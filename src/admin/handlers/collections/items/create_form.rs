@@ -12,7 +12,8 @@ use crate::{
     admin::{
         AdminState,
         context::{
-            BasePageContext, Breadcrumb, CollectionContext, PageMeta, PageType,
+            BasePageContext, Breadcrumb, CollectionContext, CollectionPermissions, PageMeta,
+            PageType,
             field::{BaseFieldData, ConditionData, FieldContext, TextField, ValidationAttrs},
             page::collections::{CollectionCreatePage, UploadFormContext},
         },
@@ -147,9 +148,12 @@ pub async fn create_form(
         .is_upload_collection()
         .then(|| upload_accept_context(&def));
 
+    let perms = CollectionPermissions::for_user(&state, &def, &auth_user);
+
     let ctx = CollectionCreatePage {
         base,
         collection: CollectionContext::from_def(&def),
+        perms,
         fields: main_fields,
         sidebar_fields,
         editing: false,

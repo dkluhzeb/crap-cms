@@ -18,7 +18,8 @@ use crate::{
     admin::{
         AdminState,
         context::{
-            BasePageContext, Breadcrumb, CollectionContext, DocumentRef, PageMeta, PageType,
+            BasePageContext, Breadcrumb, CollectionContext, CollectionPermissions, DocumentRef,
+            PageMeta, PageType,
             page::collections::{CollectionEditPage, UploadFormContext, UploadInfo},
         },
         handlers::shared::{
@@ -368,9 +369,12 @@ pub async fn edit_form(
         .is_upload_collection()
         .then(|| build_upload_context(&def, &document));
 
+    let perms = CollectionPermissions::for_user(&state, &def, &auth_user);
+
     let ctx = CollectionEditPage {
         base,
         collection: CollectionContext::from_def(&def),
+        perms,
         document: DocumentRef::with_status(&document, &doc_status),
         fields: main_fields,
         sidebar_fields,

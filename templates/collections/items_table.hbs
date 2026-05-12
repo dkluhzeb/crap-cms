@@ -100,7 +100,7 @@
   </thead>
   <tbody>
     {{#each docs}}
-      {{> collections/items_row collection=../collection is_trash=../is_trash}}
+      {{> collections/items_row collection=../collection perms=../perms is_trash=../is_trash}}
     {{/each}}
   </tbody>
 </table>

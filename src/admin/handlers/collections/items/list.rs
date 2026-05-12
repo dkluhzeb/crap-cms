@@ -11,8 +11,8 @@ use crate::{
     admin::{
         AdminState,
         context::{
-            BasePageContext, CollectionContext, PageMeta, PageType, PaginationContext,
-            page::collections::CollectionItemsListPage,
+            BasePageContext, CollectionContext, CollectionPermissions, PageMeta, PageType,
+            PaginationContext, page::collections::CollectionItemsListPage,
         },
         handlers::{
             collections::shared::{
@@ -371,10 +371,12 @@ pub async fn list_items(
     .with_editor_locale(editor_locale.as_deref(), &state);
 
     let active_filter_count = filter_pills.len();
+    let perms = CollectionPermissions::for_user(&state, &def, &auth_user);
 
     let ctx = CollectionItemsListPage {
         base,
         collection: CollectionContext::from_def(&def),
+        perms,
         docs: items,
         pagination: PaginationContext::from_result(&lp.result, lp.prev_url, lp.next_url),
         has_drafts: def.has_drafts(),

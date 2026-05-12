@@ -4,69 +4,71 @@
   {{!-- Save panel --}}
   {{#> partials/sidebar-panel}}
     <div class="edit-sidebar__actions">
-      {{#if collection.has_drafts}}
-        {{#if editing}}
-          <button
-            type="submit"
-            name="_action"
-            value="publish"
-            class="button button--primary"
-          >
-            {{t "publish"}}
-          </button>
-          <button
-            type="submit"
-            name="_action"
-            value="save_draft"
-            formnovalidate
-            class="button button--secondary"
-          >
-            {{t "save_draft"}}
-          </button>
-          {{#if (eq document.status "published")}}
+      {{#if (or (and editing perms.update) (and (not editing) perms.create))}}
+        {{#if collection.has_drafts}}
+          {{#if editing}}
             <button
               type="submit"
               name="_action"
-              value="unpublish"
-              class="button button--ghost"
+              value="publish"
+              class="button button--primary"
             >
-              {{t "unpublish"}}
+              {{t "publish"}}
+            </button>
+            <button
+              type="submit"
+              name="_action"
+              value="save_draft"
+              formnovalidate
+              class="button button--secondary"
+            >
+              {{t "save_draft"}}
+            </button>
+            {{#if (eq document.status "published")}}
+              <button
+                type="submit"
+                name="_action"
+                value="unpublish"
+                class="button button--ghost"
+              >
+                {{t "unpublish"}}
+              </button>
+            {{/if}}
+          {{else}}
+            <button
+              type="submit"
+              name="_action"
+              value="publish"
+              class="button button--primary"
+            >
+              {{t "publish"}}
+            </button>
+            <button
+              type="submit"
+              name="_action"
+              value="save_draft"
+              formnovalidate
+              class="button button--secondary"
+            >
+              {{t "save_as_draft"}}
             </button>
           {{/if}}
         {{else}}
           <button
             type="submit"
-            name="_action"
-            value="publish"
             class="button button--primary"
           >
-            {{t "publish"}}
-          </button>
-          <button
-            type="submit"
-            name="_action"
-            value="save_draft"
-            formnovalidate
-            class="button button--secondary"
-          >
-            {{t "save_as_draft"}}
+            {{#if editing}}
+              {{t "update"}}
+            {{else}}
+              {{t "create"}}
+            {{/if}}
+            {{collection.singular_name}}
           </button>
         {{/if}}
-      {{else}}
-        <button
-          type="submit"
-          class="button button--primary"
-        >
-          {{#if editing}}
-            {{t "update"}}
-          {{else}}
-            {{t "create"}}
-          {{/if}}
-          {{collection.singular_name}}
-        </button>
-      {{/if}}
 
-      {{> partials/loading-indicator variant="sidebar"}}
+        {{> partials/loading-indicator variant="sidebar"}}
+      {{/if}}
       {{> partials/htmx-nav-link href=(concat "/admin/collections/" collection.slug) label_key="cancel"}}
     </div>
   {{/partials/sidebar-panel}}
@@ -126,40 +128,42 @@
       {{> partials/version-sidebar}}
     {{/if}}
 
-    {{!-- Actions panel --}}
-    {{#> partials/sidebar-panel icon="more_horiz" label_key="actions"}}
-      {{#if ref_count}}
-        <div class="edit-sidebar__ref-info">
-          <p class="text--muted text--sm edit-sidebar__ref-text">
-            <span class="material-symbols-outlined icon--inline">link</span>
-            {{t "referenced_by_count" count=ref_count}}
-          </p>
-          <crap-back-refs
-            slug="{{collection.slug}}"
-            doc-id="{{document.id}}"
-          >
-            <button
-              type="button"
-              class="button button--ghost button--small"
+    {{#if (or perms.trash perms.delete)}}
+      {{!-- Actions panel --}}
+      {{#> partials/sidebar-panel icon="more_horiz" label_key="actions"}}
+        {{#if ref_count}}
+          <div class="edit-sidebar__ref-info">
+            <p class="text--muted text--sm edit-sidebar__ref-text">
+              <span class="material-symbols-outlined icon--inline">link</span>
+              {{t "referenced_by_count" count=ref_count}}
+            </p>
+            <crap-back-refs
+              slug="{{collection.slug}}"
+              doc-id="{{document.id}}"
             >
-              {{t "show_details"}}
-            </button>
-          </crap-back-refs>
-        </div>
-      {{/if}}
-      <button
-        type="button"
-        class="button button--danger button--full"
-        {{#if ref_count}}disabled title="{{t "cannot_delete_referenced"}}"{{/if}}
-        data-delete-id="{{document.id}}"
-        data-delete-title="{{document_title}}"
-        data-delete-slug="{{collection.slug}}"
-        data-delete-soft="{{#if collection.soft_delete}}true{{else}}false{{/if}}"
-        data-delete-can-perm="{{#if collection.can_permanently_delete}}true{{else}}false{{/if}}"
-      >
-        {{t "delete"}}
-        {{collection.singular_name}}
-      </button>
-    {{/partials/sidebar-panel}}
+              <button
+                type="button"
+                class="button button--ghost button--small"
+              >
+                {{t "show_details"}}
+              </button>
+            </crap-back-refs>
+          </div>
+        {{/if}}
+        <button
+          type="button"
+          class="button button--danger button--full"
+          {{#if ref_count}}disabled title="{{t "cannot_delete_referenced"}}"{{/if}}
+          data-delete-id="{{document.id}}"
+          data-delete-title="{{document_title}}"
+          data-delete-slug="{{collection.slug}}"
+          data-delete-soft="{{#if collection.soft_delete}}true{{else}}false{{/if}}"
+          data-delete-can-perm="{{#if perms.delete}}true{{else}}false{{/if}}"
+        >
+          {{t "delete"}}
+          {{collection.singular_name}}
+        </button>
+      {{/partials/sidebar-panel}}
+    {{/if}}
   {{/if}}
 </div>

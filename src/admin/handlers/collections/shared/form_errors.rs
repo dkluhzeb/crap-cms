@@ -9,8 +9,8 @@ use crate::{
     admin::{
         AdminState,
         context::{
-            BasePageContext, CollectionContext, DocumentRef, PageMeta, PageType,
-            page::collections::CollectionFormErrorPage,
+            BasePageContext, CollectionContext, CollectionPermissions, DocumentRef, PageMeta,
+            PageType, page::collections::CollectionFormErrorPage,
         },
         handlers::{
             forms::FormData,
@@ -116,9 +116,12 @@ pub(in crate::admin::handlers::collections) fn render_form_with_error(
         }
     });
 
+    let perms = CollectionPermissions::for_user(p.state, p.def, p.auth_user);
+
     let ctx = CollectionFormErrorPage {
         base,
         collection: CollectionContext::from_def(p.def),
+        perms,
         document: p.doc_id.map(DocumentRef::stub),
         fields: main_fields,
         sidebar_fields,

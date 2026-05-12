@@ -1319,36 +1319,108 @@ function crap.collections.find_by_id(collection, id, opts) end
 ---@field dev_mode boolean
 ---@field auth_enabled boolean
 ---@field csp_nonce string
+---@field site_name string
 
 ---@class crap.template.user
 ---@field id string
 ---@field email string
 ---@field collection string
 
+---@class crap.template.breadcrumb
+---@field label string
+---@field url? string
+---@field label_name? string
+
 ---@class crap.template.page
----@field type "dashboard" | "collection_list" | "collection_items" | "collection_edit" | "collection_create" | "collection_delete" | "collection_versions" | "global_edit" | "global_versions" | "auth_login" | "auth_forgot" | "auth_reset" | "auth_mfa" | "error_403" | "error_404" | "error_500" | "auth_required" | "admin_denied"
+---@field type "dashboard" | "collection_list" | "collection_items" | "collection_edit" | "collection_create" | "collection_delete" | "collection_versions" | "global_edit" | "global_versions" | "auth_login" | "auth_forgot" | "auth_reset" | "auth_mfa" | "error_403" | "error_404" | "error_500" | "auth_required" | "admin_denied" | "custom_page"
 ---@field title string
 ---@field title_name? string
----@field breadcrumbs? table
+---@field breadcrumbs? crap.template.breadcrumb[]
+
+---@class crap.template.nav_collection
+---@field slug string
+---@field display_name string
+---@field is_auth boolean
+---@field is_upload boolean
+
+---@class crap.template.nav_global
+---@field slug string
+---@field display_name string
+
+---@class crap.template.custom_page
+---@field slug string
+---@field section? string
+---@field label? string
+---@field icon? string
+---@field access? string
 
 ---@class crap.template.nav
----@field collections table[]
----@field globals table[]
+---@field collections crap.template.nav_collection[]
+---@field globals crap.template.nav_global[]
+---@field custom_pages? crap.template.custom_page[]
+
+---@class crap.template.field_admin_meta
+---@field label? string
+---@field hidden boolean
+---@field readonly boolean
+---@field width? string
+---@field description? string
+---@field placeholder? string
+
+---@class crap.template.field_meta
+---@field name string
+---@field field_type string
+---@field required boolean
+---@field unique boolean
+---@field localized boolean
+---@field admin crap.template.field_admin_meta
+
+---@class crap.template.admin_meta
+---@field use_as_title? string
+---@field default_sort? string
+---@field hidden boolean
+---@field list_searchable_fields string[]
+
+---@class crap.template.upload_meta
+---@field enabled boolean
+---@field mime_types string[]
+---@field max_file_size? integer
+---@field admin_thumbnail? string
+
+---@class crap.template.versions_meta
+---@field drafts boolean
+---@field max_versions integer
+
+---@class crap.template.auth_meta
+---@field enabled boolean
+---@field disable_local boolean
+---@field verify_email boolean
 
 ---@class crap.template.collection
 ---@field slug string
 ---@field display_name string
 ---@field singular_name string
----@field has_drafts boolean
----@field has_versions boolean
+---@field title_field? string
+---@field timestamps boolean
 ---@field is_auth boolean
 ---@field is_upload boolean
+---@field has_drafts boolean
+---@field has_versions boolean
+---@field soft_delete boolean
+---@field can_permanently_delete boolean
+---@field admin crap.template.admin_meta
+---@field upload? crap.template.upload_meta
+---@field versions? crap.template.versions_meta
+---@field auth? crap.template.auth_meta
+---@field fields_meta crap.template.field_meta[]
 
 ---@class crap.template.global
 ---@field slug string
 ---@field display_name string
 ---@field has_drafts boolean
 ---@field has_versions boolean
+---@field versions? crap.template.versions_meta
+---@field fields_meta crap.template.field_meta[]
 
 ---@class crap.template.document
 ---@field id string
@@ -1357,19 +1429,26 @@ function crap.collections.find_by_id(collection, id, opts) end
 ---@field status? string
 ---@field data? table
 
+---@class crap.template.editor_locale_option
+---@field value string
+---@field label string
+---@field selected boolean
+
 ---@class crap.template_ctx
 ---@field crap crap.template.crap_meta
 ---@field _locale string
 ---@field available_locales string[]
 ---@field title string
 ---@field page crap.template.page
+---@field nav crap.template.nav
+---@field breadcrumbs? crap.template.breadcrumb[]
 ---@field user? crap.template.user
----@field nav? crap.template.nav
 ---@field collection? crap.template.collection
 ---@field global? crap.template.global
 ---@field document? crap.template.document
 ---@field has_editor_locales? boolean
 ---@field editor_locale? string
+---@field editor_locales? crap.template.editor_locale_option[]
 -- For page-specific fields beyond the bases (e.g. `collection_cards`, `versions`),
 -- see docs/src/admin-ui/template-context.md or the generated reference.
 

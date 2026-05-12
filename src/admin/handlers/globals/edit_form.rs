@@ -13,8 +13,8 @@ use crate::{
     admin::{
         AdminState,
         context::{
-            BasePageContext, Breadcrumb, GlobalContext, PageMeta, PageType, field::FieldContext,
-            page::globals::GlobalEditPage,
+            BasePageContext, Breadcrumb, GlobalContext, GlobalPermissions, PageMeta, PageType,
+            field::FieldContext, page::globals::GlobalEditPage,
         },
         handlers::shared::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
@@ -197,9 +197,12 @@ pub async fn edit_form(
     .with_editor_locale(editor_locale.as_deref(), &state)
     .with_breadcrumbs(breadcrumbs);
 
+    let perms = GlobalPermissions::for_user(&state, &def, &auth_user);
+
     let ctx = GlobalEditPage {
         base,
         global: GlobalContext::from_def(&def),
+        perms,
         fields: main_fields,
         sidebar_fields,
         has_drafts,

@@ -3,6 +3,7 @@ mod helpers;
 #[allow(dead_code)]
 mod html;
 
+mod html_access_gating;
 mod html_auth;
 mod html_crud;
 mod html_forms;

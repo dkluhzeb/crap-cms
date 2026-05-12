@@ -33,53 +33,236 @@ pub(in crate::typegen) fn render(registry: &Registry) -> String {
     out
 }
 
-/// Render `crap.template_data_ctx` and `crap.template_data_fn` aliases.
+/// Render `crap.template.*` typed shapes and `crap.template_ctx` /
+/// `crap.template_data_fn` aliases.
 ///
 /// The template-data context is the same JSON shape every admin page
-/// renders (typed in `src/admin/context/page/`). Customers writing widget
-/// functions read fields like `ctx.user.email`, `ctx.page.type`,
-/// `ctx.collection.slug`, `ctx.document.id`. We model them as optional
-/// because no single page populates all of them — auth pages have no
-/// `nav` or `user`, list pages have no `document`, etc. The full per-page
-/// shape lives in `docs/src/admin-ui/template-context.md`.
+/// renders. Each Rust typed-context block in `src/admin/context/` has a
+/// matching `crap.template.*` class so Lua editors give autocomplete on
+/// every level (`ctx.user.email`, `ctx.collection.versions.max_versions`,
+/// `ctx.nav.custom_pages[1].icon`, …).
+///
+/// Per-page extra fields (`collection_cards`, `versions`, …) are not
+/// enumerated here — they vary per page and aren't part of the base
+/// context. Full per-page shapes live in
+/// `docs/src/admin-ui/template-context.md`.
 fn render_template_data_types(out: &mut String) {
-    out.push_str("---@class crap.template_data_user\n");
-    w!(out, "---@field email string");
+    out.push_str("-- ─── Template data context (for `crap.template_data.register`) ───\n\n");
+
+    // CrapMeta — mirrors `admin::context::CrapMeta`.
+    out.push_str("---@class crap.template.crap_meta\n");
+    w!(out, "---@field version string");
+    w!(out, "---@field build_hash string");
+    w!(out, "---@field dev_mode boolean");
+    w!(out, "---@field auth_enabled boolean");
+    w!(out, "---@field csp_nonce string");
+    w!(out, "---@field site_name string");
+    out.push('\n');
+
+    // UserContext — mirrors `admin::context::UserContext`.
+    out.push_str("---@class crap.template.user\n");
     w!(out, "---@field id string");
+    w!(out, "---@field email string");
     w!(out, "---@field collection string");
     out.push('\n');
 
-    out.push_str("---@class crap.template_data_page\n");
-    w!(out, "---@field type string");
-    w!(out, "---@field title? string");
-    w!(out, "---@field path? string");
+    // Breadcrumb — mirrors `admin::context::Breadcrumb`.
+    out.push_str("---@class crap.template.breadcrumb\n");
+    w!(out, "---@field label string");
+    w!(out, "---@field url? string");
+    w!(out, "---@field label_name? string");
     out.push('\n');
 
-    out.push_str("---@class crap.template_data_collection\n");
+    // PageMeta — mirrors `admin::context::PageMeta`.
+    out.push_str("---@class crap.template.page\n");
+    out.push_str("---@field type ");
+    out.push_str(&page_type_union());
+    out.push('\n');
+    w!(out, "---@field title string");
+    w!(out, "---@field title_name? string");
+    w!(out, "---@field breadcrumbs? crap.template.breadcrumb[]");
+    out.push('\n');
+
+    // NavData inner items — mirror `admin::context::nav::{NavCollection, NavGlobal}`.
+    out.push_str("---@class crap.template.nav_collection\n");
     w!(out, "---@field slug string");
+    w!(out, "---@field display_name string");
+    w!(out, "---@field is_auth boolean");
+    w!(out, "---@field is_upload boolean");
+    out.push('\n');
+
+    out.push_str("---@class crap.template.nav_global\n");
+    w!(out, "---@field slug string");
+    w!(out, "---@field display_name string");
+    out.push('\n');
+
+    // CustomPage — mirrors `admin::custom_pages::CustomPage`.
+    out.push_str("---@class crap.template.custom_page\n");
+    w!(out, "---@field slug string");
+    w!(out, "---@field section? string");
     w!(out, "---@field label? string");
+    w!(out, "---@field icon? string");
+    w!(out, "---@field access? string");
     out.push('\n');
 
-    out.push_str("---@class crap.template_data_document\n");
+    // NavData — mirrors `admin::context::NavData`.
+    out.push_str("---@class crap.template.nav\n");
+    w!(out, "---@field collections crap.template.nav_collection[]");
+    w!(out, "---@field globals crap.template.nav_global[]");
+    w!(out, "---@field custom_pages? crap.template.custom_page[]");
+    out.push('\n');
+
+    // FieldMeta + nested — mirror `admin::context::{FieldMeta, FieldAdminMeta}`.
+    out.push_str("---@class crap.template.field_admin_meta\n");
+    w!(out, "---@field label? string");
+    w!(out, "---@field hidden boolean");
+    w!(out, "---@field readonly boolean");
+    w!(out, "---@field width? string");
+    w!(out, "---@field description? string");
+    w!(out, "---@field placeholder? string");
+    out.push('\n');
+
+    out.push_str("---@class crap.template.field_meta\n");
+    w!(out, "---@field name string");
+    w!(out, "---@field field_type string");
+    w!(out, "---@field required boolean");
+    w!(out, "---@field unique boolean");
+    w!(out, "---@field localized boolean");
+    w!(out, "---@field admin crap.template.field_admin_meta");
+    out.push('\n');
+
+    // CollectionContext sub-shapes — mirror `admin::context::collection::*`.
+    out.push_str("---@class crap.template.admin_meta\n");
+    w!(out, "---@field use_as_title? string");
+    w!(out, "---@field default_sort? string");
+    w!(out, "---@field hidden boolean");
+    w!(out, "---@field list_searchable_fields string[]");
+    out.push('\n');
+
+    out.push_str("---@class crap.template.upload_meta\n");
+    w!(out, "---@field enabled boolean");
+    w!(out, "---@field mime_types string[]");
+    w!(out, "---@field max_file_size? integer");
+    w!(out, "---@field admin_thumbnail? string");
+    out.push('\n');
+
+    out.push_str("---@class crap.template.versions_meta\n");
+    w!(out, "---@field drafts boolean");
+    w!(out, "---@field max_versions integer");
+    out.push('\n');
+
+    out.push_str("---@class crap.template.auth_meta\n");
+    w!(out, "---@field enabled boolean");
+    w!(out, "---@field disable_local boolean");
+    w!(out, "---@field verify_email boolean");
+    out.push('\n');
+
+    // CollectionContext — mirrors `admin::context::CollectionContext`.
+    out.push_str("---@class crap.template.collection\n");
+    w!(out, "---@field slug string");
+    w!(out, "---@field display_name string");
+    w!(out, "---@field singular_name string");
+    w!(out, "---@field title_field? string");
+    w!(out, "---@field timestamps boolean");
+    w!(out, "---@field is_auth boolean");
+    w!(out, "---@field is_upload boolean");
+    w!(out, "---@field has_drafts boolean");
+    w!(out, "---@field has_versions boolean");
+    w!(out, "---@field soft_delete boolean");
+    w!(out, "---@field can_permanently_delete boolean");
+    w!(out, "---@field admin crap.template.admin_meta");
+    w!(out, "---@field upload? crap.template.upload_meta");
+    w!(out, "---@field versions? crap.template.versions_meta");
+    w!(out, "---@field auth? crap.template.auth_meta");
+    w!(out, "---@field fields_meta crap.template.field_meta[]");
+    out.push('\n');
+
+    // GlobalContext — mirrors `admin::context::GlobalContext`.
+    out.push_str("---@class crap.template.global\n");
+    w!(out, "---@field slug string");
+    w!(out, "---@field display_name string");
+    w!(out, "---@field has_drafts boolean");
+    w!(out, "---@field has_versions boolean");
+    w!(out, "---@field versions? crap.template.versions_meta");
+    w!(out, "---@field fields_meta crap.template.field_meta[]");
+    out.push('\n');
+
+    // DocumentRef — mirrors `admin::context::DocumentRef`.
+    out.push_str("---@class crap.template.document\n");
     w!(out, "---@field id string");
-    w!(out, "---@field title? string");
+    w!(out, "---@field created_at? string");
+    w!(out, "---@field updated_at? string");
+    w!(out, "---@field status? string");
+    w!(out, "---@field data? table");
     out.push('\n');
 
-    out.push_str("---@class crap.template_data_ctx\n");
-    w!(out, "---@field user? crap.template_data_user");
-    w!(out, "---@field page? crap.template_data_page");
-    w!(out, "---@field collection? crap.template_data_collection");
-    w!(out, "---@field document? crap.template_data_document");
-    w!(out, "---@field nav? table");
-    w!(out, "---@field theme? table<string, string>");
-    w!(out, "---@field i18n? table<string, string>");
-    w!(out, "---@field csrf? string");
-    w!(out, "---@field csp_nonce? string");
+    // EditorLocaleOption — mirrors `admin::context::EditorLocaleOption`.
+    out.push_str("---@class crap.template.editor_locale_option\n");
+    w!(out, "---@field value string");
+    w!(out, "---@field label string");
+    w!(out, "---@field selected boolean");
     out.push('\n');
 
-    out.push_str(
-        "---@alias crap.template_data_fn fun(ctx: crap.template_data_ctx): table<string, any>\n\n",
+    // The aggregate ctx — mirrors `admin::context::page::BasePageContext`.
+    out.push_str("---@class crap.template_ctx\n");
+    w!(out, "---@field crap crap.template.crap_meta");
+    w!(out, "---@field _locale string");
+    w!(out, "---@field available_locales string[]");
+    w!(out, "---@field title string");
+    w!(out, "---@field page crap.template.page");
+    w!(out, "---@field nav crap.template.nav");
+    w!(out, "---@field breadcrumbs? crap.template.breadcrumb[]");
+    w!(out, "---@field user? crap.template.user");
+    w!(out, "---@field collection? crap.template.collection");
+    w!(out, "---@field global? crap.template.global");
+    w!(out, "---@field document? crap.template.document");
+    w!(out, "---@field has_editor_locales? boolean");
+    w!(out, "---@field editor_locale? string");
+    w!(
+        out,
+        "---@field editor_locales? crap.template.editor_locale_option[]"
     );
+    out.push_str(
+        "-- For page-specific fields beyond the bases (e.g. `collection_cards`, `versions`),\n",
+    );
+    out.push_str("-- see docs/src/admin-ui/template-context.md or the generated reference.\n\n");
+
+    out.push_str("---@alias crap.template_data_fn fun(ctx: crap.template_ctx): any\n\n");
+}
+
+/// Build the literal-union annotation for `crap.template.page.type`
+/// from [`PageType::as_str`]. Kept in lockstep with the enum so the Lua
+/// autocomplete list always matches what the server emits.
+fn page_type_union() -> String {
+    use crate::admin::context::PageType;
+
+    const VARIANTS: &[PageType] = &[
+        PageType::Dashboard,
+        PageType::CollectionList,
+        PageType::CollectionItems,
+        PageType::CollectionEdit,
+        PageType::CollectionCreate,
+        PageType::CollectionDelete,
+        PageType::CollectionVersions,
+        PageType::GlobalEdit,
+        PageType::GlobalVersions,
+        PageType::AuthLogin,
+        PageType::AuthForgot,
+        PageType::AuthReset,
+        PageType::AuthMfa,
+        PageType::Error403,
+        PageType::Error404,
+        PageType::Error500,
+        PageType::AuthRequired,
+        PageType::AdminDenied,
+        PageType::CustomPage,
+    ];
+
+    VARIANTS
+        .iter()
+        .map(|v| format!("\"{}\"", v.as_str()))
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 /// Render type definitions for a single collection.

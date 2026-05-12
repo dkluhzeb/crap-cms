@@ -31,6 +31,14 @@ pub fn render_page<T: Serialize>(state: &AdminState, template: &str, ctx: &T) ->
 }
 
 /// Render a 403 Forbidden page with the given message.
+///
+/// The response carries the message both in the rendered HTML body (for
+/// direct browser navigations, which render the 403 page) and in the
+/// `X-Crap-Toast` header (for htmx form submits, which by default don't
+/// swap on 4xx — `static/components/toast.js` picks the header up on
+/// `htmx:afterRequest` and surfaces the message as an inline toast). Without
+/// the toast header htmx form submits to access-denied paths look silently
+/// broken to the user.
 pub fn forbidden(state: &AdminState, message: &str) -> Response {
     let ctx = ErrorPage {
         base: BasePageContext::for_handler(
@@ -53,7 +61,14 @@ pub fn forbidden(state: &AdminState, message: &str) -> Response {
         )),
     };
 
-    (StatusCode::FORBIDDEN, html).into_response()
+    let mut resp = (StatusCode::FORBIDDEN, html).into_response();
+
+    let toast = json!({ "message": message, "type": "error" }).to_string();
+    if let Ok(val) = toast.parse() {
+        resp.headers_mut().insert("X-Crap-Toast", val);
+    }
+
+    resp
 }
 
 /// Create a redirect response to the given URL (303 See Other).

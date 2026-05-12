@@ -13,7 +13,8 @@ use crate::{
     admin::{
         AdminState,
         context::{
-            BasePageContext, GlobalContext, PageMeta, PageType, page::globals::GlobalFormErrorPage,
+            BasePageContext, GlobalContext, GlobalPermissions, PageMeta, PageType,
+            page::globals::GlobalFormErrorPage,
         },
         handlers::{
             forms::FormData,
@@ -128,9 +129,12 @@ fn render_validation_error(
         PageMeta::new(PageType::GlobalEdit, def.display_name()),
     );
 
+    let perms = GlobalPermissions::for_user(state, def, auth_user);
+
     let ctx = GlobalFormErrorPage {
         base,
         global: GlobalContext::from_def(def),
+        perms,
         fields: main_fields,
         sidebar_fields,
     };

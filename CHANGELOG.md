@@ -14,6 +14,65 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **Lua typegen template-context emits now mirror every typed Rust
+  `admin::context::*` block.** Previously the generator emitted a small
+  set of flat `crap.template_data_*` stubs that captured a handful of
+  fields per block; the example's `generated.lua` had been hand-edited
+  to add a fuller namespaced hierarchy that got lost on the next
+  regenerate. `src/typegen/lua/render.rs::render_template_data_types`
+  now emits the full hierarchy with every field the Rust context
+  serializes — `crap.template.crap_meta` (including `site_name`),
+  `crap.template.user`, `crap.template.breadcrumb`, `crap.template.page`
+  (with the `type` union built from `PageType::as_str` so new page
+  types appear in autocomplete automatically),
+  `crap.template.{nav_collection, nav_global, custom_page}` plus the
+  parent `crap.template.nav`, `crap.template.{admin_meta, upload_meta,
+  versions_meta, auth_meta, field_admin_meta, field_meta}` for
+  collection sub-shapes, the full `crap.template.collection` and
+  `crap.template.global` with `versions` / `fields_meta` /
+  `can_permanently_delete` / `soft_delete` etc.,
+  `crap.template.document`, and `crap.template.editor_locale_option`.
+  The aggregate `crap.template_ctx` carries every field
+  `BasePageContext` serializes, including `nav` (non-optional),
+  `breadcrumbs`, and `editor_locales`. The `crap.template_data_fn`
+  alias points at `crap.template_ctx` (what `example/init.lua` and
+  customer hook annotations expect). When a Rust typed-context grows a
+  field, update the matching block in `render_template_data_types`
+  rather than hand-editing `generated.lua`.
+
+- **Admin UI now hides action buttons the user isn't allowed to use.**
+  Previously the Create / Trash / Empty-Trash / Delete / per-row
+  delete + restore buttons all rendered regardless of the user's
+  per-collection access; clicking them just hit a 403 (often silently
+  — see next entry). Now each surface checks the user's permissions
+  for that collection / global up front:
+  - `crap-cms` exposes `CollectionPermissions` / `GlobalPermissions`
+    typed structs on collection-list / edit / create / form-error and
+    global-edit page contexts (template field: `{{perms.*}}`). Each
+    set is computed in one shared transaction per page render
+    (collection: `read` / `create` / `update` / `delete` / `trash`;
+    global: `read` / `update`).
+  - `collections/items.hbs`, `items_empty.hbs`, `items_row.hbs`,
+    `edit_sidebar.hbs`, and `globals/edit_sidebar.hbs` wrap their
+    action UI in `{{#if perms.X}}`. The Save / Publish / Save-Draft /
+    Unpublish row on the global edit sidebar gates on `perms.update`;
+    the Delete panel on the collection edit sidebar disappears when
+    the user has neither `trash` nor `delete`; the per-row Trash /
+    Delete / Permanently-Delete / Restore buttons each check the
+    matching flag. Cancel / read-only links stay visible.
+  - The misleading `collection.can_permanently_delete` flag (which
+    was *definition*-level — "is `access.delete` configured at all"
+    — not per-user) is no longer used to gate UI, only to thread the
+    soft-vs-hard mode into the JS confirm dialog.
+- **403 responses now emit `X-Crap-Toast`.** `shared::response::forbidden`
+  carries the access-denied message both in the rendered HTML body
+  (for direct browser navigations) and in the `X-Crap-Toast` header
+  (for htmx submits). htmx doesn't swap 4xx by default, so the
+  client-side toast handler in `static/components/toast.js` picks the
+  message up on `htmx:afterRequest` and surfaces it inline. Without
+  this header htmx form submits to access-denied paths looked
+  silently broken — the server enforced, but the user saw nothing.
+
 - **`crap-cms update` (no subcommand) now surfaces a PATH-vs-store
   mismatch before the remote check.** Previously the "Already on the
   latest release" message was computed from the running binary's

@@ -42,13 +42,52 @@ pub fn setup_app(
     setup_app_with_config(collections, globals, config)
 }
 
+/// Like [`setup_app`] but writes a set of `access/*.lua` files into the
+/// test config directory before initializing the Lua VM. Each entry is
+/// `(name, lua_source)` — the name maps to `access/<name>.lua` and is
+/// referenced from collection definitions as `"access.<name>"`. Use this
+/// to exercise access-gating end-to-end.
+pub fn setup_app_with_access_files(
+    collections: Vec<CollectionDefinition>,
+    globals: Vec<GlobalDefinition>,
+    access_files: &[(&str, &str)],
+) -> TestApp {
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.admin.require_auth = false;
+    config.admin.dev_mode = true;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let access_dir = tmp.path().join("access");
+    std::fs::create_dir_all(&access_dir).expect("create access dir");
+
+    for (name, src) in access_files {
+        std::fs::write(access_dir.join(format!("{name}.lua")), src)
+            .unwrap_or_else(|e| panic!("write access/{name}.lua: {e}"));
+    }
+
+    setup_app_at(collections, globals, config, tmp)
+}
+
 pub fn setup_app_with_config(
     collections: Vec<CollectionDefinition>,
     globals: Vec<GlobalDefinition>,
     config: CrapConfig,
 ) -> TestApp {
     let tmp = tempfile::tempdir().expect("tempdir");
+    setup_app_at(collections, globals, config, tmp)
+}
 
+/// Like [`setup_app_with_config`] but takes an externally-prepared
+/// `tempdir`. Lets callers pre-populate it with `access/`, `hooks/`,
+/// or `init.lua` files that Lua needs to resolve during init.
+pub fn setup_app_at(
+    collections: Vec<CollectionDefinition>,
+    globals: Vec<GlobalDefinition>,
+    config: CrapConfig,
+    tmp: tempfile::TempDir,
+) -> TestApp {
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
     let shared = Registry::shared();
@@ -158,9 +197,45 @@ pub fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
     doc.id.to_string()
 }
 
+/// Like [`create_test_user`] but also sets `role` — for access-fn
+/// tests that gate on `context.user.role`. Assumes the users
+/// collection has a `role` field defined (see [`make_users_def_with_role`]).
+pub fn create_test_user_with_role(
+    app: &TestApp,
+    email: &str,
+    password: &str,
+    role: &str,
+) -> String {
+    let def = app.registry.get_collection("users").unwrap().clone();
+
+    let mut conn = app.pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let data: DocumentFields = std::collections::HashMap::from([
+        ("email".to_string(), serde_json::json!(email)),
+        ("name".to_string(), serde_json::json!("Test User")),
+        ("role".to_string(), serde_json::json!(role)),
+    ])
+    .into();
+    let doc = query::create(&tx, "users", &def, &data, None).unwrap();
+    query::update_password(&tx, "users", &doc.id, password).unwrap();
+    tx.commit().unwrap();
+    doc.id.to_string()
+}
+
 pub fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
+    // Read the user's current `_session_version` from the DB and include it
+    // in the JWT — `auth_middleware::load_auth_user` rejects tokens whose
+    // session_version differs from the DB. `update_password` increments it
+    // to 1, so a default-built JWT (sv=0) would otherwise fail to auth.
+    let conn = app.pool.get().expect("pool");
+    let ctx = crap_cms::service::ServiceContext::slug_only("users")
+        .conn(&conn)
+        .build();
+    let session_version = crap_cms::service::auth::get_session_version(&ctx, user_id).unwrap_or(0);
+
     let claims = auth::Claims::builder(user_id, "users")
         .email(email)
+        .session_version(session_version)
         .exp((chrono::Utc::now().timestamp() as u64) + 3600)
         .build()
         .unwrap();
@@ -212,6 +287,15 @@ pub fn make_users_def() -> CollectionDefinition {
         enabled: true,
         ..Default::default()
     });
+    def
+}
+
+/// `users` collection with a `role` field — for access-fn tests that
+/// gate on `context.user.role`.
+pub fn make_users_def_with_role() -> CollectionDefinition {
+    let mut def = make_users_def();
+    def.fields
+        .push(FieldDefinition::builder("role", FieldType::Text).build());
     def
 }
 

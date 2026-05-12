@@ -14,7 +14,7 @@
             {{#if is_trash}}
               {{> partials/htmx-nav-link href=(concat "/admin/collections/" collection.slug) label_key="back_to_list" icon="arrow_back"}}
               {{#if docs}}
-                {{#if collection.can_permanently_delete}}
+                {{#if perms.delete}}
                   <button
                     type="button"
                     class="button button--danger"
@@ -27,15 +27,19 @@
                 {{/if}}
               {{/if}}
             {{else}}
-              {{> partials/htmx-nav-link href=(concat "/admin/collections/" collection.slug "?trash=1") label_key="trash" icon="delete"}}
+              {{#if perms.trash}}
+                {{> partials/htmx-nav-link href=(concat "/admin/collections/" collection.slug "?trash=1") label_key="trash" icon="delete"}}
+              {{/if}}
             {{/if}}
           {{/if}}
           {{#unless is_trash}}
-            {{> partials/htmx-nav-link
-              href=(concat "/admin/collections/" collection.slug "/create")
-              label=(concat (t "create") " " collection.singular_name)
-              variant="primary"
-              icon="add"}}
+            {{#if perms.create}}
+              {{> partials/htmx-nav-link
+                href=(concat "/admin/collections/" collection.slug "/create")
+                label=(concat (t "create") " " collection.singular_name)
+                variant="primary"
+                icon="add"}}
+            {{/if}}
           {{/unless}}
         </div>
       </div>

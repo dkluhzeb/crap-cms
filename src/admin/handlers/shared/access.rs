@@ -166,8 +166,41 @@ pub fn evaluate_condition_results(
     results
 }
 
-/// Quick read-access check for dashboard/list visibility.
-/// Returns true if the user is allowed to see this collection or global.
+/// Boolean access check — used for UI-gating ("can this user create X?")
+/// rather than enforcement. Treats missing `access_ref` as allowed unless
+/// `default_deny` is configured, in which case the no-config case denies.
+///
+/// Takes an existing connection so callers computing multiple permissions
+/// (e.g. `CollectionPermissions::for_user`) can share a single transaction
+/// instead of paying for a pool acquisition per check.
+///
+/// Called without `id` / `data`; access fns that gate on doc content
+/// (rather than user role) will return false here, which errs on the safe
+/// side for UI visibility — the server-side enforcement runs the same fn
+/// with full context when the user actually tries the action.
+pub fn has_access_with_conn(
+    state: &AdminState,
+    access_ref: Option<&str>,
+    user_doc: Option<&Document>,
+    conn: &dyn crate::db::DbConnection,
+) -> bool {
+    if access_ref.is_none() {
+        return !state.config.access.default_deny;
+    }
+
+    let result = state
+        .hook_runner
+        .check_access(access_ref, user_doc, None, None, conn);
+
+    matches!(
+        result,
+        Ok(AccessResult::Allowed | AccessResult::Constrained(_))
+    )
+}
+
+/// Quick read-access check for dashboard/list visibility. Convenience
+/// wrapper around [`has_access_with_conn`] that opens its own transaction.
+/// Use the with-conn variant when checking multiple permissions in a row.
 pub fn has_read_access(
     state: &AdminState,
     access_ref: Option<&str>,
@@ -187,16 +220,11 @@ pub fn has_read_access(
         Err(_) => return false,
     };
 
-    let result = state
-        .hook_runner
-        .check_access(access_ref, user_doc, None, None, &tx);
+    let allowed = has_access_with_conn(state, access_ref, user_doc, &tx);
 
     if let Err(e) = tx.commit() {
         warn!("tx commit failed: {e}");
     }
 
-    matches!(
-        result,
-        Ok(AccessResult::Allowed | AccessResult::Constrained(_))
-    )
+    allowed
 }

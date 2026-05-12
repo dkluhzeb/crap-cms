@@ -19,6 +19,7 @@ mod locale_template;
 mod nav;
 pub mod page;
 mod pagination;
+mod permissions;
 mod user;
 
 pub use collection::{CollectionContext, VersionsMeta};
@@ -32,4 +33,5 @@ pub use locale_template::LocaleTemplateData;
 pub use nav::NavData;
 pub use page::{AuthBasePageContext, BasePageContext, Breadcrumb, PageMeta, PageType};
 pub use pagination::PaginationContext;
+pub use permissions::{CollectionPermissions, GlobalPermissions};
 pub use user::UserContext;
