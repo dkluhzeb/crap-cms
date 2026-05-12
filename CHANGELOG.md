@@ -14,6 +14,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **`crap-cms update` (no subcommand) now surfaces a PATH-vs-store
+  mismatch before the remote check.** Previously the "Already on the
+  latest release" message was computed from the running binary's
+  compile-time version, which silently misled when the user's shell
+  was resolving `crap-cms` to something outside the store (e.g. a
+  `cargo install --path .` dev build at `~/.local/bin/crap-cms`
+  shadowing the store-managed `current` symlink). Now resolves the
+  running binary against the store first: if it's outside the store
+  entirely, suggests `update use --force <version>` to repoint PATH;
+  if it's inside the store but not the active version, suggests
+  `update use <version>`. The remote "already on latest" line still
+  renders, but as a secondary `Remote:` info instead of a success.
+
 - **`crap-cms update use --force` now actually relinks the `$PATH`
   binary** to point at the store's `current` symlink, instead of
   re-printing the misalignment warning. Stale symlinks (e.g. an old

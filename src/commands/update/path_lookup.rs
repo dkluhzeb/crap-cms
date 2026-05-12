@@ -81,6 +81,60 @@ pub(super) fn warn_if_path_misaligned(store: &store::Store) {
     );
 }
 
+/// Compare the running binary with the store's active version. If they
+/// differ, emit a warning so the user knows "Already on the latest
+/// release" (computed from the *running* binary's compile-time version)
+/// doesn't reflect what their shell will actually run next time.
+///
+/// Returns `true` if a mismatch was reported — callers can use this to
+/// reframe a follow-up "remote already-latest" message so it doesn't
+/// contradict the warning.
+pub(super) fn warn_if_running_binary_mismatches_store(store: &store::Store) -> bool {
+    let Ok(running) = std::env::current_exe() else {
+        return false;
+    };
+
+    mismatch_inner(store, &running)
+}
+
+/// Core of [`warn_if_running_binary_mismatches_store`] with the running
+/// binary path lifted out so tests can supply a controlled value.
+fn mismatch_inner(store: &store::Store, running: &Path) -> bool {
+    let running_canonical = running
+        .canonicalize()
+        .unwrap_or_else(|_| running.to_path_buf());
+    let current_canonical = store.current_link().canonicalize().ok();
+
+    if let Some(target) = &current_canonical
+        && &running_canonical == target
+    {
+        return false; // aligned — silent
+    }
+
+    if store.owns_path(&running_canonical) {
+        // Running binary is in the store, just not the active version.
+        cli::warning(&format!(
+            "Running binary {} is in the store but is not the currently-active version.",
+            running.display()
+        ));
+        cli::hint("Switch to it explicitly with `crap-cms update use <version>`.");
+    } else {
+        // Running binary is somewhere outside the store entirely.
+        cli::warning(&format!(
+            "`crap-cms` from your shell ({}) is not the store-managed binary.",
+            running.display()
+        ));
+
+        if let Some(target) = &current_canonical {
+            cli::hint(&format!("Store currently has {} active.", target.display()));
+        }
+
+        cli::hint("Run `crap-cms update use --force <version>` to repoint your PATH at the store.");
+    }
+
+    true
+}
+
 /// Repoint the `$PATH` binary at the store's `current` symlink. Called by
 /// `update use --force` after the active version was switched, so the
 /// user's shell picks up the new version without manual symlink fiddling.
@@ -271,5 +325,42 @@ mod tests {
             err.to_string().contains("looks distro-managed"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn mismatch_inner_silent_when_running_is_active_version() {
+        let tmp = tempdir().unwrap();
+        let (store, bin) = build_fake_store(tmp.path().to_path_buf());
+
+        // Running binary == the active version's binary.
+        assert!(!mismatch_inner(&store, &bin));
+    }
+
+    #[test]
+    fn mismatch_inner_warns_for_outside_binary() {
+        let tmp = tempdir().unwrap();
+        let (store, _bin) = build_fake_store(tmp.path().to_path_buf());
+
+        // A binary somewhere outside the store entirely.
+        let outside = tmp.path().join("local-bin").join("crap-cms");
+        fs::create_dir_all(outside.parent().unwrap()).unwrap();
+        fs::write(&outside, b"dev-build").unwrap();
+
+        assert!(mismatch_inner(&store, &outside));
+    }
+
+    #[test]
+    fn mismatch_inner_warns_for_in_store_but_inactive_version() {
+        let tmp = tempdir().unwrap();
+        let (store, _bin) = build_fake_store(tmp.path().to_path_buf());
+
+        // Install a second version and keep the first one active.
+        let other_vdir = store.versions_dir().join("v0.2.0");
+        fs::create_dir_all(&other_vdir).unwrap();
+        let other_bin = other_vdir.join("crap-cms");
+        fs::write(&other_bin, b"#!/bin/sh\necho v2\n").unwrap();
+
+        // v0.1.0 is still active (via build_fake_store); running v0.2.0.
+        assert!(mismatch_inner(&store, &other_bin));
     }
 }
