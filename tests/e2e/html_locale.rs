@@ -307,10 +307,7 @@ async fn edit_in_non_default_locale_shows_localized_values() {
         locales: vec!["en".to_string(), "de".to_string()],
         fallback: true,
     };
-    let def = {
-        let reg = &*app.registry;
-        reg.get_collection("articles").unwrap().clone()
-    };
+    let def = app.registry.get_collection("articles").unwrap().clone();
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let en_locale_ctx = LocaleContext::from_locale_string(Some("en"), &locale_config).unwrap();

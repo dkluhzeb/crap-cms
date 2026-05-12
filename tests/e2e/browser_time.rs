@@ -36,8 +36,7 @@ async fn time_element_renders_formatted() {
 
     // Create a document so the list has a row with a <crap-time> element
     {
-        let reg = app.registry.read().unwrap();
-        let def = reg.get_collection("posts").unwrap().clone();
+        let def = app.registry.get_collection("posts").unwrap().clone();
 
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();

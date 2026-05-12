@@ -294,10 +294,7 @@ async fn edit_form_populates_values() {
     let user_id = create_test_user(&app, "edit@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "edit@test.com");
 
-    let def = {
-        let reg = &*app.registry;
-        reg.get_collection("articles").unwrap().clone()
-    };
+    let def = app.registry.get_collection("articles").unwrap().clone();
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let data: DocumentFields = std::collections::HashMap::from([

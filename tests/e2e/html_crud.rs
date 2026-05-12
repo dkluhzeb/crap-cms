@@ -129,10 +129,7 @@ async fn update_redirects_with_updated_data() {
     let user_id = create_test_user(&app, "update@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "update@test.com");
 
-    let def = {
-        let reg = &*app.registry;
-        reg.get_collection("posts").unwrap().clone()
-    };
+    let def = app.registry.get_collection("posts").unwrap().clone();
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let data: DocumentFields =
@@ -187,10 +184,7 @@ async fn delete_removes_from_list() {
     let user_id = create_test_user(&app, "delete@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "delete@test.com");
 
-    let def = {
-        let reg = &*app.registry;
-        reg.get_collection("posts").unwrap().clone()
-    };
+    let def = app.registry.get_collection("posts").unwrap().clone();
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let data: DocumentFields =
@@ -245,10 +239,7 @@ async fn list_page_shows_documents() {
     let user_id = create_test_user(&app, "list@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "list@test.com");
 
-    let def = {
-        let reg = &*app.registry;
-        reg.get_collection("posts").unwrap().clone()
-    };
+    let def = app.registry.get_collection("posts").unwrap().clone();
     for title in &["Alpha Post", "Beta Post", "Gamma Post"] {
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();

@@ -145,10 +145,7 @@ async fn save_draft_button_carries_formnovalidate() {
     );
 
     // Edit page (existing document → uses the editing-flow draft button).
-    let def = {
-        let reg = &*app.registry;
-        reg.get_collection("articles").unwrap().clone()
-    };
+    let def = app.registry.get_collection("articles").unwrap().clone();
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let mut data = DocumentFields::new();
@@ -284,10 +281,7 @@ async fn edit_form_shows_version_sidebar() {
     let cookie = make_auth_cookie(&app, &user_id, "ver6@test.com");
 
     // Create a doc via query::create
-    let def = {
-        let reg = &*app.registry;
-        reg.get_collection("articles").unwrap().clone()
-    };
+    let def = app.registry.get_collection("articles").unwrap().clone();
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let data: DocumentFields = std::collections::HashMap::from([
