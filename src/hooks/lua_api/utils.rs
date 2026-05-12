@@ -9,8 +9,8 @@ use serde_json::Value;
 
 use super::{json_to_lua, lua_to_json};
 
-/// Pure Lua table and string helpers, compiled in from `lua/util_helpers.lua`.
-const LUA_UTIL_HELPERS: &str = include_str!("../../../lua/util_helpers.lua");
+/// Pure Lua table and string helpers, compiled in from `util_helpers.lua`.
+const LUA_UTIL_HELPERS: &str = include_str!("util_helpers.lua");
 
 /// Register `crap.util` and `crap.json` — slugify, nanoid, JSON, date helpers.
 pub(super) fn register_util(lua: &Lua, crap: &Table) -> Result<()> {
