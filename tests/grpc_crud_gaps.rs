@@ -1,7 +1,21 @@
 //! Localization, drafts, versions, complex globals, has-many relationships,
 //! bulk operations, count, FTS search, and jobs RPC tests.
 //!
-//! Uses ContentService directly (no network) via ContentApi trait.
+//! Uses `ContentService` directly (no network) via `ContentApi` trait.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -364,7 +378,7 @@ async fn find_with_pagination() {
         ts.service
             .create(Request::new(content::CreateRequest {
                 collection: "posts".to_string(),
-                data: Some(make_struct(&[("title", &format!("Page {}", i))])),
+                data: Some(make_struct(&[("title", &format!("Page {i}"))])),
                 locale: None,
                 draft: None,
             }))
@@ -887,7 +901,7 @@ async fn find_trash_returns_soft_deleted_documents() {
     );
 }
 
-/// FindByID with `trash=true` should find a soft-deleted document.
+/// `FindByID` with `trash=true` should find a soft-deleted document.
 #[tokio::test]
 async fn find_by_id_trash_finds_soft_deleted() {
     let ts = setup_service(vec![make_soft_delete_posts_def()], vec![]);
@@ -1270,8 +1284,7 @@ async fn find_with_search() {
         let title = get_proto_field(doc, "title").unwrap();
         assert!(
             title.contains("Rust"),
-            "Expected Rust in title, got: {}",
-            title
+            "Expected Rust in title, got: {title}"
         );
     }
 }
@@ -1433,7 +1446,7 @@ async fn find_with_search_empty_string_returns_all() {
         .service
         .find(Request::new(content::FindRequest {
             collection: "posts".to_string(),
-            search: Some("".to_string()),
+            search: Some(String::new()),
             ..Default::default()
         }))
         .await

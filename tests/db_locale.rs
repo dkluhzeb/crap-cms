@@ -1,3 +1,17 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::collections::{HashMap, HashSet};
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
@@ -168,8 +182,7 @@ fn find_all_locales_returns_nested() {
     let title_val = docs[0].get("title").expect("title should exist");
     assert!(
         title_val.is_object(),
-        "title should be a locale object, got: {:?}",
-        title_val
+        "title should be a locale object, got: {title_val:?}"
     );
     assert_eq!(
         title_val.get("en").unwrap().as_str().unwrap(),
@@ -1580,7 +1593,7 @@ fn locale_config() -> LocaleConfig {
     }
 }
 
-/// Collection: localized group creates seo__meta_title__en, seo__meta_title__de columns.
+/// Collection: localized group creates `seo__meta_title__en`, `seo__meta_title__de` columns.
 #[test]
 fn collection_localized_group_migration_creates_locale_columns() {
     let (_tmp, pool) = create_test_pool();
@@ -1712,7 +1725,7 @@ fn make_global_with_localized_group() -> GlobalDefinition {
     def
 }
 
-/// Global: localized group creates seo__meta_title__en, seo__meta_title__de columns.
+/// Global: localized group creates `seo__meta_title__en`, `seo__meta_title__de` columns.
 #[test]
 fn global_localized_group_migration_creates_locale_columns() {
     let (_tmp, pool) = create_test_pool();

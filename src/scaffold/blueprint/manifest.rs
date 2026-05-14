@@ -77,8 +77,7 @@ fn check_blueprint_version_against(blueprint_version: &str, pkg_version: &str) -
     }
 
     Some(format!(
-        "Blueprint was created with crap-cms v{}, but running version is v{}",
-        blueprint_version, pkg_version
+        "Blueprint was created with crap-cms v{blueprint_version}, but running version is v{pkg_version}"
     ))
 }
 

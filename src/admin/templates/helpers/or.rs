@@ -14,8 +14,12 @@ impl HelperDef for OrHelper {
         _ctx: &'rc handlebars::Context,
         _rc: &mut RenderContext<'reg, 'rc>,
     ) -> Result<ScopedJson<'rc>, RenderError> {
-        let a = h.param(0).map(|p| p.value()).unwrap_or(&Value::Null);
-        let b = h.param(1).map(|p| p.value()).unwrap_or(&Value::Null);
+        let a = h
+            .param(0)
+            .map_or(&Value::Null, handlebars::PathAndJson::value);
+        let b = h
+            .param(1)
+            .map_or(&Value::Null, handlebars::PathAndJson::value);
         Ok(ScopedJson::Derived(Value::Bool(
             is_truthy(a) || is_truthy(b),
         )))

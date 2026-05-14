@@ -14,6 +14,8 @@
 //! preprocesses each per-page schema into a flat `DocContext` struct that
 //! the template renders.
 
+use std::fmt::Write as _;
+
 use handlebars::Handlebars;
 use schemars::{Schema, schema_for};
 use serde::Serialize;
@@ -46,7 +48,7 @@ use crate::admin::context::{
 /// Inline Handlebars template that produces the Markdown doc. Whitespace
 /// outside `{{ }}` blocks is significant — keep the structure tight so the
 /// rendered output stays clean.
-const TEMPLATE: &str = r#"<!--
+const TEMPLATE: &str = r"<!--
   AUTO-GENERATED — do not edit by hand.
   Source of truth: typed page-context structs in `src/admin/context/page/`.
   Regenerate with: `UPDATE_SCHEMA_DOC=1 cargo test template_context_doc_is_in_sync`
@@ -92,7 +94,7 @@ _(No fields.)_
 {{/if}}
 
 {{/each}}
-"#;
+";
 
 // ── Doc-context shape ──────────────────────────────────────────────
 
@@ -135,117 +137,132 @@ struct PageEntry {
     schema: fn() -> Schema,
 }
 
-fn pages() -> Vec<PageEntry> {
-    vec![
-        PageEntry {
-            heading: "Login page",
-            page_type: "auth_login",
-            template: "auth/login",
-            schema: || schema_for!(LoginPage),
-        },
-        PageEntry {
-            heading: "MFA challenge page",
-            page_type: "auth_mfa",
-            template: "auth/mfa",
-            schema: || schema_for!(MfaPage),
-        },
-        PageEntry {
-            heading: "Forgot password page",
-            page_type: "auth_forgot",
-            template: "auth/forgot_password",
-            schema: || schema_for!(ForgotPasswordPage),
-        },
-        PageEntry {
-            heading: "Reset password page",
-            page_type: "auth_reset",
-            template: "auth/reset_password",
-            schema: || schema_for!(ResetPasswordPage),
-        },
-        PageEntry {
-            heading: "Error pages (403 / 404 / 500)",
-            page_type: "error_403 | error_404 | error_500",
-            template: "errors/{403,404,500}",
-            schema: || schema_for!(ErrorPage),
-        },
-        PageEntry {
-            heading: "Dashboard",
-            page_type: "dashboard",
-            template: "dashboard/index",
-            schema: || schema_for!(DashboardPage),
-        },
-        PageEntry {
-            heading: "Collection list",
-            page_type: "collection_list",
-            template: "collections/list",
-            schema: || schema_for!(CollectionListPage),
-        },
-        PageEntry {
-            heading: "Collection items list",
-            page_type: "collection_items",
-            template: "collections/items",
-            schema: || schema_for!(CollectionItemsListPage),
-        },
-        PageEntry {
-            heading: "Collection edit form",
-            page_type: "collection_edit",
-            template: "collections/edit",
-            schema: || schema_for!(CollectionEditPage),
-        },
-        PageEntry {
-            heading: "Collection create form",
-            page_type: "collection_create",
-            template: "collections/edit",
-            schema: || schema_for!(CollectionCreatePage),
-        },
-        PageEntry {
-            heading: "Collection form-error re-render",
-            page_type: "collection_edit | collection_create",
-            template: "collections/edit",
-            schema: || schema_for!(CollectionFormErrorPage),
-        },
-        PageEntry {
-            heading: "Collection delete confirmation",
-            page_type: "collection_delete",
-            template: "collections/delete",
-            schema: || schema_for!(CollectionDeleteConfirmPage),
-        },
-        PageEntry {
-            heading: "Collection versions list",
-            page_type: "collection_versions",
-            template: "collections/versions",
-            schema: || schema_for!(CollectionVersionsListPage),
-        },
-        PageEntry {
-            heading: "Collection restore confirmation",
-            page_type: "collection_versions",
-            template: "collections/restore",
-            schema: || schema_for!(CollectionRestoreConfirmPage),
-        },
-        PageEntry {
-            heading: "Global edit form",
-            page_type: "global_edit",
-            template: "globals/edit",
-            schema: || schema_for!(GlobalEditPage),
-        },
-        PageEntry {
-            heading: "Global form-error re-render",
-            page_type: "global_edit",
-            template: "globals/edit",
-            schema: || schema_for!(GlobalFormErrorPage),
-        },
-        PageEntry {
-            heading: "Global versions list",
-            page_type: "global_versions",
-            template: "globals/versions",
-            schema: || schema_for!(GlobalVersionsListPage),
-        },
-        PageEntry {
-            heading: "Global restore confirmation",
-            page_type: "global_versions",
-            template: "globals/restore",
-            schema: || schema_for!(GlobalRestoreConfirmPage),
-        },
-    ]
+const AUTH_PAGES: &[PageEntry] = &[
+    PageEntry {
+        heading: "Login page",
+        page_type: "auth_login",
+        template: "auth/login",
+        schema: || schema_for!(LoginPage),
+    },
+    PageEntry {
+        heading: "MFA challenge page",
+        page_type: "auth_mfa",
+        template: "auth/mfa",
+        schema: || schema_for!(MfaPage),
+    },
+    PageEntry {
+        heading: "Forgot password page",
+        page_type: "auth_forgot",
+        template: "auth/forgot_password",
+        schema: || schema_for!(ForgotPasswordPage),
+    },
+    PageEntry {
+        heading: "Reset password page",
+        page_type: "auth_reset",
+        template: "auth/reset_password",
+        schema: || schema_for!(ResetPasswordPage),
+    },
+];
+
+const ERROR_PAGES: &[PageEntry] = &[PageEntry {
+    heading: "Error pages (403 / 404 / 500)",
+    page_type: "error_403 | error_404 | error_500",
+    template: "errors/{403,404,500}",
+    schema: || schema_for!(ErrorPage),
+}];
+
+const DASHBOARD_PAGES: &[PageEntry] = &[PageEntry {
+    heading: "Dashboard",
+    page_type: "dashboard",
+    template: "dashboard/index",
+    schema: || schema_for!(DashboardPage),
+}];
+
+const COLLECTION_PAGES: &[PageEntry] = &[
+    PageEntry {
+        heading: "Collection list",
+        page_type: "collection_list",
+        template: "collections/list",
+        schema: || schema_for!(CollectionListPage),
+    },
+    PageEntry {
+        heading: "Collection items list",
+        page_type: "collection_items",
+        template: "collections/items",
+        schema: || schema_for!(CollectionItemsListPage),
+    },
+    PageEntry {
+        heading: "Collection edit form",
+        page_type: "collection_edit",
+        template: "collections/edit",
+        schema: || schema_for!(CollectionEditPage),
+    },
+    PageEntry {
+        heading: "Collection create form",
+        page_type: "collection_create",
+        template: "collections/edit",
+        schema: || schema_for!(CollectionCreatePage),
+    },
+    PageEntry {
+        heading: "Collection form-error re-render",
+        page_type: "collection_edit | collection_create",
+        template: "collections/edit",
+        schema: || schema_for!(CollectionFormErrorPage),
+    },
+    PageEntry {
+        heading: "Collection delete confirmation",
+        page_type: "collection_delete",
+        template: "collections/delete",
+        schema: || schema_for!(CollectionDeleteConfirmPage),
+    },
+    PageEntry {
+        heading: "Collection versions list",
+        page_type: "collection_versions",
+        template: "collections/versions",
+        schema: || schema_for!(CollectionVersionsListPage),
+    },
+    PageEntry {
+        heading: "Collection restore confirmation",
+        page_type: "collection_versions",
+        template: "collections/restore",
+        schema: || schema_for!(CollectionRestoreConfirmPage),
+    },
+];
+
+const GLOBAL_PAGES: &[PageEntry] = &[
+    PageEntry {
+        heading: "Global edit form",
+        page_type: "global_edit",
+        template: "globals/edit",
+        schema: || schema_for!(GlobalEditPage),
+    },
+    PageEntry {
+        heading: "Global form-error re-render",
+        page_type: "global_edit",
+        template: "globals/edit",
+        schema: || schema_for!(GlobalFormErrorPage),
+    },
+    PageEntry {
+        heading: "Global versions list",
+        page_type: "global_versions",
+        template: "globals/versions",
+        schema: || schema_for!(GlobalVersionsListPage),
+    },
+    PageEntry {
+        heading: "Global restore confirmation",
+        page_type: "global_versions",
+        template: "globals/restore",
+        schema: || schema_for!(GlobalRestoreConfirmPage),
+    },
+];
+
+fn pages() -> impl Iterator<Item = &'static PageEntry> {
+    AUTH_PAGES
+        .iter()
+        .chain(ERROR_PAGES)
+        .chain(DASHBOARD_PAGES)
+        .chain(COLLECTION_PAGES)
+        .chain(GLOBAL_PAGES)
 }
 
 fn definitions() -> Vec<(&'static str, Schema)> {
@@ -323,7 +340,7 @@ fn render_type(prop: &Value) -> String {
         if non_null.len() == 1 {
             let inner = format_simple_type(non_null[0], prop);
             return if nullable {
-                format!("Option<{}>", inner)
+                format!("Option<{inner}>")
             } else {
                 inner
             };
@@ -357,9 +374,8 @@ fn format_simple_type(t: &str, prop: &Value) -> String {
         "array" => {
             let item_ty = prop
                 .get("items")
-                .map(render_type)
-                .unwrap_or_else(|| "any".to_string());
-            format!("Vec<{}>", item_ty)
+                .map_or_else(|| "any".to_string(), render_type);
+            format!("Vec<{item_ty}>")
         }
         "object" => "Object".to_string(),
         other => other.to_string(),
@@ -370,7 +386,6 @@ fn format_simple_type(t: &str, prop: &Value) -> String {
 
 fn build_doc_context() -> DocContext {
     let pages: Vec<PageDoc> = pages()
-        .into_iter()
         .map(|p| {
             let schema = (p.schema)();
             PageDoc {
@@ -438,12 +453,13 @@ fn template_context_doc_is_in_sync() {
         let mut shown = 0usize;
         for (i, (g, c)) in g_lines.iter().zip(c_lines.iter()).enumerate() {
             if g != c {
-                hint.push_str(&format!(
-                    "  line {}:\n    committed: {}\n    generated: {}\n",
+                let _ = writeln!(
+                    hint,
+                    "  line {}:\n    committed: {}\n    generated: {}",
                     i + 1,
                     c,
                     g
-                ));
+                );
                 shown += 1;
                 if shown >= 3 {
                     hint.push_str("  ... (truncated)\n");
@@ -452,19 +468,19 @@ fn template_context_doc_is_in_sync() {
             }
         }
         if g_lines.len() != c_lines.len() {
-            hint.push_str(&format!(
-                "  line counts differ: committed={}, generated={}\n",
+            let _ = writeln!(
+                hint,
+                "  line counts differ: committed={}, generated={}",
                 c_lines.len(),
                 g_lines.len()
-            ));
+            );
         }
 
         panic!(
             "template-context.md is out of sync with the typed page contexts.\n\
              Regenerate with:\n\
              \n  UPDATE_SCHEMA_DOC=1 cargo test template_context_doc_is_in_sync\n\
-             \nFirst differing lines:\n{}",
-            hint
+             \nFirst differing lines:\n{hint}"
         );
     }
 }

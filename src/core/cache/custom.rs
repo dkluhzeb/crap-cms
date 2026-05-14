@@ -19,6 +19,7 @@ pub struct CustomCache {
 impl CustomCache {
     /// Create a new custom cache backend.
     /// The Lua state must have `crap._cache` functions registered.
+    #[must_use]
     pub fn new(lua: Lua) -> Self {
         Self { lua }
     }
@@ -29,15 +30,15 @@ impl CustomCache {
             .lua
             .globals()
             .get("crap")
-            .map_err(|e| anyhow!("crap global not found: {}", e))?;
+            .map_err(|e| anyhow!("crap global not found: {e}"))?;
 
         let cache: mlua::Table = crap
             .get("_cache")
-            .map_err(|e| anyhow!("crap._cache not found: {}", e))?;
+            .map_err(|e| anyhow!("crap._cache not found: {e}"))?;
 
         cache
             .get(name)
-            .map_err(|e| anyhow!("crap._cache.{} not found: {}", name, e))
+            .map_err(|e| anyhow!("crap._cache.{name} not found: {e}"))
     }
 }
 
@@ -46,12 +47,12 @@ impl CacheBackend for CustomCache {
         let func = self.get_fn("get")?;
         let result: mlua::Value = func
             .call(key.to_string())
-            .map_err(|e| anyhow!("custom cache get error: {:#}", e))?;
+            .map_err(|e| anyhow!("custom cache get error: {e:#}"))?;
 
         match result {
             mlua::Value::Nil => Ok(None),
             mlua::Value::String(s) => Ok(Some(s.as_bytes().to_vec())),
-            other => bail!("custom cache get returned unexpected type: {:?}", other),
+            other => bail!("custom cache get returned unexpected type: {other:?}"),
         }
     }
 
@@ -59,21 +60,21 @@ impl CacheBackend for CustomCache {
         let func = self.get_fn("set")?;
 
         func.call::<()>((key.to_string(), self.lua.create_string(value)?))
-            .map_err(|e| anyhow!("custom cache set error: {:#}", e))
+            .map_err(|e| anyhow!("custom cache set error: {e:#}"))
     }
 
     fn delete(&self, key: &str) -> Result<()> {
         let func = self.get_fn("delete")?;
 
         func.call::<()>(key.to_string())
-            .map_err(|e| anyhow!("custom cache delete error: {:#}", e))
+            .map_err(|e| anyhow!("custom cache delete error: {e:#}"))
     }
 
     fn clear(&self) -> Result<()> {
         let func = self.get_fn("clear")?;
 
         func.call::<()>(())
-            .map_err(|e| anyhow!("custom cache clear error: {:#}", e))
+            .map_err(|e| anyhow!("custom cache clear error: {e:#}"))
     }
 
     fn has(&self, key: &str) -> Result<bool> {
@@ -81,7 +82,7 @@ impl CacheBackend for CustomCache {
             Ok(func) => {
                 let result: bool = func
                     .call(key.to_string())
-                    .map_err(|e| anyhow!("custom cache has error: {:#}", e))?;
+                    .map_err(|e| anyhow!("custom cache has error: {e:#}"))?;
                 Ok(result)
             }
             Err(_) => {
@@ -105,7 +106,7 @@ mod tests {
     fn setup_lua() -> Lua {
         let lua = Lua::new();
         lua.load(
-            r#"
+            r"
             crap = {}
             crap._cache = {}
 
@@ -130,7 +131,7 @@ mod tests {
             crap._cache.has = function(key)
                 return store[key] ~= nil
             end
-            "#,
+            ",
         )
         .exec()
         .expect("Lua setup failed");
@@ -201,7 +202,7 @@ mod tests {
     fn has_fallback_without_has_function() {
         let lua = Lua::new();
         lua.load(
-            r#"
+            r"
             crap = {}
             crap._cache = {}
             local store = {}
@@ -211,7 +212,7 @@ mod tests {
             crap._cache.delete = function(key) store[key] = nil end
             crap._cache.clear = function() store = {} end
             -- No has function — should fall back to get
-            "#,
+            ",
         )
         .exec()
         .expect("Lua setup failed");

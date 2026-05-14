@@ -3,7 +3,7 @@
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::core::Claims;
+use crate::{core::Claims, typegen::LuaAnnotation};
 
 /// Identifying data about the currently authenticated user.
 #[derive(Serialize, JsonSchema)]
@@ -21,5 +21,15 @@ impl UserContext {
             id: claims.sub.to_string(),
             collection: claims.collection.to_string(),
         }
+    }
+}
+
+impl LuaAnnotation for UserContext {
+    fn render_lua_annotation(out: &mut String) {
+        out.push_str("---@class crap.template.user\n");
+        out.push_str("---@field id string\n");
+        out.push_str("---@field email string\n");
+        out.push_str("---@field collection string\n");
+        out.push('\n');
     }
 }

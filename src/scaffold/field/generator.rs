@@ -53,6 +53,11 @@ pub struct MakeFieldOptions<'a> {
 }
 
 /// Scaffold the three files.
+///
+/// # Errors
+///
+/// Returns an error if the name is invalid, the base type is unknown, any
+/// target file already exists without `--force`, or writing fails.
 pub fn make_field(opts: &MakeFieldOptions) -> Result<()> {
     validate_slug(opts.name)?;
     let base_type = opts.base_type.unwrap_or("number");

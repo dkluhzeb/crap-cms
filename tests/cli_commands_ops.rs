@@ -3,6 +3,20 @@
 //! Tests for command library functions (sections 18-30):
 //! direct Rust calls without invoking the binary.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
@@ -24,7 +38,7 @@ fn fixture_dir() -> PathBuf {
 }
 
 /// Copy fixture dir to a temp dir, init Lua, create pool, sync schema.
-/// Returns (TempDir, DbPool, Arc<Registry>).
+/// Returns (`TempDir`, `DbPool`, Arc<Registry>).
 fn full_setup() -> (
     tempfile::TempDir,
     DbPool,
@@ -57,7 +71,7 @@ fn copy_dir(src: &Path, dst: &Path) {
     }
 }
 
-/// Create a user in an auth collection via query::create + update_password.
+/// Create a user in an auth collection via `query::create` + `update_password`.
 fn create_user(
     pool: &DbPool,
     def: &crap_cms::core::CollectionDefinition,
@@ -306,7 +320,7 @@ fn cmd_user_delete_nonexistent_email_errors() {
     });
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("No user found"), "error: {}", err);
+    assert!(err.contains("No user found"), "error: {err}");
 }
 
 #[test]
@@ -403,7 +417,7 @@ fn cmd_user_lock_non_auth_errors() {
     );
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("not an auth collection"), "error: {}", err);
+    assert!(err.contains("not an auth collection"), "error: {err}");
 }
 
 #[test]
@@ -419,7 +433,7 @@ fn cmd_user_unlock_non_auth_errors() {
     );
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("not an auth collection"), "error: {}", err);
+    assert!(err.contains("not an auth collection"), "error: {err}");
 }
 
 #[test]
@@ -436,7 +450,7 @@ fn cmd_user_delete_non_auth_errors() {
     });
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("not an auth collection"), "error: {}", err);
+    assert!(err.contains("not an auth collection"), "error: {err}");
 }
 
 #[test]
@@ -454,7 +468,7 @@ fn cmd_user_change_password_non_auth_errors() {
     });
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("not an auth collection"), "error: {}", err);
+    assert!(err.contains("not an auth collection"), "error: {err}");
 }
 
 #[test]
@@ -472,7 +486,7 @@ fn cmd_user_create_missing_collection_errors() {
     });
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("not found"), "error: {}", err);
+    assert!(err.contains("not found"), "error: {err}");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -552,7 +566,7 @@ fn cmd_jobs_trigger_nonexistent_errors() {
     );
     assert!(result.is_err(), "triggering nonexistent job should fail");
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("not defined"), "error: {}", err);
+    assert!(err.contains("not defined"), "error: {err}");
 }
 
 #[test]
@@ -630,7 +644,7 @@ fn cmd_jobs_status_not_found() {
         "jobs status with nonexistent ID should fail"
     );
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("not found"), "error: {}", err);
+    assert!(err.contains("not found"), "error: {err}");
 }
 
 #[test]
@@ -696,7 +710,7 @@ fn cmd_jobs_purge_invalid_duration() {
     );
     assert!(result.is_err(), "purge with invalid duration should fail");
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("Invalid duration"), "error: {}", err);
+    assert!(err.contains("Invalid duration"), "error: {err}");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -805,7 +819,7 @@ fn cmd_templates_list_all() {
 
 #[test]
 fn cmd_templates_list_templates_only() {
-    let result = commands::templates::list(Some("templates".to_string()), false);
+    let result = commands::templates::list(Some("templates"), false);
     assert!(
         result.is_ok(),
         "templates list templates should succeed: {:?}",
@@ -815,7 +829,7 @@ fn cmd_templates_list_templates_only() {
 
 #[test]
 fn cmd_templates_list_static_only() {
-    let result = commands::templates::list(Some("static".to_string()), false);
+    let result = commands::templates::list(Some("static"), false);
     assert!(
         result.is_ok(),
         "templates list static should succeed: {:?}",
@@ -825,7 +839,7 @@ fn cmd_templates_list_static_only() {
 
 #[test]
 fn cmd_templates_list_invalid_type() {
-    let result = commands::templates::list(Some("invalid".to_string()), false);
+    let result = commands::templates::list(Some("invalid"), false);
     assert!(
         result.is_err(),
         "templates list with invalid type should fail"
@@ -865,8 +879,7 @@ fn cmd_templates_extract_specific() {
 fn cmd_templates_extract_all_templates() {
     let tmp = tempfile::tempdir().expect("tempdir");
 
-    let result =
-        commands::templates::extract(tmp.path(), &[], true, Some("templates".to_string()), false);
+    let result = commands::templates::extract(tmp.path(), &[], true, Some("templates"), false);
     assert!(
         result.is_ok(),
         "templates extract all templates should succeed: {:?}",
@@ -879,8 +892,7 @@ fn cmd_templates_extract_all_templates() {
 fn cmd_templates_extract_all_static() {
     let tmp = tempfile::tempdir().expect("tempdir");
 
-    let result =
-        commands::templates::extract(tmp.path(), &[], true, Some("static".to_string()), false);
+    let result = commands::templates::extract(tmp.path(), &[], true, Some("static"), false);
     assert!(
         result.is_ok(),
         "templates extract all static should succeed: {:?}",
@@ -899,7 +911,7 @@ fn cmd_templates_extract_no_paths_no_all_errors() {
         "extract with no paths and no --all should fail"
     );
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("--all"), "error: {}", err);
+    assert!(err.contains("--all"), "error: {err}");
 }
 
 #[test]
@@ -959,18 +971,18 @@ fn cmd_migrate_up() {
     std::fs::create_dir_all(&migrations_dir).unwrap();
     std::fs::write(
         migrations_dir.join("20240101000000_noop.lua"),
-        r#"
+        r"
 local M = {}
 function M.up()
 end
 function M.down()
 end
 return M
-"#,
+",
     )
     .unwrap();
 
-    let result = commands::db::migrate(&config_dir, commands::MigrateAction::Up);
+    let result = commands::db::migrate(&config_dir, &commands::MigrateAction::Up);
     assert!(
         result.is_ok(),
         "migrate up should succeed: {:?}",
@@ -991,7 +1003,7 @@ fn cmd_migrate_up_no_pending() {
     copy_dir(&fixture_dir(), &config_dir);
 
     // No migration files — should succeed with "no pending" message
-    let result = commands::db::migrate(&config_dir, commands::MigrateAction::Up);
+    let result = commands::db::migrate(&config_dir, &commands::MigrateAction::Up);
     assert!(
         result.is_ok(),
         "migrate up with no pending should succeed: {:?}",
@@ -1008,7 +1020,7 @@ fn cmd_migrate_list() {
     // Create a migration
     scaffold::make_migration(&config_dir, "test_list").unwrap();
 
-    let result = commands::db::migrate(&config_dir, commands::MigrateAction::List);
+    let result = commands::db::migrate(&config_dir, &commands::MigrateAction::List);
     assert!(
         result.is_ok(),
         "migrate list should succeed: {:?}",
@@ -1022,7 +1034,7 @@ fn cmd_migrate_list_empty() {
     let config_dir = tmp.path().join("config");
     copy_dir(&fixture_dir(), &config_dir);
 
-    let result = commands::db::migrate(&config_dir, commands::MigrateAction::List);
+    let result = commands::db::migrate(&config_dir, &commands::MigrateAction::List);
     assert!(
         result.is_ok(),
         "migrate list with no migrations should succeed: {:?}",
@@ -1036,7 +1048,7 @@ fn cmd_migrate_down_no_applied() {
     let config_dir = tmp.path().join("config");
     copy_dir(&fixture_dir(), &config_dir);
 
-    let result = commands::db::migrate(&config_dir, commands::MigrateAction::Down { steps: 1 });
+    let result = commands::db::migrate(&config_dir, &commands::MigrateAction::Down { steps: 1 });
     assert!(
         result.is_ok(),
         "migrate down with nothing to roll back should succeed: {:?}",
@@ -1069,7 +1081,7 @@ fn cmd_migrate_fresh_with_confirm() {
     // Run fresh with confirm
     let result = commands::db::migrate(
         &config_dir,
-        commands::MigrateAction::Fresh { confirm: true },
+        &commands::MigrateAction::Fresh { confirm: true },
     );
     assert!(
         result.is_ok(),
@@ -1111,7 +1123,7 @@ fn cmd_backup_with_output_dir() {
     // Should contain a timestamped subdirectory with crap.db and manifest.json
     let subdirs: Vec<_> = std::fs::read_dir(&backup_output)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.path().is_dir())
         .collect();
     assert_eq!(subdirs.len(), 1);

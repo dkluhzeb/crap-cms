@@ -28,7 +28,7 @@ pub enum DisplayConditionResult {
 }
 
 /// Events that trigger hooks.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookEvent {
     BeforeValidate,
     BeforeChange,
@@ -43,6 +43,7 @@ pub enum HookEvent {
 
 impl HookEvent {
     /// Return the Lua event name string for looking up registered hooks.
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             HookEvent::BeforeValidate => "before_validate",
@@ -115,7 +116,7 @@ impl TxContext {
 unsafe impl Send for TxContext {}
 unsafe impl Sync for TxContext {}
 
-/// Optional authenticated user context injected alongside TxContext.
+/// Optional authenticated user context injected alongside `TxContext`.
 /// CRUD closures read this when overrideAccess = false.
 pub(crate) struct UserContext(pub(crate) Option<Document>);
 unsafe impl Send for UserContext {}
@@ -125,7 +126,7 @@ unsafe impl Sync for UserContext {}
 /// Lua hooks read this to get the current user's preferred UI language.
 pub(crate) struct UiLocaleContext(pub(crate) Option<String>);
 
-/// Maximum Lua instructions per hook invocation. Stored in app_data.
+/// Maximum Lua instructions per hook invocation. Stored in `app_data`.
 pub(crate) struct MaxInstructions(pub(crate) u64);
 
 /// Storage backend, stored in Lua `app_data` for upload file cleanup in CRUD hooks.
@@ -133,13 +134,13 @@ pub(crate) struct LuaStorage(pub(crate) SharedStorage);
 
 /// User-invalidation transport, stored in Lua `app_data` so CRUD delete
 /// and lock paths can publish live-stream tear-down signals from inside
-/// Lua-invoked service calls. `None` (missing app_data) = no-op.
+/// Lua-invoked service calls. `None` (missing `app_data`) = no-op.
 pub(crate) struct LuaInvalidationTransport(pub(crate) SharedInvalidationTransport);
 
 /// Process-wide populate singleflight, stored in Lua `app_data` so Lua-invoked
 /// `crap.collections.find` / `crap.collections.find_by_id` calls can dedup
 /// populate cache-miss fetches across concurrent requests. `None` (missing
-/// app_data) falls back to a fresh per-call singleflight. For override-access
+/// `app_data`) falls back to a fresh per-call singleflight. For override-access
 /// Lua calls the service layer's guardrail discards whatever we pass here,
 /// so the Arc only pays off for ordinary (non-override) Lua reads.
 pub(crate) struct LuaPopulateSingleflight(pub(crate) SharedPopulateSingleflight);
@@ -147,7 +148,7 @@ pub(crate) struct LuaPopulateSingleflight(pub(crate) SharedPopulateSingleflight)
 /// Locale configuration, stored in Lua `app_data` so Lua CRUD write paths
 /// (notably `unpublish`) can build a default `LocaleContext` for raw reads
 /// of collections with localized fields. Without this the service layer
-/// falls back to bare column names and SQLite errors with `no such column`.
+/// falls back to bare column names and `SQLite` errors with `no such column`.
 pub(crate) struct LuaLocaleConfig(pub(crate) LocaleConfig);
 
 /// Infrastructure for Lua CRUD event publishing, cache invalidation, and event
@@ -169,6 +170,7 @@ pub struct LuaCrudInfra {
 impl LuaCrudInfra {
     /// Build from a parent `ServiceContext`, attaching the given queues.
     /// Clones the context's event transport and cache (cheap Arc clones).
+    #[must_use]
     pub fn from_ctx(
         ctx: &ServiceContext,
         event_queue: Option<EventQueue>,
@@ -235,14 +237,14 @@ impl Drop for HookDepthGuard<'_> {
     }
 }
 
-/// RAII guard that removes TxContext, UserContext, and UiLocaleContext from Lua app_data on drop.
+/// RAII guard that removes `TxContext`, `UserContext`, and `UiLocaleContext` from Lua `app_data` on drop.
 /// Prevents leaks when hooks return errors via `?`.
 pub(crate) struct TxContextGuard<'a> {
     lua: &'a Lua,
 }
 
 impl<'a> TxContextGuard<'a> {
-    /// Set TxContext, UserContext, UiLocaleContext, and optionally LuaCrudInfra,
+    /// Set `TxContext`, `UserContext`, `UiLocaleContext`, and optionally `LuaCrudInfra`,
     /// returning a guard that cleans up on drop.
     pub(crate) fn set(
         lua: &'a Lua,
@@ -318,8 +320,8 @@ mod tests {
         assert_eq!(lua.app_data_ref::<HookDepth>().unwrap().0, 2);
     }
 
-    /// Regression: LuaStorage must be retrievable from Lua app_data so that
-    /// delete/delete_many CRUD functions can clean up upload files.
+    /// Regression: `LuaStorage` must be retrievable from Lua `app_data` so that
+    /// `delete/delete_many` CRUD functions can clean up upload files.
     #[test]
     fn lua_storage_stored_and_retrieved() {
         use std::sync::Arc;

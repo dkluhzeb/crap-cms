@@ -276,6 +276,20 @@ pub(crate) fn extract_status_filter(raw_query: &str) -> Option<Vec<String>> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::*;
     use crate::core::FieldType;
@@ -378,7 +392,7 @@ mod tests {
                 assert_eq!(f.field, "title");
                 match &f.op {
                     FilterOp::In(vals) => assert_eq!(vals, &vec!["foo".to_string(), "bar".into()]),
-                    other => panic!("expected In, got {:?}", other),
+                    other => panic!("expected In, got {other:?}"),
                 }
             }
             _ => panic!("expected Single"),
@@ -396,7 +410,7 @@ mod tests {
         match &result[0] {
             FilterClause::Single(f) => match &f.op {
                 FilterOp::In(vals) => assert_eq!(vals.len(), 3),
-                other => panic!("expected In, got {:?}", other),
+                other => panic!("expected In, got {other:?}"),
             },
             _ => panic!("expected Single"),
         }
@@ -433,7 +447,7 @@ mod tests {
         assert_eq!(result.len(), 1);
         match &result[0] {
             FilterClause::Single(f) => {
-                assert!(matches!(&f.op, FilterOp::Equals(v) if v == "foo"))
+                assert!(matches!(&f.op, FilterOp::Equals(v) if v == "foo"));
             }
             _ => panic!("expected Single"),
         }
@@ -455,7 +469,7 @@ mod tests {
                 assert_eq!(groups[0][0].field, "title");
                 assert_eq!(groups[1][0].field, "slug");
             }
-            _ => panic!("expected Or, got {:?}", result),
+            _ => panic!("expected Or, got {result:?}"),
         }
     }
 
@@ -508,7 +522,7 @@ mod tests {
                 );
                 match &groups[0][0].op {
                     FilterOp::In(vals) => assert_eq!(vals.len(), 2),
-                    other => panic!("expected In inside bucket 0, got {:?}", other),
+                    other => panic!("expected In inside bucket 0, got {other:?}"),
                 }
             }
             _ => panic!("expected Or"),
@@ -550,7 +564,7 @@ mod tests {
         );
         match &result[0] {
             FilterClause::Or(groups) => assert_eq!(groups.len(), 2),
-            _ => panic!("expected Or, got {:?}", result),
+            _ => panic!("expected Or, got {result:?}"),
         }
     }
 

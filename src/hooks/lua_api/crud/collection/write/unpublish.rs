@@ -13,7 +13,13 @@ use crate::{
     hooks::{
         HookContext, HookEvent,
         lifecycle::{converters::document_to_lua_table, run_hooks_inner},
-        lua_api::crud::{get_tx_conn, helpers::*},
+        lua_api::crud::{
+            get_tx_conn,
+            helpers::{
+                check_hook_depth, get_opt_bool, hook_locale_config, hook_lua_infra, hook_ui_locale,
+                hook_user, resolve_collection,
+            },
+        },
     },
     service::{LuaWriteHooks, ServiceContext, persist_unpublish, unpublish_document},
 };
@@ -184,27 +190,26 @@ impl<'a> UnpublishCtxBuilder<'a> {
 fn unpublish_document_lua(
     lua: &Lua,
     reg: &Registry,
-    collection: String,
-    id: String,
-    opts: Option<Table>,
+    collection: &str,
+    id: &str,
+    opts: Option<&Table>,
 ) -> mlua::Result<Table> {
     let conn = get_tx_conn(lua)?;
 
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
     let lua_infra = hook_lua_infra(lua);
-    let override_access = get_opt_bool(&opts, "overrideAccess", false)?;
-    let run_hooks = get_opt_bool(&opts, "hooks", true)?;
-    let def = resolve_collection(reg, &collection)?;
+    let override_access = get_opt_bool(opts, "overrideAccess", false);
+    let run_hooks = get_opt_bool(opts, "hooks", true);
+    let def = resolve_collection(reg, collection)?;
 
     if !def.has_versions() {
         return Err(RuntimeError(format!(
-            "Collection '{}' does not have versioning enabled",
-            collection
+            "Collection '{collection}' does not have versioning enabled"
         )));
     }
 
-    let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, &collection, "update");
+    let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, collection, "update");
 
     let write_hooks = LuaWriteHooks::builder(lua)
         .user(user.as_ref())
@@ -216,7 +221,7 @@ fn unpublish_document_lua(
 
     let locale_config = hook_locale_config(lua);
 
-    let ctx = ServiceContext::collection(&collection, &def)
+    let ctx = ServiceContext::collection(collection, &def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
@@ -225,7 +230,7 @@ fn unpublish_document_lua(
         .lua_infra(lua_infra.as_ref())
         .build();
 
-    let doc = unpublish_document(&ctx, &id)
+    let doc = unpublish_document(&ctx, id)
         .map_err(|e| RuntimeError(format!("unpublish error: {e:#}")))?;
 
     document_to_lua_table(lua, &doc)
@@ -236,7 +241,7 @@ fn unpublish_document_lua(
 pub(crate) fn register_unpublish(lua: &Lua, table: &Table, registry: Arc<Registry>) -> Result<()> {
     let unpublish_fn = lua.create_function(
         move |lua, (collection, id, opts): (String, String, Option<Table>)| {
-            unpublish_document_lua(lua, &registry, collection, id, opts)
+            unpublish_document_lua(lua, &registry, &collection, &id, opts.as_ref())
         },
     )?;
     table.set("unpublish", unpublish_fn)?;

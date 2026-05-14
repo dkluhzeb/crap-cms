@@ -14,6 +14,10 @@ use super::helpers::delete_junction_rows;
 ///
 /// **Must be called within a transaction.** The DELETE + INSERT sequence is not atomic on its own;
 /// without a wrapping transaction, a failed INSERT leaves the relationship in an inconsistent state.
+///
+/// # Errors
+///
+/// Returns a backend error if the DELETE or INSERT fails.
 pub fn set_related_ids(
     conn: &dyn DbConnection,
     collection: &str,
@@ -45,7 +49,7 @@ pub fn set_related_ids(
 
             params.push(DbValue::Text(parent_id.to_string()));
             params.push(DbValue::Text(id.clone()));
-            params.push(DbValue::Integer(i as i64));
+            params.push(DbValue::Integer(i64::try_from(i).unwrap_or(i64::MAX)));
             params.push(DbValue::Text(loc.to_string()));
         }
 
@@ -69,7 +73,7 @@ pub fn set_related_ids(
 
             params.push(DbValue::Text(parent_id.to_string()));
             params.push(DbValue::Text(id.clone()));
-            params.push(DbValue::Integer(i as i64));
+            params.push(DbValue::Integer(i64::try_from(i).unwrap_or(i64::MAX)));
         }
 
         let sql = format!(
@@ -85,6 +89,10 @@ pub fn set_related_ids(
 
 /// Find related IDs for a has-many relationship junction table, ordered.
 /// When `locale` is Some, filters by `_locale`.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails.
 pub fn find_related_ids(
     conn: &dyn DbConnection,
     collection: &str,
@@ -98,8 +106,7 @@ pub fn find_related_ids(
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
         (
             format!(
-                "SELECT related_id FROM \"{}\" WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order",
-                table_name
+                "SELECT related_id FROM \"{table_name}\" WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order"
             ),
             vec![
                 DbValue::Text(parent_id.to_string()),
@@ -110,8 +117,7 @@ pub fn find_related_ids(
         let p1 = conn.placeholder(1);
         (
             format!(
-                "SELECT related_id FROM \"{}\" WHERE parent_id = {p1} ORDER BY _order",
-                table_name
+                "SELECT related_id FROM \"{table_name}\" WHERE parent_id = {p1} ORDER BY _order"
             ),
             vec![DbValue::Text(parent_id.to_string())],
         )
@@ -133,6 +139,10 @@ pub fn find_related_ids(
 ///
 /// **Must be called within a transaction.** The DELETE + INSERT sequence is not atomic on its own;
 /// without a wrapping transaction, a failed INSERT leaves the relationship in an inconsistent state.
+///
+/// # Errors
+///
+/// Returns a backend error if the DELETE or INSERT fails.
 pub fn set_polymorphic_related(
     conn: &dyn DbConnection,
     collection: &str,
@@ -166,7 +176,7 @@ pub fn set_polymorphic_related(
             params.push(DbValue::Text(parent_id.to_string()));
             params.push(DbValue::Text(rel_id.clone()));
             params.push(DbValue::Text(rel_col.clone()));
-            params.push(DbValue::Integer(i as i64));
+            params.push(DbValue::Integer(i64::try_from(i).unwrap_or(i64::MAX)));
             params.push(DbValue::Text(loc.to_string()));
         }
 
@@ -192,7 +202,7 @@ pub fn set_polymorphic_related(
             params.push(DbValue::Text(parent_id.to_string()));
             params.push(DbValue::Text(rel_id.clone()));
             params.push(DbValue::Text(rel_col.clone()));
-            params.push(DbValue::Integer(i as i64));
+            params.push(DbValue::Integer(i64::try_from(i).unwrap_or(i64::MAX)));
         }
 
         let sql = format!(
@@ -208,6 +218,10 @@ pub fn set_polymorphic_related(
 
 /// Find related items for a polymorphic has-many relationship junction table.
 /// Returns `(related_collection, related_id)` pairs ordered by _order.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails.
 pub fn find_polymorphic_related(
     conn: &dyn DbConnection,
     collection: &str,
@@ -215,14 +229,13 @@ pub fn find_polymorphic_related(
     parent_id: &str,
     locale: Option<&str>,
 ) -> Result<Vec<(String, String)>> {
-    let table_name = format!("{}_{}", collection, field);
+    let table_name = format!("{collection}_{field}");
 
     let (sql, params) = if let Some(loc) = locale {
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
         (
             format!(
-                "SELECT related_collection, related_id FROM \"{}\" WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order",
-                table_name
+                "SELECT related_collection, related_id FROM \"{table_name}\" WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order"
             ),
             vec![
                 DbValue::Text(parent_id.to_string()),
@@ -233,8 +246,7 @@ pub fn find_polymorphic_related(
         let p1 = conn.placeholder(1);
         (
             format!(
-                "SELECT related_collection, related_id FROM \"{}\" WHERE parent_id = {p1} ORDER BY _order",
-                table_name
+                "SELECT related_collection, related_id FROM \"{table_name}\" WHERE parent_id = {p1} ORDER BY _order"
             ),
             vec![DbValue::Text(parent_id.to_string())],
         )

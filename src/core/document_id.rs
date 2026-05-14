@@ -19,6 +19,7 @@ impl DocumentId {
     }
 
     /// Consume the wrapper and return the inner `String`.
+    #[must_use]
     pub fn into_inner(self) -> String {
         self.0
     }

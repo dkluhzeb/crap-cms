@@ -56,7 +56,9 @@ fn resolve_polymorphic_ref(
     locale_ctx: Option<&LocaleContext>,
 ) -> Option<RelationshipSelectedItem> {
     let related_def = reg.get_collection(col)?;
-    let title_field = related_def.title_field().map(|s| s.to_string());
+    let title_field = related_def
+        .title_field()
+        .map(std::string::ToString::to_string);
 
     // Internal UI enrichment — direct query for display labels, not a user-facing read.
     let doc = query::find_by_id(conn, col, related_def, id, locale_ctx)
@@ -77,7 +79,7 @@ fn resolve_polymorphic_ref(
     })
 }
 
-/// Build selected_items for a polymorphic relationship field.
+/// Build `selected_items` for a polymorphic relationship field.
 ///
 /// Polymorphic values are stored as "collection/id" composites. Each item is
 /// looked up in its respective collection to get its label.
@@ -196,9 +198,8 @@ pub fn enrich_field_contexts(
     opts: &EnrichOptions,
 ) {
     let reg = &state.registry;
-    let conn = match state.pool.get() {
-        Ok(c) => c,
-        Err(_) => return,
+    let Ok(conn) = state.pool.get() else {
+        return;
     };
 
     let rel_locale_ctx =

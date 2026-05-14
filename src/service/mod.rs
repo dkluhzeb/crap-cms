@@ -249,17 +249,19 @@ mod tests {
             "url should be stored"
         );
         assert_eq!(
-            doc.fields.get("width").and_then(|v| v.as_f64()),
+            doc.fields.get("width").and_then(serde_json::Value::as_f64),
             Some(1920.0),
             "width should be stored"
         );
         assert_eq!(
-            doc.fields.get("height").and_then(|v| v.as_f64()),
+            doc.fields.get("height").and_then(serde_json::Value::as_f64),
             Some(1080.0),
             "height should be stored"
         );
         assert_eq!(
-            doc.fields.get("filesize").and_then(|v| v.as_f64()),
+            doc.fields
+                .get("filesize")
+                .and_then(serde_json::Value::as_f64),
             Some(12345.0),
             "filesize should be stored"
         );

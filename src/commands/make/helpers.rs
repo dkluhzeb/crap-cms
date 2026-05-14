@@ -8,10 +8,9 @@ use crate::{config::CrapConfig, core::Registry, hooks, scaffold::ConditionFieldI
 use super::hook::load_field_infos_from_registry;
 
 /// Check if localization is enabled in the config dir's crap.toml.
+#[must_use]
 pub fn has_locales_enabled(config_dir: &Path) -> bool {
-    CrapConfig::load(config_dir)
-        .map(|cfg| cfg.locale.is_enabled())
-        .unwrap_or(false)
+    CrapConfig::load(config_dir).is_ok_and(|cfg| cfg.locale.is_enabled())
 }
 
 /// Try to load the Lua registry once for reuse across make helpers.
@@ -23,9 +22,14 @@ pub(super) fn try_load_registry(config_dir: &Path) -> Option<Arc<Registry>> {
 }
 
 /// Try to load collection slugs from the config dir for interactive selection.
+#[must_use]
 pub fn try_load_collection_slugs(config_dir: &Path) -> Option<Vec<String>> {
     let registry = try_load_registry(config_dir)?;
-    let mut slugs: Vec<String> = registry.collections.keys().map(|s| s.to_string()).collect();
+    let mut slugs: Vec<String> = registry
+        .collections
+        .keys()
+        .map(std::string::ToString::to_string)
+        .collect();
 
     slugs.sort();
 
@@ -33,6 +37,7 @@ pub fn try_load_collection_slugs(config_dir: &Path) -> Option<Vec<String>> {
 }
 
 /// Try to load field names for a collection from the config dir.
+#[must_use]
 pub fn try_load_field_names(config_dir: &Path, collection: &str) -> Option<Vec<String>> {
     let registry = try_load_registry(config_dir)?;
     let def = registry.get_collection(collection)?;
@@ -41,11 +46,12 @@ pub fn try_load_field_names(config_dir: &Path, collection: &str) -> Option<Vec<S
 }
 
 /// Try to load field definitions (name + type + options) for condition hook scaffolding.
+#[must_use]
 pub fn try_load_field_infos(
     config_dir: &Path,
     collection: &str,
 ) -> Option<Vec<ConditionFieldInfo>> {
     let registry = try_load_registry(config_dir)?;
 
-    load_field_infos_from_registry(&Some(registry), collection)
+    load_field_infos_from_registry(Some(&registry), collection)
 }

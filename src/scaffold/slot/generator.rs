@@ -63,6 +63,11 @@ pub struct MakeSlotOptions<'a> {
 }
 
 /// Scaffold the slot widget HBS file.
+///
+/// # Errors
+///
+/// Returns an error if the slot/file slug is invalid, the file already
+/// exists without `--force`, or writing fails.
 pub fn make_slot(opts: &MakeSlotOptions) -> Result<()> {
     validate_template_slug(opts.slot)?;
     let file = opts.file.unwrap_or("widget");
@@ -71,7 +76,7 @@ pub fn make_slot(opts: &MakeSlotOptions) -> Result<()> {
     let dir = paths::templates_slot_dir(opts.config_dir, opts.slot);
     fs::create_dir_all(&dir).context("Failed to create slots/<name>/ directory")?;
 
-    let file_path = dir.join(format!("{}.hbs", file));
+    let file_path = dir.join(format!("{file}.hbs"));
     refuse_file_overwrite(&file_path, opts.force)?;
 
     let hbs = render_slot_hbs(opts.slot, file)?;

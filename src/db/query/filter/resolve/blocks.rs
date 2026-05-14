@@ -53,7 +53,7 @@ pub(super) fn walk_block_fields(
         let field_def = current_fields
             .iter()
             .find(|f| f.name == seg)
-            .ok_or_else(|| anyhow!("Unknown field '{}' in block filter path", seg))?;
+            .ok_or_else(|| anyhow!("Unknown field '{seg}' in block filter path"))?;
 
         match field_def.field_type {
             FieldType::Blocks | FieldType::Array => {
@@ -89,15 +89,15 @@ pub(super) fn walk_block_fields(
             _ => {
                 // Scalar leaf
                 if !remaining.is_empty() {
-                    bail!("Scalar field '{}' cannot have sub-paths", seg);
+                    bail!("Scalar field '{seg}' cannot have sub-paths");
                 }
                 json_path_parts.push(seg.to_string());
                 let path = json_path_parts.join(".");
-                let expr = if !each_joins.is_empty() {
-                    let last_alias = &each_joins.last().expect("each_joins is non-empty").1;
-                    conn.json_extract_expr(&format!("{}.value", last_alias), &path)
-                } else {
+                let expr = if each_joins.is_empty() {
                     conn.json_extract_expr("data", &path)
+                } else {
+                    let last_alias = &each_joins.last().expect("each_joins is non-empty").1;
+                    conn.json_extract_expr(&format!("{last_alias}.value"), &path)
                 };
 
                 return Ok((each_joins, expr, Some(field_def.field_type.clone())));
@@ -114,9 +114,12 @@ fn build_block_type_expr(
     json_path_parts: &mut Vec<String>,
     _join_table: &str,
 ) -> String {
-    if !each_joins.is_empty() {
+    if each_joins.is_empty() {
+        json_path_parts.push("_block_type".to_string());
+        conn.json_extract_expr("data", &json_path_parts.join("."))
+    } else {
         let last_alias = &each_joins.last().expect("each_joins is non-empty").1;
-        let source = format!("{}.value", last_alias);
+        let source = format!("{last_alias}.value");
 
         if json_path_parts.is_empty() {
             conn.json_extract_expr(&source, "_block_type")
@@ -124,9 +127,6 @@ fn build_block_type_expr(
             json_path_parts.push("_block_type".to_string());
             conn.json_extract_expr(&source, &json_path_parts.join("."))
         }
-    } else {
-        json_path_parts.push("_block_type".to_string());
-        conn.json_extract_expr("data", &json_path_parts.join("."))
     }
 }
 
@@ -142,14 +142,17 @@ fn build_json_each_source(
     segment: &str,
     join_table: &str,
 ) -> String {
-    let mut path_parts: Vec<&str> = json_path_parts.iter().map(|s| s.as_str()).collect();
+    let mut path_parts: Vec<&str> = json_path_parts
+        .iter()
+        .map(std::string::String::as_str)
+        .collect();
     path_parts.push(segment);
     let json_path = path_parts.join(".");
 
     if let Some((_src, alias)) = each_joins.last() {
-        conn.json_extract_expr(&format!("{}.value", alias), &json_path)
+        conn.json_extract_expr(&format!("{alias}.value"), &json_path)
     } else {
-        conn.json_extract_expr(&format!("{}.data", join_table), &json_path)
+        conn.json_extract_expr(&format!("{join_table}.data"), &json_path)
     }
 }
 

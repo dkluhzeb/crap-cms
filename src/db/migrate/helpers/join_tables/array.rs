@@ -24,7 +24,13 @@ pub(super) fn sync_array_table(
     let table_name = join_table(collection_slug, full_name);
     let flat_subs = flatten_array_sub_fields(&field.fields);
 
-    if !table_exists(conn, &table_name)? {
+    if table_exists(conn, &table_name)? {
+        if has_locale_col {
+            ensure_locale_column(conn, &table_name, &locale_config.default_locale)?;
+        }
+
+        alter_array_table(conn, &table_name, &flat_subs)?;
+    } else {
         create_array_table(
             conn,
             &table_name,
@@ -33,12 +39,6 @@ pub(super) fn sync_array_table(
             has_locale_col,
             locale_config,
         )?;
-    } else {
-        if has_locale_col {
-            ensure_locale_column(conn, &table_name, &locale_config.default_locale)?;
-        }
-
-        alter_array_table(conn, &table_name, &flat_subs)?;
     }
 
     Ok(())
@@ -85,7 +85,7 @@ fn create_array_table(
 
     info!("Creating array table: {}", table_name);
     conn.execute_ddl(&sql, &[])
-        .with_context(|| format!("Failed to create array table {}", table_name))?;
+        .with_context(|| format!("Failed to create array table {table_name}"))?;
 
     Ok(())
 }
@@ -116,14 +116,10 @@ fn alter_array_table(
             let tz_col = tz_column(&sub_field.name);
 
             if !existing.contains(&tz_col) {
-                let sql = format!(
-                    "ALTER TABLE \"{}\" ADD COLUMN \"{}\" TEXT",
-                    table_name, tz_col
-                );
+                let sql = format!("ALTER TABLE \"{table_name}\" ADD COLUMN \"{tz_col}\" TEXT");
                 info!("Adding column to {}: {}", table_name, tz_col);
-                conn.execute_ddl(&sql, &[]).with_context(|| {
-                    format!("Failed to add column {} to {}", tz_col, table_name)
-                })?;
+                conn.execute_ddl(&sql, &[])
+                    .with_context(|| format!("Failed to add column {tz_col} to {table_name}"))?;
             }
         }
     }

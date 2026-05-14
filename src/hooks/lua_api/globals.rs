@@ -99,7 +99,7 @@ pub(super) fn register_globals_pool_init(
     Ok(())
 }
 
-/// Init-time define: parses + registers the global. The strict InitPhase
+/// Init-time define: parses + registers the global. The strict `InitPhase`
 /// guard rejects any caller that landed here outside init.
 fn define_init(lua: &Lua, reg: &SharedRegistry, slug: &str, config: &Table) -> mlua::Result<()> {
     if lua.app_data_ref::<InitPhase>().is_none() {
@@ -130,7 +130,7 @@ fn get(lua: &Lua, reg: &Registry, slug: &str) -> mlua::Result<Value> {
 fn list(lua: &Lua, reg: &Registry) -> mlua::Result<Table> {
     let map = lua.create_table()?;
 
-    for (slug, def) in reg.globals.iter() {
+    for (slug, def) in &reg.globals {
         map.set(&**slug, global_config_to_lua(lua, def)?)?;
     }
 

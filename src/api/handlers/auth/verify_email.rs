@@ -19,7 +19,7 @@ struct VerifyEmailBlockingInput {
     token: String,
 }
 
-fn verify_email_blocking(input: VerifyEmailBlockingInput) -> Result<bool, Status> {
+fn verify_email_blocking(input: &VerifyEmailBlockingInput) -> Result<bool, Status> {
     let mut conn = input
         .pool
         .get()
@@ -72,7 +72,7 @@ impl ContentService {
             token: req.token.clone(),
         };
 
-        let found = task::spawn_blocking(move || verify_email_blocking(input))
+        let found = task::spawn_blocking(move || verify_email_blocking(&input))
             .await
             .inspect_err(|e| error!("Verify email task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;

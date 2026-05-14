@@ -129,14 +129,14 @@ async fn spawn_create(
     state: &AdminState,
     slug: &str,
     def: &CollectionDefinition,
-    auth_user: &Option<Extension<AuthUser>>,
+    auth_user: Option<&Extension<AuthUser>>,
     input: CreateInput,
 ) -> Result<Result<service::WriteResult, ServiceError>, task::JoinError> {
     let locale = input.locale_ctx.as_ref().and_then(|ctx| match &ctx.mode {
         LocaleMode::Single(l) => Some(l.clone()),
         _ => None,
     });
-    let ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
+    let ui_locale = auth_user.map(|Extension(au)| au.ui_locale.clone());
 
     let args = CreateBlockingInput {
         pool: state.pool.clone(),
@@ -202,7 +202,7 @@ pub async fn create_action(
                 slug: &slug,
                 doc_id: None,
                 locale_ctx: None,
-                auth_user: &auth_user,
+                auth_user: auth_user.as_ref(),
             },
             form.raw_mut(),
             f,
@@ -232,7 +232,7 @@ pub async fn create_action(
         &state,
         &slug,
         &def,
-        &auth_user,
+        auth_user.as_ref(),
         CreateInput {
             form,
             password,
@@ -263,9 +263,14 @@ pub async fn create_action(
                 &state,
                 "You don't have permission to create items in this collection",
             ),
-            ServiceError::Validation(ref ve) => {
-                render_form_validation_errors(&state, &def, None, &form_for_error, ve, &auth_user)
-            }
+            ServiceError::Validation(ref ve) => render_form_validation_errors(
+                &state,
+                &def,
+                None,
+                &form_for_error,
+                ve,
+                auth_user.as_ref(),
+            ),
             other => {
                 error!("Create error: {}", other);
                 redirect_response(&paths::collection_create(&slug))

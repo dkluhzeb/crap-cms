@@ -46,6 +46,23 @@ pub struct RelationshipField {
     pub selected_items: Option<Vec<RelationshipSelectedItem>>,
 }
 
+impl RelationshipField {
+    /// Construct an uninitialized variant carrying only `base`. Enrichment
+    /// populates every other field from the field's relationship config.
+    #[must_use]
+    pub fn empty(base: BaseFieldData) -> Self {
+        Self {
+            base,
+            relationship_collection: None,
+            has_many: None,
+            polymorphic: None,
+            collections: None,
+            picker: None,
+            selected_items: None,
+        }
+    }
+}
+
 /// One row of a `selected_items` list. For polymorphic relationships the
 /// `collection` field is set so templates can render labels like
 /// `{collection} / {label}`. Upload `selected_items` reuse this same struct
@@ -108,6 +125,23 @@ pub struct UploadField {
     pub selected_preview_url: Option<String>,
 }
 
+impl UploadField {
+    /// Construct an uninitialized variant carrying only `base`. Enrichment
+    /// populates every other field from the field's upload config + value.
+    #[must_use]
+    pub fn empty(base: BaseFieldData) -> Self {
+        Self {
+            base,
+            relationship_collection: None,
+            has_many: None,
+            picker: None,
+            selected_items: None,
+            selected_filename: None,
+            selected_preview_url: None,
+        }
+    }
+}
+
 // ── Join ──────────────────────────────────────────────────────────
 
 /// Read-only inverse-reference field. The `readonly` flag on
@@ -132,6 +166,22 @@ pub struct JoinField {
     /// `{{#if join_count}}…{{/if}}`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub join_count: Option<usize>,
+}
+
+impl JoinField {
+    /// Construct an uninitialized variant carrying only `base`. Enrichment
+    /// populates the `join_collection` / `on` / `items` / `count` from the
+    /// field's join config + a reverse-lookup query.
+    #[must_use]
+    pub fn empty(base: BaseFieldData) -> Self {
+        Self {
+            base,
+            join_collection: None,
+            join_on: None,
+            join_items: None,
+            join_count: None,
+        }
+    }
 }
 
 /// One row of a [`JoinField::join_items`] list — the inverse-reference

@@ -49,7 +49,7 @@ pub(in crate::admin::handlers::collections) struct FormErrorParams<'a> {
     pub form: &'a FormData,
     pub error_map: &'a HashMap<String, String>,
     pub doc_id: Option<&'a str>,
-    pub auth_user: &'a Option<Extension<AuthUser>>,
+    pub auth_user: Option<&'a Extension<AuthUser>>,
     pub toast_msg: &'a str,
 }
 
@@ -138,7 +138,7 @@ pub(in crate::admin::handlers::collections) fn render_upload_error(
     state: &AdminState,
     def: &CollectionDefinition,
     form_data: &HashMap<String, String>,
-    auth_user: &Option<Extension<AuthUser>>,
+    auth_user: Option<&Extension<AuthUser>>,
     err_msg: &str,
 ) -> Response {
     let form = FormData::raw_only(form_data.clone());
@@ -160,7 +160,7 @@ pub(in crate::admin::handlers::collections) fn render_edit_upload_error(
     def: &CollectionDefinition,
     form_data: &HashMap<String, String>,
     id: &str,
-    auth_user: &Option<Extension<AuthUser>>,
+    auth_user: Option<&Extension<AuthUser>>,
     err_msg: &str,
 ) -> Response {
     let form = FormData::raw_only(form_data.clone());
@@ -183,12 +183,9 @@ pub(in crate::admin::handlers::collections) fn render_form_validation_errors(
     doc_id: Option<&str>,
     form: &FormData,
     ve: &ValidationError,
-    auth_user: &Option<Extension<AuthUser>>,
+    auth_user: Option<&Extension<AuthUser>>,
 ) -> Response {
-    let locale = auth_user
-        .as_ref()
-        .map(|Extension(au)| au.ui_locale.as_str())
-        .unwrap_or("en");
+    let locale = auth_user.map_or("en", |Extension(au)| au.ui_locale.as_str());
 
     let error_map = translate_validation_errors(ve, &state.translations, locale);
     let toast_msg = state.translations.get(locale, "validation.error_summary");

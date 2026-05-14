@@ -14,8 +14,12 @@ use crate::db::{DbConnection, DbRow, DbValue};
 /// **Postgres**: Uses `FOR UPDATE SKIP LOCKED` for lock-free atomic claiming
 /// across multiple workers. Per-slug concurrency is enforced in the query.
 ///
-/// **SQLite**: Uses SELECT + UPDATE within the caller's IMMEDIATE transaction.
-/// SQLite serializes writes, so concurrent workers are safe.
+/// **`SQLite`**: Uses SELECT + UPDATE within the caller's IMMEDIATE transaction.
+/// `SQLite` serializes writes, so concurrent workers are safe.
+///
+/// # Errors
+///
+/// Returns a backend error if the claim query/update fails.
 pub fn claim_pending_jobs(
     conn: &dyn DbConnection,
     limit: usize,
@@ -52,7 +56,7 @@ fn claim_pending_jobs_postgres(
             continue;
         };
 
-        let max_conc = job_concurrency.get(&slug).copied().unwrap_or(1) as i64;
+        let max_conc = i64::from(job_concurrency.get(&slug).copied().unwrap_or(1));
         let slots_left = limit - claimed.len();
 
         // Atomic: claim jobs for this slug where running count is under the limit.
@@ -83,7 +87,9 @@ fn claim_pending_jobs_postgres(
             &[
                 DbValue::Text(slug),
                 DbValue::Integer(max_conc),
-                DbValue::Integer(slots_left as i64),
+                // slots_left is a small usize from `available.saturating_sub(...)`;
+                // saturating cast preserves the bound on the unreachable overflow.
+                DbValue::Integer(i64::try_from(slots_left).unwrap_or(i64::MAX)),
             ],
         )?;
 
@@ -95,8 +101,8 @@ fn claim_pending_jobs_postgres(
     Ok(claimed)
 }
 
-/// SQLite: SELECT + individual UPDATE within an IMMEDIATE transaction.
-/// SQLite serializes writes, so concurrent workers are safe.
+/// `SQLite`: SELECT + individual UPDATE within an IMMEDIATE transaction.
+/// `SQLite` serializes writes, so concurrent workers are safe.
 fn claim_pending_jobs_sqlite(
     conn: &dyn DbConnection,
     limit: usize,
@@ -113,7 +119,9 @@ fn claim_pending_jobs_sqlite(
              LIMIT {}",
             conn.placeholder(1)
         ),
-        &[DbValue::Integer((limit * 2) as i64)],
+        &[DbValue::Integer(
+            i64::try_from(limit.saturating_mul(2)).unwrap_or(i64::MAX),
+        )],
     )?;
 
     // Get actual running counts from DB (not from caller's stale snapshot)
@@ -135,7 +143,7 @@ fn claim_pending_jobs_sqlite(
         };
 
         // Per-slug concurrency check (DB-sourced + locally tracked)
-        let max_conc = job_concurrency.get(&slug).copied().unwrap_or(1) as i64;
+        let max_conc = i64::from(job_concurrency.get(&slug).copied().unwrap_or(1));
         let current = running_counts.get(&slug).copied().unwrap_or(0)
             + extra_running.get(&slug).copied().unwrap_or(0);
 
@@ -177,7 +185,7 @@ fn claim_pending_jobs_sqlite(
 /// - **Postgres claim path** (`UPDATE ... RETURNING attempt`) returns the
 ///   post-update value, which is exactly the attempt being executed —
 ///   pass straight through.
-/// - **SQLite claim path** (`SELECT` then `UPDATE`) reads the pre-update
+/// - **`SQLite` claim path** (`SELECT` then `UPDATE`) reads the pre-update
 ///   value; the caller must `+1` it before constructing the `JobRun` to
 ///   match the just-incremented DB state.
 ///
@@ -196,8 +204,16 @@ fn parse_job_row(row: &DbRow) -> Result<JobRun> {
         .to_string();
     let queue = row.text_at(2).unwrap_or("default").to_string();
     let data = row.text_at(3).unwrap_or("{}").to_string();
-    let attempt = row.i64_at(4).unwrap_or(0) as u32;
-    let max_attempts = row.i64_at(5).unwrap_or(1) as u32;
+    // Attempt counts above u32::MAX or below 0 indicate a corrupt row;
+    // fall back to safe defaults rather than wrapping.
+    let attempt = row
+        .i64_at(4)
+        .and_then(|v| u32::try_from(v).ok())
+        .unwrap_or(0);
+    let max_attempts = row
+        .i64_at(5)
+        .and_then(|v| u32::try_from(v).ok())
+        .unwrap_or(1);
 
     let mut b = JobRun::builder(id, slug)
         .status(JobStatus::Running)
@@ -217,6 +233,20 @@ fn parse_job_row(row: &DbRow) -> Result<JobRun> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::*;
     use crate::db::query::jobs::insert_job;
@@ -300,7 +330,7 @@ mod tests {
         assert_eq!(claimed.len(), 1);
     }
 
-    /// Regression: claim_pending_jobs should skip jobs whose retry_after is in the future.
+    /// Regression: `claim_pending_jobs` should skip jobs whose `retry_after` is in the future.
     #[test]
     fn test_claim_skips_jobs_with_future_retry_after() {
         let (_dir, conn) = setup_db();
@@ -323,7 +353,7 @@ mod tests {
         );
     }
 
-    /// Jobs with retry_after in the past should be claimable.
+    /// Jobs with `retry_after` in the past should be claimable.
     #[test]
     fn test_claim_picks_up_jobs_with_past_retry_after() {
         let (_dir, conn) = setup_db();

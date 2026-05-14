@@ -21,11 +21,13 @@ pub struct AdminConfig {
 
 impl AdminConfig {
     /// Create a new default admin configuration.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Create a builder for admin configuration.
+    #[must_use]
     pub fn builder() -> AdminConfigBuilder {
         AdminConfigBuilder::new()
     }
@@ -45,30 +47,35 @@ impl AdminConfigBuilder {
         Self::default()
     }
 
+    #[must_use]
     pub fn use_as_title(mut self, v: Option<String>) -> Self {
         self.use_as_title = v;
 
         self
     }
 
+    #[must_use]
     pub fn default_sort(mut self, v: Option<String>) -> Self {
         self.default_sort = v;
 
         self
     }
 
+    #[must_use]
     pub fn hidden(mut self, v: bool) -> Self {
         self.hidden = v;
 
         self
     }
 
+    #[must_use]
     pub fn list_searchable_fields(mut self, v: Vec<String>) -> Self {
         self.list_searchable_fields = v;
 
         self
     }
 
+    #[must_use]
     pub fn build(self) -> AdminConfig {
         AdminConfig {
             use_as_title: self.use_as_title,

@@ -36,7 +36,7 @@ fn sub_field_indexed_name(sf: &FieldDefinition, parent_name: &str, idx: usize) -
         sf.field_type,
         FieldType::Tabs | FieldType::Row | FieldType::Collapsible
     ) {
-        format!("{}[{}]", parent_name, idx)
+        format!("{parent_name}[{idx}]")
     } else {
         format!("{}[{}][{}]", parent_name, idx, sf.name)
     }
@@ -72,12 +72,10 @@ fn build_sub_field_base(
     val: &str,
     opts: &SubFieldOpts,
 ) -> BaseFieldData {
-    let sf_label = sf
-        .admin
-        .label
-        .as_ref()
-        .map(|ls| ls.resolve_default().to_string())
-        .unwrap_or_else(|| auto_label_from_name(&sf.name));
+    let sf_label = sf.admin.label.as_ref().map_or_else(
+        || auto_label_from_name(&sf.name),
+        |ls| ls.resolve_default().to_string(),
+    );
 
     // Recompute per-field instead of inheriting from the parent: a localized
     // field inside a non-localized parent must stay editable in non-default
@@ -114,149 +112,41 @@ fn build_sub_field_base(
     }
 }
 
-/// Construct the [`FieldContext`] variant matching `sf.field_type`, with the
-/// base data populated and per-variant defaults filled in. Type-specific
-/// dispatch in [`dispatch_sub_field_type`] subsequently mutates the variant
-/// to set its real data.
+/// Construct the [`FieldContext`] variant matching `sf.field_type` with
+/// `base` populated and per-variant defaults filled in via each variant's
+/// `empty(base)` constructor. Type-specific enrichment in
+/// [`dispatch_sub_field_type`] subsequently mutates the variant to set its
+/// real data.
 pub(super) fn construct_sub_variant(
     sf: &FieldDefinition,
     base: BaseFieldData,
     indexed_name: &str,
 ) -> FieldContext {
     match &sf.field_type {
-        FieldType::Text => FieldContext::Text(TextField {
-            base,
-            has_many: None,
-            tags: None,
-        }),
-        FieldType::Email => FieldContext::Email(TextField {
-            base,
-            has_many: None,
-            tags: None,
-        }),
-        FieldType::Json => FieldContext::Json(TextField {
-            base,
-            has_many: None,
-            tags: None,
-        }),
-        FieldType::Textarea => FieldContext::Textarea(TextareaField {
-            base,
-            rows: 8,
-            resizable: false,
-        }),
-        FieldType::Number => FieldContext::Number(NumberField {
-            base,
-            step: String::new(),
-            has_many: None,
-            tags: None,
-        }),
-        FieldType::Code => FieldContext::Code(CodeField {
-            base,
-            language: String::new(),
-            languages: None,
-        }),
-        FieldType::Richtext => FieldContext::Richtext(RichtextField {
-            base,
-            resizable: false,
-            richtext_format: "html".to_string(),
-            features: None,
-            node_names: None,
-            custom_nodes: None,
-        }),
-        FieldType::Date => FieldContext::Date(DateField {
-            base,
-            picker_appearance: "dayOnly".to_string(),
-            date_only_value: None,
-            datetime_local_value: None,
-            min_date: None,
-            max_date: None,
-            timezone_enabled: None,
-            default_timezone: None,
-            timezone_options: None,
-            timezone_value: None,
-        }),
-        FieldType::Checkbox => FieldContext::Checkbox(CheckboxField {
-            base,
-            checked: false,
-        }),
-        FieldType::Select => FieldContext::Select(ChoiceField {
-            base,
-            options: Vec::new(),
-            has_many: None,
-        }),
-        FieldType::Radio => FieldContext::Radio(ChoiceField {
-            base,
-            options: Vec::new(),
-            has_many: None,
-        }),
-        FieldType::Relationship => FieldContext::Relationship(RelationshipField {
-            base,
-            relationship_collection: None,
-            has_many: None,
-            polymorphic: None,
-            collections: None,
-            picker: None,
-            selected_items: None,
-        }),
-        FieldType::Upload => FieldContext::Upload(UploadField {
-            base,
-            relationship_collection: None,
-            has_many: None,
-            picker: None,
-            selected_items: None,
-            selected_filename: None,
-            selected_preview_url: None,
-        }),
-        FieldType::Join => FieldContext::Join(JoinField {
-            base,
-            join_collection: None,
-            join_on: None,
-            join_items: None,
-            join_count: None,
-        }),
-        FieldType::Group => FieldContext::Group(GroupField {
-            base,
-            sub_fields: Vec::new(),
-            collapsed: false,
-        }),
-        FieldType::Row => FieldContext::Row(RowField {
-            base,
-            sub_fields: Vec::new(),
-        }),
-        FieldType::Collapsible => FieldContext::Collapsible(GroupField {
-            base,
-            sub_fields: Vec::new(),
-            collapsed: false,
-        }),
-        FieldType::Tabs => FieldContext::Tabs(TabsField {
-            base,
-            tabs: Vec::new(),
-        }),
-        FieldType::Array => FieldContext::Array(ArrayField {
-            base,
-            sub_fields: Vec::new(),
-            rows: None,
-            row_count: 0,
-            template_id: safe_template_id(indexed_name),
-            min_rows: None,
-            max_rows: None,
-            init_collapsed: false,
-            add_label: None,
-            label_field: None,
-        }),
-        FieldType::Blocks => FieldContext::Blocks(BlocksField {
-            base,
-            block_definitions: Vec::new(),
-            rows: None,
-            row_count: 0,
-            template_id: safe_template_id(indexed_name),
-            min_rows: None,
-            max_rows: None,
-            init_collapsed: false,
-            add_label: None,
-            picker: None,
-            label_field: None,
-        }),
+        FieldType::Text => FieldContext::Text(TextField::empty(base)),
+        FieldType::Email => FieldContext::Email(TextField::empty(base)),
+        FieldType::Json => FieldContext::Json(TextField::empty(base)),
+        FieldType::Textarea => FieldContext::Textarea(TextareaField::empty(base)),
+        FieldType::Number => FieldContext::Number(NumberField::empty(base)),
+        FieldType::Code => FieldContext::Code(CodeField::empty(base)),
+        FieldType::Richtext => FieldContext::Richtext(RichtextField::empty(base)),
+        FieldType::Date => FieldContext::Date(DateField::empty(base)),
+        FieldType::Checkbox => FieldContext::Checkbox(CheckboxField::empty(base)),
+        FieldType::Select => FieldContext::Select(ChoiceField::empty(base)),
+        FieldType::Radio => FieldContext::Radio(ChoiceField::empty(base)),
+        FieldType::Relationship => FieldContext::Relationship(RelationshipField::empty(base)),
+        FieldType::Upload => FieldContext::Upload(UploadField::empty(base)),
+        FieldType::Join => FieldContext::Join(JoinField::empty(base)),
+        FieldType::Group => FieldContext::Group(GroupField::empty(base)),
+        FieldType::Row => FieldContext::Row(RowField::empty(base)),
+        FieldType::Collapsible => FieldContext::Collapsible(GroupField::empty(base)),
+        FieldType::Tabs => FieldContext::Tabs(TabsField::empty(base)),
+        FieldType::Array => {
+            FieldContext::Array(ArrayField::empty(base, safe_template_id(indexed_name)))
+        }
+        FieldType::Blocks => {
+            FieldContext::Blocks(BlocksField::empty(base, safe_template_id(indexed_name)))
+        }
     }
 }
 
@@ -303,7 +193,7 @@ fn dispatch_sub_field_type(
     match fc {
         FieldContext::Checkbox(cf) => field_types::sub_checkbox(cf, val),
         FieldContext::Select(cf) | FieldContext::Radio(cf) => {
-            field_types::sub_select_radio(cf, sf, val)
+            field_types::sub_select_radio(cf, sf, val);
         }
         FieldContext::Date(df) => field_types::sub_date(df, sf, val, ""),
         FieldContext::Relationship(rf) => field_types::sub_relationship(rf, sf),
@@ -312,10 +202,10 @@ fn dispatch_sub_field_type(
         FieldContext::Blocks(bf) => field_types::sub_blocks(bf, sf, raw_value, indexed_name, opts),
         FieldContext::Group(gf) => field_types::sub_group(gf, sf, raw_value, indexed_name, opts),
         FieldContext::Row(rf) => {
-            field_types::sub_row_collapsible_row(rf, sf, raw_value, indexed_name, opts)
+            field_types::sub_row_collapsible_row(rf, sf, raw_value, indexed_name, opts);
         }
         FieldContext::Collapsible(gf) => {
-            field_types::sub_row_collapsible_group(gf, sf, raw_value, indexed_name, opts)
+            field_types::sub_row_collapsible_group(gf, sf, raw_value, indexed_name, opts);
         }
         FieldContext::Tabs(tf) => field_types::sub_tabs(tf, sf, raw_value, indexed_name, opts),
         FieldContext::Textarea(tf) => {
@@ -434,7 +324,9 @@ fn enrich_nested_relationship(
     let Some(related_def) = reg.get_collection(&rc.collection) else {
         return;
     };
-    let title_field = related_def.title_field().map(|s| s.to_string());
+    let title_field = related_def
+        .title_field()
+        .map(std::string::ToString::to_string);
     let current_value = rf.base.value.as_str().unwrap_or("");
 
     if current_value.is_empty() {
@@ -491,11 +383,13 @@ fn enrich_nested_upload(
         return;
     };
 
-    let title_field = related_def.title_field().map(|s| s.to_string());
+    let title_field = related_def
+        .title_field()
+        .map(std::string::ToString::to_string);
     let admin_thumbnail = related_def
         .upload
         .as_ref()
-        .and_then(|u| u.admin_thumbnail.as_ref().cloned());
+        .and_then(|u| u.admin_thumbnail.clone());
 
     let current_value = uf.base.value.as_str().unwrap_or("");
 
@@ -524,7 +418,7 @@ fn enrich_nested_upload(
         upload::assemble_sizes_object(&mut doc, uc);
     }
 
-    let item = build_upload_item(&doc, &title_field, &admin_thumbnail, true);
+    let item = build_upload_item(&doc, title_field.as_ref(), admin_thumbnail.as_ref(), true);
     let label = item.label.clone();
     let thumb_url = item.thumbnail_url.clone();
 
@@ -672,7 +566,7 @@ mod tests {
 
     /// Regression: a Code field directly inside an Array row must inherit
     /// `admin.language` from its definition. Previously `dispatch_sub_field_type`
-    /// had no `Code` arm, so the language stayed empty and CodeMirror fell back
+    /// had no `Code` arm, so the language stayed empty and `CodeMirror` fell back
     /// to the default mode.
     #[test]
     fn enriched_sub_field_code_in_array_row_inherits_admin_language() {
@@ -936,8 +830,7 @@ mod tests {
         assert_eq!(
             ctx.get("sub_fields")
                 .and_then(|v| v.as_array())
-                .map(|a| a.len())
-                .unwrap_or(0),
+                .map_or(0, std::vec::Vec::len),
             0
         );
     }
@@ -1386,7 +1279,7 @@ mod tests {
     }
 
     /// Regression: block-definition templates (used to render new rows) must
-    /// have their upload fields enriched with selected_items context.
+    /// have their upload fields enriched with `selected_items` context.
     #[test]
     fn enrich_nested_fields_blocks_template_gets_upload_options() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -1455,7 +1348,7 @@ mod tests {
     }
 
     /// Regression: array-template sub-fields (used for the new-row UI) must
-    /// have upload selected_items enriched.
+    /// have upload `selected_items` enriched.
     #[test]
     fn enrich_nested_fields_array_template_gets_upload_options() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();

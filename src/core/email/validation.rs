@@ -12,7 +12,7 @@
 //!
 //! ### Scope
 //!
-//! - Header-derived fields (subject, to, from, cc, bcc, reply_to) MUST be
+//! - Header-derived fields (subject, to, from, cc, bcc, `reply_to`) MUST be
 //!   validated. Any `\r`, `\n`, or raw NUL (`\0`) byte is rejected outright.
 //! - Body fields (`text`, `html`) are intentionally NOT validated here:
 //!   lettre MIME-encodes them as Content-Transfer-Encoded body bytes, and
@@ -27,6 +27,10 @@ use anyhow::{Result, bail};
 /// Used for `subject`, `to`, `from`, `cc`, `bcc`, `reply_to` — anything that
 /// ends up in an SMTP header or a webhook JSON header field. The error
 /// message is deliberately generic so it can surface safely to callers.
+///
+/// # Errors
+///
+/// Returns an error if the value contains `\r`, `\n`, or a NUL byte.
 pub fn validate_no_crlf(field_name: &str, value: &str) -> Result<()> {
     if value.bytes().any(|b| matches!(b, b'\r' | b'\n' | 0)) {
         bail!(

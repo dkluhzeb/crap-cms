@@ -16,6 +16,10 @@ use crate::{cli, commands::LogsAction, config::CrapConfig};
 const LOG_PREFIX: &str = "crap-cms.log";
 
 /// Run the `logs` command.
+///
+/// # Errors
+///
+/// Returns an error if config loading or the log file operation fails.
 pub fn run(
     config_dir: &Path,
     action: Option<LogsAction>,
@@ -45,6 +49,10 @@ pub fn run(
 ///
 /// Called at serve startup and by `logs clear`. Files are sorted by name
 /// (date-based names from `tracing-appender` sort chronologically).
+///
+/// # Errors
+///
+/// Returns an error if reading the directory or removing a file fails.
 pub fn prune_old_logs(log_dir: &Path, max_files: usize) -> Result<usize> {
     let mut log_files = list_log_files(log_dir)?;
 
@@ -121,7 +129,9 @@ fn tail_lines(file: &fs::File, n: usize) -> Result<String> {
     // Read backward in chunks, counting newlines as we go.
     loop {
         let read_start = pos.saturating_sub(chunk_size);
-        let read_len = (pos - read_start) as usize;
+        // 32-bit overflow falls back to the configured chunk size rather
+        // than usize::MAX, which would attempt a multi-GB allocation.
+        let read_len = usize::try_from(pos - read_start).unwrap_or(8192);
 
         if read_len == 0 {
             break;
@@ -133,7 +143,12 @@ fn tail_lines(file: &fs::File, n: usize) -> Result<String> {
 
         reader.read_exact(&mut buf)?;
 
-        newline_count += buf.iter().filter(|&&b| b == b'\n').count();
+        // Memchr-style byte scan: tighter codegen than `.filter().count()`
+        // (avoids the per-byte branch tracking the iterator wants).
+        newline_count += buf
+            .iter()
+            .copied()
+            .fold(0usize, |acc, b| acc + usize::from(b == b'\n'));
         chunks.push(buf);
         pos = read_start;
 

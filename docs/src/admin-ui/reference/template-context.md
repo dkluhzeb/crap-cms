@@ -139,6 +139,7 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`editor_locale`** (Option<string>) _(optional)_
 - **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
 - **`collection`** ([CollectionContext](#collectioncontext))
+- **`perms`** ([CollectionPermissions](#collectionpermissions))
 - **`docs`** (Vec<any>)
 - **`pagination`** ([PaginationContext](#paginationcontext))
 - **`has_drafts`** (boolean)
@@ -172,6 +173,7 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`editor_locale`** (Option<string>) _(optional)_
 - **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
 - **`collection`** ([CollectionContext](#collectioncontext))
+- **`perms`** ([CollectionPermissions](#collectionpermissions))
 - **`document`** ([DocumentRef](#documentref))
 - **`fields`** (Vec<[FieldContext](#fieldcontext)>)
 - **`sidebar_fields`** (Vec<[FieldContext](#fieldcontext)>)
@@ -206,6 +208,7 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`editor_locale`** (Option<string>) _(optional)_
 - **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
 - **`collection`** ([CollectionContext](#collectioncontext))
+- **`perms`** ([CollectionPermissions](#collectionpermissions))
 - **`fields`** (Vec<[FieldContext](#fieldcontext)>)
 - **`sidebar_fields`** (Vec<[FieldContext](#fieldcontext)>)
 - **`editing`** (boolean)
@@ -232,6 +235,7 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`editor_locale`** (Option<string>) _(optional)_
 - **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
 - **`collection`** ([CollectionContext](#collectioncontext))
+- **`perms`** ([CollectionPermissions](#collectionpermissions))
 - **`document`** ([DocumentRef](#documentref) \| null) _(optional)_ — Document stub (with `id` only) on edit error; absent on create error.
 - **`fields`** (Vec<[FieldContext](#fieldcontext)>)
 - **`sidebar_fields`** (Vec<[FieldContext](#fieldcontext)>)
@@ -323,6 +327,7 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`editor_locale`** (Option<string>) _(optional)_
 - **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
 - **`global`** ([GlobalContext](#globalcontext))
+- **`perms`** ([GlobalPermissions](#globalpermissions))
 - **`fields`** (Vec<[FieldContext](#fieldcontext)>)
 - **`sidebar_fields`** (Vec<[FieldContext](#fieldcontext)>)
 - **`has_drafts`** (boolean)
@@ -353,6 +358,7 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`editor_locale`** (Option<string>) _(optional)_
 - **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
 - **`global`** ([GlobalContext](#globalcontext))
+- **`perms`** ([GlobalPermissions](#globalpermissions))
 - **`fields`** (Vec<[FieldContext](#fieldcontext)>)
 - **`sidebar_fields`** (Vec<[FieldContext](#fieldcontext)>)
 
@@ -430,7 +436,7 @@ Every page above flattens [BasePageContext](#basepagecontext) (or [AuthBasePageC
 
 ### PageMeta
 
-- **`type`** (string) — Page-type discriminant. Serialized as a snake_case string literal so templates can branch with `{{#if (eq page.type "collection_edit")}}`.
+- **`type`** (string) — Page-type discriminant. Serialized as a `snake_case` string literal so templates can branch with `{{#if (eq page.type "collection_edit")}}`.
 - **`title`** (string) — Page title or translation key.
 - **`title_name`** (Option<string>) _(optional)_ — Optional interpolation param for `{{t page.title name=page.title_name}}`.
 - **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Breadcrumb trail rendered by `partials/breadcrumb.hbs`.
@@ -493,12 +499,7 @@ Every page above flattens [BasePageContext](#basepagecontext) (or [AuthBasePageC
 - **`singular_name`** (string)
 - **`title_field`** (Option<string>) _(optional)_
 - **`timestamps`** (boolean)
-- **`is_auth`** (boolean)
-- **`is_upload`** (boolean)
-- **`has_drafts`** (boolean)
-- **`has_versions`** (boolean)
 - **`soft_delete`** (boolean)
-- **`can_permanently_delete`** (boolean)
 - **`admin`** ([AdminMeta](#adminmeta))
 - **`upload`** ([UploadMeta](#uploadmeta) \| null) _(optional)_
 - **`versions`** ([VersionsMeta](#versionsmeta) \| null) _(optional)_

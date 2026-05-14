@@ -43,16 +43,19 @@ impl<'a> HookRunnerBuilder<'a> {
         }
     }
 
+    #[must_use]
     pub fn config_dir(mut self, config_dir: &'a Path) -> Self {
         self.config_dir = Some(config_dir);
         self
     }
 
+    #[must_use]
     pub fn registry(mut self, registry: Arc<Registry>) -> Self {
         self.registry = Some(registry);
         self
     }
 
+    #[must_use]
     pub fn config(mut self, config: &'a CrapConfig) -> Self {
         self.config = Some(config);
         self
@@ -60,6 +63,7 @@ impl<'a> HookRunnerBuilder<'a> {
 
     /// Attach the user-invalidation transport to every VM in the pool so
     /// Lua-driven delete / lock paths can tear down live-update streams.
+    #[must_use]
     pub fn invalidation_transport(mut self, transport: SharedInvalidationTransport) -> Self {
         self.invalidation_transport = Some(transport);
         self
@@ -71,12 +75,21 @@ impl<'a> HookRunnerBuilder<'a> {
     /// override-access Lua calls the service layer's guardrail discards this
     /// Arc, so the thread-through only pays off for ordinary (non-override)
     /// Lua reads.
+    #[must_use]
     pub fn populate_singleflight(mut self, singleflight: SharedPopulateSingleflight) -> Self {
         self.populate_singleflight = Some(singleflight);
         self
     }
 
-    /// Build the HookRunner, creating and initializing the Lua VM pool.
+    /// Build the `HookRunner`, creating and initializing the Lua VM pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any Lua VM in the pool fails to initialize.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `config_dir`, `registry`, or `config` was not set on the builder.
     pub fn build(self) -> Result<HookRunner> {
         let config_dir = self.config_dir.expect("config_dir is required");
         let registry = self.registry.expect("registry is required");
@@ -115,7 +128,7 @@ impl<'a> HookRunnerBuilder<'a> {
             if registered_events.is_empty() {
                 String::new()
             } else {
-                format!(", global events: {:?}", registered_events)
+                format!(", global events: {registered_events:?}")
             }
         );
 
@@ -142,7 +155,10 @@ fn create_lua_vm(
     hooks::sandbox_lua(&lua)?;
 
     if config.hooks.max_memory > 0 {
-        lua.set_memory_limit(config.hooks.max_memory as usize)?;
+        // 32-bit overflow path falls back to 256 MiB (a sane VM memory ceiling)
+        // rather than usize::MAX, which would effectively disable the limit.
+        let memory_limit = usize::try_from(config.hooks.max_memory).unwrap_or(256 * 1024 * 1024);
+        lua.set_memory_limit(memory_limit)?;
     }
 
     lua.set_app_data(VmLabel(format!("vm-{vm_index}")));
@@ -188,10 +204,8 @@ fn create_lua_vm(
 /// Set up Lua package.path to include the config directory.
 fn setup_package_paths(lua: &Lua, config_dir: &Path) -> Result<()> {
     let config_str = config_dir.to_string_lossy();
-    let code = format!(
-        r#"package.path = "{0}/?.lua;{0}/?/init.lua;" .. package.path"#,
-        config_str
-    );
+    let code =
+        format!(r#"package.path = "{config_str}/?.lua;{config_str}/?/init.lua;" .. package.path"#);
 
     lua.load(&code)
         .exec()
@@ -200,9 +214,9 @@ fn setup_package_paths(lua: &Lua, config_dir: &Path) -> Result<()> {
 
 /// Register the crap API and CRUD functions on pool Lua VMs. Pool VMs
 /// hold the `Arc<Registry>` snapshot for both the API surface and the
-/// CRUD layer — the registry is fully populated by the time HookRunner
+/// CRUD layer — the registry is fully populated by the time `HookRunner`
 /// is built, and `crap.<x>.define` calls during pool VM init are
-/// no-ops (the init_lua VM already wrote those defs).
+/// no-ops (the `init_lua` VM already wrote those defs).
 fn register_apis(lua: &Lua, registry: Arc<Registry>, config: &CrapConfig) -> Result<()> {
     lua_api::register_api_pool_init(lua, Arc::clone(&registry), config)?;
     register_crud_functions(lua, registry, &config.locale, &config.pagination)?;

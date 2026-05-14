@@ -11,7 +11,10 @@ use crate::{
     db::LocaleContext,
     hooks::{
         lifecycle::converters::document_to_lua_table,
-        lua_api::crud::{get_tx_conn, helpers::*},
+        lua_api::crud::{
+            get_tx_conn,
+            helpers::{get_opt_bool, get_opt_string, hook_ui_locale, hook_user, resolve_global},
+        },
     },
     service::{GetGlobalInput, LuaReadHooks, ServiceContext, get_global_document},
 };
@@ -21,18 +24,18 @@ fn globals_get_inner(
     lua: &Lua,
     reg: &Registry,
     lc: &LocaleConfig,
-    slug: String,
-    opts: Option<Table>,
+    slug: &str,
+    opts: Option<&Table>,
 ) -> mlua::Result<Table> {
     let conn = get_tx_conn(lua)?;
 
-    let locale_str = get_opt_string(&opts, "locale")?;
+    let locale_str = get_opt_string(opts, "locale");
     let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), lc)
         .map_err(|e| RuntimeError(e.to_string()))?;
-    let override_access = get_opt_bool(&opts, "overrideAccess", false)?;
+    let override_access = get_opt_bool(opts, "overrideAccess", false);
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
-    let def = resolve_global(reg, &slug)?;
+    let def = resolve_global(reg, slug)?;
 
     let hooks = LuaReadHooks::builder(lua)
         .user(user.as_ref())
@@ -40,7 +43,7 @@ fn globals_get_inner(
         .override_access(override_access)
         .build();
 
-    let ctx = ServiceContext::global(&slug, &def)
+    let ctx = ServiceContext::global(slug, &def)
         .conn(conn)
         .read_hooks(&hooks)
         .user(user.as_ref())
@@ -64,7 +67,7 @@ pub(crate) fn register_globals_get(
 ) -> Result<()> {
     let lc = locale_config.clone();
     let get_fn = lua.create_function(move |lua, (slug, opts): (String, Option<Table>)| {
-        globals_get_inner(lua, &registry, &lc, slug, opts)
+        globals_get_inner(lua, &registry, &lc, &slug, opts.as_ref())
     })?;
     table.set("get", get_fn)?;
     Ok(())

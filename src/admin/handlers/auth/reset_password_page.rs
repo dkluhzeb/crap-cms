@@ -19,9 +19,8 @@ use crate::{
 
 /// Check whether a reset token exists across all auth collections.
 fn is_valid_reset_token(pool: &DbPool, registry: &Registry, token: &str) -> bool {
-    let conn = match pool.get() {
-        Ok(c) => c,
-        Err(_) => return false,
+    let Ok(conn) = pool.get() else {
+        return false;
     };
 
     for def in registry.collections.values() {

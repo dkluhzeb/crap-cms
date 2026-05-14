@@ -70,6 +70,7 @@ impl ConditionExpr {
     ///
     /// `data` is the form snapshot, indexed by field name. Missing fields
     /// resolve to JSON `null`.
+    #[must_use]
     pub fn evaluate(&self, data: &Value) -> bool {
         match self {
             Self::All(rows) => rows.iter().all(|r| r.evaluate(data)),
@@ -113,6 +114,20 @@ fn is_truthy(val: &Value) -> bool {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use serde_json::json;
 

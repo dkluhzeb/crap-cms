@@ -593,7 +593,7 @@ async fn five_level_group_crud_roundtrip() {
 /// Nested groups with locale support: localized group (details) vs non-localized group (meta).
 ///
 /// Leaf fields inside the localized group are individually marked `localized: true` to ensure
-/// the write path applies locale suffixes (locale_write_column checks the leaf's flag).
+/// the write path applies locale suffixes (`locale_write_column` checks the leaf's flag).
 fn make_locale_nesting_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("products");
     def.labels = Labels {
@@ -659,7 +659,7 @@ async fn get_create_form_with_locale(
     cookie: &str,
     locale: &str,
 ) -> String {
-    let cookie_header = format!("{}; crap_editor_locale={}", cookie, locale);
+    let cookie_header = format!("{cookie}; crap_editor_locale={locale}");
     let resp = app
         .router
         .clone()
@@ -682,7 +682,7 @@ async fn get_edit_form_with_locale(
     cookie: &str,
     locale: &str,
 ) -> String {
-    let cookie_header = format!("{}; crap_editor_locale={}", cookie, locale);
+    let cookie_header = format!("{cookie}; crap_editor_locale={locale}");
     let resp = app
         .router
         .clone()
@@ -1328,8 +1328,8 @@ async fn array_row_group_validation_error() {
 /// Group containing all layout wrapper types (Collapsible, Tabs, Row).
 ///
 /// Layout wrappers are transparent — they don't add their name to the column path.
-/// DB columns: name, config__theme, config__font_size, config__color,
-///             config__nested__level, config__width, config__height
+/// DB columns: name, `config__theme`, `config__font_size`, `config__color`,
+///             `config__nested__level`, `config__width`, `config__height`
 fn make_group_with_layouts_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("widgets");
     def.labels = Labels {

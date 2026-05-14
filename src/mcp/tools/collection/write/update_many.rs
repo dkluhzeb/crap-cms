@@ -37,9 +37,15 @@ pub(in crate::mcp::tools) fn exec_update_many(
     let data_obj = args.get("data").cloned().unwrap_or(json!({}));
     let data = extract_data_from_args(&data_obj, &[]);
 
-    let run_hooks = args.get("hooks").and_then(|v| v.as_bool()).unwrap_or(true);
+    let run_hooks = args
+        .get("hooks")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
 
-    let draft = args.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
+    let draft = args
+        .get("draft")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
 
     let svc_ctx = ServiceContext::collection(slug, def)
         .pool(ctx.pool)
@@ -56,7 +62,7 @@ pub(in crate::mcp::tools) fn exec_update_many(
         ui_locale: None,
     };
 
-    let result = service::update_many(&svc_ctx, filters, data, &ctx.config.locale, &opts)?;
+    let result = service::update_many(&svc_ctx, &filters, &data, &ctx.config.locale, &opts)?;
 
     info!(
         "MCP update_many {}: {} modified [client={}]",

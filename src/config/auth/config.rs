@@ -36,6 +36,7 @@ impl SessionCookieSameSite {
     ///
     /// `None` currently falls back to `Lax` -- see the enum docs. Callers that need
     /// to detect the configured-but-unsupported case should inspect `self` directly.
+    #[must_use]
     pub fn as_attribute(self) -> &'static str {
         match self {
             SessionCookieSameSite::Strict => "Strict",

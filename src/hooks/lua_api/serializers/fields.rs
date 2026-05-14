@@ -1,5 +1,5 @@
-//! Lua table serializers for FieldDefinition.
-//! Produces round-trip compatible tables that can be passed back to parse_fields().
+//! Lua table serializers for `FieldDefinition`.
+//! Produces round-trip compatible tables that can be passed back to `parse_fields()`.
 
 use mlua::{Lua, Result as LuaResult, Table};
 use serde_json::Value as JsonValue;
@@ -8,198 +8,205 @@ use crate::core::{FieldAccess, FieldDefinition, FieldHooks};
 
 use super::{admin::field_admin_to_lua, helpers::localized_string_to_lua};
 
-/// Convert a FieldDefinition to a full Lua table compatible with parse_fields().
+/// Convert a `FieldDefinition` to a full Lua table compatible with `parse_fields()`.
+///
+/// Sections (basics, options, admin, hooks, access, MCP, relationship,
+/// sub-fields/blocks/tabs) are populated by per-section helpers — the
+/// dispatcher reads top-to-bottom in the same order the Lua format
+/// documents the fields.
 pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
 
+    set_field_basics(&tbl, f)?;
+    set_field_options(lua, &tbl, f)?;
+
+    if let Some(admin) = field_admin_to_lua(lua, &f.admin)? {
+        tbl.set("admin", admin)?;
+    }
+    if let Some(hooks) = field_hooks_to_lua(lua, &f.hooks)? {
+        tbl.set("hooks", hooks)?;
+    }
+    if let Some(access) = field_access_to_lua(lua, &f.access)? {
+        tbl.set("access", access)?;
+    }
+
+    set_field_mcp(lua, &tbl, f)?;
+    set_field_relationship(lua, &tbl, f)?;
+    set_field_sub_fields(lua, &tbl, f)?;
+    set_field_blocks(lua, &tbl, f)?;
+    set_field_tabs(lua, &tbl, f)?;
+
+    Ok(tbl)
+}
+
+/// Set the scalar flags (`name`, `type`, `required`, `unique`, `localized`,
+/// `hidden`, `validate`, `default_value`, `picker_appearance`, `timezone`,
+/// `default_timezone`, scalar `has_many`).
+fn set_field_basics(tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
     tbl.set("name", f.name.as_str())?;
     tbl.set("type", f.field_type.as_str())?;
 
     if f.required {
         tbl.set("required", true)?;
     }
-
     if f.unique {
         tbl.set("unique", true)?;
     }
-
     if f.localized {
         tbl.set("localized", true)?;
     }
-
     if f.hidden {
         tbl.set("hidden", true)?;
     }
-
     if let Some(ref v) = f.validate {
         tbl.set("validate", v.as_str())?;
     }
-
     if let Some(ref dv) = f.default_value {
-        match dv {
-            JsonValue::Bool(b) => {
-                tbl.set("default_value", *b)?;
-            }
-            JsonValue::Number(n) => {
-                if let Some(i) = n.as_i64() {
-                    tbl.set("default_value", i)?;
-                } else if let Some(f_val) = n.as_f64() {
-                    tbl.set("default_value", f_val)?;
-                }
-            }
-            JsonValue::String(s) => {
-                tbl.set("default_value", s.as_str())?;
-            }
-            _ => {}
-        }
+        set_default_value(tbl, dv)?;
     }
-
     if let Some(ref pa) = f.picker_appearance {
         tbl.set("picker_appearance", pa.as_str())?;
     }
-
     if f.timezone {
         tbl.set("timezone", true)?;
     }
-
     if let Some(ref dtz) = f.default_timezone {
         tbl.set("default_timezone", dtz.as_str())?;
     }
 
-    // has_many for scalar fields (text, number, select — not relationship/upload which use RelationshipConfig)
+    // `has_many` is set on scalar fields (Text, Number, Select tag lists).
+    // Relationship/Upload fields carry `has_many` inside `RelationshipConfig`
+    // and skip this top-level key to avoid duplication.
     if f.has_many && f.relationship.is_none() {
         tbl.set("has_many", true)?;
     }
 
-    // options (select fields)
-    if !f.options.is_empty() {
-        let opts = lua.create_table()?;
+    Ok(())
+}
 
-        for (i, opt) in f.options.iter().enumerate() {
-            let o = lua.create_table()?;
-            o.set("label", localized_string_to_lua(lua, &opt.label)?)?;
-            o.set("value", opt.value.as_str())?;
-            opts.set(i + 1, o)?;
-        }
-
-        tbl.set("options", opts)?;
-    }
-
-    // admin
-    if let Some(admin) = field_admin_to_lua(lua, &f.admin)? {
-        tbl.set("admin", admin)?;
-    }
-
-    // hooks
-    if let Some(hooks) = field_hooks_to_lua(lua, &f.hooks)? {
-        tbl.set("hooks", hooks)?;
-    }
-
-    // access
-    if let Some(access) = field_access_to_lua(lua, &f.access)? {
-        tbl.set("access", access)?;
-    }
-
-    // mcp
-    if let Some(ref desc) = f.mcp.description {
-        let mcp = lua.create_table()?;
-
-        mcp.set("description", desc.as_str())?;
-
-        tbl.set("mcp", mcp)?;
-    }
-
-    // relationship
-    if let Some(ref rc) = f.relationship {
-        let rel = lua.create_table()?;
-
-        rel.set("collection", &*rc.collection)?;
-
-        if rc.has_many {
-            rel.set("has_many", true)?;
-        }
-
-        if let Some(md) = rc.max_depth {
-            rel.set("max_depth", md)?;
-        }
-
-        tbl.set("relationship", rel)?;
-    }
-
-    // sub-fields (array, group)
-    if !f.fields.is_empty() {
-        let sub = lua.create_table()?;
-
-        for (i, sf) in f.fields.iter().enumerate() {
-            sub.set(i + 1, field_config_to_lua(lua, sf)?)?;
-        }
-
-        tbl.set("fields", sub)?;
-    }
-
-    // blocks
-    if !f.blocks.is_empty() {
-        let blocks = lua.create_table()?;
-
-        for (i, b) in f.blocks.iter().enumerate() {
-            let bt = lua.create_table()?;
-
-            bt.set("type", b.block_type.as_str())?;
-
-            if let Some(ref lbl) = b.label {
-                bt.set("label", localized_string_to_lua(lua, lbl)?)?;
+/// Set `default_value` from a `serde_json::Value`, preserving the underlying
+/// scalar type (bool / int / float / string). Non-scalar JSON values are
+/// silently skipped — the Lua format only supports scalar defaults.
+fn set_default_value(tbl: &Table, dv: &JsonValue) -> LuaResult<()> {
+    match dv {
+        JsonValue::Bool(b) => tbl.set("default_value", *b),
+        JsonValue::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                tbl.set("default_value", i)
+            } else if let Some(f_val) = n.as_f64() {
+                tbl.set("default_value", f_val)
+            } else {
+                Ok(())
             }
-
-            if let Some(ref g) = b.group {
-                bt.set("group", g.as_str())?;
-            }
-
-            if let Some(ref url) = b.image_url {
-                bt.set("image_url", url.as_str())?;
-            }
-
-            let bf = lua.create_table()?;
-
-            for (j, sf) in b.fields.iter().enumerate() {
-                bf.set(j + 1, field_config_to_lua(lua, sf)?)?;
-            }
-
-            bt.set("fields", bf)?;
-
-            blocks.set(i + 1, bt)?;
         }
-
-        tbl.set("blocks", blocks)?;
+        JsonValue::String(s) => tbl.set("default_value", s.as_str()),
+        _ => Ok(()),
     }
+}
 
-    // tabs (for Tabs field type)
-    if !f.tabs.is_empty() {
-        let tabs = lua.create_table()?;
+/// Set the `options` array (Select/Radio rows).
+fn set_field_options(lua: &Lua, tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
+    if f.options.is_empty() {
+        return Ok(());
+    }
+    let opts = lua.create_table()?;
+    for (i, opt) in f.options.iter().enumerate() {
+        let o = lua.create_table()?;
+        o.set("label", localized_string_to_lua(lua, &opt.label)?)?;
+        o.set("value", opt.value.as_str())?;
+        opts.set(i + 1, o)?;
+    }
+    tbl.set("options", opts)
+}
 
-        for (i, tab) in f.tabs.iter().enumerate() {
-            let tt = lua.create_table()?;
+/// Set the `mcp` sub-table (only when an MCP description is configured).
+fn set_field_mcp(lua: &Lua, tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
+    let Some(ref desc) = f.mcp.description else {
+        return Ok(());
+    };
+    let mcp = lua.create_table()?;
+    mcp.set("description", desc.as_str())?;
+    tbl.set("mcp", mcp)
+}
 
-            tt.set("label", tab.label.as_str())?;
+/// Set the `relationship` sub-table for Relationship / Upload fields.
+fn set_field_relationship(lua: &Lua, tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
+    let Some(ref rc) = f.relationship else {
+        return Ok(());
+    };
+    let rel = lua.create_table()?;
+    rel.set("collection", &*rc.collection)?;
+    if rc.has_many {
+        rel.set("has_many", true)?;
+    }
+    if let Some(md) = rc.max_depth {
+        rel.set("max_depth", md)?;
+    }
+    tbl.set("relationship", rel)
+}
 
-            if let Some(ref desc) = tab.description {
-                tt.set("description", desc.as_str())?;
-            }
+/// Set the `fields` array (Group / Array sub-fields — recursive).
+fn set_field_sub_fields(lua: &Lua, tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
+    if f.fields.is_empty() {
+        return Ok(());
+    }
+    let sub = lua.create_table()?;
+    for (i, sf) in f.fields.iter().enumerate() {
+        sub.set(i + 1, field_config_to_lua(lua, sf)?)?;
+    }
+    tbl.set("fields", sub)
+}
 
-            let tf = lua.create_table()?;
-
-            for (j, sf) in tab.fields.iter().enumerate() {
-                tf.set(j + 1, field_config_to_lua(lua, sf)?)?;
-            }
-
-            tt.set("fields", tf)?;
-
-            tabs.set(i + 1, tt)?;
+/// Set the `blocks` array (Blocks field type). Each block carries its
+/// own label / group / `image_url` metadata plus a recursive `fields` array.
+fn set_field_blocks(lua: &Lua, tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
+    if f.blocks.is_empty() {
+        return Ok(());
+    }
+    let blocks = lua.create_table()?;
+    for (i, b) in f.blocks.iter().enumerate() {
+        let bt = lua.create_table()?;
+        bt.set("type", b.block_type.as_str())?;
+        if let Some(ref lbl) = b.label {
+            bt.set("label", localized_string_to_lua(lua, lbl)?)?;
         }
-
-        tbl.set("tabs", tabs)?;
+        if let Some(ref g) = b.group {
+            bt.set("group", g.as_str())?;
+        }
+        if let Some(ref url) = b.image_url {
+            bt.set("image_url", url.as_str())?;
+        }
+        let bf = lua.create_table()?;
+        for (j, sf) in b.fields.iter().enumerate() {
+            bf.set(j + 1, field_config_to_lua(lua, sf)?)?;
+        }
+        bt.set("fields", bf)?;
+        blocks.set(i + 1, bt)?;
     }
+    tbl.set("blocks", blocks)
+}
 
-    Ok(tbl)
+/// Set the `tabs` array (Tabs field type). Each tab carries a label,
+/// optional description, and a recursive `fields` array.
+fn set_field_tabs(lua: &Lua, tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
+    if f.tabs.is_empty() {
+        return Ok(());
+    }
+    let tabs = lua.create_table()?;
+    for (i, tab) in f.tabs.iter().enumerate() {
+        let tt = lua.create_table()?;
+        tt.set("label", tab.label.as_str())?;
+        if let Some(ref desc) = tab.description {
+            tt.set("description", desc.as_str())?;
+        }
+        let tf = lua.create_table()?;
+        for (j, sf) in tab.fields.iter().enumerate() {
+            tf.set(j + 1, field_config_to_lua(lua, sf)?)?;
+        }
+        tt.set("fields", tf)?;
+        tabs.set(i + 1, tt)?;
+    }
+    tbl.set("tabs", tabs)
 }
 
 /// Convert a `FieldHooks` to a Lua table. Returns `None` if no hooks are set.
@@ -421,8 +428,8 @@ mod tests {
         );
     }
 
-    /// Regression test: field_config_to_lua must emit ALL FieldAdmin properties
-    /// so that plugins using config.list() + define() don't lose admin settings.
+    /// Regression test: `field_config_to_lua` must emit ALL `FieldAdmin` properties
+    /// so that plugins using `config.list()` + `define()` don't lose admin settings.
     #[test]
     fn test_field_config_to_lua_admin_roundtrip_all_properties() {
         let lua = mlua::Lua::new();

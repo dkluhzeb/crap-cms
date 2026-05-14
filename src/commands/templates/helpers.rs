@@ -30,5 +30,5 @@ pub(super) fn lookup_embedded(kind: &str, sub_path: &str) -> Option<&'static [u8
         _ => return None,
     };
 
-    dir.get_file(sub_path).map(|f| f.contents())
+    dir.get_file(sub_path).map(include_dir::File::contents)
 }

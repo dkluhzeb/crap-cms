@@ -52,6 +52,10 @@ struct OverlayEntry {
 }
 
 /// Run `crap-cms templates status` against the given config dir.
+///
+/// # Errors
+///
+/// Returns an error if scanning the overlay directory fails.
 pub fn status(config_dir: &Path) -> Result<()> {
     let entries = collect_overlay_entries(config_dir)?;
 
@@ -93,15 +97,15 @@ pub fn status(config_dir: &Path) -> Result<()> {
             }
             Drift::Behind { from } => {
                 behind += 1;
-                ("⚠", format!("behind: extracted from {}", from))
+                ("⚠", format!("behind: extracted from {from}"))
             }
             Drift::Ahead { from } => {
                 ahead += 1;
-                ("↑", format!("ahead: extracted from {}", from))
+                ("↑", format!("ahead: extracted from {from}"))
             }
             Drift::UnknownVersion { raw } => {
                 unknown += 1;
-                ("?", format!("unparseable source header: {}", raw))
+                ("?", format!("unparseable source header: {raw}"))
             }
             Drift::NoHeader => {
                 no_header += 1;
@@ -128,8 +132,7 @@ pub fn status(config_dir: &Path) -> Result<()> {
 
     println!();
     println!(
-        "Summary: {} current, {} behind, {} ahead, {} pristine, {} unknown header, {} no header, {} orphaned, {} user-original",
-        current, behind, ahead, pristine, unknown, no_header, orphaned, user_original
+        "Summary: {current} current, {behind} behind, {ahead} ahead, {pristine} pristine, {unknown} unknown header, {no_header} no header, {orphaned} orphaned, {user_original} user-original"
     );
 
     if behind > 0 || orphaned > 0 {
@@ -163,6 +166,10 @@ pub struct CustomizationCounts {
 /// Walk the config dir's overlay roots and tally customizations.
 /// Returns zeroed counts when neither `templates/` nor `static/`
 /// exists (e.g. fresh install with only `init.lua`).
+///
+/// # Errors
+///
+/// Returns an error if scanning the overlay directory fails.
 pub fn customization_counts(config_dir: &Path) -> Result<CustomizationCounts> {
     let entries = collect_overlay_entries(config_dir)?;
     let mut c = CustomizationCounts::default();
@@ -224,7 +231,7 @@ fn walk_overlay_dir(
             .unwrap()
             .to_string_lossy()
             .to_string();
-        let rel_path = format!("{}/{}", kind, sub_rel);
+        let rel_path = format!("{kind}/{sub_rel}");
 
         let drift = classify_file(&path, kind, &sub_rel)?;
         out.push(OverlayEntry { rel_path, drift });
@@ -298,8 +305,8 @@ mod tests {
         let upstream = lookup_embedded("templates", "layout/base.hbs")
             .expect("layout/base.hbs must be embedded");
         let upstream_str = std::str::from_utf8(upstream).unwrap();
-        let header = format!("{{{{!-- crap-cms:source {} --}}}}\n", crate_version);
-        let extracted = format!("{}{}", header, upstream_str);
+        let header = format!("{{{{!-- crap-cms:source {crate_version} --}}}}\n");
+        let extracted = format!("{header}{upstream_str}");
         fs::write(layout_dir.join("base.hbs"), extracted).unwrap();
 
         // Addition (user-original — no embedded counterpart).

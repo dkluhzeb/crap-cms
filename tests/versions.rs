@@ -1,8 +1,22 @@
 //! Integration tests for the versioning and drafts system.
 //!
 //! Covers: DB query layer (create/list/find/restore/prune versions, status),
-//! service layer (create_document/update_document with draft param),
-//! and gRPC API (draft flag on CRUD RPCs, ListVersions, RestoreVersion).
+//! service layer (`create_document/update_document` with draft param),
+//! and gRPC API (draft flag on CRUD RPCs, `ListVersions`, `RestoreVersion`).
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
 
 use std::sync::Arc;
 
@@ -488,7 +502,7 @@ fn restore_version_updates_main_table() {
         &doc.id,
         &snap_v1,
         "published",
-        &Default::default(),
+        &crap_cms::config::LocaleConfig::default(),
     )
     .unwrap();
     assert_eq!(restored.get_str("title"), Some("Original"));
@@ -734,7 +748,7 @@ fn restore_version_with_group_fields() {
         &doc.id,
         &snap_v1,
         "published",
-        &Default::default(),
+        &crap_cms::config::LocaleConfig::default(),
     )
     .unwrap();
 
@@ -811,7 +825,7 @@ fn restore_global_version_with_group_fields() {
         &gdef,
         &snap_v1,
         "published",
-        &Default::default(),
+        &crap_cms::config::LocaleConfig::default(),
     )
     .unwrap();
 

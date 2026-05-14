@@ -9,19 +9,23 @@ use crate::cli;
 use super::helpers::{blueprints_dir, validate_blueprint_name};
 
 /// Remove a saved blueprint by name.
+///
+/// # Errors
+///
+/// Returns an error if the name is invalid, the blueprint doesn't exist,
+/// or the removal fails.
 pub fn blueprint_remove(name: &str) -> Result<()> {
     validate_blueprint_name(name)?;
 
     let target = blueprints_dir()?.join(name);
 
     if !target.exists() {
-        bail!("Blueprint '{}' not found", name);
+        bail!("Blueprint '{name}' not found");
     }
 
-    fs::remove_dir_all(&target)
-        .with_context(|| format!("Failed to remove blueprint '{}'", name))?;
+    fs::remove_dir_all(&target).with_context(|| format!("Failed to remove blueprint '{name}'"))?;
 
-    cli::success(&format!("Removed blueprint '{}'", name));
+    cli::success(&format!("Removed blueprint '{name}'"));
 
     Ok(())
 }
@@ -47,7 +51,7 @@ mod tests {
             fs::write(bp_target.join("crap.toml"), "").unwrap();
 
             let result = blueprint_remove("remove-me");
-            assert!(result.is_ok(), "blueprint_remove failed: {:?}", result);
+            assert!(result.is_ok(), "blueprint_remove failed: {result:?}");
             assert!(!bp_target.exists());
         });
     }

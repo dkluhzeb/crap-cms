@@ -1,5 +1,7 @@
 //! Response helpers — error pages, redirects, HTMX-aware responses, toast rendering.
 
+use std::fmt::Write as _;
+
 use axum::{
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
@@ -44,7 +46,7 @@ pub fn forbidden(state: &AdminState, message: &str) -> Response {
         base: BasePageContext::for_handler(
             state,
             None,
-            &None,
+            None,
             PageMeta::new(PageType::Error403, "forbidden_page_title"),
         ),
         message: message.to_string(),
@@ -135,7 +137,7 @@ fn percent_encode_header(s: &str) -> String {
         if b.is_ascii_graphic() || b == b' ' {
             out.push(b as char);
         } else {
-            out.push_str(&format!("%{:02X}", b));
+            let _ = write!(out, "%{b:02X}");
         }
     }
 
@@ -213,7 +215,7 @@ pub fn not_found(state: &AdminState, message: &str) -> Response {
         base: BasePageContext::for_handler(
             state,
             None,
-            &None,
+            None,
             PageMeta::new(PageType::Error404, "not_found_page_title"),
         ),
         message: message.to_string(),
@@ -260,7 +262,7 @@ pub fn service_error_to_admin_response(
 /// Convert a [`tokio::task::JoinError`] into a generic admin HTML 500
 /// response. Tokio task failures generally indicate a panic in the
 /// `spawn_blocking` body and are not user-facing. Logged at `error!`.
-pub fn task_join_error_response(state: &AdminState, err: tokio::task::JoinError) -> Response {
+pub fn task_join_error_response(state: &AdminState, err: &tokio::task::JoinError) -> Response {
     error!("spawn_blocking task error: {}", err);
     server_error(state, "An internal error occurred.")
 }
@@ -271,7 +273,7 @@ pub fn server_error(state: &AdminState, message: &str) -> Response {
         base: BasePageContext::for_handler(
             state,
             None,
-            &None,
+            None,
             PageMeta::new(PageType::Error500, "server_error_page_title"),
         ),
         message: message.to_string(),

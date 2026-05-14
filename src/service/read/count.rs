@@ -13,6 +13,11 @@ type Result<T> = std::result::Result<T, ServiceError>;
 ///
 /// Steps: validate user filters -> access check -> inject system filters
 /// (`_status`/`_deleted_at`) -> count.
+///
+/// # Errors
+///
+/// Returns service-layer errors (access denied, invalid filter) or a
+/// backend error if the COUNT query fails.
 pub fn count_documents(ctx: &ServiceContext, input: &CountDocumentsInput) -> Result<i64> {
     validate_user_filters(input.filters)?;
 

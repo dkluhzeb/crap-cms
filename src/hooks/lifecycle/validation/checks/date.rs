@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
 
-/// Validate date format and date bounds (min_date / max_date).
+/// Validate date format and date bounds (`min_date` / `max_date`).
 pub(crate) fn check_date_field(
     field: &FieldDefinition,
     data_key: &str,

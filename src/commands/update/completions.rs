@@ -143,14 +143,14 @@ fn plan_install(shell: Shell) -> Option<InstallPlan> {
     let home = home_dir()?;
 
     match shell {
-        Shell::Bash => plan_bash(&home),
-        Shell::Zsh => plan_zsh(&home),
+        Shell::Bash => Some(plan_bash(&home)),
+        Shell::Zsh => Some(plan_zsh(&home)),
         Shell::Fish => Some(plan_fish(&home)),
         _ => None,
     }
 }
 
-fn plan_bash(home: &Path) -> Option<InstallPlan> {
+fn plan_bash(home: &Path) -> InstallPlan {
     let path = bash_xdg_path(home);
     let hint = if bash_completion_available() {
         None
@@ -161,39 +161,39 @@ fn plan_bash(home: &Path) -> Option<InstallPlan> {
                 .to_string(),
         )
     };
-    Some(InstallPlan { path, hint })
+    InstallPlan { path, hint }
 }
 
-fn plan_zsh(home: &Path) -> Option<InstallPlan> {
+fn plan_zsh(home: &Path) -> InstallPlan {
     let fpath = zsh_fpath();
     let zfunc = home.join(".zfunc");
 
     // 1. If ~/.zfunc is already on fpath, install there — stable across updates.
     if fpath.iter().any(|p| p == &zfunc) {
-        return Some(InstallPlan {
+        return InstallPlan {
             path: zfunc.join("_crap-cms"),
             hint: None,
-        });
+        };
     }
 
     // 2. Otherwise, pick the first user-owned dir on fpath.
     if let Some(dir) = fpath.iter().find(|p| p.starts_with(home)) {
-        return Some(InstallPlan {
+        return InstallPlan {
             path: dir.join("_crap-cms"),
             hint: None,
-        });
+        };
     }
 
     // 3. Nothing on fpath looks writable — fall back to ~/.zfunc and nag
     //    the user (every install) until they wire it up.
-    Some(InstallPlan {
+    InstallPlan {
         path: zfunc.join("_crap-cms"),
         hint: Some(
             "~/.zfunc is not on $fpath — add `fpath=(~/.zfunc $fpath)` before \
              `compinit` in your .zshrc, then restart your shell."
                 .to_string(),
         ),
-    })
+    }
 }
 
 fn plan_fish(home: &Path) -> InstallPlan {
@@ -220,8 +220,7 @@ fn bash_xdg_path(home: &Path) -> PathBuf {
     let xdg_data = std::env::var("XDG_DATA_HOME")
         .ok()
         .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".local/share"));
+        .map_or_else(|| home.join(".local/share"), PathBuf::from);
 
     xdg_data.join("bash-completion/completions/crap-cms")
 }
@@ -230,8 +229,7 @@ fn fish_path(home: &Path) -> PathBuf {
     let config = std::env::var("XDG_CONFIG_HOME")
         .ok()
         .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".config"));
+        .map_or_else(|| home.join(".config"), PathBuf::from);
 
     config.join("fish/completions/crap-cms.fish")
 }

@@ -32,7 +32,7 @@ fn fetch_version_data(ctx: &ServiceContext, pg: &Pagination) -> (Vec<Value>, Pag
 
     let result = list_versions(ctx, &input).unwrap_or_default();
 
-    let versions = result.docs.into_iter().map(version_to_json).collect();
+    let versions = result.docs.iter().map(version_to_json).collect();
 
     (versions, result.pagination)
 }
@@ -48,19 +48,18 @@ pub async fn list_versions_page(
 ) -> Response {
     let def = match state.registry.get_global(&slug) {
         Some(d) => d.clone(),
-        None => return not_found(&state, &format!("Global '{}' not found", slug)),
+        None => return not_found(&state, &format!("Global '{slug}' not found")),
     };
 
     if !def.has_versions() {
         return redirect_response(&paths::global(&slug));
     }
 
-    let conn = match state.pool.get() {
-        Ok(c) => c,
-        Err(_) => return server_error(&state, "Database error"),
+    let Ok(conn) = state.pool.get() else {
+        return server_error(&state, "Database error");
     };
 
-    let user_doc = get_user_doc(&auth_user);
+    let user_doc = get_user_doc(auth_user.as_ref());
     let pg = params.resolve(&state.config.pagination);
     let hooks = RunnerReadHooks::new(&state.hook_runner, &conn);
 
@@ -75,8 +74,9 @@ pub async fn list_versions_page(
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
-    let prev_url = paths::global_versions_page(&slug, pg.page.saturating_sub(1).max(1) as u64);
-    let next_url = paths::global_versions_page(&slug, (pg.page + 1) as u64);
+    let prev_url =
+        paths::global_versions_page(&slug, pg.page.saturating_sub(1).max(1).cast_unsigned());
+    let next_url = paths::global_versions_page(&slug, (pg.page + 1).cast_unsigned());
 
     let breadcrumbs = vec![
         Breadcrumb::link("dashboard", paths::DASHBOARD),
@@ -87,7 +87,7 @@ pub async fn list_versions_page(
     let base = BasePageContext::for_handler(
         &state,
         claims_ref,
-        &auth_user,
+        auth_user.as_ref(),
         PageMeta::new(PageType::GlobalVersions, "version_history_for")
             .with_title_name(def.display_name()),
     )

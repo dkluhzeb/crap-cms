@@ -2,6 +2,20 @@
 //!
 //! Covers: collection CRUD, search/filter/sort, validation, versioning, uploads (API).
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -116,7 +130,7 @@ fn setup_app_with_config(
     let has_auth = registry
         .collections
         .values()
-        .any(|d| d.is_auth_collection());
+        .any(crap_cms::core::CollectionDefinition::is_auth_collection);
 
     let state = AdminState {
         config,
@@ -164,7 +178,7 @@ fn setup_app_with_config(
         ),
         populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
         cache: None,
-        custom_pages: Default::default(),
+        custom_pages: crap_cms::admin::custom_pages::CustomPageRegistry::default(),
     };
 
     let router = build_router(state);
@@ -202,13 +216,13 @@ fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
         .build()
         .unwrap();
     let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();
-    format!("crap_session={}", token)
+    format!("crap_session={token}")
 }
 
 const TEST_CSRF: &str = "test-csrf-token-12345";
 
 fn auth_and_csrf(auth_cookie: &str) -> String {
-    format!("{}; crap_csrf={}", auth_cookie, TEST_CSRF)
+    format!("{auth_cookie}; crap_csrf={TEST_CSRF}")
 }
 
 async fn body_string(body: Body) -> String {
@@ -294,7 +308,7 @@ async fn edit_form_auth_collection_shows_password_field() {
     let resp = app
         .router
         .oneshot(
-            Request::get(format!("/admin/collections/users/{}", user_id))
+            Request::get(format!("/admin/collections/users/{user_id}"))
                 .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -352,8 +366,7 @@ async fn update_action_validation_error() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Expected 200 (validation error re-render) or redirect, got {}",
-        status
+        "Expected 200 (validation error re-render) or redirect, got {status}"
     );
 }
 
@@ -411,8 +424,7 @@ async fn update_action_post_with_method_delete() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "POST with _method=DELETE should succeed, got {}",
-        status
+        "POST with _method=DELETE should succeed, got {status}"
     );
 }
 
@@ -479,8 +491,7 @@ async fn versioned_collection_create_as_draft() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Create as draft should succeed, got {}",
-        status
+        "Create as draft should succeed, got {status}"
     );
 }
 
@@ -551,8 +562,7 @@ async fn versioned_collection_update_unpublish() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Unpublish should succeed, got {}",
-        status
+        "Unpublish should succeed, got {status}"
     );
 }
 
@@ -562,7 +572,7 @@ async fn versioned_collection_update_unpublish() {
 /// which routed through `find_by_id_raw(... locale_ctx: None ...)`. With
 /// `None`, the SELECT generator falls back to bare column names (`title`)
 /// instead of locale-suffixed ones (`title__en`, `title__de`) — but the
-/// table only has the suffixed columns, so SQLite returned `no such
+/// table only has the suffixed columns, so `SQLite` returned `no such
 /// column: title`. The error was caught by the catch-all match arm in
 /// `do_update`, logged, and the user redirected to the same edit page —
 /// "unpublish button does nothing" from the user's perspective.
@@ -633,8 +643,7 @@ async fn versioned_collection_unpublish_with_localized_field() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Localized unpublish should succeed, got {}",
-        status
+        "Localized unpublish should succeed, got {status}"
     );
 
     // Confirm the document was actually flipped to draft, not just that the
@@ -752,8 +761,7 @@ async fn non_versioned_collection_versions_page_redirects() {
         status == StatusCode::SEE_OTHER
             || status == StatusCode::FOUND
             || status == StatusCode::TEMPORARY_REDIRECT,
-        "Non-versioned collection versions page should redirect, got {}",
-        status
+        "Non-versioned collection versions page should redirect, got {status}"
     );
 }
 
@@ -791,8 +799,7 @@ async fn restore_version_non_versioned_redirects() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Restore version on non-versioned collection should redirect, got {}",
-        status
+        "Restore version on non-versioned collection should redirect, got {status}"
     );
 }
 

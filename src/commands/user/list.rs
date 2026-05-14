@@ -12,17 +12,22 @@ use crate::{
 use super::helpers::load_auth_collection;
 
 /// List users in an auth collection.
+///
+/// # Errors
+///
+/// Returns an error if the collection isn't an auth collection or the
+/// underlying find query fails.
 #[cfg(not(tarpaulin_include))]
 pub fn user_list(pool: &DbPool, registry: &Registry, collection: &str) -> Result<()> {
     let def = load_auth_collection(registry, collection)?;
-    let verify_email = def.auth.as_ref().map(|a| a.verify_email).unwrap_or(false);
+    let verify_email = def.auth.as_ref().is_some_and(|a| a.verify_email);
 
     let conn = pool.get().context("Failed to get database connection")?;
     let find_query = query::FindQuery::default();
     let users = query::find(&conn, collection, &def, &find_query, None)?;
 
     if users.is_empty() {
-        cli::info(&format!("No users in '{}'.", collection));
+        cli::info(&format!("No users in '{collection}'."));
 
         return Ok(());
     }

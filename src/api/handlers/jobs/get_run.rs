@@ -1,4 +1,4 @@
-//! GetJobRun handler — get details of a specific job run.
+//! `GetJobRun` handler — get details of a specific job run.
 
 use std::sync::Arc;
 

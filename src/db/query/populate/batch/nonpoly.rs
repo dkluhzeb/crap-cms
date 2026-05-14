@@ -49,7 +49,7 @@ pub(super) fn batch_nonpoly_has_many(
         let ids: Vec<String> = match doc.fields.get(field_name) {
             Some(Value::Array(arr)) => arr
                 .iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
                 .collect(),
             _ => continue,
         };
@@ -271,12 +271,10 @@ mod tests {
             let author = doc
                 .fields
                 .get("author")
-                .unwrap_or_else(|| panic!("doc {} missing author", i));
+                .unwrap_or_else(|| panic!("doc {i} missing author"));
             assert!(
                 author.is_object(),
-                "doc {} author should be object, got {:?}",
-                i,
-                author
+                "doc {i} author should be object, got {author:?}"
             );
         }
         // p1 and p2 share the same author

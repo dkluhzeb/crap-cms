@@ -23,8 +23,7 @@ fn validate_email_input(email: &str) -> Result<()> {
     }
 
     Err(anyhow!(
-        "invalid email address '{}': must contain '@', non-empty local and domain parts, and a dot in the domain",
-        email
+        "invalid email address '{email}': must contain '@', non-empty local and domain parts, and a dot in the domain"
     ))
 }
 
@@ -42,6 +41,12 @@ pub struct UserCreateParams<'a> {
 }
 
 /// Create a new user in an auth collection.
+///
+/// # Errors
+///
+/// Returns an error if the collection isn't an auth collection, email or
+/// password validation fails, the password fails policy, or the DB write
+/// fails.
 #[cfg(not(tarpaulin_include))]
 pub fn user_create(p: UserCreateParams<'_>) -> Result<()> {
     let def = load_auth_collection(p.registry, p.collection)?;

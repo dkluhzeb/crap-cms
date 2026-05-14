@@ -148,7 +148,7 @@ fn resolve_fields(
             };
 
             if Confirm::with_theme(&crap_theme())
-                .with_prompt(format!("Add custom fields? ({})", hint))
+                .with_prompt(format!("Add custom fields? ({hint})"))
                 .default(false)
                 .interact()
                 .context("Failed to read custom fields preference")?

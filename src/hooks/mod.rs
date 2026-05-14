@@ -18,8 +18,8 @@
 //!   validation.
 //! - `lifecycle/` -- runtime hook execution. `HookRunner` owns a Lua
 //!   VM pool; `HookEvent` enumerates the events that fire user hooks
-//!   (before_validate, before_change, after_change, before_read,
-//!   after_read, before_delete, after_delete, before_broadcast); the
+//!   (`before_validate`, `before_change`, `after_change`, `before_read`,
+//!   `after_read`, `before_delete`, `after_delete`, `before_broadcast`); the
 //!   per-event execution paths live under `lifecycle/execution/`,
 //!   `lifecycle/access/`, `lifecycle/validation/`, and
 //!   `lifecycle/runner/`.

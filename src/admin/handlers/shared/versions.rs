@@ -13,7 +13,7 @@ use crate::{
 };
 
 /// Map a `VersionSnapshot` to the JSON object used in templates.
-pub fn version_to_json(v: VersionSnapshot) -> Value {
+pub fn version_to_json(v: &VersionSnapshot) -> Value {
     json!({
         "id": v.id,
         "version": v.version,
@@ -30,7 +30,7 @@ pub fn fetch_version_sidebar_data(ctx: &ServiceContext, parent_id: &str) -> (Vec
 
     match list_versions(ctx, &input) {
         Ok(result) => {
-            let vers = result.docs.into_iter().map(version_to_json).collect();
+            let vers = result.docs.iter().map(version_to_json).collect();
             (vers, result.total)
         }
         Err(_) => (vec![], 0),
@@ -92,7 +92,7 @@ mod tests {
             .snapshot(json!({}))
             .build();
 
-        let json = version_to_json(v);
+        let json = version_to_json(&v);
         assert_eq!(json["id"], "v1");
         assert_eq!(json["version"], 3);
         assert_eq!(json["status"], "published");

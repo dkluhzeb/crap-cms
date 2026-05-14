@@ -1,6 +1,6 @@
 //! Single-field rendering: `write_field` (emits a single
 //! `---@field name? type` line) and `field_to_lua_type` (maps a
-//! [`FieldDefinition`] to its LuaLS type string).
+//! [`FieldDefinition`] to its `LuaLS` type string).
 
 use crate::core::{FieldDefinition, FieldType};
 
@@ -84,7 +84,7 @@ fn field_to_lua_type(field: &FieldDefinition, parent_pascal: &str) -> String {
                 if field.options.is_empty() {
                     "string[]".to_string()
                 } else {
-                    format!("({}|string)[]", base)
+                    format!("({base}|string)[]")
                 }
             } else {
                 base
@@ -98,19 +98,18 @@ fn field_to_lua_type(field: &FieldDefinition, parent_pascal: &str) -> String {
         },
         FieldType::Array => {
             let sub = format!("{}{}", parent_pascal, to_pascal_case(&field.name));
-            format!("crap.array_row.{}[]", sub)
+            format!("crap.array_row.{sub}[]")
         }
         FieldType::Group => {
             if field.fields.is_empty() {
                 "table".to_string()
             } else {
                 let sub = format!("{}{}", parent_pascal, to_pascal_case(&field.name));
-                format!("crap.group.{}", sub)
+                format!("crap.group.{sub}")
             }
         }
-        FieldType::Row => "table".to_string(), // layout-only; sub-fields are promoted
-        FieldType::Collapsible => "table".to_string(), // layout-only; sub-fields are promoted
-        FieldType::Tabs => "table".to_string(), // layout-only; sub-fields are promoted
+        // Layout-only; sub-fields are promoted
+        FieldType::Row | FieldType::Collapsible | FieldType::Tabs => "table".to_string(),
         FieldType::Upload => {
             if rel_has_many(field) {
                 "string[]".to_string()
@@ -118,8 +117,7 @@ fn field_to_lua_type(field: &FieldDefinition, parent_pascal: &str) -> String {
                 "string".to_string()
             }
         }
-        FieldType::Blocks => "table[]".to_string(),
-        FieldType::Join => "table[]".to_string(),
+        FieldType::Blocks | FieldType::Join => "table[]".to_string(),
     }
 }
 
@@ -316,19 +314,13 @@ mod tests {
         let result = field_to_lua_type(&f_with_opts, "Test");
         assert!(
             result.contains("\"a\""),
-            "should include option 'a': {}",
-            result
+            "should include option 'a': {result}"
         );
         assert!(
             result.contains("\"b\""),
-            "should include option 'b': {}",
-            result
+            "should include option 'b': {result}"
         );
-        assert!(
-            result.ends_with("[]"),
-            "should be an array type: {}",
-            result
-        );
+        assert!(result.ends_with("[]"), "should be an array type: {result}");
 
         // has_many without options → string[]
         let f_no_opts = FieldDefinition::builder("cats", FieldType::Select)

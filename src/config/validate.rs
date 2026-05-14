@@ -86,9 +86,8 @@ impl CrapConfig {
 
             if entry.parse::<IpNet>().is_err() && entry.parse::<IpAddr>().is_err() {
                 bail!(
-                    "server.trusted_proxies entry {:?} is not a valid IP, \
-                     CIDR, or the \"*\" wildcard",
-                    entry
+                    "server.trusted_proxies entry {entry:?} is not a valid IP, \
+                     CIDR, or the \"*\" wildcard"
                 );
             }
         }
@@ -176,6 +175,11 @@ impl CrapConfig {
 
     /// Validate auth and password policy settings.
     pub(super) fn validate_auth(&self) -> Result<()> {
+        // `0` means "no cap" -- the default, silent. Finite values longer
+        // than 30 days deserve a nudge, since they materially widen the
+        // window in which a stolen session token is usable.
+        const SESSION_MAX_AGE_WARN_THRESHOLD: u64 = 30 * 86400;
+
         if !self.auth.secret.is_empty() && self.auth.secret.len() < 32 {
             warn!("auth.secret is shorter than 32 characters -- consider using a stronger key");
         }
@@ -187,11 +191,6 @@ impl CrapConfig {
                 self.auth.password_policy.max_length
             );
         }
-
-        // `0` means "no cap" -- the default, silent. Finite values longer
-        // than 30 days deserve a nudge, since they materially widen the
-        // window in which a stolen session token is usable.
-        const SESSION_MAX_AGE_WARN_THRESHOLD: u64 = 30 * 86400;
 
         if self.auth.session_absolute_max_age > SESSION_MAX_AGE_WARN_THRESHOLD {
             warn!(
@@ -271,14 +270,12 @@ impl CrapConfig {
     }
 
     /// Validate cache settings.
-    pub(super) fn validate_cache(&self) -> Result<()> {
+    pub(super) fn validate_cache(&self) {
         if self.cache.backend == "memory" && self.cache.max_entries == 0 {
             warn!(
                 "cache.max_entries = 0 with memory backend -- cache will never store entries (equivalent to backend = \"none\")"
             );
         }
-
-        Ok(())
     }
 }
 
@@ -427,8 +424,7 @@ mod tests {
         let err = config.validate().unwrap_err();
         assert!(
             err.to_string().contains("mcp.api_key"),
-            "Expected mcp.api_key error, got: {}",
-            err
+            "Expected mcp.api_key error, got: {err}"
         );
     }
 
@@ -451,8 +447,7 @@ mod tests {
         let msg = err.to_string();
         assert!(
             msg.contains("too short"),
-            "Expected short-key error, got: {}",
-            msg,
+            "Expected short-key error, got: {msg}",
         );
         assert!(msg.contains("openssl rand") || msg.contains("/dev/urandom"));
     }

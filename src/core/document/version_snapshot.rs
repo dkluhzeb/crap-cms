@@ -64,36 +64,42 @@ impl VersionSnapshotBuilder {
     }
 
     /// Set the sequential version number.
+    #[must_use]
     pub fn version(mut self, v: i64) -> Self {
         self.version = Some(v);
         self
     }
 
     /// Set the status of the version snapshot (e.g. "draft", "published").
+    #[must_use]
     pub fn status(mut self, s: impl Into<String>) -> Self {
         self.status = Some(s.into());
         self
     }
 
     /// Set whether this version is the latest one for its parent document.
+    #[must_use]
     pub fn latest(mut self, l: bool) -> Self {
         self.latest = Some(l);
         self
     }
 
     /// Set the JSON data snapshot of the document fields.
+    #[must_use]
     pub fn snapshot(mut self, s: Value) -> Self {
         self.snapshot = Some(s);
         self
     }
 
     /// Set the creation timestamp for this version.
+    #[must_use]
     pub fn created_at(mut self, ts: impl Into<String>) -> Self {
         self.created_at = Some(ts.into());
         self
     }
 
     /// Set the last update timestamp for this version.
+    #[must_use]
     pub fn updated_at(mut self, ts: impl Into<String>) -> Self {
         self.updated_at = Some(ts.into());
         self
@@ -104,6 +110,7 @@ impl VersionSnapshotBuilder {
     /// # Panics
     ///
     /// Panics if any required field is missing (version, status, latest, snapshot).
+    #[must_use]
     pub fn build(self) -> VersionSnapshot {
         VersionSnapshot {
             id: self.id,
@@ -155,7 +162,7 @@ mod builder_tests {
     #[test]
     #[should_panic(expected = "VersionSnapshotBuilder: version is required")]
     fn panics_without_version() {
-        VersionSnapshotBuilder::new("s", "p")
+        let _ = VersionSnapshotBuilder::new("s", "p")
             .status("draft")
             .latest(false)
             .snapshot(json!({}))
@@ -165,7 +172,7 @@ mod builder_tests {
     #[test]
     #[should_panic(expected = "VersionSnapshotBuilder: status is required")]
     fn panics_without_status() {
-        VersionSnapshotBuilder::new("s", "p")
+        let _ = VersionSnapshotBuilder::new("s", "p")
             .version(1)
             .latest(false)
             .snapshot(json!({}))
@@ -175,7 +182,7 @@ mod builder_tests {
     #[test]
     #[should_panic(expected = "VersionSnapshotBuilder: latest is required")]
     fn panics_without_latest() {
-        VersionSnapshotBuilder::new("s", "p")
+        let _ = VersionSnapshotBuilder::new("s", "p")
             .version(1)
             .status("draft")
             .snapshot(json!({}))
@@ -185,7 +192,7 @@ mod builder_tests {
     #[test]
     #[should_panic(expected = "VersionSnapshotBuilder: snapshot is required")]
     fn panics_without_snapshot() {
-        VersionSnapshotBuilder::new("s", "p")
+        let _ = VersionSnapshotBuilder::new("s", "p")
             .version(1)
             .status("draft")
             .latest(false)

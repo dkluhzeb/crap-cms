@@ -52,19 +52,12 @@ pub(super) fn copy_dir_recursive(src: &Path, dst: &Path, skip: &[&str]) -> Resul
 
 /// Count `.lua` files in a directory (0 if directory doesn't exist).
 pub(super) fn count_lua_files(dir: &Path) -> usize {
-    fs::read_dir(dir)
-        .map(|entries| {
-            entries
-                .filter_map(|e| e.ok())
-                .filter(|e| {
-                    e.path()
-                        .extension()
-                        .map(|ext| ext == "lua")
-                        .unwrap_or(false)
-                })
-                .count()
-        })
-        .unwrap_or(0)
+    fs::read_dir(dir).map_or(0, |entries| {
+        entries
+            .filter_map(std::result::Result::ok)
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "lua"))
+            .count()
+    })
 }
 
 /// Validate a blueprint name: alphanumeric, hyphens, underscores.
@@ -78,25 +71,26 @@ pub(super) fn validate_blueprint_name(name: &str) -> Result<()> {
         .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
     {
         bail!(
-            "Invalid blueprint name '{}' -- use alphanumeric characters, hyphens, and underscores only",
-            name
+            "Invalid blueprint name '{name}' -- use alphanumeric characters, hyphens, and underscores only"
         );
     }
 
     Ok(())
 }
 
-/// Mutex to serialize tests that mutate XDG_CONFIG_HOME.
+/// Mutex to serialize tests that mutate `XDG_CONFIG_HOME`.
 #[cfg(test)]
 pub(super) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Run a closure with XDG_CONFIG_HOME set to a temp path, then restore the original value.
+/// Run a closure with `XDG_CONFIG_HOME` set to a temp path, then restore the original value.
 #[cfg(test)]
 pub(super) fn with_temp_config_dir<F>(f: F)
 where
     F: FnOnce(&Path),
 {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let tmp = tempfile::tempdir().expect("tempdir");
     let orig = std::env::var("XDG_CONFIG_HOME").ok();
 

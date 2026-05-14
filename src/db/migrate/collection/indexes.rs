@@ -41,11 +41,8 @@ fn collect_field_indexes(
         if spec.is_localized {
             for locale in &locale_config.locales {
                 let col = locale_column(&spec.col_name, locale)?;
-                let idx_name = format!("idx_{}_{}", slug, col);
-                let sql = format!(
-                    "CREATE INDEX IF NOT EXISTS {} ON {} ({})",
-                    idx_name, slug, col
-                );
+                let idx_name = format!("idx_{slug}_{col}");
+                let sql = format!("CREATE INDEX IF NOT EXISTS {idx_name} ON {slug} ({col})");
 
                 add_index(desired, stmts, idx_name, sql);
             }
@@ -83,10 +80,9 @@ fn collect_soft_delete_unique_indexes(
         if spec.is_localized {
             for locale in &locale_config.locales {
                 let col = locale_column(&spec.col_name, locale)?;
-                let idx_name = format!("idx_{}_{}_active_unique", slug, col);
+                let idx_name = format!("idx_{slug}_{col}_active_unique");
                 let sql = format!(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({}) WHERE _deleted_at IS NULL",
-                    idx_name, slug, col
+                    "CREATE UNIQUE INDEX IF NOT EXISTS {idx_name} ON {slug} ({col}) WHERE _deleted_at IS NULL"
                 );
 
                 add_index(desired, stmts, idx_name, sql);
@@ -119,9 +115,7 @@ fn collect_compound_indexes(
         for field_name in &index_def.fields {
             if !is_valid_identifier(field_name) {
                 bail!(
-                    "Invalid field name '{}' in compound index for collection '{}'",
-                    field_name,
-                    slug
+                    "Invalid field name '{field_name}' in compound index for collection '{slug}'"
                 );
             }
         }
@@ -144,10 +138,7 @@ fn collect_compound_indexes(
         let col_list = expanded_cols.join(", ");
         let idx_name = format!("idx_{}_{}", slug, index_def.fields.join("_"));
         let unique = if index_def.unique { "UNIQUE " } else { "" };
-        let sql = format!(
-            "CREATE {}INDEX IF NOT EXISTS {} ON {} ({})",
-            unique, idx_name, slug, col_list
-        );
+        let sql = format!("CREATE {unique}INDEX IF NOT EXISTS {idx_name} ON {slug} ({col_list})");
 
         add_index(desired, stmts, idx_name, sql);
     }
@@ -172,20 +163,20 @@ pub(super) fn sync_indexes(
     collect_compound_indexes(slug, def, locale_config, &mut desired, &mut stmts)?;
 
     // Drop stale indexes (in existing but not in desired)
-    let prefix = format!("idx_{}_", slug);
+    let prefix = format!("idx_{slug}_");
     let existing: HashSet<String> = conn.index_names(slug, &prefix)?.into_iter().collect();
 
     for name in existing.difference(&desired) {
         info!("Dropping stale index: {}", name);
 
-        conn.execute_ddl(&format!("DROP INDEX IF EXISTS {}", name), &[])
-            .with_context(|| format!("Failed to drop index {}", name))?;
+        conn.execute_ddl(&format!("DROP INDEX IF EXISTS {name}"), &[])
+            .with_context(|| format!("Failed to drop index {name}"))?;
     }
 
     // Create missing indexes
     for sql in &stmts {
         conn.execute_ddl(sql, &[])
-            .with_context(|| format!("Failed to create index: {}", sql))?;
+            .with_context(|| format!("Failed to create index: {sql}"))?;
     }
 
     Ok(())

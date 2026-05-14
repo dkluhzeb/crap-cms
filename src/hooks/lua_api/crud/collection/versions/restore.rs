@@ -10,7 +10,10 @@ use crate::{
     core::Registry,
     hooks::{
         lifecycle::converters::document_to_lua_table,
-        lua_api::crud::{get_tx_conn, helpers::*},
+        lua_api::crud::{
+            get_tx_conn,
+            helpers::{get_opt_bool, hook_lua_infra, hook_user, resolve_collection},
+        },
     },
     service::{LuaWriteHooks, ServiceContext, restore_collection_version},
 };
@@ -20,24 +23,24 @@ fn restore_version_inner(
     lua: &Lua,
     reg: &Registry,
     lc: &LocaleConfig,
-    collection: String,
-    id: String,
-    version_id: String,
-    opts: Option<Table>,
+    collection: &str,
+    id: &str,
+    version_id: &str,
+    opts: Option<&Table>,
 ) -> LuaResult<Value> {
     let conn = get_tx_conn(lua)?;
 
     let user = hook_user(lua);
     let lua_infra = hook_lua_infra(lua);
-    let def = resolve_collection(reg, &collection)?;
-    let override_access = get_opt_bool(&opts, "overrideAccess", false)?;
+    let def = resolve_collection(reg, collection)?;
+    let override_access = get_opt_bool(opts, "overrideAccess", false);
 
     let write_hooks = LuaWriteHooks::builder(lua)
         .user(user.as_ref())
         .override_access(override_access)
         .build();
 
-    let ctx = ServiceContext::collection(&collection, &def)
+    let ctx = ServiceContext::collection(collection, &def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
@@ -45,7 +48,7 @@ fn restore_version_inner(
         .lua_infra(lua_infra.as_ref())
         .build();
 
-    let doc = restore_collection_version(&ctx, &id, &version_id, lc)
+    let doc = restore_collection_version(&ctx, id, version_id, lc)
         .map_err(|e| RuntimeError(format!("{e}")))?;
 
     Ok(Value::Table(document_to_lua_table(lua, &doc)?))
@@ -62,7 +65,15 @@ pub(crate) fn register_restore_version(
     let lc = locale_config.clone();
     let restore_version_fn = lua.create_function(
         move |lua, (collection, id, version_id, opts): (String, String, String, Option<Table>)| {
-            restore_version_inner(lua, &registry, &lc, collection, id, version_id, opts)
+            restore_version_inner(
+                lua,
+                &registry,
+                &lc,
+                &collection,
+                &id,
+                &version_id,
+                opts.as_ref(),
+            )
         },
     )?;
 

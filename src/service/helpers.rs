@@ -161,17 +161,19 @@ pub(crate) struct PaginationInputs<'a> {
 ///
 /// Shared by `find_documents` and `search_documents` to avoid duplicating the
 /// cursor/page branching logic.
-pub(crate) fn build_pagination(inputs: PaginationInputs<'_>) -> query::PaginationResult {
+pub(crate) fn build_pagination(inputs: &PaginationInputs<'_>) -> query::PaginationResult {
     let limit = inputs.fq.limit.unwrap_or(inputs.total);
 
     if inputs.cursor_enabled {
         query::PaginationResult::builder(inputs.docs, inputs.total, limit).cursor(
             inputs.fq.order_by.as_deref(),
-            inputs.has_timestamps,
-            inputs.has_drafts,
-            inputs.fq.before_cursor.is_some(),
-            inputs.had_cursor,
-            inputs.cursor_has_more,
+            query::CursorFlags {
+                has_timestamps: inputs.has_timestamps,
+                has_drafts: inputs.has_drafts,
+                had_before_cursor: inputs.fq.before_cursor.is_some(),
+                had_any_cursor: inputs.had_cursor,
+                cursor_has_more: inputs.cursor_has_more,
+            },
         )
     } else {
         let offset = inputs.fq.offset.unwrap_or(0);

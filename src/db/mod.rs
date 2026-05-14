@@ -1,4 +1,4 @@
-//! Database layer: backend-agnostic connection abstraction, SQLite +
+//! Database layer: backend-agnostic connection abstraction, `SQLite` +
 //! Postgres backends, pool, migrations, and CRUD/find/populate queries.
 //!
 //! ## Submodule layout

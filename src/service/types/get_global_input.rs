@@ -9,6 +9,7 @@ pub struct GetGlobalInput<'a> {
 }
 
 impl<'a> GetGlobalInput<'a> {
+    #[must_use]
     pub fn new(locale_ctx: Option<&'a LocaleContext>, ui_locale: Option<&'a str>) -> Self {
         Self {
             locale_ctx,

@@ -31,13 +31,10 @@ pub(super) fn load_auth_collection(
 ) -> Result<CollectionDefinition> {
     let def = registry
         .get_collection(collection)
-        .ok_or_else(|| anyhow!("Collection '{}' not found", collection))?;
+        .ok_or_else(|| anyhow!("Collection '{collection}' not found"))?;
 
     if !def.is_auth_collection() {
-        bail!(
-            "Collection '{}' is not an auth collection (auth must be enabled)",
-            collection
-        );
+        bail!("Collection '{collection}' is not an auth collection (auth must be enabled)");
     }
 
     Ok(def.clone())
@@ -45,10 +42,9 @@ pub(super) fn load_auth_collection(
 
 /// Check that the collection has email verification enabled.
 pub(super) fn require_verify_email(def: &CollectionDefinition, collection: &str) -> Result<()> {
-    if !def.auth.as_ref().map(|a| a.verify_email).unwrap_or(false) {
+    if !def.auth.as_ref().is_some_and(|a| a.verify_email) {
         bail!(
-            "Collection '{}' does not have email verification enabled (verify_email must be true)",
-            collection
+            "Collection '{collection}' does not have email verification enabled (verify_email must be true)"
         );
     }
 
@@ -56,7 +52,7 @@ pub(super) fn require_verify_email(def: &CollectionDefinition, collection: &str)
 }
 
 /// Resolve a user by --email or --id. Returns (def, document).
-/// Untestable: interactive fallback uses dialoguer::Select for user selection.
+/// Untestable: interactive fallback uses `dialoguer::Select` for user selection.
 #[cfg(not(tarpaulin_include))]
 pub(super) fn resolve_user(
     pool: &DbPool,
@@ -70,14 +66,14 @@ pub(super) fn resolve_user(
 
     if let Some(email) = email {
         let doc = query::find_by_email(&conn, collection, &def, &email)?
-            .ok_or_else(|| anyhow!("No user found with email '{}' in '{}'", email, collection))?;
+            .ok_or_else(|| anyhow!("No user found with email '{email}' in '{collection}'"))?;
 
         return Ok((def, doc));
     }
 
     if let Some(id) = id {
         let doc = query::find_by_id(&conn, collection, &def, &id, None)?
-            .ok_or_else(|| anyhow!("No user found with id '{}' in '{}'", id, collection))?;
+            .ok_or_else(|| anyhow!("No user found with id '{id}' in '{collection}'"))?;
 
         return Ok((def, doc));
     }
@@ -97,7 +93,7 @@ fn select_user_interactive(
     let users = query::find(conn, collection, def, &find_query, None)?;
 
     if users.is_empty() {
-        bail!("No users in '{}'", collection);
+        bail!("No users in '{collection}'");
     }
 
     let labels: Vec<String> = users

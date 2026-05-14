@@ -12,7 +12,7 @@ use crate::{
     service::{ServiceContext, document_info::get_ref_count},
 };
 
-/// Auto-generate a label from a field name (e.g. "my_field" -> "My Field").
+/// Auto-generate a label from a field name (e.g. "`my_field`" -> "My Field").
 pub fn auto_label_from_name(name: &str) -> String {
     field::to_title_case(name)
 }
@@ -80,7 +80,7 @@ pub fn flatten_document_values(
 /// Recursively flatten a group object into `prefix__key` pairs.
 fn flatten_group_value(prefix: &str, obj: &Map<String, Value>, out: &mut Vec<(String, String)>) {
     for (sub_k, sub_v) in obj {
-        let col = format!("{}__{}", prefix, sub_k);
+        let col = format!("{prefix}__{sub_k}");
 
         if let Value::Object(nested) = sub_v {
             flatten_group_value(&col, nested, out);
@@ -90,7 +90,7 @@ fn flatten_group_value(prefix: &str, obj: &Map<String, Value>, out: &mut Vec<(St
     }
 }
 
-/// Convert a serde_json Value to a string suitable for form rendering.
+/// Convert a `serde_json` Value to a string suitable for form rendering.
 fn value_to_form_string(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
@@ -102,7 +102,7 @@ fn value_to_form_string(v: &Value) -> String {
 }
 
 /// Translate validation errors using the translation system.
-/// If a FieldError has a `key`, resolve it through `Translations::get_interpolated`;
+/// If a `FieldError` has a `key`, resolve it through `Translations::get_interpolated`;
 /// otherwise use the raw English `message` (custom Lua validator messages).
 pub fn translate_validation_errors(
     ve: &ValidationError,
@@ -126,13 +126,10 @@ pub fn translate_validation_errors(
 /// Returns 0 on DB errors (fail-open for display only — actual delete protection
 /// is enforced by the DELETE handler).
 pub fn lookup_ref_count(pool: &DbPool, slug: &str, id: &str) -> i64 {
-    pool.get()
-        .ok()
-        .map(|conn| {
-            let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
-            get_ref_count(&ctx, id).unwrap_or(0)
-        })
-        .unwrap_or(0)
+    pool.get().ok().map_or(0, |conn| {
+        let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
+        get_ref_count(&ctx, id).unwrap_or(0)
+    })
 }
 
 #[cfg(test)]

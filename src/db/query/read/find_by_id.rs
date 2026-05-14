@@ -21,6 +21,10 @@ use crate::{
 ///
 /// Soft-deleted documents are excluded by default when `def.soft_delete` is true.
 /// Use [`find_by_id_unfiltered`] to include soft-deleted documents.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT, row parsing, or hydration fails.
 pub fn find_by_id(
     conn: &dyn DbConnection,
     slug: &str,
@@ -40,6 +44,10 @@ pub fn find_by_id(
 /// Like [`find_by_id`] but includes soft-deleted documents.
 ///
 /// Used by trash/restore operations that need to access deleted documents.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT, row parsing, or hydration fails.
 pub fn find_by_id_unfiltered(
     conn: &dyn DbConnection,
     slug: &str,
@@ -74,6 +82,10 @@ fn hydrate_raw(
 /// Uses a single `SELECT ... WHERE id IN (?, ?, ...)` query instead of N individual
 /// lookups. Returns documents in arbitrary order (caller should reorder if needed).
 /// Missing IDs are silently skipped (not included in the result).
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT, row parsing, or hydration fails.
 pub fn find_by_ids(
     conn: &dyn DbConnection,
     slug: &str,
@@ -300,7 +312,7 @@ mod tests {
 
         let titles: HashSet<String> = result
             .iter()
-            .filter_map(|d| d.get_str("title").map(|s| s.to_string()))
+            .filter_map(|d| d.get_str("title").map(std::string::ToString::to_string))
             .collect();
         assert!(titles.contains("First"));
         assert!(titles.contains("Second"));

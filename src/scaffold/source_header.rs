@@ -45,9 +45,9 @@ pub fn source_header_for(path: &Path, version: &str) -> Option<String> {
     };
 
     Some(if suffix.is_empty() {
-        format!("{} {}{}\n", prefix, MARKER, version)
+        format!("{prefix} {MARKER}{version}\n")
     } else {
-        format!("{} {}{} {}\n", prefix, MARKER, version, suffix)
+        format!("{prefix} {MARKER}{version} {suffix}\n")
     })
 }
 

@@ -30,7 +30,7 @@ macro_rules! w {
 }
 pub(super) use w;
 
-/// Convert a slug like "site_settings" to PascalCase "SiteSettings".
+/// Convert a slug like "`site_settings`" to `PascalCase` "`SiteSettings`".
 pub(crate) fn to_pascal_case(slug: &str) -> String {
     slug.split('_')
         .map(|word| {
@@ -295,21 +295,12 @@ mod tests {
         ];
         let result = collect_sub_type_fields(&fields);
         let names: Vec<&str> = result.iter().map(|s| s.field.name.as_str()).collect();
-        assert!(
-            names.contains(&"row_items"),
-            "array inside Row: {:?}",
-            names
-        );
+        assert!(names.contains(&"row_items"), "array inside Row: {names:?}");
         assert!(
             names.contains(&"meta"),
-            "group inside Collapsible: {:?}",
-            names
+            "group inside Collapsible: {names:?}"
         );
-        assert!(
-            names.contains(&"tab_items"),
-            "array inside Tabs: {:?}",
-            names
-        );
+        assert!(names.contains(&"tab_items"), "array inside Tabs: {names:?}");
     }
 
     #[test]

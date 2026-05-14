@@ -16,6 +16,11 @@ use std::{
 /// If `explicit` is `Some` (from `--config` flag or `CRAP_CONFIG_DIR` env var via clap),
 /// canonicalizes and validates that `crap.toml` exists there.
 /// If `None`, walks up from `std::env::current_dir()` looking for `crap.toml`.
+///
+/// # Errors
+///
+/// Returns an error if the explicit path doesn't exist or contain `crap.toml`,
+/// or if no config can be found while walking the ancestors of the cwd.
 pub fn resolve_config_dir(explicit: Option<PathBuf>) -> Result<PathBuf> {
     match explicit {
         Some(path) => validate_config_dir(&path),
@@ -42,9 +47,8 @@ fn validate_config_dir(path: &Path) -> Result<PathBuf> {
 fn find_config_in_ancestors() -> Result<PathBuf> {
     let cwd = env::current_dir().map_err(|e| {
         anyhow!(
-            "Failed to determine current directory: {}\n\n\
-             Use --config <path> or set CRAP_CONFIG_DIR to specify the config directory.",
-            e
+            "Failed to determine current directory: {e}\n\n\
+             Use --config <path> or set CRAP_CONFIG_DIR to specify the config directory."
         )
     })?;
 
@@ -102,8 +106,7 @@ mod tests {
         let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("No crap.toml found"),
-            "unexpected error: {}",
-            msg
+            "unexpected error: {msg}"
         );
     }
 
@@ -164,18 +167,15 @@ mod tests {
         let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("No crap.toml found"),
-            "unexpected error: {}",
-            msg
+            "unexpected error: {msg}"
         );
         assert!(
             msg.contains("--config"),
-            "error should mention --config flag: {}",
-            msg
+            "error should mention --config flag: {msg}"
         );
         assert!(
             msg.contains("CRAP_CONFIG_DIR"),
-            "error should mention env var: {}",
-            msg
+            "error should mention env var: {msg}"
         );
     }
 }

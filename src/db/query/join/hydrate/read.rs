@@ -38,7 +38,7 @@ fn hydrate_relationship(
 
         let json_items: Vec<Value> = items
             .into_iter()
-            .map(|(col, id)| Value::String(format!("{}/{}", col, id)))
+            .map(|(col, id)| Value::String(format!("{col}/{id}")))
             .collect();
 
         Ok(Value::Array(json_items))
@@ -213,6 +213,10 @@ fn hydrate_group_join_fields(
 /// Populates `doc.fields` with JSON arrays for each join-table field.
 /// If `select` is provided, skip hydrating fields not in the select list.
 /// When `locale_ctx` is provided, localized join fields are filtered by locale.
+///
+/// # Errors
+///
+/// Returns a backend error if any of the join-table queries fails.
 pub fn hydrate_document(
     conn: &dyn DbConnection,
     slug: &str,

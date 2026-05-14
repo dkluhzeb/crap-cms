@@ -1,5 +1,5 @@
-//! Hook execution: collection-level orchestration, after_read pipeline,
-//! before_broadcast variants, field-level hook walker, and display conditions.
+//! Hook execution: collection-level orchestration, `after_read` pipeline,
+//! `before_broadcast` variants, field-level hook walker, and display conditions.
 
 mod after_read;
 mod broadcast;

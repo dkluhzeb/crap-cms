@@ -51,7 +51,7 @@ fn save_column_preferences(
     pool: &DbPool,
     user_id: &str,
     collection_slug: &str,
-    columns: Vec<String>,
+    columns: &[String],
 ) -> Result<(), Error> {
     let conn = pool.get().context("Failed to get DB connection")?;
     let existing = user_settings::get_user_settings(&conn, user_id)?;
@@ -77,9 +77,8 @@ pub async fn save_user_settings(
     auth_user: Option<Extension<AuthUser>>,
     Form(form): Form<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let auth_user = match auth_user {
-        Some(Extension(au)) => au,
-        None => return StatusCode::UNAUTHORIZED,
+    let Some(Extension(auth_user)) = auth_user else {
+        return StatusCode::UNAUTHORIZED;
     };
 
     let Some(def) = state.registry.get_collection(&collection_slug).cloned() else {
@@ -91,7 +90,7 @@ pub async fn save_user_settings(
     let user_id = auth_user.claims.sub.clone();
 
     let result = task::spawn_blocking(move || {
-        save_column_preferences(&pool, &user_id, &collection_slug, valid_columns)
+        save_column_preferences(&pool, &user_id, &collection_slug, &valid_columns)
     })
     .await;
 

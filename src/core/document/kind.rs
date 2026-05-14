@@ -36,11 +36,13 @@ impl Document {
     }
 
     /// Get a field value by name.
+    #[must_use]
     pub fn get(&self, key: &str) -> Option<&Value> {
         self.fields.get(key)
     }
 
     /// Get a field value as a string.
+    #[must_use]
     pub fn get_str(&self, key: &str) -> Option<&str> {
         self.fields.get_str(key)
     }
@@ -79,7 +81,7 @@ fn strip_nested(fields: &mut DocumentFields, segments: &[&str]) {
     }
 }
 
-/// Recurse into a serde_json::Map to remove a deeply nested field.
+/// Recurse into a `serde_json::Map` to remove a deeply nested field.
 fn strip_nested_value(map: &mut serde_json::Map<String, Value>, segments: &[&str]) {
     let Some((&first, rest)) = segments.split_first() else {
         return;
@@ -114,6 +116,7 @@ impl DocumentBuilder {
     }
 
     /// Sets the document fields.
+    #[must_use]
     pub fn fields(mut self, fields: impl Into<DocumentFields>) -> Self {
         self.fields = fields.into();
 
@@ -121,20 +124,23 @@ impl DocumentBuilder {
     }
 
     /// Sets the document's creation timestamp.
+    #[must_use]
     pub fn created_at(mut self, ts: Option<impl Into<String>>) -> Self {
-        self.created_at = ts.map(|t| t.into());
+        self.created_at = ts.map(std::convert::Into::into);
 
         self
     }
 
     /// Sets the document's last update timestamp.
+    #[must_use]
     pub fn updated_at(mut self, ts: Option<impl Into<String>>) -> Self {
-        self.updated_at = ts.map(|t| t.into());
+        self.updated_at = ts.map(std::convert::Into::into);
 
         self
     }
 
     /// Builds and returns the `Document`.
+    #[must_use]
     pub fn build(self) -> Document {
         Document {
             id: self.id,

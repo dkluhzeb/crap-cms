@@ -1,4 +1,6 @@
-//! `crap.crypto` namespace — sha256, hmac, base64, AES-GCM encrypt/decrypt, random_bytes.
+//! `crap.crypto` namespace — sha256, hmac, base64, AES-GCM encrypt/decrypt, `random_bytes`.
+
+use std::fmt::Write as _;
 
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use anyhow::Result;
@@ -8,25 +10,25 @@ use rand::RngCore;
 use ring::{digest, hmac};
 use subtle::ConstantTimeEq;
 
-/// Register `crap.crypto` — sha256, hmac, base64, AES-GCM encrypt/decrypt, random_bytes.
+/// Register `crap.crypto` — sha256, hmac, base64, AES-GCM encrypt/decrypt, `random_bytes`.
 pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Result<()> {
     let t = lua.create_table()?;
 
     t.set(
         "sha256",
-        lua.create_function(|_, data: String| sha256(&data))?,
+        lua.create_function(|_, data: String| Ok(sha256(&data)))?,
     )?;
     t.set(
         "hmac_sha256",
-        lua.create_function(|_, (data, key): (String, String)| hmac_sha256(&data, &key))?,
+        lua.create_function(|_, (data, key): (String, String)| Ok(hmac_sha256(&data, &key)))?,
     )?;
     t.set(
         "constant_time_eq",
-        lua.create_function(|_, (a, b): (String, String)| constant_time_eq(&a, &b))?,
+        lua.create_function(|_, (a, b): (String, String)| Ok(constant_time_eq(&a, &b)))?,
     )?;
     t.set(
         "base64_encode",
-        lua.create_function(|_, data: String| b64_encode(&data))?,
+        lua.create_function(|_, data: String| Ok(b64_encode(&data)))?,
     )?;
     t.set(
         "base64_decode",
@@ -55,17 +57,15 @@ pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Res
 }
 
 /// SHA-256 hash of a string, returned as hex.
-fn sha256(data: &str) -> LuaResult<String> {
-    Ok(hex_encode(
-        digest::digest(&digest::SHA256, data.as_bytes()).as_ref(),
-    ))
+fn sha256(data: &str) -> String {
+    hex_encode(digest::digest(&digest::SHA256, data.as_bytes()).as_ref())
 }
 
 /// HMAC-SHA256 of data with key, returned as hex.
-fn hmac_sha256(data: &str, key: &str) -> LuaResult<String> {
+fn hmac_sha256(data: &str, key: &str) -> String {
     let k = hmac::Key::new(hmac::HMAC_SHA256, key.as_bytes());
 
-    Ok(hex_encode(hmac::sign(&k, data.as_bytes()).as_ref()))
+    hex_encode(hmac::sign(&k, data.as_bytes()).as_ref())
 }
 
 /// Constant-time byte-string equality.
@@ -78,20 +78,20 @@ fn hmac_sha256(data: &str, key: &str) -> LuaResult<String> {
 ///
 /// Length-mismatch is treated the same as content-mismatch (both return
 /// `false`) so the caller cannot distinguish them via return value.
-fn constant_time_eq(a: &str, b: &str) -> LuaResult<bool> {
+fn constant_time_eq(a: &str, b: &str) -> bool {
     let a_bytes = a.as_bytes();
     let b_bytes = b.as_bytes();
 
     if a_bytes.len() != b_bytes.len() {
-        return Ok(false);
+        return false;
     }
 
-    Ok(a_bytes.ct_eq(b_bytes).into())
+    a_bytes.ct_eq(b_bytes).into()
 }
 
 /// Base64-encode a string.
-fn b64_encode(data: &str) -> LuaResult<String> {
-    Ok(B64.encode(data.as_bytes()))
+fn b64_encode(data: &str) -> String {
+    B64.encode(data.as_bytes())
 }
 
 /// Base64-decode a string.
@@ -166,10 +166,28 @@ fn decrypt(secret: &str, encoded: &str) -> LuaResult<String> {
 
 /// Encode bytes as lowercase hex string.
 pub(super) fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(out, "{b:02x}");
+    }
+    out
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::*;
 
@@ -271,7 +289,7 @@ mod tests {
 
         // Decrypting with a different key should fail.
         let result = lua_dec
-            .load(format!(r#"return crap.crypto.decrypt("{}")"#, ciphertext))
+            .load(format!(r#"return crap.crypto.decrypt("{ciphertext}")"#))
             .eval::<String>();
         assert!(result.is_err());
     }
@@ -442,7 +460,7 @@ mod tests {
         let lua = setup_lua("s");
         // Each byte encodes to 2 hex chars.
         let result: String = lua
-            .load(r#"return crap.crypto.random_bytes(16)"#)
+            .load(r"return crap.crypto.random_bytes(16)")
             .eval()
             .unwrap();
         assert_eq!(result.len(), 32);
@@ -452,7 +470,7 @@ mod tests {
     fn random_bytes_zero_length() {
         let lua = setup_lua("s");
         let result: String = lua
-            .load(r#"return crap.crypto.random_bytes(0)"#)
+            .load(r"return crap.crypto.random_bytes(0)")
             .eval()
             .unwrap();
         assert_eq!(result, "");
@@ -484,12 +502,12 @@ mod tests {
         let lua = setup_lua("s");
         let result: bool = lua
             .load(
-                r#"
+                r"
                 local a = crap.crypto.random_bytes(32)
                 local b = crap.crypto.random_bytes(32)
 
                 return a ~= b
-            "#,
+            ",
             )
             .eval()
             .unwrap();

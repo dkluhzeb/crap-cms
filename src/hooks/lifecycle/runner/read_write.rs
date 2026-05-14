@@ -1,4 +1,4 @@
-//! HookRunner methods for CRUD lifecycle orchestration.
+//! `HookRunner` methods for CRUD lifecycle orchestration.
 
 use anyhow::Result;
 use serde_json::Value;
@@ -23,9 +23,13 @@ use crate::{
 };
 
 impl HookRunner {
-    /// Fire before_read hooks. Returns error to abort the read.
+    /// Fire `before_read` hooks. Returns error to abort the read.
     /// Runs collection-level hook refs, then global registered hooks.
     /// No CRUD access — uses `run_hooks` (no connection).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any `before_read` hook fails or aborts the read.
     pub fn fire_before_read(
         &self,
         hooks: &Hooks,
@@ -42,8 +46,8 @@ impl HookRunner {
         Ok(())
     }
 
-    /// Fire after_read hooks on a single document. Returns transformed doc.
-    /// Field-level after_read hooks run first, then collection-level, then global registered.
+    /// Fire `after_read` hooks on a single document. Returns transformed doc.
+    /// Field-level `after_read` hooks run first, then collection-level, then global registered.
     /// On error: logs warning, returns original doc unmodified.
     pub fn apply_after_read(&self, ctx: &AfterReadCtx, doc: Document) -> Document {
         let lua = match self.pool.acquire() {
@@ -58,9 +62,10 @@ impl HookRunner {
         apply_after_read_inner(&lua, ctx, doc)
     }
 
-    /// Apply after_read hooks to event data, matching the normal Find read pipeline.
+    /// Apply `after_read` hooks to event data, matching the normal Find read pipeline.
     /// Used by SSE and gRPC Subscribe to ensure event data consistency.
     /// Returns the original data unchanged if no hooks are configured.
+    #[must_use]
     pub fn apply_after_read_for_event(
         &self,
         collection: &str,
@@ -97,7 +102,7 @@ impl HookRunner {
         self.apply_after_read(&ctx, doc).fields
     }
 
-    /// Fire after_read hooks on a list of documents.
+    /// Fire `after_read` hooks on a list of documents.
     /// Acquires a single VM for the entire batch instead of one per document.
     pub fn apply_after_read_many(&self, ctx: &AfterReadCtx, docs: Vec<Document>) -> Vec<Document> {
         let has_field_hooks = has_field_hooks_for_event(ctx.fields, &FieldHookEvent::AfterRead);
@@ -124,13 +129,17 @@ impl HookRunner {
     }
 
     /// Run the full before-write lifecycle:
-    ///   field BeforeValidate → collection BeforeValidate → validate_fields →
-    ///   field BeforeChange → collection BeforeChange.
+    ///   field `BeforeValidate` → collection `BeforeValidate` → `validate_fields` →
+    ///   field `BeforeChange` → collection `BeforeChange`.
     /// Returns the final hook context with validated, hook-processed data.
     /// Callers use `HookContext::to_value_map()` on the result to get the data for query functions.
     ///
     /// Field hooks in before-write get full CRUD access (same transaction).
     /// The authenticated user, draft flag, and UI locale are extracted from `ctx`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any field hook, collection hook, or validation stage fails.
     pub fn run_before_write(
         &self,
         hooks: &Hooks,
@@ -196,9 +205,13 @@ impl HookRunner {
     }
 
     /// Run after-write hooks inside the transaction (with CRUD access).
-    /// Field-level after_change hooks run first, then collection-level, then registered.
+    /// Field-level `after_change` hooks run first, then collection-level, then registered.
     /// Errors propagate up and cause the caller's transaction to roll back.
     /// The authenticated user and UI locale are extracted from `ctx`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any field hook or collection hook fails.
     pub fn run_after_write(
         &self,
         hooks: &Hooks,
@@ -257,8 +270,7 @@ impl HookRunner {
             f.admin.nodes.iter().any(|node_name| {
                 self.registry
                     .get_richtext_node(node_name)
-                    .map(|nd| nd.attrs.iter().any(|a| !a.hooks.before_validate.is_empty()))
-                    .unwrap_or(false)
+                    .is_some_and(|nd| nd.attrs.iter().any(|a| !a.hooks.before_validate.is_empty()))
             })
         });
 
@@ -294,6 +306,12 @@ impl HookRunner {
     /// Checks `required`, `unique`, and custom `validate` (Lua function ref).
     /// Runs inside the caller's transaction for unique checks.
     /// Automatically injects the registry for richtext node attr validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ValidationError` (collected per-field error messages) when
+    /// any check fails. Lua VM acquisition failures are surfaced through a
+    /// synthetic `_system` field error.
     pub fn validate_fields(
         &self,
         fields: &[FieldDefinition],

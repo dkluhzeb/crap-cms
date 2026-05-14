@@ -29,7 +29,7 @@ use crate::{
     service::{self, EmailContext, ServiceContext},
 };
 
-/// Implements the gRPC ContentAPI service (Find, Create, Update, Delete, Login, etc.).
+/// Implements the gRPC `ContentAPI` service (Find, Create, Update, Delete, Login, etc.).
 pub struct ContentService {
     pub(in crate::api::handlers) pool: DbPool,
     pub(in crate::api::handlers) registry: Arc<Registry>,
@@ -53,7 +53,7 @@ pub struct ContentService {
     /// The password provider for hashing and verification.
     pub(in crate::api::handlers) password_provider: SharedPasswordProvider,
     /// Shared cross-request cache for populated relationship documents.
-    /// Uses NoneCache when caching is disabled. Cleared on any write operation.
+    /// Uses `NoneCache` when caching is disabled. Cleared on any write operation.
     pub(in crate::api::handlers) cache: SharedCache,
     pub(in crate::api::handlers) pagination_ctx: query::PaginationCtx,
     /// Cached backend identifier (e.g. `"sqlite"`, `"postgres"`), set once at startup.
@@ -76,6 +76,7 @@ pub struct ContentService {
 /// Pure helper methods — testable without I/O dependencies.
 impl ContentService {
     /// Get a clone of the shared cache handle (for periodic clearing).
+    #[must_use]
     pub fn cache_handle(&self) -> SharedCache {
         self.cache.clone()
     }
@@ -97,7 +98,7 @@ impl ContentService {
         self.registry
             .get_collection(slug)
             .cloned()
-            .ok_or_else(|| Status::not_found(format!("Collection '{}' not found", slug)))
+            .ok_or_else(|| Status::not_found(format!("Collection '{slug}' not found")))
     }
 
     pub(in crate::api::handlers) fn get_global_def(
@@ -107,7 +108,7 @@ impl ContentService {
         self.registry
             .get_global(slug)
             .cloned()
-            .ok_or_else(|| Status::not_found(format!("Global '{}' not found", slug)))
+            .ok_or_else(|| Status::not_found(format!("Global '{slug}' not found")))
     }
 
     /// Extract Bearer token string from gRPC metadata (pure, no I/O).
@@ -117,7 +118,7 @@ impl ContentService {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
     }
 }
 
@@ -126,6 +127,7 @@ impl ContentService {
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
     /// Create a new gRPC content service with all dependencies.
+    #[must_use]
     pub fn new(deps: ContentServiceDeps) -> Self {
         let default_depth = deps.config.depth.default_depth;
         let max_depth = deps.config.depth.max_depth;
@@ -188,9 +190,8 @@ impl ContentService {
         registry: &Registry,
         conn: &dyn DbConnection,
     ) -> Result<Option<AuthUser>, Status> {
-        let token = match token {
-            Some(t) => t,
-            None => return Ok(None),
+        let Some(token) = token else {
+            return Ok(None);
         };
         let claims = token_provider
             .validate_token(&token)
@@ -226,13 +227,13 @@ impl ContentService {
     /// Free-standing helper — safe to call inside `spawn_blocking`.
     pub(in crate::api::handlers) fn check_access_blocking(
         access_ref: Option<&str>,
-        auth_user: &Option<AuthUser>,
+        auth_user: Option<&AuthUser>,
         id: Option<&str>,
         data: Option<&DocumentFields>,
         hook_runner: &HookRunner,
         conn: &mut BoxedConnection,
     ) -> Result<AccessResult, Status> {
-        let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+        let user_doc = auth_user.map(|au| &au.user_doc);
         let tx = conn
             .transaction()
             .inspect_err(|e| error!("Access check tx error: {}", e))
@@ -349,7 +350,7 @@ impl ContentApi for ContentService {
         &self,
         request: Request<content::ForgotPasswordRequest>,
     ) -> Result<Response<content::ForgotPasswordResponse>, Status> {
-        self.forgot_password_impl(request).await
+        Ok(self.forgot_password_impl(request))
     }
 
     async fn reset_password(
@@ -370,14 +371,14 @@ impl ContentApi for ContentService {
         &self,
         request: Request<content::ListCollectionsRequest>,
     ) -> Result<Response<content::ListCollectionsResponse>, Status> {
-        self.list_collections_impl(request).await
+        Ok(self.list_collections_impl(request))
     }
 
     async fn describe_collection(
         &self,
         request: Request<content::DescribeCollectionRequest>,
     ) -> Result<Response<content::DescribeCollectionResponse>, Status> {
-        self.describe_collection_impl(request).await
+        self.describe_collection_impl(request)
     }
 
     type SubscribeStream =

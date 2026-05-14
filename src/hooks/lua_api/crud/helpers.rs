@@ -24,33 +24,35 @@ use crate::{
 };
 
 /// Extract a bool from an optional Lua options table, returning `default` when absent.
-pub(crate) fn get_opt_bool(opts: &Option<Table>, key: &str, default: bool) -> LuaResult<bool> {
-    Ok(opts
-        .as_ref()
-        .and_then(|o| o.get::<Option<bool>>(key).ok().flatten())
-        .unwrap_or(default))
+///
+/// Read errors (wrong-type values, etc.) are swallowed and treated the same
+/// as "absent" — Lua-side typos shouldn't be load-bearing for these
+/// boolean flags. Returns the resolved bool directly.
+pub(crate) fn get_opt_bool(opts: Option<&Table>, key: &str, default: bool) -> bool {
+    opts.and_then(|o| o.get::<Option<bool>>(key).ok().flatten())
+        .unwrap_or(default)
 }
 
 /// Extract an optional string from a Lua options table.
-pub(crate) fn get_opt_string(opts: &Option<Table>, key: &str) -> LuaResult<Option<String>> {
-    Ok(opts
-        .as_ref()
-        .and_then(|o| o.get::<Option<String>>(key).ok().flatten()))
+///
+/// Read errors are swallowed (same reasoning as `get_opt_bool`).
+pub(crate) fn get_opt_string(opts: Option<&Table>, key: &str) -> Option<String> {
+    opts.and_then(|o| o.get::<Option<String>>(key).ok().flatten())
 }
 
-/// Extract the authenticated user document from Lua app_data (if present).
+/// Extract the authenticated user document from Lua `app_data` (if present).
 pub(crate) fn hook_user(lua: &Lua) -> Option<Document> {
     lua.app_data_ref::<UserContext>()
         .and_then(|uc| uc.0.clone())
 }
 
-/// Extract the UI locale string from Lua app_data (if present).
+/// Extract the UI locale string from Lua `app_data` (if present).
 pub(crate) fn hook_ui_locale(lua: &Lua) -> Option<String> {
     lua.app_data_ref::<UiLocaleContext>()
         .and_then(|uc| uc.0.clone())
 }
 
-/// Extract the process-wide populate singleflight from Lua app_data (if set
+/// Extract the process-wide populate singleflight from Lua `app_data` (if set
 /// via `HookRunner::builder().populate_singleflight(..)`). Returns `None` when
 /// no singleflight was threaded in, so the service layer falls back to a
 /// fresh per-call singleflight. For override-access reads the service layer
@@ -60,13 +62,13 @@ pub(crate) fn hook_populate_singleflight(lua: &Lua) -> Option<SharedPopulateSing
         .map(|sf| sf.0.clone())
 }
 
-/// Build a `LuaCrudInfra` from all available Lua app_data fields.
+/// Build a `LuaCrudInfra` from all available Lua `app_data` fields.
 /// Returns `None` when no infra was threaded into the VM.
 pub(crate) fn hook_lua_infra(lua: &Lua) -> Option<LuaCrudInfra> {
     lua.app_data_ref::<LuaCrudInfra>().map(|i| i.clone())
 }
 
-/// Extract the invalidation transport from Lua app_data (if set via
+/// Extract the invalidation transport from Lua `app_data` (if set via
 /// `HookRunner::builder().invalidation_transport(..)`). Used by delete
 /// operations to tear down live sessions for deleted auth-collection users.
 pub(crate) fn hook_invalidation_transport(lua: &Lua) -> Option<SharedInvalidationTransport> {
@@ -74,7 +76,7 @@ pub(crate) fn hook_invalidation_transport(lua: &Lua) -> Option<SharedInvalidatio
         .map(|t| t.0.clone())
 }
 
-/// Extract the locale configuration from Lua app_data (set during VM
+/// Extract the locale configuration from Lua `app_data` (set during VM
 /// initialization). Used by write paths (notably `unpublish`) to thread
 /// `LocaleConfig` into a `ServiceContext` so the service layer can build
 /// a default `LocaleContext` for raw reads of localized fields.
@@ -87,7 +89,7 @@ pub(crate) fn hook_locale_config(lua: &Lua) -> Option<LocaleConfig> {
 pub(crate) fn resolve_collection(reg: &Registry, slug: &str) -> LuaResult<CollectionDefinition> {
     reg.get_collection(slug)
         .cloned()
-        .ok_or_else(|| RuntimeError(format!("Collection '{}' not found", slug)))
+        .ok_or_else(|| RuntimeError(format!("Collection '{slug}' not found")))
 }
 
 /// Look up a global definition from the registry snapshot, returning a
@@ -95,7 +97,7 @@ pub(crate) fn resolve_collection(reg: &Registry, slug: &str) -> LuaResult<Collec
 pub(crate) fn resolve_global(reg: &Registry, slug: &str) -> LuaResult<GlobalDefinition> {
     reg.get_global(slug)
         .cloned()
-        .ok_or_else(|| RuntimeError(format!("Global '{}' not found", slug)))
+        .ok_or_else(|| RuntimeError(format!("Global '{slug}' not found")))
 }
 
 /// Check hook recursion depth and return whether hooks are enabled plus an
@@ -110,8 +112,8 @@ pub(crate) fn check_hook_depth<'a>(
     collection: &str,
     operation: &str,
 ) -> (bool, Option<HookDepthGuard<'a>>) {
-    let current_depth = lua.app_data_ref::<HookDepth>().map(|d| d.0).unwrap_or(0);
-    let max_depth = lua.app_data_ref::<MaxHookDepth>().map(|d| d.0).unwrap_or(3);
+    let current_depth = lua.app_data_ref::<HookDepth>().map_or(0, |d| d.0);
+    let max_depth = lua.app_data_ref::<MaxHookDepth>().map_or(3, |d| d.0);
     let hooks_enabled = run_hooks && current_depth < max_depth;
 
     if run_hooks && current_depth >= max_depth {
@@ -228,11 +230,8 @@ mod tests {
 
     #[test]
     fn get_opt_bool_returns_default_when_no_opts() {
-        let result = get_opt_bool(&None, "overrideAccess", false).unwrap();
-        assert!(!result);
-
-        let result = get_opt_bool(&None, "hooks", true).unwrap();
-        assert!(result);
+        assert!(!get_opt_bool(None, "overrideAccess", false));
+        assert!(get_opt_bool(None, "hooks", true));
     }
 
     #[test]
@@ -242,25 +241,22 @@ mod tests {
         table.set("overrideAccess", true).unwrap();
         table.set("hooks", false).unwrap();
 
-        let opts = Some(table);
-        assert!(get_opt_bool(&opts, "overrideAccess", false).unwrap());
-        assert!(!get_opt_bool(&opts, "hooks", true).unwrap());
+        assert!(get_opt_bool(Some(&table), "overrideAccess", false));
+        assert!(!get_opt_bool(Some(&table), "hooks", true));
     }
 
     #[test]
     fn get_opt_bool_returns_default_when_key_missing() {
         let lua = Lua::new();
         let table = lua.create_table().unwrap();
-        let opts = Some(table);
 
-        assert!(!get_opt_bool(&opts, "overrideAccess", false).unwrap());
-        assert!(get_opt_bool(&opts, "hooks", true).unwrap());
+        assert!(!get_opt_bool(Some(&table), "overrideAccess", false));
+        assert!(get_opt_bool(Some(&table), "hooks", true));
     }
 
     #[test]
     fn get_opt_string_returns_none_when_no_opts() {
-        let result = get_opt_string(&None, "locale").unwrap();
-        assert!(result.is_none());
+        assert!(get_opt_string(None, "locale").is_none());
     }
 
     #[test]
@@ -269,9 +265,8 @@ mod tests {
         let table = lua.create_table().unwrap();
         table.set("locale", "en").unwrap();
 
-        let opts = Some(table);
         assert_eq!(
-            get_opt_string(&opts, "locale").unwrap().as_deref(),
+            get_opt_string(Some(&table), "locale").as_deref(),
             Some("en")
         );
     }
@@ -280,9 +275,8 @@ mod tests {
     fn get_opt_string_returns_none_when_key_missing() {
         let lua = Lua::new();
         let table = lua.create_table().unwrap();
-        let opts = Some(table);
 
-        assert!(get_opt_string(&opts, "locale").unwrap().is_none());
+        assert!(get_opt_string(Some(&table), "locale").is_none());
     }
 
     #[test]

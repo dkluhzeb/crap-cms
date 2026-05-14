@@ -35,7 +35,7 @@ struct LoginBlockingInput {
 /// Returns `Ok(Some((user, session_version)))` on success, `Ok(None)` for any
 /// recoverable failure (wrong password, locked, unverified). Errors propagate
 /// only for system failures.
-fn login_blocking(input: LoginBlockingInput) -> Result<Option<(Document, u64)>, Status> {
+fn login_blocking(input: &LoginBlockingInput) -> Result<Option<(Document, u64)>, Status> {
     let conn = input
         .pool
         .get()
@@ -56,9 +56,11 @@ fn login_blocking(input: LoginBlockingInput) -> Result<Option<(Document, u64)>, 
             input.check_verify_email,
         ) {
             Ok(result) => return Ok(Some((result.user, result.session_version))),
-            Err(ServiceError::InvalidCredentials)
-            | Err(ServiceError::AccountLocked)
-            | Err(ServiceError::EmailNotVerified) => {}
+            Err(
+                ServiceError::InvalidCredentials
+                | ServiceError::AccountLocked
+                | ServiceError::EmailNotVerified,
+            ) => {}
             Err(e) => return Err(Status::from(e)),
         }
     }
@@ -109,8 +111,7 @@ impl ContentService {
     ) -> Result<Response<content::LoginResponse>, Status> {
         let ip = request
             .remote_addr()
-            .map(|a| a.ip().to_string())
-            .unwrap_or_else(|| "unknown".to_string());
+            .map_or_else(|| "unknown".to_string(), |a| a.ip().to_string());
         let req = request.into_inner();
 
         if self.login_limiter.is_blocked(&req.email) || self.ip_login_limiter.is_blocked(&ip) {
@@ -149,18 +150,15 @@ impl ContentService {
             hook_runner: self.hook_runner.clone(),
         };
 
-        let login_result = task::spawn_blocking(move || login_blocking(input))
+        let login_result = task::spawn_blocking(move || login_blocking(&input))
             .await
             .inspect_err(|e| error!("Login task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;
 
-        let (user, session_version) = match login_result {
-            Some(u) => u,
-            None => {
-                self.login_limiter.record_failure(&req.email);
-                self.ip_login_limiter.record_failure(&ip);
-                return Err(Status::unauthenticated("Invalid email or password"));
-            }
+        let Some((user, session_version)) = login_result else {
+            self.login_limiter.record_failure(&req.email);
+            self.ip_login_limiter.record_failure(&ip);
+            return Err(Status::unauthenticated("Invalid email or password"));
         };
 
         let user_email = user
@@ -170,8 +168,8 @@ impl ContentService {
             .unwrap_or(&req.email)
             .to_string();
 
-        let expiry = def.auth.as_ref().map(|a| a.token_expiry).unwrap_or(7200);
-        let now = Utc::now().timestamp().max(0) as u64;
+        let expiry = def.auth.as_ref().map_or(7200, |a| a.token_expiry);
+        let now = Utc::now().timestamp().max(0).cast_unsigned();
 
         let claims = ClaimsBuilder::new(user.id.clone(), Slug::new(&req.collection))
             .email(user_email)

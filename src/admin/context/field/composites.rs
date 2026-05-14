@@ -25,6 +25,20 @@ pub struct GroupField {
     pub collapsed: bool,
 }
 
+impl GroupField {
+    /// Construct an uninitialized variant carrying only `base`. Enrichment
+    /// populates `sub_fields` (recursive build) + `collapsed` from
+    /// `field.admin.collapsed`.
+    #[must_use]
+    pub fn empty(base: BaseFieldData) -> Self {
+        Self {
+            base,
+            sub_fields: Vec::new(),
+            collapsed: false,
+        }
+    }
+}
+
 // ── Row ───────────────────────────────────────────────────────────
 
 /// Layout row wrapper — transparent (no name added to children, no
@@ -39,6 +53,18 @@ pub struct RowField {
     pub sub_fields: Vec<FieldContext>,
 }
 
+impl RowField {
+    /// Construct an uninitialized variant carrying only `base`. Enrichment
+    /// recursively builds `sub_fields`.
+    #[must_use]
+    pub fn empty(base: BaseFieldData) -> Self {
+        Self {
+            base,
+            sub_fields: Vec::new(),
+        }
+    }
+}
+
 // ── Tabs ──────────────────────────────────────────────────────────
 
 /// Tabbed layout wrapper — each tab carries its own sub-fields.
@@ -49,6 +75,18 @@ pub struct TabsField {
     pub base: BaseFieldData,
 
     pub tabs: Vec<TabPanel>,
+}
+
+impl TabsField {
+    /// Construct an uninitialized variant carrying only `base`. Enrichment
+    /// populates `tabs` by recursing into each declared tab's sub-fields.
+    #[must_use]
+    pub fn empty(base: BaseFieldData) -> Self {
+        Self {
+            base,
+            tabs: Vec::new(),
+        }
+    }
 }
 
 /// One tab panel inside a [`TabsField`].
@@ -106,6 +144,28 @@ pub struct ArrayField {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label_field: Option<String>,
+}
+
+impl ArrayField {
+    /// Construct an uninitialized variant carrying only `base` and the
+    /// pre-sanitized `template_id` (used by the admin UI for the new-row
+    /// template element). Enrichment fills `sub_fields`/`rows`/`row_count`
+    /// and the admin-config knobs.
+    #[must_use]
+    pub fn empty(base: BaseFieldData, template_id: String) -> Self {
+        Self {
+            base,
+            sub_fields: Vec::new(),
+            rows: None,
+            row_count: 0,
+            template_id,
+            min_rows: None,
+            max_rows: None,
+            init_collapsed: false,
+            add_label: None,
+            label_field: None,
+        }
+    }
 }
 
 /// One concrete row in an [`ArrayField::rows`] list.
@@ -167,6 +227,29 @@ pub struct BlocksField {
     pub label_field: Option<String>,
 }
 
+impl BlocksField {
+    /// Construct an uninitialized variant carrying only `base` and the
+    /// pre-sanitized `template_id`. Enrichment fills `block_definitions`
+    /// (one per allowed block type), `rows`/`row_count` from the document
+    /// data, and the admin-config knobs.
+    #[must_use]
+    pub fn empty(base: BaseFieldData, template_id: String) -> Self {
+        Self {
+            base,
+            block_definitions: Vec::new(),
+            rows: None,
+            row_count: 0,
+            template_id,
+            min_rows: None,
+            max_rows: None,
+            init_collapsed: false,
+            add_label: None,
+            picker: None,
+            label_field: None,
+        }
+    }
+}
+
 /// One block-type definition inside a [`BlocksField::block_definitions`]
 /// array. Carries the template sub-fields used to render a new block of
 /// this type.
@@ -202,7 +285,7 @@ pub struct BlockRow {
     #[serde(rename = "_block_type")]
     pub block_type: String,
 
-    /// Display label for the block — defaults to the block_type when not
+    /// Display label for the block — defaults to the `block_type` when not
     /// configured. Populated by enrichment.
     pub block_label: String,
 

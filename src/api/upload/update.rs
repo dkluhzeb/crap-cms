@@ -82,14 +82,14 @@ pub(super) async fn update_upload(
     let Some(def) = state.registry.get_collection(&slug).cloned() else {
         return json_error(
             StatusCode::NOT_FOUND,
-            &format!("Collection '{}' not found", slug),
+            &format!("Collection '{slug}' not found"),
         );
     };
 
     if !def.is_upload_collection() {
         return json_error(
             StatusCode::BAD_REQUEST,
-            &format!("Collection '{}' is not an upload collection", slug),
+            &format!("Collection '{slug}' is not an upload collection"),
         );
     }
 
@@ -141,12 +141,12 @@ pub(super) async fn update_upload(
                 id,
                 EventOperation::Update,
                 Some(doc.fields.clone()),
-                &auth_user,
+                auth_user.as_ref(),
             );
 
             json_ok(StatusCode::OK, &DocumentBody { document: &doc })
         }
-        Ok(Err(e)) => service_error_to_response(e),
+        Ok(Err(e)) => service_error_to_response(&e),
         Err(e) => {
             error!("Upload update task join failed: {}", e);
 

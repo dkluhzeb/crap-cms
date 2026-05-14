@@ -12,7 +12,13 @@ use crate::{
         lifecycle::converters::{
             document_to_lua_table, lua_table_to_hashmap, lua_table_to_json_map,
         },
-        lua_api::crud::{get_tx_conn, helpers::*},
+        lua_api::crud::{
+            get_tx_conn,
+            helpers::{
+                check_hook_depth, get_opt_bool, hook_lua_infra, hook_ui_locale, hook_user,
+                resolve_collection,
+            },
+        },
     },
     service::{self, CreateManyItem, CreateManyOptions, LuaWriteHooks, ServiceContext},
 };
@@ -35,7 +41,7 @@ fn parse_item(item_table: &Table) -> mlua::Result<CreateManyItem> {
 
     let password = data
         .remove("password")
-        .and_then(|v| v.as_str().map(|s| s.to_string()));
+        .and_then(|v| v.as_str().map(std::string::ToString::to_string));
 
     Ok(CreateManyItem { data, password })
 }
@@ -50,13 +56,13 @@ fn create_many_documents(
     reg: &Registry,
     collection: &str,
     items_table: &Table,
-    opts: &Option<Table>,
+    opts: Option<&Table>,
 ) -> mlua::Result<Table> {
     let conn = get_tx_conn(lua)?;
 
-    let override_access = get_opt_bool(opts, "overrideAccess", false)?;
-    let run_hooks = get_opt_bool(opts, "hooks", true)?;
-    let draft = get_opt_bool(opts, "draft", false)?;
+    let override_access = get_opt_bool(opts, "overrideAccess", false);
+    let run_hooks = get_opt_bool(opts, "hooks", true);
+    let draft = get_opt_bool(opts, "draft", false);
 
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
@@ -101,7 +107,7 @@ fn create_many_documents(
         draft,
     };
 
-    let svc_result = service::create_many(&ctx, items, &create_opts)
+    let svc_result = service::create_many(&ctx, &items, &create_opts)
         .map_err(|e| RuntimeError(format!("{e:#}")))?;
 
     let result = lua.create_table()?;
@@ -109,8 +115,8 @@ fn create_many_documents(
 
     let docs_table = lua.create_table()?;
     for (i, doc) in svc_result.documents.iter().enumerate() {
-        let doc_table = document_to_lua_table(lua, doc)?;
-        docs_table.raw_set(i + 1, doc_table)?;
+        let entry = document_to_lua_table(lua, doc)?;
+        docs_table.raw_set(i + 1, entry)?;
     }
     result.set("documents", docs_table)?;
 
@@ -126,7 +132,7 @@ pub(crate) fn register_create_many(
 ) -> Result<()> {
     let create_many_fn = lua.create_function(
         move |lua, (collection, items_table, opts): (String, Table, Option<Table>)| {
-            create_many_documents(lua, &registry, &collection, &items_table, &opts)
+            create_many_documents(lua, &registry, &collection, &items_table, opts.as_ref())
         },
     )?;
 

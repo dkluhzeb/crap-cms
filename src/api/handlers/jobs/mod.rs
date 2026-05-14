@@ -1,4 +1,4 @@
-//! Job RPC handlers: ListJobs, TriggerJob, GetJobRun, ListJobRuns.
+//! Job RPC handlers: `ListJobs`, `TriggerJob`, `GetJobRun`, `ListJobRuns`.
 
 mod get_run;
 mod list;
@@ -7,7 +7,7 @@ mod trigger;
 
 use crate::{api::content, core::job::JobRun};
 
-/// Convert a JobRun to gRPC response.
+/// Convert a `JobRun` to gRPC response.
 #[cfg(not(tarpaulin_include))]
 pub(super) fn job_run_to_proto(run: &JobRun) -> content::GetJobRunResponse {
     content::GetJobRunResponse {

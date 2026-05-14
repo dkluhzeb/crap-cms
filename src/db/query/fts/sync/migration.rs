@@ -17,6 +17,10 @@ use crate::db::{DbConnection, DbValue};
 ///
 /// Called during migration (startup). Always rebuilds fresh — avoids drift detection.
 /// If there are no indexable columns, drops the FTS table if it exists.
+///
+/// # Errors
+///
+/// Returns a backend error if any DROP, CREATE, or INSERT fails.
 pub fn sync_fts_table(
     conn: &dyn DbConnection,
     slug: &str,
@@ -30,16 +34,13 @@ pub fn sync_fts_table(
     // the existing FTS index is preserved rather than silently lost.
     for f in &fts_fields {
         if !is_valid_identifier(f) {
-            bail!(
-                "Invalid FTS field name '{}': must be alphanumeric/underscore",
-                f
-            );
+            bail!("Invalid FTS field name '{f}': must be alphanumeric/underscore");
         }
     }
 
     // Always drop existing FTS table first
-    conn.execute_batch_ddl(&format!("DROP TABLE IF EXISTS {}", fts_table))
-        .with_context(|| format!("Failed to drop FTS table {}", fts_table))?;
+    conn.execute_batch_ddl(&format!("DROP TABLE IF EXISTS {fts_table}"))
+        .with_context(|| format!("Failed to drop FTS table {fts_table}"))?;
 
     if fts_fields.is_empty() {
         return Ok(());
@@ -47,33 +48,23 @@ pub fn sync_fts_table(
 
     let field_list = fts_fields.join(", ");
 
-    match conn.kind() {
-        "postgres" => {
-            // Create regular table with a single tsvector column
-            let create_sql = format!(
-                "CREATE TABLE {} (id TEXT PRIMARY KEY, tsv TSVECTOR)",
-                fts_table
-            );
-            conn.execute_batch_ddl(&create_sql)
-                .with_context(|| format!("Failed to create FTS table {}", fts_table))?;
+    if conn.kind() == "postgres" {
+        // Create regular table with a single tsvector column
+        let create_sql = format!("CREATE TABLE {fts_table} (id TEXT PRIMARY KEY, tsv TSVECTOR)");
+        conn.execute_batch_ddl(&create_sql)
+            .with_context(|| format!("Failed to create FTS table {fts_table}"))?;
 
-            // Create GIN index for fast tsvector lookups
-            let index_sql = format!(
-                "CREATE INDEX IF NOT EXISTS idx_{}_tsv ON {} USING GIN(tsv)",
-                fts_table, fts_table
-            );
-            conn.execute_batch_ddl(&index_sql)
-                .with_context(|| format!("Failed to create GIN index on {}", fts_table))?;
-        }
-        _ => {
-            // Create FTS5 virtual table
-            let create_sql = format!(
-                "CREATE VIRTUAL TABLE {} USING fts5(id UNINDEXED, {})",
-                fts_table, field_list
-            );
-            conn.execute_batch_ddl(&create_sql)
-                .with_context(|| format!("Failed to create FTS table {}", fts_table))?;
-        }
+        // Create GIN index for fast tsvector lookups
+        let index_sql =
+            format!("CREATE INDEX IF NOT EXISTS idx_{fts_table}_tsv ON {fts_table} USING GIN(tsv)");
+        conn.execute_batch_ddl(&index_sql)
+            .with_context(|| format!("Failed to create GIN index on {fts_table}"))?;
+    } else {
+        // Create FTS5 virtual table
+        let create_sql =
+            format!("CREATE VIRTUAL TABLE {fts_table} USING fts5(id UNINDEXED, {field_list})");
+        conn.execute_batch_ddl(&create_sql)
+            .with_context(|| format!("Failed to create FTS table {fts_table}"))?;
     }
 
     // Bulk populate from main table
@@ -103,7 +94,7 @@ fn bulk_populate_fast(
 ) -> Result<()> {
     let coalesce_fields: Vec<String> = fts_fields
         .iter()
-        .map(|f| format!("COALESCE({}, '')", f))
+        .map(|f| format!("COALESCE({f}, '')"))
         .collect();
 
     let insert_sql = match conn.kind() {
@@ -112,10 +103,7 @@ fn bulk_populate_fast(
                 "to_tsvector('simple', {})",
                 coalesce_fields.join(" || ' ' || ")
             );
-            format!(
-                "INSERT INTO {}(id, tsv) SELECT id, {} FROM \"{}\"",
-                fts_table, tsvector_expr, slug
-            )
+            format!("INSERT INTO {fts_table}(id, tsv) SELECT id, {tsvector_expr} FROM \"{slug}\"")
         }
         _ => format!(
             "INSERT INTO {}(id, {}) SELECT id, {} FROM \"{}\"",
@@ -127,7 +115,7 @@ fn bulk_populate_fast(
     };
 
     conn.execute_batch(&insert_sql)
-        .with_context(|| format!("Failed to populate FTS table {}", fts_table))?;
+        .with_context(|| format!("Failed to populate FTS table {fts_table}"))?;
 
     Ok(())
 }
@@ -143,22 +131,19 @@ fn bulk_populate_slow(
 ) -> Result<()> {
     let select_fields: Vec<String> = fts_fields
         .iter()
-        .map(|f| format!("COALESCE({}, '')", f))
+        .map(|f| format!("COALESCE({f}, '')"))
         .collect();
     let select_sql = format!("SELECT id, {} FROM \"{}\"", select_fields.join(", "), slug);
 
     let db_rows = conn
         .query_all(&select_sql, &[])
-        .with_context(|| format!("Failed to query {} for FTS population", slug))?;
+        .with_context(|| format!("Failed to query {slug} for FTS population"))?;
 
     let is_postgres = conn.kind() == "postgres";
 
     let insert_sql = if is_postgres {
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-        format!(
-            "INSERT INTO {}(id, tsv) VALUES ({}, to_tsvector('simple', {}))",
-            fts_table, p1, p2
-        )
+        format!("INSERT INTO {fts_table}(id, tsv) VALUES ({p1}, to_tsvector('simple', {p2}))")
     } else {
         let placeholders: Vec<String> = (1..=fts_fields.len() + 1)
             .map(|i| conn.placeholder(i))
@@ -185,8 +170,7 @@ fn bulk_populate_slow(
                 || col_name
                     .split("__")
                     .next()
-                    .map(|base| json_rt_cols.contains(base))
-                    .unwrap_or(false);
+                    .is_some_and(|base| json_rt_cols.contains(base));
 
             let text = if is_json_rt && !raw.is_empty() {
                 extract_prosemirror_text(&raw)
@@ -201,14 +185,14 @@ fn bulk_populate_slow(
             let combined = field_texts.join(" ");
             let params = vec![DbValue::Text(id), DbValue::Text(combined)];
             conn.execute(&insert_sql, &params)
-                .with_context(|| format!("FTS bulk insert in {}", fts_table))?;
+                .with_context(|| format!("FTS bulk insert in {fts_table}"))?;
         } else {
             let mut params: Vec<DbValue> = vec![DbValue::Text(id)];
             for text in field_texts {
                 params.push(DbValue::Text(text));
             }
             conn.execute(&insert_sql, &params)
-                .with_context(|| format!("FTS bulk insert in {}", fts_table))?;
+                .with_context(|| format!("FTS bulk insert in {fts_table}"))?;
         }
     }
 
@@ -310,8 +294,7 @@ mod tests {
         let err_msg = result.unwrap_err().to_string();
         assert!(
             err_msg.contains("Invalid FTS field name"),
-            "Error should mention invalid field: {}",
-            err_msg
+            "Error should mention invalid field: {err_msg}"
         );
     }
 

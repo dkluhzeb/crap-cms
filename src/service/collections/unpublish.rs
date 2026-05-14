@@ -92,6 +92,11 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document
 ///
 /// **Pool mode** (`ctx.pool` set): opens a transaction, commits after success.
 /// **Conn mode** (`ctx.conn` set, Lua CRUD path): runs on the existing connection.
+///
+/// # Errors
+///
+/// Returns service-layer errors (access denied, document not found, hook
+/// errors) or a backend error if the DB transaction or persistence fails.
 #[cfg(not(tarpaulin_include))]
 pub fn unpublish_document(ctx: &ServiceContext, id: &str) -> Result<Document> {
     if ctx.pool.is_some() {

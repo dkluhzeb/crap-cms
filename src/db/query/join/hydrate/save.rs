@@ -25,7 +25,7 @@ pub(crate) fn parse_id_list(val: &Value) -> Vec<String> {
     match val {
         Value::Array(arr) => arr
             .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
             .collect(),
         Value::String(s) => {
             if s.is_empty() {
@@ -58,7 +58,7 @@ pub(crate) fn parse_polymorphic_values(val: &Value) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Coerce a JSON array of objects into a list of string-keyed Value HashMaps.
+/// Coerce a JSON array of objects into a list of string-keyed Value `HashMaps`.
 /// Per-row scalars stay typed (Number, Bool, String, Null) so the join-table
 /// writer's `coerce_json_value` can preserve precision.
 fn coerce_array_rows(val: &Value) -> Vec<HashMap<String, Value>> {
@@ -78,6 +78,10 @@ fn coerce_array_rows(val: &Value) -> Vec<HashMap<String, Value>> {
 /// Save join table data for has-many relationships and arrays.
 /// Extracts relevant data from the data map and writes to join tables.
 /// When `locale_ctx` is provided, localized join fields are scoped by locale.
+///
+/// # Errors
+///
+/// Returns a backend error if any join-table write fails.
 pub fn save_join_table_data(
     conn: &dyn DbConnection,
     slug: &str,

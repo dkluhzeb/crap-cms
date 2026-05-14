@@ -13,6 +13,7 @@ pub struct Translations {
 impl Translations {
     /// Load translations: compiled-in locales as base, overlaid with
     /// `<config_dir>/translations/*.json` files if they exist.
+    #[must_use]
     pub fn load(config_dir: &Path) -> Self {
         let mut locales: HashMap<String, HashMap<String, String>> = HashMap::new();
 
@@ -50,6 +51,7 @@ impl Translations {
 
     /// Get a translated string by locale and key.
     /// Falls back to "en" locale, then to the key itself.
+    #[must_use]
     pub fn get<'a>(&'a self, locale: &str, key: &'a str) -> &'a str {
         // Try requested locale
         if let Some(strings) = self.locales.get(locale)
@@ -71,6 +73,7 @@ impl Translations {
     }
 
     /// Get a translated string and interpolate `{{var}}` placeholders with the given params.
+    #[must_use]
     pub fn get_interpolated(
         &self,
         locale: &str,
@@ -86,16 +89,21 @@ impl Translations {
         let mut result = template.to_string();
 
         for (k, v) in params {
-            result = result.replace(&format!("{{{{{}}}}}", k), v);
+            result = result.replace(&format!("{{{{{k}}}}}"), v);
         }
         result
     }
 
     /// Return the list of available locale codes.
+    #[must_use]
     pub fn available_locales(&self) -> Vec<&str> {
-        let mut locales: Vec<&str> = self.locales.keys().map(|s| s.as_str()).collect();
+        let mut locales: Vec<&str> = self
+            .locales
+            .keys()
+            .map(std::string::String::as_str)
+            .collect();
 
-        locales.sort();
+        locales.sort_unstable();
 
         locales
     }
@@ -190,7 +198,7 @@ mod tests {
         // Should be sorted
         assert_eq!(locales, {
             let mut sorted = locales.clone();
-            sorted.sort();
+            sorted.sort_unstable();
             sorted
         });
     }

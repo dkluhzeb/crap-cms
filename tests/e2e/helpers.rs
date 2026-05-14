@@ -119,7 +119,7 @@ pub fn setup_app_at(
     let has_auth = registry
         .collections
         .values()
-        .any(|d| d.is_auth_collection());
+        .any(crap_cms::core::CollectionDefinition::is_auth_collection);
 
     let state = AdminState {
         config,
@@ -167,7 +167,7 @@ pub fn setup_app_at(
         ),
         populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
         cache: None,
-        custom_pages: Default::default(),
+        custom_pages: crap_cms::admin::custom_pages::CustomPageRegistry::default(),
     };
 
     let router = build_router(state);
@@ -240,11 +240,11 @@ pub fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
         .build()
         .unwrap();
     let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();
-    format!("crap_session={}", token)
+    format!("crap_session={token}")
 }
 
 pub fn auth_and_csrf(auth_cookie: &str) -> String {
-    format!("{}; crap_csrf={}", auth_cookie, TEST_CSRF)
+    format!("{auth_cookie}; crap_csrf={TEST_CSRF}")
 }
 
 pub async fn body_string(body: Body) -> String {

@@ -5,6 +5,7 @@
 //! Callers still own rate limiting, MFA, auth strategies, token/session creation,
 //! and response formatting.
 
+use anyhow::anyhow;
 use chrono::Utc;
 use nanoid::nanoid;
 
@@ -28,10 +29,17 @@ pub struct ResetTokenResult {
 
 /// Authenticate a user by email and password.
 ///
-/// Performs: find_by_email → verify_password → check_locked → check_verified → session_version.
+/// Performs: `find_by_email` → `verify_password` → `check_locked` → `check_verified` → `session_version`.
 /// Returns `InvalidCredentials` if the user is not found or the password is wrong.
 /// Does NOT handle rate limiting, MFA, auth strategies, or token creation — those
 /// are surface concerns.
+///
+/// # Errors
+///
+/// Returns `InvalidCredentials` when the email is unknown or the password
+/// verification fails, `AccountLocked` when the account is locked,
+/// `EmailNotVerified` when `require_verified` is set and the user's email
+/// hasn't been verified, or a backend error if the DB query fails.
 pub fn authenticate_local(
     ctx: &ServiceContext,
     email: &str,
@@ -43,12 +51,9 @@ pub fn authenticate_local(
     let conn = conn.as_ref();
     let def = ctx.collection_def()?;
 
-    let user = match query::find_by_email(conn, ctx.slug, def, email)? {
-        Some(u) => u,
-        None => {
-            password_provider.dummy_verify();
-            return Err(ServiceError::InvalidCredentials);
-        }
+    let Some(user) = query::find_by_email(conn, ctx.slug, def, email)? else {
+        password_provider.dummy_verify();
+        return Err(ServiceError::InvalidCredentials);
     };
 
     let verified = match query::get_password_hash(conn, ctx.slug, &user.id)? {
@@ -80,6 +85,10 @@ pub fn authenticate_local(
 ///
 /// Returns `Ok(None)` if the user is not found — callers should still show "success"
 /// to prevent email enumeration.
+///
+/// # Errors
+///
+/// Returns an error if the DB connection, collection lookup, or token persistence fails.
 pub fn generate_reset_token(
     ctx: &ServiceContext,
     email: &str,
@@ -89,13 +98,16 @@ pub fn generate_reset_token(
     let conn = conn.as_ref();
     let def = ctx.collection_def()?;
 
-    let user = match query::find_by_email(conn, ctx.slug, def, email)? {
-        Some(u) => u,
-        None => return Ok(None),
+    let Some(user) = query::find_by_email(conn, ctx.slug, def, email)? else {
+        return Ok(None);
     };
 
     let token = nanoid!();
-    let exp = Utc::now().timestamp() + expiry_secs as i64;
+    // Reject the impossible overflow rather than producing an `i64::MAX` /
+    // immediate-expiry token; both directions are wrong for a reset token.
+    let expiry_i64 = i64::try_from(expiry_secs)
+        .map_err(|_| ServiceError::Internal(anyhow!("expiry_secs exceeds i64::MAX")))?;
+    let exp = Utc::now().timestamp() + expiry_i64;
 
     query::set_reset_token(conn, ctx.slug, &user.id, &token, exp)?;
 
@@ -108,6 +120,11 @@ pub fn generate_reset_token(
 /// Validate a reset token and update the user's password.
 ///
 /// Clears the token on success or if it's expired/locked. Caller manages the transaction.
+///
+/// # Errors
+///
+/// Returns `InvalidToken` when the token is missing, expired, or the user is locked.
+/// Returns a backend error if the DB connection or persistence fails.
 pub fn consume_reset_token(
     ctx: &ServiceContext,
     token: &str,
@@ -151,14 +168,18 @@ pub fn consume_reset_token(
 /// Returns `true` if the token was valid and the user was marked verified.
 /// Returns `false` if the token was not found or expired (caller shows generic message).
 /// Clears expired tokens. Caller manages the transaction.
+///
+/// # Errors
+///
+/// Returns a backend error if the DB connection, collection lookup, or
+/// persistence calls fail. Expired tokens and missing users are not errors.
 pub fn consume_verification_token(ctx: &ServiceContext, token: &str) -> Result<bool, ServiceError> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let def = ctx.collection_def()?;
 
-    let (user, exp) = match query::find_by_verification_token(conn, ctx.slug, def, token)? {
-        Some(pair) => pair,
-        None => return Ok(false),
+    let Some((user, exp)) = query::find_by_verification_token(conn, ctx.slug, def, token)? else {
+        return Ok(false);
     };
 
     if Utc::now().timestamp() >= exp {
@@ -183,6 +204,10 @@ pub fn consume_verification_token(ctx: &ServiceContext, token: &str) -> Result<b
 /// Publishes a user-invalidation signal (if a transport is configured on
 /// the context) so any active live-update streams owned by this user are
 /// torn down. Publish is a no-op when no transport is attached.
+///
+/// # Errors
+///
+/// Returns a backend error if the DB connection or update fails.
 pub fn lock_user(ctx: &ServiceContext, id: &str) -> Result<(), ServiceError> {
     let conn = ctx.resolve_conn()?;
     query::lock_user(conn.as_ref(), ctx.slug, id)?;
@@ -195,6 +220,10 @@ pub fn lock_user(ctx: &ServiceContext, id: &str) -> Result<(), ServiceError> {
 }
 
 /// Unlock a user account.
+///
+/// # Errors
+///
+/// Returns a backend error if the DB connection or update fails.
 pub fn unlock_user(ctx: &ServiceContext, id: &str) -> Result<(), ServiceError> {
     let conn = ctx.resolve_conn()?;
     query::unlock_user(conn.as_ref(), ctx.slug, id)?;
@@ -203,6 +232,10 @@ pub fn unlock_user(ctx: &ServiceContext, id: &str) -> Result<(), ServiceError> {
 }
 
 /// Mark a user's email as verified.
+///
+/// # Errors
+///
+/// Returns a backend error if the DB connection or update fails.
 pub fn mark_verified(ctx: &ServiceContext, id: &str) -> Result<(), ServiceError> {
     let conn = ctx.resolve_conn()?;
     query::mark_verified(conn.as_ref(), ctx.slug, id)?;
@@ -211,6 +244,10 @@ pub fn mark_verified(ctx: &ServiceContext, id: &str) -> Result<(), ServiceError>
 }
 
 /// Mark a user's email as unverified.
+///
+/// # Errors
+///
+/// Returns a backend error if the DB connection or update fails.
 pub fn mark_unverified(ctx: &ServiceContext, id: &str) -> Result<(), ServiceError> {
     let conn = ctx.resolve_conn()?;
     query::mark_unverified(conn.as_ref(), ctx.slug, id)?;
@@ -219,30 +256,50 @@ pub fn mark_unverified(ctx: &ServiceContext, id: &str) -> Result<(), ServiceErro
 }
 
 /// Check whether a user account is locked.
+///
+/// # Errors
+///
+/// Returns a backend error if the DB connection or query fails.
 pub fn is_locked(ctx: &ServiceContext, id: &str) -> Result<bool, ServiceError> {
     let conn = ctx.resolve_conn()?;
     Ok(query::is_locked(conn.as_ref(), ctx.slug, id)?)
 }
 
 /// Check whether a user's email is verified.
+///
+/// # Errors
+///
+/// Returns a backend error if the DB connection or query fails.
 pub fn is_verified(ctx: &ServiceContext, id: &str) -> Result<bool, ServiceError> {
     let conn = ctx.resolve_conn()?;
     Ok(query::is_verified(conn.as_ref(), ctx.slug, id)?)
 }
 
 /// Get the current session version for a user (for JWT invalidation).
+///
+/// # Errors
+///
+/// Returns a backend error if the DB connection or query fails.
 pub fn get_session_version(ctx: &ServiceContext, id: &str) -> Result<u64, ServiceError> {
     let conn = ctx.resolve_conn()?;
     Ok(query::get_session_version(conn.as_ref(), ctx.slug, id)?)
 }
 
 /// Check whether a user document exists.
+///
+/// # Errors
+///
+/// Returns a backend error if the DB connection or query fails.
 pub fn user_exists(ctx: &ServiceContext, id: &str) -> Result<bool, ServiceError> {
     let conn = ctx.resolve_conn()?;
     Ok(query::user_exists(conn.as_ref(), ctx.slug, id)?)
 }
 
 /// Validate a password reset token without consuming it (for rendering the reset page).
+///
+/// # Errors
+///
+/// Returns a backend error if the DB connection, collection lookup, or query fails.
 pub fn find_by_reset_token(ctx: &ServiceContext, token: &str) -> Result<bool, ServiceError> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
@@ -252,6 +309,10 @@ pub fn find_by_reset_token(ctx: &ServiceContext, token: &str) -> Result<bool, Se
 }
 
 /// Store an MFA code for a user.
+///
+/// # Errors
+///
+/// Returns a backend error if the DB connection or persistence fails.
 pub fn set_mfa_code(
     ctx: &ServiceContext,
     id: &str,
@@ -265,6 +326,10 @@ pub fn set_mfa_code(
 }
 
 /// Verify an MFA code. Returns true if valid and not expired.
+///
+/// # Errors
+///
+/// Returns a backend error if the DB connection or query fails.
 pub fn verify_mfa_code(ctx: &ServiceContext, id: &str, code: &str) -> Result<bool, ServiceError> {
     let conn = ctx.resolve_conn()?;
     Ok(query::verify_mfa_code(conn.as_ref(), ctx.slug, id, code)?)

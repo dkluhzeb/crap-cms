@@ -29,6 +29,7 @@ pub(super) struct UpdateCache {
 }
 
 /// Default cache path: `$XDG_CACHE_HOME/crap-cms/update-check.json`.
+#[must_use]
 pub fn default_path() -> Option<PathBuf> {
     Some(cache_dir()?.join("update-check.json"))
 }
@@ -82,6 +83,7 @@ pub(super) fn read_at(path: &Path) -> Option<UpdateCache> {
 
 /// Return the cached latest tag if the cache is present AND fresh (within
 /// `CACHE_TTL_HOURS` of `now`). Used by the serve startup nudge.
+#[must_use]
 pub fn fresh_latest_at(path: &Path, now: DateTime<Utc>) -> Option<String> {
     let cache = read_at(path)?;
     let age = now.signed_duration_since(cache.checked_at);

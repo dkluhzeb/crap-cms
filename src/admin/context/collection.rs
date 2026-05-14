@@ -6,9 +6,17 @@ use serde::Serialize;
 use crate::{
     admin::context::FieldMeta,
     core::{CollectionDefinition, VersionsConfig, collection::Auth, upload::CollectionUpload},
+    typegen::LuaAnnotation,
 };
 
 /// Top-level collection metadata exposed to templates.
+///
+/// Capability bits (`is_auth`, `is_upload`, `has_versions`, `has_drafts`)
+/// are intentionally NOT separate fields — templates derive them from the
+/// presence of the corresponding `Option<*Meta>` sub-struct (and the
+/// `drafts` flag inside `versions`). Single source of truth: if `auth`
+/// is `None`, the collection isn't auth-enabled; if `versions.drafts` is
+/// false, drafts aren't on.
 #[derive(Serialize, JsonSchema)]
 pub struct CollectionContext {
     pub slug: String,
@@ -16,12 +24,7 @@ pub struct CollectionContext {
     pub singular_name: String,
     pub title_field: Option<String>,
     pub timestamps: bool,
-    pub is_auth: bool,
-    pub is_upload: bool,
-    pub has_drafts: bool,
-    pub has_versions: bool,
     pub soft_delete: bool,
-    pub can_permanently_delete: bool,
     pub admin: AdminMeta,
     pub upload: Option<UploadMeta>,
     pub versions: Option<VersionsMeta>,
@@ -62,6 +65,65 @@ pub struct AuthMeta {
     pub verify_email: bool,
 }
 
+impl LuaAnnotation for AdminMeta {
+    fn render_lua_annotation(out: &mut String) {
+        out.push_str("---@class crap.template.admin_meta\n");
+        out.push_str("---@field use_as_title? string\n");
+        out.push_str("---@field default_sort? string\n");
+        out.push_str("---@field hidden boolean\n");
+        out.push_str("---@field list_searchable_fields string[]\n");
+        out.push('\n');
+    }
+}
+
+impl LuaAnnotation for UploadMeta {
+    fn render_lua_annotation(out: &mut String) {
+        out.push_str("---@class crap.template.upload_meta\n");
+        out.push_str("---@field enabled boolean\n");
+        out.push_str("---@field mime_types string[]\n");
+        out.push_str("---@field max_file_size? integer\n");
+        out.push_str("---@field admin_thumbnail? string\n");
+        out.push('\n');
+    }
+}
+
+impl LuaAnnotation for VersionsMeta {
+    fn render_lua_annotation(out: &mut String) {
+        out.push_str("---@class crap.template.versions_meta\n");
+        out.push_str("---@field drafts boolean\n");
+        out.push_str("---@field max_versions integer\n");
+        out.push('\n');
+    }
+}
+
+impl LuaAnnotation for AuthMeta {
+    fn render_lua_annotation(out: &mut String) {
+        out.push_str("---@class crap.template.auth_meta\n");
+        out.push_str("---@field enabled boolean\n");
+        out.push_str("---@field disable_local boolean\n");
+        out.push_str("---@field verify_email boolean\n");
+        out.push('\n');
+    }
+}
+
+impl LuaAnnotation for CollectionContext {
+    fn render_lua_annotation(out: &mut String) {
+        out.push_str("---@class crap.template.collection\n");
+        out.push_str("---@field slug string\n");
+        out.push_str("---@field display_name string\n");
+        out.push_str("---@field singular_name string\n");
+        out.push_str("---@field title_field? string\n");
+        out.push_str("---@field timestamps boolean\n");
+        out.push_str("---@field soft_delete boolean\n");
+        out.push_str("---@field admin crap.template.admin_meta\n");
+        out.push_str("---@field upload? crap.template.upload_meta\n");
+        out.push_str("---@field versions? crap.template.versions_meta\n");
+        out.push_str("---@field auth? crap.template.auth_meta\n");
+        out.push_str("---@field fields_meta crap.template.field_meta[]\n");
+        out.push('\n');
+    }
+}
+
 impl CollectionContext {
     /// Build the typed context from a [`CollectionDefinition`].
     pub fn from_def(def: &CollectionDefinition) -> Self {
@@ -71,12 +133,7 @@ impl CollectionContext {
             singular_name: def.singular_name().to_string(),
             title_field: def.title_field().map(str::to_string),
             timestamps: def.timestamps,
-            is_auth: def.is_auth_collection(),
-            is_upload: def.is_upload_collection(),
-            has_drafts: def.has_drafts(),
-            has_versions: def.has_versions(),
             soft_delete: def.soft_delete,
-            can_permanently_delete: def.access.delete.is_some(),
             admin: AdminMeta::from_def(def),
             upload: def.upload.as_ref().map(UploadMeta::from_def),
             versions: def.versions.as_ref().map(VersionsMeta::from_def),
@@ -155,10 +212,9 @@ mod tests {
         assert_eq!(v["display_name"], "Posts");
         assert_eq!(v["singular_name"], "Post");
         assert_eq!(v["timestamps"], true);
-        assert_eq!(v["is_auth"], false);
-        assert_eq!(v["is_upload"], false);
-        assert_eq!(v["has_drafts"], false);
-        assert_eq!(v["has_versions"], false);
+        assert!(v["auth"].is_null());
+        assert!(v["upload"].is_null());
+        assert!(v["versions"].is_null());
         assert_eq!(v["soft_delete"], false);
         let meta = v["fields_meta"].as_array().unwrap();
         assert_eq!(meta.len(), 1);
@@ -171,21 +227,6 @@ mod tests {
         def.soft_delete = true;
         let v = serde_json::to_value(CollectionContext::from_def(&def)).unwrap();
         assert_eq!(v["soft_delete"], true);
-    }
-
-    #[test]
-    fn from_def_can_permanently_delete_true() {
-        let mut def = CollectionDefinition::new("pages");
-        def.access.delete = Some("access.admin_only".to_string());
-        let v = serde_json::to_value(CollectionContext::from_def(&def)).unwrap();
-        assert_eq!(v["can_permanently_delete"], true);
-    }
-
-    #[test]
-    fn from_def_can_permanently_delete_false() {
-        let def = CollectionDefinition::new("pages");
-        let v = serde_json::to_value(CollectionContext::from_def(&def)).unwrap();
-        assert_eq!(v["can_permanently_delete"], false);
     }
 
     #[test]

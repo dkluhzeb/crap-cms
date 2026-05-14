@@ -24,7 +24,7 @@ pub enum RecvError {
 impl std::fmt::Display for RecvError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RecvError::Lagged(n) => write!(f, "receiver lagged by {} events", n),
+            RecvError::Lagged(n) => write!(f, "receiver lagged by {n} events"),
             RecvError::Closed => write!(f, "receiver closed"),
         }
     }
@@ -84,6 +84,11 @@ impl EventReceiver {
 
     /// Await the next event. Returns `Err(RecvError::Lagged(n))` if the
     /// subscriber fell behind (same semantic as `broadcast::Receiver::recv`).
+    ///
+    /// # Errors
+    ///
+    /// Returns `RecvError::Lagged(n)` if the subscriber fell behind, or
+    /// `RecvError::Closed` if the channel was closed.
     pub async fn recv(&mut self) -> Result<MutationEvent, RecvError> {
         match &mut self.inner {
             RecvKind::Broadcast(rx) => rx.recv().await.map_err(RecvError::from),
@@ -119,6 +124,11 @@ impl InvalidationReceiver {
 
     /// Await the next invalidation signal. Returns `Err(RecvError::Lagged(n))`
     /// if the subscriber fell behind.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RecvError::Lagged(n)` if the subscriber fell behind, or
+    /// `RecvError::Closed` if the channel was closed.
     pub async fn recv(&mut self) -> Result<String, RecvError> {
         match &mut self.inner {
             RecvKind::Broadcast(rx) => rx.recv().await.map_err(RecvError::from),

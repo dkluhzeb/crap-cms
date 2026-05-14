@@ -93,7 +93,7 @@ fn find_blocking(
     Ok((proto_docs, pagination_result_to_proto(&result.pagination)))
 }
 
-/// Build a FindQuery from the gRPC request parameters.
+/// Build a `FindQuery` from the gRPC request parameters.
 ///
 /// Produces a *user* query — system filters (`_status`, `_deleted_at`) are
 /// injected by the service layer based on the typed `trash` / `include_drafts`

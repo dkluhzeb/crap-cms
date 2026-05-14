@@ -49,12 +49,9 @@ fn consume_verification_token(
 
         let ctx = ServiceContext::collection(&def.slug, def).conn(&tx).build();
 
-        match service_consume_verification_token(&ctx, token)? {
-            true => {
-                tx.commit()?;
-                return Ok(true);
-            }
-            false => continue,
+        if service_consume_verification_token(&ctx, token)? {
+            tx.commit()?;
+            return Ok(true);
         }
     }
 

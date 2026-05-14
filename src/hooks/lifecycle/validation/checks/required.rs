@@ -49,9 +49,9 @@ fn is_value_present(field: &FieldDefinition, value: Option<&Value>, is_empty: bo
     if field.has_many {
         // has_many with parent column: value is a JSON array string
         return match value {
-            Some(Value::String(s)) => serde_json::from_str::<Vec<Value>>(s)
-                .map(|arr| !arr.is_empty())
-                .unwrap_or(!s.is_empty()),
+            Some(Value::String(s)) => {
+                serde_json::from_str::<Vec<Value>>(s).map_or(!s.is_empty(), |arr| !arr.is_empty())
+            }
             _ => false,
         };
     }

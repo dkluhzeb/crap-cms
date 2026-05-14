@@ -3,6 +3,20 @@
 //! Covers: global CRUD, versioning, locale, drafts, upload serving,
 //! static assets, dashboard, CSRF, CORS, access gate.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use serde_json::json;
 use std::sync::Arc;
 
@@ -127,7 +141,7 @@ fn setup_app_with_config(
     let has_auth = registry
         .collections
         .values()
-        .any(|d| d.is_auth_collection());
+        .any(crap_cms::core::CollectionDefinition::is_auth_collection);
 
     let state = AdminState {
         config,
@@ -175,7 +189,7 @@ fn setup_app_with_config(
         ),
         populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
         cache: None,
-        custom_pages: Default::default(),
+        custom_pages: crap_cms::admin::custom_pages::CustomPageRegistry::default(),
     };
 
     let router = build_router(state);
@@ -212,17 +226,17 @@ fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
         .build()
         .unwrap();
     let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();
-    format!("crap_session={}", token)
+    format!("crap_session={token}")
 }
 
 const TEST_CSRF: &str = "test-csrf-token-12345";
 
 fn csrf_cookie() -> String {
-    format!("crap_csrf={}", TEST_CSRF)
+    format!("crap_csrf={TEST_CSRF}")
 }
 
 fn auth_and_csrf(auth_cookie: &str) -> String {
-    format!("{}; crap_csrf={}", auth_cookie, TEST_CSRF)
+    format!("{auth_cookie}; crap_csrf={TEST_CSRF}")
 }
 
 async fn body_string(body: Body) -> String {
@@ -311,8 +325,7 @@ async fn global_update_with_locale() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Global update with locale should succeed, got {}",
-        status
+        "Global update with locale should succeed, got {status}"
     );
 }
 
@@ -377,8 +390,7 @@ async fn global_unpublish() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Global unpublish should succeed, got {}",
-        status
+        "Global unpublish should succeed, got {status}"
     );
 }
 
@@ -427,8 +439,7 @@ async fn global_non_versioned_versions_page_redirects() {
         status == StatusCode::SEE_OTHER
             || status == StatusCode::FOUND
             || status == StatusCode::TEMPORARY_REDIRECT,
-        "Non-versioned global versions page should redirect, got {}",
-        status
+        "Non-versioned global versions page should redirect, got {status}"
     );
 }
 
@@ -452,8 +463,7 @@ async fn global_restore_version_non_versioned_redirects() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Global restore on non-versioned should redirect, got {}",
-        status
+        "Global restore on non-versioned should redirect, got {status}"
     );
 }
 
@@ -511,22 +521,18 @@ async fn serve_upload_existing_file() {
     let ct = resp
         .headers()
         .get("content-type")
-        .map(|v| v.to_str().unwrap_or(""))
-        .unwrap_or("");
+        .map_or("", |v| v.to_str().unwrap_or(""));
     assert!(
         ct.contains("text/plain"),
-        "Should detect text/plain MIME, got {}",
-        ct
+        "Should detect text/plain MIME, got {ct}"
     );
     let cache = resp
         .headers()
         .get("cache-control")
-        .map(|v| v.to_str().unwrap_or(""))
-        .unwrap_or("");
+        .map_or("", |v| v.to_str().unwrap_or(""));
     assert!(
         cache.contains("public"),
-        "Public file should have public cache control, got {}",
-        cache
+        "Public file should have public cache control, got {cache}"
     );
     let body = body_string(resp.into_body()).await;
     assert_eq!(body, "hello world");
@@ -554,12 +560,10 @@ async fn serve_upload_image_file() {
     let ct = resp
         .headers()
         .get("content-type")
-        .map(|v| v.to_str().unwrap_or(""))
-        .unwrap_or("");
+        .map_or("", |v| v.to_str().unwrap_or(""));
     assert!(
         ct.contains("image/png"),
-        "Should detect image/png MIME, got {}",
-        ct
+        "Should detect image/png MIME, got {ct}"
     );
 }
 
@@ -612,8 +616,7 @@ async fn upload_path_traversal_in_collection_returns_404() {
     let status = resp.status();
     assert!(
         status == StatusCode::NOT_FOUND || status == StatusCode::BAD_REQUEST,
-        "Path traversal should be rejected, got {}",
-        status
+        "Path traversal should be rejected, got {status}"
     );
 }
 
@@ -672,8 +675,7 @@ async fn static_js_returns_200() {
         .map(|v| v.to_str().unwrap_or(""));
     assert!(
         ct.unwrap_or("").contains("javascript"),
-        "JS content type should be javascript, got {:?}",
-        ct
+        "JS content type should be javascript, got {ct:?}"
     );
 }
 
@@ -700,8 +702,7 @@ async fn global_save_as_draft() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Global save as draft should succeed, got {}",
-        status
+        "Global save as draft should succeed, got {status}"
     );
 }
 
@@ -764,8 +765,7 @@ async fn versioned_global_update_as_draft() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Global draft save should succeed, got {}",
-        status
+        "Global draft save should succeed, got {status}"
     );
 }
 
@@ -983,10 +983,7 @@ async fn csrf_post_with_matching_header_passes() {
 async fn csrf_post_with_form_field_passes() {
     let app = setup_app(vec![make_users_def()], vec![]);
 
-    let body = format!(
-        "collection=users&email=a@b.com&password=wrong&_csrf={}",
-        TEST_CSRF
-    );
+    let body = format!("collection=users&email=a@b.com&password=wrong&_csrf={TEST_CSRF}");
     let resp = app
         .router
         .oneshot(

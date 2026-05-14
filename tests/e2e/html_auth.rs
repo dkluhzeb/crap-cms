@@ -40,7 +40,7 @@ async fn login_failure_shows_error() {
         .oneshot(
             Request::post("/admin/login")
                 .header("content-type", "application/x-www-form-urlencoded")
-                .header("Cookie", format!("crap_csrf={}", TEST_CSRF))
+                .header("Cookie", format!("crap_csrf={TEST_CSRF}"))
                 .header("X-CSRF-Token", TEST_CSRF)
                 .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
                     [127, 0, 0, 1],

@@ -1,8 +1,9 @@
 //! SHA256 verification against a release's `SHA256SUMS` manifest.
 
+use std::{fmt::Write as _, fs::File, io::Read, path::Path};
+
 use anyhow::{Context, Result, anyhow, bail};
 use sha2::{Digest, Sha256};
-use std::{fs::File, io::Read, path::Path};
 
 /// Parse a `SHA256SUMS` manifest and find the line matching `asset_name`.
 ///
@@ -31,7 +32,9 @@ pub(super) fn file_hex(path: &Path) -> Result<String> {
         File::open(path).with_context(|| format!("opening {} for checksum", path.display()))?;
 
     let mut hasher = Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
+    // 64 KiB on the heap; the stack-allocated form trips clippy's large-array
+    // limit on debug builds, and the SHA hot loop dwarfs the alloc cost anyway.
+    let mut buf = vec![0u8; 64 * 1024].into_boxed_slice();
     loop {
         let n = file.read(&mut buf).context("reading file for checksum")?;
         if n == 0 {
@@ -44,6 +47,11 @@ pub(super) fn file_hex(path: &Path) -> Result<String> {
 }
 
 /// Verify `downloaded` matches `expected_hex`. Error on mismatch; succeed on match.
+///
+/// # Errors
+///
+/// Returns an error if the file can't be hashed or the computed hash
+/// doesn't match `expected_hex`.
 pub fn verify(downloaded: &Path, expected_hex: &str) -> Result<()> {
     let actual = file_hex(downloaded)?;
     if !actual.eq_ignore_ascii_case(expected_hex) {
@@ -69,7 +77,7 @@ pub(super) fn verify_against_manifest(
 fn hex_encode(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
-        s.push_str(&format!("{b:02x}"));
+        let _ = write!(s, "{b:02x}");
     }
     s
 }

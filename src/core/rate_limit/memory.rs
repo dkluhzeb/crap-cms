@@ -1,4 +1,4 @@
-//! In-memory rate limit backend using HashMap with sliding window.
+//! In-memory rate limit backend using `HashMap` with sliding window.
 
 use std::{
     collections::HashMap,
@@ -26,6 +26,7 @@ impl Default for MemoryRateLimitBackend {
 }
 
 impl MemoryRateLimitBackend {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             events: Mutex::new(HashMap::new()),
@@ -35,20 +36,27 @@ impl MemoryRateLimitBackend {
 
 impl RateLimitBackend for MemoryRateLimitBackend {
     fn count(&self, key: &str, window_secs: u64) -> Result<u32> {
-        let mut map = self.events.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = self
+            .events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let window = Duration::from_secs(window_secs);
         let now = Instant::now();
 
         if let Some(times) = map.get_mut(key) {
             times.retain(|t| now.duration_since(*t) < window);
-            Ok(times.len() as u32)
+            // Saturate at u32::MAX so a runaway event log still rate-limits.
+            Ok(u32::try_from(times.len()).unwrap_or(u32::MAX))
         } else {
             Ok(0)
         }
     }
 
     fn record(&self, key: &str, window_secs: u64) -> Result<()> {
-        let mut map = self.events.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = self
+            .events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let window = Duration::from_secs(window_secs);
         let now = Instant::now();
 
@@ -68,7 +76,10 @@ impl RateLimitBackend for MemoryRateLimitBackend {
     }
 
     fn check_and_record(&self, key: &str, max_count: u32, window_secs: u64) -> Result<bool> {
-        let mut map = self.events.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = self
+            .events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let window = Duration::from_secs(window_secs);
         let now = Instant::now();
 
@@ -83,7 +94,8 @@ impl RateLimitBackend for MemoryRateLimitBackend {
         let times = map.entry(key.to_string()).or_default();
         times.retain(|t| now.duration_since(*t) < window);
 
-        if times.len() as u32 >= max_count {
+        // Saturate at u32::MAX so a runaway event log still rate-limits.
+        if u32::try_from(times.len()).unwrap_or(u32::MAX) >= max_count {
             return Ok(false);
         }
 
@@ -93,7 +105,10 @@ impl RateLimitBackend for MemoryRateLimitBackend {
     }
 
     fn clear(&self, key: &str) -> Result<()> {
-        let mut map = self.events.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = self
+            .events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         map.remove(key);
         Ok(())
     }

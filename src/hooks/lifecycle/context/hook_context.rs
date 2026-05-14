@@ -23,7 +23,7 @@ pub struct HookContext {
     pub locale: Option<String>,
     /// Whether this operation is a draft save (`true` = draft, `false`/`None` = publish).
     pub draft: Option<bool>,
-    /// Request-scoped shared table that flows from before_validate through after_change.
+    /// Request-scoped shared table that flows from `before_validate` through `after_change`.
     /// Hooks can read/write this to share state within one request lifecycle.
     /// Only JSON-compatible values survive (no functions, userdata, etc.).
     pub context: ReqContext,
@@ -51,7 +51,7 @@ impl HookContext {
         tbl.set("data", hashmap_to_lua(lua, &self.data)?)?;
         tbl.set("context", hashmap_to_lua(lua, &self.context)?)?;
 
-        let depth = lua.app_data_ref::<HookDepth>().map(|d| d.0).unwrap_or(0);
+        let depth = lua.app_data_ref::<HookDepth>().map_or(0, |d| d.0);
         tbl.set("hook_depth", depth)?;
 
         if let Some(ref v) = self.locale {
@@ -77,6 +77,7 @@ impl HookContext {
     /// `{ "seo__meta_title": "X" }` so `query::create/update` can find them.
     /// Typed values (Number, Bool, etc.) flow through unchanged so the DB
     /// coercion path can preserve precision via `coerce_json_value`.
+    #[must_use]
     pub fn to_value_map(&self, fields: &[FieldDefinition]) -> DocumentFields {
         let mut map = DocumentFields::new();
 
@@ -112,7 +113,7 @@ impl HookContext {
     }
 }
 
-/// Convert a HashMap<String, JsonValue> to a Lua table.
+/// Convert a `HashMap`<String, `JsonValue`> to a Lua table.
 fn hashmap_to_lua(lua: &Lua, map: &HashMap<String, JsonValue>) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
 
@@ -130,7 +131,7 @@ fn flatten_group_to_value_map(
     map: &mut DocumentFields,
 ) {
     for (sub_key, sub_val) in obj {
-        let flat_key = format!("{}__{}", prefix, sub_key);
+        let flat_key = format!("{prefix}__{sub_key}");
 
         if let JsonValue::Object(nested) = sub_val {
             flatten_group_to_value_map(&flat_key, nested, map);

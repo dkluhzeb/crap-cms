@@ -242,7 +242,7 @@ fn validate_leaf_sub_field(
                 errors.push(
                     FieldError::with_key(
                         qualified.to_owned(),
-                        format!("Validation failed (internal error in '{}')", validate_ref),
+                        format!("Validation failed (internal error in '{validate_ref}')"),
                         "validation.custom_error",
                     )
                     .with_param("field", sf.name.clone()),

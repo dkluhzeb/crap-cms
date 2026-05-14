@@ -1,4 +1,4 @@
-//! `crap.http` namespace — outbound HTTP via reqwest (blocking, safe in spawn_blocking context).
+//! `crap.http` namespace — outbound HTTP via reqwest (blocking, safe in `spawn_blocking` context).
 
 use std::{
     io::Read as _,
@@ -16,7 +16,7 @@ use url::Url;
 const MAX_REDIRECTS: u8 = 10;
 const ALLOWED_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"];
 
-/// Register `crap.http` — outbound HTTP via reqwest (blocking, safe in spawn_blocking context).
+/// Register `crap.http` — outbound HTTP via reqwest (blocking, safe in `spawn_blocking` context).
 pub(super) fn register_http(
     lua: &Lua,
     crap: &Table,
@@ -120,10 +120,9 @@ fn parse_request_opts(opts: &Table) -> LuaResult<RequestOpts> {
     let timeout = Duration::from_secs(opts.get::<Option<u64>>("timeout")?.unwrap_or(30));
     let body: Option<String> = opts.get("body")?;
 
-    let headers = opts
-        .get::<Table>("headers")
-        .map(|h| h.pairs::<String, String>().collect::<LuaResult<Vec<_>>>())
-        .unwrap_or(Ok(Vec::new()))?;
+    let headers = opts.get::<Table>("headers").map_or(Ok(Vec::new()), |h| {
+        h.pairs::<String, String>().collect::<LuaResult<Vec<_>>>()
+    })?;
 
     Ok(RequestOpts {
         method,
@@ -140,11 +139,11 @@ fn resolve_and_build_client(
     allow_private_networks: bool,
     timeout: Duration,
 ) -> LuaResult<Client> {
-    let pin = if !allow_private_networks {
+    let pin = if allow_private_networks {
+        None
+    } else {
         let (host, addr) = validate_url(url).map_err(RuntimeError)?;
         Some((host, addr))
-    } else {
-        None
     };
 
     build_client(pin.as_ref().map(|(h, a)| (h.as_str(), *a)), timeout).map_err(RuntimeError)
@@ -186,11 +185,11 @@ fn build_response_table(
     max_bytes: u64,
 ) -> LuaResult<Table> {
     let result = lua.create_table()?;
-    result.set("status", resp.status().as_u16() as i64)?;
+    result.set("status", i64::from(resp.status().as_u16()))?;
 
     let headers_out = lua.create_table()?;
 
-    for (name, val) in resp.headers().iter() {
+    for (name, val) in resp.headers() {
         if let Ok(v) = val.to_str() {
             headers_out.set(name.as_str(), v)?;
         }

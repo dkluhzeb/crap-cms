@@ -26,16 +26,19 @@ pub struct ReqContext(HashMap<String, Value>);
 
 impl ReqContext {
     /// Create an empty context.
+    #[must_use]
     pub fn new() -> Self {
         Self(HashMap::new())
     }
 
     /// Borrow the inner map.
+    #[must_use]
     pub fn as_map(&self) -> &HashMap<String, Value> {
         &self.0
     }
 
     /// Consume the wrapper and return the inner map.
+    #[must_use]
     pub fn into_inner(self) -> HashMap<String, Value> {
         self.0
     }

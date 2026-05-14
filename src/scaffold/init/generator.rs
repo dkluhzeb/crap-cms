@@ -60,6 +60,11 @@ impl Default for InitOptions {
 ///
 /// Creates: crap.toml, init.lua, .luarc.json, .gitignore, stylua.toml,
 /// and empty directories for collections, globals, hooks, etc.
+///
+/// # Errors
+///
+/// Returns an error if the target already contains a `crap.toml` or any
+/// file write fails.
 pub fn init(dir: Option<PathBuf>, opts: &InitOptions) -> Result<()> {
     let target = dir.unwrap_or_else(|| PathBuf::from("./crap-cms"));
 
@@ -86,7 +91,7 @@ fn create_directories(target: &std::path::Path) -> Result<()> {
 
     for subdir in INIT_SUBDIRS {
         fs::create_dir_all(target.join(subdir))
-            .with_context(|| format!("Failed to create {}/", subdir))?;
+            .with_context(|| format!("Failed to create {subdir}/"))?;
     }
 
     Ok(())
@@ -113,7 +118,7 @@ fn render_crap_toml(opts: &InitOptions) -> Result<String> {
     let locales_str = opts
         .locales
         .iter()
-        .map(|l| format!("\"{}\"", l))
+        .map(|l| format!("\"{l}\""))
         .collect::<Vec<_>>()
         .join(", ");
 

@@ -94,10 +94,14 @@ pub struct AdminState {
 
 impl AdminState {
     /// Render a template with the given data, returning HTML string.
+    ///
+    /// # Errors
+    ///
+    /// Returns a formatted error string if the template is unknown or rendering fails.
     pub fn render(&self, template: &str, data: &Value) -> Result<String, String> {
         self.handlebars
             .render(template, data)
-            .map_err(|e| format!("Template error: {}", e))
+            .map_err(|e| format!("Template error: {e}"))
     }
 
     /// Bundle the email config + renderer + server config into an

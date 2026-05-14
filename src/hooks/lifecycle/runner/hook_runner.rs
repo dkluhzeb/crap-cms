@@ -20,7 +20,8 @@ pub struct HookRunner {
 }
 
 impl HookRunner {
-    /// Create a builder for constructing a HookRunner.
+    /// Create a builder for constructing a `HookRunner`.
+    #[must_use]
     pub fn builder() -> HookRunnerBuilder<'static> {
         HookRunnerBuilder::new()
     }
@@ -28,6 +29,7 @@ impl HookRunner {
     /// Check if any globally-registered hooks exist for the given event.
     /// Uses the cached set — no VM acquisition needed.
     #[inline]
+    #[must_use]
     pub fn has_registered_hooks_for(&self, event: &str) -> bool {
         self.registered_events.contains(event)
     }

@@ -20,8 +20,14 @@ use super::lua_api;
 /// The writeable `SharedRegistry` exists only within this function's
 /// stack. After all definitions are loaded and validations pass, the
 /// registry is snapshotted and the writeable handle is dropped. Every
-/// downstream consumer (HookRunner, AdminState, MCP, gRPC, scheduler)
+/// downstream consumer (`HookRunner`, `AdminState`, MCP, gRPC, scheduler)
 /// holds only the `Arc<Registry>` snapshot.
+///
+/// # Errors
+///
+/// Returns an error if the Lua VM can't be created, sandboxing fails, the
+/// `crap` global can't be registered, or any of the `<config_dir>/*.lua`
+/// files fail to load.
 pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>> {
     let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default())?;
 
@@ -32,7 +38,7 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
     let registry = Registry::shared();
 
     setup_package_paths(&lua, config_dir)?;
-    lua_api::register_api(&lua, Arc::clone(&registry), config)?;
+    lua_api::register_api(&lua, &registry, config)?;
 
     // Mark init phase so register-only APIs (`crap.pages.register`,
     // `crap.template_data.register`, …) accept calls. Cleared after
@@ -117,7 +123,7 @@ fn load_def_dir(lua: &Lua, config_dir: &Path, kind: &str) -> Result<usize> {
     }
 }
 
-/// Resolve config-level default_timezone into date fields that don't specify their own.
+/// Resolve config-level `default_timezone` into date fields that don't specify their own.
 fn apply_config_defaults(registry: &SharedRegistry, config: &CrapConfig) {
     if config.admin.default_timezone.is_empty() {
         return;
@@ -138,7 +144,7 @@ fn apply_config_defaults(registry: &SharedRegistry, config: &CrapConfig) {
 }
 
 /// Recursively set `default_timezone` on Date fields with `timezone: true`
-/// that don't already have their own default_timezone.
+/// that don't already have their own `default_timezone`.
 fn apply_default_timezone(fields: &mut [FieldDefinition], default_tz: &str) {
     for field in fields.iter_mut() {
         if field.field_type == FieldType::Date && field.timezone && field.default_timezone.is_none()
@@ -158,7 +164,7 @@ fn setup_package_paths(lua: &Lua, config_dir: &Path) -> Result<()> {
     let config_str = config_dir.to_string_lossy();
     let pkg: Table = lua.globals().get("package")?;
     let current_path: String = pkg.get("path")?;
-    let new_path = format!("{0}/?.lua;{0}/?/init.lua;{1}", config_str, current_path);
+    let new_path = format!("{config_str}/?.lua;{config_str}/?/init.lua;{current_path}");
 
     pkg.set("path", new_path)?;
 
@@ -203,17 +209,17 @@ pub(crate) fn sandbox_lua(lua: &Lua) -> Result<()> {
 /// calls (e.g. the job dispatcher resolving a handler) hit the
 /// cache and don't re-execute the file's top-level. Without this,
 /// a `crap.<x>.define(...)` call at the top of `jobs/foo.lua`
-/// would run again at runtime and trip the InitPhase guard.
+/// would run again at runtime and trip the `InitPhase` guard.
 /// Files that don't `return` cache as `true` (Lua's standard
 /// require-no-return convention).
 pub(crate) fn load_lua_dir(lua: &Lua, dir: &Path, kind: &str) -> Result<usize> {
     let mut entries: Vec<_> = fs::read_dir(dir)
         .with_context(|| format!("Failed to read {} directory: {}", kind, dir.display()))?
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "lua"))
         .collect();
 
-    entries.sort_by_key(|e| e.file_name());
+    entries.sort_by_key(std::fs::DirEntry::file_name);
 
     let pkg: Table = lua.globals().get("package")?;
     let loaded: Table = pkg.get("loaded")?;
@@ -227,8 +233,7 @@ pub(crate) fn load_lua_dir(lua: &Lua, dir: &Path, kind: &str) -> Result<usize> {
         let name = name.to_string_lossy();
         let label = lua
             .app_data_ref::<lua_api::VmLabel>()
-            .map(|l| l.0.clone())
-            .unwrap_or_else(|| "lua".into());
+            .map_or_else(|| "lua".into(), |l| l.0.clone());
         debug!("[lua:{label}] Loading {kind}: {name}");
 
         let code = fs::read_to_string(&path)
@@ -251,7 +256,7 @@ pub(crate) fn load_lua_dir(lua: &Lua, dir: &Path, kind: &str) -> Result<usize> {
         };
         loaded
             .set(module_name.as_str(), cached)
-            .with_context(|| format!("Failed to cache loaded module '{}'", module_name))?;
+            .with_context(|| format!("Failed to cache loaded module '{module_name}'"))?;
     }
 
     Ok(count)

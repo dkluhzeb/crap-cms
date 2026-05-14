@@ -107,7 +107,7 @@ fn parse_operator_filters(
     }
 }
 
-/// Parse a scalar filter operator name into a FilterOp.
+/// Parse a scalar filter operator name into a `FilterOp`.
 fn parse_scalar_op(op_name: &str, val: String) -> Option<query::FilterOp> {
     match op_name {
         "equals" => Some(query::FilterOp::Equals(val)),
@@ -167,6 +167,20 @@ pub(in crate::mcp::tools) fn extract_data_from_args(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use std::collections::HashMap;
 
@@ -194,10 +208,10 @@ mod tests {
                 assert_eq!(f.field, "status");
                 match &f.op {
                     query::FilterOp::In(vals) => assert_eq!(vals, &["draft", "review"]),
-                    other => panic!("Expected In, got {:?}", other),
+                    other => panic!("Expected In, got {other:?}"),
                 }
             }
-            other => panic!("Expected Single, got {:?}", other),
+            other => panic!("Expected Single, got {other:?}"),
         }
     }
 
@@ -215,7 +229,7 @@ mod tests {
                 assert_eq!(f.field, "role");
                 assert!(matches!(&f.op, query::FilterOp::NotIn(_)));
             }
-            other => panic!("Expected Single, got {:?}", other),
+            other => panic!("Expected Single, got {other:?}"),
         }
     }
 
@@ -233,7 +247,7 @@ mod tests {
                 assert_eq!(f.field, "avatar");
                 assert!(matches!(&f.op, query::FilterOp::Exists));
             }
-            other => panic!("Expected Single, got {:?}", other),
+            other => panic!("Expected Single, got {other:?}"),
         }
     }
 
@@ -250,7 +264,7 @@ mod tests {
             query::FilterClause::Single(f) => {
                 assert!(matches!(&f.op, query::FilterOp::NotExists));
             }
-            other => panic!("Expected Single, got {:?}", other),
+            other => panic!("Expected Single, got {other:?}"),
         }
     }
 
@@ -267,7 +281,7 @@ mod tests {
                 assert_eq!(f.field, "title");
                 assert!(matches!(&f.op, query::FilterOp::Equals(v) if v == "hello"));
             }
-            other => panic!("Expected Single, got {:?}", other),
+            other => panic!("Expected Single, got {other:?}"),
         }
     }
 
@@ -281,7 +295,7 @@ mod tests {
                 assert_eq!(f.field, "count");
                 assert!(matches!(&f.op, query::FilterOp::Equals(v) if v == "5"));
             }
-            other => panic!("Expected Single, got {:?}", other),
+            other => panic!("Expected Single, got {other:?}"),
         }
     }
 
@@ -294,7 +308,7 @@ mod tests {
             query::FilterClause::Single(f) => {
                 assert!(matches!(&f.op, query::FilterOp::Equals(v) if v == "1"));
             }
-            other => panic!("Expected Single, got {:?}", other),
+            other => panic!("Expected Single, got {other:?}"),
         }
     }
 
@@ -307,7 +321,7 @@ mod tests {
             query::FilterClause::Single(f) => {
                 assert!(matches!(&f.op, query::FilterOp::Equals(v) if v == "0"));
             }
-            other => panic!("Expected Single, got {:?}", other),
+            other => panic!("Expected Single, got {other:?}"),
         }
     }
 
@@ -335,21 +349,27 @@ mod tests {
             assert_eq!(
                 clauses.len(),
                 1,
-                "operator {} produced wrong clause count",
-                op_name
+                "operator {op_name} produced wrong clause count"
             );
             match &clauses[0] {
-                query::FilterClause::Single(f) => match (&f.op, *expected_variant) {
-                    (query::FilterOp::NotEquals(_), "not_equals") => {}
-                    (query::FilterOp::Contains(_), "contains") => {}
-                    (query::FilterOp::GreaterThan(_), "greater_than") => {}
-                    (query::FilterOp::GreaterThanOrEqual(_), "greater_than_equal") => {}
-                    (query::FilterOp::LessThan(_), "less_than") => {}
-                    (query::FilterOp::LessThanOrEqual(_), "less_than_equal") => {}
-                    (query::FilterOp::Like(_), "like") => {}
-                    _ => panic!("Wrong op variant for operator {}: got {:?}", op_name, f.op),
-                },
-                other => panic!("Expected Single for {}, got {:?}", op_name, other),
+                query::FilterClause::Single(f) => {
+                    let matched = matches!(
+                        (&f.op, *expected_variant),
+                        (query::FilterOp::NotEquals(_), "not_equals")
+                            | (query::FilterOp::Contains(_), "contains")
+                            | (query::FilterOp::GreaterThan(_), "greater_than")
+                            | (query::FilterOp::GreaterThanOrEqual(_), "greater_than_equal")
+                            | (query::FilterOp::LessThan(_), "less_than")
+                            | (query::FilterOp::LessThanOrEqual(_), "less_than_equal")
+                            | (query::FilterOp::Like(_), "like")
+                    );
+                    assert!(
+                        matched,
+                        "Wrong op variant for operator {}: got {:?}",
+                        op_name, f.op
+                    );
+                }
+                other => panic!("Expected Single for {op_name}, got {other:?}"),
             }
         }
     }
@@ -363,7 +383,7 @@ mod tests {
             query::FilterClause::Single(f) => {
                 assert!(matches!(&f.op, query::FilterOp::GreaterThan(v) if v == "18"));
             }
-            other => panic!("Expected Single, got {:?}", other),
+            other => panic!("Expected Single, got {other:?}"),
         }
     }
 
@@ -376,7 +396,7 @@ mod tests {
             query::FilterClause::Single(f) => {
                 assert!(matches!(&f.op, query::FilterOp::Equals(v) if v == "1"));
             }
-            other => panic!("Expected Single, got {:?}", other),
+            other => panic!("Expected Single, got {other:?}"),
         }
     }
 

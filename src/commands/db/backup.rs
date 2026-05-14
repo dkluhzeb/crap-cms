@@ -17,6 +17,11 @@ use crate::{
 };
 
 /// Handle the `backup` subcommand — create a timestamped database snapshot with optional uploads.
+///
+/// # Errors
+///
+/// Returns an error if config loading, pool creation, the DB backup
+/// operation, or upload archiving fails.
 #[cfg(not(tarpaulin_include))]
 pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool) -> Result<()> {
     let config_dir = config_dir
@@ -49,7 +54,7 @@ pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool)
         None
     };
 
-    write_backup_manifest(WriteManifestParams {
+    write_backup_manifest(&WriteManifestParams {
         backup_dir: &backup_dir,
         db_path: &db_path,
         config_dir: &config_dir,
@@ -88,7 +93,7 @@ fn preflight_writable(base: &Path) -> Result<()> {
 fn create_backup_dir(config_dir: &Path, output: Option<PathBuf>) -> Result<PathBuf> {
     let timestamp = Local::now().format("%Y-%m-%dT%H-%M-%S").to_string();
     let backup_base = output.unwrap_or_else(|| config_dir.join("backups"));
-    let backup_dir = backup_base.join(format!("backup-{}", timestamp));
+    let backup_dir = backup_base.join(format!("backup-{timestamp}"));
 
     fs::create_dir_all(&backup_dir).with_context(|| {
         format!(
@@ -114,7 +119,7 @@ fn backup_database(config_dir: &Path, cfg: &CrapConfig, backup_dir: &Path) -> Re
     conn.vacuum_into(&backup_db_path)
         .context("VACUUM INTO failed")?;
 
-    let db_size = fs::metadata(&backup_db_path).map(|m| m.len()).unwrap_or(0);
+    let db_size = fs::metadata(&backup_db_path).map_or(0, |m| m.len());
 
     spin.finish_success(&format!(
         "Database snapshot: {} ({} bytes)",
@@ -161,13 +166,12 @@ fn backup_uploads(config_dir: &Path, backup_dir: &Path) -> Option<u64> {
             size
         }
         Ok(s) => {
-            spin.finish_warning(&format!("tar exited with status {}", s));
+            spin.finish_warning(&format!("tar exited with status {s}"));
             None
         }
         Err(e) => {
             spin.finish_warning(&format!(
-                "tar not found or failed: {}. Skipping uploads backup.",
-                e
+                "tar not found or failed: {e}. Skipping uploads backup."
             ));
             None
         }
@@ -188,7 +192,7 @@ struct WriteManifestParams<'a> {
 
 /// Write the backup manifest.json with metadata about the backup.
 #[cfg(not(tarpaulin_include))]
-fn write_backup_manifest(p: WriteManifestParams<'_>) -> Result<()> {
+fn write_backup_manifest(p: &WriteManifestParams<'_>) -> Result<()> {
     let manifest = BackupManifest {
         crap_version: env!("CARGO_PKG_VERSION").to_string(),
         timestamp: Local::now().to_rfc3339(),

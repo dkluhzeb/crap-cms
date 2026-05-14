@@ -1,7 +1,7 @@
 //! Forgot password handler — generate reset token and queue email.
 
 use tokio::task;
-use tonic::{Request, Response, Status};
+use tonic::{Request, Response};
 use tracing::error;
 
 use crate::{
@@ -19,39 +19,35 @@ use crate::{
 impl ContentService {
     /// Initiate a password reset flow -- generates a token and sends a reset email.
     /// Always returns success to prevent leaking user existence.
-    pub(in crate::api::handlers) async fn forgot_password_impl(
+    pub(in crate::api::handlers) fn forgot_password_impl(
         &self,
         request: Request<content::ForgotPasswordRequest>,
-    ) -> Result<Response<content::ForgotPasswordResponse>, Status> {
+    ) -> Response<content::ForgotPasswordResponse> {
         let ip = request
             .remote_addr()
-            .map(|a| a.ip().to_string())
-            .unwrap_or_else(|| "unknown".to_string());
+            .map_or_else(|| "unknown".to_string(), |a| a.ip().to_string());
         let req = request.into_inner();
+
+        let ok_response = Response::new(content::ForgotPasswordResponse { success: true });
 
         if self.forgot_password_limiter.is_blocked(&req.email)
             || self.ip_forgot_password_limiter.is_blocked(&ip)
         {
-            return Ok(Response::new(content::ForgotPasswordResponse {
-                success: true,
-            }));
+            return ok_response;
         }
 
         self.forgot_password_limiter.record_failure(&req.email);
         self.ip_forgot_password_limiter.record_failure(&ip);
 
-        let ok_response = Response::new(content::ForgotPasswordResponse { success: true });
-
-        let def = match self.get_collection_def(&req.collection) {
-            Ok(d) => d,
-            Err(_) => return Ok(ok_response),
+        let Ok(def) = self.get_collection_def(&req.collection) else {
+            return ok_response;
         };
 
         if !def.is_auth_collection()
             || !def.auth.as_ref().is_some_and(|a| a.forgot_password)
             || def.auth.as_ref().is_some_and(|a| a.disable_local)
         {
-            return Ok(ok_response);
+            return ok_response;
         }
 
         let pool = self.pool.clone();
@@ -76,9 +72,7 @@ impl ContentService {
             });
         });
 
-        Ok(Response::new(content::ForgotPasswordResponse {
-            success: true,
-        }))
+        Response::new(content::ForgotPasswordResponse { success: true })
     }
 }
 
@@ -129,7 +123,7 @@ fn send_reset_email(ctx: &ResetEmailCtx) {
         }
     });
 
-    let reset_url = format!("{}/admin/reset-password?token={}", base_url, token);
+    let reset_url = format!("{base_url}/admin/reset-password?token={token}");
 
     let html = match ctx.email_renderer.render(
         "password_reset",

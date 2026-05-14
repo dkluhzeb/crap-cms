@@ -74,7 +74,7 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
     state: &AdminState,
     slug: &str,
     id: &str,
-    auth_user: &Option<Extension<AuthUser>>,
+    auth_user: Option<&Extension<AuthUser>>,
     force_hard_delete: bool,
     json_response: bool,
 ) -> Response {

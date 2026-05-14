@@ -11,7 +11,7 @@ pub(crate) struct ListUrlContext<'a> {
     pub where_params: &'a str,
 }
 
-impl<'a> ListUrlContext<'a> {
+impl ListUrlContext<'_> {
     /// Build a page-based list URL.
     pub fn page_url(&self, page: i64) -> String {
         build_list_url(
@@ -66,20 +66,19 @@ pub(crate) fn url_decode(s: &str) -> String {
             let hi = iter.next();
             let lo = hi.and_then(|_| iter.next());
 
-            match (
+            if let (Some(h), Some(l)) = (
                 hi.and_then(|c| (c as char).to_digit(16)),
                 lo.and_then(|c| (c as char).to_digit(16)),
             ) {
-                (Some(h), Some(l)) => bytes.push((h * 16 + l) as u8),
-                _ => {
-                    // Malformed %XX — preserve the literal characters
-                    bytes.push(b'%');
-                    if let Some(h) = hi {
-                        bytes.push(h);
-                    }
-                    if let Some(l) = lo {
-                        bytes.push(l);
-                    }
+                bytes.push(u8::try_from(h * 16 + l).unwrap_or(b'?'));
+            } else {
+                // Malformed %XX — preserve the literal characters
+                bytes.push(b'%');
+                if let Some(h) = hi {
+                    bytes.push(h);
+                }
+                if let Some(l) = lo {
+                    bytes.push(l);
                 }
             }
         } else {
@@ -119,11 +118,11 @@ pub(crate) fn build_list_url_with_cursor(
 
     // Cursor pagination doesn't use page numbers — omit page param when a cursor is present
     if cursor.is_none() {
-        parts.push(format!("page={}", page));
+        parts.push(format!("page={page}"));
     }
 
     if let Some(pp) = per_page {
-        parts.push(format!("per_page={}", pp));
+        parts.push(format!("per_page={pp}"));
     }
 
     if let Some(s) = search {
@@ -155,7 +154,7 @@ fn url_encode(s: &str) -> String {
             if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
                 format!("{}", b as char)
             } else {
-                format!("%{:02X}", b)
+                format!("%{b:02X}")
             }
         })
         .collect()

@@ -81,19 +81,17 @@ pub(in crate::api::handlers) fn prost_struct_to_json_map(s: &Struct) -> HashMap<
 /// Convert a `Value` back to a `serde_json::Value`.
 pub(in crate::api::handlers) fn prost_value_to_json(v: &Value) -> JsonValue {
     match &v.kind {
-        Some(Kind::NullValue(_)) => JsonValue::Null,
         Some(Kind::BoolValue(b)) => JsonValue::Bool(*b),
-        Some(Kind::NumberValue(n)) => {
-            Number::from_f64(*n)
-                .map(JsonValue::Number)
-                .unwrap_or_else(|| {
-                    warn!(
-                        "Non-finite float {} in gRPC response, converting to null",
-                        n
-                    );
-                    JsonValue::Null
-                })
-        }
+        Some(Kind::NumberValue(n)) => Number::from_f64(*n).map_or_else(
+            || {
+                warn!(
+                    "Non-finite float {} in gRPC response, converting to null",
+                    n
+                );
+                JsonValue::Null
+            },
+            JsonValue::Number,
+        ),
         Some(Kind::StringValue(s)) => JsonValue::String(s.clone()),
         Some(Kind::ListValue(list)) => {
             JsonValue::Array(list.values.iter().map(prost_value_to_json).collect())
@@ -106,7 +104,7 @@ pub(in crate::api::handlers) fn prost_value_to_json(v: &Value) -> JsonValue {
                 .collect();
             JsonValue::Object(obj)
         }
-        None => JsonValue::Null,
+        Some(Kind::NullValue(_)) | None => JsonValue::Null,
     }
 }
 

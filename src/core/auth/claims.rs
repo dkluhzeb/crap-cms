@@ -70,6 +70,7 @@ impl ClaimsBuilder {
     }
 
     /// Set the user's email address.
+    #[must_use]
     pub fn email(mut self, email: impl Into<String>) -> Self {
         self.email = Some(email.into());
 
@@ -77,6 +78,7 @@ impl ClaimsBuilder {
     }
 
     /// Set the expiration time (Unix timestamp).
+    #[must_use]
     pub fn exp(mut self, exp: u64) -> Self {
         self.exp = Some(exp);
 
@@ -88,6 +90,7 @@ impl ClaimsBuilder {
     /// Login paths should pass `now()`; token refresh should forward the
     /// previous token's `auth_time` so the session's absolute max age is
     /// measured from the original login, not from each refresh.
+    #[must_use]
     pub fn auth_time(mut self, at: u64) -> Self {
         self.auth_time = Some(at);
 
@@ -95,6 +98,7 @@ impl ClaimsBuilder {
     }
 
     /// Set the session version (incremented on password change).
+    #[must_use]
     pub fn session_version(mut self, version: u64) -> Self {
         self.session_version = version;
 
@@ -103,16 +107,16 @@ impl ClaimsBuilder {
 
     /// Build the final `Claims` instance.
     ///
-    /// Returns an error if `email` or `exp` have not been set.
+    /// # Errors
+    ///
+    /// Returns an error if `email` or `exp` have not been set on the builder.
     pub fn build(self) -> Result<Claims> {
-        let email = match self.email {
-            Some(e) => e,
-            None => bail!("ClaimsBuilder: email is required"),
+        let Some(email) = self.email else {
+            bail!("ClaimsBuilder: email is required");
         };
 
-        let exp = match self.exp {
-            Some(e) => e,
-            None => bail!("ClaimsBuilder: exp is required"),
+        let Some(exp) = self.exp else {
+            bail!("ClaimsBuilder: exp is required");
         };
 
         Ok(Claims {
@@ -120,7 +124,7 @@ impl ClaimsBuilder {
             collection: self.collection,
             email,
             exp,
-            iat: Some(Utc::now().timestamp().max(0) as u64),
+            iat: Some(Utc::now().timestamp().max(0).cast_unsigned()),
             auth_time: self.auth_time,
             session_version: self.session_version,
         })
@@ -128,6 +132,20 @@ impl ClaimsBuilder {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod builder_tests {
     use super::*;
 
@@ -169,8 +187,7 @@ mod builder_tests {
         let err = ClaimsBuilder::new("id", "col").exp(1).build().unwrap_err();
         assert!(
             err.to_string().contains("email is required"),
-            "unexpected error: {}",
-            err
+            "unexpected error: {err}"
         );
     }
 
@@ -186,12 +203,11 @@ mod builder_tests {
             .unwrap();
 
         let iat = claims.iat.expect("iat must be Some");
-        assert!(iat > 0, "iat must be non-zero, got {}", iat);
+        assert!(iat > 0, "iat must be non-zero, got {iat}");
         // Sanity: iat should be a reasonable Unix timestamp (after 2020-01-01)
         assert!(
             iat > 1_577_836_800,
-            "iat should be after 2020-01-01, got {}",
-            iat
+            "iat should be after 2020-01-01, got {iat}"
         );
     }
 
@@ -204,8 +220,7 @@ mod builder_tests {
             .unwrap_err();
         assert!(
             err.to_string().contains("exp is required"),
-            "unexpected error: {}",
-            err
+            "unexpected error: {err}"
         );
     }
 

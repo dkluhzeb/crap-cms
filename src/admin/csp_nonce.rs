@@ -30,6 +30,7 @@ impl CspNonce {
     }
 
     /// Raw nonce string — embed in CSP header and in `nonce="..."` attributes.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -44,6 +45,7 @@ task_local! {
 /// Read the current task's nonce, or empty string if called outside a request
 /// scope (tests, background tasks). Used by `CrapMeta::from_state` to populate
 /// `crap.csp_nonce` without threading the nonce through every handler.
+#[must_use]
 pub fn current_nonce_or_empty() -> String {
     CSP_NONCE
         .try_with(|n| n.as_str().to_string())

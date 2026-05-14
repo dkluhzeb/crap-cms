@@ -3,6 +3,20 @@
 //! Covers creating, reading, and updating documents with nested join data
 //! (arrays, blocks, groups) through the gRPC API surface.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -73,7 +87,7 @@ fn get_proto_value(doc: &content::Document, field: &str) -> Option<Value> {
         .and_then(|s| s.fields.get(field).cloned())
 }
 
-/// Extract the list of Values from a ListValue field.
+/// Extract the list of Values from a `ListValue` field.
 fn get_list_items(doc: &content::Document, field: &str) -> Vec<Value> {
     match get_proto_value(doc, field) {
         Some(Value {
@@ -196,7 +210,10 @@ fn setup_service_with_locale(
     let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
-    config.locale.locales = locales.iter().map(|s| s.to_string()).collect();
+    config.locale.locales = locales
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
     config.locale.default_locale = locales.first().unwrap_or(&"en").to_string();
     config.locale.fallback = true;
 

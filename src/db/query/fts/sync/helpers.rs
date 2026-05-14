@@ -6,7 +6,7 @@ use crate::db::{DbConnection, DbValue};
 /// Get column names from the FTS table (excludes `id`).
 ///
 /// Returns `None` if the FTS table doesn't exist or has no columns.
-/// For PostgreSQL, the FTS table has a single `tsv` column — this returns `None`
+/// For `PostgreSQL`, the FTS table has a single `tsv` column — this returns `None`
 /// so that callers use the Postgres-specific upsert path instead.
 pub(super) fn get_fts_table_columns(
     conn: &dyn DbConnection,
@@ -16,39 +16,35 @@ pub(super) fn get_fts_table_columns(
         return None;
     }
 
-    match conn.kind() {
-        "postgres" => {
-            let p1 = conn.placeholder(1);
-            let sql = format!(
-                "SELECT column_name FROM information_schema.columns \
-                 WHERE table_schema='public' AND table_name={} AND column_name != 'id'",
-                p1
-            );
+    if conn.kind() == "postgres" {
+        let p1 = conn.placeholder(1);
+        let sql = format!(
+            "SELECT column_name FROM information_schema.columns \
+             WHERE table_schema='public' AND table_name={p1} AND column_name != 'id'"
+        );
 
-            let rows = conn
-                .query_all(&sql, &[DbValue::Text(fts_table.to_string())])
-                .ok()?;
+        let rows = conn
+            .query_all(&sql, &[DbValue::Text(fts_table.to_string())])
+            .ok()?;
 
-            let cols: Vec<String> = rows
-                .into_iter()
-                .filter_map(|row| row.opt_text_at(0))
-                .collect();
+        let cols: Vec<String> = rows
+            .into_iter()
+            .filter_map(|row| row.opt_text_at(0))
+            .collect();
 
-            if cols.is_empty() { None } else { Some(cols) }
-        }
-        _ => {
-            // Use PRAGMA table_info (not table_xinfo) — table_xinfo includes hidden
-            // virtual columns like the table name and rank which aren't real data columns.
-            let rows = conn
-                .query_all(&format!("PRAGMA table_info({})", fts_table), &[])
-                .ok()?;
+        if cols.is_empty() { None } else { Some(cols) }
+    } else {
+        // Use PRAGMA table_info (not table_xinfo) — table_xinfo includes hidden
+        // virtual columns like the table name and rank which aren't real data columns.
+        let rows = conn
+            .query_all(&format!("PRAGMA table_info({fts_table})"), &[])
+            .ok()?;
 
-            let cols: Vec<String> = rows
-                .into_iter()
-                .filter_map(|row| row.text_at(1).filter(|n| *n != "id").map(str::to_string))
-                .collect();
+        let cols: Vec<String> = rows
+            .into_iter()
+            .filter_map(|row| row.text_at(1).filter(|n| *n != "id").map(str::to_string))
+            .collect();
 
-            if cols.is_empty() { None } else { Some(cols) }
-        }
+        if cols.is_empty() { None } else { Some(cols) }
     }
 }

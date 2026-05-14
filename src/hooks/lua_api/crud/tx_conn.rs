@@ -1,11 +1,11 @@
-//! Helper for retrieving the active transaction connection from Lua app_data.
+//! Helper for retrieving the active transaction connection from Lua `app_data`.
 //! Used by every Lua CRUD closure to access the shared transaction.
 
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult};
 
 use crate::{db::DbConnection, hooks::lifecycle::TxContext};
 
-/// Get the active transaction connection from Lua app_data.
+/// Get the active transaction connection from Lua `app_data`.
 /// Returns an error if called outside of `run_hooks_with_conn`.
 ///
 /// The returned reference is valid for the duration of the current hook call.
@@ -29,6 +29,20 @@ pub(crate) fn get_tx_conn(lua: &Lua) -> LuaResult<&dyn DbConnection> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::*;
     use mlua::Lua;
@@ -36,9 +50,8 @@ mod tests {
     #[test]
     fn test_get_tx_conn_without_context() {
         let lua = Lua::new();
-        let err = match get_tx_conn(&lua) {
-            Ok(_) => panic!("expected error when called outside hook context"),
-            Err(e) => e,
+        let Err(err) = get_tx_conn(&lua) else {
+            panic!("expected error when called outside hook context");
         };
         assert!(err.to_string().contains("only available inside hooks"));
     }

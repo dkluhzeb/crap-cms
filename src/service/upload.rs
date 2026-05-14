@@ -41,10 +41,15 @@ pub struct UploadUpdateResult {
 ///
 /// Full lifecycle: process file -> inject metadata -> create document -> commit guard -> enqueue conversions.
 /// The caller is responsible for multipart parsing and auth — this function takes the parsed file and form data.
+///
+/// # Errors
+///
+/// Returns a `ValidationError` if file processing fails, or any service-layer
+/// error from the underlying `create_document` (access denied, validation, etc.).
 pub fn create_upload(
     ctx: &ServiceContext,
     storage: &SharedStorage,
-    file: UploadedFile,
+    file: &UploadedFile,
     mut form_data: HashMap<String, String>,
     ui_locale: Option<String>,
     upload_max_file_size: u64,
@@ -59,7 +64,7 @@ pub fn create_upload(
     let (processed, mut guard) = process_upload(
         file,
         &upload_config,
-        storage.clone(),
+        storage,
         ctx.slug,
         upload_max_file_size,
     )
@@ -118,6 +123,11 @@ pub struct UpdateUploadInput<'a> {
 ///
 /// Full lifecycle: load old doc -> process file -> inject metadata -> update document ->
 /// commit guard -> delete old files -> enqueue conversions.
+///
+/// # Errors
+///
+/// Returns a `ValidationError` if file processing fails, or any service-layer
+/// error from the underlying `update_document` (access denied, validation, etc.).
 pub fn update_upload(
     ctx: &ServiceContext,
     input: UpdateUploadInput<'_>,
@@ -149,21 +159,17 @@ pub fn update_upload(
     if let Some(f) = file
         && let Some(upload_config) = def.upload.clone()
     {
-        let (processed, guard) = process_upload(
-            f,
-            &upload_config,
-            storage.clone(),
-            ctx.slug,
-            upload_max_file_size,
-        )
-        .map_err(|e| {
-            ServiceError::Validation(ValidationError::new(vec![FieldError::new(
-                "_file",
-                e.to_string(),
-            )]))
-        })?;
+        let (processed, guard) =
+            process_upload(&f, &upload_config, storage, ctx.slug, upload_max_file_size).map_err(
+                |e| {
+                    ServiceError::Validation(ValidationError::new(vec![FieldError::new(
+                        "_file",
+                        e.to_string(),
+                    )]))
+                },
+            )?;
 
-        queued_conversions = processed.queued_conversions.clone();
+        queued_conversions.clone_from(&processed.queued_conversions);
         upload_guard = Some(guard);
         inject_upload_metadata(&mut form_data, &processed);
     }

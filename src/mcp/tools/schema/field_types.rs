@@ -219,7 +219,7 @@ mod tests {
             "tabs",
             "join",
         ] {
-            assert!(names.contains(expected), "Missing field type: {}", expected);
+            assert!(names.contains(expected), "Missing field type: {expected}");
         }
 
         // Verify each entry has all required keys

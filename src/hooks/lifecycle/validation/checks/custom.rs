@@ -17,13 +17,11 @@ pub(crate) fn check_custom_validate(
     table: &str,
     errors: &mut Vec<FieldError>,
 ) {
-    let validate_ref = match field.validate {
-        Some(ref v) => v,
-        None => return,
+    let Some(validate_ref) = field.validate.as_ref() else {
+        return;
     };
-    let val = match value {
-        Some(v) => v,
-        None => return,
+    let Some(val) = value else {
+        return;
     };
 
     match run_validate_function_inner(lua, validate_ref, val, data, table, &field.name) {
@@ -37,7 +35,7 @@ pub(crate) fn check_custom_validate(
             errors.push(
                 FieldError::with_key(
                     data_key.to_owned(),
-                    format!("Validation failed (internal error in '{}')", validate_ref),
+                    format!("Validation failed (internal error in '{validate_ref}')"),
                     "validation.custom_error",
                 )
                 .with_param("field", field.name.clone()),

@@ -118,8 +118,7 @@ mod tests {
         let result = call_display_condition_with_lua(&lua, "hooks.boom", &json!({}));
         assert!(
             matches!(result, Some(DisplayConditionResult::Bool(false))),
-            "error must hide field (fail closed), got {:?}",
-            result
+            "error must hide field (fail closed), got {result:?}"
         );
     }
 
@@ -134,8 +133,7 @@ mod tests {
         let result = call_display_condition_with_lua(&lua, "hooks.num", &json!({}));
         assert!(
             matches!(result, Some(DisplayConditionResult::Bool(false))),
-            "unexpected type must hide field (fail closed), got {:?}",
-            result
+            "unexpected type must hide field (fail closed), got {result:?}"
         );
     }
 

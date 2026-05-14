@@ -36,14 +36,14 @@ pub(super) fn to_delta_map(
 
 /// Apply ref count deltas to target collection tables.
 ///
-/// Deltas are batched per (collection, delta_value) so that all targets
+/// Deltas are batched per (collection, `delta_value`) so that all targets
 /// sharing the same collection and delta are updated in a single `UPDATE`
 /// with an `IN` clause. This reduces round-trips from O(targets) to
-/// O(distinct collection×delta_sign pairs) — typically 2-4 UPDATEs instead
+/// O(distinct `collection×delta_sign` pairs) — typically 2-4 UPDATEs instead
 /// of 5-8+ for a write touching multiple relationships.
 ///
 /// Postgres takes a row-level write lock on each updated row implicitly
-/// (READ COMMITTED default isolation), and SQLite serializes via the
+/// (READ COMMITTED default isolation), and `SQLite` serializes via the
 /// `IMMEDIATE` transaction held by the caller.
 pub(super) fn apply_deltas(
     conn: &dyn DbConnection,
@@ -67,17 +67,14 @@ pub(super) fn apply_deltas(
         let placeholders: Vec<String> = (1..=ids.len()).map(|i| conn.placeholder(i)).collect();
         let in_clause = placeholders.join(", ");
 
-        let clamped = conn.greatest_expr("0", &format!("_ref_count + ({})", delta));
+        let clamped = conn.greatest_expr("0", &format!("_ref_count + ({delta})"));
         let sql =
             format!("UPDATE \"{collection}\" SET _ref_count = {clamped} WHERE id IN ({in_clause})");
 
         let params: Vec<DbValue> = ids.iter().map(|id| DbValue::Text(id.to_string())).collect();
 
         let affected = conn.execute(&sql, &params).with_context(|| {
-            format!(
-                "Failed to batch-update _ref_count on {} by {}",
-                collection, delta
-            )
+            format!("Failed to batch-update _ref_count on {collection} by {delta}")
         })?;
 
         // Increment against vanished targets is a hard error: the caller is
@@ -86,10 +83,8 @@ pub(super) fn apply_deltas(
         if *delta > 0 && affected < ids.len() {
             let missing = find_missing_ids(conn, collection, ids);
             bail!(
-                "cannot reference {}/{}: target no longer exists \
-                 (concurrently hard-deleted)",
-                collection,
-                missing
+                "cannot reference {collection}/{missing}: target no longer exists \
+                 (concurrently hard-deleted)"
             );
         }
 

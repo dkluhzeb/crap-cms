@@ -35,6 +35,11 @@ struct CollectionTemplateContext<'a> {
 /// Generate a collection Lua file at `<config_dir>/collections/<slug>.lua`.
 ///
 /// Accepts pre-parsed field stubs or `None` for defaults.
+///
+/// # Errors
+///
+/// Returns an error if the slug is invalid, the file already exists without
+/// `--force`, or writing the file fails.
 pub fn make_collection(
     config_dir: &Path,
     slug: &str,
@@ -46,7 +51,7 @@ pub fn make_collection(
     let collections_dir = paths::collections_dir(config_dir);
     fs::create_dir_all(&collections_dir).context("Failed to create collections/ directory")?;
 
-    let file_path = collections_dir.join(format!("{}.lua", slug));
+    let file_path = collections_dir.join(format!("{slug}.lua"));
 
     refuse_file_overwrite(&file_path, opts.force)?;
 
@@ -60,7 +65,7 @@ pub fn make_collection(
     Ok(())
 }
 
-/// Pick the first scalar field for use_as_title / list_searchable_fields.
+/// Pick the first scalar field for `use_as_title` / `list_searchable_fields`.
 fn title_field<'a>(fields: &'a [FieldStub], opts: &CollectionOptions) -> Option<&'a str> {
     if opts.auth {
         return Some("email");
@@ -101,7 +106,7 @@ fn render_collection_lua(
 
     let mut fields_lua = String::new();
     for field in fields {
-        write_field_lua(&mut fields_lua, field, 8);
+        write_field_lua(&mut fields_lua, field, 2);
     }
 
     render(
@@ -128,7 +133,7 @@ mod tests {
     use super::*;
     use crate::scaffold::collection::parser::parse_fields_shorthand;
 
-    /// Helper: parse shorthand and call make_collection with the result.
+    /// Helper: parse shorthand and call `make_collection` with the result.
     fn make_from_shorthand(
         config_dir: &Path,
         slug: &str,

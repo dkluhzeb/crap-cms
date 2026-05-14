@@ -16,6 +16,12 @@ use crate::{
 use super::{create, hooks, queries};
 
 /// Run a bench subcommand.
+///
+/// # Errors
+///
+/// Returns an error if the config can't be loaded, the Lua VM fails to
+/// initialize, the database pool can't be created, schema sync fails, or
+/// the dispatched subcommand itself fails.
 pub fn run(config_dir: &Path, action: BenchAction) -> Result<()> {
     let config_dir = config_dir
         .canonicalize()

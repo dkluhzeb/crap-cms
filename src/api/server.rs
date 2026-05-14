@@ -47,12 +47,13 @@ pub struct GrpcStartParams {
     /// one is created.
     pub invalidation_transport: Option<SharedInvalidationTransport>,
     /// Optional process-wide populate singleflight — when `None`, the
-    /// ContentService creates a fresh one (dedup only within its own process).
+    /// `ContentService` creates a fresh one (dedup only within its own process).
     pub populate_singleflight: Option<SharedPopulateSingleflight>,
 }
 
 impl GrpcStartParams {
     /// Create a builder for `GrpcStartParams`.
+    #[must_use]
     pub fn builder() -> GrpcStartParamsBuilder {
         GrpcStartParamsBuilder::new()
     }
@@ -102,109 +103,132 @@ impl GrpcStartParamsBuilder {
         }
     }
 
+    #[must_use]
     pub fn pool(mut self, pool: DbPool) -> Self {
         self.pool = Some(pool);
 
         self
     }
 
+    #[must_use]
     pub fn registry(mut self, registry: Arc<Registry>) -> Self {
         self.registry = Some(registry);
 
         self
     }
 
+    #[must_use]
     pub fn hook_runner(mut self, hook_runner: HookRunner) -> Self {
         self.hook_runner = Some(hook_runner);
 
         self
     }
 
+    #[must_use]
     pub fn config(mut self, config: CrapConfig) -> Self {
         self.config = Some(config);
 
         self
     }
 
+    #[must_use]
     pub fn config_dir(mut self, config_dir: PathBuf) -> Self {
         self.config_dir = Some(config_dir);
 
         self
     }
 
+    #[must_use]
     pub fn event_transport(mut self, transport: Option<SharedEventTransport>) -> Self {
         self.event_transport = transport;
 
         self
     }
 
+    #[must_use]
     pub fn login_limiter(mut self, limiter: Arc<LoginRateLimiter>) -> Self {
         self.login_limiter = Some(limiter);
 
         self
     }
 
+    #[must_use]
     pub fn ip_login_limiter(mut self, limiter: Arc<LoginRateLimiter>) -> Self {
         self.ip_login_limiter = Some(limiter);
 
         self
     }
 
+    #[must_use]
     pub fn forgot_password_limiter(mut self, limiter: Arc<LoginRateLimiter>) -> Self {
         self.forgot_password_limiter = Some(limiter);
 
         self
     }
 
+    #[must_use]
     pub fn ip_forgot_password_limiter(mut self, limiter: Arc<LoginRateLimiter>) -> Self {
         self.ip_forgot_password_limiter = Some(limiter);
 
         self
     }
 
+    #[must_use]
     pub fn storage(mut self, storage: SharedStorage) -> Self {
         self.storage = Some(storage);
 
         self
     }
 
+    #[must_use]
     pub fn cache(mut self, cache: SharedCache) -> Self {
         self.cache = Some(cache);
 
         self
     }
 
+    #[must_use]
     pub fn token_provider(mut self, token_provider: SharedTokenProvider) -> Self {
         self.token_provider = Some(token_provider);
 
         self
     }
 
+    #[must_use]
     pub fn password_provider(mut self, password_provider: SharedPasswordProvider) -> Self {
         self.password_provider = Some(password_provider);
 
         self
     }
 
+    #[must_use]
     pub fn rate_limit_backend(mut self, backend: SharedRateLimitBackend) -> Self {
         self.rate_limit_backend = Some(backend);
 
         self
     }
 
+    #[must_use]
     pub fn invalidation_transport(mut self, transport: SharedInvalidationTransport) -> Self {
         self.invalidation_transport = Some(transport);
 
         self
     }
 
-    /// Process-wide populate singleflight shared with the HookRunner.
+    /// Process-wide populate singleflight shared with the `HookRunner`.
+    #[must_use]
     pub fn populate_singleflight(mut self, sf: SharedPopulateSingleflight) -> Self {
         self.populate_singleflight = Some(sf);
 
         self
     }
 
+    /// # Panics
+    ///
+    /// Panics if any required field (`pool`, `registry`, `hook_runner`,
+    /// `config`, `config_dir`, `login_limiter`, `ip_login_limiter`, etc.)
+    /// was not set on the builder.
+    #[must_use]
     pub fn build(self) -> GrpcStartParams {
         GrpcStartParams {
             pool: self.pool.expect("pool is required"),
@@ -238,6 +262,11 @@ impl GrpcStartParamsBuilder {
 
 /// Start the gRPC server. Reflection is enabled by default but can be
 /// disabled via `config.server.grpc_reflection`.
+///
+/// # Errors
+///
+/// Returns an error if the address can't be parsed, the listener can't
+/// bind, or the server hits an unrecoverable runtime error.
 #[cfg(not(tarpaulin_include))]
 pub async fn start(addr: &str, params: GrpcStartParams, shutdown: CancellationToken) -> Result<()> {
     let addr = addr.parse()?;
@@ -249,7 +278,10 @@ pub async fn start(addr: &str, params: GrpcStartParams, shutdown: CancellationTo
     let grpc_rate_window = params.config.server.grpc_rate_limit_window;
     let grpc_reflection = params.config.server.grpc_reflection;
     let grpc_timeout = params.config.server.grpc_timeout;
-    let grpc_max_msg = params.config.server.grpc_max_message_size as usize;
+    // 32-bit overflow path falls back to gRPC's default (4 MiB) rather than
+    // usize::MAX — an effectively-unbounded message size would be a DoS vector.
+    let grpc_max_msg =
+        usize::try_from(params.config.server.grpc_max_message_size).unwrap_or(4 * 1024 * 1024);
     let cors_layer = params.config.cors.build_layer();
 
     let mut deps_builder = ContentServiceDeps::builder()
@@ -351,7 +383,7 @@ fn spawn_periodic_cache_clear(cache: SharedCache, interval_secs: u64, shutdown: 
                         warn!("Periodic cache clear failed: {:#}", e);
                     }
                 },
-                _ = shutdown.cancelled() => break,
+                () = shutdown.cancelled() => break,
             }
         }
     });

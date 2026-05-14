@@ -26,6 +26,7 @@ impl Default for PaginationConfig {
 
 impl PaginationConfig {
     /// Whether cursor-based pagination is active.
+    #[must_use]
     pub fn is_cursor(&self) -> bool {
         matches!(self.mode, PaginationMode::Cursor)
     }

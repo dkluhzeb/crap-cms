@@ -18,6 +18,7 @@ use crate::{
     admin::{
         AdminState, Translations,
         context::field::{FieldContext, RichtextField},
+        custom_pages::CustomPageRegistry,
         handlers::field_context::{builder::build_field_contexts, enrich},
     },
     config::{CrapConfig, EmailConfig, UploadConfig},
@@ -110,7 +111,7 @@ pub(super) fn enrich_richtext_value(ctx: &mut Value, reg: &Registry) {
     *ctx = serde_json::to_value(typed).expect("RichtextField serializes infallibly");
 }
 
-/// Build a minimal [`AdminState`] backed by an in-memory SQLite pool. Used by
+/// Build a minimal [`AdminState`] backed by an in-memory `SQLite` pool. Used by
 /// tests that exercise DB-touching enrichment paths.
 pub(super) fn make_test_state() -> AdminState {
     let tmp = tempfile::tempdir().unwrap();
@@ -157,6 +158,6 @@ pub(super) fn make_test_state() -> AdminState {
         invalidation_transport: Arc::new(InProcessInvalidationBus::new()),
         populate_singleflight: Arc::new(Singleflight::new()),
         cache: None,
-        custom_pages: Default::default(),
+        custom_pages: CustomPageRegistry::default(),
     }
 }

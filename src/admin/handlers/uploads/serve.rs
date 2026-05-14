@@ -73,7 +73,7 @@ async fn check_upload_access(
 
     let allowed = matches!(
         access,
-        Ok(Ok(AccessResult::Allowed)) | Ok(Ok(AccessResult::Constrained(_)))
+        Ok(Ok(AccessResult::Allowed | AccessResult::Constrained(_)))
     );
 
     if allowed {
@@ -170,7 +170,7 @@ async fn serve_file(
 
     // Content negotiation: try serving a more efficient format variant
     for (variant_name, variant_mime) in negotiate_variants(filename, accepts_avif, accepts_webp) {
-        let variant_key = format!("{}/{}", collection_slug, variant_name);
+        let variant_key = format!("{collection_slug}/{variant_name}");
 
         if let Some(local_path) = storage.local_path(&variant_key) {
             if local_path.exists() {
@@ -185,7 +185,7 @@ async fn serve_file(
     }
 
     // Serve the original file
-    let original_key = format!("{}/{}", collection_slug, filename);
+    let original_key = format!("{collection_slug}/{filename}");
 
     let requested_mime = mime_guess::from_path(filename)
         .first_or_octet_stream()
@@ -230,15 +230,15 @@ fn negotiate_variants(
 
     let mut variants = Vec::new();
     if accepts_avif {
-        variants.push((format!("{}.avif", stem), "image/avif"));
+        variants.push((format!("{stem}.avif"), "image/avif"));
     }
     if accepts_webp {
-        variants.push((format!("{}.webp", stem), "image/webp"));
+        variants.push((format!("{stem}.webp"), "image/webp"));
     }
     variants
 }
 
-/// Conditional headers extracted from the original request, forwarded to ServeFile.
+/// Conditional headers extracted from the original request, forwarded to `ServeFile`.
 struct ConditionalHeaders {
     range: Option<HeaderValue>,
     if_none_match: Option<HeaderValue>,
@@ -313,7 +313,7 @@ fn apply_response_headers(response: &mut Response, cache_control: &str, mime: &s
 }
 
 /// Serve a file via `tower_http::services::ServeFile` with custom headers.
-/// Provides Range, ETag, Last-Modified, and conditional GET support for free.
+/// Provides Range, `ETag`, Last-Modified, and conditional GET support for free.
 async fn serve_with_headers(
     path: &path::Path,
     request: Request<Body>,

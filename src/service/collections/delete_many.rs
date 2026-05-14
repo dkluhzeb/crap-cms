@@ -53,9 +53,14 @@ impl Default for DeleteManyOptions {
 ///
 /// **Conn mode** (`ctx.conn` set, Lua path): finds all matching docs on the existing
 /// connection and deletes them one by one.
+///
+/// # Errors
+///
+/// Returns service-layer errors per-document or a backend error if the
+/// find/delete queries fail.
 pub fn delete_many(
     ctx: &ServiceContext,
-    filters: Vec<FilterClause>,
+    filters: &[FilterClause],
     locale_config: &LocaleConfig,
     opts: &DeleteManyOptions,
 ) -> Result<DeleteManyResult> {
@@ -69,7 +74,7 @@ pub fn delete_many(
 /// Pool-based bulk delete: batched transactions with event publishing after each commit.
 fn delete_many_pool(
     ctx: &ServiceContext,
-    filters: Vec<FilterClause>,
+    filters: &[FilterClause],
     locale_config: &LocaleConfig,
     opts: &DeleteManyOptions,
 ) -> Result<DeleteManyResult> {
@@ -90,7 +95,7 @@ fn delete_many_pool(
             .context("Start delete transaction")?;
 
         let batch_query = FindQuery::builder()
-            .filters(filters.clone())
+            .filters(filters.to_vec())
             .limit(Some(BATCH_SIZE))
             .include_deleted(opts.include_deleted)
             .build();
@@ -166,7 +171,9 @@ fn delete_many_pool(
         // If nothing was deleted in this batch, all remaining matches are
         // referenced — stop to avoid an infinite loop.
         if batch_deleted == 0 {
-            skipped_count = batch_len as i64;
+            // batch_len comes from `docs.len()`; saturate at i64::MAX for the
+            // unreachable case so we still break out of the loop.
+            skipped_count = i64::try_from(batch_len).unwrap_or(i64::MAX);
             break;
         }
     }
@@ -183,14 +190,14 @@ fn delete_many_pool(
 /// Conn-based bulk delete: uses existing connection (Lua CRUD path).
 fn delete_many_conn(
     ctx: &ServiceContext,
-    filters: Vec<FilterClause>,
+    filters: &[FilterClause],
     locale_config: &LocaleConfig,
     opts: &DeleteManyOptions,
 ) -> Result<DeleteManyResult> {
     let def = ctx.collection_def()?;
 
     let find_query = FindQuery::builder()
-        .filters(filters)
+        .filters(filters.to_vec())
         .include_deleted(opts.include_deleted)
         .build();
 

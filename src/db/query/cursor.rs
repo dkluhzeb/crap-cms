@@ -24,6 +24,7 @@ pub enum SortDirection {
 
 impl SortDirection {
     /// SQL keyword for this direction.
+    #[must_use]
     pub fn as_sql(&self) -> &'static str {
         match self {
             Self::Asc => "ASC",
@@ -32,6 +33,7 @@ impl SortDirection {
     }
 
     /// Return the opposite direction.
+    #[must_use]
     pub fn flip(&self) -> Self {
         match self {
             Self::Asc => Self::Desc,
@@ -159,6 +161,11 @@ pub struct CursorData {
 
 impl CursorData {
     /// Encode cursor data to a base64url string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if JSON serialization fails (should not happen with
+    /// the well-formed `CursorData` shape).
     pub fn encode(&self) -> Result<String> {
         let json = serde_json::to_string(self)?;
 
@@ -166,14 +173,18 @@ impl CursorData {
     }
 
     /// Decode a base64url string into cursor data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input is not valid base64url, not valid
+    /// UTF-8 JSON, or missing required fields (`sort_col`, `id`).
     pub fn decode(s: &str) -> Result<Self> {
         let bytes = B64
             .decode(s.as_bytes())
-            .map_err(|e| anyhow!("Invalid cursor encoding: {}", e))?;
-        let json_str =
-            str::from_utf8(&bytes).map_err(|e| anyhow!("Invalid cursor UTF-8: {}", e))?;
+            .map_err(|e| anyhow!("Invalid cursor encoding: {e}"))?;
+        let json_str = str::from_utf8(&bytes).map_err(|e| anyhow!("Invalid cursor UTF-8: {e}"))?;
         let data: CursorData =
-            serde_json::from_str(json_str).map_err(|e| anyhow!("Invalid cursor JSON: {}", e))?;
+            serde_json::from_str(json_str).map_err(|e| anyhow!("Invalid cursor JSON: {e}"))?;
 
         if data.sort_col.is_empty() || data.id.is_empty() {
             bail!("Cursor missing required fields");
@@ -336,7 +347,7 @@ mod tests {
     fn build_cursors_both_when_results_exist() {
         let docs: Vec<Document> = (0..3)
             .map(|i| {
-                let mut d = Document::new(format!("id{}", i));
+                let mut d = Document::new(format!("id{i}"));
                 d.fields
                     .insert("title".to_string(), json!(format!("Post {}", i)));
                 d.created_at = Some(format!("2024-0{}-01", i + 1));

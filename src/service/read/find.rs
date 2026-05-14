@@ -14,8 +14,13 @@ type Result<T> = std::result::Result<T, ServiceError>;
 /// Execute a paginated find query with the full read lifecycle.
 ///
 /// Steps: validate user filters -> access check -> inject system filters ->
-/// before_read -> find + count -> post-process -> build pagination.
+/// `before_read` -> find + count -> post-process -> build pagination.
 /// Returns `PaginatedResult<Document>` with docs, total, and computed pagination metadata.
+///
+/// # Errors
+///
+/// Returns service-layer errors (access denied, invalid filter, hook errors)
+/// or a backend error if the find/count queries fail.
 pub fn find_documents(
     ctx: &ServiceContext,
     input: &FindDocumentsInput,
@@ -95,8 +100,10 @@ pub fn find_documents(
     let limit = fq.limit.unwrap_or(total);
 
     // Detect whether more pages exist via overfetch, then trim the extra doc.
+    // Saturate doc count for the unreachable case so the > check still works.
+    let docs_count = i64::try_from(docs.len()).unwrap_or(i64::MAX);
     let cursor_has_more = if overfetch {
-        if (docs.len() as i64) > limit {
+        if docs_count > limit {
             if fq.before_cursor.is_some() {
                 docs.remove(0);
             } else {
@@ -112,7 +119,7 @@ pub fn find_documents(
 
     post_process_docs(ctx, conn, &mut docs, input);
 
-    let pagination = helpers::build_pagination(helpers::PaginationInputs {
+    let pagination = helpers::build_pagination(&helpers::PaginationInputs {
         docs: &docs,
         total,
         fq: &fq,

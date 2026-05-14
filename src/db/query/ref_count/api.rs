@@ -25,6 +25,10 @@ use super::read::read_outgoing_refs;
 /// Read the `_ref_count` value for a document.
 /// Returns `None` if the document does not exist, `Some(count)` otherwise
 /// (defaulting to 0 when the column is NULL).
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT query fails.
 pub fn get_ref_count(conn: &dyn DbConnection, collection: &str, id: &str) -> Result<Option<i64>> {
     get_ref_count_inner(conn, collection, id, false)
 }
@@ -32,8 +36,12 @@ pub fn get_ref_count(conn: &dyn DbConnection, collection: &str, id: &str) -> Res
 /// Read `_ref_count` with a row-level lock (`SELECT ... FOR UPDATE` on Postgres).
 ///
 /// Used by the delete path to prevent a concurrent create from incrementing the
-/// ref count between the check and the actual DELETE. On SQLite, `IMMEDIATE`
+/// ref count between the check and the actual DELETE. On `SQLite`, `IMMEDIATE`
 /// transactions already serialize writes, so no lock suffix is needed.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT query fails.
 pub fn get_ref_count_locked(
     conn: &dyn DbConnection,
     collection: &str,
@@ -54,10 +62,7 @@ fn get_ref_count_inner(
     } else {
         ""
     };
-    let sql = format!(
-        "SELECT _ref_count FROM \"{}\" WHERE id = {p1}{for_update}",
-        collection
-    );
+    let sql = format!("SELECT _ref_count FROM \"{collection}\" WHERE id = {p1}{for_update}");
     let row = conn.query_one(&sql, &[DbValue::Text(id.to_string())])?;
 
     Ok(row.map(|r| {
@@ -72,9 +77,10 @@ fn get_ref_count_inner(
 
 /// Check whether write data contains any relationship or upload field values.
 ///
-/// When an update doesn't touch any ref-bearing fields, the entire ref_count
+/// When an update doesn't touch any ref-bearing fields, the entire `ref_count`
 /// dance (snapshot before, read after, apply deltas) can be skipped — saving
 /// 10+ queries on the hot path.
+#[must_use]
 pub fn data_touches_refs(fields: &[FieldDefinition], data: &DocumentFields, prefix: &str) -> bool {
     for field in fields {
         match field.field_type {
@@ -163,8 +169,14 @@ pub fn data_touches_refs(fields: &[FieldDefinition], data: &DocumentFields, pref
 /// version restore) stays wired up without churn; callers just don't pay
 /// for an explicit pre-lock anymore.
 ///
-/// SQLite has always been a no-op here (`IMMEDIATE` transactions serialize
-/// all writers at the DB level), so SQLite behavior is unchanged.
+/// `SQLite` has always been a no-op here (`IMMEDIATE` transactions serialize
+/// all writers at the DB level), so `SQLite` behavior is unchanged.
+///
+/// # Errors
+///
+/// Currently infallible (returns `Ok(())` unconditionally). The `Result`
+/// return type is preserved so the call sites can keep their `?` operators
+/// in case future backends reintroduce a fallible pre-lock step.
 pub fn lock_ref_targets_from_data(
     _conn: &dyn DbConnection,
     _fields: &[FieldDefinition],
@@ -176,6 +188,10 @@ pub fn lock_ref_targets_from_data(
 
 /// Adjust ref counts after creating a new document.
 /// Reads the newly written outgoing refs and increments targets.
+///
+/// # Errors
+///
+/// Returns a backend error if reading outgoing refs or applying deltas fails.
 pub fn after_create(
     conn: &dyn DbConnection,
     table: &str,
@@ -194,6 +210,10 @@ pub fn after_create(
 /// Instead of reading outgoing refs back from the DB (which wastes 5+ round-trips
 /// for data that was just written), computes refs directly from the write data.
 /// This eliminates all SELECT queries from the create path's ref count phase.
+///
+/// # Errors
+///
+/// Returns a backend error if applying deltas fails (e.g. target row missing).
 pub fn after_create_from_data(
     conn: &dyn DbConnection,
     fields: &[FieldDefinition],
@@ -212,6 +232,10 @@ pub fn after_create_from_data(
 /// Adjust ref counts before hard-deleting a document.
 /// Reads current outgoing refs and decrements targets.
 /// Must be called BEFORE the DELETE (CASCADE would remove junction rows).
+///
+/// # Errors
+///
+/// Returns a backend error if reading outgoing refs or applying deltas fails.
 pub fn before_hard_delete(
     conn: &dyn DbConnection,
     table: &str,
@@ -229,21 +253,29 @@ pub fn before_hard_delete(
 /// Reads outgoing refs before and after, then applies the diff.
 ///
 /// The caller must pass `old_refs` obtained before the mutation.
+///
+/// # Errors
+///
+/// Returns a backend error if reading the new refs or applying deltas fails.
 pub fn after_update(
     conn: &dyn DbConnection,
     table: &str,
     id: &str,
     fields: &[FieldDefinition],
     locale_config: &LocaleConfig,
-    old_refs: Vec<OutgoingRef>,
+    old_refs: &[OutgoingRef],
 ) -> Result<()> {
     let new_refs = read_outgoing_refs(conn, table, id, fields, locale_config)?;
-    let deltas = to_delta_map(&old_refs, &new_refs);
+    let deltas = to_delta_map(old_refs, &new_refs);
 
     apply_deltas(conn, &deltas)
 }
 
 /// Snapshot the current outgoing refs for a document (call before mutation).
+///
+/// # Errors
+///
+/// Returns a backend error if reading outgoing refs fails.
 pub fn snapshot_outgoing_refs(
     conn: &dyn DbConnection,
     table: &str,
@@ -285,7 +317,7 @@ mod tests {
         assert_eq!(get_ref_count_val(&conn, "media", "m1"), 0);
     }
 
-    /// Regression: get_ref_count must return None for missing documents
+    /// Regression: `get_ref_count` must return None for missing documents
     /// instead of 0, so callers can distinguish "not found" from "zero refs".
     #[test]
     fn ref_count_returns_none_for_missing_document() {
@@ -638,7 +670,7 @@ mod tests {
         conn.execute("UPDATE posts SET image = 'm2' WHERE id = 'p1'", &[])
             .unwrap();
 
-        after_update(&conn, "posts", "p1", &fields, &no_locale(), old_refs).unwrap();
+        after_update(&conn, "posts", "p1", &fields, &no_locale(), &old_refs).unwrap();
 
         assert_eq!(get_ref_count_val(&conn, "media", "m1"), 0);
         assert_eq!(get_ref_count_val(&conn, "media", "m2"), 1);
@@ -724,7 +756,7 @@ mod tests {
         conn.execute("UPDATE posts SET image = '' WHERE id = 'p1'", &[])
             .unwrap();
 
-        after_update(&conn, "posts", "p1", &fields, &no_locale(), old_refs).unwrap();
+        after_update(&conn, "posts", "p1", &fields, &no_locale(), &old_refs).unwrap();
 
         assert_eq!(get_ref_count_val(&conn, "media", "m1"), 0);
     }
@@ -878,7 +910,7 @@ mod tests {
     }
 
     /// Regression: duplicate IDs in has-many data must be deduplicated
-    /// (matching the DB path's SELECT DISTINCT). Without dedup, _ref_count
+    /// (matching the DB path's SELECT DISTINCT). Without dedup, _`ref_count`
     /// would be inflated, permanently blocking deletion of the target.
     #[test]
     fn after_create_from_data_deduplicates_has_many() {

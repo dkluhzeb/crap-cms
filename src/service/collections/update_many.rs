@@ -46,10 +46,16 @@ pub struct UpdateManyOptions<'a> {
     pub ui_locale: Option<String>,
 }
 
+/// Update multiple documents matching `filters` with the partial `data`.
+///
+/// # Errors
+///
+/// Returns service-layer errors per-document or a backend error if the
+/// find/update queries fail.
 pub fn update_many(
     ctx: &ServiceContext,
-    filters: Vec<FilterClause>,
-    data: DocumentFields,
+    filters: &[FilterClause],
+    data: &DocumentFields,
     locale_config: &LocaleConfig,
     opts: &UpdateManyOptions<'_>,
 ) -> Result<UpdateManyResult> {
@@ -63,8 +69,8 @@ pub fn update_many(
 /// Pool-based bulk update: phase 1 finds IDs, phase 2 updates in chunks.
 fn update_many_pool(
     ctx: &ServiceContext,
-    filters: Vec<FilterClause>,
-    data: DocumentFields,
+    filters: &[FilterClause],
+    data: &DocumentFields,
     locale_config: &LocaleConfig,
     opts: &UpdateManyOptions<'_>,
 ) -> Result<UpdateManyResult> {
@@ -82,7 +88,7 @@ fn update_many_pool(
             .transaction_immediate()
             .context("Start read transaction")?;
 
-        let find_query = FindQuery::builder().filters(filters).build();
+        let find_query = FindQuery::builder().filters(filters.to_vec()).build();
 
         let docs = query::find(&tx, ctx.slug, def, &find_query, opts.locale_ctx)
             .context("Find docs for update")?;
@@ -163,14 +169,14 @@ fn update_many_pool(
 /// Conn-based bulk update: uses existing connection (Lua CRUD path).
 fn update_many_conn(
     ctx: &ServiceContext,
-    filters: Vec<FilterClause>,
-    data: DocumentFields,
+    filters: &[FilterClause],
+    data: &DocumentFields,
     locale_config: &LocaleConfig,
     opts: &UpdateManyOptions<'_>,
 ) -> Result<UpdateManyResult> {
     let def = ctx.collection_def()?;
 
-    let find_query = FindQuery::builder().filters(filters).build();
+    let find_query = FindQuery::builder().filters(filters.to_vec()).build();
 
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();

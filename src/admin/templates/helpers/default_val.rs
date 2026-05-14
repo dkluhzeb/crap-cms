@@ -14,8 +14,12 @@ impl HelperDef for DefaultHelper {
         _ctx: &'rc handlebars::Context,
         _rc: &mut RenderContext<'reg, 'rc>,
     ) -> Result<ScopedJson<'rc>, RenderError> {
-        let val = h.param(0).map(|p| p.value()).unwrap_or(&Value::Null);
-        let fallback = h.param(1).map(|p| p.value()).unwrap_or(&Value::Null);
+        let val = h
+            .param(0)
+            .map_or(&Value::Null, handlebars::PathAndJson::value);
+        let fallback = h
+            .param(1)
+            .map_or(&Value::Null, handlebars::PathAndJson::value);
         if is_truthy(val) {
             Ok(ScopedJson::Derived(val.clone()))
         } else {

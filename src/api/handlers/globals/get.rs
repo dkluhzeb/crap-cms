@@ -1,4 +1,4 @@
-//! GetGlobal handler — get the single document for a global definition.
+//! `GetGlobal` handler — get the single document for a global definition.
 
 use std::sync::Arc;
 

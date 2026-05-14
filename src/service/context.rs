@@ -86,46 +86,65 @@ pub struct ServiceContext<'a> {
 
 impl<'a> ServiceContext<'a> {
     /// Create a builder with required slug and definition.
+    #[must_use]
     pub fn collection(slug: &'a str, def: &'a CollectionDefinition) -> ServiceContextBuilder<'a> {
         ServiceContextBuilder::new(slug, Def::Collection(def))
     }
 
     /// Create a builder for a global operation.
+    #[must_use]
     pub fn global(slug: &'a str, def: &'a GlobalDefinition) -> ServiceContextBuilder<'a> {
         ServiceContextBuilder::new(slug, Def::Global(def))
     }
 
     /// Create a builder with slug only — no definition. For operations that
     /// don't need a collection/global definition (jobs, low-level persist).
+    #[must_use]
     pub fn slug_only(slug: &'a str) -> ServiceContextBuilder<'a> {
         ServiceContextBuilder::new(slug, Def::None)
     }
 
     /// Resolve a connection — use `self.conn` if set, otherwise acquire from pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if neither a connection nor a pool was
+    /// attached to the context, or if the pool fails to hand out a connection.
     pub fn resolve_conn(&self) -> Result<ResolvedConn<'_>, ServiceError> {
-        match self.conn {
-            Some(c) => Ok(ResolvedConn::Borrowed(c)),
-            None => {
-                let pool = self.pool.context("service requires pool or conn")?;
-                let conn = pool.get().context("DB connection")?;
-                Ok(ResolvedConn::Owned(conn))
-            }
+        if let Some(c) = self.conn {
+            Ok(ResolvedConn::Borrowed(c))
+        } else {
+            let pool = self.pool.context("service requires pool or conn")?;
+            let conn = pool.get().context("DB connection")?;
+            Ok(ResolvedConn::Owned(conn))
         }
     }
 
     /// Get read hooks or error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if `read_hooks` were not attached to the context.
     pub fn read_hooks(&self) -> Result<&dyn ReadHooks, ServiceError> {
         self.read_hooks
             .ok_or_else(|| ServiceError::Internal(anyhow!("read_hooks not set")))
     }
 
     /// Get write hooks or error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if `write_hooks` were not attached to the context.
     pub fn write_hooks(&self) -> Result<&dyn WriteHooks, ServiceError> {
         self.write_hooks
             .ok_or_else(|| ServiceError::Internal(anyhow!("write_hooks not set")))
     }
 
     /// Get the hook runner or error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if the hook `runner` was not attached.
     pub fn runner(&self) -> Result<&HookRunner, ServiceError> {
         self.runner
             .ok_or_else(|| ServiceError::Internal(anyhow!("runner not set")))
@@ -152,6 +171,7 @@ impl<'a> ServiceContext<'a> {
     /// Snapshot fidelity for non-default locales is the same as regular
     /// draft saves (lossy for non-default-locale columns) — preserving
     /// all locales in snapshots is a separate change.
+    #[must_use]
     pub fn default_locale_ctx(&self) -> Option<crate::db::query::LocaleContext> {
         let config = self.locale_config?;
         if !config.is_enabled() {
@@ -165,6 +185,11 @@ impl<'a> ServiceContext<'a> {
 
     /// Get the definition as a `CollectionDefinition`. Errors if the context
     /// was built with `Def::Global` or `Def::None`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error when the context was built with a global or
+    /// no definition rather than a collection.
     pub fn collection_def(&self) -> Result<&CollectionDefinition, ServiceError> {
         match &self.def {
             Def::Collection(d) => Ok(d),
@@ -177,6 +202,11 @@ impl<'a> ServiceContext<'a> {
 
     /// Get the definition as a `GlobalDefinition`. Errors if the context was
     /// built with `Def::Collection` or `Def::None`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error when the context was built with a collection
+    /// or no definition rather than a global.
     pub fn global_def(&self) -> Result<&GlobalDefinition, ServiceError> {
         match &self.def {
             Def::Global(d) => Ok(d),
@@ -188,6 +218,7 @@ impl<'a> ServiceContext<'a> {
     }
 
     /// Derive the version table name: slug for collections, `_global_{slug}` for globals.
+    #[must_use]
     pub fn version_table(&self) -> Cow<'_, str> {
         match &self.def {
             Def::Collection(_) | Def::None => Cow::Borrowed(self.slug),
@@ -196,6 +227,7 @@ impl<'a> ServiceContext<'a> {
     }
 
     /// Get the read access reference from the definition.
+    #[must_use]
     pub fn read_access_ref(&self) -> Option<&str> {
         match &self.def {
             Def::Collection(d) => d.access.read.as_deref(),
@@ -206,6 +238,10 @@ impl<'a> ServiceContext<'a> {
 
     /// Get field definitions from either collection or global def. Errors
     /// if the context was built with `Def::None`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error when the context has no attached definition.
     pub fn fields(&self) -> Result<&[FieldDefinition], ServiceError> {
         match &self.def {
             Def::Collection(d) => Ok(&d.fields),
@@ -220,9 +256,8 @@ impl<'a> ServiceContext<'a> {
     /// `verify_email` enabled and the document has an email field.
     /// No-op when email context is not attached.
     pub fn maybe_send_verification(&self, doc: &Document) {
-        let def = match &self.def {
-            Def::Collection(d) => d,
-            _ => return,
+        let Def::Collection(def) = &self.def else {
+            return;
         };
 
         let should_verify =
@@ -486,13 +521,14 @@ impl<'a> ServiceContextBuilder<'a> {
     pub fn lua_infra(mut self, infra: Option<&crate::hooks::LuaCrudInfra>) -> Self {
         let Some(infra) = infra else { return self };
         if infra.event_transport.is_some() {
-            self.event_transport = infra.event_transport.clone();
+            self.event_transport.clone_from(&infra.event_transport);
         }
         if infra.cache.is_some() {
-            self.cache = infra.cache.clone();
+            self.cache.clone_from(&infra.cache);
         }
-        self.event_queue = infra.event_queue.clone();
-        self.verification_queue = infra.verification_queue.clone();
+        self.event_queue.clone_from(&infra.event_queue);
+        self.verification_queue
+            .clone_from(&infra.verification_queue);
         self
     }
 

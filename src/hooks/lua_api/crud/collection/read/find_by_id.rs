@@ -11,7 +11,13 @@ use crate::{
     db::LocaleContext,
     hooks::{
         lifecycle::converters::document_to_lua_table,
-        lua_api::crud::{get_tx_conn, helpers::*},
+        lua_api::crud::{
+            get_tx_conn,
+            helpers::{
+                get_opt_bool, get_opt_string, hook_populate_singleflight, hook_ui_locale,
+                hook_user, resolve_collection,
+            },
+        },
     },
     service::{FindByIdInput, LuaReadHooks, ServiceContext, find_document_by_id},
 };
@@ -21,9 +27,9 @@ fn find_by_id_inner(
     lua: &Lua,
     reg: &Registry,
     lc: &LocaleConfig,
-    collection: String,
-    id: String,
-    opts: Option<Table>,
+    collection: &str,
+    id: &str,
+    opts: Option<&Table>,
 ) -> LuaResult<Value> {
     let conn = get_tx_conn(lua)?;
 
@@ -34,19 +40,19 @@ fn find_by_id_inner(
         .and_then(|o| o.get::<i32>("depth").ok())
         .unwrap_or(0)
         .clamp(0, 10);
-    let locale_str = get_opt_string(&opts, "locale")?;
+    let locale_str = get_opt_string(opts, "locale");
     let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), lc)
         .map_err(|e| RuntimeError(e.to_string()))?;
-    let override_access = get_opt_bool(&opts, "overrideAccess", false)?;
-    let use_draft = get_opt_bool(&opts, "draft", false)?;
-    let def = resolve_collection(reg, &collection)?;
+    let override_access = get_opt_bool(opts, "overrideAccess", false);
+    let use_draft = get_opt_bool(opts, "draft", false);
+    let def = resolve_collection(reg, collection)?;
 
     let select: Option<Vec<String>> = opts
         .as_ref()
         .and_then(|o| o.get::<Table>("select").ok())
         .map(|t| {
             t.sequence_values::<String>()
-                .filter_map(|r| r.ok())
+                .filter_map(std::result::Result::ok)
                 .collect()
         });
 
@@ -56,14 +62,14 @@ fn find_by_id_inner(
         .override_access(override_access)
         .build();
 
-    let ctx = ServiceContext::collection(&collection, &def)
+    let ctx = ServiceContext::collection(collection, &def)
         .conn(conn)
         .read_hooks(&hooks)
         .user(user.as_ref())
         .override_access(override_access)
         .build();
 
-    let input = FindByIdInput::builder(&id)
+    let input = FindByIdInput::builder(id)
         .depth(depth)
         .locale_ctx(locale_ctx.as_ref())
         .registry(Some(reg))
@@ -91,7 +97,7 @@ pub(crate) fn register_find_by_id(
     let lc = locale_config.clone();
     let find_by_id_fn = lua.create_function(
         move |lua, (collection, id, opts): (String, String, Option<Table>)| {
-            find_by_id_inner(lua, &registry, &lc, collection, id, opts)
+            find_by_id_inner(lua, &registry, &lc, &collection, &id, opts.as_ref())
         },
     )?;
 

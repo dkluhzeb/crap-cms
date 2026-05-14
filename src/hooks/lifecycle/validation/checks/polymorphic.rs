@@ -90,7 +90,11 @@ fn check_one(field: &FieldDefinition, data_key: &str, value: &Value, errors: &mu
         return;
     };
 
-    let allowed: Vec<&str> = rc.polymorphic.iter().map(|s| s.as_ref()).collect();
+    let allowed: Vec<&str> = rc
+        .polymorphic
+        .iter()
+        .map(std::convert::AsRef::as_ref)
+        .collect();
     if allowed.contains(&collection.as_str()) {
         return;
     }
@@ -149,7 +153,7 @@ mod tests {
         let mut errors = Vec::new();
         let val = json!(["posts/p1", "articles/a1"]);
         check_polymorphic_allowlist(&field, "ref", Some(&val), &mut errors);
-        assert!(errors.is_empty(), "got: {:?}", errors);
+        assert!(errors.is_empty(), "got: {errors:?}");
     }
 
     #[test]

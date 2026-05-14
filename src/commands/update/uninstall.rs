@@ -16,7 +16,7 @@ pub(super) fn run_uninstall(version: &str) -> Result<()> {
     store.uninstall(&version)?;
     cli::success(&format!("Removed {version}."));
 
-    if store.installed().map(|v| v.is_empty()).unwrap_or(false) {
+    if store.installed().is_ok_and(|v| v.is_empty()) {
         completions::uninstall_all_completions();
     }
 

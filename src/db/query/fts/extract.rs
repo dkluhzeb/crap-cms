@@ -1,10 +1,10 @@
-//! ProseMirror JSON text extraction helpers.
+//! `ProseMirror` JSON text extraction helpers.
 
 use std::collections::HashMap;
 
 use serde_json::{Map, Value};
 
-/// Borrow view over one ProseMirror node. The wire format is intentionally
+/// Borrow view over one `ProseMirror` node. The wire format is intentionally
 /// open-ended (custom node types add arbitrary attrs), but the four fields
 /// used by the FTS extractor — `type`, `text`, `attrs`, `content` — are
 /// well-defined. This view returns `None` for any field the underlying
@@ -34,7 +34,7 @@ impl<'a> ProseMirrorNode<'a> {
     }
 }
 
-/// Extract plain text from a ProseMirror JSON document.
+/// Extract plain text from a `ProseMirror` JSON document.
 ///
 /// Recursively walks the JSON tree collecting `{ "type": "text", "text": "..." }` nodes.
 /// Returns concatenated plain text with spaces between nodes.
@@ -45,7 +45,7 @@ pub(crate) fn extract_prosemirror_text(json_str: &str) -> String {
     extract_prosemirror_text_with_nodes(json_str, &HashMap::new())
 }
 
-/// Extract text from ProseMirror JSON, including text from custom node attrs.
+/// Extract text from `ProseMirror` JSON, including text from custom node attrs.
 ///
 /// `node_searchable` maps node type names to their searchable attribute names.
 /// When a node matches, its attr values are extracted as text in addition to

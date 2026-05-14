@@ -18,6 +18,11 @@ pub struct RateLimitFactoryConfig<'a> {
 }
 
 /// Create the appropriate rate limit backend from config.
+///
+/// # Errors
+///
+/// Returns an error if the backend name is unknown or the Redis client
+/// fails to initialize.
 pub fn create_rate_limit_backend(
     cfg: &RateLimitFactoryConfig<'_>,
 ) -> Result<SharedRateLimitBackend> {
@@ -49,7 +54,7 @@ pub fn create_rate_limit_backend(
                  Rebuild with `--features redis`."
             );
         }
-        other => bail!("Unknown rate limit backend: '{}'", other),
+        other => bail!("Unknown rate limit backend: '{other}'"),
     }
 }
 

@@ -1,4 +1,4 @@
-//! Bulk CreateMany RPC handler.
+//! Bulk `CreateMany` RPC handler.
 
 use std::sync::Arc;
 
@@ -73,7 +73,7 @@ fn create_many_blocking(
         draft: input.draft,
     };
 
-    let result = service::create_many(&ctx, input.items, &opts)
+    let result = service::create_many(&ctx, &input.items, &opts)
         .map_err(|e| Status::from(e.reclassify(&input.db_kind)))?;
 
     let proto_docs: Vec<content::Document> = result

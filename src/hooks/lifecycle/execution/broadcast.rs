@@ -10,7 +10,7 @@ use crate::hooks::lifecycle::context::HookContext;
 
 use super::runtime::{read_hook_result, resolve_hook_function};
 
-/// Call a before_broadcast hook ref. Returns Some(context) to continue, None to suppress.
+/// Call a `before_broadcast` hook ref. Returns Some(context) to continue, None to suppress.
 pub(crate) fn call_before_broadcast_hook(
     lua: &Lua,
     hook_ref: &str,
@@ -42,7 +42,7 @@ pub(crate) fn call_before_broadcast_hook(
     }
 }
 
-/// Call all globally registered before_broadcast hooks.
+/// Call all globally registered `before_broadcast` hooks.
 /// Returns Some(context) to continue, None if any hook suppresses.
 pub(crate) fn call_registered_before_broadcast(
     lua: &Lua,
@@ -66,10 +66,7 @@ pub(crate) fn call_registered_before_broadcast(
 
     for i in 1..=len {
         let func: LuaFunction = list.raw_get(i).with_context(|| {
-            format!(
-                "registered before_broadcast hook at index {} is not a function",
-                i
-            )
+            format!("registered before_broadcast hook at index {i} is not a function")
         })?;
 
         let ctx_table = context.to_lua_table(lua)?;

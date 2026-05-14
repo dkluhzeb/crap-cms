@@ -1,5 +1,5 @@
 //! Webhook email provider — sends emails via HTTP POST.
-//! Works with SendGrid, Mailgun, Resend, or any HTTP API.
+//! Works with `SendGrid`, Mailgun, Resend, or any HTTP API.
 
 use std::collections::HashMap;
 
@@ -12,7 +12,7 @@ use crate::config::EmailConfig;
 
 use super::EmailProvider;
 
-/// JSON body POSTed to the configured webhook for each outgoing email.
+/// JSON body `POSTed` to the configured webhook for each outgoing email.
 #[derive(Serialize)]
 struct WebhookEmailPayload<'a> {
     from: WebhookFrom<'a>,

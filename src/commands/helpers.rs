@@ -25,6 +25,11 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 
 /// Load config, init Lua, create pool, and sync schema. Shared by user, export, import commands.
+///
+/// # Errors
+///
+/// Returns an error if config loading, Lua init, pool creation, or schema
+/// sync fails.
 pub fn load_config_and_sync(config_dir: &Path) -> Result<(DbPool, Arc<Registry>)> {
     let config_dir = config_dir
         .canonicalize()
@@ -85,7 +90,7 @@ pub fn load_and_validate_config(config_dir: &Path) -> Result<CrapConfig> {
     Ok(cfg)
 }
 
-/// Run on_init hooks if configured. Failure aborts startup.
+/// Run `on_init` hooks if configured. Failure aborts startup.
 pub fn run_on_init_hooks(cfg: &CrapConfig, pool: &DbPool, hook_runner: &HookRunner) -> Result<()> {
     if cfg.hooks.on_init.is_empty() {
         return Ok(());

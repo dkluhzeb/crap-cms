@@ -1,4 +1,4 @@
-//! HookRunner methods for auth strategies and access control.
+//! `HookRunner` methods for auth strategies and access control.
 
 use std::collections::HashMap;
 
@@ -52,6 +52,11 @@ impl HookRunner {
     /// Run a custom auth strategy function. Takes a strategy function ref and
     /// a headers map, returns Some(Document) if the strategy authenticates a user.
     /// The strategy function gets CRUD access via the provided connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if VM acquisition, function resolution, or the
+    /// strategy call itself fails.
     pub fn run_auth_strategy(
         &self,
         authenticate_ref: &str,
@@ -81,19 +86,22 @@ impl HookRunner {
 
         match result {
             Value::Table(tbl) => Ok(Some(lua_table_to_auth_user(&tbl)?)),
-            Value::Nil | Value::Boolean(false) => Ok(None),
             _ => Ok(None),
         }
     }
 
     /// Run a collection-level or global-level access check.
     ///
-    /// `access_ref` is the Lua function ref (e.g., "hooks.access.admin_only").
+    /// `access_ref` is the Lua function ref (e.g., "`hooks.access.admin_only`").
     /// If `None`, access is allowed (no restriction configured).
     /// The function receives `{ user = ..., id = ..., data = ... }` and returns:
     /// - `true` → Allowed
     /// - `false` / `nil` → Denied
     /// - `table` → Constrained (read only: additional WHERE filters)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if VM acquisition or the access function call fails.
     pub fn check_access(
         &self,
         access_ref: Option<&str>,

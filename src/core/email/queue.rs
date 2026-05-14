@@ -31,6 +31,11 @@ pub struct EmailJobData {
 /// The email will be processed by the scheduler with retries on failure.
 /// `config` supplies the retry budget (`queue_retries + 1` total attempts)
 /// and the queue name. Returns the job run ID.
+///
+/// # Errors
+///
+/// Returns an error if `to` or `subject` contain CRLF (header injection),
+/// or if serializing/inserting the job fails.
 pub fn queue_email(
     conn: &dyn DbConnection,
     data: &EmailJobData,

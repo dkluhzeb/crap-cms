@@ -30,14 +30,14 @@ pub(super) fn populate_nonpoly_has_many(
     let ids: Vec<String> = match doc.fields.get(field_name) {
         Some(Value::Array(arr)) => arr
             .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
             .collect(),
         _ => return Ok(()),
     };
 
     let fetch_ids: Vec<String> = ids
         .iter()
-        .filter(|id| !visited.contains(&(rel_collection.to_string(), id.to_string())))
+        .filter(|id| !visited.contains(&(rel_collection.to_string(), (*id).clone())))
         .cloned()
         .collect();
 

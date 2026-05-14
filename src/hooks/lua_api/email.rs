@@ -41,7 +41,7 @@ pub(super) fn register_email(lua: &Lua, crap: &Table, config: &CrapConfig) -> Re
 
         provider
             .send(&to, &subject, &html, text.as_deref())
-            .map_err(|e| RuntimeError(format!("email send error: {:#}", e)))?;
+            .map_err(|e| RuntimeError(format!("email send error: {e:#}")))?;
 
         Ok(true)
     })?;
@@ -80,7 +80,7 @@ pub(super) fn register_email(lua: &Lua, crap: &Table, config: &CrapConfig) -> Re
             },
             &config,
         )
-        .map_err(|e| RuntimeError(format!("email queue error: {:#}", e)))?;
+        .map_err(|e| RuntimeError(format!("email queue error: {e:#}")))?;
 
         Ok(job_id)
     })?;

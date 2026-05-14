@@ -11,7 +11,12 @@ type Result<T> = std::result::Result<T, ServiceError>;
 
 /// Read a global document with the full read lifecycle.
 ///
-/// Steps: before_read -> get_global -> field-level read strip -> after_read.
+/// Steps: `before_read` -> `get_global` -> field-level read strip -> `after_read`.
+///
+/// # Errors
+///
+/// Returns service-layer errors (access denied, hook errors) or a backend
+/// error if the SELECT or hydration fails.
 pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Result<Document> {
     let resolved = ctx.resolve_conn()?;
     let conn = resolved.as_ref();

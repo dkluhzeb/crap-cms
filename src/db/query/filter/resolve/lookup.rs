@@ -1,4 +1,4 @@
-//! Field-tree lookups shared by normalize and resolve_filter paths.
+//! Field-tree lookups shared by normalize and `resolve_filter` paths.
 
 use crate::core::{FieldDefinition, FieldType};
 

@@ -5,7 +5,7 @@
   {{#> partials/sidebar-panel}}
     <div class="edit-sidebar__actions">
       {{#if (or (and editing perms.update) (and (not editing) perms.create))}}
-        {{#if collection.has_drafts}}
+        {{#if collection.versions.drafts}}
           {{#if editing}}
             <button
               type="submit"
@@ -93,7 +93,7 @@
     {{!-- Document meta panel --}}
     {{#> partials/sidebar-panel icon="info" label_key="document"}}
       <div class="edit-sidebar__meta">
-        {{#if collection.has_drafts}}
+        {{#if collection.versions.drafts}}
           <div class="edit-sidebar__meta-row">
             <span class="edit-sidebar__meta-label">{{t "status"}}</span>
             <span class="edit-sidebar__meta-value">
@@ -124,7 +124,7 @@
       </div>
     {{/partials/sidebar-panel}}
 
-    {{#if collection.has_versions}}
+    {{#if collection.versions}}
       {{> partials/version-sidebar}}
     {{/if}}
 

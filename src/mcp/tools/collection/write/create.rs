@@ -27,7 +27,7 @@ pub(in crate::mcp::tools) fn exec_create(
     let password = if def.is_auth_collection() {
         args.get("password")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
     } else {
         None
     };

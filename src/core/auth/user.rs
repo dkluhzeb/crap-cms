@@ -16,6 +16,7 @@ pub struct AuthUser {
 
 impl AuthUser {
     /// Create a new `AuthUser` instance with the given claims and document.
+    #[must_use]
     pub fn new(claims: Claims, user_doc: Document) -> Self {
         Self {
             claims,

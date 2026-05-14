@@ -126,7 +126,7 @@ pub struct FieldDefinition {
     /// Only meaningful for dayOnly and dayAndTime picker appearances.
     #[serde(default)]
     pub timezone: bool,
-    /// Default IANA timezone for the admin UI dropdown (e.g., "America/New_York").
+    /// Default IANA timezone for the admin UI dropdown (e.g., "`America/New_York`").
     #[serde(default)]
     pub default_timezone: Option<String>,
     /// Configuration for join (virtual reverse-relationship) fields.
@@ -148,15 +148,19 @@ impl FieldDefinition {
 
     /// Whether this field has a column on the parent table.
     /// False for Array, Group, Row, Blocks, and has-many Relationship (they use join tables or prefixed/promoted columns).
+    #[must_use]
     pub fn has_parent_column(&self) -> bool {
         match self.field_type {
-            FieldType::Array => false,
-            FieldType::Group => false, // sub-fields get prefixed columns instead
-            FieldType::Row => false,   // sub-fields promoted to parent level (no prefix)
-            FieldType::Collapsible => false, // sub-fields promoted to parent level (no prefix)
-            FieldType::Tabs => false,  // sub-fields promoted to parent level (no prefix)
-            FieldType::Blocks => false, // uses a join table
-            FieldType::Join => false,  // virtual field, no column
+            // Array uses a join table; Group prefixes sub-field columns; Row/Collapsible/Tabs
+            // promote sub-fields to parent level (no prefix); Blocks uses a join table; Join is
+            // a virtual field with no column.
+            FieldType::Array
+            | FieldType::Group
+            | FieldType::Row
+            | FieldType::Collapsible
+            | FieldType::Tabs
+            | FieldType::Blocks
+            | FieldType::Join => false,
             FieldType::Relationship | FieldType::Upload => {
                 match &self.relationship {
                     Some(rc) => !rc.has_many,
@@ -168,10 +172,11 @@ impl FieldDefinition {
     }
 }
 
-/// Convert a snake_case identifier to Title Case.
+/// Convert a `snake_case` identifier to Title Case.
 ///
 /// Examples: `"my_field"` → `"My Field"`, `"site_settings"` → `"Site Settings"`.
 /// Used to auto-generate human-readable labels from field and collection names.
+#[must_use]
 pub fn to_title_case(s: &str) -> String {
     s.split('_')
         .filter(|w| !w.is_empty())
@@ -189,6 +194,7 @@ pub fn to_title_case(s: &str) -> String {
 /// Recursively flatten layout wrappers (Row, Collapsible, Tabs) to extract leaf fields.
 /// Used by Array join table DDL, read, write, and form parsing — layout wrappers are
 /// transparent inside arrays, so their children should be promoted as individual columns.
+#[must_use]
 pub fn flatten_array_sub_fields(fields: &[FieldDefinition]) -> Vec<&FieldDefinition> {
     let mut result = Vec::new();
     for f in fields {
@@ -236,168 +242,196 @@ impl FieldDefinitionBuilder {
     }
 
     /// Set whether the field is required.
+    #[must_use]
     pub fn required(mut self, v: bool) -> Self {
         self.inner.required = v;
         self
     }
 
     /// Set whether the field must be unique.
+    #[must_use]
     pub fn unique(mut self, v: bool) -> Self {
         self.inner.unique = v;
         self
     }
 
     /// Set whether to create a database index for this field.
+    #[must_use]
     pub fn index(mut self, v: bool) -> Self {
         self.inner.index = v;
         self
     }
 
     /// Set the name of the Lua validation function.
+    #[must_use]
     pub fn validate(mut self, v: impl Into<String>) -> Self {
         self.inner.validate = Some(v.into());
         self
     }
 
     /// Set the default value for this field.
+    #[must_use]
     pub fn default_value(mut self, v: Value) -> Self {
         self.inner.default_value = Some(v);
         self
     }
 
     /// Set the options for Select or Radio fields.
+    #[must_use]
     pub fn options(mut self, v: Vec<SelectOption>) -> Self {
         self.inner.options = v;
         self
     }
 
     /// Set the admin UI configuration for this field.
+    #[must_use]
     pub fn admin(mut self, v: FieldAdmin) -> Self {
         self.inner.admin = v;
         self
     }
 
     /// Set the lifecycle hooks for this field.
+    #[must_use]
     pub fn hooks(mut self, v: FieldHooks) -> Self {
         self.inner.hooks = v;
         self
     }
 
     /// Set the access control rules for this field.
+    #[must_use]
     pub fn access(mut self, v: FieldAccess) -> Self {
         self.inner.access = v;
         self
     }
 
     /// Set the MCP-specific configuration for this field.
+    #[must_use]
     pub fn mcp(mut self, v: McpFieldConfig) -> Self {
         self.inner.mcp = v;
         self
     }
 
     /// Set the relationship configuration for this field.
+    #[must_use]
     pub fn relationship(mut self, v: RelationshipConfig) -> Self {
         self.inner.relationship = Some(v);
         self
     }
 
     /// Set the sub-fields for Group or Array types.
+    #[must_use]
     pub fn fields(mut self, v: Vec<FieldDefinition>) -> Self {
         self.inner.fields = v;
         self
     }
 
     /// Set the block definitions for Blocks types.
+    #[must_use]
     pub fn blocks(mut self, v: Vec<BlockDefinition>) -> Self {
         self.inner.blocks = v;
         self
     }
 
     /// Set the tab definitions for Tabs types.
+    #[must_use]
     pub fn tabs(mut self, v: Vec<FieldTab>) -> Self {
         self.inner.tabs = v;
         self
     }
 
     /// Set whether this field is localized.
+    #[must_use]
     pub fn localized(mut self, v: bool) -> Self {
         self.inner.localized = v;
         self
     }
 
     /// Set the picker appearance for date fields.
+    #[must_use]
     pub fn picker_appearance(mut self, v: impl Into<String>) -> Self {
         self.inner.picker_appearance = Some(v.into());
         self
     }
 
     /// Set the minimum number of rows for Array or Blocks.
+    #[must_use]
     pub fn min_rows(mut self, v: usize) -> Self {
         self.inner.min_rows = Some(v);
         self
     }
 
     /// Set the maximum number of rows for Array or Blocks.
+    #[must_use]
     pub fn max_rows(mut self, v: usize) -> Self {
         self.inner.max_rows = Some(v);
         self
     }
 
     /// Set the minimum string length for text fields.
+    #[must_use]
     pub fn min_length(mut self, v: usize) -> Self {
         self.inner.min_length = Some(v);
         self
     }
 
     /// Set the maximum string length for text fields.
+    #[must_use]
     pub fn max_length(mut self, v: usize) -> Self {
         self.inner.max_length = Some(v);
         self
     }
 
     /// Set the minimum numeric value.
+    #[must_use]
     pub fn min(mut self, v: f64) -> Self {
         self.inner.min = Some(v);
         self
     }
 
     /// Set the maximum numeric value.
+    #[must_use]
     pub fn max(mut self, v: f64) -> Self {
         self.inner.max = Some(v);
         self
     }
 
     /// Set whether this field allows multiple values.
+    #[must_use]
     pub fn has_many(mut self, v: bool) -> Self {
         self.inner.has_many = v;
         self
     }
 
     /// Set the minimum date value.
+    #[must_use]
     pub fn min_date(mut self, v: impl Into<String>) -> Self {
         self.inner.min_date = Some(v.into());
         self
     }
 
     /// Set the maximum date value.
+    #[must_use]
     pub fn max_date(mut self, v: impl Into<String>) -> Self {
         self.inner.max_date = Some(v.into());
         self
     }
 
     /// Set whether to store an IANA timezone alongside the date value.
+    #[must_use]
     pub fn timezone(mut self, v: bool) -> Self {
         self.inner.timezone = v;
         self
     }
 
     /// Set the default IANA timezone for the admin UI dropdown.
+    #[must_use]
     pub fn default_timezone(mut self, v: impl Into<String>) -> Self {
         self.inner.default_timezone = Some(v.into());
         self
     }
 
     /// Set the join configuration for virtual reverse-relationship fields.
+    #[must_use]
     pub fn join(mut self, v: JoinConfig) -> Self {
         self.inner.join = Some(v);
         self
@@ -405,12 +439,14 @@ impl FieldDefinitionBuilder {
 
     /// Set whether this field is stripped from all read responses (API-hidden).
     /// See [`FieldDefinition::hidden`] for full semantics.
+    #[must_use]
     pub fn hidden(mut self, v: bool) -> Self {
         self.inner.hidden = v;
         self
     }
 
     /// Build the final `FieldDefinition` instance.
+    #[must_use]
     pub fn build(self) -> FieldDefinition {
         self.inner
     }
@@ -439,7 +475,7 @@ mod tests {
                 field_type: ft.clone(),
                 ..Default::default()
             };
-            assert!(f.has_parent_column(), "{:?} should have parent column", ft);
+            assert!(f.has_parent_column(), "{ft:?} should have parent column");
         }
     }
 

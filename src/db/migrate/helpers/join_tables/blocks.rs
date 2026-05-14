@@ -22,26 +22,25 @@ pub(super) fn sync_blocks_table(
     if !table_exists(conn, &table_name)? {
         let locale_col = if has_locale_col {
             let default_loc = sanitize_locale(&locale_config.default_locale)?;
-            format!(", _locale TEXT NOT NULL DEFAULT '{}'", default_loc)
+            format!(", _locale TEXT NOT NULL DEFAULT '{default_loc}'")
         } else {
             String::new()
         };
 
         let sql = format!(
-            "CREATE TABLE \"{}\" (\
+            "CREATE TABLE \"{table_name}\" (\
                 id TEXT PRIMARY KEY, \
-                parent_id TEXT NOT NULL REFERENCES \"{}\"(id) ON DELETE CASCADE, \
+                parent_id TEXT NOT NULL REFERENCES \"{collection_slug}\"(id) ON DELETE CASCADE, \
                 _order INTEGER NOT NULL DEFAULT 0, \
                 _block_type TEXT NOT NULL, \
                 data TEXT NOT NULL DEFAULT '{{}}'\
-                {}\
-            )",
-            table_name, collection_slug, locale_col
+                {locale_col}\
+            )"
         );
 
         info!("Creating blocks table: {}", table_name);
         conn.execute_ddl(&sql, &[])
-            .with_context(|| format!("Failed to create blocks table {}", table_name))?;
+            .with_context(|| format!("Failed to create blocks table {table_name}"))?;
     } else if has_locale_col {
         ensure_locale_column(conn, &table_name, &locale_config.default_locale)?;
     }

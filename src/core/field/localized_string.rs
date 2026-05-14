@@ -16,19 +16,20 @@ pub enum LocalizedString {
 
 impl LocalizedString {
     /// Resolve to a single string for the given locale, with fallback to default locale.
+    #[must_use]
     pub fn resolve(&self, locale: &str, default_locale: &str) -> &str {
         match self {
             LocalizedString::Plain(s) => s,
             LocalizedString::Localized(map) => map
                 .get(locale)
                 .or_else(|| map.get(default_locale))
-                .map(|s| s.as_str())
-                .unwrap_or(""),
+                .map_or("", std::string::String::as_str),
         }
     }
 
     /// Resolve using the default locale only (for when locale config is disabled).
     /// Uses the alphabetically-first key for deterministic results across runs.
+    #[must_use]
     pub fn resolve_default(&self) -> &str {
         match self {
             LocalizedString::Plain(s) => s,
@@ -36,8 +37,7 @@ impl LocalizedString {
                 .keys()
                 .min()
                 .and_then(|k| map.get(k))
-                .map(|s| s.as_str())
-                .unwrap_or(""),
+                .map_or("", std::string::String::as_str),
         }
     }
 }

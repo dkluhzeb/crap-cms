@@ -189,14 +189,9 @@ fn write_field_with_context(out: &mut String, field: &FieldDefinition, parent_pa
 /// Map a field definition to its Rust type string.
 fn field_to_rust(field: &FieldDefinition, parent_pascal: &str) -> String {
     match &field.field_type {
-        FieldType::Text => {
-            if field.has_many {
-                "Vec<String>".to_string()
-            } else {
-                "String".to_string()
-            }
-        }
-        FieldType::Textarea
+        FieldType::Text if field.has_many => "Vec<String>".to_string(),
+        FieldType::Text
+        | FieldType::Textarea
         | FieldType::Email
         | FieldType::Date
         | FieldType::Richtext
@@ -209,8 +204,8 @@ fn field_to_rust(field: &FieldDefinition, parent_pascal: &str) -> String {
                 .map(|rc| to_pascal_case(&rc.collection));
 
             match target {
-                Some(t) if rel_has_many(field) => format!("Vec<Rel<{}>>", t),
-                Some(t) => format!("Rel<{}>", t),
+                Some(t) if rel_has_many(field) => format!("Vec<Rel<{t}>>"),
+                Some(t) => format!("Rel<{t}>"),
                 None if rel_has_many(field) => "Vec<String>".to_string(),
                 None => "String".to_string(),
             }
@@ -230,7 +225,6 @@ fn field_to_rust(field: &FieldDefinition, parent_pascal: &str) -> String {
             }
         }
         FieldType::Checkbox => "bool".to_string(),
-        FieldType::Json => "serde_json::Value".to_string(),
         FieldType::Relationship => match &field.relationship {
             Some(rc) if rc.is_polymorphic() && rc.has_many => "Vec<String>".to_string(),
             Some(rc) if rc.is_polymorphic() => "String".to_string(),
@@ -252,11 +246,11 @@ fn field_to_rust(field: &FieldDefinition, parent_pascal: &str) -> String {
                 format!("{}{}", parent_pascal, to_pascal_case(&field.name))
             }
         }
-        FieldType::Row => "serde_json::Value".to_string(), // layout-only; sub-fields are promoted
-        FieldType::Collapsible => "serde_json::Value".to_string(), // layout-only; sub-fields are promoted
-        FieldType::Tabs => "serde_json::Value".to_string(), // layout-only; sub-fields are promoted
-        FieldType::Blocks => "Vec<serde_json::Value>".to_string(),
-        FieldType::Join => "Vec<serde_json::Value>".to_string(),
+        // Json has no Rust type constraint; Row/Collapsible/Tabs are pure layout wrappers.
+        FieldType::Json | FieldType::Row | FieldType::Collapsible | FieldType::Tabs => {
+            "serde_json::Value".to_string()
+        }
+        FieldType::Blocks | FieldType::Join => "Vec<serde_json::Value>".to_string(),
     }
 }
 
@@ -329,23 +323,19 @@ mod tests {
         // Polymorphic has-one = String (stores "collection/id" composite)
         assert!(
             out.contains("pub subject: String,"),
-            "polymorphic has-one should be String: {}",
-            out
+            "polymorphic has-one should be String: {out}"
         );
         assert!(
             out.contains("Polymorphic relationship"),
-            "should have polymorphic comment: {}",
-            out
+            "should have polymorphic comment: {out}"
         );
         assert!(
             out.contains("posts"),
-            "comment should list target collections: {}",
-            out
+            "comment should list target collections: {out}"
         );
         assert!(
             out.contains("pages"),
-            "comment should list target collections: {}",
-            out
+            "comment should list target collections: {out}"
         );
     }
 
@@ -366,23 +356,19 @@ mod tests {
         // Polymorphic has-many = Vec<String> (array of "collection/id" composites)
         assert!(
             out.contains("Vec<String>"),
-            "polymorphic has-many should be Vec<String>: {}",
-            out
+            "polymorphic has-many should be Vec<String>: {out}"
         );
         assert!(
             out.contains("Polymorphic relationship"),
-            "should have polymorphic comment: {}",
-            out
+            "should have polymorphic comment: {out}"
         );
         assert!(
             out.contains("articles"),
-            "comment should list target collections: {}",
-            out
+            "comment should list target collections: {out}"
         );
         assert!(
             out.contains("videos"),
-            "comment should list target collections: {}",
-            out
+            "comment should list target collections: {out}"
         );
     }
 
@@ -399,7 +385,7 @@ mod tests {
         );
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("pub author: Rel<Users>,"), "got: {}", out);
+        assert!(out.contains("pub author: Rel<Users>,"), "got: {out}");
     }
 
     #[test]
@@ -491,18 +477,12 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("pub struct PostsSeo {"),
-            "group sub-type struct should be emitted: {}",
-            out
+            "group sub-type struct should be emitted: {out}"
         );
-        assert!(
-            out.contains("pub title: String,"),
-            "group sub-field: {}",
-            out
-        );
+        assert!(out.contains("pub title: String,"), "group sub-field: {out}");
         assert!(
             out.contains("pub description: Option<String>,"),
-            "group optional sub-field: {}",
-            out
+            "group optional sub-field: {out}"
         );
     }
 
@@ -524,8 +504,7 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("pub struct PostsItems {"),
-            "array nested in Row should emit sub-type: {}",
-            out
+            "array nested in Row should emit sub-type: {out}"
         );
     }
 
@@ -544,13 +523,11 @@ mod tests {
         render_global(&mut out, &global);
         assert!(
             out.contains("pub struct SettingsNav {"),
-            "global array sub-type: {}",
-            out
+            "global array sub-type: {out}"
         );
         assert!(
             out.contains("pub struct SettingsSeo {"),
-            "global group sub-type: {}",
-            out
+            "global group sub-type: {out}"
         );
     }
 
@@ -592,8 +569,7 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("pub images: Vec<String>,"),
-            "has-many upload should be Vec<String>: {}",
-            out
+            "has-many upload should be Vec<String>: {out}"
         );
     }
 
@@ -649,13 +625,11 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("pub tags: Vec<String>,"),
-            "required has-many text should be Vec<String>: {}",
-            out
+            "required has-many text should be Vec<String>: {out}"
         );
         assert!(
             out.contains("Option<Vec<String>>"),
-            "optional has-many text should be Option<Vec<String>>: {}",
-            out
+            "optional has-many text should be Option<Vec<String>>: {out}"
         );
     }
 
@@ -677,13 +651,11 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("pub scores: Vec<f64>,"),
-            "required has-many number should be Vec<f64>: {}",
-            out
+            "required has-many number should be Vec<f64>: {out}"
         );
         assert!(
             out.contains("Option<Vec<f64>>"),
-            "optional has-many number should be Option<Vec<f64>>: {}",
-            out
+            "optional has-many number should be Option<Vec<f64>>: {out}"
         );
     }
 
@@ -733,18 +705,15 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("pub snippet: String,"),
-            "code field should map to String: {}",
-            out
+            "code field should map to String: {out}"
         );
         assert!(
             out.contains("Option<Vec<serde_json::Value>>"),
-            "join field should map to Vec<serde_json::Value>: {}",
-            out
+            "join field should map to Vec<serde_json::Value>: {out}"
         );
         assert!(
             out.contains("pub color: String,"),
-            "radio without options should be String: {}",
-            out
+            "radio without options should be String: {out}"
         );
     }
 
@@ -766,13 +735,11 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("pub tags: Vec<String>,"),
-            "required select has-many should be Vec<String>: {}",
-            out
+            "required select has-many should be Vec<String>: {out}"
         );
         assert!(
             out.contains("Option<Vec<String>>"),
-            "optional radio has-many should be Option<Vec<String>>: {}",
-            out
+            "optional radio has-many should be Option<Vec<String>>: {out}"
         );
     }
 
@@ -803,40 +770,33 @@ mod tests {
         // Row sub-fields promoted — layout_row should not appear as a field
         assert!(
             !out.contains("layout_row"),
-            "row field name should not appear as a struct field: {}",
-            out
+            "row field name should not appear as a struct field: {out}"
         );
         assert!(
             out.contains("pub first_name: String,"),
-            "row required sub-field promoted: {}",
-            out
+            "row required sub-field promoted: {out}"
         );
         assert!(
             out.contains("pub last_name: Option<String>,"),
-            "row optional sub-field promoted: {}",
-            out
+            "row optional sub-field promoted: {out}"
         );
         // Collapsible sub-fields promoted
         assert!(
             !out.contains("details"),
-            "collapsible field name should not appear: {}",
-            out
+            "collapsible field name should not appear: {out}"
         );
         assert!(
             out.contains("pub bio: Option<String>,"),
-            "collapsible sub-field promoted: {}",
-            out
+            "collapsible sub-field promoted: {out}"
         );
         // Tabs sub-fields promoted
         assert!(
             !out.contains("sections"),
-            "tabs field name should not appear: {}",
-            out
+            "tabs field name should not appear: {out}"
         );
         assert!(
             out.contains("pub tab_field: String,"),
-            "tabs sub-field promoted: {}",
-            out
+            "tabs sub-field promoted: {out}"
         );
     }
 }

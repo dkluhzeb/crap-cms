@@ -15,8 +15,8 @@ use crate::{
 
 // ── Lua <-> Rust type conversion helpers ────────────────────────────────────
 
-/// Convert a Lua data table to HashMap<String, Value>.
-/// Preserves nested tables (blocks, arrays, has-many IDs) unlike lua_table_to_hashmap
+/// Convert a Lua data table to `HashMap`<String, Value>.
+/// Preserves nested tables (blocks, arrays, has-many IDs) unlike `lua_table_to_hashmap`
 /// which only handles scalars.
 pub(crate) fn lua_table_to_json_map(tbl: &Table) -> LuaResult<HashMap<String, JsonValue>> {
     let mut map = HashMap::new();
@@ -34,7 +34,7 @@ pub(crate) fn lua_table_to_json_map(tbl: &Table) -> LuaResult<HashMap<String, Js
     Ok(map)
 }
 
-/// Convert a Lua query table to a FindQuery.
+/// Convert a Lua query table to a `FindQuery`.
 /// Supports both simple filters (`{ status = "published" }`) and operator-based
 /// filters (`{ title = { contains = "hello" } }`).
 pub(crate) fn lua_table_to_find_query(tbl: &Table) -> LuaResult<(FindQuery, Option<i64>)> {
@@ -49,7 +49,7 @@ pub(crate) fn lua_table_to_find_query(tbl: &Table) -> LuaResult<(FindQuery, Opti
 
     let select: Option<Vec<String>> = tbl.get::<Table>("select").ok().map(|t| {
         t.sequence_values::<String>()
-            .filter_map(|r| r.ok())
+            .filter_map(std::result::Result::ok)
             .collect()
     });
 
@@ -69,9 +69,8 @@ pub(crate) fn lua_table_to_find_query(tbl: &Table) -> LuaResult<(FindQuery, Opti
 
 /// Parse the `where` clause from a Lua query table into filter clauses.
 fn parse_where_clause(tbl: &Table) -> LuaResult<Vec<FilterClause>> {
-    let filters_tbl = match tbl.get::<Table>("where") {
-        Ok(t) => t,
-        Err(_) => return Ok(Vec::new()),
+    let Ok(filters_tbl) = tbl.get::<Table>("where") else {
+        return Ok(Vec::new());
     };
 
     let mut clauses = Vec::new();
@@ -160,7 +159,7 @@ fn parse_cursor(tbl: &Table, key: &str) -> LuaResult<Option<CursorData>> {
     }
 }
 
-/// Parse a Lua filter operator name + value into a FilterOp.
+/// Parse a Lua filter operator name + value into a `FilterOp`.
 pub(crate) fn lua_parse_filter_op(op_name: &str, value: &Value) -> LuaResult<FilterOp> {
     let to_string = |v: &Value| -> LuaResult<String> {
         match v {
@@ -205,10 +204,7 @@ pub(crate) fn lua_parse_filter_op(op_name: &str, value: &Value) -> LuaResult<Fil
         }
         "exists" => Ok(FilterOp::Exists),
         "not_exists" => Ok(FilterOp::NotExists),
-        _ => Err(RuntimeError(format!(
-            "unknown filter operator '{}'",
-            op_name
-        ))),
+        _ => Err(RuntimeError(format!("unknown filter operator '{op_name}'"))),
     }
 }
 
@@ -224,7 +220,7 @@ fn collect_filter_values(
     Ok(vals)
 }
 
-/// Convert a Lua data table to a HashMap<String, String> for create/update.
+/// Convert a Lua data table to a `HashMap`<String, String> for create/update.
 pub(crate) fn lua_table_to_hashmap(tbl: &Table) -> LuaResult<HashMap<String, String>> {
     let mut map = HashMap::new();
 
@@ -235,7 +231,6 @@ pub(crate) fn lua_table_to_hashmap(tbl: &Table) -> LuaResult<HashMap<String, Str
             Value::Integer(i) => i.to_string(),
             Value::Number(n) => n.to_string(),
             Value::Boolean(b) => b.to_string(),
-            Value::Nil => continue,
             _ => continue,
         };
 
@@ -354,6 +349,20 @@ pub(crate) fn find_result_to_lua(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::*;
     use crate::core::document::DocumentBuilder;

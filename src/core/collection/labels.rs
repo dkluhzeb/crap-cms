@@ -17,6 +17,7 @@ pub struct Labels {
 
 impl Labels {
     /// Create a new labels configuration with singular and plural forms.
+    #[must_use]
     pub fn new(singular: Option<LocalizedString>, plural: Option<LocalizedString>) -> Self {
         Self { singular, plural }
     }

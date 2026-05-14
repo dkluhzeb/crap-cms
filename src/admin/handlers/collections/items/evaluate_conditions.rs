@@ -18,7 +18,7 @@ use crate::{
 
 /// POST /admin/collections/{slug}/evaluate-conditions
 /// Evaluates server-only display conditions with current form data.
-/// Returns JSON: { "field_name": true/false, ... }
+/// Returns JSON: `{ "field_name": true/false, ... }`
 pub(crate) async fn evaluate_conditions(
     State(state): State<AdminState>,
     Path(slug): Path<String>,
@@ -29,7 +29,13 @@ pub(crate) async fn evaluate_conditions(
         return Json(json!({})).into_response();
     };
 
-    match check_access_or_forbid(&state, def.access.read.as_deref(), &auth_user, None, None) {
+    match check_access_or_forbid(
+        &state,
+        def.access.read.as_deref(),
+        auth_user.as_ref(),
+        None,
+        None,
+    ) {
         Ok(AccessResult::Denied) | Err(_) => return Json(json!({})).into_response(),
         _ => {}
     }

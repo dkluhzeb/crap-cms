@@ -1,4 +1,4 @@
-//! Register `crap.auth` — hash_password, verify_password, user.
+//! Register `crap.auth` — `hash_password`, `verify_password`, user.
 
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Table, Value};

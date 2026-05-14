@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use crate::{
     config::McpConfig,
-    core::Registry,
+    core::{CollectionDefinition, GlobalDefinition, Registry},
     mcp::{
         protocol::ToolDefinition,
         schema::{CrudOp, collection_input_schema, global_input_schema},
@@ -73,7 +73,7 @@ pub(in crate::mcp) enum ToolOp {
     Unpublish,
     ListVersions,
     RestoreVersion,
-    /// Read a global (same as find_by_id but for globals)
+    /// Read a global (same as `find_by_id` but for globals)
     ReadGlobal,
     /// Update a global
     UpdateGlobal,
@@ -97,206 +97,187 @@ pub(in crate::mcp) fn generate_tools(
 ) -> Vec<ToolDefinition> {
     let mut tools = Vec::new();
 
-    // Collection CRUD tools
     for (slug, def) in &registry.collections {
-        if !should_include(slug, config) {
-            continue;
-        }
-
-        let label = def.display_name();
-        let base_desc = def
-            .mcp
-            .description
-            .as_deref()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("CRUD operations on {}", label));
-
-        // find_<slug>
-        tools.push(ToolDefinition {
-            name: format!("find_{}", slug),
-            description: Some(format!("Query {} documents. {}", label, base_desc)),
-            input_schema: collection_input_schema(def, CrudOp::Find),
-        });
-
-        // find_by_id_<slug>
-        tools.push(ToolDefinition {
-            name: format!("find_by_id_{}", slug),
-            description: Some(format!("Get a single {} document by ID", label)),
-            input_schema: collection_input_schema(def, CrudOp::FindById),
-        });
-
-        // create_<slug>
-        tools.push(ToolDefinition {
-            name: format!("create_{}", slug),
-            description: Some(format!("Create a new {} document", label)),
-            input_schema: collection_input_schema(def, CrudOp::Create),
-        });
-
-        // create_many_<slug>
-        tools.push(ToolDefinition {
-            name: format!("create_many_{}", slug),
-            description: Some(format!(
-                "Bulk create multiple {} documents in batched transactions",
-                label
-            )),
-            input_schema: collection_input_schema(def, CrudOp::CreateMany),
-        });
-
-        // update_many_<slug>
-        tools.push(ToolDefinition {
-            name: format!("update_many_{}", slug),
-            description: Some(format!(
-                "Bulk update multiple {} documents matching a filter",
-                label
-            )),
-            input_schema: collection_input_schema(def, CrudOp::UpdateMany),
-        });
-
-        // delete_many_<slug>
-        tools.push(ToolDefinition {
-            name: format!("delete_many_{}", slug),
-            description: Some(format!(
-                "Bulk delete multiple {} documents matching a filter",
-                label
-            )),
-            input_schema: collection_input_schema(def, CrudOp::DeleteMany),
-        });
-
-        // update_<slug>
-        tools.push(ToolDefinition {
-            name: format!("update_{}", slug),
-            description: Some(format!("Update an existing {} document", label)),
-            input_schema: collection_input_schema(def, CrudOp::Update),
-        });
-
-        // delete_<slug>
-        tools.push(ToolDefinition {
-            name: format!("delete_{}", slug),
-            description: Some(format!("Delete a {} document by ID", label)),
-            input_schema: collection_input_schema(def, CrudOp::Delete),
-        });
-
-        // count_<slug>
-        tools.push(ToolDefinition {
-            name: format!("count_{}", slug),
-            description: Some(format!("Count {} documents matching filters", label)),
-            input_schema: collection_input_schema(def, CrudOp::Count),
-        });
-
-        // undelete_<slug> — only for collections with soft delete
-        if def.has_soft_delete() {
-            tools.push(ToolDefinition {
-                name: format!("undelete_{}", slug),
-                description: Some(format!("Restore a soft-deleted {} document", label)),
-                input_schema: collection_input_schema(def, CrudOp::Undelete),
-            });
-        }
-
-        // unpublish_<slug> — only for versioned collections
-        if def.versions.is_some() {
-            tools.push(ToolDefinition {
-                name: format!("unpublish_{}", slug),
-                description: Some(format!("Unpublish a {} document (set to draft)", label)),
-                input_schema: collection_input_schema(def, CrudOp::Unpublish),
-            });
-
-            // list_versions_<slug>
-            tools.push(ToolDefinition {
-                name: format!("list_versions_{}", slug),
-                description: Some(format!("List version history for a {} document", label)),
-                input_schema: collection_input_schema(def, CrudOp::ListVersions),
-            });
-
-            // restore_version_<slug>
-            tools.push(ToolDefinition {
-                name: format!("restore_version_{}", slug),
-                description: Some(format!(
-                    "Restore a {} document to a specific version",
-                    label
-                )),
-                input_schema: collection_input_schema(def, CrudOp::RestoreVersion),
-            });
+        if should_include(slug, config) {
+            tools.extend(collection_tools(slug, def));
         }
     }
 
-    // Global CRUD tools (prefixed with "global_" to avoid collision with collection tools)
     for (slug, def) in &registry.globals {
-        let label = def.display_name();
-
-        // global_read_<slug>
-        tools.push(ToolDefinition {
-            name: format!("global_read_{}", slug),
-            description: Some(format!("Read the {} global document", label)),
-            input_schema: global_input_schema(def, CrudOp::Find),
-        });
-
-        // global_update_<slug>
-        tools.push(ToolDefinition {
-            name: format!("global_update_{}", slug),
-            description: Some(format!("Update the {} global document", label)),
-            input_schema: global_input_schema(def, CrudOp::Update),
-        });
+        tools.extend(global_tools(slug, def));
     }
 
-    // Schema introspection tools
-    tools.push(ToolDefinition {
-        name: TOOL_LIST_COLLECTIONS.to_string(),
-        description: Some("List all collections with their labels and capabilities".to_string()),
-        input_schema: json!({ "type": "object", "properties": {} }),
-    });
+    tools.extend(schema_introspection_tools());
 
-    tools.push(ToolDefinition {
-        name: TOOL_DESCRIBE_COLLECTION.to_string(),
-        description: Some("Get the full field schema for a collection or global".to_string()),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "slug": { "type": "string", "description": "Collection or global slug" }
-            },
-            "required": ["slug"]
-        }),
-    });
-
-    tools.push(ToolDefinition {
-        name: TOOL_LIST_FIELD_TYPES.to_string(),
-        description: Some(
-            "List all available field types with descriptions and valid options".to_string(),
-        ),
-        input_schema: json!({ "type": "object", "properties": {} }),
-    });
-
-    tools.push(ToolDefinition {
-        name: TOOL_CLI_REFERENCE.to_string(),
-        description: Some("Get CLI command reference for crap-cms. Returns usage, flags, and examples for all commands or a specific command.".to_string()),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "Specific command to get help for (e.g., 'serve', 'migrate', 'user create'). Omit for full reference."
-                }
-            }
-        }),
-    });
-
-    // Config generation tools (opt-in)
     if config.config_tools {
-        tools.push(ToolDefinition {
-            name: TOOL_READ_CONFIG_FILE.to_string(),
-            description: Some("Read a file from the config directory".to_string()),
-            input_schema: json!({
+        tools.extend(config_generation_tools());
+    }
+
+    tools
+}
+
+/// All MCP tools for a single collection: CRUD + soft-delete/version variants.
+fn collection_tools(slug: &str, def: &CollectionDefinition) -> Vec<ToolDefinition> {
+    let label = def.display_name();
+    let base_desc = def.mcp.description.as_deref().map_or_else(
+        || format!("CRUD operations on {label}"),
+        std::string::ToString::to_string,
+    );
+    let schema = |op| collection_input_schema(def, op);
+
+    let mut tools = vec![
+        ToolDefinition::new(
+            format!("find_{slug}"),
+            format!("Query {label} documents. {base_desc}"),
+            schema(CrudOp::Find),
+        ),
+        ToolDefinition::new(
+            format!("find_by_id_{slug}"),
+            format!("Get a single {label} document by ID"),
+            schema(CrudOp::FindById),
+        ),
+        ToolDefinition::new(
+            format!("create_{slug}"),
+            format!("Create a new {label} document"),
+            schema(CrudOp::Create),
+        ),
+        ToolDefinition::new(
+            format!("create_many_{slug}"),
+            format!("Bulk create multiple {label} documents in batched transactions"),
+            schema(CrudOp::CreateMany),
+        ),
+        ToolDefinition::new(
+            format!("update_many_{slug}"),
+            format!("Bulk update multiple {label} documents matching a filter"),
+            schema(CrudOp::UpdateMany),
+        ),
+        ToolDefinition::new(
+            format!("delete_many_{slug}"),
+            format!("Bulk delete multiple {label} documents matching a filter"),
+            schema(CrudOp::DeleteMany),
+        ),
+        ToolDefinition::new(
+            format!("update_{slug}"),
+            format!("Update an existing {label} document"),
+            schema(CrudOp::Update),
+        ),
+        ToolDefinition::new(
+            format!("delete_{slug}"),
+            format!("Delete a {label} document by ID"),
+            schema(CrudOp::Delete),
+        ),
+        ToolDefinition::new(
+            format!("count_{slug}"),
+            format!("Count {label} documents matching filters"),
+            schema(CrudOp::Count),
+        ),
+    ];
+
+    if def.has_soft_delete() {
+        tools.push(ToolDefinition::new(
+            format!("undelete_{slug}"),
+            format!("Restore a soft-deleted {label} document"),
+            schema(CrudOp::Undelete),
+        ));
+    }
+
+    if def.versions.is_some() {
+        tools.push(ToolDefinition::new(
+            format!("unpublish_{slug}"),
+            format!("Unpublish a {label} document (set to draft)"),
+            schema(CrudOp::Unpublish),
+        ));
+        tools.push(ToolDefinition::new(
+            format!("list_versions_{slug}"),
+            format!("List version history for a {label} document"),
+            schema(CrudOp::ListVersions),
+        ));
+        tools.push(ToolDefinition::new(
+            format!("restore_version_{slug}"),
+            format!("Restore a {label} document to a specific version"),
+            schema(CrudOp::RestoreVersion),
+        ));
+    }
+
+    tools
+}
+
+/// MCP tools for a single global: read + update (prefixed `global_` to
+/// avoid name collisions with collection tools).
+fn global_tools(slug: &str, def: &GlobalDefinition) -> Vec<ToolDefinition> {
+    let label = def.display_name();
+    vec![
+        ToolDefinition::new(
+            format!("global_read_{slug}"),
+            format!("Read the {label} global document"),
+            global_input_schema(def, CrudOp::Find),
+        ),
+        ToolDefinition::new(
+            format!("global_update_{slug}"),
+            format!("Update the {label} global document"),
+            global_input_schema(def, CrudOp::Update),
+        ),
+    ]
+}
+
+/// Always-on schema introspection tools (list/describe/field types/CLI reference).
+fn schema_introspection_tools() -> Vec<ToolDefinition> {
+    vec![
+        ToolDefinition::new(
+            TOOL_LIST_COLLECTIONS,
+            "List all collections with their labels and capabilities",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        ToolDefinition::new(
+            TOOL_DESCRIBE_COLLECTION,
+            "Get the full field schema for a collection or global",
+            json!({
+                "type": "object",
+                "properties": {
+                    "slug": { "type": "string", "description": "Collection or global slug" }
+                },
+                "required": ["slug"]
+            }),
+        ),
+        ToolDefinition::new(
+            TOOL_LIST_FIELD_TYPES,
+            "List all available field types with descriptions and valid options",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        ToolDefinition::new(
+            TOOL_CLI_REFERENCE,
+            "Get CLI command reference for crap-cms. Returns usage, flags, and examples for all commands or a specific command.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Specific command to get help for (e.g., 'serve', 'migrate', 'user create'). Omit for full reference."
+                    }
+                }
+            }),
+        ),
+    ]
+}
+
+/// Opt-in config generation tools (`mcp.config_tools = true`).
+fn config_generation_tools() -> Vec<ToolDefinition> {
+    vec![
+        ToolDefinition::new(
+            TOOL_READ_CONFIG_FILE,
+            "Read a file from the config directory",
+            json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Relative path within the config directory" }
                 },
                 "required": ["path"]
             }),
-        });
-
-        tools.push(ToolDefinition {
-            name: TOOL_WRITE_CONFIG_FILE.to_string(),
-            description: Some("Write a file to the config directory (creates parent dirs)".to_string()),
-            input_schema: json!({
+        ),
+        ToolDefinition::new(
+            TOOL_WRITE_CONFIG_FILE,
+            "Write a file to the config directory (creates parent dirs)",
+            json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Relative path within the config directory" },
@@ -304,24 +285,21 @@ pub(in crate::mcp) fn generate_tools(
                 },
                 "required": ["path", "content"]
             }),
-        });
-
-        tools.push(ToolDefinition {
-            name: TOOL_LIST_CONFIG_FILES.to_string(),
-            description: Some("List files in the config directory".to_string()),
-            input_schema: json!({
+        ),
+        ToolDefinition::new(
+            TOOL_LIST_CONFIG_FILES,
+            "List files in the config directory",
+            json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Subdirectory to list (default: root)" }
                 }
             }),
-        });
-    }
-
-    tools
+        ),
+    ]
 }
 
-/// Parse a tool name like "find_posts" into (op, slug).
+/// Parse a tool name like "`find_posts`" into (op, slug).
 pub(in crate::mcp) fn parse_tool_name(name: &str, registry: &Registry) -> Option<ParsedTool> {
     // Try collection CRUD patterns (longer prefixes first to avoid ambiguity)
     for prefix in &[
@@ -439,14 +417,14 @@ pub(in crate::mcp) fn execute_tool(
 
     // Dynamic CRUD tools
     let Some(parsed) = parse_tool_name(name, ctx.registry) else {
-        bail!("Unknown tool: {}", name);
+        bail!("Unknown tool: {name}");
     };
 
     // Enforce include/exclude at execution time — not just in tools/list.
     // Without this, an attacker who knows a collection slug could directly call
     // e.g. find_<slug> even if the collection was excluded from tool listing.
     if !should_include(&parsed.slug, &ctx.config.mcp) {
-        bail!("Tool not available: {}", name);
+        bail!("Tool not available: {name}");
     }
 
     let slug = parsed.slug.as_str();
@@ -746,8 +724,7 @@ mod tests {
             execute_tool("find_posts", &json!({ "limit": 10 }), tmp.path(), &ctx).unwrap_err();
         assert!(
             err.to_string().contains("Tool not available"),
-            "Expected 'Tool not available' error, got: {}",
-            err
+            "Expected 'Tool not available' error, got: {err}"
         );
     }
 
@@ -780,14 +757,13 @@ mod tests {
 
         // find_posts should work (included)
         let result = execute_tool("find_posts", &json!({}), tmp.path(), &ctx);
-        assert!(result.is_ok(), "find_posts should succeed: {:?}", result);
+        assert!(result.is_ok(), "find_posts should succeed: {result:?}");
 
         // find_users should be blocked (not in include list)
         let err = execute_tool("find_users", &json!({}), tmp.path(), &ctx).unwrap_err();
         assert!(
             err.to_string().contains("Tool not available"),
-            "Expected 'Tool not available' error for users, got: {}",
-            err
+            "Expected 'Tool not available' error for users, got: {err}"
         );
     }
 }

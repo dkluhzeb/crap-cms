@@ -36,11 +36,15 @@ pub(in crate::mcp::tools) fn exec_find_by_id(
     let locale = args.get("locale").and_then(|v| v.as_str());
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
 
-    let depth = args
+    // MCP requests outside i32 range can't be valid populate depths; clamp
+    // to the configured default before applying max_depth.
+    let depth_raw = args
         .get("depth")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(ctx.config.depth.default_depth as i64) as i32;
-    let depth = depth.min(ctx.config.depth.max_depth);
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(i64::from(ctx.config.depth.default_depth));
+    let depth = i32::try_from(depth_raw)
+        .unwrap_or(ctx.config.depth.default_depth)
+        .min(ctx.config.depth.max_depth);
 
     let hooks = RunnerReadHooks::new(ctx.runner, &conn);
     let svc_ctx = ServiceContext::collection(slug, def)

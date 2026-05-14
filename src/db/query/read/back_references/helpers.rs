@@ -39,7 +39,7 @@ pub(super) fn query_ids(
     }
 }
 
-/// Simple query for array/blocks parent_id lookups.
+/// Simple query for array/blocks `parent_id` lookups.
 pub(super) fn query_ids_simple(conn: &dyn DbConnection, sql: &str, value: &str) -> Vec<String> {
     let params = vec![DbValue::Text(value.to_string())];
     match conn.query_all(sql, &params) {

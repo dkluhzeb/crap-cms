@@ -1,4 +1,4 @@
-//! TriggerJob handler — trigger a job by slug, queuing it for execution.
+//! `TriggerJob` handler — trigger a job by slug, queuing it for execution.
 
 use std::sync::Arc;
 

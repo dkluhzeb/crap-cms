@@ -11,6 +11,11 @@ use crate::{
 };
 
 /// Handle the `images` subcommand — dispatches to the appropriate action handler.
+///
+/// # Errors
+///
+/// Returns an error if config loading, pool creation, or the dispatched
+/// action fails.
 #[cfg(not(tarpaulin_include))]
 pub fn run(config_dir: &Path, action: ImagesAction) -> Result<()> {
     let config_dir = config_dir
@@ -22,7 +27,7 @@ pub fn run(config_dir: &Path, action: ImagesAction) -> Result<()> {
     let conn = pool.get().context("Failed to get DB connection")?;
 
     match action {
-        ImagesAction::List { status, limit } => list_entries(&conn, status, limit),
+        ImagesAction::List { status, limit } => list_entries(&conn, status.as_deref(), limit),
         ImagesAction::Stats => show_stats(&conn),
         ImagesAction::Retry { id, all, confirm } => retry_entries(&conn, id, all, confirm),
         ImagesAction::Purge { older_than } => purge_entries(&conn, &older_than),
@@ -30,8 +35,8 @@ pub fn run(config_dir: &Path, action: ImagesAction) -> Result<()> {
 }
 
 /// List image processing queue entries with optional status filter.
-fn list_entries(conn: &BoxedConnection, status: Option<String>, limit: i64) -> Result<()> {
-    let entries = query::images::list_image_entries(conn, status.as_deref(), limit)?;
+fn list_entries(conn: &BoxedConnection, status: Option<&str>, limit: i64) -> Result<()> {
+    let entries = query::images::list_image_entries(conn, status, limit)?;
 
     if entries.is_empty() {
         cli::info("No queue entries found.");
@@ -109,14 +114,14 @@ fn retry_entries(
 
         let count = query::images::retry_all_failed_images(conn)?;
 
-        cli::success(&format!("Reset {} failed entry/entries to pending", count));
+        cli::success(&format!("Reset {count} failed entry/entries to pending"));
     } else if let Some(entry_id) = id {
         let found = query::images::retry_image_entry(conn, &entry_id)?;
 
         if found {
-            cli::success(&format!("Reset entry {} to pending", entry_id));
+            cli::success(&format!("Reset entry {entry_id} to pending"));
         } else {
-            bail!("Entry '{}' not found or not in 'failed' status", entry_id);
+            bail!("Entry '{entry_id}' not found or not in 'failed' status");
         }
     } else {
         bail!("Specify --id <id> or --all -y");
@@ -129,14 +134,13 @@ fn retry_entries(
 fn purge_entries(conn: &BoxedConnection, older_than: &str) -> Result<()> {
     let secs = parse_duration_string(older_than).ok_or_else(|| {
         anyhow!(
-            "Invalid duration '{}'. Use format like '7d' (days), '24h' (hours), '30m' (minutes), '60s' (seconds)",
-            older_than
+            "Invalid duration '{older_than}'. Use format like '7d' (days), '24h' (hours), '30m' (minutes), '60s' (seconds)"
         )
     })?;
 
     let deleted = query::images::purge_old_image_entries(conn, secs)?;
 
-    cli::success(&format!("Purged {} old queue entry/entries", deleted));
+    cli::success(&format!("Purged {deleted} old queue entry/entries"));
 
     Ok(())
 }

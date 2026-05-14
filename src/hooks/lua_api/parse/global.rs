@@ -9,9 +9,17 @@ use crate::{
     db::query,
 };
 
-use super::shared::*;
+use super::shared::{
+    parse_access_config, parse_fields_section, parse_hooks_section, parse_labels,
+    parse_live_setting, parse_mcp_section, parse_versions_config, warn_deep_nesting,
+};
 
 /// Parse a Lua table into a `GlobalDefinition`, extracting fields, hooks, and access config.
+///
+/// # Errors
+///
+/// Returns an error if the slug is invalid or any nested
+/// fields/hooks/versions spec fails to parse.
 pub fn parse_global_definition(lua: &Lua, slug: &str, config: &Table) -> Result<GlobalDefinition> {
     query::validate_slug(slug)?;
 
@@ -104,7 +112,7 @@ mod tests {
         let def = parse_global_definition(&lua, "site_settings", &config).unwrap();
         match def.labels.singular {
             Some(LocalizedString::Plain(s)) => assert_eq!(s, "Settings"),
-            other => panic!("Expected Plain label, got {:?}", other),
+            other => panic!("Expected Plain label, got {other:?}"),
         }
     }
 }

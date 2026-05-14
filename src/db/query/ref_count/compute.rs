@@ -52,7 +52,24 @@ pub(super) fn compute_refs_from_data(
                 };
                 let col = prefixed_name(prefix, &field.name);
 
-                if !field.has_parent_column() {
+                if field.has_parent_column() {
+                    // Has-one: read scalar value from the unified data map.
+                    let columns = if field.localized && locale_config.is_enabled() {
+                        locale_config
+                            .locales
+                            .iter()
+                            .filter_map(|l| locale_column(&col, l).ok())
+                            .collect::<Vec<_>>()
+                    } else {
+                        vec![col]
+                    };
+
+                    for col_name in &columns {
+                        if let Some(value) = data.get(col_name).and_then(Value::as_str) {
+                            push_ref(refs, value, rc.is_polymorphic(), &rc.collection);
+                        }
+                    }
+                } else {
                     // Has-many: read structured value from the unified data map.
                     // Deduplicate to match the DB path's SELECT DISTINCT —
                     // junction tables can have duplicate rows, and parse_id_list
@@ -74,23 +91,6 @@ pub(super) fn compute_refs_from_data(
                                     push_ref(refs, &id, false, &rc.collection);
                                 }
                             }
-                        }
-                    }
-                } else {
-                    // Has-one: read scalar value from the unified data map.
-                    let columns = if field.localized && locale_config.is_enabled() {
-                        locale_config
-                            .locales
-                            .iter()
-                            .filter_map(|l| locale_column(&col, l).ok())
-                            .collect::<Vec<_>>()
-                    } else {
-                        vec![col]
-                    };
-
-                    for col_name in &columns {
-                        if let Some(value) = data.get(col_name).and_then(Value::as_str) {
-                            push_ref(refs, value, rc.is_polymorphic(), &rc.collection);
                         }
                     }
                 }
@@ -150,7 +150,7 @@ fn compute_array_refs_from_data(
     }
 }
 
-/// Extract refs from blocks row data (JSON objects with _block_type and data fields).
+/// Extract refs from blocks row data (JSON objects with _`block_type` and data fields).
 fn compute_blocks_refs_from_data(
     rows: &[Value],
     blocks: &[BlockDefinition],

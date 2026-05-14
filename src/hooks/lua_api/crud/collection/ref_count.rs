@@ -7,27 +7,27 @@ use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 
 use crate::{
     core::Registry,
-    hooks::lua_api::crud::{get_tx_conn, helpers::*},
+    hooks::lua_api::crud::{get_tx_conn, helpers::resolve_collection},
     service::{ServiceContext, document_info},
 };
 
 /// Core logic for `crap.collections.ref_count`.
-fn ref_count_inner(lua: &Lua, reg: &Registry, collection: String, id: String) -> LuaResult<i64> {
+fn ref_count_inner(lua: &Lua, reg: &Registry, collection: &str, id: &str) -> LuaResult<i64> {
     let conn = get_tx_conn(lua)?;
 
-    let def = resolve_collection(reg, &collection)?;
+    let def = resolve_collection(reg, collection)?;
 
-    let ctx = ServiceContext::collection(&collection, &def)
+    let ctx = ServiceContext::collection(collection, &def)
         .conn(conn)
         .build();
-    document_info::get_ref_count(&ctx, &id).map_err(|e| RuntimeError(format!("{e}")))
+    document_info::get_ref_count(&ctx, id).map_err(|e| RuntimeError(format!("{e}")))
 }
 
 /// Register `crap.collections.ref_count(collection, id)`.
 #[cfg(not(tarpaulin_include))]
 pub(crate) fn register_ref_count(lua: &Lua, table: &Table, registry: Arc<Registry>) -> Result<()> {
     let ref_count_fn = lua.create_function(move |lua, (collection, id): (String, String)| {
-        ref_count_inner(lua, &registry, collection, id)
+        ref_count_inner(lua, &registry, &collection, &id)
     })?;
 
     table.set("ref_count", ref_count_fn)?;

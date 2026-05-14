@@ -22,8 +22,7 @@ fn validate_auth_collection(service: &ContentService, collection: &str) -> Resul
 
     if !def.is_auth_collection() {
         return Err(Status::invalid_argument(format!(
-            "Collection '{}' is not an auth collection",
-            collection
+            "Collection '{collection}' is not an auth collection"
         )));
     }
 

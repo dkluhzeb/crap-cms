@@ -25,7 +25,7 @@ struct ResetPasswordBlockingInput {
 /// the semantic outcome of `consume_reset_token` — kept as `ServiceError`
 /// so the caller can record a rate-limit failure before mapping to `Status`.
 fn reset_password_blocking(
-    input: ResetPasswordBlockingInput,
+    input: &ResetPasswordBlockingInput,
 ) -> Result<Result<(), ServiceError>, Status> {
     let mut conn = input
         .pool
@@ -61,8 +61,7 @@ impl ContentService {
     ) -> Result<Response<content::ResetPasswordResponse>, Status> {
         let ip = request
             .remote_addr()
-            .map(|a| a.ip().to_string())
-            .unwrap_or_else(|| "unknown".to_string());
+            .map_or_else(|| "unknown".to_string(), |a| a.ip().to_string());
         let req = request.into_inner();
 
         if self.ip_forgot_password_limiter.is_blocked(&ip) {
@@ -98,7 +97,7 @@ impl ContentService {
             password: req.new_password.clone(),
         };
 
-        let result = task::spawn_blocking(move || reset_password_blocking(input))
+        let result = task::spawn_blocking(move || reset_password_blocking(&input))
             .await
             .inspect_err(|e| error!("Reset password task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;

@@ -1,4 +1,4 @@
-//! HookRunner methods for running Lua migrations.
+//! `HookRunner` methods for running Lua migrations.
 
 use std::{fs, path::Path};
 
@@ -12,6 +12,11 @@ use crate::{
 impl HookRunner {
     /// Run a migration file (up or down direction) within a transaction.
     /// Loads the Lua file, calls `M.up()` or `M.down()` with CRUD access.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file can't be read, the Lua module can't be
+    /// loaded, or the migration function itself fails.
     pub fn run_migration(
         &self,
         path: &Path,

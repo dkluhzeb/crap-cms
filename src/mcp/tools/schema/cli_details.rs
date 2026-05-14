@@ -1,4 +1,4 @@
-//! CLI reference data — 24 CLI_DETAIL_* statics consumed by `exec_cli_reference`.
+//! CLI reference data — 24 `CLI_DETAIL`_* statics consumed by `exec_cli_reference`.
 //!
 //! Split out from `cli_reference.rs` to keep that file under the 1000-LOC soft limit.
 

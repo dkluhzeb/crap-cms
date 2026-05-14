@@ -461,7 +461,7 @@ mod tests {
         );
 
         assert_eq!(errors.len(), 1);
-        assert!(errors[0].message.contains("1"));
+        assert!(errors[0].message.contains('1'));
     }
 
     #[test]
@@ -654,8 +654,7 @@ mod tests {
         // text has max_length=100 — create a string that exceeds it
         let long_text = "a".repeat(101);
         let json = format!(
-            r#"{{"type":"doc","content":[{{"type":"cta","attrs":{{"text":"{}","url":"/ok"}}}}]}}"#,
-            long_text
+            r#"{{"type":"doc","content":[{{"type":"cta","attrs":{{"text":"{long_text}","url":"/ok"}}}}]}}"#
         );
         let mut errors = Vec::new();
 
@@ -762,8 +761,7 @@ mod tests {
 
         assert!(
             result.contains("HELLO"),
-            "hook should uppercase the label: {}",
-            result
+            "hook should uppercase the label: {result}"
         );
     }
 
@@ -831,8 +829,7 @@ mod tests {
         // The single quote in the attr value must be escaped as &#39;
         assert!(
             result.contains("&#39;"),
-            "single quote should be escaped: {}",
-            result
+            "single quote should be escaped: {result}"
         );
         assert!(
             !result.contains("data-attrs='{") || !result.contains("'}'"),

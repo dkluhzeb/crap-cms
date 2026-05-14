@@ -17,6 +17,10 @@ use crate::{
 };
 
 /// Get the single global document from `_global_{slug}`.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT, row parsing, or hydration fails.
 pub fn get_global(
     conn: &dyn DbConnection,
     slug: &str,
@@ -42,7 +46,7 @@ pub fn get_global(
     // Build a row with aliased column names so row_to_document sees the right names
     let raw_row = conn
         .query_one(&sql, &[])?
-        .with_context(|| format!("Failed to get global '{}'", slug))?;
+        .with_context(|| format!("Failed to get global '{slug}'"))?;
 
     // Remap columns to result_names (for locale SELECT aliasing)
     let values: Vec<DbValue> = (0..raw_row.column_count())
@@ -66,6 +70,10 @@ pub fn get_global(
 }
 
 /// Update the single global document in `_global_{slug}`. Returns the updated document.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE, join-table sync, or re-read fails.
 pub fn update_global(
     conn: &dyn DbConnection,
     slug: &str,
@@ -78,7 +86,7 @@ pub fn update_global(
 
     let mut col = UpdateCollector::new();
 
-    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn)?;
+    collect_update_params(&def.fields, data, locale_ctx, &mut col, conn)?;
 
     if col.set_clauses.is_empty() {
         return get_global(conn, slug, def, locale_ctx);
@@ -93,7 +101,7 @@ pub fn update_global(
     );
 
     conn.execute(&sql, &col.params)
-        .with_context(|| format!("Failed to update global '{}'", slug))?;
+        .with_context(|| format!("Failed to update global '{slug}'"))?;
 
     get_global(conn, slug, def, locale_ctx)
 }

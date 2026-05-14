@@ -11,6 +11,11 @@ pub type SharedEmailProvider = Arc<dyn EmailProvider>;
 /// Object-safe email provider trait.
 pub trait EmailProvider: Send + Sync {
     /// Send an email. Blocking — call from `spawn_blocking` context.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying transport fails (SMTP error,
+    /// webhook HTTP failure, …).
     fn send(&self, to: &str, subject: &str, html: &str, text: Option<&str>) -> Result<()>;
 
     /// Return the backend identifier (`"smtp"`, `"webhook"`, `"log"`, `"custom"`).

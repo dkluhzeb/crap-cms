@@ -46,7 +46,7 @@ fn restore_global_version_blocking(
     restore_global_version(&ctx, &input.version_id, &input.locale_config)
 }
 
-/// POST /admin/globals/{slug}/versions/{version_id}/restore
+/// `POST /admin/globals/{slug}/versions/{version_id}/restore`
 pub async fn restore_version(
     State(state): State<AdminState>,
     Path((slug, version_id)): Path<(String, String)>,
@@ -66,7 +66,7 @@ pub async fn restore_version(
         runner: state.hook_runner.clone(),
         slug,
         def,
-        user_doc: get_user_doc(&auth_user).cloned(),
+        user_doc: get_user_doc(auth_user.as_ref()).cloned(),
         event_transport: state.event_transport.clone(),
         cache: state.cache.clone(),
         version_id,

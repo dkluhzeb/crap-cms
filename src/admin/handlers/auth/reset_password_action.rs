@@ -71,7 +71,7 @@ fn consume_reset_token(
             Err(ServiceError::InvalidToken {
                 reason: "not found",
                 ..
-            }) => continue,
+            }) => {}
             Err(e) => {
                 tx.commit()?;
                 return Err(e.into_anyhow());

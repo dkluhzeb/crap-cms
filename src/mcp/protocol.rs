@@ -42,6 +42,7 @@ pub const INVALID_PARAMS: i64 = -32602;
 pub const INTERNAL_ERROR: i64 = -32603;
 
 impl JsonRpcResponse {
+    #[must_use]
     pub fn success(id: Option<Value>, result: Value) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
@@ -100,6 +101,26 @@ pub struct ToolDefinition {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub input_schema: Value,
+}
+
+impl ToolDefinition {
+    /// Construct a tool definition with the given name, description, and JSON
+    /// schema. Wraps the description in `Some(...)` so call sites read as a
+    /// straight three-arg call instead of a struct literal with positional
+    /// `Some(...)` noise. MCP always emits a description for runtime tools;
+    /// the `Option` exists only to satisfy the wire-format `null` case.
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        input_schema: Value,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: Some(description.into()),
+            input_schema,
+        }
+    }
 }
 
 /// MCP tools/call params.

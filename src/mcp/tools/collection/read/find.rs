@@ -33,8 +33,8 @@ pub(in crate::mcp::tools) fn exec_find(
         .context("Collection not found")?;
     let conn = ctx.pool.get().context("DB connection")?;
 
-    let limit = args.get("limit").and_then(|v| v.as_i64());
-    let page = args.get("page").and_then(|v| v.as_i64());
+    let limit = args.get("limit").and_then(serde_json::Value::as_i64);
+    let page = args.get("page").and_then(serde_json::Value::as_i64);
     let after_cursor = args.get("after_cursor").and_then(|v| v.as_str());
     let before_cursor = args.get("before_cursor").and_then(|v| v.as_str());
 
@@ -50,19 +50,33 @@ pub(in crate::mcp::tools) fn exec_find(
     let order_by = args
         .get("order_by")
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
     let search = args
         .get("search")
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
     let locale = args.get("locale").and_then(|v| v.as_str());
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
 
-    let depth = args.get("depth").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-    let depth = depth.min(ctx.config.depth.max_depth);
+    // MCP requests outside i32 range can't be valid populate depths; treat
+    // them as 0 (no population) before applying max_depth.
+    let depth_raw = args
+        .get("depth")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0);
+    let depth = i32::try_from(depth_raw)
+        .unwrap_or(0)
+        .min(ctx.config.depth.max_depth);
 
-    let is_trash = args.get("trash").and_then(|v| v.as_bool()).unwrap_or(false) && def.soft_delete;
-    let include_drafts = args.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
+    let is_trash = args
+        .get("trash")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+        && def.soft_delete;
+    let include_drafts = args
+        .get("draft")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
 
     // Default sort for trash listings is a presentation concern.
     let order_by = order_by

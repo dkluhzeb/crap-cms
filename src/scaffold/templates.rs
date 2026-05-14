@@ -34,13 +34,23 @@ fn collect_embedded_files_flat<'a>(dir: &'a Dir<'a>) -> Vec<(String, &'a [u8])> 
 }
 
 /// Format a file size as human-readable (e.g., "1.2 KB", "92.0 KB").
+/// Integer math avoids the `usize as f64` precision-loss path.
 fn format_size(bytes: usize) -> String {
-    if bytes < 1024 {
-        format!("{} B", bytes)
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
+    const KB: usize = 1024;
+    const MB: usize = 1024 * KB;
+
+    fn split(bytes: usize, unit: usize) -> (usize, usize) {
+        (bytes / unit, (bytes % unit) * 10 / unit)
+    }
+
+    if bytes < KB {
+        format!("{bytes} B")
+    } else if bytes < MB {
+        let (whole, tenths) = split(bytes, KB);
+        format!("{whole}.{tenths} KB")
     } else {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+        let (whole, tenths) = split(bytes, MB);
+        format!("{whole}.{tenths} MB")
     }
 }
 
@@ -207,7 +217,7 @@ fn print_file_tree(files: &[(String, &[u8])]) {
 
     for (dir, entries) in &dirs {
         if !dir.is_empty() {
-            println!("  {}/", dir);
+            println!("  {dir}/");
         }
         for (name, size) in entries {
             let indent = if dir.is_empty() { "  " } else { "    " };
@@ -222,7 +232,7 @@ fn validate_type_filter(filter: Option<&str>) -> Result<()> {
         && f != "templates"
         && f != "static"
     {
-        bail!("Invalid --type '{}' -- valid: templates, static", f);
+        bail!("Invalid --type '{f}' -- valid: templates, static");
     }
 
     Ok(())
@@ -252,6 +262,10 @@ fn print_section(
 }
 
 /// List embedded templates and/or static files.
+///
+/// # Errors
+///
+/// Returns an error if `type_filter` is not one of the accepted values.
 pub fn templates_list(type_filter: Option<&str>, verbose: bool) -> Result<()> {
     validate_type_filter(type_filter)?;
 
@@ -346,7 +360,12 @@ pub struct TemplatesExtractParams<'a> {
 }
 
 /// Extract embedded templates/static files into a config directory.
-pub fn templates_extract(p: TemplatesExtractParams<'_>) -> Result<()> {
+///
+/// # Errors
+///
+/// Returns an error if no paths are given without `--all`, an unknown path
+/// is requested, or any file write fails.
+pub fn templates_extract(p: &TemplatesExtractParams<'_>) -> Result<()> {
     validate_type_filter(p.type_filter)?;
 
     if !p.all && p.paths.is_empty() {
@@ -419,7 +438,7 @@ fn extract_specific(
 
     for path in paths {
         let Some((kind, file)) = find_embedded_file(path, want_templates, want_static) else {
-            cli::warning(&format!("Not found: {}", path));
+            cli::warning(&format!("Not found: {path}"));
             continue;
         };
 
@@ -456,6 +475,10 @@ fn extract_specific(
 /// - No `output` -> writes to stdout (pipe-friendly).
 /// - `output` is a directory -> writes `content.proto` into it.
 /// - `output` is a file path -> writes directly to that file.
+///
+/// # Errors
+///
+/// Returns an error if writing to stdout or the resolved output path fails.
 pub fn proto_export(output: Option<&Path>) -> Result<()> {
     let Some(path) = output else {
         std::io::stdout()
@@ -491,6 +514,20 @@ fn resolve_proto_path(path: &Path) -> Result<std::path::PathBuf> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::*;
     use std::fs;
@@ -529,7 +566,7 @@ mod tests {
     }
 
     fn extract_one(tmp: &Path, path: &str, force: bool) {
-        templates_extract(TemplatesExtractParams {
+        templates_extract(&TemplatesExtractParams {
             config_dir: tmp,
             paths: &[path.to_string()],
             all: false,
@@ -594,7 +631,7 @@ mod tests {
     #[test]
     fn test_templates_extract_all_templates() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        templates_extract(TemplatesExtractParams {
+        templates_extract(&TemplatesExtractParams {
             config_dir: tmp.path(),
             paths: &[],
             all: true,
@@ -612,7 +649,7 @@ mod tests {
     #[test]
     fn test_templates_extract_all_static() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        templates_extract(TemplatesExtractParams {
+        templates_extract(&TemplatesExtractParams {
             config_dir: tmp.path(),
             paths: &[],
             all: true,
@@ -630,7 +667,7 @@ mod tests {
     #[test]
     fn test_templates_extract_requires_paths_or_all() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let result = templates_extract(TemplatesExtractParams {
+        let result = templates_extract(&TemplatesExtractParams {
             config_dir: tmp.path(),
             paths: &[],
             all: false,
@@ -655,7 +692,7 @@ mod tests {
     #[test]
     fn test_templates_extract_all_both() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        templates_extract(TemplatesExtractParams {
+        templates_extract(&TemplatesExtractParams {
             config_dir: tmp.path(),
             paths: &[],
             all: true,
@@ -673,7 +710,7 @@ mod tests {
     fn test_templates_extract_all_with_existing_skipped() {
         let tmp = tempfile::tempdir().expect("tempdir");
         // First extraction
-        templates_extract(TemplatesExtractParams {
+        templates_extract(&TemplatesExtractParams {
             config_dir: tmp.path(),
             paths: &[],
             all: true,
@@ -684,7 +721,7 @@ mod tests {
         // Write marker
         fs::write(tmp.path().join("templates/layout/base.hbs"), "CUSTOM").unwrap();
         // Second extraction without force -- should skip existing
-        templates_extract(TemplatesExtractParams {
+        templates_extract(&TemplatesExtractParams {
             config_dir: tmp.path(),
             paths: &[],
             all: true,
@@ -704,7 +741,7 @@ mod tests {
     fn test_templates_extract_all_static_with_existing_skipped() {
         let tmp = tempfile::tempdir().expect("tempdir");
         // First extraction
-        templates_extract(TemplatesExtractParams {
+        templates_extract(&TemplatesExtractParams {
             config_dir: tmp.path(),
             paths: &[],
             all: true,
@@ -715,7 +752,7 @@ mod tests {
         // Write marker
         fs::write(tmp.path().join("static/styles/main.css"), "CUSTOM").unwrap();
         // Second extraction without force -- should skip
-        templates_extract(TemplatesExtractParams {
+        templates_extract(&TemplatesExtractParams {
             config_dir: tmp.path(),
             paths: &[],
             all: true,
@@ -730,7 +767,7 @@ mod tests {
     #[test]
     fn test_templates_extract_invalid_type() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let result = templates_extract(TemplatesExtractParams {
+        let result = templates_extract(&TemplatesExtractParams {
             config_dir: tmp.path(),
             paths: &[],
             all: true,
@@ -778,7 +815,7 @@ mod tests {
     fn test_templates_extract_specific_with_type_filter() {
         let tmp = tempfile::tempdir().expect("tempdir");
         // Extract only static files (styles.css should be found in static)
-        templates_extract(TemplatesExtractParams {
+        templates_extract(&TemplatesExtractParams {
             config_dir: tmp.path(),
             paths: &["styles/main.css".to_string()],
             all: false,

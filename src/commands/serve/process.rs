@@ -22,6 +22,11 @@ use super::pid::{check_existing_pid, is_process_running, read_pid, remove_pid_fi
 use super::startup::{ServeMode, validate_config_dir};
 
 /// Re-exec the current binary as a detached background process.
+///
+/// # Errors
+///
+/// Returns an error if the executable path can't be determined, the config
+/// directory is invalid, or the child process fails to spawn.
 #[cfg(not(tarpaulin_include))]
 pub fn detach(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) -> Result<()> {
     let exe = env::current_exe().context("Failed to determine executable path")?;
@@ -66,7 +71,7 @@ pub fn detach(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) ->
 
     write_pid_file(&config_dir, pid)?;
 
-    cli::success(&format!("Started crap-cms in background (PID {})", pid));
+    cli::success(&format!("Started crap-cms in background (PID {pid})"));
 
     Ok(())
 }
@@ -95,6 +100,11 @@ where
 }
 
 /// Stop a running detached instance by sending SIGTERM, falling back to SIGKILL.
+///
+/// # Errors
+///
+/// Returns an error if the config dir is invalid, no PID file is found, the
+/// process can't be signalled, or it fails to exit after both signals.
 #[cfg(unix)]
 pub fn stop(config_dir: &Path) -> Result<()> {
     validate_config_dir(config_dir)?;
@@ -107,7 +117,7 @@ pub fn stop(config_dir: &Path) -> Result<()> {
     if !is_process_running(pid) {
         remove_pid_file(config_dir);
 
-        bail!("Process {} is not running (stale PID file removed)", pid);
+        bail!("Process {pid} is not running (stale PID file removed)");
     }
 
     // Send SIGTERM for graceful shutdown.
@@ -144,6 +154,12 @@ pub fn stop(config_dir: &Path) -> Result<()> {
 }
 
 /// Restart a detached instance: stop the current one, then start a new one.
+///
+/// # Errors
+///
+/// Returns an error if the config dir is invalid or the detach step fails.
+/// The stop step's error is non-fatal: a stale PID file is cleaned up and
+/// `detach` proceeds.
 #[cfg(unix)]
 pub fn restart(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) -> Result<()> {
     validate_config_dir(config_dir)?;
@@ -164,17 +180,18 @@ pub fn restart(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) -
 }
 
 /// Show the status of a detached instance.
+///
+/// # Errors
+///
+/// Returns an error if the config directory is invalid.
 #[cfg(unix)]
 pub fn status(config_dir: &Path) -> Result<()> {
     validate_config_dir(config_dir)?;
 
-    let pid = match read_pid(config_dir) {
-        Some(pid) => pid,
-        None => {
-            cli::info("Not running (no PID file)");
+    let Some(pid) = read_pid(config_dir) else {
+        cli::info("Not running (no PID file)");
 
-            return Ok(());
-        }
+        return Ok(());
     };
 
     if !is_process_running(pid) {
@@ -198,7 +215,7 @@ pub fn status(config_dir: &Path) -> Result<()> {
 /// Parse process start time from /proc/[pid]/stat and print uptime.
 ///
 /// Uses `/proc/uptime` for system uptime and `/proc/[pid]/stat` field 22
-/// (starttime in clock ticks). CLK_TCK is read from `getconf CLK_TCK`.
+/// (starttime in clock ticks). `CLK_TCK` is read from `getconf CLK_TCK`.
 #[cfg(target_os = "linux")]
 fn show_uptime(stat: &str) {
     // Field 22 is starttime in clock ticks since boot.
@@ -211,9 +228,8 @@ fn show_uptime(stat: &str) {
         .collect();
 
     // Field 22 is at index 19 in the post-comm fields.
-    let start_ticks: u64 = match fields.get(19).and_then(|s| s.parse().ok()) {
-        Some(v) => v,
-        None => return,
+    let Some(start_ticks) = fields.get(19).and_then(|s| s.parse::<u64>().ok()) else {
+        return;
     };
 
     // Get CLK_TCK via getconf (avoids libc dependency).
@@ -225,22 +241,24 @@ fn show_uptime(stat: &str) {
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(100); // 100 is the default on Linux
 
-    let uptime_str = match fs::read_to_string("/proc/uptime") {
-        Ok(s) => s,
-        Err(_) => return,
+    let Ok(uptime_str) = fs::read_to_string("/proc/uptime") else {
+        return;
     };
 
-    let system_uptime_secs: f64 = match uptime_str
+    // Parse the integer seconds part of `/proc/uptime` so we can do the
+    // arithmetic without dragging f64 through (avoids clippy's
+    // cast_precision_loss / cast_possible_truncation chain).
+    let Some(system_uptime_secs) = uptime_str
         .split_whitespace()
         .next()
-        .and_then(|s| s.parse().ok())
-    {
-        Some(v) => v,
-        None => return,
+        .and_then(|s| s.split('.').next())
+        .and_then(|s| s.parse::<u64>().ok())
+    else {
+        return;
     };
 
-    let process_start_secs = start_ticks as f64 / clk_tck as f64;
-    let uptime_secs = (system_uptime_secs - process_start_secs).max(0.0) as u64;
+    let process_start_secs = start_ticks / clk_tck;
+    let uptime_secs = system_uptime_secs.saturating_sub(process_start_secs);
 
     cli::kv("Uptime", &format_duration(uptime_secs));
 }

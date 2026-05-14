@@ -15,15 +15,31 @@ pub type SharedStorage = Arc<dyn StorageBackend>;
 /// paths, S3 object keys, etc.).
 pub trait StorageBackend: Send + Sync {
     /// Store a file. Overwrites if the key already exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend fails (IO error, network error, permission denied, …).
     fn put(&self, key: &str, data: &[u8], content_type: &str) -> Result<()>;
 
     /// Retrieve a file's contents.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the key is missing or the backend fails.
     fn get(&self, key: &str) -> Result<Vec<u8>>;
 
     /// Delete a file. No error if the key doesn't exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend fails (IO error, permission denied, …).
     fn delete(&self, key: &str) -> Result<()>;
 
     /// Check whether a key exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend fails.
     fn exists(&self, key: &str) -> Result<bool>;
 
     /// Return the public-facing URL for a key.
@@ -37,7 +53,7 @@ pub trait StorageBackend: Send + Sync {
 
     /// Return the local filesystem path for a key, if this is a local backend.
     /// Used by the file serving handler to leverage `tower_http::ServeFile`
-    /// with Range, ETag, and conditional GET support.
+    /// with Range, `ETag`, and conditional GET support.
     /// Non-local backends return `None` and files are served via `get()`.
     fn local_path(&self, key: &str) -> Option<PathBuf> {
         let _ = key;

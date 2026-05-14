@@ -25,6 +25,7 @@ pub struct FindByIdInput<'a> {
 }
 
 impl<'a> FindByIdInput<'a> {
+    #[must_use]
     pub fn builder(id: &'a str) -> FindByIdInputBuilder<'a> {
         FindByIdInputBuilder::new(id)
     }

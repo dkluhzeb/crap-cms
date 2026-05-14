@@ -1,3 +1,16 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
 #![cfg(feature = "sqlite")]
 
 use std::collections::HashSet;
@@ -297,7 +310,7 @@ fn global_has_many_field_save_and_read() {
     assert_eq!(posts_arr[2], "post-3");
 }
 
-/// save_join_table_data works with global table names (prefixed _global_).
+/// `save_join_table_data` works with global table names (prefixed _global_).
 #[test]
 fn global_save_join_table_data() {
     let (_tmp, pool, def) = setup_global_with_joins();
@@ -674,8 +687,8 @@ fn global_alter_table_adds_join_tables() {
     assert_eq!(items[0]["label"], "First");
 }
 
-/// hydrate_document Group guard: when a global stores groups as single JSON columns,
-/// hydrate_document must NOT attempt to reconstruct from __-prefixed sub-columns.
+/// `hydrate_document` Group guard: when a global stores groups as single JSON columns,
+/// `hydrate_document` must NOT attempt to reconstruct from __-prefixed sub-columns.
 #[test]
 fn hydrate_document_skips_group_reconstruction_for_globals() {
     let manager = r2d2_sqlite::SqliteConnectionManager::memory();
@@ -719,7 +732,7 @@ fn hydrate_document_skips_group_reconstruction_for_globals() {
     assert_eq!(doc.get_str("title"), Some("Test"));
 }
 
-/// hydrate_document Group reconstruction still works for collections
+/// `hydrate_document` Group reconstruction still works for collections
 /// (where __-prefixed sub-columns DO exist).
 #[test]
 fn hydrate_document_reconstructs_group_for_collections() {
@@ -774,7 +787,7 @@ fn hydrate_document_reconstructs_group_for_collections() {
     assert_eq!(seo_obj.get("meta_description").unwrap(), "Page Desc");
 }
 
-/// update_global skips join-table fields (no column for them in parent table).
+/// `update_global` skips join-table fields (no column for them in parent table).
 #[test]
 fn global_update_ignores_join_table_field_values() {
     let (_tmp, pool, def) = setup_global_with_joins();

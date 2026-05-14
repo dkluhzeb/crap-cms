@@ -12,6 +12,7 @@ pub enum Language {
 }
 
 impl Language {
+    #[must_use]
     pub fn from_name(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "lua" => Some(Self::Lua),
@@ -23,6 +24,7 @@ impl Language {
         }
     }
 
+    #[must_use]
     pub fn file_extension(&self) -> &'static str {
         match self {
             Self::Lua => "lua",
@@ -33,6 +35,7 @@ impl Language {
         }
     }
 
+    #[must_use]
     pub fn all() -> &'static [Self] {
         &[
             Self::Lua,
@@ -43,6 +46,7 @@ impl Language {
         ]
     }
 
+    #[must_use]
     pub fn label(&self) -> &'static str {
         match self {
             Self::Lua => "lua",

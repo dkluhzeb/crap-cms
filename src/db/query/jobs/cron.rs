@@ -15,6 +15,10 @@ use crate::db::{DbConnection, DbValue};
 /// prevents the update and `affected == 0`.
 ///
 /// Must be called inside an IMMEDIATE/serializable transaction.
+///
+/// # Errors
+///
+/// Returns a backend error if the INSERT or UPDATE fails.
 pub fn try_claim_cron_window(
     conn: &dyn DbConnection,
     slug: &str,

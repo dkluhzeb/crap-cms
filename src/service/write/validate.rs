@@ -28,6 +28,11 @@ pub struct ValidateContext<'a> {
 /// (field stripping, field hooks, validation, collection hooks) and returns.
 ///
 /// Used by live validation endpoints.
+///
+/// # Errors
+///
+/// Returns service-layer errors (validation failures, hook errors) without
+/// touching the database.
 pub fn validate_document(
     conn: &dyn DbConnection,
     write_hooks: &dyn WriteHooks,

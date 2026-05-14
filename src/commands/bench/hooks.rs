@@ -97,7 +97,7 @@ fn select_hooks(
     }
 
     if let Some(include) = cli_hooks {
-        let refs: Vec<&str> = include.split(',').map(|s| s.trim()).collect();
+        let refs: Vec<&str> = include.split(',').map(str::trim).collect();
         let indices: Vec<usize> = all_hooks
             .iter()
             .enumerate()
@@ -113,7 +113,7 @@ fn select_hooks(
     }
 
     if let Some(exclude) = cli_exclude {
-        let refs: Vec<&str> = exclude.split(',').map(|s| s.trim()).collect();
+        let refs: Vec<&str> = exclude.split(',').map(str::trim).collect();
         let indices: Vec<usize> = all_hooks
             .iter()
             .enumerate()
@@ -125,7 +125,7 @@ fn select_hooks(
     }
 
     // Interactive wizard
-    let labels: Vec<String> = all_hooks.iter().map(|h| h.label()).collect();
+    let labels: Vec<String> = all_hooks.iter().map(HookEntry::label).collect();
 
     let selections = MultiSelect::with_theme(&crap_theme())
         .with_prompt("Select hooks to benchmark (space to toggle, enter to confirm)")

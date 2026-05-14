@@ -23,6 +23,11 @@ type Result<T> = std::result::Result<T, ServiceError>;
 ///
 /// **Pool mode** (`ctx.pool` set): opens a transaction, commits after success.
 /// **Conn mode** (`ctx.conn` set, Lua CRUD path): runs on the existing connection.
+///
+/// # Errors
+///
+/// Returns service-layer errors (access denied, ref-count protection, hook
+/// errors) or a backend error if the DB transaction or persistence fails.
 #[cfg(not(tarpaulin_include))]
 pub fn delete_document(
     ctx: &ServiceContext,

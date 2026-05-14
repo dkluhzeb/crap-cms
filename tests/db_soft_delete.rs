@@ -3,6 +3,20 @@
 //! Tests the query layer and service layer together: soft-delete, restore,
 //! find filtering, count filtering, FTS cleanup, and auto-purge.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::sync::Arc;
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
@@ -242,7 +256,7 @@ fn bulk_delete_uses_soft_delete() {
                 &pool,
                 "articles",
                 &def,
-                &[("title", &format!("Doc {}", i)), ("body", "")],
+                &[("title", &format!("Doc {i}")), ("body", "")],
             )
         })
         .collect();
@@ -540,8 +554,8 @@ fn find_by_id_unfiltered_includes_soft_deleted() {
 
 /// Regression: permanently deleting soft-deleted documents (empty trash) must
 /// skip documents that are still referenced by other documents, preserving
-/// referential integrity. Previously, empty_trash deleted all trashed docs
-/// without checking _ref_count, which could orphan references.
+/// referential integrity. Previously, `empty_trash` deleted all trashed docs
+/// without checking _`ref_count`, which could orphan references.
 #[test]
 fn empty_trash_skips_referenced_documents() {
     use crap_cms::core::field::RelationshipConfig;
@@ -584,7 +598,7 @@ fn empty_trash_skips_referenced_documents() {
     let rc = query::ref_count::get_ref_count(&conn, "media", &m1)
         .unwrap()
         .expect("m1 should exist");
-    assert!(rc > 0, "m1 should be referenced, got ref_count={}", rc);
+    assert!(rc > 0, "m1 should be referenced, got ref_count={rc}");
 
     // Soft-delete both media docs
     query::soft_delete(&conn, "media", &m1).unwrap();

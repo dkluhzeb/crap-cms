@@ -34,12 +34,12 @@ pub async fn render_custom_page(
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
     if !is_valid_slug(&slug) {
-        return not_found(&state, &format!("Page '{}' not found", slug));
+        return not_found(&state, &format!("Page '{slug}' not found"));
     }
 
-    let template_name = format!("pages/{}", slug);
+    let template_name = format!("pages/{slug}");
     if state.handlebars.get_template(&template_name).is_none() {
-        return not_found(&state, &format!("Page '{}' not found", slug));
+        return not_found(&state, &format!("Page '{slug}' not found"));
     }
 
     // Enforce per-page access — same pattern as `access.read` on
@@ -47,7 +47,7 @@ pub async fn render_custom_page(
     // function returns false (or denies), respond 403.
     let registered = state.custom_pages.get(&slug);
     if let Some(access_ref) = registered.and_then(|p| p.access.as_deref()) {
-        let user_doc = get_user_doc(&auth_user);
+        let user_doc = get_user_doc(auth_user.as_ref());
         if !has_read_access(&state, Some(access_ref), user_doc) {
             return forbidden(&state, "You don't have permission to view this page");
         }
@@ -65,7 +65,7 @@ pub async fn render_custom_page(
     let base = BasePageContext::for_handler(
         &state,
         claims_ref,
-        &auth_user,
+        auth_user.as_ref(),
         PageMeta::new(PageType::CustomPage, title),
     )
     .with_editor_locale(editor_locale.as_deref(), &state);

@@ -1,4 +1,4 @@
-//! ListJobs handler — list all defined jobs.
+//! `ListJobs` handler — list all defined jobs.
 
 use std::sync::Arc;
 

@@ -68,7 +68,7 @@ fn transform_has_many_recursive(
                         // Traditional HTML form — comma-separated.
                         let values: Vec<&str> = val
                             .split(',')
-                            .map(|s| s.trim())
+                            .map(str::trim)
                             .filter(|s| !s.is_empty())
                             .collect();
 

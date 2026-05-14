@@ -1,6 +1,6 @@
-//! Rust proto conversion generator — `from_document` impls using prost_types.
+//! Rust proto conversion generator — `from_document` impls using `prost_types`.
 //!
-//! Generates `generated_proto.rs` with direct prost_types extraction:
+//! Generates `generated_proto.rs` with direct `prost_types` extraction:
 //! no JSON intermediate, no serde deserialization in the hot path.
 
 use crate::core::{
@@ -156,115 +156,75 @@ fn render_from_document_trait(out: &mut String) {
     w!(out, "");
 }
 
+/// Hand-written Rust helpers (`struct_to_document` + `get_rel` + `get_rel_list`)
+/// that the generated `from_document` impls call into. Emitted verbatim — they
+/// have no per-collection or per-field interpolation, so a raw literal is the
+/// source of truth, not a write-line-by-line chain.
+const REL_HELPERS_SOURCE: &str = r#"
+// ── Relationship helpers ──────────────────────────────────
+
+fn struct_to_document(s: &prost_types::Struct) -> Document {
+    let id = s.fields.get("id")
+        .and_then(|v| match &v.kind {
+            Some(Kind::StringValue(s)) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+
+    Document {
+        id,
+        collection: String::new(),
+        fields: Some(prost_types::Struct { fields: s.fields.clone() }),
+        created_at: s.fields.get("created_at").and_then(|v| match &v.kind {
+            Some(Kind::StringValue(s)) => Some(s.clone()),
+            _ => None,
+        }),
+        updated_at: s.fields.get("updated_at").and_then(|v| match &v.kind {
+            Some(Kind::StringValue(s)) => Some(s.clone()),
+            _ => None,
+        }),
+    }
+}
+
+fn get_rel<T: FromDocument>(doc: &Document, name: &str) -> Option<Rel<T>> {
+    doc.fields.as_ref()
+        .and_then(|f| f.fields.get(name))
+        .and_then(|v| match &v.kind {
+            Some(Kind::StringValue(s)) if !s.is_empty() => Some(Rel::Id(s.clone())),
+            Some(Kind::StructValue(s)) => {
+                let inner = struct_to_document(s);
+                Some(Rel::Doc(Box::new(T::from_document(&inner))))
+            }
+            _ => None,
+        })
+}
+
+fn get_rel_list<T: FromDocument>(doc: &Document, name: &str) -> Vec<Rel<T>> {
+    doc.fields.as_ref()
+        .and_then(|f| f.fields.get(name))
+        .and_then(|v| match &v.kind {
+            Some(Kind::ListValue(list)) => Some(
+                list.values.iter()
+                    .filter_map(|v| match &v.kind {
+                        Some(Kind::StringValue(s)) if !s.is_empty() => Some(Rel::Id(s.clone())),
+                        Some(Kind::StructValue(s)) => {
+                            let inner = struct_to_document(s);
+                            Some(Rel::Doc(Box::new(T::from_document(&inner))))
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            ),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+"#;
+
 /// Render relationship helpers that use `FromDocument` + `Rel<T>`.
 fn render_rel_helpers(out: &mut String) {
-    w!(
-        out,
-        "// ── Relationship helpers ──────────────────────────────────"
-    );
-    w!(out, "");
-    w!(
-        out,
-        "fn struct_to_document(s: &prost_types::Struct) -> Document {{"
-    );
-    w!(out, "    let id = s.fields.get(\"id\")");
-    w!(out, "        .and_then(|v| match &v.kind {{");
-    w!(
-        out,
-        "            Some(Kind::StringValue(s)) => Some(s.clone()),"
-    );
-    w!(out, "            _ => None,");
-    w!(out, "        }})");
-    w!(out, "        .unwrap_or_default();");
-    w!(out, "");
-    w!(out, "    Document {{");
-    w!(out, "        id,");
-    w!(out, "        collection: String::new(),");
-    w!(
-        out,
-        "        fields: Some(prost_types::Struct {{ fields: s.fields.clone() }}),"
-    );
-    w!(
-        out,
-        "        created_at: s.fields.get(\"created_at\").and_then(|v| match &v.kind {{"
-    );
-    w!(
-        out,
-        "            Some(Kind::StringValue(s)) => Some(s.clone()),"
-    );
-    w!(out, "            _ => None,");
-    w!(out, "        }}),");
-    w!(
-        out,
-        "        updated_at: s.fields.get(\"updated_at\").and_then(|v| match &v.kind {{"
-    );
-    w!(
-        out,
-        "            Some(Kind::StringValue(s)) => Some(s.clone()),"
-    );
-    w!(out, "            _ => None,");
-    w!(out, "        }}),");
-    w!(out, "    }}");
-    w!(out, "}}");
-    w!(out, "");
-    w!(
-        out,
-        "fn get_rel<T: FromDocument>(doc: &Document, name: &str) -> Option<Rel<T>> {{"
-    );
-    w!(out, "    doc.fields.as_ref()");
-    w!(out, "        .and_then(|f| f.fields.get(name))");
-    w!(out, "        .and_then(|v| match &v.kind {{");
-    w!(
-        out,
-        "            Some(Kind::StringValue(s)) if !s.is_empty() => Some(Rel::Id(s.clone())),"
-    );
-    w!(out, "            Some(Kind::StructValue(s)) => {{");
-    w!(out, "                let inner = struct_to_document(s);");
-    w!(
-        out,
-        "                Some(Rel::Doc(Box::new(T::from_document(&inner))))"
-    );
-    w!(out, "            }}");
-    w!(out, "            _ => None,");
-    w!(out, "        }})");
-    w!(out, "}}");
-    w!(out, "");
-    w!(
-        out,
-        "fn get_rel_list<T: FromDocument>(doc: &Document, name: &str) -> Vec<Rel<T>> {{"
-    );
-    w!(out, "    doc.fields.as_ref()");
-    w!(out, "        .and_then(|f| f.fields.get(name))");
-    w!(out, "        .and_then(|v| match &v.kind {{");
-    w!(out, "            Some(Kind::ListValue(list)) => Some(");
-    w!(out, "                list.values.iter()");
-    w!(out, "                    .filter_map(|v| match &v.kind {{");
-    w!(
-        out,
-        "                        Some(Kind::StringValue(s)) if !s.is_empty() => Some(Rel::Id(s.clone())),"
-    );
-    w!(
-        out,
-        "                        Some(Kind::StructValue(s)) => {{"
-    );
-    w!(
-        out,
-        "                            let inner = struct_to_document(s);"
-    );
-    w!(
-        out,
-        "                            Some(Rel::Doc(Box::new(T::from_document(&inner))))"
-    );
-    w!(out, "                        }}");
-    w!(out, "                        _ => None,");
-    w!(out, "                    }})");
-    w!(out, "                    .collect()");
-    w!(out, "            ),");
-    w!(out, "            _ => None,");
-    w!(out, "        }})");
-    w!(out, "        .unwrap_or_default()");
-    w!(out, "}}");
-    w!(out, "");
+    out.push_str(REL_HELPERS_SOURCE);
+    out.push('\n');
 }
 
 /// Render `from_document` impl for a collection.
@@ -331,7 +291,7 @@ fn render_global_impl(out: &mut String, global: &GlobalDefinition) {
     w!(out, "");
 }
 
-/// Render field extraction lines for a struct's from_document body.
+/// Render field extraction lines for a struct's `from_document` body.
 fn render_field_extractions(
     out: &mut String,
     fields: &[FieldDefinition],
@@ -418,7 +378,7 @@ fn field_extraction(field: &FieldDefinition, parent_pascal: &str, doc_var: &str)
             if field
                 .relationship
                 .as_ref()
-                .is_some_and(|rc| rc.is_polymorphic()) =>
+                .is_some_and(crate::core::RelationshipConfig::is_polymorphic) =>
         {
             if rel_has_many(field) {
                 opt_list("get_str_list", doc_var, name, optional)
@@ -506,7 +466,7 @@ fn render_sub_type_from_struct(out: &mut String, pascal: &str, fields: &[FieldDe
     w!(out, "");
 }
 
-/// Generate extraction for a sub-type field (from prost_types::Struct, not Document).
+/// Generate extraction for a sub-type field (from `prost_types::Struct`, not Document).
 fn sub_field_extraction(field: &FieldDefinition) -> String {
     let name = &field.name;
     let optional = is_optional(field);
@@ -634,13 +594,11 @@ mod tests {
 
         assert!(
             out.contains("author: get_rel(doc, \"author\")"),
-            "required has-one should use get_rel: {}",
-            out
+            "required has-one should use get_rel: {out}"
         );
         assert!(
             out.contains("get_rel_list(doc, \"tags\")"),
-            "optional has-many should use get_rel_list: {}",
-            out
+            "optional has-many should use get_rel_list: {out}"
         );
     }
 
@@ -662,18 +620,15 @@ mod tests {
 
         assert!(
             out.contains("impl PostsItems {"),
-            "should generate sub-type impl: {}",
-            out
+            "should generate sub-type impl: {out}"
         );
         assert!(
             out.contains("fn from_struct(s: &prost_types::Struct)"),
-            "should have from_struct: {}",
-            out
+            "should have from_struct: {out}"
         );
         assert!(
             out.contains("PostsItems::from_struct(s)"),
-            "should call from_struct in array extraction: {}",
-            out
+            "should call from_struct in array extraction: {out}"
         );
     }
 
@@ -715,18 +670,15 @@ mod tests {
 
         assert!(
             out.contains("first: get_str(doc, \"first\")"),
-            "row sub-fields promoted: {}",
-            out
+            "row sub-fields promoted: {out}"
         );
         assert!(
             out.contains("last: get_str_opt(doc, \"last\")"),
-            "row sub-fields promoted: {}",
-            out
+            "row sub-fields promoted: {out}"
         );
         assert!(
             !out.contains("row:"),
-            "row field itself should not appear: {}",
-            out
+            "row field itself should not appear: {out}"
         );
     }
 }

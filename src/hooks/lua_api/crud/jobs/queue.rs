@@ -19,15 +19,15 @@ use crate::{
 fn queue_job_inner(
     lua: &Lua,
     reg: &Registry,
-    slug: String,
+    slug: &str,
     data: Option<Table>,
 ) -> mlua::Result<String> {
     let conn = get_tx_conn(lua)?;
 
     let job_def = reg
-        .get_job(&slug)
+        .get_job(slug)
         .cloned()
-        .ok_or_else(|| RuntimeError(format!("Job '{}' not defined", slug)))?;
+        .ok_or_else(|| RuntimeError(format!("Job '{slug}' not defined")))?;
 
     if job_def.access.is_some() {
         let user_doc = hook_user(lua);
@@ -63,7 +63,7 @@ fn queue_job_inner(
 
     let job_run = query::jobs::insert_job(
         conn,
-        &slug,
+        slug,
         &data_json,
         "hook",
         job_def.retries + 1,
@@ -78,7 +78,7 @@ fn queue_job_inner(
 #[cfg(not(tarpaulin_include))]
 pub(crate) fn register_jobs_queue(lua: &Lua, table: &Table, registry: Arc<Registry>) -> Result<()> {
     let queue_fn = lua.create_function(move |lua, (slug, data): (String, Option<Table>)| {
-        queue_job_inner(lua, &registry, slug, data)
+        queue_job_inner(lua, &registry, &slug, data)
     })?;
 
     table.set("queue", queue_fn)?;

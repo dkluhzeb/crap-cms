@@ -1,6 +1,6 @@
 //! Full-text search helpers: index management, search, sync on writes.
 //!
-//! Supports SQLite (FTS5) and PostgreSQL (tsvector + GIN).
+//! Supports `SQLite` (FTS5) and `PostgreSQL` (tsvector + GIN).
 
 mod extract;
 mod fields;

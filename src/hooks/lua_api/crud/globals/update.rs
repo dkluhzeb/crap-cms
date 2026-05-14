@@ -13,17 +13,25 @@ use crate::{
     core::{DocumentFields, Registry},
     db::LocaleContext,
     hooks::{
-        lifecycle::converters::*,
-        lua_api::crud::{get_tx_conn, helpers::*},
+        lifecycle::converters::{
+            document_to_lua_table, lua_table_to_hashmap, lua_table_to_json_map,
+        },
+        lua_api::crud::{
+            get_tx_conn,
+            helpers::{
+                check_hook_depth, get_opt_bool, get_opt_string, hook_lua_infra, hook_ui_locale,
+                hook_user, resolve_global,
+            },
+        },
     },
     service::{LuaWriteHooks, ServiceContext, WriteInput, update_global_document},
 };
 
 /// Decoded `crap.globals.update(slug, data, opts?)` Lua arguments.
-struct GlobalsUpdateInput {
+struct GlobalsUpdateInput<'a> {
     slug: String,
     data_table: Table,
-    opts: Option<Table>,
+    opts: Option<&'a Table>,
 }
 
 /// Core logic for `crap.globals.update`.
@@ -31,7 +39,7 @@ fn globals_update_inner(
     lua: &Lua,
     reg: &Registry,
     lc: &LocaleConfig,
-    input: GlobalsUpdateInput,
+    input: GlobalsUpdateInput<'_>,
 ) -> mlua::Result<Table> {
     let GlobalsUpdateInput {
         slug,
@@ -42,11 +50,11 @@ fn globals_update_inner(
     let conn = get_tx_conn(lua)?;
 
     let lua_infra = hook_lua_infra(lua);
-    let locale_str = get_opt_string(&opts, "locale")?;
+    let locale_str = get_opt_string(opts, "locale");
     let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), lc)
         .map_err(|e| RuntimeError(e.to_string()))?;
-    let override_access = get_opt_bool(&opts, "overrideAccess", false)?;
-    let run_hooks = get_opt_bool(&opts, "hooks", true)?;
+    let override_access = get_opt_bool(opts, "overrideAccess", false);
+    let run_hooks = get_opt_bool(opts, "hooks", true);
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
     let def = resolve_global(reg, &slug)?;
@@ -119,7 +127,7 @@ pub(crate) fn register_globals_update(
                 GlobalsUpdateInput {
                     slug,
                     data_table,
-                    opts,
+                    opts: opts.as_ref(),
                 },
             )
         },

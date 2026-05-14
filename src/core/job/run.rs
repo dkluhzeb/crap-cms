@@ -9,7 +9,7 @@ pub struct JobRun {
     pub slug: String,
     pub status: JobStatus,
     pub queue: String,
-    /// JSON input data from queue().
+    /// JSON input data from `queue()`.
     pub data: String,
     /// JSON return value from handler.
     pub result: Option<String>,
@@ -76,78 +76,91 @@ impl JobRunBuilder {
         }
     }
 
+    #[must_use]
     pub fn status(mut self, s: JobStatus) -> Self {
         self.status = s;
 
         self
     }
 
+    #[must_use]
     pub fn queue(mut self, q: impl Into<String>) -> Self {
         self.queue = q.into();
 
         self
     }
 
+    #[must_use]
     pub fn data(mut self, d: impl Into<String>) -> Self {
         self.data = d.into();
 
         self
     }
 
+    #[must_use]
     pub fn result(mut self, r: impl Into<String>) -> Self {
         self.result = Some(r.into());
 
         self
     }
 
+    #[must_use]
     pub fn error(mut self, e: impl Into<String>) -> Self {
         self.error = Some(e.into());
 
         self
     }
 
+    #[must_use]
     pub fn attempt(mut self, a: u32) -> Self {
         self.attempt = a;
 
         self
     }
 
+    #[must_use]
     pub fn max_attempts(mut self, m: u32) -> Self {
         self.max_attempts = m;
 
         self
     }
 
+    #[must_use]
     pub fn scheduled_by(mut self, s: impl Into<String>) -> Self {
         self.scheduled_by = Some(s.into());
 
         self
     }
 
+    #[must_use]
     pub fn created_at(mut self, ts: impl Into<String>) -> Self {
         self.created_at = Some(ts.into());
 
         self
     }
 
+    #[must_use]
     pub fn started_at(mut self, ts: impl Into<String>) -> Self {
         self.started_at = Some(ts.into());
 
         self
     }
 
+    #[must_use]
     pub fn completed_at(mut self, ts: impl Into<String>) -> Self {
         self.completed_at = Some(ts.into());
 
         self
     }
 
+    #[must_use]
     pub fn heartbeat_at(mut self, ts: impl Into<String>) -> Self {
         self.heartbeat_at = Some(ts.into());
 
         self
     }
 
+    #[must_use]
     pub fn retry_after(mut self, ts: impl Into<String>) -> Self {
         self.retry_after = Some(ts.into());
 
@@ -155,6 +168,7 @@ impl JobRunBuilder {
     }
 
     /// Build the final [`JobRun`].
+    #[must_use]
     pub fn build(self) -> JobRun {
         JobRun {
             id: self.id,

@@ -47,7 +47,7 @@ pub(in crate::mcp::tools) fn exec_describe_collection(
 
     if let Some(def) = registry.collections.get(slug) {
         if !should_include(slug, mcp_config) {
-            bail!("Unknown collection or global: {}", slug);
+            bail!("Unknown collection or global: {slug}");
         }
         let response = DescribeResponse::Collection {
             slug,
@@ -72,7 +72,7 @@ pub(in crate::mcp::tools) fn exec_describe_collection(
         return Ok(to_string_pretty(&response)?);
     }
 
-    bail!("Unknown collection or global: {}", slug)
+    bail!("Unknown collection or global: {slug}")
 }
 
 #[cfg(test)]

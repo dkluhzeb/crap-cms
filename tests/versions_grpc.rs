@@ -1,8 +1,22 @@
 //! Integration tests for the versioning and drafts system.
 //!
 //! Covers: DB query layer (create/list/find/restore/prune versions, status),
-//! service layer (create_document/update_document with draft param),
-//! and gRPC API (draft flag on CRUD RPCs, ListVersions, RestoreVersion).
+//! service layer (`create_document/update_document` with draft param),
+//! and gRPC API (draft flag on CRUD RPCs, `ListVersions`, `RestoreVersion`).
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
 
 use std::sync::Arc;
 
@@ -555,7 +569,7 @@ async fn grpc_list_versions_with_limit() {
             .update(Request::new(content::UpdateRequest {
                 collection: "articles".to_string(),
                 id: doc.id.clone(),
-                data: Some(make_struct(&[("title", &format!("Update {}", i))])),
+                data: Some(make_struct(&[("title", &format!("Update {i}"))])),
                 locale: None,
                 draft: None,
                 unpublish: None,
@@ -896,7 +910,7 @@ async fn grpc_max_versions_prunes_old() {
             .update(Request::new(content::UpdateRequest {
                 collection: "docs".to_string(),
                 id: doc.id.clone(),
-                data: Some(make_struct(&[("title", &format!("Update {}", i))])),
+                data: Some(make_struct(&[("title", &format!("Update {i}"))])),
                 locale: None,
                 draft: None,
                 unpublish: None,
@@ -1352,8 +1366,8 @@ fn persist_unpublish_sets_draft_status() {
 
 // ── Locale Regression Tests ──────────────────────────────────────────────
 
-/// Regression: persist_draft_version must receive the caller's locale_ctx
-/// so that find_by_id_raw reads locale-resolved columns. Previously `None`
+/// Regression: `persist_draft_version` must receive the caller's `locale_ctx`
+/// so that `find_by_id_raw` reads locale-resolved columns. Previously `None`
 /// was always passed, causing the wrong column values to be read for
 /// locale-specific draft saves.
 #[test]

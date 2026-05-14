@@ -1,4 +1,4 @@
-//! Version RPC handlers: ListVersions, RestoreVersion.
+//! Version RPC handlers: `ListVersions`, `RestoreVersion`.
 
 mod list;
 mod restore;

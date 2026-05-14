@@ -15,13 +15,18 @@ use crate::{
 };
 
 /// Handle the `migrate` subcommand — dispatches to the appropriate action handler.
+///
+/// # Errors
+///
+/// Returns an error if config loading, pool creation, or the dispatched
+/// migration action fails.
 #[cfg(not(tarpaulin_include))]
-pub fn migrate(config_dir: &Path, action: MigrateAction) -> Result<()> {
+pub fn migrate(config_dir: &Path, action: &MigrateAction) -> Result<()> {
     let config_dir = config_dir
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
 
-    if let MigrateAction::Create { ref name } = action {
+    if let MigrateAction::Create { name } = action {
         return scaffold::make_migration(&config_dir, name);
     }
 
@@ -32,10 +37,10 @@ pub fn migrate(config_dir: &Path, action: MigrateAction) -> Result<()> {
     match action {
         MigrateAction::Create { .. } => unreachable!(),
         MigrateAction::Up => migrate_up(&config_dir, &cfg, &registry, &pool),
-        MigrateAction::Down { steps } => migrate_down(&config_dir, &cfg, &registry, &pool, steps),
+        MigrateAction::Down { steps } => migrate_down(&config_dir, &cfg, &registry, &pool, *steps),
         MigrateAction::List => migrate_list(&config_dir, &pool),
         MigrateAction::Fresh { confirm } => {
-            migrate_fresh(&config_dir, &cfg, &registry, &pool, confirm)
+            migrate_fresh(&config_dir, &cfg, &registry, &pool, *confirm)
         }
     }
 }
@@ -115,9 +120,9 @@ fn migrate_down(
         db_migrate::remove_migration(&tx, filename)?;
 
         tx.commit()
-            .with_context(|| format!("Failed to commit rollback of {}", filename))?;
+            .with_context(|| format!("Failed to commit rollback of {filename}"))?;
 
-        cli::success(&format!("Rolled back: {}", filename));
+        cli::success(&format!("Rolled back: {filename}"));
     }
 
     cli::success(&format!("{} migration(s) rolled back.", to_rollback.len()));
@@ -219,9 +224,9 @@ fn run_migrations(
         db_migrate::record_migration(&tx, filename)?;
 
         tx.commit()
-            .with_context(|| format!("Failed to commit migration {}", filename))?;
+            .with_context(|| format!("Failed to commit migration {filename}"))?;
 
-        cli::success(&format!("Applied: {}", filename));
+        cli::success(&format!("Applied: {filename}"));
     }
 
     Ok(())

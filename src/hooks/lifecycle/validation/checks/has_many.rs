@@ -2,8 +2,8 @@ use serde_json::Value;
 
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
 
-/// Validate individual values within a has_many JSON array.
-/// Checks count bounds (min_rows/max_rows) for all has_many field types
+/// Validate individual values within a `has_many` JSON array.
+/// Checks count bounds (`min_rows/max_rows`) for all `has_many` field types
 /// and per-element constraints for Text/Number.
 pub(crate) fn check_has_many_elements(
     field: &FieldDefinition,
@@ -46,7 +46,7 @@ pub(crate) fn check_has_many_elements(
     }
 }
 
-/// Validate a single text value against min_length/max_length constraints.
+/// Validate a single text value against `min_length/max_length` constraints.
 fn check_text_value_length(
     field: &FieldDefinition,
     data_key: &str,
@@ -134,7 +134,7 @@ fn check_number_value_bounds(
     }
 }
 
-/// Shared min_rows/max_rows validation for all has_many field types.
+/// Shared `min_rows/max_rows` validation for all `has_many` field types.
 fn check_count_bounds(
     field: &FieldDefinition,
     data_key: &str,
@@ -572,7 +572,7 @@ mod tests {
         );
     }
 
-    /// Regression: has_many validation must report ALL invalid values, not just the first.
+    /// Regression: `has_many` validation must report ALL invalid values, not just the first.
     /// Previously, `break` after the first error caused subsequent violations to be hidden.
     #[test]
     fn test_has_many_reports_all_invalid_values() {
@@ -606,7 +606,7 @@ mod tests {
         );
     }
 
-    /// Regression: has_many number validation must report ALL out-of-bounds values.
+    /// Regression: `has_many` number validation must report ALL out-of-bounds values.
     #[test]
     fn test_has_many_number_reports_all_invalid_values() {
         let lua = mlua::Lua::new();
@@ -638,7 +638,7 @@ mod tests {
         );
     }
 
-    /// Regression: has_many length validation must count characters, not bytes.
+    /// Regression: `has_many` length validation must count characters, not bytes.
     /// Multibyte UTF-8 characters (emoji, CJK, accented) were overcounted with `.len()`.
     #[test]
     fn test_has_many_text_length_counts_chars_not_bytes() {
@@ -682,9 +682,9 @@ mod tests {
         assert!(result.is_ok(), "你好 is 2 chars — should pass min_length=2");
     }
 
-    /// Regression: has_many Select must enforce min_rows/max_rows bounds.
-    /// Previously, check_has_many_elements only handled Text/Number, so
-    /// Select/Radio has_many fields silently bypassed row count validation.
+    /// Regression: `has_many` Select must enforce `min_rows/max_rows` bounds.
+    /// Previously, `check_has_many_elements` only handled Text/Number, so
+    /// Select/Radio `has_many` fields silently bypassed row count validation.
     #[test]
     fn test_has_many_select_min_rows_fails() {
         let lua = mlua::Lua::new();
@@ -717,7 +717,7 @@ mod tests {
         assert!(result.unwrap_err().errors[0].message.contains("at least 2"));
     }
 
-    /// Regression: has_many Select must enforce max_rows bounds.
+    /// Regression: `has_many` Select must enforce `max_rows` bounds.
     #[test]
     fn test_has_many_select_max_rows_fails() {
         let lua = mlua::Lua::new();
@@ -750,7 +750,7 @@ mod tests {
         assert!(result.unwrap_err().errors[0].message.contains("at most 2"));
     }
 
-    /// Regression: has_many Radio must enforce min_rows bounds.
+    /// Regression: `has_many` Radio must enforce `min_rows` bounds.
     #[test]
     fn test_has_many_radio_min_rows_fails() {
         let lua = mlua::Lua::new();

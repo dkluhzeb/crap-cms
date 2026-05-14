@@ -48,7 +48,7 @@ pub fn validation_ok_response() -> Response {
 }
 
 /// Convert a `DocumentFields` into a `HashMap<String, String>` suitable for
-/// the form processing pipeline (transform_select_has_many, extract_join_data_from_form).
+/// the form processing pipeline (`transform_select_has_many`, `extract_join_data_from_form`).
 ///
 /// Strings pass through, numbers/bools become their string representation, nulls become
 /// empty strings, and arrays/objects become their JSON serialization.
@@ -93,7 +93,7 @@ pub struct RunValidationParams<'a> {
     pub user_doc: Option<&'a Document>,
 }
 
-/// Run the before_validate → validate pipeline inside a rolled-back transaction.
+/// Run the `before_validate` → validate pipeline inside a rolled-back transaction.
 ///
 /// Used by both collection and global validation endpoints. The `table_name`
 /// parameter allows globals to pass `_global_{slug}` while collections pass
@@ -129,7 +129,7 @@ pub fn run_validation(p: &RunValidationParams) -> anyhow::Result<()> {
     };
 
     service::validate_document(&tx, &wh, &validate_ctx, input, p.user_doc)
-        .map_err(|e| e.into_anyhow())?;
+        .map_err(crate::service::ServiceError::into_anyhow)?;
 
     // Always rollback — this is validation only
     drop(tx);
@@ -140,17 +140,14 @@ pub fn run_validation(p: &RunValidationParams) -> anyhow::Result<()> {
 /// Handle the result of a validation run, returning the appropriate JSON response.
 pub fn handle_validation_result(
     result: Result<anyhow::Result<()>, tokio::task::JoinError>,
-    auth_user: &Option<Extension<AuthUser>>,
+    auth_user: Option<&Extension<AuthUser>>,
     state: &AdminState,
 ) -> Response {
     match result {
         Ok(Ok(())) => validation_ok_response(),
         Ok(Err(e)) => {
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
-                let locale = auth_user
-                    .as_ref()
-                    .map(|Extension(au)| au.ui_locale.as_str())
-                    .unwrap_or("en");
+                let locale = auth_user.map_or("en", |Extension(au)| au.ui_locale.as_str());
 
                 validation_error_response(ve, &state.translations, locale)
             } else {

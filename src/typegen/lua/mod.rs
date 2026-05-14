@@ -1,4 +1,4 @@
-//! LuaLS type definition generator for IDE support in hooks and init.lua.
+//! `LuaLS` type definition generator for IDE support in hooks and init.lua.
 //!
 //! Split into:
 //! - [`render`]: top-level [`render`](render::render) entry + per-collection /
@@ -9,9 +9,11 @@
 //! Shared test fixtures (`text_field`, `select_field`, `checkbox_field`)
 //! live in `pub(super) mod test_helpers` since both files exercise them.
 
+mod annotation;
 mod field;
 mod render;
 
+pub use annotation::LuaAnnotation;
 pub(super) use render::render;
 
 #[cfg(test)]

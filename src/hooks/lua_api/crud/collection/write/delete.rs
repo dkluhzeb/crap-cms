@@ -10,7 +10,13 @@ use crate::{
     core::Registry,
     hooks::{
         lifecycle::LuaStorage,
-        lua_api::crud::{get_tx_conn, helpers::*},
+        lua_api::crud::{
+            get_tx_conn,
+            helpers::{
+                check_hook_depth, get_opt_bool, hook_invalidation_transport, hook_lua_infra,
+                hook_user, resolve_collection,
+            },
+        },
     },
     service::{LuaWriteHooks, ServiceContext, delete_document},
 };
@@ -20,18 +26,18 @@ fn delete_document_lua(
     lua: &Lua,
     reg: &Registry,
     lc: &LocaleConfig,
-    collection: String,
-    id: String,
-    opts: Option<Table>,
+    collection: &str,
+    id: &str,
+    opts: Option<&Table>,
 ) -> mlua::Result<bool> {
     let conn = get_tx_conn(lua)?;
 
     let user = hook_user(lua);
     let lua_infra = hook_lua_infra(lua);
-    let override_access = get_opt_bool(&opts, "overrideAccess", false)?;
-    let run_hooks = get_opt_bool(&opts, "hooks", true)?;
-    let force_hard_delete = get_opt_bool(&opts, "forceHardDelete", false)?;
-    let mut def = resolve_collection(reg, &collection)?;
+    let override_access = get_opt_bool(opts, "overrideAccess", false);
+    let run_hooks = get_opt_bool(opts, "hooks", true);
+    let force_hard_delete = get_opt_bool(opts, "forceHardDelete", false);
+    let mut def = resolve_collection(reg, collection)?;
 
     // `force_hard_delete` on a soft-delete collection must flip the def so
     // `delete_document_in_conn` treats it as a hard delete. Mirrors the pattern
@@ -44,7 +50,7 @@ fn delete_document_lua(
     // Collection-level access check is handled inside service::delete_document
     // via WriteHooks::check_access (respects override_access on LuaWriteHooks).
 
-    let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, &collection, "delete");
+    let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, collection, "delete");
 
     let write_hooks = LuaWriteHooks::builder(lua)
         .user(user.as_ref())
@@ -56,7 +62,7 @@ fn delete_document_lua(
     let storage = lua.app_data_ref::<LuaStorage>().map(|s| s.0.clone());
     let invalidation_transport = hook_invalidation_transport(lua);
 
-    let ctx = ServiceContext::collection(&collection, &def)
+    let ctx = ServiceContext::collection(collection, &def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
@@ -65,7 +71,7 @@ fn delete_document_lua(
         .lua_infra(lua_infra.as_ref())
         .build();
 
-    delete_document(&ctx, &id, storage.as_deref(), Some(lc))
+    delete_document(&ctx, id, storage.as_deref(), Some(lc))
         .map_err(|e| RuntimeError(format!("delete error: {e:#}")))?;
 
     Ok(true)
@@ -82,7 +88,7 @@ pub(crate) fn register_delete(
     let lc = locale_config.clone();
     let delete_fn = lua.create_function(
         move |lua, (collection, id, opts): (String, String, Option<Table>)| {
-            delete_document_lua(lua, &registry, &lc, collection, id, opts)
+            delete_document_lua(lua, &registry, &lc, &collection, &id, opts.as_ref())
         },
     )?;
     table.set("delete", delete_fn)?;

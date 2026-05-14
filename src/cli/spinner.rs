@@ -16,6 +16,12 @@ pub struct Spinner {
 
 impl Spinner {
     /// Create and start a new spinner with the given message.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the static template string in this module becomes
+    /// malformed — unreachable in normal builds.
+    #[must_use]
     pub fn new(msg: &str) -> Self {
         let bar = if Term::stdout().is_term() {
             let pb = ProgressBar::new_spinner();
@@ -32,7 +38,7 @@ impl Spinner {
             pb
         } else {
             // Non-interactive: print the message and use a hidden bar
-            println!("{}", msg);
+            println!("{msg}");
             ProgressBar::hidden()
         };
 

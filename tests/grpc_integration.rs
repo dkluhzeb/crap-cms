@@ -1,12 +1,26 @@
-//! Integration tests for the gRPC ContentService via the ContentApi trait.
+//! Integration tests for the gRPC `ContentService` via the `ContentApi` trait.
 //!
-//! These tests construct a ContentService directly (no network) and call
-//! trait methods with tonic::Request objects to exercise the full RPC path.
+//! These tests construct a `ContentService` directly (no network) and call
+//! trait methods with `tonic::Request` objects to exercise the full RPC path.
 //!
 //! This file covers: basic CRUD, globals, list/describe endpoints.
-//! Auth tests → grpc_auth.rs
-//! Query/filter/hook/depth tests → grpc_query.rs
-//! Locale/draft/version/bulk/FTS tests → grpc_hooks_locale.rs
+//! Auth tests → `grpc_auth.rs`
+//! Query/filter/hook/depth tests → `grpc_query.rs`
+//! Locale/draft/version/bulk/FTS tests → `grpc_hooks_locale.rs`
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -117,7 +131,7 @@ fn setup_service(
 
 /// Build a `ContentService` whose registry is loaded from a Lua fixture dir,
 /// so tests can exercise real access hooks and Lua-defined globals against
-/// the gRPC surface. The HookRunner uses the fixture dir as its config dir
+/// the gRPC surface. The `HookRunner` uses the fixture dir as its config dir
 /// so hooks resolve via package paths.
 #[allow(dead_code)]
 fn setup_service_with_fixture(fixture_dir: &std::path::Path) -> TestSetup {
@@ -506,7 +520,7 @@ async fn find_with_limit_and_offset() {
         ts.service
             .create(Request::new(content::CreateRequest {
                 collection: "posts".to_string(),
-                data: Some(make_struct(&[("title", &format!("Post {}", i))])),
+                data: Some(make_struct(&[("title", &format!("Post {i}"))])),
                 locale: None,
                 draft: None,
             }))
@@ -877,8 +891,7 @@ async fn grpc_create_rejects_empty_required_in_nested_array() {
     let msg = err.message().to_string();
     assert!(
         msg.contains("first_name") || msg.contains("required"),
-        "Error should reference the nested required field: {}",
-        msg
+        "Error should reference the nested required field: {msg}"
     );
 }
 
@@ -930,10 +943,8 @@ async fn grpc_global_read_access_denied_returns_permission_denied() {
         slug: "restricted_settings".to_string(),
         locale: None,
     });
-    req.metadata_mut().insert(
-        "authorization",
-        format!("Bearer {}", token).parse().unwrap(),
-    );
+    req.metadata_mut()
+        .insert("authorization", format!("Bearer {token}").parse().unwrap());
 
     let err = ts
         .service

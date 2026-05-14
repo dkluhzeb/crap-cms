@@ -67,8 +67,8 @@ pub struct ServerConfig {
     /// is logged at startup for this combination.
     #[serde(default)]
     pub trusted_proxies: Vec<String>,
-    /// Public-facing base URL (e.g. "https://cms.example.com"). Used for password reset
-    /// emails and other external links. When not set, falls back to http://{host}:{admin_port}.
+    /// Public-facing base URL (e.g. "<https://cms.example.com>"). Used for password reset
+    /// emails and other external links. When not set, falls back to `http://{host}:{admin_port`}.
     pub public_url: Option<String>,
     /// HTTP request timeout for the admin server in seconds. None = no timeout (default).
     /// Applies to all admin HTTP requests. SSE streams are exempt (handled by shutdown).
@@ -122,6 +122,7 @@ impl ServerConfig {
     ///
     /// Uses `public_url` if set, otherwise falls back to `http://{host}:{admin_port}`.
     /// Special-cases `0.0.0.0` -> `localhost` since `0.0.0.0` is a bind address, not reachable.
+    #[must_use]
     pub fn base_url(&self) -> String {
         if let Some(ref url) = self.public_url {
             url.trim_end_matches('/').to_string()

@@ -1,4 +1,4 @@
-//! Field types and definitions. Each field maps to a column (or join table) in SQLite.
+//! Field types and definitions. Each field maps to a column (or join table) in `SQLite`.
 
 mod admin;
 mod block_definition;

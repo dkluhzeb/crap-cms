@@ -2,6 +2,20 @@
 //!
 //! Covers: collection CRUD, search/filter/sort, validation, versioning, uploads (API).
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use serde_json::json;
 use std::sync::Arc;
 
@@ -116,7 +130,7 @@ fn setup_app_with_config(
     let has_auth = registry
         .collections
         .values()
-        .any(|d| d.is_auth_collection());
+        .any(crap_cms::core::CollectionDefinition::is_auth_collection);
 
     let state = AdminState {
         config,
@@ -164,7 +178,7 @@ fn setup_app_with_config(
         ),
         populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
         cache: None,
-        custom_pages: Default::default(),
+        custom_pages: crap_cms::admin::custom_pages::CustomPageRegistry::default(),
     };
 
     let router = build_router(state);
@@ -202,13 +216,13 @@ fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
         .build()
         .unwrap();
     let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();
-    format!("crap_session={}", token)
+    format!("crap_session={token}")
 }
 
 const TEST_CSRF: &str = "test-csrf-token-12345";
 
 fn auth_and_csrf(auth_cookie: &str) -> String {
-    format!("{}; crap_csrf={}", auth_cookie, TEST_CSRF)
+    format!("{auth_cookie}; crap_csrf={TEST_CSRF}")
 }
 
 async fn body_string(body: Body) -> String {
@@ -809,8 +823,7 @@ async fn create_action_creates_document() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::FOUND || status == StatusCode::OK,
-        "Create action should redirect or HX-Redirect, got {}",
-        status
+        "Create action should redirect or HX-Redirect, got {status}"
     );
 }
 
@@ -876,8 +889,7 @@ async fn update_action_updates_document() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::FOUND || status == StatusCode::OK,
-        "Update action should redirect or HX-Redirect, got {}",
-        status
+        "Update action should redirect or HX-Redirect, got {status}"
     );
 }
 
@@ -912,8 +924,7 @@ async fn delete_action_removes_document() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::FOUND || status == StatusCode::OK,
-        "Delete action should redirect or return 200, got {}",
-        status
+        "Delete action should redirect or return 200, got {status}"
     );
 }
 
@@ -999,8 +1010,7 @@ async fn create_action_with_locale() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Localized create with locale param should succeed, got {}",
-        status
+        "Localized create with locale param should succeed, got {status}"
     );
 }
 
@@ -1035,8 +1045,7 @@ async fn delete_action_returns_redirect() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::FOUND || status == StatusCode::OK,
-        "Delete action should redirect or return 200 with HX-Redirect, got {}",
-        status
+        "Delete action should redirect or return 200 with HX-Redirect, got {status}"
     );
 
     if status == StatusCode::SEE_OTHER || status == StatusCode::FOUND {
@@ -1047,8 +1056,7 @@ async fn delete_action_returns_redirect() {
         if let Some(loc) = location {
             assert!(
                 loc.contains("/admin/collections/posts"),
-                "Delete redirect should point to collection list, got {}",
-                loc
+                "Delete redirect should point to collection list, got {loc}"
             );
         }
     }
@@ -1100,8 +1108,7 @@ async fn delete_nonexistent_document() {
             || status == StatusCode::OK
             || status == StatusCode::FOUND
             || status == StatusCode::NOT_FOUND,
-        "Delete nonexistent should return redirect or not found, got {}",
-        status
+        "Delete nonexistent should return redirect or not found, got {status}"
     );
 }
 
@@ -1132,8 +1139,7 @@ async fn update_nonexistent_document() {
             || status == StatusCode::FOUND
             || status == StatusCode::NOT_FOUND
             || status == StatusCode::INTERNAL_SERVER_ERROR,
-        "Update nonexistent should return redirect or error, got {}",
-        status
+        "Update nonexistent should return redirect or error, got {status}"
     );
 }
 
@@ -1350,8 +1356,7 @@ async fn localized_collection_create_via_form() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Localized create should redirect or HX-Redirect, got {}",
-        status
+        "Localized create should redirect or HX-Redirect, got {status}"
     );
 }
 
@@ -1382,7 +1387,7 @@ async fn localized_collection_edit_page_returns_200() {
     let resp = app
         .router
         .oneshot(
-            Request::get(format!("/admin/collections/pages/{}", doc_id))
+            Request::get(format!("/admin/collections/pages/{doc_id}"))
                 .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -1423,7 +1428,7 @@ async fn localized_collection_delete_succeeds() {
     let resp = app
         .router
         .oneshot(
-            Request::delete(format!("/admin/collections/pages/{}", doc_id))
+            Request::delete(format!("/admin/collections/pages/{doc_id}"))
                 .header("cookie", auth_and_csrf(&cookie))
                 .header("X-CSRF-Token", TEST_CSRF)
                 .body(Body::empty())
@@ -1434,8 +1439,7 @@ async fn localized_collection_delete_succeeds() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::FOUND || status == StatusCode::OK,
-        "expected redirect after delete, got {}",
-        status
+        "expected redirect after delete, got {status}"
     );
 }
 
@@ -1533,8 +1537,7 @@ async fn collection_create_with_draft() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Create draft should succeed, got {}",
-        status
+        "Create draft should succeed, got {status}"
     );
 }
 
@@ -1670,8 +1673,7 @@ async fn create_action_validation_error_missing_required_field() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Expected 200 (validation error re-render) or redirect, got {}",
-        status
+        "Expected 200 (validation error re-render) or redirect, got {status}"
     );
 }
 
@@ -1700,8 +1702,7 @@ async fn create_action_auth_collection_with_password() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Create auth collection user should succeed, got {}",
-        status
+        "Create auth collection user should succeed, got {status}"
     );
 }
 

@@ -18,6 +18,11 @@ pub struct QueueJobInput<'a> {
 /// If `job_def.access` is set, the runner's Lua VM checks whether the given
 /// `user` is allowed to trigger this job. Returns `ServiceError::AccessDenied`
 /// when the check denies access.
+///
+/// # Errors
+///
+/// Returns `AccessDenied` when the access hook denies, or a backend error if
+/// the access check or INSERT fails.
 pub fn queue_job(ctx: &ServiceContext, input: &QueueJobInput) -> Result<JobRun, ServiceError> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();

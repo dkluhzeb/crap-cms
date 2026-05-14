@@ -91,12 +91,12 @@ pub(super) fn build_op_condition(
         FilterOp::Equals(v) => {
             let ph = conn.placeholder(params.len() + 1);
             params.push(coerce_filter_value(field_type, op, v));
-            format!("{} = {}", expr, ph)
+            format!("{expr} = {ph}")
         }
         FilterOp::NotEquals(v) => {
             let ph = conn.placeholder(params.len() + 1);
             params.push(coerce_filter_value(field_type, op, v));
-            format!("{} != {}", expr, ph)
+            format!("{expr} != {ph}")
         }
         FilterOp::Like(v) => {
             let ph = conn.placeholder(params.len() + 1);
@@ -106,28 +106,28 @@ pub(super) fn build_op_condition(
         FilterOp::Contains(v) => {
             let escaped = v.replace('%', "\\%").replace('_', "\\_");
             let ph = conn.placeholder(params.len() + 1);
-            params.push(DbValue::Text(format!("%{}%", escaped)));
+            params.push(DbValue::Text(format!("%{escaped}%")));
             format!("{} {} {} ESCAPE '\\'", expr, conn.like_operator(), ph)
         }
         FilterOp::GreaterThan(v) => {
             let ph = conn.placeholder(params.len() + 1);
             params.push(coerce_filter_value(field_type, op, v));
-            format!("{} > {}", expr, ph)
+            format!("{expr} > {ph}")
         }
         FilterOp::LessThan(v) => {
             let ph = conn.placeholder(params.len() + 1);
             params.push(coerce_filter_value(field_type, op, v));
-            format!("{} < {}", expr, ph)
+            format!("{expr} < {ph}")
         }
         FilterOp::GreaterThanOrEqual(v) => {
             let ph = conn.placeholder(params.len() + 1);
             params.push(coerce_filter_value(field_type, op, v));
-            format!("{} >= {}", expr, ph)
+            format!("{expr} >= {ph}")
         }
         FilterOp::LessThanOrEqual(v) => {
             let ph = conn.placeholder(params.len() + 1);
             params.push(coerce_filter_value(field_type, op, v));
-            format!("{} <= {}", expr, ph)
+            format!("{expr} <= {ph}")
         }
         FilterOp::In(vals) => {
             // Empty IN list: "x IN ()" is a SQL error, so emit always-false.
@@ -164,10 +164,10 @@ pub(super) fn build_op_condition(
             format!("{} NOT IN ({})", expr, placeholders.join(", "))
         }
         FilterOp::Exists => {
-            format!("{} IS NOT NULL", expr)
+            format!("{expr} IS NOT NULL")
         }
         FilterOp::NotExists => {
-            format!("{} IS NULL", expr)
+            format!("{expr} IS NULL")
         }
     }
 }
@@ -488,8 +488,7 @@ mod tests {
             assert_eq!(
                 params,
                 vec![DbValue::Text((*bad).into())],
-                "expected Text fallback for '{}'",
-                bad
+                "expected Text fallback for '{bad}'"
             );
         }
     }
@@ -528,9 +527,7 @@ mod tests {
             assert_eq!(
                 params,
                 vec![DbValue::Integer(*expected)],
-                "'{}' should parse to {}",
-                input,
-                expected
+                "'{input}' should parse to {expected}"
             );
         }
     }

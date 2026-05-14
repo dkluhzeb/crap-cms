@@ -14,7 +14,10 @@ use crate::{
     },
     hooks::{
         lifecycle::converters::lua_table_to_find_query,
-        lua_api::crud::{get_tx_conn, helpers::*},
+        lua_api::crud::{
+            get_tx_conn,
+            helpers::{get_opt_bool, get_opt_string, hook_user, resolve_collection},
+        },
     },
     service::{CountDocumentsInput, LuaReadHooks, ServiceContext, count_documents},
 };
@@ -24,21 +27,21 @@ fn count_inner(
     lua: &Lua,
     reg: &Registry,
     lc: &LocaleConfig,
-    collection: String,
-    query_table: Option<Table>,
+    collection: &str,
+    query_table: Option<&Table>,
 ) -> LuaResult<i64> {
     let conn = get_tx_conn(lua)?;
 
     let locale_ctx =
-        LocaleContext::from_locale_string(get_opt_string(&query_table, "locale")?.as_deref(), lc)
+        LocaleContext::from_locale_string(get_opt_string(query_table, "locale").as_deref(), lc)
             .map_err(|e| RuntimeError(e.to_string()))?;
-    let override_access = get_opt_bool(&query_table, "overrideAccess", false)?;
-    let draft = get_opt_bool(&query_table, "draft", false)?;
+    let override_access = get_opt_bool(query_table, "overrideAccess", false);
+    let draft = get_opt_bool(query_table, "draft", false);
     let user = hook_user(lua);
-    let def = resolve_collection(reg, &collection)?;
+    let def = resolve_collection(reg, collection)?;
 
     let find_query = match query_table {
-        Some(ref qt) => lua_table_to_find_query(qt)?.0,
+        Some(qt) => lua_table_to_find_query(qt)?.0,
         None => query::FindQuery::default(),
     };
     let mut filters = find_query.filters;
@@ -51,7 +54,7 @@ fn count_inner(
         .override_access(override_access)
         .build();
 
-    let ctx = ServiceContext::collection(&collection, &def)
+    let ctx = ServiceContext::collection(collection, &def)
         .conn(conn)
         .read_hooks(&hooks)
         .user(user.as_ref())
@@ -78,7 +81,7 @@ pub(crate) fn register_count(
     let lc = locale_config.clone();
     let count_fn = lua.create_function(
         move |lua, (collection, query_table): (String, Option<Table>)| {
-            count_inner(lua, &registry, &lc, collection, query_table)
+            count_inner(lua, &registry, &lc, &collection, query_table.as_ref())
         },
     )?;
 

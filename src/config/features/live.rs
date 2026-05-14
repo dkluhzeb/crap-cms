@@ -9,7 +9,7 @@ pub struct LiveConfig {
     /// Enable live event streaming (SSE + gRPC Subscribe). Default: true.
     pub enabled: bool,
     /// Default event delivery mode for collections/globals that don't specify one.
-    /// `"metadata"` (default) = id/operation only, `"full"` = after_read hooks + data.
+    /// `"metadata"` (default) = id/operation only, `"full"` = `after_read` hooks + data.
     pub default_mode: String,
     /// Event transport. `"memory"` (default) -- in-process broadcast, events do
     /// not cross server nodes. `"redis"` -- Redis pub/sub (requires the `redis`

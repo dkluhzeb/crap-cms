@@ -1,25 +1,28 @@
 //! Register `crap.env` — read-only env var access.
 
 use anyhow::Result;
-use mlua::{Lua, Result as LuaResult, Table};
+use mlua::{Lua, Table};
 use std::env;
 
 /// Register `crap.env.get` — read-only, restricted to `CRAP_*` and `LUA_*` prefixed vars.
 pub(super) fn register_env(lua: &Lua, crap: &Table) -> Result<()> {
     let t = lua.create_table()?;
-    t.set("get", lua.create_function(|_, key: String| env_get(&key))?)?;
+    t.set(
+        "get",
+        lua.create_function(|_, key: String| Ok(env_get(&key)))?,
+    )?;
     crap.set("env", t)?;
 
     Ok(())
 }
 
 /// Read an environment variable, restricted to `CRAP_*` and `LUA_*` prefixes.
-fn env_get(key: &str) -> LuaResult<Option<String>> {
+fn env_get(key: &str) -> Option<String> {
     if !key.starts_with("CRAP_") && !key.starts_with("LUA_") {
-        return Ok(None);
+        return None;
     }
 
-    Ok(env::var(key).ok())
+    env::var(key).ok()
 }
 
 #[cfg(test)]
@@ -94,7 +97,7 @@ mod tests {
             "AWS_SECRET_ACCESS_KEY",
         ] {
             let val: Option<String> = get.call(key).unwrap();
-            assert_eq!(val, None, "Expected None for blocked key: {}", key);
+            assert_eq!(val, None, "Expected None for blocked key: {key}");
         }
     }
 

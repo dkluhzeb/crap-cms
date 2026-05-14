@@ -39,6 +39,7 @@ impl LoginRateLimiter {
     /// Create a rate limiter with the default in-memory backend.
     ///
     /// Convenience constructor for single-server deployments and tests.
+    #[must_use]
     pub fn new(max_attempts: u32, window_seconds: u64) -> Self {
         Self::with_backend(
             Arc::new(MemoryRateLimitBackend::new()),
@@ -54,13 +55,13 @@ impl LoginRateLimiter {
     }
 
     /// Check if a key is currently blocked (too many recent failures).
+    #[must_use]
     pub fn is_blocked(&self, key: &str) -> bool {
         let pkey = self.prefixed_key(key);
 
         self.backend
             .count(&pkey, self.window_secs)
-            .map(|count| count >= self.max_attempts)
-            .unwrap_or(false)
+            .is_ok_and(|count| count >= self.max_attempts)
     }
 
     /// Record a failed attempt for the given key.

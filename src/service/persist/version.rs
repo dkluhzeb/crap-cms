@@ -10,6 +10,11 @@ use crate::{
 
 /// Persist a draft-only version save: find existing doc, merge incoming data,
 /// create a draft version snapshot. Main table is NOT modified.
+///
+/// # Errors
+///
+/// Returns a backend error if the document can't be found or the version
+/// snapshot can't be created.
 pub fn persist_draft_version(
     ctx: &ServiceContext,
     id: &str,
@@ -22,7 +27,7 @@ pub fn persist_draft_version(
     let slug = ctx.slug;
 
     let existing_doc = query::find_by_id_raw(conn, slug, def, id, locale_ctx, false)?
-        .ok_or_else(|| anyhow!("Document {} not found in {}", id, slug))?;
+        .ok_or_else(|| anyhow!("Document {id} not found in {slug}"))?;
 
     versions::save_draft_version(
         conn,
@@ -39,6 +44,11 @@ pub fn persist_draft_version(
 
 /// Persist an unpublish operation: find existing doc, set status to draft,
 /// create a draft version snapshot. Returns the existing doc.
+///
+/// # Errors
+///
+/// Returns a backend error if the document can't be found, the snapshot
+/// can't be created, or the status update fails.
 pub fn persist_unpublish(ctx: &ServiceContext, id: &str) -> Result<Document> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
@@ -54,7 +64,7 @@ pub fn persist_unpublish(ctx: &ServiceContext, id: &str) -> Result<Document> {
     let locale_ctx = ctx.default_locale_ctx();
 
     let doc = query::find_by_id_raw(conn, slug, def, id, locale_ctx.as_ref(), false)?
-        .ok_or_else(|| anyhow!("Document {} not found in {}", id, slug))?;
+        .ok_or_else(|| anyhow!("Document {id} not found in {slug}"))?;
 
     versions::unpublish_with_snapshot(conn, slug, id, &def.fields, def.versions.as_ref(), &doc)?;
 

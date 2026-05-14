@@ -1,7 +1,7 @@
 //! Shared form-preparation helper used by both `validate_create`
 //! and `validate_update` handlers.
 
-use axum::{Extension, response::Response};
+use axum::Extension;
 
 use crate::{
     admin::{
@@ -20,10 +20,10 @@ use crate::{
 pub(super) fn prepare_form_for_validation(
     _state: &AdminState,
     def: &CollectionDefinition,
-    _auth_user: &Option<Extension<AuthUser>>,
+    _auth_user: Option<&Extension<AuthUser>>,
     payload: &ValidateRequest,
     _operation: &str,
-) -> Result<DocumentFields, Box<Response>> {
+) -> DocumentFields {
     let mut form_data = values_to_string_map(&payload.data);
 
     // Field write access stripping is now handled inside service::validate_document
@@ -37,5 +37,5 @@ pub(super) fn prepare_form_for_validation(
         }
     }
 
-    Ok(FormData::from_raw(form_data, &def.fields).into())
+    FormData::from_raw(form_data, &def.fields).into()
 }

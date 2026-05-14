@@ -70,7 +70,7 @@ pub(super) fn parse_relationship_collection(rel_tbl: &Table) -> (String, Vec<Str
         Ok(Value::Table(arr)) => {
             let slugs: Vec<String> = arr
                 .sequence_values::<String>()
-                .filter_map(|r| r.ok())
+                .filter_map(std::result::Result::ok)
                 .collect();
             let first = slugs.first().cloned().unwrap_or_default();
 
@@ -261,7 +261,7 @@ mod tests {
         let result = get_localized_string(&tbl, "label");
         match result {
             Some(LocalizedString::Plain(s)) => assert_eq!(s, "Hello"),
-            other => panic!("Expected Plain, got {:?}", other),
+            other => panic!("Expected Plain, got {other:?}"),
         }
     }
 
@@ -279,7 +279,7 @@ mod tests {
                 assert_eq!(map.get("en").unwrap(), "Hello");
                 assert_eq!(map.get("de").unwrap(), "Hallo");
             }
-            other => panic!("Expected Localized, got {:?}", other),
+            other => panic!("Expected Localized, got {other:?}"),
         }
     }
 

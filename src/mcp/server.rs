@@ -63,19 +63,18 @@ impl McpServer {
     pub(in crate::mcp) fn audit_label(&self) -> &str {
         self.client_name
             .get()
-            .map(String::as_str)
-            .unwrap_or(self.transport_label)
+            .map_or(self.transport_label, String::as_str)
     }
 }
 
 /// Parse required JSON-RPC params, returning an error response on failure.
 fn parse_params<T: DeserializeOwned>(
-    id: &Option<Value>,
+    id: Option<&Value>,
     params: Option<Value>,
 ) -> Result<T, Box<JsonRpcResponse>> {
     let Some(p) = params else {
         return Err(Box::new(JsonRpcResponse::error(
-            id.clone(),
+            id.cloned(),
             INVALID_PARAMS,
             "Missing params",
         )));
@@ -83,7 +82,7 @@ fn parse_params<T: DeserializeOwned>(
 
     from_value(p).map_err(|e| {
         Box::new(JsonRpcResponse::error(
-            id.clone(),
+            id.cloned(),
             INVALID_PARAMS,
             format!("Invalid params: {e}"),
         ))
@@ -106,7 +105,7 @@ impl McpServer {
             }
             "tools/list" => self.handle_tools_list(req.id),
             "tools/call" => self.handle_tools_call(req.id, req.params),
-            "resources/list" => self.handle_resources_list(req.id),
+            "resources/list" => Self::handle_resources_list(req.id),
             "resources/read" => self.handle_resources_read(req.id, req.params),
             "ping" => JsonRpcResponse::success(req.id, json!({})),
             _ => JsonRpcResponse::error(
@@ -119,7 +118,7 @@ impl McpServer {
 
     /// Respond with server capabilities and protocol version.
     fn handle_initialize(&self, id: Option<Value>, params: Option<Value>) -> JsonRpcResponse {
-        let params: InitializeParams = match parse_params(&id, params) {
+        let params: InitializeParams = match parse_params(id.as_ref(), params) {
             Ok(p) => p,
             Err(resp) => return *resp,
         };
@@ -169,7 +168,7 @@ impl McpServer {
 
     /// Execute a tool call and return the result.
     fn handle_tools_call(&self, id: Option<Value>, params: Option<Value>) -> JsonRpcResponse {
-        let call: ToolCallParams = match parse_params(&id, params) {
+        let call: ToolCallParams = match parse_params(id.as_ref(), params) {
             Ok(c) => c,
             Err(resp) => return *resp,
         };
@@ -202,7 +201,7 @@ impl McpServer {
     }
 
     /// List all available MCP resources.
-    fn handle_resources_list(&self, id: Option<Value>) -> JsonRpcResponse {
+    fn handle_resources_list(id: Option<Value>) -> JsonRpcResponse {
         let resource_defs = resources::list_resources();
         let resources_json: Vec<Value> = resource_defs
             .iter()
@@ -214,7 +213,7 @@ impl McpServer {
 
     /// Read a single resource by URI.
     fn handle_resources_read(&self, id: Option<Value>, params: Option<Value>) -> JsonRpcResponse {
-        let read_params: ResourceReadParams = match parse_params(&id, params) {
+        let read_params: ResourceReadParams = match parse_params(id.as_ref(), params) {
             Ok(r) => r,
             Err(resp) => return *resp,
         };
@@ -237,6 +236,20 @@ impl McpServer {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use std::sync::OnceLock;
 
@@ -262,7 +275,7 @@ mod tests {
         }
     }
 
-    /// Build a full McpServer backed by a real SQLite pool and HookRunner.
+    /// Build a full `McpServer` backed by a real `SQLite` pool and `HookRunner`.
     fn make_server_with(collections: Vec<CollectionDefinition>) -> (tempfile::TempDir, McpServer) {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut config = CrapConfig::test_default();

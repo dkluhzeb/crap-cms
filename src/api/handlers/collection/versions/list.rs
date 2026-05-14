@@ -1,4 +1,4 @@
-//! ListVersions handler — list version history for a document.
+//! `ListVersions` handler — list version history for a document.
 
 use std::sync::Arc;
 

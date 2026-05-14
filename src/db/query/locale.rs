@@ -32,6 +32,10 @@ impl LocaleContext {
     /// Returns `Ok(None)` if localization is disabled (empty `locales` vec).
     /// Returns `Err` if the locale string is not a valid configured locale.
     /// `"all"` → `All`, a specific code → `Single`, `None` → `Default`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `locale` is not one of the configured locales.
     pub fn from_locale_string(locale: Option<&str>, config: &LocaleConfig) -> Result<Option<Self>> {
         if !config.is_enabled() {
             return Ok(None);
@@ -59,9 +63,13 @@ impl LocaleContext {
 }
 
 /// Get locale-aware SELECT expressions and result column names for a collection.
-/// Returns (select_exprs, result_names) where:
-/// - select_exprs: SQL expressions for the SELECT clause (may include aliases/COALESCE)
-/// - result_names: column names in the result set (used by row_to_document)
+/// Returns (`select_exprs`, `result_names`) where:
+/// - `select_exprs`: SQL expressions for the SELECT clause (may include aliases/COALESCE)
+/// - `result_names`: column names in the result set (used by `row_to_document`)
+///
+/// # Errors
+///
+/// Returns an error if any field name conflicts with locale-suffixed naming.
 pub fn get_locale_select_columns(
     fields: &[FieldDefinition],
     timestamps: bool,
@@ -71,6 +79,10 @@ pub fn get_locale_select_columns(
 }
 
 /// Full version with all options including soft-delete and draft status columns.
+///
+/// # Errors
+///
+/// Returns an error if any field name conflicts with locale-suffixed naming.
 pub fn get_locale_select_columns_full(
     fields: &[FieldDefinition],
     timestamps: bool,
@@ -168,7 +180,7 @@ fn add_locale_columns(
         LocaleMode::Default => {
             let col = locale_column(field_name, &locale_ctx.config.default_locale)?;
 
-            select_exprs.push(format!("{} AS {}", col, field_name));
+            select_exprs.push(format!("{col} AS {field_name}"));
             result_names.push(field_name.to_string());
         }
         LocaleMode::Single(req_locale) => {
@@ -183,11 +195,10 @@ fn add_locale_columns(
 
             if locale_ctx.config.fallback && req_col != default_col {
                 select_exprs.push(format!(
-                    "COALESCE({}, {}) AS {}",
-                    req_col, default_col, field_name
+                    "COALESCE({req_col}, {default_col}) AS {field_name}"
                 ));
             } else {
-                select_exprs.push(format!("{} AS {}", req_col, field_name));
+                select_exprs.push(format!("{req_col} AS {field_name}"));
             }
 
             result_names.push(field_name.to_string());
@@ -255,7 +266,7 @@ pub(crate) fn group_locale_fields(
 pub(crate) fn locale_write_column(
     field_name: &str,
     field: &FieldDefinition,
-    locale_ctx: &Option<&LocaleContext>,
+    locale_ctx: Option<&LocaleContext>,
     inherited_localized: bool,
 ) -> Result<String> {
     let Some(ctx) = locale_ctx.filter(|c| c.config.is_enabled()) else {
@@ -314,7 +325,7 @@ mod tests {
         assert!(ctx.is_some());
         match ctx.unwrap().mode {
             LocaleMode::Single(locale) => assert_eq!(locale, "de"),
-            other => panic!("Expected Single, got {:?}", other),
+            other => panic!("Expected Single, got {other:?}"),
         }
     }
 
@@ -326,8 +337,7 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("Invalid locale 'fr'"),
-            "Error should mention the invalid locale, got: {}",
-            err
+            "Error should mention the invalid locale, got: {err}"
         );
     }
 
@@ -348,7 +358,7 @@ mod tests {
             config: locale_cfg,
         };
         let ctx_ref: Option<&LocaleContext> = Some(&ctx);
-        let col = locale_write_column("title", &field, &ctx_ref, false).unwrap();
+        let col = locale_write_column("title", &field, ctx_ref, false).unwrap();
         assert_eq!(
             col, "title",
             "Non-localized field should pass through unchanged"
@@ -364,7 +374,7 @@ mod tests {
             config: locale_cfg,
         };
         let ctx_ref: Option<&LocaleContext> = Some(&ctx);
-        let col = locale_write_column("title", &field, &ctx_ref, false).unwrap();
+        let col = locale_write_column("title", &field, ctx_ref, false).unwrap();
         assert_eq!(col, "title__de");
     }
 
@@ -377,7 +387,7 @@ mod tests {
             config: locale_cfg,
         };
         let ctx_ref: Option<&LocaleContext> = Some(&ctx);
-        let col = locale_write_column("title", &field, &ctx_ref, false).unwrap();
+        let col = locale_write_column("title", &field, ctx_ref, false).unwrap();
         assert_eq!(col, "title__en", "Default mode should use default locale");
     }
 
@@ -555,7 +565,7 @@ mod tests {
         };
         let ctx_ref: Option<&LocaleContext> = Some(&ctx);
 
-        let col = locale_write_column("title", &field, &ctx_ref, true).unwrap();
+        let col = locale_write_column("title", &field, ctx_ref, true).unwrap();
         assert_eq!(
             col, "title__de",
             "inherited_localized=true should add locale suffix even when field.localized=false"
@@ -574,7 +584,7 @@ mod tests {
         };
         let ctx_ref: Option<&LocaleContext> = Some(&ctx);
 
-        let col = locale_write_column("title", &field, &ctx_ref, false).unwrap();
+        let col = locale_write_column("title", &field, ctx_ref, false).unwrap();
         assert_eq!(
             col, "title",
             "inherited_localized=false + field.localized=false should not add locale suffix"
@@ -599,13 +609,11 @@ mod tests {
 
         assert!(
             exprs.contains(&"_status".to_string()),
-            "_status should be in SELECT exprs when has_drafts=true, got: {:?}",
-            exprs
+            "_status should be in SELECT exprs when has_drafts=true, got: {exprs:?}"
         );
         assert!(
             names.contains(&"_status".to_string()),
-            "_status should be in result names when has_drafts=true, got: {:?}",
-            names
+            "_status should be in result names when has_drafts=true, got: {names:?}"
         );
     }
 
@@ -625,13 +633,11 @@ mod tests {
 
         assert!(
             !exprs.contains(&"_status".to_string()),
-            "_status should NOT be in SELECT exprs when has_drafts=false, got: {:?}",
-            exprs
+            "_status should NOT be in SELECT exprs when has_drafts=false, got: {exprs:?}"
         );
         assert!(
             !names.contains(&"_status".to_string()),
-            "_status should NOT be in result names when has_drafts=false, got: {:?}",
-            names
+            "_status should NOT be in result names when has_drafts=false, got: {names:?}"
         );
     }
 
@@ -659,13 +665,11 @@ mod tests {
 
         assert!(
             exprs.contains(&"start_date".to_string()),
-            "SELECT should include start_date, got: {:?}",
-            exprs
+            "SELECT should include start_date, got: {exprs:?}"
         );
         assert!(
             exprs.contains(&"start_date_tz".to_string()),
-            "SELECT should include start_date_tz, got: {:?}",
-            exprs
+            "SELECT should include start_date_tz, got: {exprs:?}"
         );
         assert!(
             names.contains(&"start_date".to_string()),
@@ -723,14 +727,12 @@ mod tests {
         // The date column should have locale handling (COALESCE for fallback)
         assert!(
             exprs.iter().any(|e| e.contains("start_date__de")),
-            "Localized date should include locale-suffixed column, got: {:?}",
-            exprs
+            "Localized date should include locale-suffixed column, got: {exprs:?}"
         );
         // The _tz column should also have locale handling
         assert!(
             exprs.iter().any(|e| e.contains("start_date_tz__de")),
-            "Localized _tz should include locale-suffixed column, got: {:?}",
-            exprs
+            "Localized _tz should include locale-suffixed column, got: {exprs:?}"
         );
     }
 
@@ -776,13 +778,11 @@ mod tests {
 
         assert!(
             exprs.contains(&"schedule__start".to_string()),
-            "Group date should be prefixed: {:?}",
-            exprs
+            "Group date should be prefixed: {exprs:?}"
         );
         assert!(
             exprs.contains(&"schedule__start_tz".to_string()),
-            "Group date _tz should be prefixed: {:?}",
-            exprs
+            "Group date _tz should be prefixed: {exprs:?}"
         );
         assert!(names.contains(&"schedule__start".to_string()));
         assert!(names.contains(&"schedule__start_tz".to_string()));

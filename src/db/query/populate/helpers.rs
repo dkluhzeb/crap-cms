@@ -122,6 +122,20 @@ pub(crate) fn document_to_json(doc: &Document, collection: &str) -> Value {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use serde_json::json;
     use std::sync::{
@@ -282,7 +296,10 @@ mod tests {
             obj.get("title").and_then(|v| v.as_str()),
             Some("Hello World")
         );
-        assert_eq!(obj.get("count").and_then(|v| v.as_i64()), Some(42));
+        assert_eq!(
+            obj.get("count").and_then(serde_json::Value::as_i64),
+            Some(42)
+        );
         assert_eq!(
             obj.get("created_at").and_then(|v| v.as_str()),
             Some("2024-01-01T00:00:00Z")
@@ -340,7 +357,10 @@ mod tests {
         // Verify deep structure is preserved
         let data = obj.get("data").unwrap();
         let meta = data.get("meta").expect("meta should exist");
-        assert_eq!(meta.get("score").and_then(|v| v.as_f64()), Some(9.5));
+        assert_eq!(
+            meta.get("score").and_then(serde_json::Value::as_f64),
+            Some(9.5)
+        );
         let keywords = meta
             .get("keywords")
             .and_then(|v| v.as_array())

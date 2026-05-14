@@ -1,8 +1,8 @@
-//! Custom ProseMirror node types for richtext fields.
+//! Custom `ProseMirror` node types for richtext fields.
 //!
 //! Provides data model types for defining custom structured nodes (CTAs, embeds,
 //! alerts, etc.) that can be embedded inside richtext content. Also includes a
-//! ProseMirror JSON → HTML renderer that handles both standard PM nodes and
+//! `ProseMirror` JSON → HTML renderer that handles both standard PM nodes and
 //! custom nodes via a callback.
 
 pub mod node_def;

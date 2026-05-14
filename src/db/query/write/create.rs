@@ -39,6 +39,10 @@ impl InsertCollector {
 }
 
 /// Create a new document. Returns the created document.
+///
+/// # Errors
+///
+/// Returns a backend error if the INSERT, join-table writes, or re-read fails.
 pub fn create(
     conn: &dyn DbConnection,
     slug: &str,
@@ -56,7 +60,7 @@ pub fn create(
         idx: 2,
     };
 
-    collect_insert_params(&def.fields, data, &locale_ctx, &mut collector, conn)?;
+    collect_insert_params(&def.fields, data, locale_ctx, &mut collector, conn)?;
 
     if def.timestamps {
         collector.push(conn, "created_at".to_string(), DbValue::Text(now.clone()));
@@ -71,7 +75,7 @@ pub fn create(
     );
 
     conn.execute(&sql, &collector.params)
-        .with_context(|| format!("Failed to insert into '{}'", slug))?;
+        .with_context(|| format!("Failed to insert into '{slug}'"))?;
 
     // Return the created document with the same locale context.
     find_by_id_raw(conn, slug, def, &id, locale_ctx, false)?
@@ -82,7 +86,7 @@ pub fn create(
 fn collect_leaf_param(
     field: &FieldDefinition,
     data: &DocumentFields,
-    locale_ctx: &Option<&LocaleContext>,
+    locale_ctx: Option<&LocaleContext>,
     collector: &mut InsertCollector,
     conn: &dyn DbConnection,
     prefix: &str,
@@ -139,7 +143,7 @@ fn collect_leaf_param(
 pub(super) fn collect_insert_params(
     fields: &[FieldDefinition],
     data: &DocumentFields,
-    locale_ctx: &Option<&LocaleContext>,
+    locale_ctx: Option<&LocaleContext>,
     collector: &mut InsertCollector,
     conn: &dyn DbConnection,
 ) -> Result<()> {
@@ -829,7 +833,7 @@ mod tests {
 
         // Empty date with timezone should result in null
         assert!(
-            doc.get("start_date").is_none_or(|v| v.is_null()),
+            doc.get("start_date").is_none_or(serde_json::Value::is_null),
             "Empty date value should be stored as null"
         );
     }

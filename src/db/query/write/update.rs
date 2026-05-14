@@ -20,6 +20,10 @@ use crate::{
 };
 
 /// Update a document by ID. Returns the updated document.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE, join-table sync, or re-read fails.
 pub fn update(
     conn: &dyn DbConnection,
     slug: &str,
@@ -41,6 +45,10 @@ pub fn update(
 
 /// Partial update: like [`update`] but skips absent checkbox fields instead of
 /// defaulting them to 0. Used for bulk updates where not all fields are provided.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE, join-table sync, or re-read fails.
 pub fn update_partial(
     conn: &dyn DbConnection,
     slug: &str,
@@ -70,7 +78,7 @@ fn update_inner(
     locale_ctx: Option<&LocaleContext>,
     mut col: UpdateCollector,
 ) -> Result<Document> {
-    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn)?;
+    collect_update_params(&def.fields, data, locale_ctx, &mut col, conn)?;
 
     if def.timestamps {
         col.push(conn, "updated_at", DbValue::Text(utc_now()));
@@ -137,7 +145,7 @@ impl UpdateCollector {
 fn collect_leaf_update(
     field: &FieldDefinition,
     data: &DocumentFields,
-    locale_ctx: &Option<&LocaleContext>,
+    locale_ctx: Option<&LocaleContext>,
     collector: &mut UpdateCollector,
     conn: &dyn DbConnection,
     prefix: &str,
@@ -193,7 +201,7 @@ fn collect_leaf_update(
 pub(in crate::db::query) fn collect_update_params(
     fields: &[FieldDefinition],
     data: &DocumentFields,
-    locale_ctx: &Option<&LocaleContext>,
+    locale_ctx: Option<&LocaleContext>,
     collector: &mut UpdateCollector,
     conn: &dyn DbConnection,
 ) -> Result<()> {
@@ -549,7 +557,10 @@ mod tests {
         update_data.insert("title".to_string(), json!("Updated"));
         let updated = update(&conn, "items", &def, &doc.id, &update_data, None).unwrap();
         assert_eq!(
-            updated.fields.get("active").and_then(|v| v.as_i64()),
+            updated
+                .fields
+                .get("active")
+                .and_then(serde_json::Value::as_i64),
             Some(0),
             "Regular update should reset absent checkbox to 0"
         );
@@ -569,7 +580,10 @@ mod tests {
         update_data.insert("title".to_string(), json!("Partial"));
         let updated = update_partial(&conn, "items", &def, &doc.id, &update_data, None).unwrap();
         assert_eq!(
-            updated.fields.get("active").and_then(|v| v.as_i64()),
+            updated
+                .fields
+                .get("active")
+                .and_then(serde_json::Value::as_i64),
             Some(1),
             "Partial update should preserve absent checkbox value"
         );
@@ -589,7 +603,10 @@ mod tests {
         update_data.insert("active".to_string(), json!("0"));
         let updated = update_partial(&conn, "items", &def, &doc.id, &update_data, None).unwrap();
         assert_eq!(
-            updated.fields.get("active").and_then(|v| v.as_i64()),
+            updated
+                .fields
+                .get("active")
+                .and_then(serde_json::Value::as_i64),
             Some(0),
             "Partial update with explicit checkbox value should set it"
         );

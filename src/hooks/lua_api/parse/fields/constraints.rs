@@ -7,7 +7,7 @@ use serde_json::{Number as JsonNumber, Value as JsonValue};
 
 use crate::core::FieldType;
 
-use super::super::helpers::*;
+use super::super::helpers::{get_bool, get_string};
 
 pub(super) fn parse_default_value(
     field_tbl: &Table,
@@ -16,7 +16,6 @@ pub(super) fn parse_default_value(
 ) -> Result<Option<JsonValue>> {
     let val: Value = field_tbl.get("default_value").unwrap_or(Value::Nil);
     let default_value = match val {
-        Value::Nil => None,
         Value::Boolean(b) => Some(JsonValue::Bool(b)),
         Value::Integer(i) => Some(JsonValue::Number(JsonNumber::from(i))),
         Value::Number(n) => JsonNumber::from_f64(n).map(JsonValue::Number),
@@ -47,10 +46,7 @@ pub(super) fn parse_default_value(
                 _ => "unknown",
             };
             bail!(
-                "Field '{}': default_value type mismatch — expected {} but got {}",
-                name,
-                expected_type,
-                got
+                "Field '{name}': default_value type mismatch — expected {expected_type} but got {got}"
             );
         }
     }
@@ -107,34 +103,19 @@ pub(super) fn validate_constraints(name: &str, c: &Constraints) -> Result<()> {
     if let (Some(mn), Some(mx)) = (c.min_rows, c.max_rows)
         && mn > mx
     {
-        bail!(
-            "Field '{}': min_rows ({}) must not exceed max_rows ({})",
-            name,
-            mn,
-            mx
-        );
+        bail!("Field '{name}': min_rows ({mn}) must not exceed max_rows ({mx})");
     }
 
     if let (Some(mn), Some(mx)) = (c.min_length, c.max_length)
         && mn > mx
     {
-        bail!(
-            "Field '{}': min_length ({}) must not exceed max_length ({})",
-            name,
-            mn,
-            mx
-        );
+        bail!("Field '{name}': min_length ({mn}) must not exceed max_length ({mx})");
     }
 
     if let (Some(mn), Some(mx)) = (c.min, c.max)
         && mn > mx
     {
-        bail!(
-            "Field '{}': min ({}) must not exceed max ({})",
-            name,
-            mn,
-            mx
-        );
+        bail!("Field '{name}': min ({mn}) must not exceed max ({mx})");
     }
 
     Ok(())
@@ -148,13 +129,13 @@ pub(super) fn parse_constraints(field_tbl: &Table, name: &str) -> Result<Constra
 
     let min = match field_tbl.get::<Value>("min") {
         Ok(Value::Number(n)) => Some(n),
-        Ok(Value::Integer(i)) => Some(i as f64),
+        Ok(Value::Integer(i)) => i32::try_from(i).ok().map(f64::from),
         _ => None,
     };
 
     let max = match field_tbl.get::<Value>("max") {
         Ok(Value::Number(n)) => Some(n),
-        Ok(Value::Integer(i)) => Some(i as f64),
+        Ok(Value::Integer(i)) => i32::try_from(i).ok().map(f64::from),
         _ => None,
     };
 

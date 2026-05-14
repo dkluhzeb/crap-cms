@@ -1,4 +1,4 @@
-//! Shared test helpers for db::query module tests.
+//! Shared test helpers for `db::query` module tests.
 
 use crate::core::{FieldDefinition, FieldTab, FieldType, collection::CollectionDefinition};
 

@@ -35,10 +35,10 @@ pub(super) fn register_util(lua: &Lua, crap: &Table) -> Result<()> {
     crap.set("json", json_table)?;
 
     // Date helpers
-    t.set("date_now", lua.create_function(|_, ()| date_now())?)?;
+    t.set("date_now", lua.create_function(|_, ()| Ok(date_now()))?)?;
     t.set(
         "date_timestamp",
-        lua.create_function(|_, ()| date_timestamp())?,
+        lua.create_function(|_, ()| Ok(date_timestamp()))?,
     )?;
     t.set(
         "date_parse",
@@ -86,13 +86,13 @@ fn json_decode(lua: &Lua, s: &str) -> LuaResult<LuaValue> {
 }
 
 /// Current time as RFC 3339 string.
-fn date_now() -> LuaResult<String> {
-    Ok(Utc::now().to_rfc3339())
+fn date_now() -> String {
+    Utc::now().to_rfc3339()
 }
 
 /// Current Unix timestamp.
-fn date_timestamp() -> LuaResult<i64> {
-    Ok(Utc::now().timestamp())
+fn date_timestamp() -> i64 {
+    Utc::now().timestamp()
 }
 
 /// Parse a date string into a Unix timestamp. Supports RFC 3339, "YYYY-MM-DD HH:MM:SS", "YYYY-MM-DD".
@@ -229,7 +229,7 @@ mod tests {
     fn json_util_aliases_still_work() {
         let lua = setup_lua();
         let result: String = lua
-            .load(r#"return crap.util.json_encode({ ok = true })"#)
+            .load(r"return crap.util.json_encode({ ok = true })")
             .eval()
             .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();

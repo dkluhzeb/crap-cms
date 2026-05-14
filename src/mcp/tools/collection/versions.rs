@@ -39,8 +39,8 @@ pub(in crate::mcp::tools) fn exec_list_versions(
         .get(slug)
         .context("Collection not found")?;
 
-    let limit = args.get("limit").and_then(|v| v.as_i64());
-    let offset = args.get("offset").and_then(|v| v.as_i64());
+    let limit = args.get("limit").and_then(serde_json::Value::as_i64);
+    let offset = args.get("offset").and_then(serde_json::Value::as_i64);
 
     // MCP operates with full access — override access checks
     let conn = ctx.pool.get().context("DB connection")?;

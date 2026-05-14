@@ -27,6 +27,11 @@ pub struct MakeComponentOptions<'a> {
 }
 
 /// Scaffold the JS file.
+///
+/// # Errors
+///
+/// Returns an error if the tag is invalid, the file already exists without
+/// `--force`, or writing the file fails.
 pub fn make_component(opts: &MakeComponentOptions) -> Result<()> {
     validate_tag(opts.tag)?;
 
@@ -58,27 +63,22 @@ fn validate_tag(tag: &str) -> Result<()> {
         bail!("tag must not be empty");
     }
     if !tag.contains('-') {
-        bail!(
-            "tag '{}' is invalid -- custom elements must contain a hyphen (e.g. 'my-widget')",
-            tag
-        );
+        bail!("tag '{tag}' is invalid -- custom elements must contain a hyphen (e.g. 'my-widget')");
     }
     if tag.starts_with('-') || tag.ends_with('-') {
-        bail!("tag '{}' must not start or end with a hyphen", tag);
+        bail!("tag '{tag}' must not start or end with a hyphen");
     }
     if tag.contains("--") {
-        bail!("tag '{}' must not contain consecutive hyphens", tag);
+        bail!("tag '{tag}' must not contain consecutive hyphens");
     }
     if !tag.chars().next().unwrap().is_ascii_lowercase() {
-        bail!("tag '{}' must start with an ASCII lowercase letter", tag);
+        bail!("tag '{tag}' must start with an ASCII lowercase letter");
     }
     for c in tag.chars() {
         let ok = c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-';
         if !ok {
             bail!(
-                "tag '{}' contains invalid character '{}' (lowercase letters / digits / `-` only)",
-                tag,
-                c
+                "tag '{tag}' contains invalid character '{c}' (lowercase letters / digits / `-` only)"
             );
         }
     }
@@ -104,8 +104,7 @@ fn tag_to_class_name(tag: &str) -> String {
                 c.to_ascii_uppercase().to_string() + chars.as_str()
             })
         })
-        .collect::<Vec<_>>()
-        .join("")
+        .collect::<String>()
 }
 
 #[cfg(test)]

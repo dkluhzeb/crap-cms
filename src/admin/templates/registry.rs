@@ -17,6 +17,10 @@ static TEMPLATES_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates");
 ///
 /// `hook_runner` enables the Lua-backed `{{data "name"}}` helper. Tests
 /// pass `None` to skip Lua wiring.
+///
+/// # Errors
+///
+/// Returns an error if a compiled-in or overlay template fails to register.
 pub fn create_handlebars(
     config_dir: &Path,
     dev_mode: bool,
@@ -51,10 +55,10 @@ fn register_embedded_dir(hbs: &mut Handlebars, dir: &Dir) -> Result<()> {
         if path.extension().is_some_and(|ext| ext == "hbs") {
             let name_str = path.with_extension("").to_string_lossy().to_string();
             let content = str::from_utf8(file.contents())
-                .with_context(|| format!("Invalid UTF-8 in template: {}", name_str))?;
+                .with_context(|| format!("Invalid UTF-8 in template: {name_str}"))?;
 
             hbs.register_template_string(&name_str, content)
-                .with_context(|| format!("Failed to register template: {}", name_str))?;
+                .with_context(|| format!("Failed to register template: {name_str}"))?;
         }
     }
 
@@ -83,9 +87,8 @@ fn register_dir_recursive(hbs: &mut Handlebars, base: &Path, dir: &Path) -> Resu
         if path.is_dir() {
             register_dir_recursive(hbs, base, &path)?;
         } else if path.extension().is_some_and(|ext| ext == "hbs") {
-            let relative = match path.strip_prefix(base) {
-                Ok(r) => r,
-                Err(_) => continue,
+            let Ok(relative) = path.strip_prefix(base) else {
+                continue;
             };
             let name = relative.with_extension("").to_string_lossy().to_string();
             let content = fs::read_to_string(&path)
@@ -94,7 +97,7 @@ fn register_dir_recursive(hbs: &mut Handlebars, base: &Path, dir: &Path) -> Resu
             debug!("Overlay template: {}", name);
 
             hbs.register_template_string(&name, &content)
-                .with_context(|| format!("Failed to register overlay template: {}", name))?;
+                .with_context(|| format!("Failed to register overlay template: {name}"))?;
         }
     }
 
@@ -102,6 +105,20 @@ fn register_dir_recursive(hbs: &mut Handlebars, base: &Path, dir: &Path) -> Resu
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use serde_json::json;
 
@@ -372,7 +389,7 @@ mod tests {
         assert!(html.contains(r#"hx-get="/admin/foo""#), "{html}");
         assert!(html.contains(r#"hx-target="body""#), "{html}");
         assert!(html.contains(r#"hx-push-url="true""#), "{html}");
-        assert!(html.contains(r#"button button--primary"#), "{html}");
+        assert!(html.contains(r"button button--primary"), "{html}");
         assert!(
             html.contains(r#"<span class="material-symbols-outlined">arrow_back</span>"#),
             "default-size icon (no size param given): {html}"
@@ -414,7 +431,7 @@ mod tests {
 
         let html = hbs.render("t", &json!({})).expect("render");
 
-        assert!(html.contains(r#"button button--ghost"#), "{html}");
+        assert!(html.contains(r"button button--ghost"), "{html}");
         assert!(html.contains("Back"), "{html}");
         assert!(
             !html.contains("material-symbols"),
@@ -446,7 +463,7 @@ mod tests {
         let translations = Arc::new(Translations::load(tmp.path()));
         let mut hbs =
             (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
-        hbs.register_template_string("t", r#"{{> partials/meta-tags}}"#)
+        hbs.register_template_string("t", r"{{> partials/meta-tags}}")
             .expect("register caller");
 
         let html = hbs.render("t", &json!({})).expect("render");
@@ -466,7 +483,7 @@ mod tests {
         let translations = Arc::new(Translations::load(tmp.path()));
         let mut hbs =
             (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
-        hbs.register_template_string("t", r#"{{> partials/meta-tags}}"#)
+        hbs.register_template_string("t", r"{{> partials/meta-tags}}")
             .expect("register caller");
 
         let html = hbs.render("t", &json!({})).expect("render");
@@ -479,7 +496,7 @@ mod tests {
         let translations = Arc::new(Translations::load(tmp.path()));
         let mut hbs =
             (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
-        hbs.register_template_string("t", r#"{{> partials/icon-font}}"#)
+        hbs.register_template_string("t", r"{{> partials/icon-font}}")
             .expect("register caller");
 
         let html = hbs.render("t", &json!({})).expect("render");
@@ -504,7 +521,7 @@ mod tests {
         let translations = Arc::new(Translations::load(tmp.path()));
         let mut hbs =
             (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
-        hbs.register_template_string("t", r#"{{> partials/icon-font}}"#)
+        hbs.register_template_string("t", r"{{> partials/icon-font}}")
             .expect("register caller");
 
         let html = hbs.render("t", &json!({})).expect("render");
@@ -582,7 +599,7 @@ mod tests {
         let translations = Arc::new(Translations::load(tmp.path()));
         let mut hbs =
             (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
-        hbs.register_template_string("t", r#"{{> partials/loading-indicator}}"#)
+        hbs.register_template_string("t", r"{{> partials/loading-indicator}}")
             .expect("register caller");
 
         let html = hbs.render("t", &json!({})).expect("render");
@@ -629,7 +646,7 @@ mod tests {
             html.contains(r#"<span class="form__array-row-title">Title 0</span>"#),
             "{html}"
         );
-        assert!(html.contains(r#"form__array-row-error-badge"#), "{html}");
+        assert!(html.contains(r"form__array-row-error-badge"), "{html}");
         assert!(html.contains(r#"data-action="move-row-up""#), "{html}");
         assert!(html.contains(r#"data-action="move-row-down""#), "{html}");
         assert!(html.contains(r#"data-action="duplicate-row""#), "{html}");
@@ -686,7 +703,7 @@ mod tests {
             html.contains(r#"<span class="required">*</span>"#),
             "{html}"
         );
-        assert!(html.contains(r#"form__locale-badge"#), "{html}");
+        assert!(html.contains(r"form__locale-badge"), "{html}");
         assert!(html.contains(r#"type="radio""#), "{html}");
         assert!(
             html.contains(r#"<p class="form__error">pick one</p>"#),
@@ -809,9 +826,9 @@ mod tests {
             html.contains(r#"<span class="required">*</span>"#),
             "{html}"
         );
-        assert!(html.contains(r#"form__locale-badge"#), "{html}");
+        assert!(html.contains(r"form__locale-badge"), "{html}");
         assert!(
-            html.contains(r#"<input"#) && html.contains(r#"type="email""#),
+            html.contains(r"<input") && html.contains(r#"type="email""#),
             "{html}"
         );
         assert!(html.contains(r#"<p class="form__error">bad</p>"#), "{html}");

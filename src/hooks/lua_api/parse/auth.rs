@@ -4,7 +4,7 @@ use mlua::{Result as LuaResult, Table, Value};
 
 use crate::core::collection::{Auth, AuthStrategy, MfaMode};
 
-use super::helpers::*;
+use super::helpers::{get_bool, get_string, get_table};
 
 pub(super) fn parse_collection_auth(config: &Table) -> LuaResult<Option<Auth>> {
     let val: Value = match config.get("auth") {
@@ -14,7 +14,6 @@ pub(super) fn parse_collection_auth(config: &Table) -> LuaResult<Option<Auth>> {
 
     match val {
         Value::Boolean(true) => Ok(Some(Auth::new(true))),
-        Value::Boolean(false) | Value::Nil => Ok(None),
         Value::Table(tbl) => {
             let token_expiry = tbl.get::<u64>("token_expiry").unwrap_or(7200);
             let disable_local = get_bool(&tbl, "disable_local", false)?;
@@ -40,9 +39,8 @@ pub(super) fn parse_collection_auth(config: &Table) -> LuaResult<Option<Auth>> {
 }
 
 fn parse_auth_strategies(tbl: &Table) -> Vec<AuthStrategy> {
-    let strategies_tbl = match get_table(tbl, "strategies") {
-        Ok(t) => t,
-        Err(_) => return Vec::new(),
+    let Ok(strategies_tbl) = get_table(tbl, "strategies") else {
+        return Vec::new();
     };
 
     let mut strategies = Vec::new();

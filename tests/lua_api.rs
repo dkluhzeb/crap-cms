@@ -1,3 +1,17 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
@@ -86,10 +100,10 @@ fn json_encode_nested() {
     let runner = setup_lua();
     let result = eval_lua(
         &runner,
-        r#"
+        r"
         local t = { nested = { x = 1, y = 2 }, arr = { 10, 20, 30 } }
         return crap.util.json_encode(t)
-    "#,
+    ",
     );
     let parsed: serde_json::Value = serde_json::from_str(&result).expect("valid JSON");
     let nested = parsed.get("nested").unwrap();
@@ -118,10 +132,10 @@ fn nanoid_correct_length() {
     let runner = setup_lua();
     let result = eval_lua(
         &runner,
-        r#"
+        r"
         local id = crap.util.nanoid()
         return tostring(#id)
-    "#,
+    ",
     );
     let len: usize = result.parse().expect("should be a number");
     assert_eq!(len, 21, "Default nanoid length should be 21");
@@ -273,7 +287,7 @@ fn lua_slugify_special_chars() {
 
 // ── Helper: setup with real DB tables ────────────────────────────────────────
 
-/// Set up a HookRunner with a real synced database (tables created from Lua definitions).
+/// Set up a `HookRunner` with a real synced database (tables created from Lua definitions).
 /// Returns (tempdir, pool, registry, runner). The tempdir must be kept alive for the DB.
 #[allow(dead_code)]
 fn setup_with_db() -> (tempfile::TempDir, DbPool, Arc<Registry>, HookRunner) {
@@ -362,9 +376,9 @@ fn lua_locale_get_default() {
     let runner = setup_lua();
     let result = eval_lua(
         &runner,
-        r#"
+        r"
         return crap.locale.get_default()
-    "#,
+    ",
     );
     assert_eq!(result, "en", "Default locale should be 'en'");
 }
@@ -374,10 +388,10 @@ fn lua_locale_get_all() {
     let runner = setup_lua();
     let result = eval_lua(
         &runner,
-        r#"
+        r"
         local all = crap.locale.get_all()
         return tostring(#all)
-    "#,
+    ",
     );
     assert_eq!(result, "0", "No locales configured by default");
 }
@@ -387,9 +401,9 @@ fn lua_locale_is_enabled() {
     let runner = setup_lua();
     let result = eval_lua(
         &runner,
-        r#"
+        r"
         return tostring(crap.locale.is_enabled())
-    "#,
+    ",
     );
     assert_eq!(result, "false", "Locale should not be enabled by default");
 }

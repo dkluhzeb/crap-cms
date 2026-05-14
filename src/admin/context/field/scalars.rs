@@ -28,6 +28,19 @@ pub struct TextField {
     pub tags: Option<Vec<String>>,
 }
 
+impl TextField {
+    /// Construct an uninitialized variant carrying only `base` — enrichment
+    /// populates `has_many` / `tags` later.
+    #[must_use]
+    pub fn empty(base: BaseFieldData) -> Self {
+        Self {
+            base,
+            has_many: None,
+            tags: None,
+        }
+    }
+}
+
 // ── Textarea ──────────────────────────────────────────────────────
 
 /// Multi-line textarea. Always emits `rows` and `resizable`.
@@ -42,6 +55,19 @@ pub struct TextareaField {
 
     /// Whether the textarea allows user-resizing in the admin UI.
     pub resizable: bool,
+}
+
+impl TextareaField {
+    /// Construct with `base` and field-level admin defaults (`rows = 8`,
+    /// `resizable = false`). Enrichment overwrites these from `field.admin`.
+    #[must_use]
+    pub fn empty(base: BaseFieldData) -> Self {
+        Self {
+            base,
+            rows: 8,
+            resizable: false,
+        }
+    }
 }
 
 // ── Number ────────────────────────────────────────────────────────
@@ -63,9 +89,23 @@ pub struct NumberField {
     pub tags: Option<Vec<String>>,
 }
 
+impl NumberField {
+    /// Construct an uninitialized variant carrying only `base`. Enrichment
+    /// populates `step` and `has_many`/`tags`.
+    #[must_use]
+    pub fn empty(base: BaseFieldData) -> Self {
+        Self {
+            base,
+            step: String::new(),
+            has_many: None,
+            tags: None,
+        }
+    }
+}
+
 // ── Code ──────────────────────────────────────────────────────────
 
-/// Source-code editor field (CodeMirror). Always emits `language`. Emits
+/// Source-code editor field (`CodeMirror`). Always emits `language`. Emits
 /// `languages` only when the operator configured an allow-list (which makes
 /// the editor render an in-form picker).
 #[derive(Serialize, Deserialize, Default, JsonSchema)]
@@ -83,9 +123,22 @@ pub struct CodeField {
     pub languages: Option<Vec<String>>,
 }
 
+impl CodeField {
+    /// Construct an uninitialized variant carrying only `base`. Enrichment
+    /// populates `language` / `languages` from the field's admin config.
+    #[must_use]
+    pub fn empty(base: BaseFieldData) -> Self {
+        Self {
+            base,
+            language: String::new(),
+            languages: None,
+        }
+    }
+}
+
 // ── Richtext ──────────────────────────────────────────────────────
 
-/// Rich-text editor field (ProseMirror). The `_node_names` key is prefixed
+/// Rich-text editor field (`ProseMirror`). The `_node_names` key is prefixed
 /// with `_` per the existing on-the-wire shape consumed by the
 /// `<crap-richtext>` element.
 #[derive(Serialize, Deserialize, Default, JsonSchema)]
@@ -105,7 +158,7 @@ pub struct RichtextField {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub features: Option<Vec<String>>,
 
-    /// Optional list of allowed ProseMirror node names. Emitted with a
+    /// Optional list of allowed `ProseMirror` node names. Emitted with a
     /// leading underscore per the existing client-side contract.
     /// Removed from the JSON by enrichment (replaced by [`Self::custom_nodes`]).
     #[serde(rename = "_node_names", skip_serializing_if = "Option::is_none")]
@@ -117,7 +170,24 @@ pub struct RichtextField {
     pub custom_nodes: Option<Vec<RichtextNodeDefCtx>>,
 }
 
-/// One custom ProseMirror node definition exposed to the richtext editor.
+impl RichtextField {
+    /// Construct with `base` and the wire-format default
+    /// (`richtext_format = "html"`). Enrichment overwrites the format
+    /// + populates `features` / `node_names` / `custom_nodes`.
+    #[must_use]
+    pub fn empty(base: BaseFieldData) -> Self {
+        Self {
+            base,
+            resizable: false,
+            richtext_format: "html".to_string(),
+            features: None,
+            node_names: None,
+            custom_nodes: None,
+        }
+    }
+}
+
+/// One custom `ProseMirror` node definition exposed to the richtext editor.
 #[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct RichtextNodeDefCtx {
@@ -246,6 +316,27 @@ pub struct DateField {
     pub timezone_value: Option<String>,
 }
 
+impl DateField {
+    /// Construct with `base` and the default picker appearance (`"dayOnly"`).
+    /// Enrichment overwrites the appearance + populates min/max/timezone keys
+    /// from the field's admin config.
+    #[must_use]
+    pub fn empty(base: BaseFieldData) -> Self {
+        Self {
+            base,
+            picker_appearance: "dayOnly".to_string(),
+            date_only_value: None,
+            datetime_local_value: None,
+            min_date: None,
+            max_date: None,
+            timezone_enabled: None,
+            default_timezone: None,
+            timezone_options: None,
+            timezone_value: None,
+        }
+    }
+}
+
 /// One row in a Date field's timezone picker.
 #[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
@@ -266,6 +357,18 @@ pub struct CheckboxField {
     pub checked: bool,
 }
 
+impl CheckboxField {
+    /// Construct with `base` and `checked = false`. Enrichment populates
+    /// `checked` from the field value.
+    #[must_use]
+    pub fn empty(base: BaseFieldData) -> Self {
+        Self {
+            base,
+            checked: false,
+        }
+    }
+}
+
 // ── Choice (Select / Radio) ───────────────────────────────────────
 
 /// Select dropdown or radio button group. The `field_type` discriminator
@@ -281,6 +384,19 @@ pub struct ChoiceField {
     /// Set to `Some(true)` for multi-select; absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_many: Option<bool>,
+}
+
+impl ChoiceField {
+    /// Construct an uninitialized variant carrying only `base`. Enrichment
+    /// populates `options` + `has_many` from the field's admin config.
+    #[must_use]
+    pub fn empty(base: BaseFieldData) -> Self {
+        Self {
+            base,
+            options: Vec::new(),
+            has_many: None,
+        }
+    }
 }
 
 /// One row in a Select/Radio's `options` array.

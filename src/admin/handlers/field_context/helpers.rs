@@ -29,7 +29,7 @@ pub fn count_errors_in_field_contexts(fields: &[FieldContext]) -> usize {
     fields
         .iter()
         .map(|fc| {
-            let mut count = if fc.base().error.is_some() { 1 } else { 0 };
+            let mut count = usize::from(fc.base().error.is_some());
 
             count += match fc {
                 FieldContext::Group(gf) | FieldContext::Collapsible(gf) => {
@@ -41,24 +41,16 @@ pub fn count_errors_in_field_contexts(fields: &[FieldContext]) -> usize {
                     .iter()
                     .map(|tp| count_errors_in_field_contexts(&tp.sub_fields))
                     .sum(),
-                FieldContext::Array(af) => af
-                    .rows
-                    .as_ref()
-                    .map(|rs| {
-                        rs.iter()
-                            .map(|r| count_errors_in_field_contexts(&r.sub_fields))
-                            .sum()
-                    })
-                    .unwrap_or(0),
-                FieldContext::Blocks(bf) => bf
-                    .rows
-                    .as_ref()
-                    .map(|rs| {
-                        rs.iter()
-                            .map(|r| count_errors_in_field_contexts(&r.sub_fields))
-                            .sum()
-                    })
-                    .unwrap_or(0),
+                FieldContext::Array(af) => af.rows.as_ref().map_or(0, |rs| {
+                    rs.iter()
+                        .map(|r| count_errors_in_field_contexts(&r.sub_fields))
+                        .sum()
+                }),
+                FieldContext::Blocks(bf) => bf.rows.as_ref().map_or(0, |rs| {
+                    rs.iter()
+                        .map(|r| count_errors_in_field_contexts(&r.sub_fields))
+                        .sum()
+                }),
                 _ => 0,
             };
 
@@ -73,7 +65,7 @@ pub fn collect_node_attr_errors(
     errors: &HashMap<String, String>,
     field_name: &str,
 ) -> Option<String> {
-    let prefix = format!("{}[", field_name);
+    let prefix = format!("{field_name}[");
 
     let msgs: Vec<&str> = errors
         .iter()
@@ -216,15 +208,15 @@ fn apply_single_condition(
 
     match result {
         DisplayConditionResult::Bool(visible) => {
-            condition.condition_visible = Some(*visible);
-            condition.condition_ref = Some(cond_ref.clone());
+            condition.visible = Some(*visible);
+            condition.func_ref = Some(cond_ref.clone());
         }
         DisplayConditionResult::Table {
             condition: cond,
             visible,
         } => {
-            condition.condition_visible = Some(*visible);
-            condition.condition_json = Some(cond.clone());
+            condition.visible = Some(*visible);
+            condition.expr = Some(cond.clone());
         }
     }
 }

@@ -1,4 +1,4 @@
-//! Lua table serializer for GlobalDefinition.
+//! Lua table serializer for `GlobalDefinition`.
 
 use mlua::{Lua, Result as LuaResult, Table};
 
@@ -8,7 +8,7 @@ use super::collection::{
     access_to_lua, collection_hooks_to_lua, fields_to_lua, labels_to_lua, live_to_lua, mcp_to_lua,
 };
 
-/// Convert a GlobalDefinition to a full Lua table compatible with parse_global_definition().
+/// Convert a `GlobalDefinition` to a full Lua table compatible with `parse_global_definition()`.
 pub(crate) fn global_config_to_lua(lua: &Lua, def: &GlobalDefinition) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
 
@@ -19,7 +19,7 @@ pub(crate) fn global_config_to_lua(lua: &Lua, def: &GlobalDefinition) -> LuaResu
 
     access_to_lua(lua, &tbl, &def.access)?;
     mcp_to_lua(lua, &tbl, &def.mcp)?;
-    live_to_lua(&tbl, &def.live)?;
+    live_to_lua(&tbl, def.live.as_ref())?;
 
     Ok(tbl)
 }

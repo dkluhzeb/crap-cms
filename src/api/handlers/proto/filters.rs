@@ -12,7 +12,7 @@ fn parse_field_filters(field: &str, value: &JsonValue, ctx: &str) -> Result<Vec<
             op: FilterOp::Equals(s.clone()),
         }]),
         JsonValue::Number(_) | JsonValue::Bool(_) => {
-            let s = value_to_string(value).map_err(|e| format!("{} '{}': {}", ctx, field, e))?;
+            let s = value_to_string(value).map_err(|e| format!("{ctx} '{field}': {e}"))?;
 
             Ok(vec![Filter {
                 field: field.to_string(),
@@ -24,7 +24,7 @@ fn parse_field_filters(field: &str, value: &JsonValue, ctx: &str) -> Result<Vec<
 
             for (op_name, op_value) in ops {
                 let op = parse_filter_op(op_name, op_value)
-                    .map_err(|e| format!("{} '{}': {}", ctx, field, e))?;
+                    .map_err(|e| format!("{ctx} '{field}': {e}"))?;
 
                 filters.push(Filter {
                     field: field.to_string(),
@@ -35,8 +35,7 @@ fn parse_field_filters(field: &str, value: &JsonValue, ctx: &str) -> Result<Vec<
             Ok(filters)
         }
         _ => Err(format!(
-            "{} '{}': value must be string, number, boolean, or operator object",
-            ctx, field
+            "{ctx} '{field}': value must be string, number, boolean, or operator object"
         )),
     }
 }
@@ -72,7 +71,7 @@ fn parse_or_clause(value: &JsonValue) -> Result<FilterClause, String> {
 /// (`{"field": {"greater_than": 5}}`), and `or` groups.
 pub fn parse_where_json(json_str: &str) -> Result<Vec<FilterClause>, String> {
     let obj: JsonValue =
-        serde_json::from_str(json_str).map_err(|e| format!("JSON parse error: {}", e))?;
+        serde_json::from_str(json_str).map_err(|e| format!("JSON parse error: {e}"))?;
 
     let map = obj
         .as_object()
@@ -94,7 +93,7 @@ pub fn parse_where_json(json_str: &str) -> Result<Vec<FilterClause>, String> {
     Ok(clauses)
 }
 
-/// Parse a filter operator name (e.g. "equals", "greater_than") and its JSON value into a `FilterOp`.
+/// Parse a filter operator name (e.g. "equals", "`greater_than`") and its JSON value into a `FilterOp`.
 pub(in crate::api::handlers) fn parse_filter_op(
     op_name: &str,
     value: &JsonValue,
@@ -126,7 +125,7 @@ pub(in crate::api::handlers) fn parse_filter_op(
         }
         "exists" => Ok(FilterOp::Exists),
         "not_exists" => Ok(FilterOp::NotExists),
-        _ => Err(format!("unknown operator '{}'", op_name)),
+        _ => Err(format!("unknown operator '{op_name}'")),
     }
 }
 
@@ -141,6 +140,20 @@ pub(in crate::api::handlers) fn value_to_string(v: &JsonValue) -> Result<String,
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::*;
     use crate::db::{FilterClause, FilterOp};
@@ -226,7 +239,7 @@ mod tests {
 
     #[test]
     fn parse_where_json_non_object() {
-        let result = parse_where_json(r#"[1, 2, 3]"#);
+        let result = parse_where_json(r"[1, 2, 3]");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("must be a JSON object"));
     }

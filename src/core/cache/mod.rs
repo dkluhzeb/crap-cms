@@ -1,6 +1,6 @@
 //! Cache backend abstraction for cross-request caching.
 //!
-//! Provides a trait-based backend system: `memory` (default DashMap),
+//! Provides a trait-based backend system: `memory` (default `DashMap`),
 //! `redis` (feature-flagged), `none` (no-op), and `custom` (Lua-delegated).
 //!
 //! The [`CacheBackend`] trait + [`SharedCache`] type alias live in the

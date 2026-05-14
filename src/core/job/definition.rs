@@ -68,48 +68,56 @@ impl JobDefinitionBuilder {
         }
     }
 
+    #[must_use]
     pub fn schedule(mut self, s: impl Into<String>) -> Self {
         self.inner.schedule = Some(s.into());
 
         self
     }
 
+    #[must_use]
     pub fn queue(mut self, q: impl Into<String>) -> Self {
         self.inner.queue = q.into();
 
         self
     }
 
+    #[must_use]
     pub fn retries(mut self, n: u32) -> Self {
         self.inner.retries = n;
 
         self
     }
 
+    #[must_use]
     pub fn timeout(mut self, t: u64) -> Self {
         self.inner.timeout = t;
 
         self
     }
 
+    #[must_use]
     pub fn concurrency(mut self, n: u32) -> Self {
         self.inner.concurrency = n;
 
         self
     }
 
+    #[must_use]
     pub fn skip_if_running(mut self, b: bool) -> Self {
         self.inner.skip_if_running = b;
 
         self
     }
 
+    #[must_use]
     pub fn labels(mut self, l: JobLabels) -> Self {
         self.inner.labels = l;
 
         self
     }
 
+    #[must_use]
     pub fn access(mut self, a: impl Into<String>) -> Self {
         self.inner.access = Some(a.into());
 
@@ -117,6 +125,7 @@ impl JobDefinitionBuilder {
     }
 
     /// Build the final [`JobDefinition`].
+    #[must_use]
     pub fn build(self) -> JobDefinition {
         self.inner
     }

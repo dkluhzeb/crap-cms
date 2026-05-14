@@ -1,3 +1,17 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -53,7 +67,7 @@ fn eval_lua_init(runner: &HookRunner, code: &str) -> String {
 
 // ── Helper: setup with real DB tables ────────────────────────────────────────
 
-/// Set up a HookRunner with a real synced database (tables created from Lua definitions).
+/// Set up a `HookRunner` with a real synced database (tables created from Lua definitions).
 /// Returns (tempdir, pool, registry, runner). The tempdir must be kept alive for the DB.
 #[allow(dead_code)]
 fn setup_with_db() -> (tempfile::TempDir, DbPool, Arc<Registry>, HookRunner) {
@@ -300,7 +314,7 @@ fn collections_config_get_includes_picker_appearance() {
     assert_eq!(result, "dayAndTime");
 }
 
-/// Pool-VM define is a no-op (with `InitPhase` set). The init_lua VM
+/// Pool-VM define is a no-op (with `InitPhase` set). The `init_lua` VM
 /// owns the writable registry; pool VMs re-running definition files
 /// or `init.lua` would otherwise double-write idempotently — pointless
 /// work, so the pool-init `define` stub returns `Ok` without touching
@@ -403,14 +417,13 @@ fn globals_list_returns_slug_keyed_map() {
     );
     assert!(
         result.contains("settings"),
-        "should contain settings, got: {}",
-        result
+        "should contain settings, got: {result}"
     );
 }
 
 /// `crap.globals.config.list()` is callable and returns all registered
 /// globals — verified from a pool VM. The actual bulk-modify pattern
-/// only mutates the registry from `init.lua` (init_lua VM); see the
+/// only mutates the registry from `init.lua` (`init_lua` VM); see the
 /// unit tests in `lua_api/globals.rs` for that side.
 #[test]
 fn globals_list_iteration_works_in_pool_vm() {
@@ -428,8 +441,7 @@ fn globals_list_iteration_works_in_pool_vm() {
     );
     assert!(
         result.contains("settings"),
-        "expected 'settings' in {}",
-        result
+        "expected 'settings' in {result}"
     );
 }
 
@@ -450,15 +462,14 @@ fn collections_list_returns_all_collections() {
     );
     assert!(
         result.contains("articles"),
-        "should contain articles, got: {}",
-        result
+        "should contain articles, got: {result}"
     );
 }
 
 /// `crap.collections.config.list()` is callable from a pool VM and
 /// returns every registered collection. The bulk-modify pattern from
 /// a plugin (loop list → modify → define) only mutates the registry
-/// during init_lua; see unit tests in `lua_api/collections.rs`.
+/// during `init_lua`; see unit tests in `lua_api/collections.rs`.
 #[test]
 fn collections_list_iteration_works_in_pool_vm() {
     let runner = setup_lua();
@@ -475,8 +486,7 @@ fn collections_list_iteration_works_in_pool_vm() {
     );
     assert!(
         result.contains("articles"),
-        "expected 'articles' in {}",
-        result
+        "expected 'articles' in {result}"
     );
 }
 
@@ -716,8 +726,7 @@ fn lua_validate_fields_with_custom_validator() {
     let err_msg = format!("{}", result.unwrap_err());
     assert!(
         err_msg.contains("positive") || err_msg.contains("Must be"),
-        "Error should mention positive, got: {}",
-        err_msg
+        "Error should mention positive, got: {err_msg}"
     );
 }
 
@@ -751,7 +760,10 @@ crap.collections.define("posts", {
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let mut config = CrapConfig::test_default();
-    config.locale.locales = locales.iter().map(|s| s.to_string()).collect();
+    config.locale.locales = locales
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
     config.locale.default_locale = locales.first().unwrap_or(&"en").to_string();
     config.locale.fallback = true;
 

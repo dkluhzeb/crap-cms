@@ -1,3 +1,17 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -656,8 +670,7 @@ fn populate_depth_1_hydrates_has_one() {
     let cat_val = post.get("category").expect("category should exist");
     assert!(
         cat_val.is_object(),
-        "category should be an object, got: {:?}",
-        cat_val
+        "category should be an object, got: {cat_val:?}"
     );
     assert_eq!(cat_val.get("name").unwrap().as_str().unwrap(), "Tech");
     assert_eq!(
@@ -876,8 +889,7 @@ fn populate_respects_field_max_depth_1_stops_nested_relations() {
     let capped = post.get("capped_cat").expect("capped_cat should exist");
     assert!(
         capped.is_object(),
-        "capped_cat should be hydrated at depth 1, got: {:?}",
-        capped
+        "capped_cat should be hydrated at depth 1, got: {capped:?}"
     );
     assert_eq!(
         capped.get("name").and_then(|v| v.as_str()),
@@ -891,8 +903,7 @@ fn populate_respects_field_max_depth_1_stops_nested_relations() {
     let nested_parent = capped.get("parent").expect("nested parent should exist");
     assert!(
         nested_parent.is_string(),
-        "nested parent should stay as ID (max_depth=1 caps), got: {:?}",
-        nested_parent
+        "nested parent should stay as ID (max_depth=1 caps), got: {nested_parent:?}"
     );
     assert_eq!(
         nested_parent.as_str(),
@@ -987,8 +998,7 @@ fn populate_with_localized_related_collection() {
     let img = article.get("image").expect("image field should exist");
     assert!(
         img.is_object(),
-        "image should be populated object, got: {:?}",
-        img
+        "image should be populated object, got: {img:?}"
     );
     assert_eq!(img.get("url").unwrap().as_str().unwrap(), "/img/test.png");
     assert_eq!(img.get("caption").unwrap().as_str().unwrap(), "Test image");

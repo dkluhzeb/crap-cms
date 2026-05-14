@@ -80,7 +80,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token<'_>>> {
         if bytes[i..].starts_with(b"{{!") {
             flush_text(src, text_start, i, &mut out);
             let end = find_hbs_comment_end(src, i)
-                .ok_or_else(|| anyhow!("unterminated handlebars comment at byte {}", i))?;
+                .ok_or_else(|| anyhow!("unterminated handlebars comment at byte {i}"))?;
             out.push(Token::HbsComment(&src[i..end]));
             i = end;
             text_start = i;
@@ -91,7 +91,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token<'_>>> {
         if bytes[i..].starts_with(b"{{{") {
             flush_text(src, text_start, i, &mut out);
             let end = find_close(src, i + 3, b"}}}")
-                .ok_or_else(|| anyhow!("unterminated {{{{{{...}}}}}} at byte {}", i))?
+                .ok_or_else(|| anyhow!("unterminated {{{{{{...}}}}}} at byte {i}"))?
                 + 3;
             out.push(Token::HbsExpr(&src[i..end]));
             i = end;
@@ -103,7 +103,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token<'_>>> {
         if bytes[i..].starts_with(b"{{") {
             flush_text(src, text_start, i, &mut out);
             let end = find_close(src, i + 2, b"}}")
-                .ok_or_else(|| anyhow!("unterminated {{{{...}}}} at byte {}", i))?
+                .ok_or_else(|| anyhow!("unterminated {{{{...}}}} at byte {i}"))?
                 + 2;
             let tok = classify_mustache(&src[i..end]);
             out.push(tok);
@@ -118,7 +118,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token<'_>>> {
             let end = src[i + 4..]
                 .find("-->")
                 .map(|p| i + 4 + p + 3)
-                .ok_or_else(|| anyhow!("unterminated <!-- … --> at byte {}", i))?;
+                .ok_or_else(|| anyhow!("unterminated <!-- … --> at byte {i}"))?;
             out.push(Token::HtmlComment(&src[i..end]));
             i = end;
             text_start = i;
@@ -159,14 +159,14 @@ pub fn tokenize(src: &str) -> Result<Vec<Token<'_>>> {
                 out.push(tok);
                 let body_start = next;
                 let close_pos = find_raw_close(src, body_start, &tag_name)
-                    .ok_or_else(|| anyhow!("unterminated <{}> at byte {}", tag_name, i))?;
+                    .ok_or_else(|| anyhow!("unterminated <{tag_name}> at byte {i}"))?;
                 if close_pos > body_start {
                     out.push(Token::RawText(&src[body_start..close_pos]));
                 }
                 let after_close = src[close_pos..]
                     .find('>')
                     .map(|p| close_pos + p + 1)
-                    .ok_or_else(|| anyhow!("unterminated </{}> tag", tag_name))?;
+                    .ok_or_else(|| anyhow!("unterminated </{tag_name}> tag"))?;
                 out.push(Token::HtmlEnd { name: tag_name });
                 i = after_close;
                 text_start = i;
@@ -279,7 +279,7 @@ fn read_html_tag(src: &str, start: usize) -> Result<(Token<'_>, usize)> {
         i += 1;
     }
     if i == name_start {
-        return Err(anyhow!("expected tag name at byte {}", start));
+        return Err(anyhow!("expected tag name at byte {start}"));
     }
     let name = src[name_start..i].to_ascii_lowercase();
 
@@ -289,7 +289,7 @@ fn read_html_tag(src: &str, start: usize) -> Result<(Token<'_>, usize)> {
             i += 1;
         }
         if i >= bytes.len() {
-            return Err(anyhow!("unterminated </{}> tag", name));
+            return Err(anyhow!("unterminated </{name}> tag"));
         }
         return Ok((Token::HtmlEnd { name }, i + 1));
     }
@@ -353,7 +353,7 @@ fn read_html_tag(src: &str, start: usize) -> Result<(Token<'_>, usize)> {
         }
         i += 1;
     }
-    Err(anyhow!("unterminated tag starting at byte {}", start))
+    Err(anyhow!("unterminated tag starting at byte {start}"))
 }
 
 fn is_name_char(b: u8) -> bool {
@@ -432,9 +432,7 @@ pub fn parse_attributes(raw: &str) -> Result<Vec<Attr>> {
         if i == name_start {
             // Couldn't make progress — bail safely with whatever's left.
             return Err(anyhow!(
-                "unrecognised attribute syntax at byte {} of `{}`",
-                i,
-                raw
+                "unrecognised attribute syntax at byte {i} of `{raw}`"
             ));
         }
         let name = raw[name_start..i].to_ascii_lowercase();
@@ -444,12 +442,12 @@ pub fn parse_attributes(raw: &str) -> Result<Vec<Attr>> {
         if i < bytes.len() && bytes[i] == b'=' {
             i += 1;
             if i >= bytes.len() {
-                return Err(anyhow!("trailing '=' in attribute list `{}`", raw));
+                return Err(anyhow!("trailing '=' in attribute list `{raw}`"));
             }
             let q = bytes[i];
             if q == b'"' || q == b'\'' {
                 let close = find_attr_value_quote(raw, i + 1, q)
-                    .ok_or_else(|| anyhow!("unterminated attribute value in `{}`", raw))?;
+                    .ok_or_else(|| anyhow!("unterminated attribute value in `{raw}`"))?;
                 value = Some(raw[i + 1..close].to_string());
                 i = close + 1;
             } else {
@@ -514,8 +512,7 @@ fn consume_hbs_block_attr(raw: &str, start: usize) -> Result<usize> {
     loop {
         if i >= bytes.len() {
             return Err(anyhow!(
-                "unterminated handlebars block in attribute list at byte {}",
-                start
+                "unterminated handlebars block in attribute list at byte {start}"
             ));
         }
         if raw[i..].starts_with("{{#") || raw[i..].starts_with("{{^") {

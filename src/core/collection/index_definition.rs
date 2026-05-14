@@ -14,6 +14,7 @@ pub struct IndexDefinition {
 
 impl IndexDefinition {
     /// Create a new index definition for the given fields.
+    #[must_use]
     pub fn new(fields: Vec<String>) -> Self {
         Self {
             fields,

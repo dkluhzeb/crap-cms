@@ -6,6 +6,10 @@ use crate::scaffold;
 
 /// Handle the `templates list` subcommand (no config needed — lists
 /// embedded defaults shipped with the binary).
-pub fn list(r#type: Option<String>, verbose: bool) -> Result<()> {
-    scaffold::templates_list(r#type.as_deref(), verbose)
+///
+/// # Errors
+///
+/// Returns an error if `r#type` is not one of the accepted values.
+pub fn list(r#type: Option<&str>, verbose: bool) -> Result<()> {
+    scaffold::templates_list(r#type, verbose)
 }

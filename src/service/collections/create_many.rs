@@ -56,10 +56,15 @@ pub struct CreateManyResult {
 ///
 /// Each document goes through the full lifecycle (before-hooks, validation,
 /// persist, after-hooks). Referenced targets are validated per-document.
+///
+/// # Errors
+///
+/// Returns service-layer errors per-document or a backend error if the
+/// transaction fails.
 #[cfg(not(tarpaulin_include))]
 pub fn create_many(
     ctx: &ServiceContext,
-    items: Vec<CreateManyItem>,
+    items: &[CreateManyItem],
     opts: &CreateManyOptions,
 ) -> Result<CreateManyResult> {
     if let Some(pool) = ctx.pool {
@@ -73,7 +78,7 @@ pub fn create_many(
 fn create_many_pooled(
     ctx: &ServiceContext,
     pool: &crate::db::DbPool,
-    items: Vec<CreateManyItem>,
+    items: &[CreateManyItem],
     opts: &CreateManyOptions,
 ) -> Result<CreateManyResult> {
     let runner = ctx.runner()?;
@@ -139,13 +144,13 @@ fn create_many_pooled(
 /// Conn mode (Lua): create on existing connection without transaction management.
 fn create_many_on_conn(
     ctx: &ServiceContext,
-    items: Vec<CreateManyItem>,
+    items: &[CreateManyItem],
     opts: &CreateManyOptions,
 ) -> Result<CreateManyResult> {
     let mut created = 0i64;
     let mut documents = Vec::with_capacity(items.len());
 
-    for item in &items {
+    for item in items {
         let input = WriteInput::builder(item.data.clone())
             .password(item.password.as_deref())
             .draft(opts.draft)

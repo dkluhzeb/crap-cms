@@ -1,3 +1,17 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -201,13 +215,13 @@ fn published_or_author_constrains_anonymous() {
                     assert_eq!(f.field, "_status");
                     match &f.op {
                         query::FilterOp::Equals(val) => assert_eq!(val, "published"),
-                        other => panic!("Expected Equals op, got {:?}", other),
+                        other => panic!("Expected Equals op, got {other:?}"),
                     }
                 }
-                other => panic!("Expected Single clause, got {:?}", other),
+                other => panic!("Expected Single clause, got {other:?}"),
             }
         }
-        other => panic!("Expected Constrained, got {:?}", other),
+        other => panic!("Expected Constrained, got {other:?}"),
     }
 }
 
@@ -243,8 +257,7 @@ fn field_write_no_field_access_allows_all() {
     // No field-level access controls in posts definition
     assert!(
         denied.is_empty(),
-        "Expected no denied fields, got: {:?}",
-        denied
+        "Expected no denied fields, got: {denied:?}"
     );
 }
 
@@ -259,8 +272,7 @@ fn field_read_no_config_allows_all() {
     let denied = runner.check_field_read_access(&posts.fields, None, &conn);
     assert!(
         denied.is_empty(),
-        "Expected no denied fields for read, got: {:?}",
-        denied
+        "Expected no denied fields for read, got: {denied:?}"
     );
 }
 
@@ -417,8 +429,7 @@ fn field_read_access_strips_denied_fields() {
     let denied = runner.check_field_read_access(&fields, Some(&admin), &conn);
     assert!(
         denied.is_empty(),
-        "Admin user should have all fields allowed, but got denied: {:?}",
-        denied
+        "Admin user should have all fields allowed, but got denied: {denied:?}"
     );
 }
 
@@ -464,26 +475,22 @@ fn field_write_access_strips_denied_fields() {
     let denied_on_create = runner.check_field_write_access(&fields, None, "create", &conn);
     assert!(
         denied_on_create.contains(&"auto_slug".to_string()),
-        "auto_slug should be denied on create for anonymous, got: {:?}",
-        denied_on_create
+        "auto_slug should be denied on create for anonymous, got: {denied_on_create:?}"
     );
     assert!(
         !denied_on_create.contains(&"immutable_field".to_string()),
-        "immutable_field should be allowed on create (no create access config), got: {:?}",
-        denied_on_create
+        "immutable_field should be allowed on create (no create access config), got: {denied_on_create:?}"
     );
 
     // Anonymous user: on update, immutable_field should be denied (admin_only denies anonymous)
     let denied_on_update = runner.check_field_write_access(&fields, None, "update", &conn);
     assert!(
         denied_on_update.contains(&"immutable_field".to_string()),
-        "immutable_field should be denied on update for anonymous, got: {:?}",
-        denied_on_update
+        "immutable_field should be denied on update for anonymous, got: {denied_on_update:?}"
     );
     assert!(
         !denied_on_update.contains(&"auto_slug".to_string()),
-        "auto_slug should be allowed on update (no update access config), got: {:?}",
-        denied_on_update
+        "auto_slug should be allowed on update (no update access config), got: {denied_on_update:?}"
     );
 }
 
@@ -499,8 +506,7 @@ fn no_access_config_means_allowed() {
     let result = runner.check_access(None, None, None, None, &conn).unwrap();
     assert!(
         matches!(result, query::AccessResult::Allowed),
-        "None access ref should return Allowed, got: {:?}",
-        result
+        "None access ref should return Allowed, got: {result:?}"
     );
 
     // Also test with a user present — should still be Allowed
@@ -510,8 +516,7 @@ fn no_access_config_means_allowed() {
         .unwrap();
     assert!(
         matches!(result, query::AccessResult::Allowed),
-        "None access ref with user should still return Allowed, got: {:?}",
-        result
+        "None access ref with user should still return Allowed, got: {result:?}"
     );
 
     // Field-level: fields without any access config should not be denied
@@ -611,10 +616,9 @@ fn access_hook_filter_table_on_update_denies_when_filter_does_not_match() {
     let conn = pool.get().unwrap();
     let code = format!(
         r#"
-        local doc = crap.collections.update("articles", "{}", {{ title = "Hacked" }})
+        local doc = crap.collections.update("articles", "{id}", {{ title = "Hacked" }})
         return doc.title
-        "#,
-        id
+        "#
     );
     let result = runner.eval_lua_with_conn(&code, &conn, Some(&user_a));
 
@@ -639,10 +643,9 @@ fn access_hook_filter_table_on_update_allows_when_filter_matches() {
     let conn = pool.get().unwrap();
     let code = format!(
         r#"
-        local doc = crap.collections.update("articles", "{}", {{ title = "Mine Updated" }})
+        local doc = crap.collections.update("articles", "{id}", {{ title = "Mine Updated" }})
         return doc.title
-        "#,
-        id
+        "#
     );
     let result = runner
         .eval_lua_with_conn(&code, &conn, Some(&user_a))
@@ -660,10 +663,9 @@ fn access_hook_filter_table_on_delete_denies_when_filter_does_not_match() {
     let conn = pool.get().unwrap();
     let code = format!(
         r#"
-        crap.collections.delete("articles", "{}")
+        crap.collections.delete("articles", "{id}")
         return "OK"
-        "#,
-        id
+        "#
     );
     let result = runner.eval_lua_with_conn(&code, &conn, Some(&user_a));
 
@@ -727,10 +729,9 @@ fn access_hook_filter_table_on_undelete_enforces_match() {
         let conn = pool.get().unwrap();
         let code = format!(
             r#"
-            crap.collections.delete("articles", "{}", {{ overrideAccess = true }})
+            crap.collections.delete("articles", "{id}", {{ overrideAccess = true }})
             return "OK"
-            "#,
-            id
+            "#
         );
         runner.eval_lua_with_conn(&code, &conn, None).unwrap();
     }
@@ -740,10 +741,9 @@ fn access_hook_filter_table_on_undelete_enforces_match() {
     let conn = pool.get().unwrap();
     let code = format!(
         r#"
-        crap.collections.undelete("articles", "{}")
+        crap.collections.undelete("articles", "{id}")
         return "OK"
-        "#,
-        id
+        "#
     );
     let result = runner.eval_lua_with_conn(&code, &conn, Some(&user_a));
 
@@ -761,10 +761,9 @@ fn access_hook_filter_table_on_undelete_enforces_match() {
     let user_b = make_user_doc("user_b", "editor");
     let code = format!(
         r#"
-        crap.collections.undelete("articles", "{}")
+        crap.collections.undelete("articles", "{id}")
         return "OK"
-        "#,
-        id
+        "#
     );
     let result = runner
         .eval_lua_with_conn(&code, &conn, Some(&user_b))
@@ -772,8 +771,8 @@ fn access_hook_filter_table_on_undelete_enforces_match() {
     assert_eq!(result, "OK");
 }
 
-/// Regression: HookRunner::check_access must consult DefaultDeny when access_ref is None.
-/// Previously, check_access short-circuited to Allowed before reaching the DefaultDeny check.
+/// Regression: `HookRunner::check_access` must consult `DefaultDeny` when `access_ref` is None.
+/// Previously, `check_access` short-circuited to Allowed before reaching the `DefaultDeny` check.
 #[test]
 fn default_deny_true_no_access_ref_returns_denied() {
     let config_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("example");
@@ -798,8 +797,7 @@ fn default_deny_true_no_access_ref_returns_denied() {
     let result = runner.check_access(None, None, None, None, &conn).unwrap();
     assert!(
         matches!(result, query::AccessResult::Denied),
-        "With default_deny=true and no access ref, expected Denied, got: {:?}",
-        result
+        "With default_deny=true and no access ref, expected Denied, got: {result:?}"
     );
 
     // Even with a user present, no access function + default_deny → Denied
@@ -809,8 +807,7 @@ fn default_deny_true_no_access_ref_returns_denied() {
         .unwrap();
     assert!(
         matches!(result, query::AccessResult::Denied),
-        "With default_deny=true, user present, and no access ref, expected Denied, got: {:?}",
-        result
+        "With default_deny=true, user present, and no access ref, expected Denied, got: {result:?}"
     );
 }
 
@@ -875,7 +872,7 @@ fn access_hook_filter_table_on_global_update_is_rejected() {
 }
 
 /// Helper: seed a versioned article directly so we can drive list/restore.
-/// Returns (doc_id, first_version_id).
+/// Returns (`doc_id`, `first_version_id`).
 fn seed_versioned_article(
     pool: &crap_cms::db::DbPool,
     registry: &std::sync::Arc<crap_cms::core::Registry>,
@@ -1224,7 +1221,7 @@ fn search_documents_includes_drafts_when_opted_in() {
 // present with `_deleted_at` set.
 
 /// Helper: query the raw row for an article (bypasses the soft-delete filter).
-/// Returns (row_exists, deleted_at_is_set).
+/// Returns (`row_exists`, `deleted_at_is_set`).
 fn raw_article_row_state(pool: &crap_cms::db::DbPool, id: &str) -> (bool, bool) {
     let conn = pool.get().unwrap();
     let sql = format!(
@@ -1253,10 +1250,9 @@ fn lua_delete_force_hard_delete_removes_row_on_soft_delete_collection() {
     let conn = pool.get().unwrap();
     let code = format!(
         r#"
-        crap.collections.delete("articles", "{}", {{ forceHardDelete = true }})
+        crap.collections.delete("articles", "{id}", {{ forceHardDelete = true }})
         return "OK"
-        "#,
-        id
+        "#
     );
     let result = runner
         .eval_lua_with_conn(&code, &conn, Some(&user_a))
@@ -1282,10 +1278,9 @@ fn lua_delete_default_soft_deletes_row_on_soft_delete_collection() {
     let conn = pool.get().unwrap();
     let code = format!(
         r#"
-        crap.collections.delete("articles", "{}")
+        crap.collections.delete("articles", "{id}")
         return "OK"
-        "#,
-        id
+        "#
     );
     let result = runner
         .eval_lua_with_conn(&code, &conn, Some(&user_a))
@@ -1312,10 +1307,9 @@ fn lua_delete_force_hard_delete_false_soft_deletes() {
     let conn = pool.get().unwrap();
     let code = format!(
         r#"
-        crap.collections.delete("articles", "{}", {{ forceHardDelete = false }})
+        crap.collections.delete("articles", "{id}", {{ forceHardDelete = false }})
         return "OK"
-        "#,
-        id
+        "#
     );
     runner
         .eval_lua_with_conn(&code, &conn, Some(&user_a))
@@ -1346,10 +1340,9 @@ fn lua_list_versions_respects_access_by_default() {
     let conn = pool.get().unwrap();
     let code = format!(
         r#"
-        local r = crap.collections.list_versions("versioned_articles", "{}")
+        local r = crap.collections.list_versions("versioned_articles", "{id}")
         return "OK:" .. tostring(#r.docs)
-        "#,
-        id
+        "#
     );
     let result = runner.eval_lua_with_conn(&code, &conn, Some(&user_a));
     assert!(
@@ -1373,11 +1366,10 @@ fn lua_list_versions_override_access_bypasses() {
     let code = format!(
         r#"
         local r = crap.collections.list_versions(
-            "versioned_articles", "{}", {{ overrideAccess = true }}
+            "versioned_articles", "{id}", {{ overrideAccess = true }}
         )
         return tostring(#r.docs)
-        "#,
-        id
+        "#
     );
     let result = runner
         .eval_lua_with_conn(&code, &conn, Some(&user_a))
@@ -1398,10 +1390,9 @@ fn lua_restore_version_respects_access_by_default() {
     let conn = pool.get().unwrap();
     let code = format!(
         r#"
-        crap.collections.restore_version("versioned_articles", "{}", "{}")
+        crap.collections.restore_version("versioned_articles", "{id}", "{version_id}")
         return "OK"
-        "#,
-        id, version_id
+        "#
     );
     let result = runner.eval_lua_with_conn(&code, &conn, Some(&user_a));
     assert!(
@@ -1425,12 +1416,11 @@ fn lua_restore_version_override_access_bypasses() {
     let code = format!(
         r#"
         local d = crap.collections.restore_version(
-            "versioned_articles", "{}", "{}",
+            "versioned_articles", "{id}", "{version_id}",
             {{ overrideAccess = true }}
         )
         return d.id
-        "#,
-        id, version_id
+        "#
     );
     let result = runner
         .eval_lua_with_conn(&code, &conn, Some(&user_a))

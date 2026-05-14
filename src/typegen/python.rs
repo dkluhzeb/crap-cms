@@ -166,14 +166,9 @@ fn write_field_with_context(out: &mut String, field: &FieldDefinition, parent_pa
 /// Map a field definition to its Python type string.
 fn field_to_py(field: &FieldDefinition, parent_pascal: &str) -> String {
     match &field.field_type {
-        FieldType::Text => {
-            if field.has_many {
-                "list[str]".to_string()
-            } else {
-                "str".to_string()
-            }
-        }
-        FieldType::Textarea
+        FieldType::Text if field.has_many => "list[str]".to_string(),
+        FieldType::Text
+        | FieldType::Textarea
         | FieldType::Email
         | FieldType::Date
         | FieldType::Richtext
@@ -202,8 +197,6 @@ fn field_to_py(field: &FieldDefinition, parent_pascal: &str) -> String {
         FieldType::Checkbox => "bool".to_string(),
         FieldType::Json => "Any".to_string(),
         FieldType::Relationship => match &field.relationship {
-            Some(rc) if rc.is_polymorphic() && rc.has_many => "list[str]".to_string(),
-            Some(rc) if rc.is_polymorphic() => "str".to_string(),
             Some(rc) if rc.has_many => "list[str]".to_string(),
             _ => "str".to_string(),
         },
@@ -221,19 +214,16 @@ fn field_to_py(field: &FieldDefinition, parent_pascal: &str) -> String {
                 format!("{}{}", parent_pascal, to_pascal_case(&field.name))
             }
         }
-        FieldType::Row => "dict".to_string(), // layout-only; sub-fields are promoted
-        FieldType::Collapsible => "dict".to_string(), // layout-only; sub-fields are promoted
-        FieldType::Tabs => "dict".to_string(), // layout-only; sub-fields are promoted
-        FieldType::Blocks => "list[dict]".to_string(),
-        FieldType::Join => "list[dict]".to_string(),
+        // Layout-only; sub-fields are promoted
+        FieldType::Row | FieldType::Collapsible | FieldType::Tabs => "dict".to_string(),
+        FieldType::Blocks | FieldType::Join => "list[dict]".to_string(),
     }
 }
 
 /// Return the Python default value for a field type.
 fn default_for_type(field: &FieldDefinition) -> &'static str {
     match &field.field_type {
-        FieldType::Text if field.has_many => "field(default_factory=list)",
-        FieldType::Number if field.has_many => "field(default_factory=list)",
+        FieldType::Text | FieldType::Number if field.has_many => "field(default_factory=list)",
         FieldType::Number => "0.0",
         FieldType::Checkbox => "False",
         _ => "\"\"",
@@ -333,23 +323,19 @@ mod tests {
         // Polymorphic has-one = str (stores "collection/id" composite)
         assert!(
             out.contains("subject: str = \"\""),
-            "polymorphic has-one should be str: {}",
-            out
+            "polymorphic has-one should be str: {out}"
         );
         assert!(
             out.contains("Polymorphic relationship"),
-            "should have polymorphic comment: {}",
-            out
+            "should have polymorphic comment: {out}"
         );
         assert!(
             out.contains("posts"),
-            "comment should list target collections: {}",
-            out
+            "comment should list target collections: {out}"
         );
         assert!(
             out.contains("pages"),
-            "comment should list target collections: {}",
-            out
+            "comment should list target collections: {out}"
         );
     }
 
@@ -370,23 +356,19 @@ mod tests {
         // Polymorphic has-many = list[str] (array of "collection/id" composites)
         assert!(
             out.contains("list[str]"),
-            "polymorphic has-many should be list[str]: {}",
-            out
+            "polymorphic has-many should be list[str]: {out}"
         );
         assert!(
             out.contains("Polymorphic relationship"),
-            "should have polymorphic comment: {}",
-            out
+            "should have polymorphic comment: {out}"
         );
         assert!(
             out.contains("articles"),
-            "comment should list target collections: {}",
-            out
+            "comment should list target collections: {out}"
         );
         assert!(
             out.contains("videos"),
-            "comment should list target collections: {}",
-            out
+            "comment should list target collections: {out}"
         );
     }
 
@@ -458,14 +440,13 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
         // Sub-type should be generated
-        assert!(out.contains("class PostsItems:"), "sub-type class: {}", out);
+        assert!(out.contains("class PostsItems:"), "sub-type class: {out}");
         assert!(out.contains("label: str = \"\""));
         assert!(out.contains("value: Optional[str] = None"));
         // Parent should reference sub-type
         assert!(
             out.contains("list[PostsItems]"),
-            "parent should reference sub-type: {}",
-            out
+            "parent should reference sub-type: {out}"
         );
     }
 
@@ -497,14 +478,12 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("class PostsSeo:"),
-            "group sub-type class should be emitted: {}",
-            out
+            "group sub-type class should be emitted: {out}"
         );
-        assert!(out.contains("title: str"), "group sub-field: {}", out);
+        assert!(out.contains("title: str"), "group sub-field: {out}");
         assert!(
             out.contains("description: Optional[str]"),
-            "group optional sub-field: {}",
-            out
+            "group optional sub-field: {out}"
         );
     }
 
@@ -526,8 +505,7 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("class PostsItems:"),
-            "array nested in Row should emit sub-type: {}",
-            out
+            "array nested in Row should emit sub-type: {out}"
         );
     }
 
@@ -546,13 +524,11 @@ mod tests {
         render_global(&mut out, &global);
         assert!(
             out.contains("class SettingsNav:"),
-            "global array sub-type: {}",
-            out
+            "global array sub-type: {out}"
         );
         assert!(
             out.contains("class SettingsSeo:"),
-            "global group sub-type: {}",
-            out
+            "global group sub-type: {out}"
         );
     }
 
@@ -603,8 +579,7 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("images: list[str]"),
-            "has-many upload should be list[str]: {}",
-            out
+            "has-many upload should be list[str]: {out}"
         );
     }
 
@@ -684,13 +659,11 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("tags: list[str] = field(default_factory=list)"),
-            "required has-many text should use list default: {}",
-            out
+            "required has-many text should use list default: {out}"
         );
         assert!(
             out.contains("labels: Optional[list[str]] = None"),
-            "optional has-many text should be Optional[list[str]]: {}",
-            out
+            "optional has-many text should be Optional[list[str]]: {out}"
         );
     }
 
@@ -712,13 +685,11 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("scores: list[float] = field(default_factory=list)"),
-            "required has-many number should use list default: {}",
-            out
+            "required has-many number should use list default: {out}"
         );
         assert!(
             out.contains("weights: Optional[list[float]] = None"),
-            "optional has-many number should be Optional[list[float]]: {}",
-            out
+            "optional has-many number should be Optional[list[float]]: {out}"
         );
     }
 
@@ -767,18 +738,15 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("snippet: str = \"\""),
-            "code field should map to str: {}",
-            out
+            "code field should map to str: {out}"
         );
         assert!(
             out.contains("Optional[list[dict]]"),
-            "join field should map to list[dict]: {}",
-            out
+            "join field should map to list[dict]: {out}"
         );
         assert!(
             out.contains("color: str = \"\""),
-            "radio without options should be str: {}",
-            out
+            "radio without options should be str: {out}"
         );
     }
 
@@ -800,13 +768,11 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("tags: list[str]"),
-            "required select has-many should be list[str]: {}",
-            out
+            "required select has-many should be list[str]: {out}"
         );
         assert!(
             out.contains("Optional[list[str]]"),
-            "optional radio has-many should be Optional[list[str]]: {}",
-            out
+            "optional radio has-many should be Optional[list[str]]: {out}"
         );
     }
 
@@ -837,40 +803,33 @@ mod tests {
         // Row sub-fields promoted — no "layout_row" key
         assert!(
             !out.contains("layout_row"),
-            "row field name should not appear: {}",
-            out
+            "row field name should not appear: {out}"
         );
         assert!(
             out.contains("first_name: str = \"\""),
-            "row required sub-field promoted: {}",
-            out
+            "row required sub-field promoted: {out}"
         );
         assert!(
             out.contains("last_name: Optional[str] = None"),
-            "row optional sub-field promoted: {}",
-            out
+            "row optional sub-field promoted: {out}"
         );
         // Collapsible sub-fields promoted
         assert!(
             !out.contains("details"),
-            "collapsible field name should not appear: {}",
-            out
+            "collapsible field name should not appear: {out}"
         );
         assert!(
             out.contains("bio: Optional[str] = None"),
-            "collapsible sub-field promoted: {}",
-            out
+            "collapsible sub-field promoted: {out}"
         );
         // Tabs sub-fields promoted
         assert!(
             !out.contains("sections"),
-            "tabs field name should not appear: {}",
-            out
+            "tabs field name should not appear: {out}"
         );
         assert!(
             out.contains("tab_field: str = \"\""),
-            "tabs sub-field promoted: {}",
-            out
+            "tabs sub-field promoted: {out}"
         );
     }
 }

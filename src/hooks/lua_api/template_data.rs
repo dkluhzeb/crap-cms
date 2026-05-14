@@ -153,7 +153,7 @@ mod tests {
     }
 
     /// Regression: `crap.template_data.register` called outside the init
-    /// phase must fail loudly. Each VM has its own template_data registry,
+    /// phase must fail loudly. Each VM has its own `template_data` registry,
     /// so a runtime registration would only land in the current VM —
     /// future renders served by other VMs would not see the function,
     /// producing intermittent visibility across requests.

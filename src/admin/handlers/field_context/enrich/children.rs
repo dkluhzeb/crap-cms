@@ -22,8 +22,8 @@ use serde_json::Value;
 use crate::{
     admin::{
         context::field::{
-            ArrayField, BaseFieldData, BlockDefinition, BlocksField, ConditionData, FieldContext,
-            TabPanel, ValidationAttrs,
+            ArrayField, BaseFieldData, BlockDefinition, BlocksField, CodeField, ConditionData,
+            FieldContext, TabPanel, TextareaField, ValidationAttrs,
         },
         handlers::{
             field_context::{
@@ -97,12 +97,10 @@ fn build_child_base(
     non_default_locale: bool,
     errors: &HashMap<String, String>,
 ) -> BaseFieldData {
-    let label = child
-        .admin
-        .label
-        .as_ref()
-        .map(|ls| ls.resolve_default().to_string())
-        .unwrap_or_else(|| auto_label_from_name(&child.name));
+    let label = child.admin.label.as_ref().map_or_else(
+        || auto_label_from_name(&child.name),
+        |ls| ls.resolve_default().to_string(),
+    );
 
     let locale_locked = non_default_locale && !child.localized;
 
@@ -143,7 +141,7 @@ fn apply_array_template(
     child_name: &str,
     opts: &ChildEnrichOpts,
 ) {
-    let template_prefix = format!("{}[__INDEX__]", child_name);
+    let template_prefix = format!("{child_name}[__INDEX__]");
 
     af.sub_fields = child
         .fields
@@ -170,7 +168,7 @@ fn apply_array_template(
         .labels_singular
         .as_ref()
         .map(|ls| ls.resolve_default().to_string());
-    af.label_field = child.admin.label_field.clone();
+    af.label_field.clone_from(&child.admin.label_field);
 }
 
 /// Apply Blocks template-only enrichment (no row iteration). Mirrors
@@ -182,7 +180,7 @@ fn apply_blocks_template(
     child_name: &str,
     opts: &ChildEnrichOpts,
 ) {
-    let template_prefix = format!("{}[__INDEX__]", child_name);
+    let template_prefix = format!("{child_name}[__INDEX__]");
 
     bf.block_definitions = child
         .blocks
@@ -203,11 +201,10 @@ fn apply_blocks_template(
                 })
                 .collect();
 
-            let label = bd
-                .label
-                .as_ref()
-                .map(|ls| ls.resolve_default().to_string())
-                .unwrap_or_else(|| bd.block_type.clone());
+            let label = bd.label.as_ref().map_or_else(
+                || bd.block_type.clone(),
+                |ls| ls.resolve_default().to_string(),
+            );
 
             BlockDefinition {
                 block_type: bd.block_type.clone(),
@@ -230,7 +227,7 @@ fn apply_blocks_template(
         .labels_singular
         .as_ref()
         .map(|ls| ls.resolve_default().to_string());
-    bf.picker = child.admin.picker.clone();
+    bf.picker.clone_from(&child.admin.picker);
 }
 
 /// Apply Date enrichment with structured-row timezone lookup.
@@ -264,7 +261,9 @@ fn apply_date(
     }
 }
 
-/// Apply type-specific enrichment to the typed child variant.
+/// Apply type-specific enrichment to the typed child variant. Each arm
+/// either calls a per-variant helper or sets a single field on the variant;
+/// the match itself stays as the table of contents for `FieldContext`.
 fn dispatch_child(
     fc: &mut FieldContext,
     child: &FieldDefinition,
@@ -280,73 +279,22 @@ fn dispatch_child(
 
     match fc {
         FieldContext::Row(rf) => {
-            rf.sub_fields = build_enriched_children_from_data(
-                &child.fields,
-                child_raw,
-                child_name,
-                opts.locale_locked,
-                opts.non_default_locale,
-                opts.depth + 1,
-                opts.errors,
-            );
+            rf.sub_fields = enrich_container_children(child, child_raw, child_name, opts);
         }
         FieldContext::Collapsible(gf) => {
-            gf.sub_fields = build_enriched_children_from_data(
-                &child.fields,
-                child_raw,
-                child_name,
-                opts.locale_locked,
-                opts.non_default_locale,
-                opts.depth + 1,
-                opts.errors,
-            );
+            gf.sub_fields = enrich_container_children(child, child_raw, child_name, opts);
             gf.collapsed = child.admin.collapsed;
         }
         FieldContext::Group(gf) => {
             // Group adds a `[0]` index suffix for its sub-fields' parent
             // prefix — matches the form parser's "Group is a single-element
             // composite" convention.
-            let group_prefix = format!("{}[0]", child_name);
-            gf.sub_fields = build_enriched_children_from_data(
-                &child.fields,
-                child_raw,
-                &group_prefix,
-                opts.locale_locked,
-                opts.non_default_locale,
-                opts.depth + 1,
-                opts.errors,
-            );
+            let group_prefix = format!("{child_name}[0]");
+            gf.sub_fields = enrich_container_children(child, child_raw, &group_prefix, opts);
             gf.collapsed = child.admin.collapsed;
         }
         FieldContext::Tabs(tf) => {
-            tf.tabs = child
-                .tabs
-                .iter()
-                .map(|tab| {
-                    let tab_sub_fields = build_enriched_children_from_data(
-                        &tab.fields,
-                        child_raw,
-                        child_name,
-                        opts.locale_locked,
-                        opts.non_default_locale,
-                        opts.depth + 1,
-                        opts.errors,
-                    );
-
-                    let error_count = count_errors_in_field_contexts(&tab_sub_fields);
-
-                    TabPanel {
-                        label: tab.label.clone(),
-                        sub_fields: tab_sub_fields,
-                        error_count: if error_count > 0 {
-                            Some(error_count)
-                        } else {
-                            None
-                        },
-                        description: tab.description.clone(),
-                    }
-                })
-                .collect();
+            tf.tabs = enrich_tab_panels(child, child_raw, child_name, opts);
         }
         FieldContext::Array(af) => apply_array_template(af, child, child_name, opts),
         FieldContext::Blocks(bf) => apply_blocks_template(bf, child, child_name, opts),
@@ -357,26 +305,9 @@ fn dispatch_child(
         FieldContext::Date(df) => apply_date(df, child, child_val, data_obj),
         FieldContext::Relationship(rf) => field_types::sub_relationship(rf, child),
         FieldContext::Upload(uf) => field_types::sub_upload(uf, child),
-        FieldContext::Textarea(tf) => {
-            tf.rows = child.admin.rows.unwrap_or(8);
-            tf.resizable = child.admin.resizable;
-        }
+        FieldContext::Textarea(tf) => enrich_sub_textarea(tf, child),
         FieldContext::Richtext(rf) => enrich_sub_richtext(rf, child, child_name, opts.errors),
-        FieldContext::Code(cf) => {
-            // Layout-wrapper-nested Code fields use the operator default
-            // language only — no per-row `<short>_lang` lookup. This
-            // preserves the pre-existing Value-based behavior; fixing the
-            // companion lookup is a separate concern.
-            cf.language = child
-                .admin
-                .language
-                .as_deref()
-                .unwrap_or("json")
-                .to_string();
-            if !child.admin.languages.is_empty() {
-                cf.languages = Some(child.admin.languages.clone());
-            }
-        }
+        FieldContext::Code(cf) => enrich_sub_code(cf, child),
         FieldContext::Text(tf) if child.has_many => {
             field_types::sub_text_has_many_tags(tf, child_val);
         }
@@ -384,6 +315,88 @@ fn dispatch_child(
             field_types::sub_number_has_many_tags(nf, child_val);
         }
         _ => {}
+    }
+}
+
+/// Recurse into the layout-wrapper's `child.fields` to build typed
+/// sub-field contexts. Shared by `Row`, `Collapsible`, and `Group` arms —
+/// only the parent-prefix string differs.
+fn enrich_container_children(
+    child: &FieldDefinition,
+    child_raw: Option<&Value>,
+    parent_prefix: &str,
+    opts: &ChildEnrichOpts,
+) -> Vec<FieldContext> {
+    build_enriched_children_from_data(
+        &child.fields,
+        child_raw,
+        parent_prefix,
+        opts.locale_locked,
+        opts.non_default_locale,
+        opts.depth + 1,
+        opts.errors,
+    )
+}
+
+/// Build the per-tab [`TabPanel`] list for a `Tabs` field — each tab's
+/// `fields` recurse into typed sub-field contexts and the per-tab error
+/// count is precomputed for the UI badge.
+fn enrich_tab_panels(
+    child: &FieldDefinition,
+    child_raw: Option<&Value>,
+    child_name: &str,
+    opts: &ChildEnrichOpts,
+) -> Vec<TabPanel> {
+    child
+        .tabs
+        .iter()
+        .map(|tab| {
+            let tab_sub_fields = build_enriched_children_from_data(
+                &tab.fields,
+                child_raw,
+                child_name,
+                opts.locale_locked,
+                opts.non_default_locale,
+                opts.depth + 1,
+                opts.errors,
+            );
+            let error_count = count_errors_in_field_contexts(&tab_sub_fields);
+            TabPanel {
+                label: tab.label.clone(),
+                sub_fields: tab_sub_fields,
+                error_count: if error_count > 0 {
+                    Some(error_count)
+                } else {
+                    None
+                },
+                description: tab.description.clone(),
+            }
+        })
+        .collect()
+}
+
+/// Apply the textarea-specific admin knobs (`rows`, `resizable`) to a
+/// layout-wrapper-nested textarea child.
+fn enrich_sub_textarea(tf: &mut TextareaField, child: &FieldDefinition) {
+    tf.rows = child.admin.rows.unwrap_or(8);
+    tf.resizable = child.admin.resizable;
+}
+
+/// Apply the code-editor-specific admin knobs (`language`, `languages`) to
+/// a layout-wrapper-nested code child.
+///
+/// Layout-wrapper-nested Code fields use the operator-default language
+/// only — no per-row `<short>_lang` lookup. This preserves the pre-existing
+/// Value-based behavior; fixing the companion lookup is a separate concern.
+fn enrich_sub_code(cf: &mut CodeField, child: &FieldDefinition) {
+    cf.language = child
+        .admin
+        .language
+        .as_deref()
+        .unwrap_or("json")
+        .to_string();
+    if !child.admin.languages.is_empty() {
+        cf.languages = Some(child.admin.languages.clone());
     }
 }
 

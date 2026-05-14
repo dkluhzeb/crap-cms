@@ -83,6 +83,10 @@ fn clear_token(
 // ── Reset token functions ────────────────────────────────────────────────
 
 /// Store a password reset token and expiry for a user.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
 pub fn set_reset_token(
     conn: &dyn DbConnection,
     slug: &str,
@@ -102,6 +106,10 @@ pub fn set_reset_token(
 }
 
 /// Find a user by their reset token. Returns the document and token expiry.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails or the row fails to parse.
 pub fn find_by_reset_token(
     conn: &dyn DbConnection,
     slug: &str,
@@ -112,6 +120,10 @@ pub fn find_by_reset_token(
 }
 
 /// Clear the reset token for a user (after successful reset or expiry).
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
 pub fn clear_reset_token(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<()> {
     clear_token(conn, slug, user_id, "_reset_token", "_reset_token_exp")
 }
@@ -119,6 +131,10 @@ pub fn clear_reset_token(conn: &dyn DbConnection, slug: &str, user_id: &str) -> 
 // ── Verification token functions ─────────────────────────────────────────
 
 /// Store a verification token and expiry for a user.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
 pub fn set_verification_token(
     conn: &dyn DbConnection,
     slug: &str,
@@ -138,6 +154,10 @@ pub fn set_verification_token(
 }
 
 /// Find a user by their verification token. Returns the document and token expiry.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails or the row fails to parse.
 pub fn find_by_verification_token(
     conn: &dyn DbConnection,
     slug: &str,
@@ -155,6 +175,10 @@ pub fn find_by_verification_token(
 }
 
 /// Clear the verification token for a user (after expiry). Does NOT change `_verified` status.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
 pub fn clear_verification_token(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<()> {
     clear_token(
         conn,
@@ -166,6 +190,10 @@ pub fn clear_verification_token(conn: &dyn DbConnection, slug: &str, user_id: &s
 }
 
 /// Mark a user as verified (set _verified = 1, clear token and expiry).
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
 pub fn mark_verified(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<()> {
     let sql = format!(
         "UPDATE \"{slug}\" SET _verified = 1, _verification_token = NULL, \
@@ -178,6 +206,10 @@ pub fn mark_verified(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Resu
 }
 
 /// Mark a user as unverified (set _verified = 0). Does NOT touch token fields.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
 pub fn mark_unverified(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<()> {
     let sql = format!(
         "UPDATE \"{slug}\" SET _verified = 0 WHERE id = {}",
@@ -189,6 +221,20 @@ pub fn mark_unverified(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Re
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use tempfile::TempDir;
 

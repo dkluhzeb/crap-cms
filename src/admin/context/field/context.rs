@@ -38,9 +38,9 @@ pub enum FieldContext {
     Textarea(TextareaField),
     /// Numeric input (or tag input when `has_many`).
     Number(NumberField),
-    /// Source-code editor (CodeMirror).
+    /// Source-code editor (`CodeMirror`).
     Code(CodeField),
-    /// Rich-text editor (ProseMirror).
+    /// Rich-text editor (`ProseMirror`).
     Richtext(RichtextField),
     /// Date / datetime picker.
     Date(DateField),

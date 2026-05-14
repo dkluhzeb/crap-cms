@@ -34,6 +34,11 @@ use crate::{
 const PID_FILENAME: &str = "crap-worker.pid";
 
 /// Stop a running detached worker.
+///
+/// # Errors
+///
+/// Returns an error if no PID file is found, the process can't be signalled,
+/// or the worker fails to exit after `SIGTERM` and `SIGKILL`.
 #[cfg(unix)]
 pub fn stop(config_dir: &Path) -> Result<()> {
     let pid = read_pid(config_dir, PID_FILENAME).context(
@@ -44,10 +49,7 @@ pub fn stop(config_dir: &Path) -> Result<()> {
     if !is_process_running(pid) {
         helpers::remove_pid_file(config_dir, PID_FILENAME);
 
-        bail!(
-            "Worker process {} is not running (stale PID file removed)",
-            pid
-        );
+        bail!("Worker process {pid} is not running (stale PID file removed)");
     }
 
     send_signal(pid, libc::SIGTERM)?;
@@ -82,10 +84,15 @@ pub fn stop(config_dir: &Path) -> Result<()> {
 }
 
 /// Restart a running detached worker.
+///
+/// # Errors
+///
+/// Returns an error if the detach step fails (the stop step's error is
+/// non-fatal: a stale PID file is cleaned up and `detach` proceeds).
 #[cfg(unix)]
 pub fn restart(
     config_dir: &Path,
-    queues: Option<Vec<String>>,
+    queues: Option<&[String]>,
     concurrency: Option<usize>,
     no_cron: bool,
 ) -> Result<()> {
@@ -103,15 +110,18 @@ pub fn restart(
 }
 
 /// Show status of a detached worker.
+///
+/// # Errors
+///
+/// Currently infallible (returns `Ok(())` for all observed states). The
+/// `Result` return type is preserved for parity with sibling commands and
+/// because PID-file IO could plausibly fail in the future.
 #[cfg(unix)]
 pub fn status(config_dir: &Path) -> Result<()> {
-    let pid = match read_pid(config_dir, PID_FILENAME) {
-        Some(pid) => pid,
-        None => {
-            cli::info("Worker not running (no PID file)");
+    let Some(pid) = read_pid(config_dir, PID_FILENAME) else {
+        cli::info("Worker not running (no PID file)");
 
-            return Ok(());
-        }
+        return Ok(());
     };
 
     if !is_process_running(pid) {
@@ -128,10 +138,15 @@ pub fn status(config_dir: &Path) -> Result<()> {
 }
 
 /// Re-exec the current binary as a detached background worker process.
+///
+/// # Errors
+///
+/// Returns an error if the current executable path can't be determined or
+/// the child process fails to spawn.
 #[cfg(not(tarpaulin_include))]
 pub fn detach(
     config_dir: &Path,
-    queues: Option<Vec<String>>,
+    queues: Option<&[String]>,
     concurrency: Option<usize>,
     no_cron: bool,
 ) -> Result<()> {
@@ -156,7 +171,7 @@ pub fn detach(
 
     cmd.arg("-C").arg(&config_dir).arg("work");
 
-    if let Some(ref q) = queues {
+    if let Some(q) = queues {
         cmd.arg("--queues").arg(q.join(","));
     }
 
@@ -181,13 +196,13 @@ pub fn detach(
 
     helpers::write_pid_file(&config_dir, PID_FILENAME, pid)?;
 
-    cli::success(&format!("Started worker in background (PID {})", pid));
+    cli::success(&format!("Started worker in background (PID {pid})"));
 
     Ok(())
 }
 
 /// Log worker configuration before starting.
-fn log_worker_config(queues: &Option<Vec<String>>, no_cron: bool, concurrency: usize) {
+fn log_worker_config(queues: Option<&[String]>, no_cron: bool, concurrency: usize) {
     if let Some(q) = queues {
         info!("Worker processing queues: {}", q.join(", "));
     } else {
@@ -205,6 +220,11 @@ fn log_worker_config(queues: &Option<Vec<String>>, no_cron: bool, concurrency: u
 }
 
 /// Run a standalone job worker.
+///
+/// # Errors
+///
+/// Returns an error if config loading, Lua init, pool creation, migrations,
+/// hook initialization, or scheduler startup fails.
 #[cfg(not(tarpaulin_include))]
 pub async fn run(
     config_dir: &Path,
@@ -243,7 +263,7 @@ pub async fn run(
         jobs_config.max_concurrent = c;
     }
 
-    log_worker_config(&queues, no_cron, jobs_config.max_concurrent);
+    log_worker_config(queues.as_deref(), no_cron, jobs_config.max_concurrent);
 
     scheduler::start(SchedulerParams {
         pool: db_pool,

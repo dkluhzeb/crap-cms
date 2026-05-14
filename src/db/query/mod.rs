@@ -30,7 +30,7 @@ pub use helpers::apply_pagination_limits;
 pub use locale::{
     LocaleContext, LocaleMode, get_locale_select_columns, get_locale_select_columns_full,
 };
-pub use pagination_result::{PaginationResult, PaginationResultBuilder, resolve_sort};
+pub use pagination_result::{CursorFlags, PaginationResult, PaginationResultBuilder, resolve_sort};
 pub use types::*;
 pub use validation::{
     get_valid_filter_paths, is_valid_identifier, reject_system_field, sanitize_locale,

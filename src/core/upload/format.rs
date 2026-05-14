@@ -20,6 +20,7 @@ pub struct FormatQuality {
 }
 
 impl FormatQuality {
+    #[must_use]
     pub fn new(quality: u8, queue: bool) -> Self {
         Self { quality, queue }
     }

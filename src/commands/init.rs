@@ -18,6 +18,12 @@ use crate::{
 
 /// Handle the `init` subcommand — scaffold directory, then optionally create collections
 /// and a first admin user via interactive survey.
+///
+/// # Errors
+///
+/// Returns an error if directory resolution fails, the interactive survey
+/// is interrupted, or any of the scaffolded artifacts (collections, admin
+/// user) fail to write.
 #[cfg(not(tarpaulin_include))]
 pub fn run(dir: Option<PathBuf>, no_input: bool) -> Result<()> {
     let config_dir = resolve_directory(dir, no_input)?;

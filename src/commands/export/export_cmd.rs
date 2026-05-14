@@ -16,10 +16,15 @@ use crate::{
 };
 
 /// Export collection data to JSON.
+///
+/// # Errors
+///
+/// Returns an error if config loading, pool creation, the collection scan,
+/// or writing the output file fails.
 #[cfg(not(tarpaulin_include))]
 pub fn export(
     config_dir: &Path,
-    collection_filter: Option<String>,
+    collection_filter: Option<&str>,
     output: Option<PathBuf>,
 ) -> Result<()> {
     let (pool, registry) = load_config_and_sync(config_dir)?;
@@ -28,13 +33,17 @@ pub fn export(
 
     let mut collections_data = Map::new();
 
-    let slugs: Vec<String> = if let Some(ref slug) = collection_filter {
+    let slugs: Vec<String> = if let Some(slug) = collection_filter {
         if registry.get_collection(slug).is_none() {
-            bail!("Collection '{}' not found", slug);
+            bail!("Collection '{slug}' not found");
         }
-        vec![slug.clone()]
+        vec![slug.to_string()]
     } else {
-        let mut s: Vec<String> = registry.collections.keys().map(|s| s.to_string()).collect();
+        let mut s: Vec<String> = registry
+            .collections
+            .keys()
+            .map(std::string::ToString::to_string)
+            .collect();
         s.sort();
         s
     };

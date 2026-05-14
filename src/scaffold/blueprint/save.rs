@@ -13,6 +13,11 @@ use super::manifest::write_manifest;
 ///
 /// Copies everything except runtime artifacts (`data/`, `uploads/`, `types/`)
 /// to `~/.config/crap-cms/blueprints/<name>/`.
+///
+/// # Errors
+///
+/// Returns an error if the name is invalid, `config_dir` lacks a `crap.toml`,
+/// the destination already exists without `--force`, or copying fails.
 pub fn blueprint_save(config_dir: &Path, name: &str, force: bool) -> Result<()> {
     validate_blueprint_name(name)?;
 
@@ -26,15 +31,12 @@ pub fn blueprint_save(config_dir: &Path, name: &str, force: bool) -> Result<()> 
     let target = blueprints_dir()?.join(name);
 
     if target.exists() && !force {
-        bail!(
-            "Blueprint '{}' already exists -- use --force to overwrite",
-            name
-        );
+        bail!("Blueprint '{name}' already exists -- use --force to overwrite");
     }
 
     if target.exists() {
         fs::remove_dir_all(&target)
-            .with_context(|| format!("Failed to remove existing blueprint '{}'", name))?;
+            .with_context(|| format!("Failed to remove existing blueprint '{name}'"))?;
     }
 
     fs::create_dir_all(&target).with_context(|| {
@@ -45,10 +47,10 @@ pub fn blueprint_save(config_dir: &Path, name: &str, force: bool) -> Result<()> 
     })?;
 
     copy_dir_recursive(config_dir, &target, BLUEPRINT_SKIP)
-        .with_context(|| format!("Failed to copy config to blueprint '{}'", name))?;
+        .with_context(|| format!("Failed to copy config to blueprint '{name}'"))?;
 
     write_manifest(&target)
-        .with_context(|| format!("Failed to write manifest for blueprint '{}'", name))?;
+        .with_context(|| format!("Failed to write manifest for blueprint '{name}'"))?;
 
     cli::success(&format!(
         "Saved blueprint '{}' from {}",
@@ -87,8 +89,8 @@ mod tests {
             let result = blueprint_save(tmp.path(), "my-bp", false);
             assert!(result.is_err());
             let err = result.unwrap_err().to_string();
-            assert!(err.contains("already exists"), "got: {}", err);
-            assert!(err.contains("--force"), "got: {}", err);
+            assert!(err.contains("already exists"), "got: {err}");
+            assert!(err.contains("--force"), "got: {err}");
         });
     }
 
@@ -111,8 +113,7 @@ mod tests {
             let result = blueprint_save(tmp.path(), "overwrite-bp", true);
             assert!(
                 result.is_ok(),
-                "blueprint_save with force failed: {:?}",
-                result
+                "blueprint_save with force failed: {result:?}"
             );
 
             assert!(!bp_target.join("old-file.txt").exists());
@@ -141,7 +142,7 @@ mod tests {
             fs::write(tmp.path().join("types/crap.lua"), "should skip").unwrap();
 
             let result = blueprint_save(tmp.path(), "new-bp", false);
-            assert!(result.is_ok(), "blueprint_save failed: {:?}", result);
+            assert!(result.is_ok(), "blueprint_save failed: {result:?}");
 
             let bp_target = config_home
                 .join("crap-cms")

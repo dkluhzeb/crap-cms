@@ -1,24 +1,29 @@
-//! ProseMirror JSON → HTML renderer for richtext fields.
+//! `ProseMirror` JSON → HTML renderer for richtext fields.
 //!
 //! Handles standard PM nodes and marks, custom nodes via callback,
 //! and HTML passthrough replacement for `<crap-node>` elements.
 
+use std::fmt::Write as _;
+
 use serde_json::{Map, Value};
 
-/// Render ProseMirror JSON to HTML.
+/// Render `ProseMirror` JSON to HTML.
 ///
-/// Handles standard PM nodes (doc, paragraph, heading, text, blockquote, code_block,
-/// bullet_list, ordered_list, list_item, horizontal_rule, hard_break) and marks
+/// Handles standard PM nodes (doc, paragraph, heading, text, blockquote, `code_block`,
+/// `bullet_list`, `ordered_list`, `list_item`, `horizontal_rule`, `hard_break`) and marks
 /// (strong, em, code, link). Custom nodes are delegated to the `custom_renderer`
-/// callback which receives (node_type, attrs_json) and returns HTML.
+/// callback which receives (`node_type`, `attrs_json`) and returns HTML.
 ///
 /// For unknown nodes without a custom renderer, emits `<crap-node>` passthrough.
+///
+/// # Errors
+///
+/// Returns a descriptive error string if `json_str` is not valid JSON.
 pub fn render_prosemirror_to_html<F>(json_str: &str, custom_renderer: &F) -> Result<String, String>
 where
     F: Fn(&str, &Value) -> Option<String>,
 {
-    let parsed: Value =
-        serde_json::from_str(json_str).map_err(|e| format!("Invalid JSON: {}", e))?;
+    let parsed: Value = serde_json::from_str(json_str).map_err(|e| format!("Invalid JSON: {e}"))?;
     let mut out = String::new();
     render_node(&parsed, custom_renderer, &mut out);
     Ok(out)
@@ -28,14 +33,12 @@ pub(super) fn render_node<F>(node: &Value, custom_renderer: &F, out: &mut String
 where
     F: Fn(&str, &Value) -> Option<String>,
 {
-    let obj = match node.as_object() {
-        Some(o) => o,
-        None => return,
+    let Some(obj) = node.as_object() else {
+        return;
     };
 
-    let node_type = match obj.get("type").and_then(|t| t.as_str()) {
-        Some(t) => t,
-        None => return,
+    let Some(node_type) = obj.get("type").and_then(|t| t.as_str()) else {
+        return;
     };
 
     match node_type {
@@ -49,12 +52,12 @@ where
             let level = obj
                 .get("attrs")
                 .and_then(|a| a.get("level"))
-                .and_then(|l| l.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .unwrap_or(1)
                 .clamp(1, 6);
-            out.push_str(&format!("<h{}>", level));
+            let _ = write!(out, "<h{level}>");
             render_children(node, custom_renderer, out);
-            out.push_str(&format!("</h{}>", level));
+            let _ = write!(out, "</h{level}>");
         }
         "text" => {
             let text = obj.get("text").and_then(|t| t.as_str()).unwrap_or("");
@@ -100,11 +103,12 @@ where
             } else {
                 // Passthrough as <crap-node>
                 let attrs_json = serde_json::to_string(&attrs).unwrap_or_default();
-                out.push_str(&format!(
+                let _ = write!(
+                    out,
                     "<crap-node data-type=\"{}\" data-attrs='{}'>",
                     html_escape_attr(node_type),
                     html_escape_attr(&attrs_json)
-                ));
+                );
                 out.push_str("</crap-node>");
             }
         }
@@ -155,7 +159,7 @@ fn render_text_with_marks(text: &str, marks: Option<&Vec<Value>>, out: &mut Stri
                             .and_then(|h| h.as_str())
                             .unwrap_or("#");
                         let safe_href = if is_safe_url(href) { href } else { "#" };
-                        out.push_str(&format!("<a href=\"{}\">", html_escape_attr(safe_href),));
+                        let _ = write!(out, "<a href=\"{}\">", html_escape_attr(safe_href));
                         open_tags.push("</a>");
                     }
                     _ => {} // Unknown mark — skip
@@ -245,7 +249,7 @@ where
 
 /// Extract an attribute value from a tag string. Handles both single and double quotes.
 pub(crate) fn extract_attr_value(tag: &str, attr_name: &str) -> Option<String> {
-    let patterns = [format!("{}=\"", attr_name), format!("{}='", attr_name)];
+    let patterns = [format!("{attr_name}=\""), format!("{attr_name}='")];
 
     for pattern in &patterns {
         if let Some((_before, after)) = tag.split_once(pattern.as_str()) {
@@ -347,7 +351,7 @@ mod tests {
             if name == "cta" {
                 let text = attrs.get("text").and_then(|t| t.as_str()).unwrap_or("");
                 let url = attrs.get("url").and_then(|u| u.as_str()).unwrap_or("#");
-                Some(format!("<a href=\"{}\" class=\"btn\">{}</a>", url, text))
+                Some(format!("<a href=\"{url}\" class=\"btn\">{text}</a>"))
             } else {
                 None
             }
@@ -409,7 +413,7 @@ mod tests {
         let renderer = |name: &str, attrs: &Value| -> Option<String> {
             if name == "cta" {
                 let text = attrs.get("text").and_then(|t| t.as_str()).unwrap_or("");
-                Some(format!("<button>{}</button>", text))
+                Some(format!("<button>{text}</button>"))
             } else {
                 None
             }
@@ -437,7 +441,7 @@ mod tests {
         let renderer = |name: &str, attrs: &Value| -> Option<String> {
             if name == "cta" {
                 let text = attrs.get("text").and_then(|t| t.as_str()).unwrap_or("");
-                Some(format!("[{}]", text))
+                Some(format!("[{text}]"))
             } else {
                 None
             }
@@ -497,8 +501,7 @@ mod tests {
 
     fn make_link_json(href: &str) -> String {
         format!(
-            r#"{{"type":"doc","content":[{{"type":"paragraph","content":[{{"type":"text","text":"click","marks":[{{"type":"link","attrs":{{"href":"{}"}}}}]}}]}}]}}"#,
-            href
+            r#"{{"type":"doc","content":[{{"type":"paragraph","content":[{{"type":"text","text":"click","marks":[{{"type":"link","attrs":{{"href":"{href}"}}}}]}}]}}]}}"#
         )
     }
 
@@ -550,7 +553,7 @@ mod tests {
         );
     }
 
-    /// Regression: node_type in crap-node passthrough used html_escape (no quote escaping).
+    /// Regression: `node_type` in crap-node passthrough used `html_escape` (no quote escaping).
     #[test]
     fn passthrough_node_type_attr_escaped() {
         let json = r#"{"type":"doc","content":[{"type":"x\"onload=\"alert(1)","attrs":{}}]}"#;
@@ -576,7 +579,7 @@ mod tests {
         let renderer = |name: &str, attrs: &Value| -> Option<String> {
             if name == "cta" {
                 let text = attrs.get("text").and_then(|t| t.as_str()).unwrap_or("");
-                Some(format!("<button>{}</button>", text))
+                Some(format!("<button>{text}</button>"))
             } else {
                 None
             }

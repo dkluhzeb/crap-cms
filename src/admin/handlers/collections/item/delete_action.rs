@@ -34,5 +34,13 @@ pub async fn delete_action(
 
     let force_hard = action == "hard_delete";
 
-    delete_action_impl(&state, &slug, &id, &auth_user, force_hard, from_dialog).await
+    delete_action_impl(
+        &state,
+        &slug,
+        &id,
+        auth_user.as_ref(),
+        force_hard,
+        from_dialog,
+    )
+    .await
 }

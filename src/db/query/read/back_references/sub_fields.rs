@@ -98,8 +98,7 @@ pub(super) fn scan_blocks(
                     let extract = scan.conn.json_extract_expr("data", &sub.name);
                     let (p1, p2) = (scan.conn.placeholder(1), scan.conn.placeholder(2));
                     let sql = format!(
-                        "SELECT DISTINCT parent_id FROM \"{}\" WHERE _block_type = {p1} AND {} = {p2}",
-                        blocks_table, extract
+                        "SELECT DISTINCT parent_id FROM \"{blocks_table}\" WHERE _block_type = {p1} AND {extract} = {p2}"
                     );
                     let params = vec![
                         DbValue::Text(block.block_type.clone()),
@@ -111,11 +110,10 @@ pub(super) fn scan_blocks(
                         let label = format!(
                             "{} > {} > {}",
                             to_title_case(blocks_field_name),
-                            block
-                                .label
-                                .as_ref()
-                                .map(|l| l.resolve_default().to_string())
-                                .unwrap_or_else(|| to_title_case(&block.block_type)),
+                            block.label.as_ref().map_or_else(
+                                || to_title_case(&block.block_type),
+                                |l| l.resolve_default().to_string()
+                            ),
                             field_display_label(sub),
                         );
                         results.push(BackReference::new(

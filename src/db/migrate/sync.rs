@@ -12,10 +12,15 @@ use super::{backfill_ref_counts, collection, global};
 
 /// Sync all collection tables with their Lua definitions.
 ///
-/// Concurrency safety: `transaction_immediate()` acquires SQLite's write lock at
+/// Concurrency safety: `transaction_immediate()` acquires `SQLite`'s write lock at
 /// transaction start (not first write), so concurrent `sync_all` calls are serialized
 /// by the database engine. Combined with `busy_timeout` (default 30s), the second caller
 /// waits rather than failing.
+///
+/// # Errors
+///
+/// Returns an error if the connection, transaction, or any of the
+/// per-collection/global schema-sync steps fails.
 pub fn sync_all(pool: &DbPool, registry: &Registry, locale_config: &LocaleConfig) -> Result<()> {
     let mut conn = pool.get().context("Failed to get DB connection")?;
     let tx = conn
@@ -40,7 +45,7 @@ pub fn sync_all(pool: &DbPool, registry: &Registry, locale_config: &LocaleConfig
     Ok(())
 }
 
-/// Create all system tables (_crap_meta, _crap_migrations, _crap_jobs, etc.).
+/// Create all system tables (_`crap_meta`, _`crap_migrations`, _`crap_jobs`, etc.).
 fn create_system_tables(conn: &dyn DbConnection) -> Result<()> {
     let td = conn.timestamp_column_default();
     let tt = conn.timestamp_column_type();

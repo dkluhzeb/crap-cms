@@ -75,7 +75,7 @@ fn test_validate_array_sub_field_required_skipped_in_draft() {
 
 // ── Regression tests: sub-field validation checks were missing ────────
 
-/// Regression: length bounds (min_length/max_length) were not enforced
+/// Regression: length bounds (`min_length/max_length`) were not enforced
 /// inside Array sub-fields — only required/date/custom checks ran.
 #[test]
 fn test_array_sub_field_max_length_enforced() {

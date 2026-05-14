@@ -1,4 +1,4 @@
-//! Serializers for CollectionDefinition and GlobalDefinition to Lua tables.
+//! Serializers for `CollectionDefinition` and `GlobalDefinition` to Lua tables.
 
 use mlua::{Lua, Result as LuaResult, Table};
 
@@ -55,7 +55,7 @@ pub(super) fn access_to_lua(lua: &Lua, tbl: &Table, access: &Access) -> LuaResul
 }
 
 /// Serialize live setting to a Lua table.
-pub(super) fn live_to_lua(tbl: &Table, live: &Option<LiveSetting>) -> LuaResult<()> {
+pub(super) fn live_to_lua(tbl: &Table, live: Option<&LiveSetting>) -> LuaResult<()> {
     match live {
         None => tbl.set("live", true),
         Some(LiveSetting::Disabled) => tbl.set("live", false),
@@ -85,7 +85,7 @@ pub(super) fn fields_to_lua(lua: &Lua, tbl: &Table, fields: &[FieldDefinition]) 
     tbl.set("fields", arr)
 }
 
-/// Convert a CollectionDefinition to a full Lua table compatible with parse_collection_definition().
+/// Convert a `CollectionDefinition` to a full Lua table compatible with `parse_collection_definition()`.
 pub(crate) fn collection_config_to_lua(lua: &Lua, def: &CollectionDefinition) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
 
@@ -128,7 +128,7 @@ pub(crate) fn collection_config_to_lua(lua: &Lua, def: &CollectionDefinition) ->
     mcp_to_lua(lua, &tbl, &def.mcp)?;
     collection_auth_to_lua(lua, &tbl, def)?;
     collection_upload_to_lua(lua, &tbl, def)?;
-    live_to_lua(&tbl, &def.live)?;
+    live_to_lua(&tbl, def.live.as_ref())?;
 
     // soft_delete
     if def.soft_delete {

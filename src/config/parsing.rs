@@ -107,14 +107,17 @@ pub(crate) mod serde_duration {
             DurationValue::Human(s) => {
                 super::parse_duration_string(&s).ok_or_else(|| {
                     serde::de::Error::custom(format!(
-                        "invalid duration '{}': use an integer (seconds) or a string like \"30s\", \"5m\", \"2h\", \"7d\"",
-                        s
+                        "invalid duration '{s}': use an integer (seconds) or a string like \"30s\", \"5m\", \"2h\", \"7d\""
                     ))
                 })
             }
         }
     }
 
+    // `&u64` is required by serde's `#[serde(with = "...")]` contract —
+    // the serialize fn signature is fixed by the framework, so we can't
+    // take `u64` by value.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn serialize<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -149,14 +152,15 @@ pub(crate) mod serde_duration_option {
                 }
                 super::parse_duration_string(&s).map(Some).ok_or_else(|| {
                     serde::de::Error::custom(format!(
-                        "invalid duration '{}': use an integer (seconds) or a string like \"30s\", \"5m\", \"2h\", \"7d\"",
-                        s
+                        "invalid duration '{s}': use an integer (seconds) or a string like \"30s\", \"5m\", \"2h\", \"7d\""
                     ))
                 })
             }
         }
     }
 
+    // See note on `serde_duration::serialize` — signature is fixed by serde.
+    #[allow(clippy::ref_option)]
     pub fn serialize<S>(value: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -190,20 +194,20 @@ pub(crate) mod serde_duration_ms {
             DurationValue::Human(s) => {
                 let secs = super::parse_duration_string(&s).ok_or_else(|| {
                     serde::de::Error::custom(format!(
-                        "invalid duration '{}': use an integer (milliseconds) or a string like \"30s\", \"5m\", \"2h\"",
-                        s
+                        "invalid duration '{s}': use an integer (milliseconds) or a string like \"30s\", \"5m\", \"2h\""
                     ))
                 })?;
                 secs.checked_mul(1000).ok_or_else(|| {
                     serde::de::Error::custom(format!(
-                        "duration '{}' overflows u64 when converted to milliseconds",
-                        s
+                        "duration '{s}' overflows u64 when converted to milliseconds"
                     ))
                 })
             }
         }
     }
 
+    // See note on `serde_duration::serialize` — signature is fixed by serde.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn serialize<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -233,14 +237,15 @@ pub(crate) mod serde_filesize {
             FilesizeValue::Human(s) => {
                 super::parse_filesize_string(&s).ok_or_else(|| {
                     serde::de::Error::custom(format!(
-                        "invalid file size '{}': use an integer (bytes) or a string like \"500B\", \"100KB\", \"50MB\", \"1GB\"",
-                        s
+                        "invalid file size '{s}': use an integer (bytes) or a string like \"500B\", \"100KB\", \"50MB\", \"1GB\""
                     ))
                 })
             }
         }
     }
 
+    // See note on `serde_duration::serialize` — signature is fixed by serde.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn serialize<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,

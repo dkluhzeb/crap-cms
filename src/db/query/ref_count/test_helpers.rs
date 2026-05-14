@@ -1,4 +1,4 @@
-//! Shared test setup for ref_count submodules.
+//! Shared test setup for `ref_count` submodules.
 
 use crate::config::{CrapConfig, DatabaseConfig, LocaleConfig};
 use crate::core::CollectionDefinition;
@@ -48,7 +48,7 @@ pub(super) fn setup_db(
 
 pub(super) fn insert_doc(conn: &dyn DbConnection, table: &str, id: &str) {
     conn.execute(
-        &format!("INSERT INTO \"{}\" (id) VALUES (?1)", table),
+        &format!("INSERT INTO \"{table}\" (id) VALUES (?1)"),
         &[DbValue::Text(id.to_string())],
     )
     .unwrap();
@@ -62,10 +62,7 @@ pub(super) fn insert_doc_with_field(
     val: &str,
 ) {
     conn.execute(
-        &format!(
-            "INSERT INTO \"{}\" (id, \"{}\") VALUES (?1, ?2)",
-            table, col
-        ),
+        &format!("INSERT INTO \"{table}\" (id, \"{col}\") VALUES (?1, ?2)"),
         &[
             DbValue::Text(id.to_string()),
             DbValue::Text(val.to_string()),

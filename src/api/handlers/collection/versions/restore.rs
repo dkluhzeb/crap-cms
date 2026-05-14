@@ -1,4 +1,4 @@
-//! RestoreVersion handler — restore a document to a previous version.
+//! `RestoreVersion` handler — restore a document to a previous version.
 
 use std::sync::Arc;
 

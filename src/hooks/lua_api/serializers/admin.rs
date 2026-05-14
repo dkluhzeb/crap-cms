@@ -152,7 +152,7 @@ mod tests {
         let langs: Table = tbl.get("languages").expect("languages key must be set");
         let collected: Vec<String> = langs
             .sequence_values::<String>()
-            .filter_map(|r| r.ok())
+            .filter_map(std::result::Result::ok)
             .collect();
         assert_eq!(collected, vec!["javascript", "python"]);
     }

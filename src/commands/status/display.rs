@@ -10,19 +10,29 @@ use crate::{
 };
 
 /// Format a byte count as a human-readable string (e.g., "1.5 MB").
+///
+/// Uses integer arithmetic to compute one decimal place, sidestepping the
+/// precision-loss that comes with `bytes as f64` for large `u64` values.
 pub(super) fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = 1024 * KB;
     const GB: u64 = 1024 * MB;
 
+    fn split(bytes: u64, unit: u64) -> (u64, u64) {
+        (bytes / unit, (bytes % unit) * 10 / unit)
+    }
+
     if bytes >= GB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
+        let (whole, tenths) = split(bytes, GB);
+        format!("{whole}.{tenths} GB")
     } else if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
+        let (whole, tenths) = split(bytes, MB);
+        format!("{whole}.{tenths} MB")
     } else if bytes >= KB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
+        let (whole, tenths) = split(bytes, KB);
+        format!("{whole}.{tenths} KB")
     } else {
-        format!("{} bytes", bytes)
+        format!("{bytes} bytes")
     }
 }
 
@@ -68,12 +78,12 @@ pub(super) fn walkdir_count(path: &Path) -> usize {
     count
 }
 
-/// Print database info (path and size for SQLite, backend name otherwise).
+/// Print database info (path and size for `SQLite`, backend name otherwise).
 pub(super) fn print_db_info(cfg: &CrapConfig, config_dir: &Path, conn: &dyn DbConnection) {
     match conn.kind() {
         "sqlite" => {
             let db_path = cfg.db_path(config_dir);
-            let db_size = fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
+            let db_size = fs::metadata(&db_path).map_or(0, |m| m.len());
 
             cli::kv(
                 "Database",
@@ -81,7 +91,7 @@ pub(super) fn print_db_info(cfg: &CrapConfig, config_dir: &Path, conn: &dyn DbCo
             );
         }
         other => {
-            cli::kv("Database", &format!("{} backend", other));
+            cli::kv("Database", &format!("{other} backend"));
         }
     }
 }
@@ -96,9 +106,9 @@ pub(super) fn print_db_info(cfg: &CrapConfig, config_dir: &Path, conn: &dyn DbCo
 /// no `static/` directories (fresh install) — the kv line would be
 /// noise.
 pub(super) fn print_customizations(config_dir: &Path) {
-    let counts = match crate::commands::templates::customization_counts(config_dir) {
-        Ok(c) => c,
-        Err(_) => return, // I/O issue under config_dir — silently skip
+    // I/O issue under config_dir — silently skip
+    let Ok(counts) = crate::commands::templates::customization_counts(config_dir) else {
+        return;
     };
 
     if counts.overrides == 0 && counts.additions == 0 {
@@ -218,10 +228,7 @@ pub(super) fn print_collections(reg: &Registry, conn: &dyn DbConnection) {
 /// Count soft-deleted documents in a collection.
 fn trash_count(conn: &dyn DbConnection, slug: &str) -> i64 {
     conn.query_one(
-        &format!(
-            "SELECT COUNT(*) AS cnt FROM \"{}\" WHERE _deleted_at IS NOT NULL",
-            slug
-        ),
+        &format!("SELECT COUNT(*) AS cnt FROM \"{slug}\" WHERE _deleted_at IS NOT NULL"),
         &[],
     )
     .ok()
@@ -288,7 +295,7 @@ pub(super) fn print_access(cfg: &CrapConfig, reg: &Registry) {
         let row = access_row(slug, a);
 
         if row.iter().skip(1).any(|v| *v != "-") {
-            table.row(row.iter().map(|s| s.as_str()).collect());
+            table.row(row.iter().map(std::string::String::as_str).collect());
             has_rows = true;
         }
     }
@@ -302,7 +309,7 @@ pub(super) fn print_access(cfg: &CrapConfig, reg: &Registry) {
         let row = access_row(&label, a);
 
         if row.iter().skip(1).any(|v| *v != "-") {
-            table.row(row.iter().map(|s| s.as_str()).collect());
+            table.row(row.iter().map(std::string::String::as_str).collect());
             has_rows = true;
         }
     }
@@ -353,7 +360,7 @@ pub(super) fn print_live(cfg: &CrapConfig, reg: &Registry) {
 
     for slug in &slugs {
         let def = &reg.collections[*slug];
-        let status = live_status(&def.live, &def.live_mode);
+        let status = live_status(def.live.as_ref(), def.live_mode);
         rows.push((slug.to_string(), status));
     }
 
@@ -362,7 +369,7 @@ pub(super) fn print_live(cfg: &CrapConfig, reg: &Registry) {
 
     for slug in &global_slugs {
         let def = &reg.globals[*slug];
-        let status = live_status(&def.live, &def.live_mode);
+        let status = live_status(def.live.as_ref(), def.live_mode);
         rows.push((format!("{slug} (global)"), status));
     }
 
@@ -386,7 +393,7 @@ pub(super) fn print_live(cfg: &CrapConfig, reg: &Registry) {
     table.print();
 }
 
-fn live_status(live: &Option<LiveSetting>, mode: &LiveMode) -> String {
+fn live_status(live: Option<&LiveSetting>, mode: LiveMode) -> String {
     match live {
         Some(LiveSetting::Disabled) => "disabled".to_string(),
         Some(LiveSetting::Function(f)) => format!("filter: {f}"),
@@ -537,17 +544,31 @@ pub(super) fn print_jobs(reg: &Registry, conn: &dyn DbConnection, config_dir: &P
     let mut parts = vec![format!("{} defined", defined)];
 
     if running > 0 {
-        parts.push(format!("{} running", running));
+        parts.push(format!("{running} running"));
     }
 
     if failed_24h > 0 {
-        parts.push(format!("{} failed (24h)", failed_24h));
+        parts.push(format!("{failed_24h} failed (24h)"));
     }
 
     cli::kv("Jobs", &parts.join(", "));
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::*;
 

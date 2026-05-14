@@ -2,9 +2,21 @@
 //! find-overload / template-data renderers.
 
 use crate::{
+    admin::context::{AdminMeta, AuthMeta, UploadMeta, VersionsMeta},
+    admin::{
+        context::{
+            BasePageContext, CollectionContext, CrapMeta, DocumentRef, EditorLocaleOption,
+            FieldAdminMeta, FieldMeta, GlobalContext, NavCollection, NavData, NavGlobal, PageMeta,
+            UserContext, page::Breadcrumb,
+        },
+        custom_pages::CustomPage,
+    },
     core::{CollectionDefinition, Registry, Slug, collection::GlobalDefinition},
     db::query::get_column_names,
-    typegen::helpers::{SubTypeKind, collect_sub_type_fields, to_pascal_case, w},
+    typegen::{
+        helpers::{SubTypeKind, collect_sub_type_fields, to_pascal_case, w},
+        lua::LuaAnnotation,
+    },
 };
 
 use super::field::write_field;
@@ -49,220 +61,31 @@ pub(in crate::typegen) fn render(registry: &Registry) -> String {
 fn render_template_data_types(out: &mut String) {
     out.push_str("-- ─── Template data context (for `crap.template_data.register`) ───\n\n");
 
-    // CrapMeta — mirrors `admin::context::CrapMeta`.
-    out.push_str("---@class crap.template.crap_meta\n");
-    w!(out, "---@field version string");
-    w!(out, "---@field build_hash string");
-    w!(out, "---@field dev_mode boolean");
-    w!(out, "---@field auth_enabled boolean");
-    w!(out, "---@field csp_nonce string");
-    w!(out, "---@field site_name string");
-    out.push('\n');
-
-    // UserContext — mirrors `admin::context::UserContext`.
-    out.push_str("---@class crap.template.user\n");
-    w!(out, "---@field id string");
-    w!(out, "---@field email string");
-    w!(out, "---@field collection string");
-    out.push('\n');
-
-    // Breadcrumb — mirrors `admin::context::Breadcrumb`.
-    out.push_str("---@class crap.template.breadcrumb\n");
-    w!(out, "---@field label string");
-    w!(out, "---@field url? string");
-    w!(out, "---@field label_name? string");
-    out.push('\n');
-
-    // PageMeta — mirrors `admin::context::PageMeta`.
-    out.push_str("---@class crap.template.page\n");
-    out.push_str("---@field type ");
-    out.push_str(&page_type_union());
-    out.push('\n');
-    w!(out, "---@field title string");
-    w!(out, "---@field title_name? string");
-    w!(out, "---@field breadcrumbs? crap.template.breadcrumb[]");
-    out.push('\n');
-
-    // NavData inner items — mirror `admin::context::nav::{NavCollection, NavGlobal}`.
-    out.push_str("---@class crap.template.nav_collection\n");
-    w!(out, "---@field slug string");
-    w!(out, "---@field display_name string");
-    w!(out, "---@field is_auth boolean");
-    w!(out, "---@field is_upload boolean");
-    out.push('\n');
-
-    out.push_str("---@class crap.template.nav_global\n");
-    w!(out, "---@field slug string");
-    w!(out, "---@field display_name string");
-    out.push('\n');
-
-    // CustomPage — mirrors `admin::custom_pages::CustomPage`.
-    out.push_str("---@class crap.template.custom_page\n");
-    w!(out, "---@field slug string");
-    w!(out, "---@field section? string");
-    w!(out, "---@field label? string");
-    w!(out, "---@field icon? string");
-    w!(out, "---@field access? string");
-    out.push('\n');
-
-    // NavData — mirrors `admin::context::NavData`.
-    out.push_str("---@class crap.template.nav\n");
-    w!(out, "---@field collections crap.template.nav_collection[]");
-    w!(out, "---@field globals crap.template.nav_global[]");
-    w!(out, "---@field custom_pages? crap.template.custom_page[]");
-    out.push('\n');
-
-    // FieldMeta + nested — mirror `admin::context::{FieldMeta, FieldAdminMeta}`.
-    out.push_str("---@class crap.template.field_admin_meta\n");
-    w!(out, "---@field label? string");
-    w!(out, "---@field hidden boolean");
-    w!(out, "---@field readonly boolean");
-    w!(out, "---@field width? string");
-    w!(out, "---@field description? string");
-    w!(out, "---@field placeholder? string");
-    out.push('\n');
-
-    out.push_str("---@class crap.template.field_meta\n");
-    w!(out, "---@field name string");
-    w!(out, "---@field field_type string");
-    w!(out, "---@field required boolean");
-    w!(out, "---@field unique boolean");
-    w!(out, "---@field localized boolean");
-    w!(out, "---@field admin crap.template.field_admin_meta");
-    out.push('\n');
-
-    // CollectionContext sub-shapes — mirror `admin::context::collection::*`.
-    out.push_str("---@class crap.template.admin_meta\n");
-    w!(out, "---@field use_as_title? string");
-    w!(out, "---@field default_sort? string");
-    w!(out, "---@field hidden boolean");
-    w!(out, "---@field list_searchable_fields string[]");
-    out.push('\n');
-
-    out.push_str("---@class crap.template.upload_meta\n");
-    w!(out, "---@field enabled boolean");
-    w!(out, "---@field mime_types string[]");
-    w!(out, "---@field max_file_size? integer");
-    w!(out, "---@field admin_thumbnail? string");
-    out.push('\n');
-
-    out.push_str("---@class crap.template.versions_meta\n");
-    w!(out, "---@field drafts boolean");
-    w!(out, "---@field max_versions integer");
-    out.push('\n');
-
-    out.push_str("---@class crap.template.auth_meta\n");
-    w!(out, "---@field enabled boolean");
-    w!(out, "---@field disable_local boolean");
-    w!(out, "---@field verify_email boolean");
-    out.push('\n');
-
-    // CollectionContext — mirrors `admin::context::CollectionContext`.
-    out.push_str("---@class crap.template.collection\n");
-    w!(out, "---@field slug string");
-    w!(out, "---@field display_name string");
-    w!(out, "---@field singular_name string");
-    w!(out, "---@field title_field? string");
-    w!(out, "---@field timestamps boolean");
-    w!(out, "---@field is_auth boolean");
-    w!(out, "---@field is_upload boolean");
-    w!(out, "---@field has_drafts boolean");
-    w!(out, "---@field has_versions boolean");
-    w!(out, "---@field soft_delete boolean");
-    w!(out, "---@field can_permanently_delete boolean");
-    w!(out, "---@field admin crap.template.admin_meta");
-    w!(out, "---@field upload? crap.template.upload_meta");
-    w!(out, "---@field versions? crap.template.versions_meta");
-    w!(out, "---@field auth? crap.template.auth_meta");
-    w!(out, "---@field fields_meta crap.template.field_meta[]");
-    out.push('\n');
-
-    // GlobalContext — mirrors `admin::context::GlobalContext`.
-    out.push_str("---@class crap.template.global\n");
-    w!(out, "---@field slug string");
-    w!(out, "---@field display_name string");
-    w!(out, "---@field has_drafts boolean");
-    w!(out, "---@field has_versions boolean");
-    w!(out, "---@field versions? crap.template.versions_meta");
-    w!(out, "---@field fields_meta crap.template.field_meta[]");
-    out.push('\n');
-
-    // DocumentRef — mirrors `admin::context::DocumentRef`.
-    out.push_str("---@class crap.template.document\n");
-    w!(out, "---@field id string");
-    w!(out, "---@field created_at? string");
-    w!(out, "---@field updated_at? string");
-    w!(out, "---@field status? string");
-    w!(out, "---@field data? table");
-    out.push('\n');
-
-    // EditorLocaleOption — mirrors `admin::context::EditorLocaleOption`.
-    out.push_str("---@class crap.template.editor_locale_option\n");
-    w!(out, "---@field value string");
-    w!(out, "---@field label string");
-    w!(out, "---@field selected boolean");
-    out.push('\n');
-
-    // The aggregate ctx — mirrors `admin::context::page::BasePageContext`.
-    out.push_str("---@class crap.template_ctx\n");
-    w!(out, "---@field crap crap.template.crap_meta");
-    w!(out, "---@field _locale string");
-    w!(out, "---@field available_locales string[]");
-    w!(out, "---@field title string");
-    w!(out, "---@field page crap.template.page");
-    w!(out, "---@field nav crap.template.nav");
-    w!(out, "---@field breadcrumbs? crap.template.breadcrumb[]");
-    w!(out, "---@field user? crap.template.user");
-    w!(out, "---@field collection? crap.template.collection");
-    w!(out, "---@field global? crap.template.global");
-    w!(out, "---@field document? crap.template.document");
-    w!(out, "---@field has_editor_locales? boolean");
-    w!(out, "---@field editor_locale? string");
-    w!(
-        out,
-        "---@field editor_locales? crap.template.editor_locale_option[]"
-    );
-    out.push_str(
-        "-- For page-specific fields beyond the bases (e.g. `collection_cards`, `versions`),\n",
-    );
-    out.push_str("-- see docs/src/admin-ui/template-context.md or the generated reference.\n\n");
+    // The annotation for each Rust struct is defined as
+    // `impl LuaAnnotation for X` next to the struct itself — see
+    // `src/admin/context/*.rs`. Adding a new struct here is one line;
+    // changing a field updates the source-of-truth alongside the type.
+    CrapMeta::render_lua_annotation(out);
+    UserContext::render_lua_annotation(out);
+    Breadcrumb::render_lua_annotation(out);
+    PageMeta::render_lua_annotation(out);
+    NavCollection::render_lua_annotation(out);
+    NavGlobal::render_lua_annotation(out);
+    CustomPage::render_lua_annotation(out);
+    NavData::render_lua_annotation(out);
+    FieldAdminMeta::render_lua_annotation(out);
+    FieldMeta::render_lua_annotation(out);
+    AdminMeta::render_lua_annotation(out);
+    UploadMeta::render_lua_annotation(out);
+    VersionsMeta::render_lua_annotation(out);
+    AuthMeta::render_lua_annotation(out);
+    CollectionContext::render_lua_annotation(out);
+    GlobalContext::render_lua_annotation(out);
+    DocumentRef::render_lua_annotation(out);
+    EditorLocaleOption::render_lua_annotation(out);
+    BasePageContext::render_lua_annotation(out);
 
     out.push_str("---@alias crap.template_data_fn fun(ctx: crap.template_ctx): any\n\n");
-}
-
-/// Build the literal-union annotation for `crap.template.page.type`
-/// from [`PageType::as_str`]. Kept in lockstep with the enum so the Lua
-/// autocomplete list always matches what the server emits.
-fn page_type_union() -> String {
-    use crate::admin::context::PageType;
-
-    const VARIANTS: &[PageType] = &[
-        PageType::Dashboard,
-        PageType::CollectionList,
-        PageType::CollectionItems,
-        PageType::CollectionEdit,
-        PageType::CollectionCreate,
-        PageType::CollectionDelete,
-        PageType::CollectionVersions,
-        PageType::GlobalEdit,
-        PageType::GlobalVersions,
-        PageType::AuthLogin,
-        PageType::AuthForgot,
-        PageType::AuthReset,
-        PageType::AuthMfa,
-        PageType::Error403,
-        PageType::Error404,
-        PageType::Error500,
-        PageType::AuthRequired,
-        PageType::AdminDenied,
-        PageType::CustomPage,
-    ];
-
-    VARIANTS
-        .iter()
-        .map(|v| format!("\"{}\"", v.as_str()))
-        .collect::<Vec<_>>()
-        .join(" | ")
 }
 
 /// Render type definitions for a single collection.
@@ -707,18 +530,15 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("Polymorphic relationship"),
-            "should have polymorphic comment: {}",
-            out
+            "should have polymorphic comment: {out}"
         );
         assert!(
             out.contains("posts"),
-            "comment should list target collections: {}",
-            out
+            "comment should list target collections: {out}"
         );
         assert!(
             out.contains("pages"),
-            "comment should list target collections: {}",
-            out
+            "comment should list target collections: {out}"
         );
     }
 
@@ -762,40 +582,33 @@ mod tests {
         // Row sub-fields promoted — "layout_row" should not appear as a @field
         assert!(
             !out.contains("@field layout_row"),
-            "row field name should not appear: {}",
-            out
+            "row field name should not appear: {out}"
         );
         assert!(
             out.contains("---@field first_name string"),
-            "row required sub-field promoted: {}",
-            out
+            "row required sub-field promoted: {out}"
         );
         assert!(
             out.contains("---@field last_name? string"),
-            "row optional sub-field promoted: {}",
-            out
+            "row optional sub-field promoted: {out}"
         );
         // Collapsible sub-fields promoted
         assert!(
             !out.contains("@field details"),
-            "collapsible field name should not appear: {}",
-            out
+            "collapsible field name should not appear: {out}"
         );
         assert!(
             out.contains("---@field bio? string"),
-            "collapsible sub-field promoted: {}",
-            out
+            "collapsible sub-field promoted: {out}"
         );
         // Tabs sub-fields promoted
         assert!(
             !out.contains("@field sections"),
-            "tabs field name should not appear: {}",
-            out
+            "tabs field name should not appear: {out}"
         );
         assert!(
             out.contains("---@field tab_field string"),
-            "tabs sub-field promoted: {}",
-            out
+            "tabs sub-field promoted: {out}"
         );
     }
 
@@ -814,24 +627,21 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("---@class crap.group.PostsSeo"),
-            "group sub-type class should be emitted with collection prefix: {}",
-            out
+            "group sub-type class should be emitted with collection prefix: {out}"
         );
         assert!(
             out.contains("---@field title string"),
-            "group sub-field: {}",
-            out
+            "group sub-field: {out}"
         );
         assert!(
             out.contains("---@field description? string"),
-            "group sub-field optional: {}",
-            out
+            "group sub-field optional: {out}"
         );
     }
 
     /// Regression: two collections with identically-named array fields must
     /// produce distinct sub-type class names (prefixed with the collection's
-    /// PascalCase name) so they don't collide.
+    /// `PascalCase` name) so they don't collide.
     #[test]
     fn array_subtype_names_prefixed_with_collection_name() {
         let mut posts = CollectionDefinition::new("posts");
@@ -857,13 +667,11 @@ mod tests {
         // Each collection should produce a uniquely-prefixed class name
         assert!(
             posts_out.contains("---@class crap.array_row.PostsItems"),
-            "posts sub-type should be PostsItems, got:\n{}",
-            posts_out
+            "posts sub-type should be PostsItems, got:\n{posts_out}"
         );
         assert!(
             pages_out.contains("---@class crap.array_row.PagesItems"),
-            "pages sub-type should be PagesItems, got:\n{}",
-            pages_out
+            "pages sub-type should be PagesItems, got:\n{pages_out}"
         );
 
         // The two class names must be different
@@ -889,8 +697,7 @@ mod tests {
         render_global(&mut out, &global);
         assert!(
             out.contains("---@class crap.group.SettingsSeo"),
-            "global group sub-type should be prefixed: {}",
-            out
+            "global group sub-type should be prefixed: {out}"
         );
     }
 
@@ -920,13 +727,11 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("---@class crap.array_row.PostsItems"),
-            "array inside Row should emit sub-type with collection prefix: {}",
-            out
+            "array inside Row should emit sub-type with collection prefix: {out}"
         );
         assert!(
             out.contains("---@class crap.array_row.PostsTabItems"),
-            "array inside Tabs should emit sub-type with collection prefix: {}",
-            out
+            "array inside Tabs should emit sub-type with collection prefix: {out}"
         );
     }
 }

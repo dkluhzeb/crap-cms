@@ -54,7 +54,7 @@ pub(super) fn register_access<R: RegistryRead>(lua: &Lua, crap: &Table, registry
     Ok(())
 }
 
-/// Extract the current user from Lua app_data.
+/// Extract the current user from Lua `app_data`.
 fn current_user(lua: &Lua) -> Option<Document> {
     lua.app_data_ref::<UserContext>()
         .and_then(|ctx| ctx.0.clone())
@@ -159,27 +159,26 @@ fn constraints_to_lua(lua: &Lua, clauses: &[FilterClause]) -> LuaResult<Table> {
 
 /// Convert a single `FilterOp` to a Lua value.
 fn filter_op_to_lua(lua: &Lua, op: &FilterOp) -> LuaResult<Value> {
-    match op {
-        FilterOp::Equals(v) => Ok(Value::String(lua.create_string(v)?)),
-        _ => {
-            // For complex operators, return a table { op_name = value }
-            let op_tbl = lua.create_table()?;
-            let (name, val) = filter_op_name_value(op);
+    if let FilterOp::Equals(v) = op {
+        Ok(Value::String(lua.create_string(v)?))
+    } else {
+        // For complex operators, return a table { op_name = value }
+        let op_tbl = lua.create_table()?;
+        let (name, val) = filter_op_name_value(op);
 
-            match val {
-                OpValue::Single(s) => op_tbl.set(name, lua.create_string(&s)?)?,
-                OpValue::List(items) => {
-                    let arr = lua.create_table()?;
-                    for (i, s) in items.iter().enumerate() {
-                        arr.set(i + 1, lua.create_string(s)?)?;
-                    }
-                    op_tbl.set(name, arr)?;
+        match val {
+            OpValue::Single(s) => op_tbl.set(name, lua.create_string(&s)?)?,
+            OpValue::List(items) => {
+                let arr = lua.create_table()?;
+                for (i, s) in items.iter().enumerate() {
+                    arr.set(i + 1, lua.create_string(s)?)?;
                 }
-                OpValue::None => op_tbl.set(name, true)?,
+                op_tbl.set(name, arr)?;
             }
-
-            Ok(Value::Table(op_tbl))
+            OpValue::None => op_tbl.set(name, true)?,
         }
+
+        Ok(Value::Table(op_tbl))
     }
 }
 
@@ -291,7 +290,7 @@ mod tests {
 
         match result {
             Value::String(s) => assert_eq!(s.to_str().unwrap(), "allowed"),
-            other => panic!("Expected string 'allowed', got {:?}", other),
+            other => panic!("Expected string 'allowed', got {other:?}"),
         }
     }
 

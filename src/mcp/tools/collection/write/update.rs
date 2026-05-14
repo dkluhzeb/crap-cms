@@ -32,7 +32,7 @@ pub(in crate::mcp::tools) fn exec_update(
         args.get("password")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
     } else {
         None
     };

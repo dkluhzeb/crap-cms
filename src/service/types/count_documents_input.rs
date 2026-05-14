@@ -21,6 +21,7 @@ pub struct CountDocumentsInput<'a> {
 }
 
 impl<'a> CountDocumentsInput<'a> {
+    #[must_use]
     pub fn builder(filters: &'a [FilterClause]) -> CountDocumentsInputBuilder<'a> {
         CountDocumentsInputBuilder::new(filters)
     }

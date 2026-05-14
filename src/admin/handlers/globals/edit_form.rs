@@ -42,7 +42,7 @@ struct ReadParams {
 }
 
 /// Fetch the global document via the shared service layer read lifecycle.
-fn read_global_document_blocking(params: ReadParams) -> Result<Document, ServiceError> {
+fn read_global_document_blocking(params: &ReadParams) -> Result<Document, ServiceError> {
     let conn = params.pool.get().map_err(ServiceError::Internal)?;
 
     let hooks = RunnerReadHooks::new(&params.runner, &conn);
@@ -117,7 +117,7 @@ pub async fn edit_form(
 ) -> Response {
     let def = match state.registry.get_global(&slug) {
         Some(d) => d.clone(),
-        None => return not_found(&state, &format!("Global '{}' not found", slug)),
+        None => return not_found(&state, &format!("Global '{slug}' not found")),
     };
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
@@ -134,7 +134,7 @@ pub async fn edit_form(
     };
 
     let read_result =
-        task::spawn_blocking(move || read_global_document_blocking(read_params)).await;
+        task::spawn_blocking(move || read_global_document_blocking(&read_params)).await;
 
     let document = match read_result {
         Ok(Ok(doc)) => doc,
@@ -145,11 +145,11 @@ pub async fn edit_form(
                 "You don't have permission to view this global",
             );
         }
-        Err(e) => return task_join_error_response(&state, e),
+        Err(e) => return task_join_error_response(&state, &e),
     };
 
     // Compute read-denied fields to exclude from form rendering.
-    let denied = match compute_denied_read_fields(&state, &auth_user, &def.fields) {
+    let denied = match compute_denied_read_fields(&state, auth_user.as_ref(), &def.fields) {
         Ok(d) => d,
         Err(resp) => return *resp,
     };
@@ -191,13 +191,13 @@ pub async fn edit_form(
     let base = BasePageContext::for_handler(
         &state,
         claims_ref,
-        &auth_user,
+        auth_user.as_ref(),
         PageMeta::new(PageType::GlobalEdit, def.display_name()),
     )
     .with_editor_locale(editor_locale.as_deref(), &state)
     .with_breadcrumbs(breadcrumbs);
 
-    let perms = GlobalPermissions::for_user(&state, &def, &auth_user);
+    let perms = GlobalPermissions::for_user(&state, &def, auth_user.as_ref());
 
     let ctx = GlobalEditPage {
         base,

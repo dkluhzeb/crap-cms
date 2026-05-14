@@ -1,8 +1,9 @@
-//! before_validate hook pipeline for richtext node attrs. Walks ProseMirror
+//! `before_validate` hook pipeline for richtext node attrs. Walks `ProseMirror`
 //! JSON or HTML and runs each node's per-attr `before_validate` Lua hooks,
 //! transforming the attr values in-place.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 use mlua::Lua;
 use serde_json::Value;
@@ -30,8 +31,7 @@ pub(crate) fn run_before_validate_on_node_attrs(
     let has_hooks = field.admin.nodes.iter().any(|node_name| {
         registry
             .get_richtext_node(node_name)
-            .map(|nd| nd.attrs.iter().any(|a| !a.hooks.before_validate.is_empty()))
-            .unwrap_or(false)
+            .is_some_and(|nd| nd.attrs.iter().any(|a| !a.hooks.before_validate.is_empty()))
     });
 
     if !has_hooks {
@@ -45,7 +45,7 @@ pub(crate) fn run_before_validate_on_node_attrs(
     }
 }
 
-/// Run `before_validate` hooks on node attrs in ProseMirror JSON content.
+/// Run `before_validate` hooks on node attrs in `ProseMirror` JSON content.
 fn run_before_validate_json(
     lua: &Lua,
     content: &str,
@@ -183,11 +183,12 @@ fn run_before_validate_html(
 
             if changed {
                 let attrs_json = serde_json::to_string(&attrs).unwrap_or_default();
-                result.push_str(&format!(
+                let _ = write!(
+                    result,
                     "<crap-node data-type=\"{}\" data-attrs='{}'></crap-node>",
                     html_escape_attr(&node_type),
                     html_escape_attr(&attrs_json),
-                ));
+                );
             } else {
                 result.push_str(tag);
             }
@@ -224,13 +225,11 @@ fn run_attr_before_validate_hooks(
                 continue;
             }
         };
-        let lua_val = match lua_api::json_to_lua(lua, &current) {
-            Ok(v) => v,
-            Err(_) => continue,
+        let Ok(lua_val) = lua_api::json_to_lua(lua, &current) else {
+            continue;
         };
-        let ctx_table = match lua.create_table() {
-            Ok(t) => t,
-            Err(_) => continue,
+        let Ok(ctx_table) = lua.create_table() else {
+            continue;
         };
         let _ = ctx_table.set("collection", collection);
         let _ = ctx_table.set("field_name", field_name);

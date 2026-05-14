@@ -12,13 +12,18 @@ use crate::{
 use super::columns::get_valid_filter_columns;
 
 /// Check that a string is a safe SQL identifier (alphanumeric + underscore).
+#[must_use]
 pub fn is_valid_identifier(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Sanitize a locale string for safe use in SQL identifiers (column names, defaults).
-/// Converts dashes to underscores (e.g. "de-DE" → "de_DE") and strips anything
+/// Converts dashes to underscores (e.g. "de-DE" → "`de_DE`") and strips anything
 /// except alphanumeric + underscore.
+///
+/// # Errors
+///
+/// Returns an error if the input contains no alphanumeric or underscore characters.
 pub fn sanitize_locale(locale: &str) -> Result<String> {
     let result: String = locale
         .chars()
@@ -27,10 +32,7 @@ pub fn sanitize_locale(locale: &str) -> Result<String> {
         .collect();
 
     if result.is_empty() {
-        bail!(
-            "sanitize_locale produced empty string from input: {:?}",
-            locale
-        );
+        bail!("sanitize_locale produced empty string from input: {locale:?}");
     }
 
     Ok(result)
@@ -48,14 +50,17 @@ pub fn sanitize_locale(locale: &str) -> Result<String> {
 /// constructing `FilterClause` literals (trash view injection, draft filter,
 /// soft-delete exclusion) bypass this check by design — they don't go through
 /// the user-input parsers.
+///
+/// # Errors
+///
+/// Returns an error if the first dotted segment of `field` starts with `_`.
 pub fn reject_system_field(field: &str) -> Result<()> {
     let first = field.split('.').next().unwrap_or(field);
 
     if first.starts_with('_') {
         bail!(
-            "Cannot filter on system column '{}' — system columns are engine-internal. \
-             Use typed flags (trash, draft, etc.) to access them.",
-            field
+            "Cannot filter on system column '{field}' — system columns are engine-internal. \
+             Use typed flags (trash, draft, etc.) to access them."
         );
     }
 
@@ -68,6 +73,11 @@ pub fn reject_system_field(field: &str) -> Result<()> {
 /// dotted-access keys (collection names, global names, field/node/job
 /// names). For URL- and filename-style slugs that allow hyphens
 /// (custom pages, slots, themes), use [`validate_template_slug`].
+///
+/// # Errors
+///
+/// Returns an error if the slug is empty, starts with an underscore, or
+/// contains characters other than lowercase ASCII letters, digits, and `_`.
 pub fn validate_slug(slug: &str) -> Result<()> {
     if slug.is_empty() {
         bail!("Slug cannot be empty");
@@ -77,10 +87,7 @@ pub fn validate_slug(slug: &str) -> Result<()> {
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
     {
-        bail!(
-            "Invalid slug '{}' — use lowercase letters, digits, and underscores only",
-            slug
-        );
+        bail!("Invalid slug '{slug}' — use lowercase letters, digits, and underscores only");
     }
 
     if slug.starts_with('_') {
@@ -103,6 +110,10 @@ pub fn validate_slug(slug: &str) -> Result<()> {
 /// - cannot start with `-` or `_`
 /// - cannot end with `-`
 /// - no `--` or `__` runs
+///
+/// # Errors
+///
+/// Returns an error if any of the rules above are violated.
 pub fn validate_template_slug(slug: &str) -> Result<()> {
     if slug.is_empty() {
         bail!("Slug cannot be empty");
@@ -112,28 +123,29 @@ pub fn validate_template_slug(slug: &str) -> Result<()> {
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
     {
-        bail!(
-            "Invalid slug '{}' — use lowercase letters, digits, '-', and '_' only",
-            slug
-        );
+        bail!("Invalid slug '{slug}' — use lowercase letters, digits, '-', and '_' only");
     }
 
     if slug.starts_with('-') || slug.starts_with('_') {
-        bail!("Slug '{}' cannot start with '-' or '_'", slug);
+        bail!("Slug '{slug}' cannot start with '-' or '_'");
     }
 
     if slug.ends_with('-') {
-        bail!("Slug '{}' cannot end with '-'", slug);
+        bail!("Slug '{slug}' cannot end with '-'");
     }
 
     if slug.contains("--") || slug.contains("__") {
-        bail!("Slug '{}' cannot contain '--' or '__'", slug);
+        bail!("Slug '{slug}' cannot contain '--' or '__'");
     }
 
     Ok(())
 }
 
 /// Validate that a field name exists in the set of valid columns.
+///
+/// # Errors
+///
+/// Returns an error if the field name is not present in `valid_columns`.
 pub fn validate_field_name(field: &str, valid_columns: &HashSet<String>) -> Result<()> {
     if !valid_columns.contains(field) {
         bail!(
@@ -146,13 +158,18 @@ pub fn validate_field_name(field: &str, valid_columns: &HashSet<String>) -> Resu
     Ok(())
 }
 
-/// Validate all filter fields and order_by in a FindQuery against a collection definition.
+/// Validate all filter fields and `order_by` in a `FindQuery` against a collection definition.
 ///
 /// Filter fields support dot notation for array/block/relationship sub-fields
 /// (e.g., `items.name`, `content.body`, `tags.id`). The first segment must match
 /// a known field; deeper segments are validated at SQL generation time.
 ///
 /// `order_by` only supports flat columns (no dot notation).
+///
+/// # Errors
+///
+/// Returns an error if any filter field or `order_by` references a column
+/// that does not exist on the collection.
 pub fn validate_query_fields(
     def: &CollectionDefinition,
     query: &FindQuery,
@@ -163,7 +180,7 @@ pub fn validate_query_fields(
     for clause in &query.filters {
         match clause {
             FilterClause::Single(f) => {
-                validate_filter_field(&f.field, &exact_columns, &prefix_roots)?
+                validate_filter_field(&f.field, &exact_columns, &prefix_roots)?;
             }
             FilterClause::Or(groups) => {
                 for group in groups {
@@ -188,8 +205,9 @@ pub fn validate_query_fields(
 /// Get valid filter paths: exact column names + prefix roots for dot notation.
 ///
 /// Returns `(exact_columns, prefix_roots)` where:
-/// - `exact_columns`: flat column names valid for filtering and order_by
+/// - `exact_columns`: flat column names valid for filtering and `order_by`
 /// - `prefix_roots`: field names that accept dot-path sub-filters (Array, Blocks, has-many Relationship)
+#[must_use]
 pub fn get_valid_filter_paths(
     def: &CollectionDefinition,
     locale_ctx: Option<&LocaleContext>,
@@ -263,7 +281,7 @@ pub(crate) fn validate_filter_field(
         let mut all: Vec<String> = exact_columns.iter().cloned().collect();
 
         for p in prefix_roots {
-            all.push(format!("{}.*", p));
+            all.push(format!("{p}.*"));
         }
 
         all.sort();
@@ -300,7 +318,7 @@ mod tests {
     fn validate_field_name_accepts_known() {
         let valid: HashSet<String> = ["id", "title", "status"]
             .iter()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect();
         assert!(validate_field_name("title", &valid).is_ok());
         assert!(validate_field_name("id", &valid).is_ok());
@@ -310,7 +328,7 @@ mod tests {
     fn validate_field_name_rejects_unknown() {
         let valid: HashSet<String> = ["id", "title", "status"]
             .iter()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect();
         let err = validate_field_name("nonexistent", &valid).unwrap_err();
         assert!(err.to_string().contains("Invalid field 'nonexistent'"));
@@ -419,7 +437,7 @@ mod tests {
         assert!(validate_template_slug("double__underscore").is_err());
     }
 
-    /// Regression: get_valid_filter_paths did not recurse into layout wrappers,
+    /// Regression: `get_valid_filter_paths` did not recurse into layout wrappers,
     /// so Array/Blocks fields inside Row/Tabs/Collapsible were rejected as invalid.
     #[test]
     fn filter_paths_include_array_inside_layout_wrappers() {

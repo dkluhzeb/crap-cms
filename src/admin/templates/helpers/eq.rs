@@ -12,8 +12,8 @@ impl HelperDef for EqHelper {
         _ctx: &'rc handlebars::Context,
         _rc: &mut RenderContext<'reg, 'rc>,
     ) -> Result<ScopedJson<'rc>, RenderError> {
-        let a = h.param(0).map(|p| p.value());
-        let b = h.param(1).map(|p| p.value());
+        let a = h.param(0).map(handlebars::PathAndJson::value);
+        let b = h.param(1).map(handlebars::PathAndJson::value);
         let result = a == b;
         Ok(ScopedJson::Derived(Value::Bool(result)))
     }

@@ -79,10 +79,10 @@ pub struct FieldAdmin {
     #[serde(default)]
     pub features: Vec<String>,
     /// For blocks fields: picker style. "select" (default) uses a dropdown,
-    /// "card" uses a visual card grid (shows images when image_url is set on blocks).
+    /// "card" uses a visual card grid (shows images when `image_url` is set on blocks).
     #[serde(default)]
     pub picker: Option<String>,
-    /// For richtext fields: storage format. "html" (default) or "json" (ProseMirror JSON).
+    /// For richtext fields: storage format. "html" (default) or "json" (`ProseMirror` JSON).
     #[serde(default)]
     pub richtext_format: Option<String>,
     /// For richtext fields: which custom node types are available.
@@ -126,6 +126,7 @@ pub struct FieldAdmin {
 
 impl FieldAdmin {
     /// Returns a new `FieldAdminBuilder` for constructing display hints.
+    #[must_use]
     pub fn builder() -> FieldAdminBuilder {
         FieldAdminBuilder::new()
     }
@@ -170,6 +171,11 @@ impl Default for FieldAdmin {
 /// name (no filesystem lookup beyond what `register_template_string`
 /// produces), but applying the same character-whitelist as user-facing
 /// path inputs prevents injection of unexpected names.
+///
+/// # Errors
+///
+/// Returns a descriptive error string if the name is empty, absolute,
+/// contains `..`, or includes characters outside `[a-zA-Z0-9/_-]`.
 pub fn validate_template_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("template name must not be empty".to_string());
@@ -221,6 +227,7 @@ impl Default for FieldAdminBuilder {
 
 impl FieldAdminBuilder {
     /// Create a new `FieldAdminBuilder`.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             inner: FieldAdmin::default(),
@@ -228,96 +235,112 @@ impl FieldAdminBuilder {
     }
 
     /// Set the localized label for the field.
+    #[must_use]
     pub fn label(mut self, v: LocalizedString) -> Self {
         self.inner.label = Some(v);
         self
     }
 
     /// Set the localized placeholder text for the field.
+    #[must_use]
     pub fn placeholder(mut self, v: LocalizedString) -> Self {
         self.inner.placeholder = Some(v);
         self
     }
 
     /// Set the localized description text for the field.
+    #[must_use]
     pub fn description(mut self, v: LocalizedString) -> Self {
         self.inner.description = Some(v);
         self
     }
 
     /// Set whether the field is hidden in the admin UI.
+    #[must_use]
     pub fn hidden(mut self, v: bool) -> Self {
         self.inner.hidden = v;
         self
     }
 
     /// Set whether the field is read-only in the admin UI.
+    #[must_use]
     pub fn readonly(mut self, v: bool) -> Self {
         self.inner.readonly = v;
         self
     }
 
     /// Set the CSS width for the field container (e.g., "50%").
+    #[must_use]
     pub fn width(mut self, v: impl Into<String>) -> Self {
         self.inner.width = Some(v.into());
         self
     }
 
     /// Set whether the field starts collapsed.
+    #[must_use]
     pub fn collapsed(mut self, v: bool) -> Self {
         self.inner.collapsed = v;
         self
     }
 
     /// Set the sub-field name to use as row label (for arrays/blocks).
+    #[must_use]
     pub fn label_field(mut self, v: impl Into<String>) -> Self {
         self.inner.label_field = Some(v.into());
         self
     }
 
     /// Set the Lua function ref for computed row labels.
+    #[must_use]
     pub fn row_label(mut self, v: impl Into<String>) -> Self {
         self.inner.row_label = Some(v.into());
         self
     }
 
     /// Set custom singular label for row items.
+    #[must_use]
     pub fn labels_singular(mut self, v: LocalizedString) -> Self {
         self.inner.labels_singular = Some(v);
         self
     }
 
     /// Set custom plural label for the field.
+    #[must_use]
     pub fn labels_plural(mut self, v: LocalizedString) -> Self {
         self.inner.labels_plural = Some(v);
         self
     }
 
     /// Set field position in layout ("main" or "sidebar").
+    #[must_use]
     pub fn position(mut self, v: impl Into<String>) -> Self {
         self.inner.position = Some(v.into());
         self
     }
 
     /// Set Lua function ref for conditional visibility.
+    #[must_use]
     pub fn condition(mut self, v: impl Into<String>) -> Self {
         self.inner.condition = Some(v.into());
         self
     }
 
     /// Set step attribute for number inputs.
+    #[must_use]
     pub fn step(mut self, v: impl Into<String>) -> Self {
         self.inner.step = Some(v.into());
         self
     }
 
     /// Set number of visible rows for textarea fields.
+    #[must_use]
     pub fn rows(mut self, v: u32) -> Self {
         self.inner.rows = Some(v);
         self
     }
 
     /// Set language mode for code fields.
+    #[must_use]
     pub fn language(mut self, v: impl Into<String>) -> Self {
         self.inner.language = Some(v.into());
         self
@@ -325,36 +348,42 @@ impl FieldAdminBuilder {
 
     /// Set the allow-list of languages the editor can pick from at edit time
     /// for code fields. When non-empty, the form renders a language picker.
+    #[must_use]
     pub fn languages(mut self, v: Vec<String>) -> Self {
         self.inner.languages = v;
         self
     }
 
     /// Set enabled toolbar features for richtext fields.
+    #[must_use]
     pub fn features(mut self, v: Vec<String>) -> Self {
         self.inner.features = v;
         self
     }
 
     /// Set picker style for blocks fields ("select" or "card").
+    #[must_use]
     pub fn picker(mut self, v: impl Into<String>) -> Self {
         self.inner.picker = Some(v.into());
         self
     }
 
     /// Set storage format for richtext fields ("html" or "json").
+    #[must_use]
     pub fn richtext_format(mut self, v: impl Into<String>) -> Self {
         self.inner.richtext_format = Some(v.into());
         self
     }
 
     /// Set available custom node types for richtext fields.
+    #[must_use]
     pub fn nodes(mut self, v: Vec<String>) -> Self {
         self.inner.nodes = v;
         self
     }
 
     /// Set whether the field allows vertical resizing (textarea/richtext).
+    #[must_use]
     pub fn resizable(mut self, v: bool) -> Self {
         self.inner.resizable = v;
         self
@@ -366,6 +395,7 @@ impl FieldAdminBuilder {
     /// validated by the builder — call
     /// [`crate::core::validate_template_name`] before passing user
     /// input.
+    #[must_use]
     pub fn template(mut self, v: impl Into<String>) -> Self {
         self.inner.template = Some(v.into());
         self
@@ -373,6 +403,7 @@ impl FieldAdminBuilder {
 
     /// Set the freeform `extra` map of per-field configuration. See
     /// [`FieldAdmin::extra`] for details. Replaces any previous extras.
+    #[must_use]
     pub fn extra(mut self, v: Map<String, Value>) -> Self {
         self.inner.extra = v;
         self
@@ -381,12 +412,14 @@ impl FieldAdminBuilder {
     /// Insert a single key into the freeform `extra` map. Convenience
     /// over building a full `Map` for the common case of attaching a
     /// handful of named values.
+    #[must_use]
     pub fn extra_insert(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
         self.inner.extra.insert(key.into(), value.into());
         self
     }
 
     /// Build the final `FieldAdmin`.
+    #[must_use]
     pub fn build(self) -> FieldAdmin {
         self.inner
     }

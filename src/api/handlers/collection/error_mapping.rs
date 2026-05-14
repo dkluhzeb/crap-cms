@@ -1,4 +1,4 @@
-//! Error mapping: ServiceError → tonic::Status.
+//! Error mapping: `ServiceError` → `tonic::Status`.
 
 use tonic::Status;
 use tracing::{error, warn};

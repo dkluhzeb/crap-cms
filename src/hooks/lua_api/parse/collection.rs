@@ -13,8 +13,12 @@ use crate::{
 
 use super::{
     auth::parse_collection_auth,
-    helpers::*,
-    shared::*,
+    helpers::{get_bool, get_string, get_table},
+    shared::{
+        parse_access_config, parse_fields_section, parse_hooks_section, parse_indexes,
+        parse_labels, parse_live_setting, parse_mcp_section, parse_versions_config,
+        warn_deep_nesting,
+    },
     upload::{inject_upload_fields, parse_collection_upload},
 };
 
@@ -26,7 +30,7 @@ fn parse_admin_config(config: &Table) -> Result<AdminConfig> {
 
     let list_searchable_fields = if let Ok(tbl) = get_table(&admin_tbl, "list_searchable_fields") {
         tbl.sequence_values::<String>()
-            .filter_map(|r| r.ok())
+            .filter_map(std::result::Result::ok)
             .collect()
     } else {
         Vec::new()
@@ -41,7 +45,7 @@ fn parse_admin_config(config: &Table) -> Result<AdminConfig> {
 }
 
 /// If auth is enabled and no email field exists, inject one at index 0.
-fn inject_auth_email_field(auth: &Option<Auth>, fields: &mut Vec<FieldDefinition>) {
+fn inject_auth_email_field(auth: Option<&Auth>, fields: &mut Vec<FieldDefinition>) {
     let Some(a) = auth else { return };
     if !a.enabled || fields.iter().any(|f| f.name == "email") {
         return;
@@ -62,6 +66,11 @@ fn inject_auth_email_field(auth: &Option<Auth>, fields: &mut Vec<FieldDefinition
 }
 
 /// Parse a Lua table into a `CollectionDefinition`, extracting fields, hooks, auth, upload, etc.
+///
+/// # Errors
+///
+/// Returns an error if the slug is invalid, any required table field is
+/// missing, or a nested field/hook/auth/upload spec fails to parse.
 pub fn parse_collection_definition(
     lua: &Lua,
     slug: &str,
@@ -99,7 +108,7 @@ pub fn parse_collection_definition(
         None
     };
 
-    inject_auth_email_field(&auth, &mut fields);
+    inject_auth_email_field(auth.as_ref(), &mut fields);
 
     let mut def = CollectionDefinition::new(slug);
 

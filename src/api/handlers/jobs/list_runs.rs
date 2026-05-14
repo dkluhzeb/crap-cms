@@ -1,4 +1,4 @@
-//! ListJobRuns handler — list job runs with optional filters.
+//! `ListJobRuns` handler — list job runs with optional filters.
 
 use std::sync::Arc;
 

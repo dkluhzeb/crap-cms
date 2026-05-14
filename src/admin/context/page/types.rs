@@ -8,8 +8,10 @@
 use schemars::JsonSchema;
 use serde::Serialize;
 
+use crate::typegen::LuaAnnotation;
+
 /// Page type identifiers for template conditional logic.
-#[derive(JsonSchema)]
+#[derive(JsonSchema, Clone, Copy, PartialEq, Eq)]
 #[schemars(rename_all = "snake_case")]
 pub enum PageType {
     /// The main administration dashboard.
@@ -53,8 +55,35 @@ pub enum PageType {
 }
 
 impl PageType {
+    /// All variants, listed in render-canonical order. The Lua-annotation
+    /// emitter joins these into the literal-union type for
+    /// `crap.template.page.type`, so any new variant added here flows
+    /// straight into the IDE autocomplete list.
+    pub const ALL: &'static [PageType] = &[
+        PageType::Dashboard,
+        PageType::CollectionList,
+        PageType::CollectionItems,
+        PageType::CollectionEdit,
+        PageType::CollectionCreate,
+        PageType::CollectionDelete,
+        PageType::CollectionVersions,
+        PageType::GlobalEdit,
+        PageType::GlobalVersions,
+        PageType::AuthLogin,
+        PageType::AuthForgot,
+        PageType::AuthReset,
+        PageType::AuthMfa,
+        PageType::Error403,
+        PageType::Error404,
+        PageType::Error500,
+        PageType::AuthRequired,
+        PageType::AdminDenied,
+        PageType::CustomPage,
+    ];
+
     /// Returns the string identifier used in templates for this page type.
-    pub fn as_str(&self) -> &'static str {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
         match self {
             PageType::Dashboard => "dashboard",
             PageType::CollectionList => "collection_list",
@@ -77,6 +106,18 @@ impl PageType {
             PageType::CustomPage => "custom_page",
         }
     }
+
+    /// Build the `lua-language-server` literal-union annotation for the
+    /// `crap.template.page.type` field (`"dashboard" | "collection_list" | …`).
+    /// Driven off [`Self::ALL`] so the IDE list never drifts from the enum.
+    #[must_use]
+    pub fn lua_type_union() -> String {
+        Self::ALL
+            .iter()
+            .map(|v| format!("\"{}\"", v.as_str()))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
 }
 
 /// A breadcrumb entry with a label and optional URL.
@@ -90,6 +131,16 @@ pub struct Breadcrumb {
     /// Optional interpolation param for `{{t label name=label_name}}`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label_name: Option<String>,
+}
+
+impl LuaAnnotation for Breadcrumb {
+    fn render_lua_annotation(out: &mut String) {
+        out.push_str("---@class crap.template.breadcrumb\n");
+        out.push_str("---@field label string\n");
+        out.push_str("---@field url? string\n");
+        out.push_str("---@field label_name? string\n");
+        out.push('\n');
+    }
 }
 
 impl Breadcrumb {

@@ -4,7 +4,7 @@ use mlua::{Lua, Table};
 
 use crate::core::CollectionDefinition;
 
-/// Serialize the auth section of a CollectionDefinition into the Lua table.
+/// Serialize the auth section of a `CollectionDefinition` into the Lua table.
 pub(super) fn collection_auth_to_lua(
     lua: &Lua,
     tbl: &Table,

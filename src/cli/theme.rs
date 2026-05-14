@@ -10,6 +10,7 @@ use super::glyphs;
 /// Uses `?` as the prompt prefix (cyan), `✓` for success (green), `✗` for errors (red).
 /// Glyphs route through [`super::glyphs`] so the ASCII fallback
 /// (`+` / `x`) kicks in when the terminal lacks Unicode support.
+#[must_use]
 pub fn crap_theme() -> ColorfulTheme {
     ColorfulTheme {
         prompt_prefix: style(glyphs::prompt().to_string()).cyan().bold(),

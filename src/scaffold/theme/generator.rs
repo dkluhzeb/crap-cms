@@ -32,6 +32,11 @@ pub struct MakeThemeOptions<'a> {
 }
 
 /// Scaffold a theme CSS file in `static/styles/themes/themes-<name>.css`.
+///
+/// # Errors
+///
+/// Returns an error if the name is invalid, the file already exists without
+/// `--force`, or writing fails.
 pub fn make_theme(opts: &MakeThemeOptions) -> Result<()> {
     validate_template_slug(opts.name)?;
 

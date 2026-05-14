@@ -1,4 +1,4 @@
-//! FindByID handler — fetch a single document by ID.
+//! `FindByID` handler — fetch a single document by ID.
 
 use std::sync::Arc;
 

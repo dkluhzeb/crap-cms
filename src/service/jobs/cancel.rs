@@ -7,6 +7,10 @@ use crate::{
 
 /// Cancel all pending jobs, optionally filtered by slug.
 /// Returns the number of cancelled jobs.
+///
+/// # Errors
+///
+/// Returns a backend error if the DELETE fails.
 pub fn cancel_pending_jobs(
     conn: &dyn DbConnection,
     slug: Option<&str>,

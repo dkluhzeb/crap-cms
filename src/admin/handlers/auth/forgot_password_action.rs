@@ -57,7 +57,7 @@ fn forgot_password_collection(
 ///
 /// Runs inside `spawn_blocking`. Silently returns on any failure — the
 /// handler always shows "success" to avoid leaking whether the email exists.
-fn send_reset_email(params: ResetEmailParams) {
+fn send_reset_email(params: &ResetEmailParams) {
     let conn = match params.pool.get() {
         Ok(c) => c,
         Err(e) => {
@@ -147,7 +147,7 @@ pub async fn forgot_password_action(
             reset_expiry: state.config.auth.reset_token_expiry,
         };
 
-        task::spawn_blocking(move || send_reset_email(params));
+        task::spawn_blocking(move || send_reset_email(&params));
     }
 
     render_forgot_success(&state, &auth_collections)

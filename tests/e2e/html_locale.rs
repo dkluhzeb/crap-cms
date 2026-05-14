@@ -78,7 +78,7 @@ async fn get_create_form_with_locale(
     cookie: &str,
     locale: &str,
 ) -> String {
-    let cookie_header = format!("{}; crap_editor_locale={}", cookie, locale);
+    let cookie_header = format!("{cookie}; crap_editor_locale={locale}");
     let resp = app
         .router
         .clone()
@@ -101,7 +101,7 @@ async fn get_edit_form_with_locale(
     cookie: &str,
     locale: &str,
 ) -> String {
-    let cookie_header = format!("{}; crap_editor_locale={}", cookie, locale);
+    let cookie_header = format!("{cookie}; crap_editor_locale={locale}");
     let resp = app
         .router
         .clone()

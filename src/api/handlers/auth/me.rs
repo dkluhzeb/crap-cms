@@ -22,7 +22,7 @@ struct MeBlockingInput {
     def: CollectionDefinition,
 }
 
-fn me_blocking(input: MeBlockingInput) -> Result<(Option<Document>, u64, bool), Status> {
+fn me_blocking(input: &MeBlockingInput) -> Result<(Option<Document>, u64, bool), Status> {
     let conn = input
         .pool
         .get()
@@ -81,10 +81,11 @@ impl ContentService {
         };
         let session_version = claims.session_version;
 
-        let (doc, db_session_version, is_locked) = task::spawn_blocking(move || me_blocking(input))
-            .await
-            .inspect_err(|e| error!("Me task error: {}", e))
-            .map_err(|_| Status::internal("Internal error"))??;
+        let (doc, db_session_version, is_locked) =
+            task::spawn_blocking(move || me_blocking(&input))
+                .await
+                .inspect_err(|e| error!("Me task error: {}", e))
+                .map_err(|_| Status::internal("Internal error"))??;
 
         let doc = doc.ok_or_else(|| Status::not_found("User not found"))?;
 

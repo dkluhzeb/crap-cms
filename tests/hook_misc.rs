@@ -1,8 +1,22 @@
 //! Miscellaneous hook tests for crap-cms hook lifecycle.
 //!
-//! Tests for: hook_ctx_to_string_map, call_row_label, call_display_condition,
-//! run_before_render, run_system_hooks, run_hooks (no conn), run_migration,
-//! run_job_handler, and related standalone lifecycle tests.
+//! Tests for: `hook_ctx_to_string_map`, `call_row_label`, `call_display_condition`,
+//! `run_before_render`, `run_system_hooks`, `run_hooks` (no conn), `run_migration`,
+//! `run_job_handler`, and related standalone lifecycle tests.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -119,7 +133,7 @@ fn call_display_condition_bool_true() {
     assert!(result.is_some());
     match result.unwrap() {
         crap_cms::hooks::lifecycle::DisplayConditionResult::Bool(b) => assert!(b),
-        other => panic!("Expected Bool(true), got {:?}", other),
+        other => panic!("Expected Bool(true), got {other:?}"),
     }
 }
 
@@ -132,7 +146,7 @@ fn call_display_condition_bool_false() {
     assert!(result.is_some());
     match result.unwrap() {
         crap_cms::hooks::lifecycle::DisplayConditionResult::Bool(b) => assert!(!b),
-        other => panic!("Expected Bool(false), got {:?}", other),
+        other => panic!("Expected Bool(false), got {other:?}"),
     }
 }
 
@@ -153,7 +167,7 @@ fn call_display_condition_table() {
             assert_eq!(row.field, "status");
             assert!(matches!(&row.op, ConditionOp::Equals(v) if v == &json!("published")));
         }
-        other => panic!("Expected Table, got {:?}", other),
+        other => panic!("Expected Table, got {other:?}"),
     }
 }
 
@@ -171,7 +185,7 @@ fn call_display_condition_table_not_visible() {
                 "status=draft should not be visible when condition says equals=published"
             );
         }
-        other => panic!("Expected Table, got {:?}", other),
+        other => panic!("Expected Table, got {other:?}"),
     }
 }
 
@@ -319,11 +333,11 @@ fn run_migration_invalid_direction_fails() {
     let migration_path = migration_dir.path().join("002_test.lua");
     std::fs::write(
         &migration_path,
-        r#"
+        r"
         local M = {}
         function M.up() end
         return M
-    "#,
+    ",
     )
     .expect("write migration");
 
@@ -577,13 +591,13 @@ fn run_job_handler_with_return_value() {
     ).unwrap();
     std::fs::write(
         jobs_dir.join("test_job.lua"),
-        r#"
+        r"
         local M = {}
         function M.run(ctx)
             return { processed = true, slug = ctx.job.slug, data_value = ctx.data.key }
         end
         return M
-    "#,
+    ",
     )
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
@@ -619,7 +633,9 @@ fn run_job_handler_with_return_value() {
     let result_json: serde_json::Value =
         serde_json::from_str(&result.unwrap()).expect("parse JSON");
     assert_eq!(
-        result_json.get("processed").and_then(|v| v.as_bool()),
+        result_json
+            .get("processed")
+            .and_then(serde_json::Value::as_bool),
         Some(true)
     );
     assert_eq!(
@@ -645,13 +661,13 @@ fn run_job_handler_nil_return() {
     ).unwrap();
     std::fs::write(
         jobs_dir.join("void_job.lua"),
-        r#"
+        r"
         local M = {}
         function M.run(ctx)
             -- do nothing, return nil
         end
         return M
-    "#,
+    ",
     )
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
@@ -755,7 +771,7 @@ fn call_display_condition_standalone_bool() {
     let result = runner.call_display_condition("hooks.conditions.show_if_published", &form_data);
     match result {
         Some(crap_cms::hooks::lifecycle::DisplayConditionResult::Bool(b)) => assert!(b),
-        other => panic!("Expected Bool(true), got {:?}", other),
+        other => panic!("Expected Bool(true), got {other:?}"),
     }
 
     let form_data_draft = json!({ "status": "draft" });
@@ -763,7 +779,7 @@ fn call_display_condition_standalone_bool() {
         runner.call_display_condition("hooks.conditions.show_if_published", &form_data_draft);
     match result {
         Some(crap_cms::hooks::lifecycle::DisplayConditionResult::Bool(b)) => assert!(!b),
-        other => panic!("Expected Bool(false), got {:?}", other),
+        other => panic!("Expected Bool(false), got {other:?}"),
     }
 }
 
@@ -812,6 +828,6 @@ fn call_display_condition_standalone_table() {
             assert_eq!(row.field, "status");
             assert!(matches!(&row.op, ConditionOp::Equals(v) if v == &json!("published")));
         }
-        other => panic!("Expected Table result, got {:?}", other),
+        other => panic!("Expected Table result, got {other:?}"),
     }
 }

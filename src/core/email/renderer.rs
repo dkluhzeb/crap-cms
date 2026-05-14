@@ -17,8 +17,13 @@ pub struct EmailRenderer {
 }
 
 impl EmailRenderer {
-    /// Create a new EmailRenderer, loading compiled-in defaults then overlaying
+    /// Create a new `EmailRenderer`, loading compiled-in defaults then overlaying
     /// config dir templates from `<config_dir>/templates/email/`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any compiled-in or overlay template fails to load or
+    /// register.
     pub fn new(config_dir: &Path) -> Result<Self> {
         let mut hbs = Handlebars::new();
         hbs.set_strict_mode(false);
@@ -30,9 +35,9 @@ impl EmailRenderer {
             if path.extension().is_some_and(|ext| ext == "hbs") {
                 let name = path.with_extension("").to_string_lossy().to_string();
                 let content = str::from_utf8(file.contents())
-                    .with_context(|| format!("Invalid UTF-8 in email template: {}", name))?;
+                    .with_context(|| format!("Invalid UTF-8 in email template: {name}"))?;
                 hbs.register_template_string(&name, content)
-                    .with_context(|| format!("Failed to register email template: {}", name))?;
+                    .with_context(|| format!("Failed to register email template: {name}"))?;
             }
         }
 
@@ -62,10 +67,14 @@ impl EmailRenderer {
     }
 
     /// Render an email template by name with the given typed context.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the template name is unknown or rendering fails.
     pub fn render<T: Serialize>(&self, template: &str, data: &T) -> Result<String> {
         self.hbs
             .render(template, data)
-            .with_context(|| format!("Failed to render email template '{}'", template))
+            .with_context(|| format!("Failed to render email template '{template}'"))
     }
 }
 

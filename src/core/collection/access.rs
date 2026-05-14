@@ -26,17 +26,20 @@ pub struct Access {
 
 impl Access {
     /// Create a new default access control configuration.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Create a builder for access control configuration.
+    #[must_use]
     pub fn builder() -> AccessBuilder {
         AccessBuilder::new()
     }
 
     /// Resolve the access function for trash operations (soft delete + restore).
     /// Returns `access.trash` when set, otherwise falls back to `access.update`.
+    #[must_use]
     pub fn resolve_trash(&self) -> Option<&str> {
         self.trash.as_deref().or(self.update.as_deref())
     }
@@ -57,36 +60,42 @@ impl AccessBuilder {
         Self::default()
     }
 
+    #[must_use]
     pub fn read(mut self, read: Option<String>) -> Self {
         self.read = read;
 
         self
     }
 
+    #[must_use]
     pub fn create(mut self, create: Option<String>) -> Self {
         self.create = create;
 
         self
     }
 
+    #[must_use]
     pub fn update(mut self, update: Option<String>) -> Self {
         self.update = update;
 
         self
     }
 
+    #[must_use]
     pub fn delete(mut self, delete: Option<String>) -> Self {
         self.delete = delete;
 
         self
     }
 
+    #[must_use]
     pub fn trash(mut self, trash: Option<String>) -> Self {
         self.trash = trash;
 
         self
     }
 
+    #[must_use]
     pub fn build(self) -> Access {
         Access {
             read: self.read,

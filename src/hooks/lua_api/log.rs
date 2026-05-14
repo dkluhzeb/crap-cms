@@ -45,8 +45,7 @@ pub(super) fn register_log(lua: &Lua, crap: &Table) -> Result<()> {
 /// Get the VM label from Lua app data, defaulting to `"lua"`.
 fn vm_label(lua: &Lua) -> String {
     lua.app_data_ref::<VmLabel>()
-        .map(|l| l.0.clone())
-        .unwrap_or_else(|| "lua".into())
+        .map_or_else(|| "lua".into(), |l| l.0.clone())
 }
 
 /// Whether this VM is the init VM (logs at requested level) or a runner VM

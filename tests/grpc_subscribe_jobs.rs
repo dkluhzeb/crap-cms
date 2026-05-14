@@ -1,6 +1,20 @@
 //! gRPC integration tests for Subscribe streaming and Job RPCs.
 //!
-//! Uses ContentService directly (no network) via ContentApi trait.
+//! Uses `ContentService` directly (no network) via `ContentApi` trait.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -73,7 +87,10 @@ fn setup_service_inner(
     config.auth.secret = "test-jwt-secret".into();
 
     if !locales.is_empty() {
-        config.locale.locales = locales.iter().map(|s| s.to_string()).collect();
+        config.locale.locales = locales
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect();
         config.locale.default_locale = locales.first().unwrap_or(&"en").to_string();
         config.locale.fallback = true;
     }
@@ -162,7 +179,10 @@ fn setup_service_inner_with_jobs(
     config.auth.secret = "test-jwt-secret".into();
 
     if !locales.is_empty() {
-        config.locale.locales = locales.iter().map(|s| s.to_string()).collect();
+        config.locale.locales = locales
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect();
         config.locale.default_locale = locales.first().unwrap_or(&"en").to_string();
         config.locale.fallback = true;
     }
@@ -333,10 +353,8 @@ async fn create_user_and_login(ts: &TestSetup) -> String {
 
 /// Add Bearer token to a Request.
 fn add_auth<T>(req: &mut Request<T>, token: &str) {
-    req.metadata_mut().insert(
-        "authorization",
-        format!("Bearer {}", token).parse().unwrap(),
-    );
+    req.metadata_mut()
+        .insert("authorization", format!("Bearer {token}").parse().unwrap());
 }
 
 // ── Subscribe Tests ─────────────────────────────────────────────────────

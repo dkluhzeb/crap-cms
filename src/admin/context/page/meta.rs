@@ -5,13 +5,14 @@ use schemars::JsonSchema;
 use serde::Serialize;
 
 use super::{Breadcrumb, PageType};
+use crate::typegen::LuaAnnotation;
 
 /// The `page` object every admin template receives. Carries the page-type
 /// discriminant, the page title (already-translated label or translation key),
 /// optional title interpolation parameter, and breadcrumb trail.
 #[derive(Serialize, JsonSchema)]
 pub struct PageMeta {
-    /// Page-type discriminant. Serialized as a snake_case string literal so
+    /// Page-type discriminant. Serialized as a `snake_case` string literal so
     /// templates can branch with `{{#if (eq page.type "collection_edit")}}`.
     #[serde(rename = "type")]
     pub page_type: &'static str,
@@ -30,7 +31,7 @@ pub struct PageMeta {
 
 impl PageMeta {
     /// Construct page metadata for the given page type and title. Breadcrumbs
-    /// and title_name default to empty/None — callers add them as needed.
+    /// and `title_name` default to empty/None — callers add them as needed.
     pub fn new(page_type: PageType, title: impl Into<String>) -> Self {
         Self {
             page_type: page_type.as_str(),
@@ -44,6 +45,19 @@ impl PageMeta {
     pub fn with_title_name(mut self, name: impl Into<String>) -> Self {
         self.title_name = Some(name.into());
         self
+    }
+}
+
+impl LuaAnnotation for PageMeta {
+    fn render_lua_annotation(out: &mut String) {
+        out.push_str("---@class crap.template.page\n");
+        out.push_str("---@field type ");
+        out.push_str(&PageType::lua_type_union());
+        out.push('\n');
+        out.push_str("---@field title string\n");
+        out.push_str("---@field title_name? string\n");
+        out.push_str("---@field breadcrumbs? crap.template.breadcrumb[]\n");
+        out.push('\n');
     }
 }
 

@@ -11,6 +11,10 @@ use crate::scaffold::paths;
 use crate::scaffold::render::render;
 
 /// Create a new migration file at `<config_dir>/migrations/YYYYMMDDHHMMSS_name.lua`.
+///
+/// # Errors
+///
+/// Returns an error if the name is invalid or writing the file fails.
 pub fn make_migration(config_dir: &Path, name: &str) -> Result<()> {
     validate_migration_name(name)?;
 
@@ -18,7 +22,7 @@ pub fn make_migration(config_dir: &Path, name: &str) -> Result<()> {
     fs::create_dir_all(&migrations_dir).context("Failed to create migrations/ directory")?;
 
     let timestamp = Local::now().format("%Y%m%d%H%M%S");
-    let filename = format!("{}_{}.lua", timestamp, name);
+    let filename = format!("{timestamp}_{name}.lua");
     let file_path = migrations_dir.join(&filename);
 
     let lua = render("migration", &json!({}))?;
@@ -39,8 +43,7 @@ fn validate_migration_name(name: &str) -> Result<()> {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
     {
         bail!(
-            "Invalid migration name '{}' -- use lowercase letters, digits, and underscores only",
-            name
+            "Invalid migration name '{name}' -- use lowercase letters, digits, and underscores only"
         );
     }
 
@@ -58,7 +61,7 @@ mod tests {
 
         let entries: Vec<_> = fs::read_dir(tmp.path().join("migrations"))
             .unwrap()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .collect();
         assert_eq!(entries.len(), 1);
 
@@ -74,8 +77,7 @@ mod tests {
 
         let entry = fs::read_dir(tmp.path().join("migrations"))
             .unwrap()
-            .filter_map(|e| e.ok())
-            .next()
+            .find_map(std::result::Result::ok)
             .unwrap();
         let content = fs::read_to_string(entry.path()).unwrap();
         assert!(content.contains("function M.up()"));

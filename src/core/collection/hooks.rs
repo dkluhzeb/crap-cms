@@ -33,11 +33,13 @@ pub struct Hooks {
 
 impl Hooks {
     /// Create a new default hooks configuration.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Create a builder for hooks configuration.
+    #[must_use]
     pub fn builder() -> HooksBuilder {
         HooksBuilder::new()
     }
@@ -61,54 +63,63 @@ impl HooksBuilder {
         Self::default()
     }
 
+    #[must_use]
     pub fn before_validate(mut self, v: Vec<String>) -> Self {
         self.before_validate = v;
 
         self
     }
 
+    #[must_use]
     pub fn before_change(mut self, v: Vec<String>) -> Self {
         self.before_change = v;
 
         self
     }
 
+    #[must_use]
     pub fn after_change(mut self, v: Vec<String>) -> Self {
         self.after_change = v;
 
         self
     }
 
+    #[must_use]
     pub fn before_read(mut self, v: Vec<String>) -> Self {
         self.before_read = v;
 
         self
     }
 
+    #[must_use]
     pub fn after_read(mut self, v: Vec<String>) -> Self {
         self.after_read = v;
 
         self
     }
 
+    #[must_use]
     pub fn before_delete(mut self, v: Vec<String>) -> Self {
         self.before_delete = v;
 
         self
     }
 
+    #[must_use]
     pub fn after_delete(mut self, v: Vec<String>) -> Self {
         self.after_delete = v;
 
         self
     }
 
+    #[must_use]
     pub fn before_broadcast(mut self, v: Vec<String>) -> Self {
         self.before_broadcast = v;
 
         self
     }
 
+    #[must_use]
     pub fn build(self) -> Hooks {
         Hooks {
             before_validate: self.before_validate,

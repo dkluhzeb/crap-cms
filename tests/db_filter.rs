@@ -1,3 +1,17 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::collections::HashMap;
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
@@ -557,8 +571,7 @@ fn validate_query_fields_rejects_invalid_filter() {
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("nonexistent_field"),
-        "Error should mention the invalid field name, got: {}",
-        err_msg
+        "Error should mention the invalid field name, got: {err_msg}"
     );
 }
 
@@ -573,8 +586,7 @@ fn validate_query_fields_rejects_invalid_order() {
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("nonexistent_field"),
-        "Error should mention the invalid field name, got: {}",
-        err_msg
+        "Error should mention the invalid field name, got: {err_msg}"
     );
 }
 
@@ -1052,10 +1064,10 @@ fn filter_array_group_subfield() {
 /// Regression for the `DbValue::Text` bug on numeric comparisons.
 ///
 /// Before the fix, `gt`/`lt`/`gte`/`lte` on a `Number` field bound the
-/// operand as `DbValue::Text(v)`, and SQLite's implicit text→number
+/// operand as `DbValue::Text(v)`, and `SQLite`'s implicit text→number
 /// coercion papered over the mismatch. This test populates a table with
 /// actual numeric values and asserts the filter returns the right rows
-/// when bound correctly — it stays green on SQLite but also guards the
+/// when bound correctly — it stays green on `SQLite` but also guards the
 /// contract for backends (e.g. Postgres) that don't silently coerce.
 #[test]
 fn numeric_greater_than_with_actual_integers_in_db() {
@@ -1114,7 +1126,7 @@ fn numeric_greater_than_with_actual_integers_in_db() {
         .build();
     let docs = ops::find_documents(&pool, "scores", &def, &q, None).expect("find");
     let labels: Vec<_> = docs.iter().filter_map(|d| d.get_str("label")).collect();
-    assert_eq!(labels.len(), 2, "expected 2 rows > 50, got {:?}", labels);
+    assert_eq!(labels.len(), 2, "expected 2 rows > 50, got {labels:?}");
     assert!(labels.contains(&"hundred"));
     assert!(labels.contains(&"thousand"));
 
@@ -1127,7 +1139,7 @@ fn numeric_greater_than_with_actual_integers_in_db() {
         .build();
     let docs2 = ops::find_documents(&pool, "scores", &def, &q2, None).expect("find");
     let labels2: Vec<_> = docs2.iter().filter_map(|d| d.get_str("label")).collect();
-    assert_eq!(labels2.len(), 2, "expected 2 rows < 50, got {:?}", labels2);
+    assert_eq!(labels2.len(), 2, "expected 2 rows < 50, got {labels2:?}");
     assert!(labels2.contains(&"one"));
     assert!(labels2.contains(&"ten"));
 
@@ -1402,10 +1414,10 @@ fn filter_localized_field_in_array_with_all_locale_matches_any() {
         ops::find_documents(&pool, "l10n_articles", &def, &q, Some(&all_ctx)).expect("find all");
 
     let mut ids: Vec<&str> = docs.iter().map(|d| d.id.as_ref()).collect();
-    ids.sort();
+    ids.sort_unstable();
 
     let mut expected = vec![doc_a_id.as_str(), doc_b_id.as_str()];
-    expected.sort();
+    expected.sort_unstable();
 
     assert_eq!(
         ids, expected,

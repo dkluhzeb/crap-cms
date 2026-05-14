@@ -38,6 +38,11 @@ struct FormatVariant {
 /// Reads `{name}_url`, `{name}_width`, `{name}_height`, `{name}_webp_url`, `{name}_avif_url`
 /// from document fields, builds a nested PayloadCMS-style object, inserts as `sizes`,
 /// and removes the individual per-size columns.
+///
+/// # Panics
+///
+/// Panics only if `serde_json::to_value` on the assembled `HashMap` fails —
+/// unreachable for a map of owned `String`/`u32`-valued structs.
 pub fn assemble_sizes_object(doc: &mut Document, upload: &CollectionUpload) {
     let mut sizes: HashMap<String, ImageSizeEntry> = HashMap::new();
 
@@ -46,21 +51,21 @@ pub fn assemble_sizes_object(doc: &mut Document, upload: &CollectionUpload) {
 
         let url = doc
             .fields
-            .remove(&format!("{}_url", name))
+            .remove(&format!("{name}_url"))
             .and_then(|v| match v {
                 Value::String(s) => Some(s),
                 _ => None,
             });
         let width = doc
             .fields
-            .remove(&format!("{}_width", name))
-            .and_then(|v| v.as_f64())
-            .map(|v| v as u32);
+            .remove(&format!("{name}_width"))
+            .and_then(|v| v.as_u64())
+            .and_then(|v| u32::try_from(v).ok());
         let height = doc
             .fields
-            .remove(&format!("{}_height", name))
-            .and_then(|v| v.as_f64())
-            .map(|v| v as u32);
+            .remove(&format!("{name}_height"))
+            .and_then(|v| v.as_u64())
+            .and_then(|v| u32::try_from(v).ok());
 
         if let Some(url) = url {
             let formats = collect_format_urls(doc, name, upload);
@@ -76,8 +81,8 @@ pub fn assemble_sizes_object(doc: &mut Document, upload: &CollectionUpload) {
             );
         } else {
             // Still remove format columns even if there's no URL
-            doc.fields.remove(&format!("{}_webp_url", name));
-            doc.fields.remove(&format!("{}_avif_url", name));
+            doc.fields.remove(&format!("{name}_webp_url"));
+            doc.fields.remove(&format!("{name}_avif_url"));
         }
     }
 
@@ -96,13 +101,13 @@ fn collect_format_urls(
     let mut formats = HashMap::new();
 
     if upload.format_options.webp.is_some()
-        && let Some(Value::String(url)) = doc.fields.remove(&format!("{}_webp_url", size_name))
+        && let Some(Value::String(url)) = doc.fields.remove(&format!("{size_name}_webp_url"))
     {
         formats.insert("webp".to_string(), FormatVariant { url });
     }
 
     if upload.format_options.avif.is_some()
-        && let Some(Value::String(url)) = doc.fields.remove(&format!("{}_avif_url", size_name))
+        && let Some(Value::String(url)) = doc.fields.remove(&format!("{size_name}_avif_url"))
     {
         formats.insert("avif".to_string(), FormatVariant { url });
     }
@@ -111,7 +116,7 @@ fn collect_format_urls(
 }
 
 /// Inject upload metadata fields into form data from a processed upload.
-/// Writes per-size typed fields ({name}_url, {name}_width, {name}_height, {name}_webp_url, etc.)
+/// Writes per-size typed fields ({name}_url, {name}_width, {name}_height, {name}_`webp_url`, etc.)
 pub fn inject_upload_metadata(
     form_data: &mut HashMap<String, String>,
     processed: &ProcessedUpload,
@@ -130,11 +135,11 @@ pub fn inject_upload_metadata(
 
     // Per-size typed fields
     for (name, size) in &processed.sizes {
-        form_data.insert(format!("{}_url", name), size.url.clone());
-        form_data.insert(format!("{}_width", name), size.width.to_string());
-        form_data.insert(format!("{}_height", name), size.height.to_string());
+        form_data.insert(format!("{name}_url"), size.url.clone());
+        form_data.insert(format!("{name}_width"), size.width.to_string());
+        form_data.insert(format!("{name}_height"), size.height.to_string());
         for (fmt, result) in &size.formats {
-            form_data.insert(format!("{}_{}_url", name, fmt), result.url.clone());
+            form_data.insert(format!("{name}_{fmt}_url"), result.url.clone());
         }
     }
 }
@@ -159,6 +164,10 @@ pub fn delete_upload_files(storage: &dyn StorageBackend, doc_fields: &DocumentFi
 
 /// Insert queued format conversions into the image processing queue.
 /// Called after document creation, when the document ID is known.
+///
+/// # Errors
+///
+/// Returns a backend error if any INSERT into the image queue fails.
 pub fn enqueue_conversions(
     conn: &dyn DbConnection,
     collection: &str,
@@ -489,7 +498,7 @@ mod tests {
         );
     }
 
-    /// Helper to create a LocalStorage backed by a tempdir.
+    /// Helper to create a `LocalStorage` backed by a tempdir.
     fn test_storage(tmp: &tempfile::TempDir) -> LocalStorage {
         LocalStorage::new(tmp.path().join("uploads"))
     }

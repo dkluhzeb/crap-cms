@@ -15,7 +15,7 @@ use crate::{
 
 use super::dispatch::ValidationWalker;
 
-impl<'a> ValidationWalker<'a> {
+impl ValidationWalker<'_> {
     /// Validate a single scalar field (not Group/Row/Collapsible/Tabs).
     /// Dispatches to individual check functions in `checks` module.
     pub(super) fn scalar(
@@ -43,103 +43,11 @@ impl<'a> ValidationWalker<'a> {
         checks::check_row_bounds(field, &data_key, value, self.ctx.is_draft, errors);
         checks::check_polymorphic_allowlist(field, &data_key, value, errors);
 
-        // Validate sub-fields within Array/Blocks rows.
-        // Draft mode still validates sub-fields (format, bounds, etc.) — only `required`
-        // checks are skipped inside sub-field validation via the is_draft flag.
-        let has_sub_structure = !field.fields.is_empty() || !field.blocks.is_empty();
-        if matches!(field.field_type, FieldType::Array | FieldType::Blocks)
-            && has_sub_structure
-            && let Some(Value::Array(rows)) = value
+        self.validate_array_or_blocks_rows(field, &data_key, value, errors);
+
+        if let Some(col_name) =
+            self.resolve_unique_check_column(field, &data_key, inherited_localized, errors)
         {
-            for (idx, row) in rows.iter().enumerate() {
-                let row_obj = match row.as_object() {
-                    Some(obj) => obj,
-                    None => {
-                        errors.push(
-                            FieldError::with_key(
-                                format!("{}[{}]", data_key, idx),
-                                format!("{} row {} must be an object", field.name, idx),
-                                "validation.invalid_row_type",
-                            )
-                            .with_param("field", field.name.clone())
-                            .with_param("index", idx.to_string()),
-                        );
-                        continue;
-                    }
-                };
-                let sub_fields: &[FieldDefinition] = if field.field_type == FieldType::Blocks {
-                    let block_type = row_obj
-                        .get("_block_type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    match field.blocks.iter().find(|b| b.block_type == block_type) {
-                        Some(bd) => &bd.fields,
-                        None => {
-                            errors.push(
-                                FieldError::with_key(
-                                    format!("{}[{}]", data_key, idx),
-                                    format!(
-                                        "{} row {} has unknown block type '{}'",
-                                        field.name, idx, block_type
-                                    ),
-                                    "validation.unknown_block_type",
-                                )
-                                .with_param("field", field.name.clone())
-                                .with_param("index", idx.to_string())
-                                .with_param("block_type", block_type.to_string()),
-                            );
-                            continue;
-                        }
-                    }
-                } else {
-                    &field.fields
-                };
-                let params = SubFieldParams {
-                    lua: self.lua,
-                    parent_name: &data_key,
-                    idx,
-                    table: self.ctx.table,
-                    registry: self.ctx.registry,
-                    is_draft: self.ctx.is_draft,
-                };
-                validate_sub_fields_inner(&params, sub_fields, row_obj, errors);
-            }
-        }
-
-        // Compute the actual DB column name for the unique check.
-        // Localized fields store data in suffixed columns (e.g., slug__en).
-        let is_localized =
-            (inherited_localized || field.localized) && self.ctx.locale_ctx.is_some();
-        // If locale sanitization fails, emit a validation error rather than silently
-        // skipping the unique check, which could allow duplicates to slip through.
-        let col_name = if let (true, Some(lctx)) = (is_localized, self.ctx.locale_ctx) {
-            let locale = match &lctx.mode {
-                LocaleMode::Single(l) => l.as_str(),
-                _ => lctx.config.default_locale.as_str(),
-            };
-            match sanitize_locale(locale) {
-                Ok(l) => Some(format!("{}__{}", data_key, l)),
-                Err(_) => {
-                    errors.push(
-                        FieldError::with_key(
-                            data_key.clone(),
-                            format!(
-                                "{}: invalid locale '{}' — cannot verify uniqueness",
-                                field.name, locale,
-                            ),
-                            "validation.invalid_locale",
-                        )
-                        .with_param("field", field.name.clone())
-                        .with_param("locale", locale.to_string()),
-                    );
-                    None
-                }
-            }
-        } else {
-            Some(data_key.clone())
-        };
-
-        if let Some(col_name) = col_name {
             checks::check_unique(
                 field, &data_key, &col_name, value, is_empty, self.ctx, errors,
             );
@@ -160,23 +68,167 @@ impl<'a> ValidationWalker<'a> {
             errors,
         );
 
-        // Validate custom node attrs within richtext content
-        if field.field_type == FieldType::Richtext
-            && !is_empty
-            && !field.admin.nodes.is_empty()
-            && let Some(registry) = self.ctx.registry
-            && let Some(Value::String(content)) = value
-        {
-            validate_richtext_node_attrs(
-                &RichtextValidationCtx::builder(self.lua, registry, self.ctx.table)
-                    .draft(self.ctx.is_draft)
-                    .build(),
-                content,
-                &data_key,
-                field,
-                errors,
-            );
+        self.validate_richtext_node_attrs_field(field, &data_key, value, is_empty, errors);
+    }
+
+    /// For `Array`/`Blocks` fields, walk each row and recurse into sub-fields.
+    /// Draft mode still validates sub-fields (format, bounds, etc.) — only
+    /// `required` checks are skipped inside sub-field validation via the
+    /// `is_draft` flag.
+    fn validate_array_or_blocks_rows(
+        &self,
+        field: &FieldDefinition,
+        data_key: &str,
+        value: Option<&Value>,
+        errors: &mut Vec<FieldError>,
+    ) {
+        let has_sub_structure = !field.fields.is_empty() || !field.blocks.is_empty();
+        if !matches!(field.field_type, FieldType::Array | FieldType::Blocks) || !has_sub_structure {
+            return;
         }
+        let Some(Value::Array(rows)) = value else {
+            return;
+        };
+
+        for (idx, row) in rows.iter().enumerate() {
+            let Some(row_obj) = row.as_object() else {
+                errors.push(
+                    FieldError::with_key(
+                        format!("{data_key}[{idx}]"),
+                        format!("{} row {} must be an object", field.name, idx),
+                        "validation.invalid_row_type",
+                    )
+                    .with_param("field", field.name.clone())
+                    .with_param("index", idx.to_string()),
+                );
+                continue;
+            };
+            let Some(sub_fields) = resolve_row_sub_fields(field, row_obj, data_key, idx, errors)
+            else {
+                continue;
+            };
+            let params = SubFieldParams {
+                lua: self.lua,
+                parent_name: data_key,
+                idx,
+                table: self.ctx.table,
+                registry: self.ctx.registry,
+                is_draft: self.ctx.is_draft,
+            };
+            validate_sub_fields_inner(&params, sub_fields, row_obj, errors);
+        }
+    }
+
+    /// Compute the actual DB column name for the unique check. Localized
+    /// fields store data in suffixed columns (e.g. `slug__en`).
+    ///
+    /// Returns `None` (and emits a validation error) when locale sanitization
+    /// fails — silently skipping the unique check could allow duplicates to
+    /// slip through.
+    fn resolve_unique_check_column(
+        &self,
+        field: &FieldDefinition,
+        data_key: &str,
+        inherited_localized: bool,
+        errors: &mut Vec<FieldError>,
+    ) -> Option<String> {
+        let is_localized =
+            (inherited_localized || field.localized) && self.ctx.locale_ctx.is_some();
+        let Some(lctx) = self.ctx.locale_ctx.filter(|_| is_localized) else {
+            return Some(data_key.to_string());
+        };
+
+        let locale = match &lctx.mode {
+            LocaleMode::Single(l) => l.as_str(),
+            _ => lctx.config.default_locale.as_str(),
+        };
+
+        if let Ok(l) = sanitize_locale(locale) {
+            return Some(format!("{data_key}__{l}"));
+        }
+
+        errors.push(
+            FieldError::with_key(
+                data_key.to_string(),
+                format!(
+                    "{}: invalid locale '{}' — cannot verify uniqueness",
+                    field.name, locale,
+                ),
+                "validation.invalid_locale",
+            )
+            .with_param("field", field.name.clone())
+            .with_param("locale", locale.to_string()),
+        );
+        None
+    }
+
+    /// Validate custom-node attrs within a `Richtext` field's content.
+    /// No-op for non-richtext fields, empty values, or fields without
+    /// custom nodes registered.
+    fn validate_richtext_node_attrs_field(
+        &self,
+        field: &FieldDefinition,
+        data_key: &str,
+        value: Option<&Value>,
+        is_empty: bool,
+        errors: &mut Vec<FieldError>,
+    ) {
+        if field.field_type != FieldType::Richtext || is_empty || field.admin.nodes.is_empty() {
+            return;
+        }
+        let Some(registry) = self.ctx.registry else {
+            return;
+        };
+        let Some(Value::String(content)) = value else {
+            return;
+        };
+        validate_richtext_node_attrs(
+            &RichtextValidationCtx::builder(self.lua, registry, self.ctx.table)
+                .draft(self.ctx.is_draft)
+                .build(),
+            content,
+            data_key,
+            field,
+            errors,
+        );
+    }
+}
+
+/// Resolve which sub-field schema applies to one Array/Blocks row.
+/// For `Blocks`, looks up the block definition by `_block_type`; emits
+/// an error and returns `None` when the type is unknown. For `Array`,
+/// always returns the field's own sub-fields.
+fn resolve_row_sub_fields<'def>(
+    field: &'def FieldDefinition,
+    row_obj: &serde_json::Map<String, Value>,
+    data_key: &str,
+    idx: usize,
+    errors: &mut Vec<FieldError>,
+) -> Option<&'def [FieldDefinition]> {
+    if field.field_type != FieldType::Blocks {
+        return Some(&field.fields);
+    }
+    let block_type = row_obj
+        .get("_block_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if let Some(bd) = field.blocks.iter().find(|b| b.block_type == block_type) {
+        Some(&bd.fields)
+    } else {
+        errors.push(
+            FieldError::with_key(
+                format!("{data_key}[{idx}]"),
+                format!(
+                    "{} row {} has unknown block type '{}'",
+                    field.name, idx, block_type
+                ),
+                "validation.unknown_block_type",
+            )
+            .with_param("field", field.name.clone())
+            .with_param("index", idx.to_string())
+            .with_param("block_type", block_type.to_string()),
+        );
+        None
     }
 }
 

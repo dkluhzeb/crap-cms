@@ -55,7 +55,7 @@ pub(crate) fn send_verification_email(
         }
 
         let base_url = server_config.base_url();
-        let verify_url = format!("{}/admin/verify-email?token={}", base_url, token);
+        let verify_url = format!("{base_url}/admin/verify-email?token={token}");
         let html = match email_renderer.render(
             "verify_email",
             &VerifyEmailContext {

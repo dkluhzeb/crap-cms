@@ -1,4 +1,4 @@
-//! Tonic gRPC service implementing all ContentAPI RPCs.
+//! Tonic gRPC service implementing all `ContentAPI` RPCs.
 
 mod auth;
 mod collection;

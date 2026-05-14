@@ -10,6 +10,11 @@ use crate::{
 
 /// Persist the DB write phase of a create operation.
 /// Performs: insert -> join data -> password -> version snapshot.
+///
+/// # Errors
+///
+/// Returns a backend error if the INSERT, join-table writes, or version
+/// snapshot creation fails.
 pub fn persist_create(
     ctx: &ServiceContext,
     data: &DocumentFields,

@@ -13,23 +13,31 @@ use crate::{
         query::{self, filter::normalize_filter_fields},
     },
     hooks::{
-        lifecycle::converters::*,
-        lua_api::crud::{get_tx_conn, helpers::*},
+        lifecycle::converters::{
+            find_result_to_lua, lua_table_to_find_query, pagination_result_to_lua_table,
+        },
+        lua_api::crud::{
+            get_tx_conn,
+            helpers::{
+                get_opt_bool, get_opt_string, hook_populate_singleflight, hook_ui_locale,
+                hook_user, resolve_collection,
+            },
+        },
     },
     service::{FindDocumentsInput, LuaReadHooks, ServiceContext, find_documents},
 };
 
 /// Parameters for the find operation, capturing all pre-cloned config values.
 struct FindParams {
-    pg_default: i64,
-    pg_max: i64,
-    pg_cursor: bool,
+    default: i64,
+    max: i64,
+    cursor: bool,
 }
 
 // Note: `override_access` is parsed from opts and passed to `LuaReadHooks`
 // (which passes it to the service layer's `check_access`).
 
-/// Build the FindQuery from the Lua table, applying pagination + normalizing
+/// Build the `FindQuery` from the Lua table, applying pagination + normalizing
 /// filter field paths.
 ///
 /// Produces a *user* query — system filters (`_status`, `_deleted_at`) are
@@ -37,25 +45,25 @@ struct FindParams {
 fn prepare_find_query(
     params: &FindParams,
     def: &CollectionDefinition,
-    query_table: Option<Table>,
+    query_table: Option<&Table>,
 ) -> LuaResult<FindQuery> {
     let (mut fq, lua_page) = match query_table {
-        Some(qt) => lua_table_to_find_query(&qt)?,
+        Some(qt) => lua_table_to_find_query(qt)?,
         None => (FindQuery::default(), None),
     };
 
     fq.limit = Some(query::apply_pagination_limits(
         fq.limit,
-        params.pg_default,
-        params.pg_max,
+        params.default,
+        params.max,
     ));
 
     if let Some(p) = lua_page {
-        let clamped = fq.limit.unwrap_or(params.pg_default);
+        let clamped = fq.limit.unwrap_or(params.default);
         fq.offset = Some((p.max(1) - 1) * clamped);
     }
 
-    if !params.pg_cursor {
+    if !params.cursor {
         fq.after_cursor = None;
         fq.before_cursor = None;
     }
@@ -71,25 +79,24 @@ fn find_inner(
     reg: &Registry,
     lc: &LocaleConfig,
     params: &FindParams,
-    collection: String,
-    query_table: Option<Table>,
+    collection: &str,
+    query_table: Option<&Table>,
 ) -> LuaResult<Table> {
     let conn = get_tx_conn(lua)?;
 
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
     let depth: i32 = query_table
-        .as_ref()
         .and_then(|qt| qt.get::<i32>("depth").ok())
         .unwrap_or(0)
         .clamp(0, 10);
-    let locale_str = get_opt_string(&query_table, "locale")?;
+    let locale_str = get_opt_string(query_table, "locale");
     let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), lc)
         .map_err(|e| RuntimeError(e.to_string()))?;
-    let override_access = get_opt_bool(&query_table, "overrideAccess", false)?;
-    let draft = get_opt_bool(&query_table, "draft", false)?;
-    let trash = get_opt_bool(&query_table, "trash", false)?;
-    let def = resolve_collection(reg, &collection)?;
+    let override_access = get_opt_bool(query_table, "overrideAccess", false);
+    let draft = get_opt_bool(query_table, "draft", false);
+    let trash = get_opt_bool(query_table, "trash", false);
+    let def = resolve_collection(reg, collection)?;
 
     let mut find_query = prepare_find_query(params, &def, query_table)?;
 
@@ -106,7 +113,7 @@ fn find_inner(
         .override_access(override_access)
         .build();
 
-    let ctx = ServiceContext::collection(&collection, &def)
+    let ctx = ServiceContext::collection(collection, &def)
         .conn(conn)
         .read_hooks(&hooks)
         .user(user.as_ref())
@@ -118,7 +125,7 @@ fn find_inner(
         .locale_ctx(locale_ctx.as_ref())
         .registry(Some(reg))
         .select(find_query.select.as_deref())
-        .cursor_enabled(params.pg_cursor)
+        .cursor_enabled(params.cursor)
         .trash(is_trash)
         .include_drafts(draft)
         .singleflight(hook_populate_singleflight(lua))
@@ -141,14 +148,21 @@ pub(crate) fn register_find(
 ) -> Result<()> {
     let lc = locale_config.clone();
     let params = FindParams {
-        pg_default: pagination_config.default_limit,
-        pg_max: pagination_config.max_limit,
-        pg_cursor: pagination_config.is_cursor(),
+        default: pagination_config.default_limit,
+        max: pagination_config.max_limit,
+        cursor: pagination_config.is_cursor(),
     };
 
     let find_fn = lua.create_function(
         move |lua, (collection, query_table): (String, Option<Table>)| {
-            find_inner(lua, &registry, &lc, &params, collection, query_table)
+            find_inner(
+                lua,
+                &registry,
+                &lc,
+                &params,
+                &collection,
+                query_table.as_ref(),
+            )
         },
     )?;
 

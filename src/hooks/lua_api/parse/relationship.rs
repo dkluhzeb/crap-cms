@@ -5,7 +5,7 @@ use tracing::warn;
 
 use crate::core::{FieldType, RelationshipConfig};
 
-use super::helpers::*;
+use super::helpers::{get_bool, get_string, get_table, parse_relationship_collection};
 
 /// Parse the relationship config for a field, handling both `Relationship` and `Upload` field types.
 /// Returns `None` for field types that don't have a relationship config.
@@ -55,7 +55,10 @@ fn parse_relationship_table(
     let mut rc = RelationshipConfig::new(collection, has_many);
 
     rc.max_depth = max_depth;
-    rc.polymorphic = polymorphic.into_iter().map(|s| s.into()).collect();
+    rc.polymorphic = polymorphic
+        .into_iter()
+        .map(std::convert::Into::into)
+        .collect();
 
     Ok(Some(rc))
 }

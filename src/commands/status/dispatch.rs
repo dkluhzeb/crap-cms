@@ -16,6 +16,11 @@ use super::{check, display};
 
 /// Print project status: collections, globals, migrations, jobs, uploads, locale.
 /// With `run_check = true`, also runs a best-practice audit.
+///
+/// # Errors
+///
+/// Returns an error if config loading, Lua init, pool creation, or
+/// schema sync fails.
 pub fn run(config_dir: &Path, run_check: bool) -> Result<()> {
     let config_dir = config_dir
         .canonicalize()

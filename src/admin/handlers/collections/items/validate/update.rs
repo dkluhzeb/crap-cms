@@ -34,16 +34,19 @@ pub async fn validate_update(
         return validation_error_response_simple("Collection not found");
     };
 
-    match check_access_or_forbid(&state, def.access.update.as_deref(), &auth_user, None, None) {
+    match check_access_or_forbid(
+        &state,
+        def.access.update.as_deref(),
+        auth_user.as_ref(),
+        None,
+        None,
+    ) {
         Ok(AccessResult::Denied) => return validation_error_response_simple("Access denied"),
         Err(_) => return validation_error_response_simple("Access check failed"),
         _ => {}
     }
 
-    let data = match prepare_form_for_validation(&state, &def, &auth_user, &payload, "update") {
-        Ok(v) => v,
-        Err(resp) => return *resp,
-    };
+    let data = prepare_form_for_validation(&state, &def, auth_user.as_ref(), &payload, "update");
 
     let is_draft = payload.draft && def.has_drafts();
     let locale_ctx =
@@ -54,7 +57,7 @@ pub async fn validate_update(
     let slug_owned = slug.clone();
     let id_owned = id.clone();
     let def_owned = def.clone();
-    let user_doc = get_user_doc(&auth_user).cloned();
+    let user_doc = get_user_doc(auth_user.as_ref()).cloned();
 
     let result = task::spawn_blocking(move || {
         run_validation(&RunValidationParams {
@@ -75,5 +78,5 @@ pub async fn validate_update(
     })
     .await;
 
-    handle_validation_result(result, &auth_user, &state)
+    handle_validation_result(result, auth_user.as_ref(), &state)
 }

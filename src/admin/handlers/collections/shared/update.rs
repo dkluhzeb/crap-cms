@@ -55,11 +55,21 @@ fn handle_update_success(state: &AdminState, slug: &str, id: &str, upload: Optio
     }
 }
 
+/// Whether (and how) to update the auth collection's `_locked` flag.
+///
+/// Auth collections render a `_locked` checkbox; non-auth collections never
+/// touch the lock state. The three states are: skip the update entirely
+/// (non-auth), lock the account, or unlock it.
+enum LockUpdate {
+    Skip,
+    Set(bool),
+}
+
 /// Prepared update input.
 struct UpdateInput {
     form: FormData,
     password: Option<String>,
-    locked_value: Option<Option<String>>,
+    lock: LockUpdate,
     locale_ctx: Option<LocaleContext>,
     draft: bool,
     action: String,
@@ -117,10 +127,8 @@ fn update_document_blocking(
     };
 
     if result.is_ok()
-        && let Some(locked_field) = args.input.locked_value
+        && let LockUpdate::Set(should_lock) = args.input.lock
     {
-        let should_lock =
-            locked_field.as_deref() == Some("on") || locked_field.as_deref() == Some("1");
         let conn = args.pool.get().context("DB connection for lock update")?;
         let ctx = ServiceContext::slug_only(&args.slug)
             .conn(&conn)
@@ -143,14 +151,14 @@ async fn spawn_update(
     slug: &str,
     id: &str,
     def: &CollectionDefinition,
-    auth_user: &Option<Extension<AuthUser>>,
+    auth_user: Option<&Extension<AuthUser>>,
     input: UpdateInput,
 ) -> Result<Result<service::WriteResult, ServiceError>, task::JoinError> {
     let locale = input.locale_ctx.as_ref().and_then(|ctx| match &ctx.mode {
         LocaleMode::Single(l) => Some(l.clone()),
         _ => None,
     });
-    let ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
+    let ui_locale = auth_user.map(|Extension(au)| au.ui_locale.clone());
     // The unpublish branch reads the row via `find_by_id_raw`, which needs
     // a `LocaleContext` to emit `title__en`/`title__de` for localized
     // fields when locales are enabled. Threading the config through
@@ -181,7 +189,7 @@ pub(in crate::admin::handlers::collections) async fn do_update(
     id: &str,
     form_data: HashMap<String, String>,
     file: Option<UploadedFile>,
-    auth_user: &Option<Extension<AuthUser>>,
+    auth_user: Option<&Extension<AuthUser>>,
 ) -> Response {
     let Some(def) = state.registry.get_collection(slug).cloned() else {
         return redirect_response(paths::COLLECTIONS_ROOT).into_response();
@@ -227,10 +235,12 @@ pub(in crate::admin::handlers::collections) async fn do_update(
         None
     };
 
-    let locked_value = if def.is_auth_collection() {
-        Some(form.take("_locked"))
+    let lock = if def.is_auth_collection() {
+        let raw = form.take("_locked");
+        let should_lock = matches!(raw.as_deref(), Some("on" | "1"));
+        LockUpdate::Set(should_lock)
     } else {
-        None
+        LockUpdate::Skip
     };
 
     if let Some(ref pw) = password
@@ -251,7 +261,7 @@ pub(in crate::admin::handlers::collections) async fn do_update(
         UpdateInput {
             form,
             password,
-            locked_value,
+            lock,
             locale_ctx,
             draft,
             action,

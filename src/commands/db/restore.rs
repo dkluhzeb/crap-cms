@@ -12,6 +12,11 @@ use crate::{
 };
 
 /// Handle the `restore` subcommand — replace database and optionally uploads from a backup.
+///
+/// # Errors
+///
+/// Returns an error if the backup directory is invalid, config loading
+/// fails, or any of the restore filesystem operations fails.
 #[cfg(not(tarpaulin_include))]
 pub fn restore(
     config_dir: &Path,
@@ -80,7 +85,7 @@ fn read_and_display_manifest(backup_dir: &Path) -> Result<()> {
     cli::kv("DB size", &format!("{} bytes", manifest.db_size));
 
     if let Some(size) = manifest.uploads_size {
-        cli::kv("Uploads", &format!("{} bytes", size));
+        cli::kv("Uploads", &format!("{size} bytes"));
     }
 
     Ok(())
@@ -144,7 +149,7 @@ fn restore_uploads(config_dir: &Path, backup_dir: &Path) {
 
     match status {
         Ok(s) if s.success() => spin.finish_success("Uploads restored"),
-        Ok(s) => spin.finish_warning(&format!("tar exited with status {}", s)),
-        Err(e) => spin.finish_warning(&format!("tar not found or failed: {}. Skipping.", e)),
+        Ok(s) => spin.finish_warning(&format!("tar exited with status {s}")),
+        Err(e) => spin.finish_warning(&format!("tar not found or failed: {e}. Skipping.")),
     }
 }

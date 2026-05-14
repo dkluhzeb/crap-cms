@@ -3,7 +3,7 @@
 use std::{collections::HashMap, time::Duration};
 
 use anyhow::Result;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::{
     core::{CollectionDefinition, DocumentFields, FieldDefinition, FieldType},
@@ -62,7 +62,7 @@ pub(super) fn resolve_bench_data(
     Ok((data, DataSource::Synthetic))
 }
 
-/// Convert document field values to `HashMap<String, String>` for WriteInput.
+/// Convert document field values to `HashMap<String, String>` for `WriteInput`.
 pub fn to_string_map(data: &DocumentFields) -> HashMap<String, String> {
     data.iter()
         .filter_map(|(k, v)| {
@@ -118,11 +118,10 @@ fn generate_synthetic_data(fields: &[FieldDefinition]) -> DocumentFields {
                 let val = field
                     .options
                     .first()
-                    .map(|o| o.value.clone())
-                    .unwrap_or_else(|| "option_a".into());
+                    .map_or_else(|| "option_a".into(), |o| o.value.clone());
                 Value::String(val)
             }
-            FieldType::Json => Value::Object(Default::default()),
+            FieldType::Json => Value::Object(Map::default()),
             // Complex types — skip (empty/null is valid for optional fields)
             FieldType::Relationship
             | FieldType::Upload
@@ -157,7 +156,7 @@ pub(super) fn timing_stats(durations: &[Duration]) -> (Duration, Duration, Durat
     let min = durations.iter().copied().min().unwrap_or_default();
     let max = durations.iter().copied().max().unwrap_or_default();
     let sum: Duration = durations.iter().sum();
-    let avg = sum / durations.len().max(1) as u32;
+    let avg = sum / u32::try_from(durations.len().max(1)).unwrap_or(u32::MAX);
     (min, avg, max)
 }
 

@@ -109,7 +109,7 @@ pub(super) fn register_collections_pool_init(
 }
 
 /// Init-time define: parses + registers the collection. The strict
-/// InitPhase guard rejects any caller that landed here outside init.
+/// `InitPhase` guard rejects any caller that landed here outside init.
 fn define_init(lua: &Lua, reg: &SharedRegistry, slug: &str, config: &Table) -> mlua::Result<()> {
     if lua.app_data_ref::<InitPhase>().is_none() {
         return Err(RuntimeError(DEFINE_INIT_ONLY_ERROR.into()));
@@ -139,7 +139,7 @@ fn get(lua: &Lua, reg: &Registry, slug: &str) -> mlua::Result<Value> {
 fn list(lua: &Lua, reg: &Registry) -> mlua::Result<Table> {
     let map = lua.create_table()?;
 
-    for (slug, def) in reg.collections.iter() {
+    for (slug, def) in &reg.collections {
         map.set(slug.as_ref(), collection_config_to_lua(lua, def)?)?;
     }
 

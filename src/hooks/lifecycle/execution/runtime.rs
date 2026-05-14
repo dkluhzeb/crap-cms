@@ -17,14 +17,14 @@ use crate::{
 };
 
 /// Runs collection-level hook refs, then global registered hooks.
-/// TxContext must already be set in app_data if CRUD access is needed.
+/// `TxContext` must already be set in `app_data` if CRUD access is needed.
 pub(crate) fn run_hooks_inner(
     lua: &Lua,
     hooks: &Hooks,
     event: HookEvent,
     mut context: HookContext,
 ) -> Result<HookContext> {
-    let hook_refs = get_hook_refs(hooks, &event);
+    let hook_refs = get_hook_refs(hooks, event);
     let timing = !hook_refs.is_empty() && tracing::enabled!(tracing::Level::DEBUG);
     let start = if timing {
         Some(std::time::Instant::now())
@@ -37,7 +37,7 @@ pub(crate) fn run_hooks_inner(
     }
 
     // Run global registered hooks
-    context = call_registered_hooks(lua, &event, context)?;
+    context = call_registered_hooks(lua, event, context)?;
 
     if let Some(start) = start {
         let elapsed = start.elapsed();
@@ -54,7 +54,7 @@ pub(crate) fn run_hooks_inner(
 }
 
 /// Get the list of hook references for a given event.
-pub(crate) fn get_hook_refs<'a>(hooks: &'a Hooks, event: &HookEvent) -> &'a [String] {
+pub(crate) fn get_hook_refs(hooks: &Hooks, event: HookEvent) -> &[String] {
     match event {
         HookEvent::BeforeValidate => &hooks.before_validate,
         HookEvent::BeforeChange => &hooks.before_change,
@@ -82,7 +82,7 @@ pub(crate) fn has_registered_hooks(lua: &Lua, event: &str) -> bool {
 }
 
 /// Scan a Lua VM's `_crap_event_hooks` table and return the set of event names
-/// that have at least one registered handler. Called once during HookRunner::new().
+/// that have at least one registered handler. Called once during `HookRunner::new()`.
 pub(crate) fn scan_registered_events(lua: &Lua) -> HashSet<String> {
     let mut events = HashSet::new();
     let event_hooks: Table = match lua.named_registry_value("_crap_event_hooks") {
@@ -104,7 +104,7 @@ pub(crate) fn scan_registered_events(lua: &Lua) -> HashSet<String> {
 /// Reuses the same context-to-table / table-to-context conversion as `call_hook_ref`.
 pub(crate) fn call_registered_hooks(
     lua: &Lua,
-    event: &HookEvent,
+    event: HookEvent,
     mut context: HookContext,
 ) -> Result<HookContext> {
     let event_hooks: Table = match lua.named_registry_value("_crap_event_hooks") {
@@ -126,7 +126,7 @@ pub(crate) fn call_registered_hooks(
     for i in 1..=len {
         let func: LuaFunction = list
             .raw_get(i)
-            .with_context(|| format!("registered hook at index {} is not a function", i))?;
+            .with_context(|| format!("registered hook at index {i} is not a function"))?;
 
         debug!(
             "Running registered {} hook #{} for {}",
@@ -155,7 +155,7 @@ pub(crate) fn call_registered_hooks(
     Ok(context)
 }
 
-/// Read hook result data and context back from a returned Lua table into the HookContext.
+/// Read hook result data and context back from a returned Lua table into the `HookContext`.
 pub(super) fn read_hook_result(ctx: &mut HookContext, tbl: &Table) -> Result<()> {
     if let Ok(data_tbl) = tbl.get::<Table>("data") {
         let mut new_data = DocumentFields::new();
@@ -189,25 +189,22 @@ pub(crate) fn resolve_hook_function(lua: &Lua, hook_ref: &str) -> Result<LuaFunc
     let parts: Vec<&str> = hook_ref.split('.').collect();
 
     if parts.len() < 2 {
-        bail!("Hook ref '{}' must be module.function format", hook_ref);
+        bail!("Hook ref '{hook_ref}' must be module.function format");
     }
     let module_path = parts[..parts.len() - 1].join(".");
     let func_name = parts[parts.len() - 1];
 
     let module: Table = require
         .call(module_path.clone())
-        .with_context(|| format!("Failed to require module '{}'", module_path))?;
-    let func: LuaFunction = module.get(func_name).with_context(|| {
-        format!(
-            "Function '{}' not found in module '{}'",
-            func_name, module_path
-        )
-    })?;
+        .with_context(|| format!("Failed to require module '{module_path}'"))?;
+    let func: LuaFunction = module
+        .get(func_name)
+        .with_context(|| format!("Function '{func_name}' not found in module '{module_path}'"))?;
 
     Ok(func)
 }
 
-/// Resolve a dotted function reference (e.g., "hooks.posts.auto_slug")
+/// Resolve a dotted function reference (e.g., "`hooks.posts.auto_slug`")
 /// and call it with the context.
 pub(crate) fn call_hook_ref(
     lua: &Lua,
@@ -305,28 +302,25 @@ mod tests {
         };
 
         assert_eq!(
-            get_hook_refs(&hooks, &HookEvent::BeforeValidate),
+            get_hook_refs(&hooks, HookEvent::BeforeValidate),
             &["hooks.validate"]
         );
         assert_eq!(
-            get_hook_refs(&hooks, &HookEvent::BeforeChange),
+            get_hook_refs(&hooks, HookEvent::BeforeChange),
             &["hooks.change"]
         );
         assert_eq!(
-            get_hook_refs(&hooks, &HookEvent::AfterChange),
+            get_hook_refs(&hooks, HookEvent::AfterChange),
             &["hooks.after"]
         );
-        assert!(get_hook_refs(&hooks, &HookEvent::BeforeRead).is_empty());
+        assert!(get_hook_refs(&hooks, HookEvent::BeforeRead).is_empty());
+        assert_eq!(get_hook_refs(&hooks, HookEvent::AfterRead), &["hooks.read"]);
+        assert!(get_hook_refs(&hooks, HookEvent::BeforeDelete).is_empty());
+        assert!(get_hook_refs(&hooks, HookEvent::AfterDelete).is_empty());
         assert_eq!(
-            get_hook_refs(&hooks, &HookEvent::AfterRead),
-            &["hooks.read"]
-        );
-        assert!(get_hook_refs(&hooks, &HookEvent::BeforeDelete).is_empty());
-        assert!(get_hook_refs(&hooks, &HookEvent::AfterDelete).is_empty());
-        assert_eq!(
-            get_hook_refs(&hooks, &HookEvent::BeforeBroadcast),
+            get_hook_refs(&hooks, HookEvent::BeforeBroadcast),
             &["hooks.broadcast"]
         );
-        assert!(get_hook_refs(&hooks, &HookEvent::BeforeRender).is_empty());
+        assert!(get_hook_refs(&hooks, HookEvent::BeforeRender).is_empty());
     }
 }

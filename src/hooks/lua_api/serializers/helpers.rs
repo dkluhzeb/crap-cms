@@ -5,7 +5,7 @@ use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
 use crate::core::LocalizedString;
 
-/// Convert a LocalizedString to a Lua value (string or locale table).
+/// Convert a `LocalizedString` to a Lua value (string or locale table).
 pub(super) fn localized_string_to_lua(lua: &Lua, ls: &LocalizedString) -> mlua::Result<Value> {
     match ls {
         LocalizedString::Plain(s) => Ok(Value::String(lua.create_string(s)?)),
@@ -31,13 +31,11 @@ pub fn lua_to_json(value: &Value) -> mlua::Result<JsonValue> {
 fn lua_to_json_inner(value: &Value, depth: usize) -> mlua::Result<JsonValue> {
     if depth > MAX_NESTING_DEPTH {
         return Err(mlua::Error::RuntimeError(format!(
-            "Table nesting exceeds maximum depth of {}",
-            MAX_NESTING_DEPTH
+            "Table nesting exceeds maximum depth of {MAX_NESTING_DEPTH}"
         )));
     }
 
     match value {
-        Value::Nil => Ok(JsonValue::Null),
         Value::Boolean(b) => Ok(JsonValue::Bool(*b)),
         Value::Integer(i) => Ok(JsonValue::Number((*i).into())),
         Value::Number(n) => JsonNumber::from_f64(*n)
@@ -101,8 +99,7 @@ pub fn json_to_lua(lua: &Lua, value: &JsonValue) -> mlua::Result<Value> {
 fn json_to_lua_inner(lua: &Lua, value: &JsonValue, depth: usize) -> mlua::Result<Value> {
     if depth > MAX_NESTING_DEPTH {
         return Err(mlua::Error::RuntimeError(format!(
-            "JSON nesting exceeds maximum depth of {}",
-            MAX_NESTING_DEPTH
+            "JSON nesting exceeds maximum depth of {MAX_NESTING_DEPTH}"
         )));
     }
 
@@ -116,8 +113,7 @@ fn json_to_lua_inner(lua: &Lua, value: &JsonValue, depth: usize) -> mlua::Result
                 Ok(Value::Number(f))
             } else {
                 Err(mlua::Error::RuntimeError(format!(
-                    "JSON number {} cannot be represented as i64 or f64",
-                    n
+                    "JSON number {n} cannot be represented as i64 or f64"
                 )))
             }
         }
@@ -396,7 +392,7 @@ mod tests {
         assert_eq!(back["empty"], json!(null));
     }
 
-    /// Edge-case numbers (i64::MAX, f64::MAX) must survive conversion without error.
+    /// Edge-case numbers (`i64::MAX`, `f64::MAX`) must survive conversion without error.
     #[test]
     fn json_to_lua_extreme_numbers_succeed() {
         let lua = Lua::new();

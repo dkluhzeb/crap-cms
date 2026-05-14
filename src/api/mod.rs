@@ -1,4 +1,4 @@
-//! gRPC API server (Tonic) implementing the ContentAPI service.
+//! gRPC API server (Tonic) implementing the `ContentAPI` service.
 //!
 //! ## Submodule layout
 //!
@@ -38,6 +38,19 @@ pub use server::{GrpcStartParams, start};
 
 /// Generated gRPC content service types.
 pub mod content {
+    // Generated from `proto/content.proto` by tonic_prost_build at build time.
+    // Doc comments inside the generated code come from the .proto source and
+    // are written for cross-language consumers (Go/Python/TS); they intentionally
+    // don't use Rust-specific Markdown conventions like backticks for identifiers
+    // or `# Errors` sections on Result-returning functions. The codegen also
+    // emits `Default::default()` in struct literals, which clippy::pedantic flags.
+    #![allow(
+        clippy::doc_markdown,
+        clippy::missing_errors_doc,
+        clippy::default_trait_access,
+        clippy::too_many_lines
+    )]
+
     tonic::include_proto!("crap");
 
     /// File descriptor set for gRPC reflection.

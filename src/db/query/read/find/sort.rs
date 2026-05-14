@@ -7,6 +7,8 @@
 //! (e.g. `-published_at`, where drafts have a NULL key and would
 //! otherwise sort last).
 
+use std::fmt::Write as _;
+
 use anyhow::{Result, bail};
 
 use crate::core::{CollectionDefinition, FieldDefinition, FieldType};
@@ -84,15 +86,40 @@ pub(super) fn apply_order_by(
         String::new()
     };
 
-    if sort_col != "id" {
-        sql.push_str(&format!(
-            " ORDER BY {status_prefix}{resolved} {effective_dir}, id {effective_dir}"
-        ));
+    if sort_col == "id" {
+        let _ = write!(sql, " ORDER BY {status_prefix}id {effective_dir}");
     } else {
-        sql.push_str(&format!(" ORDER BY {status_prefix}id {effective_dir}"));
+        let _ = write!(
+            sql,
+            " ORDER BY {status_prefix}{resolved} {effective_dir}, id {effective_dir}"
+        );
     }
 
     Ok(())
+}
+
+/// Recurse through field definitions looking for a column name.
+/// Layout wrappers (Row, Collapsible, Tabs) promote their children to
+/// parent-level columns, so we recurse into them. Group sub-fields use
+/// `group__subfield` naming for DB columns.
+fn check_fields(col: &str, fields: &[FieldDefinition], prefix: &str) -> bool {
+    fields.iter().any(|f| {
+        let full_name = prefixed_name(prefix, &f.name);
+
+        if full_name == col && f.has_parent_column() {
+            return true;
+        }
+
+        match f.field_type {
+            FieldType::Group => check_fields(col, &f.fields, &full_name),
+            FieldType::Row | FieldType::Collapsible => check_fields(col, &f.fields, prefix),
+            FieldType::Tabs => f
+                .tabs
+                .iter()
+                .any(|tab| check_fields(col, &tab.fields, prefix)),
+            _ => false,
+        }
+    })
 }
 
 /// Check whether a sort column name corresponds to a real column on the collection table.
@@ -106,29 +133,6 @@ pub(super) fn is_valid_sort_column(col: &str, def: &CollectionDefinition) -> boo
     }
 
     // User-defined fields that have a parent column (has-one scalar fields).
-    // Layout wrappers (Row, Collapsible, Tabs) promote their children to
-    // parent-level columns, so we recurse into them.
-    // Group sub-fields use `group__subfield` naming for DB columns.
-    fn check_fields(col: &str, fields: &[FieldDefinition], prefix: &str) -> bool {
-        fields.iter().any(|f| {
-            let full_name = prefixed_name(prefix, &f.name);
-
-            if full_name == col && f.has_parent_column() {
-                return true;
-            }
-
-            match f.field_type {
-                FieldType::Group => check_fields(col, &f.fields, &full_name),
-                FieldType::Row | FieldType::Collapsible => check_fields(col, &f.fields, prefix),
-                FieldType::Tabs => f
-                    .tabs
-                    .iter()
-                    .any(|tab| check_fields(col, &tab.fields, prefix)),
-                _ => false,
-            }
-        })
-    }
-
     check_fields(col, &def.fields, "")
 }
 

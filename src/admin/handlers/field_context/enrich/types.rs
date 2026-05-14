@@ -35,14 +35,14 @@ use crate::{
 /// Logs a warning when the stored value isn't an array. Empty / missing keys
 /// are normal (no rows yet) and stay quiet; a string value here usually
 /// signals a `has_many` flag that disagrees with the storage shape (data
-/// migrated from has_one without a backfill, hand-edited DB row, or a
+/// migrated from `has_one` without a backfill, hand-edited DB row, or a
 /// faulty Lua hook), which would otherwise present as an empty selector
 /// without explanation.
 fn extract_selected_ids(doc_fields: &DocumentFields, field_name: &str) -> Vec<String> {
     match doc_fields.get(field_name) {
         Some(Value::Array(arr)) => arr
             .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
             .collect(),
         None | Some(Value::Null) => Vec::new(),
         Some(other) => {
@@ -64,9 +64,8 @@ fn extract_selected_ids(doc_fields: &DocumentFields, field_name: &str) -> Vec<St
 }
 
 /// Build a typed `{ id, label }` item from a document.
-fn doc_to_label_item(doc: &Document, title_field: &Option<String>) -> RelationshipSelectedItem {
+fn doc_to_label_item(doc: &Document, title_field: Option<&String>) -> RelationshipSelectedItem {
     let label = title_field
-        .as_ref()
         .and_then(|f| doc.get_str(f))
         .unwrap_or(&doc.id)
         .to_string();
@@ -85,7 +84,7 @@ fn resolve_has_many_items(
     ids: &[String],
     collection: &str,
     related_def: &CollectionDefinition,
-    title_field: &Option<String>,
+    title_field: Option<&String>,
     conn: &dyn DbConnection,
     rel_locale_ctx: Option<&LocaleContext>,
 ) -> Vec<RelationshipSelectedItem> {
@@ -106,7 +105,7 @@ fn resolve_has_one_item(
     current_value: &str,
     collection: &str,
     related_def: &CollectionDefinition,
-    title_field: &Option<String>,
+    title_field: Option<&String>,
     conn: &dyn DbConnection,
     rel_locale_ctx: Option<&LocaleContext>,
 ) -> Vec<RelationshipSelectedItem> {
@@ -150,7 +149,9 @@ pub(super) fn enrich_relationship(
         return;
     };
 
-    let title_field = related_def.title_field().map(|s| s.to_string());
+    let title_field = related_def
+        .title_field()
+        .map(std::string::ToString::to_string);
 
     let items = if rc.has_many {
         let ids = extract_selected_ids(doc_fields, &field_def.name);
@@ -158,7 +159,7 @@ pub(super) fn enrich_relationship(
             &ids,
             &rc.collection,
             related_def,
-            &title_field,
+            title_field.as_ref(),
             conn,
             rel_locale_ctx,
         )
@@ -178,7 +179,7 @@ pub(super) fn enrich_relationship(
             current_value,
             &rc.collection,
             related_def,
-            &title_field,
+            title_field.as_ref(),
             conn,
             rel_locale_ctx,
         )
@@ -234,7 +235,7 @@ fn build_array_row_sub_fields(
     sub_fields
 }
 
-/// Build a single typed [`ArrayRow`] with index, sub_fields, errors, and custom label.
+/// Build a single typed [`ArrayRow`] with index, `sub_fields`, errors, and custom label.
 fn build_array_row(
     field_def: &FieldDefinition,
     row: &Value,
@@ -306,8 +307,8 @@ pub(super) fn enrich_array(
 fn prepare_upload_doc(
     mut doc: Document,
     related_def: &CollectionDefinition,
-    title_field: &Option<String>,
-    admin_thumbnail: &Option<String>,
+    title_field: Option<&String>,
+    admin_thumbnail: Option<&String>,
     include_filename: bool,
 ) -> RelationshipSelectedItem {
     if let Some(ref uc) = related_def.upload
@@ -326,8 +327,8 @@ fn resolve_upload_has_many(
     ids: &[String],
     collection: &str,
     related_def: &CollectionDefinition,
-    title_field: &Option<String>,
-    admin_thumbnail: &Option<String>,
+    title_field: Option<&String>,
+    admin_thumbnail: Option<&String>,
     conn: &dyn DbConnection,
     rel_locale_ctx: Option<&LocaleContext>,
 ) -> Vec<RelationshipSelectedItem> {
@@ -350,8 +351,8 @@ fn resolve_upload_has_one(
     uf: &mut UploadField,
     collection: &str,
     related_def: &CollectionDefinition,
-    title_field: &Option<String>,
-    admin_thumbnail: &Option<String>,
+    title_field: Option<&String>,
+    admin_thumbnail: Option<&String>,
     conn: &dyn DbConnection,
     rel_locale_ctx: Option<&LocaleContext>,
 ) {
@@ -398,11 +399,13 @@ pub(super) fn enrich_upload(
         return;
     };
 
-    let title_field = related_def.title_field().map(|s| s.to_string());
+    let title_field = related_def
+        .title_field()
+        .map(std::string::ToString::to_string);
     let admin_thumbnail = related_def
         .upload
         .as_ref()
-        .and_then(|u| u.admin_thumbnail.as_ref().cloned());
+        .and_then(|u| u.admin_thumbnail.clone());
 
     if rc.has_many {
         let ids = extract_selected_ids(doc_fields, &field_def.name);
@@ -410,8 +413,8 @@ pub(super) fn enrich_upload(
             &ids,
             &rc.collection,
             related_def,
-            &title_field,
-            &admin_thumbnail,
+            title_field.as_ref(),
+            admin_thumbnail.as_ref(),
             conn,
             rel_locale_ctx,
         );
@@ -421,8 +424,8 @@ pub(super) fn enrich_upload(
             uf,
             &rc.collection,
             related_def,
-            &title_field,
-            &admin_thumbnail,
+            title_field.as_ref(),
+            admin_thumbnail.as_ref(),
             conn,
             rel_locale_ctx,
         );
@@ -432,29 +435,28 @@ pub(super) fn enrich_upload(
 /// Build a typed item for an upload document (shared by has-one and has-many).
 pub(super) fn build_upload_item(
     doc: &Document,
-    title_field: &Option<String>,
-    admin_thumbnail: &Option<String>,
+    title_field: Option<&String>,
+    admin_thumbnail: Option<&String>,
     include_filename: bool,
 ) -> RelationshipSelectedItem {
     let label = doc
         .get_str("filename")
-        .or_else(|| title_field.as_ref().and_then(|f| doc.get_str(f)))
+        .or_else(|| title_field.and_then(|f| doc.get_str(f)))
         .unwrap_or(&doc.id)
         .to_string();
     let mime = doc.get_str("mime_type").unwrap_or("").to_string();
     let is_image = mime.starts_with("image/");
     let thumb_url = if is_image {
         admin_thumbnail
-            .as_ref()
             .and_then(|thumb_name| {
                 doc.fields
                     .get("sizes")
                     .and_then(|v| v.get(thumb_name))
                     .and_then(|v| v.get("url"))
                     .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
+                    .map(std::string::ToString::to_string)
             })
-            .or_else(|| doc.get_str("url").map(|s| s.to_string()))
+            .or_else(|| doc.get_str("url").map(std::string::ToString::to_string))
     } else {
         None
     };
@@ -614,7 +616,9 @@ pub(super) fn enrich_join(
         && let Some(doc_id_str) = doc_id
         && let Some(target_def) = reg.get_collection(&jc.collection)
     {
-        let title_field = target_def.title_field().map(|s| s.to_string());
+        let title_field = target_def
+            .title_field()
+            .map(std::string::ToString::to_string);
 
         let fq = query::FindQuery::builder()
             .filters(vec![query::FilterClause::Single(query::Filter {
@@ -647,12 +651,10 @@ pub(super) fn enrich_join(
 
 /// Build a typed attribute object for a richtext node field definition.
 fn build_node_attr(f: &FieldDefinition) -> RichtextNodeAttrCtx {
-    let label = f
-        .admin
-        .label
-        .as_ref()
-        .map(|ls| ls.resolve_default().to_string())
-        .unwrap_or_else(|| to_title_case(&f.name));
+    let label = f.admin.label.as_ref().map_or_else(
+        || to_title_case(&f.name),
+        |ls| ls.resolve_default().to_string(),
+    );
 
     let options = if f.options.is_empty() {
         None

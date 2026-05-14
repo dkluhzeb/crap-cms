@@ -22,13 +22,17 @@ use crate::{
 /// - [`RunnerReadHooks`]: acquires a Lua VM from the pool (admin, gRPC, MCP)
 /// - [`LuaReadHooks`]: uses the current Lua VM inline (Lua CRUD hooks)
 pub trait ReadHooks {
-    /// Fire before_read hooks. Returns error to abort the read.
+    /// Fire `before_read` hooks. Returns error to abort the read.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any `before_read` hook fails or aborts the read.
     fn before_read(&self, hooks: &Hooks, slug: &str, operation: &str) -> Result<()>;
 
-    /// Apply after_read hooks to a single document.
+    /// Apply `after_read` hooks to a single document.
     fn after_read_one(&self, ctx: &AfterReadCtx, doc: Document) -> Document;
 
-    /// Apply after_read hooks to a batch of documents.
+    /// Apply `after_read` hooks to a batch of documents.
     /// Default implementation calls `after_read_one` per document.
     fn after_read_many(&self, ctx: &AfterReadCtx, docs: Vec<Document>) -> Vec<Document> {
         docs.into_iter()
@@ -37,6 +41,10 @@ pub trait ReadHooks {
     }
 
     /// Check collection-level access. Returns the access result (Allowed/Denied/Constrained).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the access hook itself raises (e.g. a Lua runtime error).
     fn check_access(
         &self,
         access_ref: Option<&str>,
@@ -52,7 +60,7 @@ pub trait ReadHooks {
 }
 
 /// Pool-based hook execution for admin, gRPC, and MCP surfaces.
-/// Acquires a Lua VM from the HookRunner pool for each operation.
+/// Acquires a Lua VM from the `HookRunner` pool for each operation.
 pub struct RunnerReadHooks<'a> {
     pub runner: &'a HookRunner,
     pub conn: &'a dyn DbConnection,
@@ -109,6 +117,7 @@ pub struct LuaReadHooks<'a> {
 
 impl<'a> LuaReadHooks<'a> {
     /// Create a builder with the required Lua VM reference.
+    #[must_use]
     pub fn builder(lua: &'a mlua::Lua) -> LuaReadHooksBuilder<'a> {
         LuaReadHooksBuilder::new(lua)
     }

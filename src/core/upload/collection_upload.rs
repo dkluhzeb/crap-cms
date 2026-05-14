@@ -22,6 +22,7 @@ pub struct CollectionUpload {
 
 impl CollectionUpload {
     /// Create a new enabled upload config with defaults for all other fields.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             enabled: true,
@@ -32,6 +33,7 @@ impl CollectionUpload {
     /// Return the set of system-injected field names that are auto-populated
     /// by the upload processing system (not user input).
     /// Mirrors the fields created by `inject_upload_fields()` in the Lua parser.
+    #[must_use]
     pub fn system_field_names(&self) -> HashSet<String> {
         let mut names: HashSet<String> = [
             "filename",
@@ -44,7 +46,7 @@ impl CollectionUpload {
             "focal_y",
         ]
         .iter()
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .collect();
 
         for size in &self.image_sizes {

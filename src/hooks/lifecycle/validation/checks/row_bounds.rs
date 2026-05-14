@@ -2,7 +2,7 @@ use serde_json::Value;
 
 use crate::core::{FieldDefinition, validate::FieldError};
 
-/// Validate min_rows / max_rows for Array, Blocks, and has-many Relationship fields.
+/// Validate `min_rows` / `max_rows` for Array, Blocks, and has-many Relationship fields.
 pub(crate) fn check_row_bounds(
     field: &FieldDefinition,
     data_key: &str,

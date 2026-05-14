@@ -16,6 +16,11 @@ use crate::{
 };
 
 /// Start the MCP server in stdio mode.
+///
+/// # Errors
+///
+/// Returns an error if config loading, Lua init, pool creation, schema sync,
+/// or the MCP server hits an unrecoverable runtime error.
 #[cfg(not(tarpaulin_include))] // async server startup, requires interactive stdio
 pub async fn run(config_dir: &Path) -> Result<()> {
     let config_dir = config_dir
@@ -26,7 +31,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
 
     if let Some(warning) = cfg.check_version() {
-        eprintln!("Warning: {}", warning);
+        eprintln!("Warning: {warning}");
     }
 
     let registry = hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;

@@ -3,6 +3,20 @@
 //! Tests for command library functions (sections 18-30):
 //! direct Rust calls without invoking the binary.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
@@ -23,7 +37,7 @@ fn fixture_dir() -> PathBuf {
 }
 
 /// Copy fixture dir to a temp dir, init Lua, create pool, sync schema.
-/// Returns (TempDir, DbPool, Arc<Registry>).
+/// Returns (`TempDir`, `DbPool`, Arc<Registry>).
 fn full_setup() -> (
     tempfile::TempDir,
     DbPool,
@@ -56,7 +70,7 @@ fn copy_dir(src: &Path, dst: &Path) {
     }
 }
 
-/// Create a user in an auth collection via query::create + update_password.
+/// Create a user in an auth collection via `query::create` + `update_password`.
 fn create_user(
     pool: &DbPool,
     def: &crap_cms::core::CollectionDefinition,
@@ -169,12 +183,7 @@ fn cmd_export_collection_filter() {
     }
 
     let output_path = tmp.path().join("export_filtered.json");
-    commands::export::export(
-        &config_dir,
-        Some("posts".to_string()),
-        Some(output_path.clone()),
-    )
-    .unwrap();
+    commands::export::export(&config_dir, Some("posts"), Some(output_path.clone())).unwrap();
 
     let content = std::fs::read_to_string(&output_path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -195,7 +204,7 @@ fn cmd_export_nonexistent_errors() {
     let output_path = tmp.path().join("export_bad.json");
     let result = commands::export::export(
         &config_dir,
-        Some("nonexistent_collection".to_string()),
+        Some("nonexistent_collection"),
         Some(output_path),
     );
     assert!(
@@ -205,8 +214,7 @@ fn cmd_export_nonexistent_errors() {
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("not found"),
-        "error should mention 'not found', got: {}",
-        err_msg
+        "error should mention 'not found', got: {err_msg}"
     );
 }
 
@@ -254,7 +262,7 @@ fn cmd_import_roundtrip() {
     }
 
     // Import from the exported file
-    commands::export::import(&config_dir, &export_path, Some("posts".to_string())).unwrap();
+    commands::export::import(&config_dir, &export_path, Some("posts")).unwrap();
 
     // Verify data restored
     {
@@ -353,8 +361,7 @@ fn cmd_user_create_non_auth_errors() {
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("not an auth collection"),
-        "error should mention 'not an auth collection', got: {}",
-        err_msg
+        "error should mention 'not an auth collection', got: {err_msg}"
     );
 }
 
@@ -398,8 +405,7 @@ fn cmd_typegen_invalid_lang_errors() {
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("Unknown language"),
-        "error should mention 'Unknown language', got: {}",
-        err_msg
+        "error should mention 'Unknown language', got: {err_msg}"
     );
 }
 
@@ -436,7 +442,7 @@ fn cmd_migrate_create() {
 
     commands::db::migrate(
         &config_dir,
-        commands::MigrateAction::Create {
+        &commands::MigrateAction::Create {
             name: "test_migration".into(),
         },
     )
@@ -445,14 +451,13 @@ fn cmd_migrate_create() {
     let migrations_dir = config_dir.join("migrations");
     let files: Vec<_> = std::fs::read_dir(&migrations_dir)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .collect();
     assert_eq!(files.len(), 1, "should have created one migration file");
     let filename = files[0].file_name().to_string_lossy().to_string();
     assert!(
         filename.ends_with("_test_migration.lua"),
-        "migration file should end with '_test_migration.lua', got: {}",
-        filename
+        "migration file should end with '_test_migration.lua', got: {filename}"
     );
 
     let content = std::fs::read_to_string(files[0].path()).unwrap();
@@ -470,14 +475,13 @@ fn cmd_migrate_fresh_needs_confirm() {
 
     let result = commands::db::migrate(
         &config_dir,
-        commands::MigrateAction::Fresh { confirm: false },
+        &commands::MigrateAction::Fresh { confirm: false },
     );
     assert!(result.is_err(), "migrate fresh without confirm should fail");
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("--confirm"),
-        "error should mention '--confirm', got: {}",
-        err_msg
+        "error should mention '--confirm', got: {err_msg}"
     );
 }
 
@@ -510,7 +514,7 @@ fn cmd_backup_creates_snapshot() {
     );
     let backup_dirs: Vec<_> = std::fs::read_dir(&backup_output)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.path().is_dir())
         .collect();
     assert_eq!(backup_dirs.len(), 1, "should have one backup directory");
@@ -635,7 +639,7 @@ fn parse_key_val_no_equals() {
     let result = commands::parse_key_val("noequalssign");
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.contains("no `=` found"), "error: {}", err);
+    assert!(err.contains("no `=` found"), "error: {err}");
 }
 
 #[test]
@@ -714,10 +718,10 @@ fn has_locales_enabled_empty_array() {
 
     std::fs::write(
         config_dir.join("crap.toml"),
-        r#"
+        r"
 [locale]
 locales = []
-"#,
+",
     )
     .unwrap();
 
@@ -876,7 +880,7 @@ fn cmd_user_list_non_auth_errors() {
         "user_list on non-auth collection should fail"
     );
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("not an auth collection"), "error: {}", err);
+    assert!(err.contains("not an auth collection"), "error: {err}");
 }
 
 #[test]
@@ -889,5 +893,5 @@ fn cmd_user_list_missing_collection_errors() {
         "user_list on missing collection should fail"
     );
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("not found"), "error: {}", err);
+    assert!(err.contains("not found"), "error: {err}");
 }

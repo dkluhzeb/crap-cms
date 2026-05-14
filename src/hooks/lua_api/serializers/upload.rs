@@ -4,7 +4,7 @@ use mlua::{Lua, Table};
 
 use crate::core::{CollectionDefinition, upload::ImageFit};
 
-/// Serialize the upload section of a CollectionDefinition into the Lua table.
+/// Serialize the upload section of a `CollectionDefinition` into the Lua table.
 pub(super) fn collection_upload_to_lua(
     lua: &Lua,
     tbl: &Table,
@@ -100,6 +100,20 @@ pub(super) fn collection_upload_to_lua(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use crate::core::{
         CollectionDefinition,

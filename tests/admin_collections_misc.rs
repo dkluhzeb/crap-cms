@@ -2,6 +2,20 @@
 //!
 //! Covers: collection CRUD, search/filter/sort, validation, versioning, uploads (API).
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use serde_json::json;
 use std::sync::Arc;
 
@@ -116,7 +130,7 @@ fn setup_app_with_config(
     let has_auth = registry
         .collections
         .values()
-        .any(|d| d.is_auth_collection());
+        .any(crap_cms::core::CollectionDefinition::is_auth_collection);
 
     let state = AdminState {
         config,
@@ -164,7 +178,7 @@ fn setup_app_with_config(
         ),
         populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
         cache: None,
-        custom_pages: Default::default(),
+        custom_pages: crap_cms::admin::custom_pages::CustomPageRegistry::default(),
     };
 
     let router = build_router(state);
@@ -202,17 +216,17 @@ fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
         .build()
         .unwrap();
     let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();
-    format!("crap_session={}", token)
+    format!("crap_session={token}")
 }
 
 const TEST_CSRF: &str = "test-csrf-token-12345";
 
 fn csrf_cookie() -> String {
-    format!("crap_csrf={}", TEST_CSRF)
+    format!("crap_csrf={TEST_CSRF}")
 }
 
 fn auth_and_csrf(auth_cookie: &str) -> String {
-    format!("{}; crap_csrf={}", auth_cookie, TEST_CSRF)
+    format!("{auth_cookie}; crap_csrf={TEST_CSRF}")
 }
 
 async fn body_string(body: Body) -> String {
@@ -227,7 +241,7 @@ fn make_bearer_token(app: &TestApp, user_id: &str, email: &str) -> String {
         .build()
         .unwrap();
     let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();
-    format!("Bearer {}", token)
+    format!("Bearer {token}")
 }
 
 fn make_locale_config() -> LocaleConfig {
@@ -365,30 +379,27 @@ fn build_multipart_body(
     let boundary = "----CrapTestBoundary";
     let mut body = Vec::new();
 
-    body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
     body.extend_from_slice(
-        format!(
-            "Content-Disposition: form-data; name=\"_file\"; filename=\"{}\"\r\n",
-            filename
-        )
-        .as_bytes(),
+        format!("Content-Disposition: form-data; name=\"_file\"; filename=\"{filename}\"\r\n")
+            .as_bytes(),
     );
-    body.extend_from_slice(format!("Content-Type: {}\r\n\r\n", content_type).as_bytes());
+    body.extend_from_slice(format!("Content-Type: {content_type}\r\n\r\n").as_bytes());
     body.extend_from_slice(file_data);
     body.extend_from_slice(b"\r\n");
 
     for (name, value) in fields {
-        body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
         body.extend_from_slice(
-            format!("Content-Disposition: form-data; name=\"{}\"\r\n\r\n", name).as_bytes(),
+            format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
         );
         body.extend_from_slice(value.as_bytes());
         body.extend_from_slice(b"\r\n");
     }
 
-    body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
 
-    let content_type = format!("multipart/form-data; boundary={}", boundary);
+    let content_type = format!("multipart/form-data; boundary={boundary}");
     (content_type, body)
 }
 
@@ -471,7 +482,7 @@ async fn update_localized_collection_redirects_with_locale() {
     let resp = app
         .router
         .oneshot(
-            Request::post(format!("/admin/collections/pages/{}", doc_id))
+            Request::post(format!("/admin/collections/pages/{doc_id}"))
                 .header("cookie", auth_and_csrf(&cookie))
                 .header("X-CSRF-Token", TEST_CSRF)
                 .header("content-type", "application/x-www-form-urlencoded")
@@ -483,8 +494,7 @@ async fn update_localized_collection_redirects_with_locale() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Localized update should succeed, got {}",
-        status
+        "Localized update should succeed, got {status}"
     );
     if status == StatusCode::OK
         && let Some(hx_redir) = resp.headers().get("HX-Redirect")
@@ -492,8 +502,7 @@ async fn update_localized_collection_redirects_with_locale() {
         let redir = hx_redir.to_str().unwrap_or("");
         assert!(
             !redir.contains("locale="),
-            "HX-Redirect should not contain locale= (cookie-based now), got {}",
-            redir
+            "HX-Redirect should not contain locale= (cookie-based now), got {redir}"
         );
     }
 }
@@ -542,8 +551,7 @@ async fn create_action_nonexistent_collection_redirects() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::FOUND,
-        "Create on nonexistent collection should redirect, got {}",
-        status
+        "Create on nonexistent collection should redirect, got {status}"
     );
 }
 
@@ -608,8 +616,7 @@ async fn create_action_missing_required_field_shows_errors() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Validation error should re-render form or redirect, got {}",
-        status
+        "Validation error should re-render form or redirect, got {status}"
     );
 }
 
@@ -646,7 +653,7 @@ async fn edit_form_auth_collection_includes_password() {
     let resp = app
         .router
         .oneshot(
-            Request::get(format!("/admin/collections/users/{}", user_id))
+            Request::get(format!("/admin/collections/users/{user_id}"))
                 .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -750,8 +757,7 @@ async fn post_with_method_delete_deletes_document() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "DELETE via _method should succeed, got {}",
-        status
+        "DELETE via _method should succeed, got {status}"
     );
 }
 
@@ -801,8 +807,7 @@ async fn delete_action_nonexistent_collection_redirects() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Delete on nonexistent collection should redirect, got {}",
-        status
+        "Delete on nonexistent collection should redirect, got {status}"
     );
 }
 
@@ -938,7 +943,7 @@ async fn edit_form_with_non_default_locale() {
     let resp = app
         .router
         .oneshot(
-            Request::get(format!("/admin/collections/pages/{}", doc_id))
+            Request::get(format!("/admin/collections/pages/{doc_id}"))
                 .header("cookie", format!("{}; crap_editor_locale=de", &cookie))
                 .body(Body::empty())
                 .unwrap(),
@@ -976,7 +981,7 @@ async fn update_action_with_locale() {
     let resp = app
         .router
         .oneshot(
-            Request::post(format!("/admin/collections/pages/{}", doc_id))
+            Request::post(format!("/admin/collections/pages/{doc_id}"))
                 .header("cookie", auth_and_csrf(&cookie))
                 .header("X-CSRF-Token", TEST_CSRF)
                 .header("content-type", "application/x-www-form-urlencoded")
@@ -988,8 +993,7 @@ async fn update_action_with_locale() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Update with locale should succeed, got {}",
-        status
+        "Update with locale should succeed, got {status}"
     );
 }
 
@@ -1132,7 +1136,7 @@ async fn admin_upload_edit_form_renders_focal_point_preview() {
     let edit_resp = app
         .router
         .oneshot(
-            Request::get(format!("/admin/collections/media/{}", doc_id))
+            Request::get(format!("/admin/collections/media/{doc_id}"))
                 .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -1161,9 +1165,9 @@ async fn upload_api_create_no_file_returns_400() {
 
     let boundary = "----CrapTestBoundary";
     let mut body = Vec::new();
-    body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
     body.extend_from_slice(b"Content-Disposition: form-data; name=\"alt\"\r\n\r\nsome text\r\n");
-    body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
 
     let resp = app
         .router
@@ -1171,7 +1175,7 @@ async fn upload_api_create_no_file_returns_400() {
             Request::post("/api/upload/media")
                 .header(
                     "content-type",
-                    format!("multipart/form-data; boundary={}", boundary),
+                    format!("multipart/form-data; boundary={boundary}"),
                 )
                 .header("authorization", &bearer)
                 .header("Cookie", csrf_cookie())
@@ -1316,7 +1320,7 @@ async fn upload_api_update_replaces_file() {
         .router
         .clone()
         .oneshot(
-            Request::patch(format!("/api/upload/media/{}", doc_id))
+            Request::patch(format!("/api/upload/media/{doc_id}"))
                 .header("content-type", ct2)
                 .header("authorization", &bearer)
                 .header("Cookie", csrf_cookie())
@@ -1371,7 +1375,7 @@ async fn upload_api_delete_returns_success() {
         .router
         .clone()
         .oneshot(
-            Request::delete(format!("/api/upload/media/{}", doc_id))
+            Request::delete(format!("/api/upload/media/{doc_id}"))
                 .header("authorization", &bearer)
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)

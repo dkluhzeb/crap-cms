@@ -6,6 +6,11 @@ use std::path::Path;
 use crate::{cli, config, hooks, typegen};
 
 /// Handle the `typegen` subcommand — loads the Lua registry and generates types.
+///
+/// # Errors
+///
+/// Returns an error if the language string is unknown, config loading,
+/// Lua init, or writing the output file fails.
 pub fn run(
     config_dir: &Path,
     lang_str: &str,
@@ -29,10 +34,7 @@ pub fn run(
         }
     } else {
         let lang = typegen::Language::from_name(lang_str).ok_or_else(|| {
-            anyhow!(
-                "Unknown language '{}'. Valid: lua, ts, go, py, rs, all",
-                lang_str
-            )
+            anyhow!("Unknown language '{lang_str}'. Valid: lua, ts, go, py, rs, all")
         })?;
 
         let path = typegen::generate_lang(&config_dir, &registry, lang, output_dir)

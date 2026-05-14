@@ -34,14 +34,19 @@ impl RelationshipConfig {
     }
 
     /// Returns true if this relationship targets multiple collections.
+    #[must_use]
     pub fn is_polymorphic(&self) -> bool {
         !self.polymorphic.is_empty()
     }
 
     /// Returns all target collections (polymorphic list, or single `collection`).
+    #[must_use]
     pub fn all_collections(&self) -> Vec<&str> {
         if self.is_polymorphic() {
-            self.polymorphic.iter().map(|s| s.as_ref()).collect()
+            self.polymorphic
+                .iter()
+                .map(std::convert::AsRef::as_ref)
+                .collect()
         } else {
             vec![self.collection.as_ref()]
         }

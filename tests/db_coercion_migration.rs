@@ -1,3 +1,17 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::DocumentFields;
 use crap_cms::core::Registry;
@@ -749,7 +763,7 @@ fn count_all_documents() {
     // Insert 3 documents
     for i in 0..3 {
         let mut data = DocumentFields::new();
-        data.insert("title".to_string(), Value::String(format!("Post {}", i)));
+        data.insert("title".to_string(), Value::String(format!("Post {i}")));
         let mut conn = pool.get().expect("DB connection");
         let tx = conn.transaction().expect("Start transaction");
         query::create(&tx, "posts", &def, &data, None).expect("Create failed");
@@ -780,7 +794,7 @@ fn count_with_filter() {
     let statuses = ["published", "draft", "published"];
     for (i, status) in statuses.iter().enumerate() {
         let mut data = DocumentFields::new();
-        data.insert("title".to_string(), Value::String(format!("Post {}", i)));
+        data.insert("title".to_string(), Value::String(format!("Post {i}")));
         data.insert("status".to_string(), json!(status));
         let mut conn = pool.get().expect("DB connection");
         let tx = conn.transaction().expect("Start transaction");
@@ -838,7 +852,7 @@ fn ops_count_documents() {
 
     for i in 0..3 {
         let mut data = DocumentFields::new();
-        data.insert("title".to_string(), Value::String(format!("Post {}", i)));
+        data.insert("title".to_string(), Value::String(format!("Post {i}")));
         let mut conn = pool.get().expect("DB connection");
         let tx = conn.transaction().expect("Start transaction");
         query::create(&tx, "posts", &def, &data, None).expect("Create failed");
@@ -980,8 +994,7 @@ fn validate_query_fields_rejects_invalid_filter() {
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("nonexistent_field"),
-        "Error should mention the invalid field name, got: {}",
-        err_msg
+        "Error should mention the invalid field name, got: {err_msg}"
     );
 }
 
@@ -996,8 +1009,7 @@ fn validate_query_fields_rejects_invalid_order() {
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("nonexistent_field"),
-        "Error should mention the invalid field name, got: {}",
-        err_msg
+        "Error should mention the invalid field name, got: {err_msg}"
     );
 }
 
@@ -1066,7 +1078,7 @@ fn create_checkbox_truthy_values() {
         let mut data = DocumentFields::new();
         data.insert(
             "label".to_string(),
-            Value::String(format!("truthy_{}", truthy)),
+            Value::String(format!("truthy_{truthy}")),
         );
         data.insert("active".to_string(), json!(truthy));
         let mut conn = pool.get().expect("conn");
@@ -1076,8 +1088,7 @@ fn create_checkbox_truthy_values() {
         assert_eq!(
             doc.get("active").unwrap().as_i64(),
             Some(1),
-            "Checkbox value '{}' should coerce to 1",
-            truthy
+            "Checkbox value '{truthy}' should coerce to 1"
         );
     }
 }
@@ -1106,10 +1117,7 @@ fn create_checkbox_falsy_values() {
     // All falsy values should store as 0
     for falsy in &["off", "false", "0"] {
         let mut data = DocumentFields::new();
-        data.insert(
-            "label".to_string(),
-            Value::String(format!("falsy_{}", falsy)),
-        );
+        data.insert("label".to_string(), Value::String(format!("falsy_{falsy}")));
         data.insert("active".to_string(), json!(falsy));
         let mut conn = pool.get().expect("conn");
         let tx = conn.transaction().expect("tx");
@@ -1118,8 +1126,7 @@ fn create_checkbox_falsy_values() {
         assert_eq!(
             doc.get("active").unwrap().as_i64(),
             Some(0),
-            "Checkbox value '{}' should coerce to 0",
-            falsy
+            "Checkbox value '{falsy}' should coerce to 0"
         );
     }
 }

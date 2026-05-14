@@ -12,10 +12,14 @@ impl HelperDef for ContainsHelper {
         _ctx: &'rc handlebars::Context,
         _rc: &mut RenderContext<'reg, 'rc>,
     ) -> Result<ScopedJson<'rc>, RenderError> {
-        let haystack = h.param(0).map(|p| p.value()).unwrap_or(&Value::Null);
-        let needle = h.param(1).map(|p| p.value()).unwrap_or(&Value::Null);
+        let haystack = h
+            .param(0)
+            .map_or(&Value::Null, handlebars::PathAndJson::value);
+        let needle = h
+            .param(1)
+            .map_or(&Value::Null, handlebars::PathAndJson::value);
         let result = match haystack {
-            Value::String(s) => needle.as_str().map(|n| s.contains(n)).unwrap_or(false),
+            Value::String(s) => needle.as_str().is_some_and(|n| s.contains(n)),
             Value::Array(arr) => arr.contains(needle),
             _ => false,
         };

@@ -34,7 +34,7 @@ pub(crate) fn has_field_hooks_for_event(
 }
 
 /// Shared implementation for `run_field_hooks` and `run_field_hooks_with_conn`.
-/// Caller is responsible for locking the Lua VM and (optionally) setting TxContext.
+/// Caller is responsible for locking the Lua VM and (optionally) setting `TxContext`.
 pub(crate) fn run_field_hooks_inner(
     lua: &Lua,
     data: &mut DocumentFields,
@@ -51,7 +51,7 @@ struct FieldHookWalker<'a> {
     call: &'a FieldHooksCall<'a>,
 }
 
-impl<'a> FieldHookWalker<'a> {
+impl FieldHookWalker<'_> {
     /// Recursive field-hook execution with prefix support for nested structures.
     /// Group accumulates prefix (`group__`), Row/Collapsible/Tabs pass through transparently.
     fn walk(
@@ -116,7 +116,7 @@ impl<'a> FieldHookWalker<'a> {
             current = call_field_hook_ref(
                 self.lua,
                 hook_ref,
-                current,
+                &current,
                 &data_key,
                 self.call.collection,
                 self.call.operation,
@@ -184,7 +184,7 @@ pub(crate) fn get_field_hook_refs<'a>(
 pub(crate) fn call_field_hook_ref(
     lua: &Lua,
     hook_ref: &str,
-    value: JsonValue,
+    value: &JsonValue,
     field_name: &str,
     collection: &str,
     operation: &str,
@@ -193,7 +193,7 @@ pub(crate) fn call_field_hook_ref(
     let func = resolve_hook_function(lua, hook_ref)?;
 
     // Convert the field value to Lua
-    let lua_value = lua_api::json_to_lua(lua, &value)?;
+    let lua_value = lua_api::json_to_lua(lua, value)?;
 
     // Build context table
     let ctx_table = lua.create_table()?;
@@ -229,7 +229,7 @@ pub(crate) fn call_field_hook_ref(
 
     // Convert result back to JSON
     lua_api::lua_to_json(&result)
-        .map_err(|e| anyhow!("Field hook '{}' returned invalid value: {}", hook_ref, e))
+        .map_err(|e| anyhow!("Field hook '{hook_ref}' returned invalid value: {e}"))
 }
 
 #[cfg(test)]
@@ -265,7 +265,7 @@ mod tests {
         let result = call_field_hook_ref(
             &lua,
             "hooks.upper",
-            json!("hello"),
+            &json!("hello"),
             "title",
             "posts",
             "create",
@@ -300,7 +300,7 @@ mod tests {
         let result = call_field_hook_ref(
             &lua,
             "hooks.trim",
-            JsonValue::Null,
+            &JsonValue::Null,
             "title",
             "posts",
             "update",
@@ -423,7 +423,7 @@ mod tests {
         let result = call_field_hook_ref(
             &lua,
             "hooks.inspect_ctx",
-            json!("hello"),
+            &json!("hello"),
             "title",
             "posts",
             "create",
@@ -434,7 +434,7 @@ mod tests {
         assert_eq!(result, json!("posts:title:create"));
     }
 
-    /// Regression: has_any_field_hook must find hooks inside Group/Row/Tabs.
+    /// Regression: `has_any_field_hook` must find hooks inside Group/Row/Tabs.
     #[test]
     fn has_any_field_hook_finds_nested_hooks() {
         let mut inner = FieldDefinition::builder("inner", FieldType::Text).build();

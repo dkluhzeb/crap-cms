@@ -18,6 +18,11 @@ type Result<T> = std::result::Result<T, ServiceError>;
 ///
 /// Runs the full lifecycle: before-write hooks -> persist -> after-write hooks.
 /// Does NOT manage transactions — caller must open/commit.
+///
+/// # Errors
+///
+/// Returns service-layer errors (access denied, validation, hook errors) or
+/// a backend error if persistence fails.
 pub fn create_document_in_conn(
     ctx: &ServiceContext,
     mut input: WriteInput<'_>,

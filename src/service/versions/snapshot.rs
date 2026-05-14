@@ -17,7 +17,7 @@ pub(crate) struct VersionSnapshotCtx<'a> {
 }
 
 impl<'a> VersionSnapshotCtx<'a> {
-    /// Create a builder with the required table and parent_id fields.
+    /// Create a builder with the required table and `parent_id` fields.
     pub fn builder(table: &'a str, parent_id: &'a str) -> VersionSnapshotCtxBuilder<'a> {
         VersionSnapshotCtxBuilder::new(table, parent_id)
     }
@@ -85,7 +85,7 @@ pub(crate) fn create_version_snapshot(
     Ok(())
 }
 
-/// Prune versions if max_versions is configured and > 0.
+/// Prune versions if `max_versions` is configured and > 0.
 pub(crate) fn prune_versions(
     conn: &dyn DbConnection,
     table: &str,

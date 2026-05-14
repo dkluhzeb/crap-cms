@@ -23,7 +23,7 @@ pub struct AfterReadCtx<'a> {
 }
 
 /// Inner implementation of `apply_after_read` — operates on a locked `&Lua`.
-/// Runs field-level after_read hooks, then collection-level, then global registered.
+/// Runs field-level `after_read` hooks, then collection-level, then global registered.
 /// On error: logs warning, returns original doc unmodified.
 pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Document) -> Document {
     let has_field_hooks = has_any_field_hook(ctx.fields, &FieldHookEvent::AfterRead);
@@ -73,7 +73,7 @@ pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Documen
         .build();
 
     // Run collection-level + global registered hooks
-    let hook_refs = get_hook_refs(ctx.hooks, &HookEvent::AfterRead);
+    let hook_refs = get_hook_refs(ctx.hooks, HookEvent::AfterRead);
     let result = (|| -> Result<HookContext> {
         let mut context = hook_ctx;
 
@@ -81,7 +81,7 @@ pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Documen
             context = call_hook_ref(lua, hook_ref, context)?;
         }
 
-        context = call_registered_hooks(lua, &HookEvent::AfterRead, context)?;
+        context = call_registered_hooks(lua, HookEvent::AfterRead, context)?;
 
         Ok(context)
     })();
@@ -94,11 +94,11 @@ pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Documen
 
             let created_at = fields
                 .remove("created_at")
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .and_then(|v| v.as_str().map(std::string::ToString::to_string))
                 .or(doc.created_at.clone());
             let updated_at = fields
                 .remove("updated_at")
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .and_then(|v| v.as_str().map(std::string::ToString::to_string))
                 .or(doc.updated_at.clone());
 
             DocumentBuilder::new(doc.id)

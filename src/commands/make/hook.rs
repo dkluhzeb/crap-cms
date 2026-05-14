@@ -32,11 +32,12 @@ pub(super) fn run_hook(config_dir: &Path, action: MakeAction) -> Result<()> {
     let hook_type = resolve_hook_type(hook_type)?;
     let registry = try_load_registry(config_dir);
 
-    let (collection, is_global) = resolve_hook_collection(collection, &registry)?;
-    let position = resolve_hook_position(position, &hook_type)?;
-    let field = resolve_hook_field(field, &hook_type, &registry, &collection)?;
+    let (collection, is_global) = resolve_hook_collection(collection, registry.as_ref())?;
+    let position = resolve_hook_position(position, hook_type)?;
+    let field = resolve_hook_field(field, hook_type, registry.as_ref(), &collection)?;
     let name = resolve_hook_name(name, &position)?;
-    let condition_field = resolve_condition_field(&hook_type, &field, &registry, &collection)?;
+    let condition_field =
+        resolve_condition_field(hook_type, field.as_ref(), registry.as_ref(), &collection)?;
 
     let opts = MakeHookOptions {
         config_dir,
@@ -56,29 +57,25 @@ pub(super) fn run_hook(config_dir: &Path, action: MakeAction) -> Result<()> {
 /// Resolve hook type from CLI arg or interactive prompt.
 #[cfg(not(tarpaulin_include))]
 fn resolve_hook_type(hook_type: Option<String>) -> Result<HookType> {
-    match hook_type {
-        Some(t) => HookType::from_name(&t).ok_or_else(|| {
-            anyhow!(
-                "Unknown hook type '{}' — valid: collection, field, access, condition",
-                t
-            )
-        }),
-        None => {
-            let items = &["Collection", "Field", "Access", "Condition"];
-            let selection = Select::with_theme(&crap_theme())
-                .with_prompt("Hook type")
-                .items(items)
-                .default(0)
-                .interact()
-                .context("Failed to read hook type selection")?;
+    if let Some(t) = hook_type {
+        HookType::from_name(&t).ok_or_else(|| {
+            anyhow!("Unknown hook type '{t}' — valid: collection, field, access, condition")
+        })
+    } else {
+        let items = &["Collection", "Field", "Access", "Condition"];
+        let selection = Select::with_theme(&crap_theme())
+            .with_prompt("Hook type")
+            .items(items)
+            .default(0)
+            .interact()
+            .context("Failed to read hook type selection")?;
 
-            Ok(match selection {
-                0 => HookType::Collection,
-                1 => HookType::Field,
-                2 => HookType::Access,
-                _ => HookType::Condition,
-            })
-        }
+        Ok(match selection {
+            0 => HookType::Collection,
+            1 => HookType::Field,
+            2 => HookType::Access,
+            _ => HookType::Condition,
+        })
     }
 }
 
@@ -88,25 +85,27 @@ fn resolve_hook_type(hook_type: Option<String>) -> Result<HookType> {
 #[cfg(not(tarpaulin_include))]
 fn resolve_hook_collection(
     collection: Option<String>,
-    registry: &Option<Arc<Registry>>,
+    registry: Option<&Arc<Registry>>,
 ) -> Result<(String, bool)> {
     if let Some(c) = collection {
-        let is_global = registry
-            .as_ref()
-            .map(|r| &**r)
-            .map(|reg| reg.globals.contains_key(c.as_str()))
-            .unwrap_or(false);
+        let is_global = registry.is_some_and(|reg| reg.globals.contains_key(c.as_str()));
 
         return Ok((c, is_global));
     }
 
     let (collection_slugs, global_slugs) = registry
-        .as_ref()
-        .map(|r| &**r)
         .map(|reg| {
-            let mut cs: Vec<String> = reg.collections.keys().map(|s| s.to_string()).collect();
+            let mut cs: Vec<String> = reg
+                .collections
+                .keys()
+                .map(std::string::ToString::to_string)
+                .collect();
             cs.sort();
-            let mut gs: Vec<String> = reg.globals.keys().map(|s| s.to_string()).collect();
+            let mut gs: Vec<String> = reg
+                .globals
+                .keys()
+                .map(std::string::ToString::to_string)
+                .collect();
             gs.sort();
             (cs, gs)
         })
@@ -125,7 +124,7 @@ fn resolve_hook_collection(
     let global_offset = items.len();
 
     for g in &global_slugs {
-        items.push(format!("{} (global)", g));
+        items.push(format!("{g} (global)"));
     }
 
     let selection = Select::with_theme(&crap_theme())
@@ -144,41 +143,38 @@ fn resolve_hook_collection(
 
 /// Resolve lifecycle position from CLI arg or interactive prompt.
 #[cfg(not(tarpaulin_include))]
-fn resolve_hook_position(position: Option<String>, hook_type: &HookType) -> Result<String> {
-    match position {
-        Some(p) => {
-            if !hook_type.valid_positions().contains(&p.as_str()) {
-                bail!(
-                    "Invalid position '{}' for {} hook — valid: {}",
-                    p,
-                    hook_type.label(),
-                    hook_type.valid_positions().join(", ")
-                );
-            }
-            Ok(p)
+fn resolve_hook_position(position: Option<String>, hook_type: HookType) -> Result<String> {
+    if let Some(p) = position {
+        if !hook_type.valid_positions().contains(&p.as_str()) {
+            bail!(
+                "Invalid position '{}' for {} hook — valid: {}",
+                p,
+                hook_type.label(),
+                hook_type.valid_positions().join(", ")
+            );
         }
-        None => {
-            let positions = hook_type.valid_positions();
+        Ok(p)
+    } else {
+        let positions = hook_type.valid_positions();
 
-            if positions.len() == 1 {
-                return Ok(positions[0].to_string());
-            }
-
-            let prompt = if *hook_type == HookType::Condition {
-                "Return type"
-            } else {
-                "Lifecycle position"
-            };
-
-            let selection = Select::with_theme(&crap_theme())
-                .with_prompt(prompt)
-                .items(positions)
-                .default(0)
-                .interact()
-                .context("Failed to read position selection")?;
-
-            Ok(positions[selection].to_string())
+        if positions.len() == 1 {
+            return Ok(positions[0].to_string());
         }
+
+        let prompt = if hook_type == HookType::Condition {
+            "Return type"
+        } else {
+            "Lifecycle position"
+        };
+
+        let selection = Select::with_theme(&crap_theme())
+            .with_prompt(prompt)
+            .items(positions)
+            .default(0)
+            .interact()
+            .context("Failed to read position selection")?;
+
+        Ok(positions[selection].to_string())
     }
 }
 
@@ -186,11 +182,11 @@ fn resolve_hook_position(position: Option<String>, hook_type: &HookType) -> Resu
 #[cfg(not(tarpaulin_include))]
 fn resolve_hook_field(
     field: Option<String>,
-    hook_type: &HookType,
-    registry: &Option<Arc<Registry>>,
+    hook_type: HookType,
+    registry: Option<&Arc<Registry>>,
     collection: &str,
 ) -> Result<Option<String>> {
-    if *hook_type != HookType::Field {
+    if hook_type != HookType::Field {
         return Ok(field);
     }
 
@@ -198,7 +194,7 @@ fn resolve_hook_field(
         return Ok(Some(f));
     }
 
-    let field_names: Option<Vec<String>> = registry.as_ref().map(|r| &**r).and_then(|reg| {
+    let field_names: Option<Vec<String>> = registry.map(|r| &**r).and_then(|reg| {
         reg.get_collection(collection)
             .map(|def| def.fields.iter().map(|f| f.name.clone()).collect())
     });
@@ -238,12 +234,12 @@ fn resolve_hook_name(name: Option<String>, position: &str) -> Result<String> {
 /// Resolve condition field info for condition hooks.
 #[cfg(not(tarpaulin_include))]
 fn resolve_condition_field(
-    hook_type: &HookType,
-    field: &Option<String>,
-    registry: &Option<Arc<Registry>>,
+    hook_type: HookType,
+    field: Option<&String>,
+    registry: Option<&Arc<Registry>>,
     collection: &str,
 ) -> Result<Option<ConditionFieldInfo>> {
-    if *hook_type != HookType::Condition {
+    if hook_type != HookType::Condition {
         return Ok(None);
     }
 
@@ -283,10 +279,10 @@ fn resolve_condition_field(
 
 /// Load condition-eligible field infos from the registry.
 pub(super) fn load_field_infos_from_registry(
-    registry: &Option<Arc<Registry>>,
+    registry: Option<&Arc<Registry>>,
     collection: &str,
 ) -> Option<Vec<ConditionFieldInfo>> {
-    let reg = registry.as_ref()?;
+    let reg = registry?;
     let def = reg.get_collection(collection)?;
 
     Some(

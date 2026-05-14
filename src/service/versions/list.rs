@@ -13,6 +13,10 @@ use crate::{
 ///
 /// Checks read access before listing. Returns paginated result with page metadata.
 /// Derives the version table name from `ctx.slug` + `ctx.def`.
+///
+/// # Errors
+///
+/// Returns `AccessDenied` or `HookError`, or a backend error if the SELECT fails.
 pub fn list_versions(
     ctx: &ServiceContext,
     input: &ListVersionsInput,
@@ -86,7 +90,7 @@ mod tests {
         },
     };
 
-    /// Noop implementation of ReadHooks for unit tests — always allows access.
+    /// Noop implementation of `ReadHooks` for unit tests — always allows access.
     struct NoopReadHooks;
 
     impl ReadHooks for NoopReadHooks {
@@ -117,7 +121,7 @@ mod tests {
         }
     }
 
-    /// Noop implementation of WriteHooks for unit tests — always allows access.
+    /// Noop implementation of `WriteHooks` for unit tests — always allows access.
     struct NoopWriteHooks;
 
     impl WriteHooks for NoopWriteHooks {

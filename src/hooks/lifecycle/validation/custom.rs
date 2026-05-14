@@ -56,8 +56,6 @@ pub(super) fn run_validate_function_inner(
 
     let result: Value = func.call((lua_value, ctx_table))?;
     match result {
-        Value::Nil => Ok(None),
-        Value::Boolean(true) => Ok(None),
         Value::Boolean(false) => Ok(Some("validation failed".to_string())),
         Value::String(s) => Ok(Some(s.to_str()?.to_string())),
         _ => Ok(None),

@@ -8,7 +8,7 @@ use crate::{
     hooks::lifecycle::run_before_validate_on_node_attrs,
 };
 
-/// Run richtext node attr before_validate hooks on all richtext fields in the data map.
+/// Run richtext node attr `before_validate` hooks on all richtext fields in the data map.
 /// Used by both `LuaWriteHooks` and `update_many`.
 /// Walks the field tree to find richtext fields with custom nodes, then runs
 /// `run_before_validate_on_node_attrs` on each field's content.
@@ -29,8 +29,7 @@ pub(crate) fn apply_richtext_before_validate(
         f.admin.nodes.iter().any(|node_name| {
             registry
                 .get_richtext_node(node_name)
-                .map(|nd| nd.attrs.iter().any(|a| !a.hooks.before_validate.is_empty()))
-                .unwrap_or(false)
+                .is_some_and(|nd| nd.attrs.iter().any(|a| !a.hooks.before_validate.is_empty()))
         })
     });
 

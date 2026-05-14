@@ -32,7 +32,7 @@ pub struct GlobalDefinition {
     /// Real-time update settings for this global.
     #[serde(default)]
     pub live: Option<LiveSetting>,
-    /// Controls what data events carry (metadata-only or full with after_read hooks).
+    /// Controls what data events carry (metadata-only or full with `after_read` hooks).
     #[serde(default)]
     pub live_mode: LiveMode,
     /// Versioning and draft configuration.
@@ -55,11 +55,13 @@ impl GlobalDefinition {
     }
 
     /// Get the display label (singular form, falls back to slug). Uses default resolution.
+    #[must_use]
     pub fn display_name(&self) -> &str {
         resolve_label(self.labels.singular.as_ref(), &self.slug, None)
     }
 
     /// Get the display label resolved for a specific locale.
+    #[must_use]
     pub fn display_name_for(&self, locale: &str, default_locale: &str) -> &str {
         resolve_label(
             self.labels.singular.as_ref(),
@@ -69,11 +71,13 @@ impl GlobalDefinition {
     }
 
     /// Check if this global has versioning enabled.
+    #[must_use]
     pub fn has_versions(&self) -> bool {
         self.versions.is_some()
     }
 
     /// Check if this global has drafts enabled (versioning with drafts flag).
+    #[must_use]
     pub fn has_drafts(&self) -> bool {
         self.versions.as_ref().is_some_and(|v| v.drafts)
     }
@@ -186,48 +190,56 @@ impl GlobalDefinitionBuilder {
     }
 
     /// Set localized labels for the global.
+    #[must_use]
     pub fn labels(mut self, v: Labels) -> Self {
         self.inner.labels = v;
         self
     }
 
     /// Set the fields for this global.
+    #[must_use]
     pub fn fields(mut self, v: Vec<FieldDefinition>) -> Self {
         self.inner.fields = v;
         self
     }
 
     /// Set the hooks for this global.
+    #[must_use]
     pub fn hooks(mut self, v: Hooks) -> Self {
         self.inner.hooks = v;
         self
     }
 
     /// Set access control configuration for this global.
+    #[must_use]
     pub fn access(mut self, v: Access) -> Self {
         self.inner.access = v;
         self
     }
 
     /// Set MCP (Model Context Protocol) configuration for this global.
+    #[must_use]
     pub fn mcp(mut self, v: McpConfig) -> Self {
         self.inner.mcp = v;
         self
     }
 
     /// Set live update settings for this global.
+    #[must_use]
     pub fn live(mut self, v: LiveSetting) -> Self {
         self.inner.live = Some(v);
         self
     }
 
     /// Enable and configure versioning/drafts for this global.
+    #[must_use]
     pub fn versions(mut self, v: VersionsConfig) -> Self {
         self.inner.versions = Some(v);
         self
     }
 
     /// Build the final `GlobalDefinition`.
+    #[must_use]
     pub fn build(self) -> GlobalDefinition {
         self.inner
     }

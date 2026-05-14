@@ -53,7 +53,7 @@ impl Default for CorsConfig {
 }
 
 impl CorsConfig {
-    /// Build a tower-http CorsLayer from this config. Returns None if no origins configured.
+    /// Build a tower-http `CorsLayer` from this config. Returns `None` if no origins configured.
     pub fn build_layer(&self) -> Option<CorsLayer> {
         if self.allowed_origins.is_empty() {
             return None;

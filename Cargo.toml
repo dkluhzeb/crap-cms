@@ -185,6 +185,32 @@ tonic-prost-build = "0.14"
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin)', 'cfg(tarpaulin_include)', 'cfg(feature, values("browser-tests", "sqlite", "postgres", "s3-storage", "redis"))'] }
 
+[lints.clippy]
+# Pedantic at warn-level. We fix what we can — suppressions get added
+# below only after we've examined the warnings and decided the rule
+# isn't worth following in this codebase.
+pedantic = { level = "warn", priority = -1 }
+
+# crap-cms is a binary, not a library. The lint exists to keep public
+# library APIs hasher-generic so downstream crates can pass HashMaps
+# with custom hashers (AHash, FxHash, …). We have no external callers,
+# every HashMap in this crate uses the default RandomState, and the
+# `DocumentFields` newtype would need a hasher type param threaded
+# through dozens of files for zero practical flexibility.
+implicit_hasher = "allow"
+
+# The lint targets positional bool soup. All our hits are named-field
+# records: Serialize/JsonSchema view models accessed by name in
+# Handlebars (`{{#if perms.read}}`), TOML config records
+# (`PasswordPolicy`, `Auth`, `FieldDefinition`), clap-derived CLI
+# options (`CollectionOptions`), and struct-of-args bundles we
+# created specifically to defeat positional bool args
+# (`CursorFlags`, `PaginationInputs`, `FindDocumentsInput`).
+# Refactoring would break serde formats, template access, or CLI
+# surfaces — and the struct-of-args bundles literally exist to
+# undo `needless_pass_by_value`. No call site uses positional booleans.
+struct_excessive_bools = "allow"
+
 [profile.release]
 lto = true
 codegen-units = 1

@@ -64,7 +64,7 @@ pub async fn undelete_action(
         runner: state.hook_runner.clone(),
         slug: slug.clone(),
         def,
-        user_doc: get_user_doc(&auth_user).cloned(),
+        user_doc: get_user_doc(auth_user.as_ref()).cloned(),
         event_transport: state.event_transport.clone(),
         cache: state.cache.clone(),
         id: id.clone(),
@@ -86,7 +86,7 @@ pub async fn undelete_action(
 
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Undelete failed: {}", e),
+                format!("Undelete failed: {e}"),
             )
                 .into_response()
         }
@@ -95,7 +95,7 @@ pub async fn undelete_action(
 
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Undelete failed: {}", e),
+                format!("Undelete failed: {e}"),
             )
                 .into_response()
         }

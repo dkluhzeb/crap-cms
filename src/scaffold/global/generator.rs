@@ -22,6 +22,11 @@ struct GlobalTemplateContext<'a> {
 /// Generate a global Lua file at `<config_dir>/globals/<slug>.lua`.
 ///
 /// Accepts pre-parsed field stubs or `None` for defaults.
+///
+/// # Errors
+///
+/// Returns an error if the slug is invalid, the file already exists without
+/// `--force`, or writing the file fails.
 pub fn make_global(
     config_dir: &Path,
     slug: &str,
@@ -33,7 +38,7 @@ pub fn make_global(
     let globals_dir = paths::globals_dir(config_dir);
     fs::create_dir_all(&globals_dir).context("Failed to create globals/ directory")?;
 
-    let file_path = globals_dir.join(format!("{}.lua", slug));
+    let file_path = globals_dir.join(format!("{slug}.lua"));
     refuse_file_overwrite(&file_path, force)?;
 
     let lua = render_global_lua(slug, fields)?;
@@ -51,17 +56,16 @@ fn render_global_lua(slug: &str, fields: Option<&[FieldStub]>) -> Result<String>
     let label = to_title_case(slug);
 
     let default_fields;
-    let fields = match fields {
-        Some(f) => f,
-        None => {
-            default_fields = [FieldStub::builder("title", "text").required(true).build()];
-            &default_fields
-        }
+    let fields = if let Some(f) = fields {
+        f
+    } else {
+        default_fields = [FieldStub::builder("title", "text").required(true).build()];
+        &default_fields
     };
 
     let mut fields_lua = String::new();
     for field in fields {
-        write_field_lua(&mut fields_lua, field, 8);
+        write_field_lua(&mut fields_lua, field, 2);
     }
 
     render(

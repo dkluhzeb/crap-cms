@@ -11,6 +11,11 @@ use crate::{
 
 /// Persist the DB write phase of a normal (non-draft) update operation.
 /// Performs: update -> join data -> password -> version snapshot (published).
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE, join-table writes, or version
+/// snapshot creation fails.
 pub fn persist_update(
     ctx: &ServiceContext,
     id: &str,
@@ -65,7 +70,7 @@ pub fn persist_update(
 
     // Ref count last: minimizes row-level lock hold time on shared targets.
     if let Some(old_refs) = old_refs {
-        query::ref_count::after_update(conn, slug, &doc.id, &def.fields, &locale_cfg, old_refs)?;
+        query::ref_count::after_update(conn, slug, &doc.id, &def.fields, &locale_cfg, &old_refs)?;
     }
 
     Ok(doc)
@@ -74,7 +79,7 @@ pub fn persist_update(
 /// Persist the DB write phase of a single document in a bulk update.
 ///
 /// Handles: partial update -> join data -> ref count adjustment -> FTS sync -> version snapshot.
-/// Used by both gRPC UpdateMany and Lua update_many to avoid duplicating per-doc persistence logic.
+/// Used by both gRPC `UpdateMany` and Lua `update_many` to avoid duplicating per-doc persistence logic.
 pub(crate) fn persist_bulk_update(
     ctx: &ServiceContext,
     id: &str,
@@ -121,7 +126,7 @@ pub(crate) fn persist_bulk_update(
 
     // Ref count last: minimizes row-level lock hold time on shared targets.
     if let Some(old_refs) = old_refs {
-        query::ref_count::after_update(conn, ctx.slug, id, &def.fields, locale_config, old_refs)?;
+        query::ref_count::after_update(conn, ctx.slug, id, &def.fields, locale_config, &old_refs)?;
     }
 
     Ok(updated)

@@ -39,7 +39,13 @@ pub async fn validate_global(
         None => return validation_error_response_simple("Global not found"),
     };
 
-    match check_access_or_forbid(&state, def.access.update.as_deref(), &auth_user, None, None) {
+    match check_access_or_forbid(
+        &state,
+        def.access.update.as_deref(),
+        auth_user.as_ref(),
+        None,
+        None,
+    ) {
         Ok(AccessResult::Denied) => return validation_error_response_simple("Access denied"),
         Err(_) => return validation_error_response_simple("Access check failed"),
         _ => {}
@@ -62,7 +68,7 @@ pub async fn validate_global(
     let runner = state.hook_runner.clone();
     let slug_owned = slug.clone();
     let def_owned = def.clone();
-    let user_doc = get_user_doc(&auth_user).cloned();
+    let user_doc = get_user_doc(auth_user.as_ref()).cloned();
 
     let result = task::spawn_blocking(move || {
         run_validation(&RunValidationParams {
@@ -83,5 +89,5 @@ pub async fn validate_global(
     })
     .await;
 
-    handle_validation_result(result, &auth_user, &state)
+    handle_validation_result(result, auth_user.as_ref(), &state)
 }

@@ -35,11 +35,11 @@ return function(context)
 end
 "#;
 
-const ACCESS_AUTHENTICATED: &str = r#"
+const ACCESS_AUTHENTICATED: &str = r"
 return function(context)
     return context.user ~= nil
 end
-"#;
+";
 
 /// Build a `posts` collection with editor-restricted create/update and
 /// admin-only delete — matches the shape of the example's `pages` /

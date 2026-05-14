@@ -1,6 +1,8 @@
 //! Top-level [`find`] orchestrator and the small SELECT/limit/map helpers
 //! that don't fit the cursor or sort submodules.
 
+use std::fmt::Write as _;
+
 use anyhow::{Context as _, Result};
 
 use super::cursor::{SortInfo, apply_cursor_keyset};
@@ -18,6 +20,11 @@ use crate::db::{
 };
 
 /// Find documents matching a query.
+///
+/// # Errors
+///
+/// Returns an error if any filter/sort field is invalid, or a backend error
+/// if the SELECT, row parsing, or hydration fails.
 pub fn find(
     conn: &dyn DbConnection,
     slug: &str,
@@ -146,13 +153,13 @@ fn apply_limit_offset(
     if let Some(limit) = query.limit {
         let ph = conn.placeholder(params.len() + 1);
         params.push(DbValue::Integer(limit.max(0)));
-        sql.push_str(&format!(" LIMIT {ph}"));
+        let _ = write!(sql, " LIMIT {ph}");
     }
 
     if let Some(offset) = query.offset {
         let ph = conn.placeholder(params.len() + 1);
         params.push(DbValue::Integer(offset.max(0)));
-        sql.push_str(&format!(" OFFSET {ph}"));
+        let _ = write!(sql, " OFFSET {ph}");
     }
 }
 
@@ -187,6 +194,20 @@ fn map_rows(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use serde_json::{Value, json};
     use tempfile::TempDir;
@@ -505,9 +526,7 @@ mod tests {
             &[
                 DbValue::Text(id.to_string()),
                 DbValue::Text(id.to_string()),
-                published_at
-                    .map(|s| DbValue::Text(s.to_string()))
-                    .unwrap_or(DbValue::Null),
+                published_at.map_or(DbValue::Null, |s| DbValue::Text(s.to_string())),
                 DbValue::Text(status.to_string()),
             ],
         )
@@ -516,7 +535,7 @@ mod tests {
 
     /// Regression for the "drafts hide on page 2" UX bug. With
     /// `default_sort = "-published_at"` on a drafts-enabled collection,
-    /// drafts have NULL `published_at` and SQLite sorts NULLs LAST in
+    /// drafts have NULL `published_at` and `SQLite` sorts NULLs LAST in
     /// DESC. With page-1 limits in the typical 20-row range, drafts
     /// vanish off the bottom of the list — making "All" look like
     /// "published only" until the user explicitly paginates. Fix:
@@ -568,11 +587,11 @@ mod tests {
     /// so prev returned only published rows — the drafts that were on
     /// page 1 vanished.
     ///
-    /// Fix: `_status ASC` is always prepended when has_drafts; cursors
+    /// Fix: `_status ASC` is always prepended when `has_drafts`; cursors
     /// encode `_status` as `status_val`; `apply_cursor_keyset` builds
     /// a composite `(_status outer_op cursor_status) OR (_status =
     /// cursor_status AND inner_keyset)`. Drafts ride along on
-    /// before_cursor.
+    /// `before_cursor`.
     #[test]
     fn cursor_round_trip_preserves_drafts_on_page_1() {
         let (_tmp, pool) = setup_drafts_db();
@@ -798,7 +817,7 @@ mod tests {
     }
 
     /// Regression: negative limit/offset must be clamped to 0 instead of
-    /// passing undefined values to SQLite.
+    /// passing undefined values to `SQLite`.
     #[test]
     fn negative_limit_and_offset_clamped_to_zero() {
         let (_tmp, pool) = setup_db();

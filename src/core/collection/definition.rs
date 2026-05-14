@@ -1,4 +1,4 @@
-//! Full definition of a collection, parsed from a Lua file. Maps to one SQLite table.
+//! Full definition of a collection, parsed from a Lua file. Maps to one `SQLite` table.
 
 use serde::{Deserialize, Serialize};
 
@@ -15,7 +15,7 @@ fn default_true() -> bool {
     true
 }
 
-/// Full definition of a collection, parsed from a Lua file. Maps to one SQLite table.
+/// Full definition of a collection, parsed from a Lua file. Maps to one `SQLite` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionDefinition {
     /// Unique identifier for the collection, used in URLs and database table names.
@@ -50,7 +50,7 @@ pub struct CollectionDefinition {
     /// Real-time update settings for this collection.
     #[serde(default)]
     pub live: Option<LiveSetting>,
-    /// Controls what data events carry (metadata-only or full with after_read hooks).
+    /// Controls what data events carry (metadata-only or full with `after_read` hooks).
     #[serde(default)]
     pub live_mode: LiveMode,
     /// Versioning and draft configuration.
@@ -106,16 +106,19 @@ impl CollectionDefinition {
     }
 
     /// Get the display label (plural form, falls back to slug). Uses default resolution.
+    #[must_use]
     pub fn display_name(&self) -> &str {
         resolve_label(self.labels.plural.as_ref(), &self.slug, None)
     }
 
     /// Get the singular label (falls back to slug). Uses default resolution.
+    #[must_use]
     pub fn singular_name(&self) -> &str {
         resolve_label(self.labels.singular.as_ref(), &self.slug, None)
     }
 
     /// Get the display label resolved for a specific locale.
+    #[must_use]
     pub fn display_name_for(&self, locale: &str, default_locale: &str) -> &str {
         resolve_label(
             self.labels.plural.as_ref(),
@@ -125,6 +128,7 @@ impl CollectionDefinition {
     }
 
     /// Get the singular label resolved for a specific locale.
+    #[must_use]
     pub fn singular_name_for(&self, locale: &str, default_locale: &str) -> &str {
         resolve_label(
             self.labels.singular.as_ref(),
@@ -134,31 +138,37 @@ impl CollectionDefinition {
     }
 
     /// Get the field name to use as item title in admin lists.
+    #[must_use]
     pub fn title_field(&self) -> Option<&str> {
         self.admin.use_as_title.as_deref()
     }
 
     /// Check if this collection has authentication enabled.
+    #[must_use]
     pub fn is_auth_collection(&self) -> bool {
         self.auth.as_ref().is_some_and(|a| a.enabled)
     }
 
     /// Check if this collection has file upload support enabled.
+    #[must_use]
     pub fn is_upload_collection(&self) -> bool {
         self.upload.as_ref().is_some_and(|u| u.enabled)
     }
 
     /// Check if this collection has versioning enabled.
+    #[must_use]
     pub fn has_versions(&self) -> bool {
         self.versions.is_some()
     }
 
     /// Check if this collection has drafts enabled (versioning with drafts flag).
+    #[must_use]
     pub fn has_drafts(&self) -> bool {
         self.versions.as_ref().is_some_and(|v| v.drafts)
     }
 
     /// Check if this collection has soft deletes enabled.
+    #[must_use]
     pub fn has_soft_delete(&self) -> bool {
         self.soft_delete
     }
@@ -182,7 +192,7 @@ mod tests {
             plural: plural.map(|s| LocalizedString::Plain(s.to_string())),
         };
         def.admin = AdminConfig {
-            use_as_title: title_field.map(|s| s.to_string()),
+            use_as_title: title_field.map(std::string::ToString::to_string),
             ..Default::default()
         };
         def
@@ -434,90 +444,105 @@ impl CollectionDefinitionBuilder {
     }
 
     /// Set the plural and singular labels for the collection.
+    #[must_use]
     pub fn labels(mut self, v: Labels) -> Self {
         self.inner.labels = v;
         self
     }
 
     /// Set whether the collection should include standard timestamps.
+    #[must_use]
     pub fn timestamps(mut self, v: bool) -> Self {
         self.inner.timestamps = v;
         self
     }
 
     /// Set the field definitions for the collection.
+    #[must_use]
     pub fn fields(mut self, v: Vec<FieldDefinition>) -> Self {
         self.inner.fields = v;
         self
     }
 
     /// Set the admin UI configuration for the collection.
+    #[must_use]
     pub fn admin(mut self, v: AdminConfig) -> Self {
         self.inner.admin = v;
         self
     }
 
     /// Set the lifecycle hooks for the collection.
+    #[must_use]
     pub fn hooks(mut self, v: Hooks) -> Self {
         self.inner.hooks = v;
         self
     }
 
     /// Set the authentication configuration for the collection.
+    #[must_use]
     pub fn auth(mut self, v: Auth) -> Self {
         self.inner.auth = Some(v);
         self
     }
 
     /// Set the file upload configuration for the collection.
+    #[must_use]
     pub fn upload(mut self, v: CollectionUpload) -> Self {
         self.inner.upload = Some(v);
         self
     }
 
     /// Set the access control rules for the collection.
+    #[must_use]
     pub fn access(mut self, v: Access) -> Self {
         self.inner.access = v;
         self
     }
 
     /// Set the MCP-specific configuration for the collection.
+    #[must_use]
     pub fn mcp(mut self, v: McpConfig) -> Self {
         self.inner.mcp = v;
         self
     }
 
     /// Set the live update settings for the collection.
+    #[must_use]
     pub fn live(mut self, v: LiveSetting) -> Self {
         self.inner.live = Some(v);
         self
     }
 
     /// Set the versioning and drafts configuration for the collection.
+    #[must_use]
     pub fn versions(mut self, v: VersionsConfig) -> Self {
         self.inner.versions = Some(v);
         self
     }
 
     /// Set additional database indexes for the collection.
+    #[must_use]
     pub fn indexes(mut self, v: Vec<IndexDefinition>) -> Self {
         self.inner.indexes = v;
         self
     }
 
     /// Enable soft deletes for the collection.
+    #[must_use]
     pub fn soft_delete(mut self, v: bool) -> Self {
         self.inner.soft_delete = v;
         self
     }
 
     /// Set the retention period for soft-deleted documents.
+    #[must_use]
     pub fn soft_delete_retention(mut self, v: impl Into<String>) -> Self {
         self.inner.soft_delete_retention = Some(v.into());
         self
     }
 
     /// Build the final `CollectionDefinition` instance.
+    #[must_use]
     pub fn build(self) -> CollectionDefinition {
         self.inner
     }

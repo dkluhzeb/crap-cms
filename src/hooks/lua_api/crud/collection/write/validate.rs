@@ -9,7 +9,13 @@ use crate::{
     config::LocaleConfig,
     core::Registry,
     db::LocaleContext,
-    hooks::lua_api::crud::{get_tx_conn, helpers::*},
+    hooks::lua_api::crud::{
+        get_tx_conn,
+        helpers::{
+            ExtractedData, extract_data, get_opt_bool, get_opt_string, hook_ui_locale, hook_user,
+            resolve_collection,
+        },
+    },
     service::{LuaWriteHooks, ServiceError, ValidateContext, WriteInput, validate_document},
 };
 
@@ -18,23 +24,23 @@ fn validate_inner(
     lua: &Lua,
     reg: &Registry,
     lc: &LocaleConfig,
-    collection: String,
-    data_table: Table,
-    opts: Option<Table>,
+    collection: &str,
+    data_table: &Table,
+    opts: Option<&Table>,
 ) -> LuaResult<Table> {
     let conn = get_tx_conn(lua)?;
 
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
-    let locale_str = get_opt_string(&opts, "locale")?;
+    let locale_str = get_opt_string(opts, "locale");
     let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), lc)
         .map_err(|e| RuntimeError(e.to_string()))?;
-    let override_access = get_opt_bool(&opts, "overrideAccess", false)?;
-    let draft = get_opt_bool(&opts, "draft", false)?;
-    let exclude_id = get_opt_string(&opts, "id")?;
-    let def = resolve_collection(reg, &collection)?;
+    let override_access = get_opt_bool(opts, "overrideAccess", false);
+    let draft = get_opt_bool(opts, "draft", false);
+    let exclude_id = get_opt_string(opts, "id");
+    let def = resolve_collection(reg, collection)?;
 
-    let ExtractedData { data, password } = extract_data(&data_table, &def)?;
+    let ExtractedData { data, password } = extract_data(data_table, &def)?;
 
     let write_hooks = LuaWriteHooks::builder(lua)
         .user(user.as_ref())
@@ -50,8 +56,8 @@ fn validate_inner(
     };
 
     let validate_ctx = ValidateContext {
-        slug: &collection,
-        table_name: &collection,
+        slug: collection,
+        table_name: collection,
         fields: &def.fields,
         hooks: &def.hooks,
         operation,
@@ -99,7 +105,7 @@ pub(crate) fn register_validate(
     let lc = locale_config.clone();
     let validate_fn = lua.create_function(
         move |lua, (collection, data_table, opts): (String, Table, Option<Table>)| {
-            validate_inner(lua, &registry, &lc, collection, data_table, opts)
+            validate_inner(lua, &registry, &lc, &collection, &data_table, opts.as_ref())
         },
     )?;
 

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 #[serde(default, deny_unknown_fields)]
 pub struct DepthConfig {
     /// Default population depth when request doesn't specify one.
-    /// Used as default for FindByID. Find defaults to 0 regardless.
+    /// Used as default for `FindByID`. Find defaults to 0 regardless.
     pub default_depth: i32,
     /// Maximum allowed depth application-wide. Prevents abuse.
     pub max_depth: i32,

@@ -61,10 +61,10 @@ pub(crate) fn has_any_field_access(
         }
 
         match field.field_type {
-            FieldType::Group | FieldType::Row | FieldType::Collapsible => {
-                if has_any_field_access(&field.fields, extractor) {
-                    return true;
-                }
+            FieldType::Group | FieldType::Row | FieldType::Collapsible
+                if has_any_field_access(&field.fields, extractor) =>
+            {
+                return true;
             }
             FieldType::Tabs => {
                 for tab in &field.tabs {
@@ -73,7 +73,7 @@ pub(crate) fn has_any_field_access(
                     }
                 }
             }
-            _ => continue, // Array/Blocks — separate join tables
+            _ => {} // Array/Blocks — separate join tables
         }
     }
 
@@ -99,7 +99,7 @@ fn collect_field_access_denied(
 
         if let Some(ref_str) = extractor(field) {
             match check_access_with_lua(lua, Some(ref_str), user, None, None) {
-                Ok(AccessResult::Allowed) | Ok(AccessResult::Constrained(_)) => {}
+                Ok(AccessResult::Allowed | AccessResult::Constrained(_)) => {}
                 Ok(AccessResult::Denied) => {
                     denied.push(full_name.clone());
 

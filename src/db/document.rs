@@ -12,6 +12,10 @@ use super::{
 };
 
 /// Convert a `DbRow` to a `Document`.
+///
+/// # Errors
+///
+/// Returns an error if the `id` column is missing or any value fails to parse.
 pub fn row_to_document(conn: &dyn DbConnection, row: &DbRow) -> Result<Document> {
     let id = row.get_string("id")?;
     let mut fields = HashMap::new();
@@ -20,7 +24,7 @@ pub fn row_to_document(conn: &dyn DbConnection, row: &DbRow) -> Result<Document>
 
     for (i, name) in row.column_names().iter().enumerate() {
         match name.as_str() {
-            "id" => continue,
+            "id" => {}
             "created_at" => {
                 if let Some(DbValue::Text(s)) = row.get_value(i) {
                     created_at = Some(conn.normalize_timestamp(s));
@@ -32,7 +36,9 @@ pub fn row_to_document(conn: &dyn DbConnection, row: &DbRow) -> Result<Document>
                 }
             }
             _ => {
-                let value = row.get_value(i).map(|v| v.to_json()).unwrap_or(Value::Null);
+                let value = row
+                    .get_value(i)
+                    .map_or(Value::Null, super::types::DbValue::to_json);
                 fields.insert(name.clone(), value);
             }
         }
@@ -56,7 +62,13 @@ mod tests {
     };
 
     fn make_row(columns: Vec<&str>, values: Vec<DbValue>) -> DbRow {
-        DbRow::new(columns.into_iter().map(|s| s.to_string()).collect(), values)
+        DbRow::new(
+            columns
+                .into_iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
+            values,
+        )
     }
 
     #[test]

@@ -12,7 +12,13 @@ use crate::{
         lifecycle::converters::{
             lua_table_to_find_query, lua_table_to_hashmap, lua_table_to_json_map,
         },
-        lua_api::crud::{get_tx_conn, helpers::*},
+        lua_api::crud::{
+            get_tx_conn,
+            helpers::{
+                EnforceAccessParams, check_hook_depth, enforce_access, get_opt_bool,
+                get_opt_string, hook_lua_infra, hook_ui_locale, hook_user, resolve_collection,
+            },
+        },
     },
     service::{self, LuaWriteHooks, ServiceContext, UpdateManyOptions, validate_user_filters},
 };
@@ -57,15 +63,15 @@ fn update_many_documents(
     collection: &str,
     query_table: &Table,
     data_table: &Table,
-    opts: &Option<Table>,
+    opts: Option<&Table>,
 ) -> mlua::Result<Table> {
     let conn = get_tx_conn(lua)?;
 
-    let override_access = get_opt_bool(opts, "overrideAccess", false)?;
-    let run_hooks = get_opt_bool(opts, "hooks", true)?;
-    let draft = get_opt_bool(opts, "draft", false)?;
+    let override_access = get_opt_bool(opts, "overrideAccess", false);
+    let run_hooks = get_opt_bool(opts, "hooks", true);
+    let draft = get_opt_bool(opts, "draft", false);
 
-    let locale_str = get_opt_string(opts, "locale")?;
+    let locale_str = get_opt_string(opts, "locale");
     let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), lc)
         .map_err(|e| RuntimeError(e.to_string()))?;
 
@@ -117,7 +123,7 @@ fn update_many_documents(
         ui_locale: ui_locale.clone(),
     };
 
-    let svc_result = service::update_many(&ctx, filters, data, lc, &update_opts)
+    let svc_result = service::update_many(&ctx, &filters, &data, lc, &update_opts)
         .map_err(|e| RuntimeError(format!("{e:#}")))?;
 
     let result = lua.create_table()?;
@@ -150,7 +156,7 @@ pub(crate) fn register_update_many(
                 &collection,
                 &query_table,
                 &data_table,
-                &opts,
+                opts.as_ref(),
             )
         },
     )?;

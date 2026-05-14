@@ -16,6 +16,7 @@ use crate::db::{Filter, FilterClause, FilterOp};
 /// Returns `true` if all clauses match (AND semantics, same as SQL WHERE).
 /// Returns `false` (fail-closed) if a referenced field is missing from data.
 /// Returns `true` for empty constraints (no filters = no restrictions).
+#[must_use]
 pub fn matches_constraints(data: &DocumentFields, constraints: &[FilterClause]) -> bool {
     if constraints.is_empty() {
         return true;
@@ -31,9 +32,8 @@ pub fn matches_constraints(data: &DocumentFields, constraints: &[FilterClause]) 
 
 /// Evaluate a single filter against document data.
 fn matches_filter(data: &DocumentFields, filter: &Filter) -> bool {
-    let value = match data.get(&filter.field) {
-        Some(v) => v,
-        None => return matches_missing_field(&filter.op),
+    let Some(value) = data.get(&filter.field) else {
+        return matches_missing_field(&filter.op);
     };
 
     let value_str = value_to_string(value);
@@ -99,9 +99,7 @@ fn compare_values(a: &str, b: &str) -> Option<Ordering> {
 fn matches_like(value: &str, pattern: &str) -> bool {
     let regex_pattern = pattern.replace('%', ".*").replace('_', ".");
 
-    regex::Regex::new(&format!("^{}$", regex_pattern))
-        .map(|re| re.is_match(value))
-        .unwrap_or(false)
+    regex::Regex::new(&format!("^{regex_pattern}$")).is_ok_and(|re| re.is_match(value))
 }
 
 #[cfg(test)]
@@ -407,9 +405,9 @@ mod tests {
 
     // ── Null values ─────────────────────────────────────────────────
 
-    /// Null JSON values compare as empty string. This mirrors SQLite behavior
+    /// Null JSON values compare as empty string. This mirrors `SQLite` behavior
     /// where NULL text columns coerce to "" in comparisons, and matches how
-    /// event data arrives from the DB layer (serde_json maps SQL NULL → Value::Null,
+    /// event data arrives from the DB layer (`serde_json` maps SQL NULL → `Value::Null`,
     /// and `value_to_string` normalizes it to ""). Without this, a filter like
     /// `status != "deleted"` would fail-closed on documents where status is null,
     /// incorrectly blocking access.

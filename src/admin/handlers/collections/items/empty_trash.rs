@@ -66,13 +66,13 @@ fn empty_trash(input: EmptyTrashInput<'_>) -> Result<usize, ServiceError> {
         include_deleted: true,
     };
 
-    let result = delete_many(&ctx, filters, input.locale_cfg, &delete_opts)?;
+    let result = delete_many(&ctx, &filters, input.locale_cfg, &delete_opts)?;
 
     for fields in &result.upload_fields_to_clean {
         upload::delete_upload_files(input.storage, fields);
     }
 
-    Ok(result.hard_deleted as usize)
+    Ok(usize::try_from(result.hard_deleted.max(0)).unwrap_or(0))
 }
 
 /// POST /admin/collections/{slug}/empty-trash

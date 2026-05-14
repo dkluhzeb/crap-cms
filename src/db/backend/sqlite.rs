@@ -1,4 +1,4 @@
-//! SQLite implementation of `DbConnection`.
+//! `SQLite` implementation of `DbConnection`.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -26,15 +26,15 @@ fn sqlite_table_exists(conn: &dyn DbConnection, name: &str) -> Result<bool> {
         &[DbValue::Text(name.to_string())],
     )?;
 
-    Ok(row.map(|r| r.get_i64("cnt").unwrap_or(0)).unwrap_or(0) > 0)
+    Ok(row.map_or(0, |r| r.get_i64("cnt").unwrap_or(0)) > 0)
 }
 
 fn sqlite_get_table_columns(conn: &dyn DbConnection, table: &str) -> Result<HashSet<String>> {
     if !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        bail!("Invalid table name for PRAGMA: {:?}", table);
+        bail!("Invalid table name for PRAGMA: {table:?}");
     }
 
-    let rows = conn.query_all(&format!("PRAGMA table_info({})", table), &[])?;
+    let rows = conn.query_all(&format!("PRAGMA table_info({table})"), &[])?;
 
     Ok(rows
         .into_iter()
@@ -47,9 +47,9 @@ fn sqlite_get_table_column_types(
     table: &str,
 ) -> Result<HashMap<String, String>> {
     if !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        bail!("Invalid table name for PRAGMA: {:?}", table);
+        bail!("Invalid table name for PRAGMA: {table:?}");
     }
-    let rows = conn.query_all(&format!("PRAGMA table_info({})", table), &[])?;
+    let rows = conn.query_all(&format!("PRAGMA table_info({table})"), &[])?;
     let mut map = HashMap::new();
 
     for row in rows {
@@ -66,7 +66,7 @@ fn sqlite_index_names(conn: &dyn DbConnection, table: &str, prefix: &str) -> Res
         "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=?1 AND name LIKE ?2",
         &[
             DbValue::Text(table.to_string()),
-            DbValue::Text(format!("{}%", prefix)),
+            DbValue::Text(format!("{prefix}%")),
         ],
     )?;
 
@@ -86,8 +86,8 @@ fn sqlite_date_offset_expr(seconds: i64, param_pos: usize) -> (String, DbValue) 
     let abs = seconds.unsigned_abs();
     let sign = if seconds >= 0 { "-" } else { "+" };
     (
-        format!("datetime('now', ?{})", param_pos),
-        DbValue::Text(format!("{}{} seconds", sign, abs)),
+        format!("datetime('now', ?{param_pos})"),
+        DbValue::Text(format!("{sign}{abs} seconds")),
     )
 }
 
@@ -128,7 +128,7 @@ fn sqlite_vacuum_into(conn: &dyn DbConnection, dest: &std::path::Path) -> Result
 
 const SQLITE_SIDECAR_EXTENSIONS: &[&str] = &["db-wal", "db-shm"];
 
-/// Normalize SQLite's `"YYYY-MM-DD HH:MM:SS"` to ISO 8601 `"YYYY-MM-DDTHH:MM:SS.000Z"`.
+/// Normalize `SQLite`'s `"YYYY-MM-DD HH:MM:SS"` to ISO 8601 `"YYYY-MM-DDTHH:MM:SS.000Z"`.
 /// Already-normalized values pass through unchanged.
 fn sqlite_normalize_timestamp(ts: &str) -> String {
     if ts.len() == 19
@@ -151,28 +151,22 @@ fn sqlite_column_type_for_field(ft: &FieldType) -> &'static str {
 }
 
 fn sqlite_build_insert_ignore(table: &str, columns: &str, values: &str) -> String {
-    format!(
-        "INSERT OR IGNORE INTO \"{}\" ({}) VALUES ({})",
-        table, columns, values
-    )
+    format!("INSERT OR IGNORE INTO \"{table}\" ({columns}) VALUES ({values})")
 }
 
 fn sqlite_build_upsert(table: &str, columns: &[&str], values: &str, _key_col: &str) -> String {
     let cols = columns
         .iter()
-        .map(|c| format!("\"{}\"", c))
+        .map(|c| format!("\"{c}\""))
         .collect::<Vec<_>>()
         .join(", ");
 
-    format!(
-        "INSERT OR REPLACE INTO \"{}\" ({}) VALUES ({})",
-        table, cols, values
-    )
+    format!("INSERT OR REPLACE INTO \"{table}\" ({cols}) VALUES ({values})")
 }
 
 // ── Macros to deduplicate shared dialect + query methods ───────────────
 
-/// Shared SQLite dialect methods — identical across all `DbConnection` impls.
+/// Shared `SQLite` dialect methods — identical across all `DbConnection` impls.
 /// Mirrors the `pg_shared_methods!()` pattern from `postgres.rs`.
 macro_rules! sqlite_shared_methods {
     () => {
@@ -385,6 +379,10 @@ impl SqliteConnection {
     }
 
     /// Open an `IMMEDIATE` transaction (write-lock from the start).
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if starting the transaction fails.
     pub fn transaction_immediate(&mut self) -> Result<SqliteTransaction<'_>> {
         let tx = self
             .inner
@@ -395,6 +393,10 @@ impl SqliteConnection {
     }
 
     /// Open a `DEFERRED` transaction (default behavior).
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if starting the transaction fails.
     pub fn transaction(&mut self) -> Result<SqliteTransaction<'_>> {
         let tx = self
             .inner
@@ -422,8 +424,10 @@ impl ConnectionInner for SqliteConnection {
 impl DbConnection for SqliteConnection {
     fn execute(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
         let rusqlite_params = to_rusqlite_params(params);
-        let refs: Vec<&dyn rusqlite::types::ToSql> =
-            rusqlite_params.iter().map(|b| b.as_ref()).collect();
+        let refs: Vec<&dyn rusqlite::types::ToSql> = rusqlite_params
+            .iter()
+            .map(std::convert::AsRef::as_ref)
+            .collect();
         let count = self
             .inner
             .execute(sql, refs.as_slice())
@@ -442,8 +446,10 @@ impl DbConnection for SqliteConnection {
 
     fn query_all(&self, sql: &str, params: &[DbValue]) -> Result<Vec<DbRow>> {
         let rusqlite_params = to_rusqlite_params(params);
-        let refs: Vec<&dyn rusqlite::types::ToSql> =
-            rusqlite_params.iter().map(|b| b.as_ref()).collect();
+        let refs: Vec<&dyn rusqlite::types::ToSql> = rusqlite_params
+            .iter()
+            .map(std::convert::AsRef::as_ref)
+            .collect();
 
         let mut stmt = self
             .inner
@@ -472,8 +478,10 @@ impl DbConnection for SqliteConnection {
 
     fn query_one(&self, sql: &str, params: &[DbValue]) -> Result<Option<DbRow>> {
         let rusqlite_params = to_rusqlite_params(params);
-        let refs: Vec<&dyn rusqlite::types::ToSql> =
-            rusqlite_params.iter().map(|b| b.as_ref()).collect();
+        let refs: Vec<&dyn rusqlite::types::ToSql> = rusqlite_params
+            .iter()
+            .map(std::convert::AsRef::as_ref)
+            .collect();
 
         let mut stmt = self
             .inner
@@ -512,6 +520,10 @@ impl<'conn> SqliteTransaction<'conn> {
     }
 
     /// Commit this transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the commit fails.
     pub fn commit(self) -> Result<()> {
         self.inner.commit().context("Failed to commit transaction")
     }
@@ -524,7 +536,7 @@ impl TransactionInner for SqliteTransaction<'_> {
 }
 
 impl DbConnection for SqliteTransaction<'_> {
-    sqlite_ufcs_query_methods!(|s| std::ops::Deref::deref(&s.inner));
+    sqlite_ufcs_query_methods!(|s| &*s.inner);
     sqlite_shared_methods!();
 }
 
@@ -536,7 +548,7 @@ impl DbConnection for SqliteTransaction<'_> {
 /// explicitly via `std::ops::Deref::deref(self)` to reach the inherent methods and
 /// avoid ambiguity with our trait methods that share the same name.
 impl DbConnection for rusqlite::Transaction<'_> {
-    sqlite_ufcs_query_methods!(|s| std::ops::Deref::deref(s));
+    sqlite_ufcs_query_methods!(|s| &**s);
     sqlite_shared_methods!();
 }
 
@@ -572,23 +584,20 @@ fn rusqlite_row_to_dbrow(row: &rusqlite::Row, col_count: usize, col_names: &[Str
     let mut values = Vec::with_capacity(col_count);
 
     for i in 0..col_count {
-        let val = row
-            .get_ref(i)
-            .map(|v| match v {
-                rusqlite::types::ValueRef::Null => DbValue::Null,
-                rusqlite::types::ValueRef::Integer(i) => DbValue::Integer(i),
-                rusqlite::types::ValueRef::Real(f) => DbValue::Real(f),
-                rusqlite::types::ValueRef::Text(s) => match std::str::from_utf8(s) {
-                    Ok(valid) => DbValue::Text(valid.to_owned()),
-                    Err(e) => {
-                        warn!("Invalid UTF-8 in SQLite text column: {}", e);
+        let val = row.get_ref(i).map_or(DbValue::Null, |v| match v {
+            rusqlite::types::ValueRef::Null => DbValue::Null,
+            rusqlite::types::ValueRef::Integer(i) => DbValue::Integer(i),
+            rusqlite::types::ValueRef::Real(f) => DbValue::Real(f),
+            rusqlite::types::ValueRef::Text(s) => match std::str::from_utf8(s) {
+                Ok(valid) => DbValue::Text(valid.to_owned()),
+                Err(e) => {
+                    warn!("Invalid UTF-8 in SQLite text column: {}", e);
 
-                        DbValue::Text(String::from_utf8_lossy(s).into_owned())
-                    }
-                },
-                rusqlite::types::ValueRef::Blob(b) => DbValue::Blob(b.to_vec()),
-            })
-            .unwrap_or(DbValue::Null);
+                    DbValue::Text(String::from_utf8_lossy(s).into_owned())
+                }
+            },
+            rusqlite::types::ValueRef::Blob(b) => DbValue::Blob(b.to_vec()),
+        });
         values.push(val);
     }
 
@@ -602,12 +611,23 @@ pub struct InMemoryConn(pub rusqlite::Connection);
 
 #[cfg(test)]
 impl InMemoryConn {
-    /// Open an in-memory SQLite database.
+    /// Open an in-memory `SQLite` database.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `rusqlite` cannot open the in-memory database — test-only
+    /// helper, so failure here means the test fixture is unusable.
+    #[must_use]
     pub fn open() -> Self {
         Self(rusqlite::Connection::open_in_memory().unwrap())
     }
 
     /// Execute a batch of SQL statements (test helper).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the batch fails to execute — call sites pass fixture SQL
+    /// the test author controls, so a failure means the fixture is wrong.
     pub fn setup(&self, sql: &str) {
         self.0.execute_batch(sql).unwrap();
     }
@@ -620,6 +640,20 @@ impl DbConnection for InMemoryConn {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::*;
     use crate::config::CrapConfig;

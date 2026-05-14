@@ -30,6 +30,11 @@ use super::runner::{
 use super::types::{EmailQueueConfig, SchedulerParams};
 
 /// Start the scheduler background loop. Runs until the cancellation token fires.
+///
+/// # Errors
+///
+/// Returns an error if the connection acquisition or stale-job recovery
+/// step at startup fails.
 #[cfg(not(tarpaulin_include))]
 pub async fn start(params: SchedulerParams) -> Result<()> {
     let SchedulerParams {
@@ -68,7 +73,7 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
 
     loop {
         select! {
-            _ = shutdown.cancelled() => {
+            () = shutdown.cancelled() => {
                 info!("Scheduler shutting down");
                 break Ok(());
             }
@@ -88,7 +93,7 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
                 tokio::spawn(async move {
                     if let Err(e) = poll_and_execute(
                         &pool, &hook_runner, &registry, max_concurrent, &running_jobs, &eq,
-                    ).await {
+                    ) {
                         error!("Scheduler poll error: {}", e);
                     }
                 });
@@ -103,10 +108,10 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
                 last_cron_check = now;
                 purge_counter += 1;
 
-                run_periodic_purges(PurgeTickInput {
+                run_periodic_purges(&PurgeTickInput {
                     counter: purge_counter,
                     auto_purge_secs,
-                    cron_interval_secs: config.cron_interval as i64,
+                    cron_interval_secs: i64::try_from(config.cron_interval).unwrap_or(i64::MAX),
                     pool: &pool,
                     registry: &registry,
                     storage: &storage,
@@ -171,7 +176,7 @@ struct PurgeTickInput<'a> {
 /// In multi-node deployments the retention purge is gated by an atomic
 /// `_crap_cron_fired` claim -- only one node runs the purge per cron window.
 #[cfg(not(tarpaulin_include))]
-fn run_periodic_purges(p: PurgeTickInput<'_>) {
+fn run_periodic_purges(p: &PurgeTickInput<'_>) {
     if !p.counter.is_multiple_of(10) {
         return;
     }
@@ -350,7 +355,7 @@ async fn process_single_image(
                     if let Err(fe) = image_query::fail_image_entry(
                         &conn,
                         &entry_id,
-                        &format!("db commit failed: {}", e),
+                        &format!("db commit failed: {e}"),
                     ) {
                         error!(
                             "Image queue: failed to record failure for {}: {:#}",
@@ -366,7 +371,7 @@ async fn process_single_image(
         }
         Err(e) => {
             error!("Image conversion panicked: {}: {}", entry_id, e);
-            image_query::fail_image_entry(&conn, &entry_id, &format!("panic: {}", e))?;
+            image_query::fail_image_entry(&conn, &entry_id, &format!("panic: {e}"))?;
         }
     }
 
@@ -413,7 +418,7 @@ fn record_conversion_success(
 
 /// Poll for pending jobs and execute them.
 #[cfg(not(tarpaulin_include))]
-async fn poll_and_execute(
+fn poll_and_execute(
     pool: &DbPool,
     hook_runner: &HookRunner,
     registry: &Registry,
@@ -424,23 +429,26 @@ async fn poll_and_execute(
     let mut conn = pool.get().context("Failed to get DB connection")?;
 
     let total_running = job_query::count_running(&conn, None)?;
-    if total_running as usize >= max_concurrent {
+    // Saturate to max_concurrent so a runaway counter still gates new jobs
+    // (zero `available` = skip this tick rather than over-claiming).
+    let running_usize = usize::try_from(total_running).unwrap_or(max_concurrent);
+    if running_usize >= max_concurrent {
         return Ok(());
     }
 
-    let available = max_concurrent - total_running as usize;
-    let job_concurrency = read_job_concurrency(registry)?;
+    let available = max_concurrent - running_usize;
+    let job_concurrency = read_job_concurrency(registry);
 
     let empty_counts = HashMap::new();
     let claimed = claim_pending_jobs(&mut conn, available, &empty_counts, &job_concurrency)?;
     drop(conn);
 
     for job_run in claimed {
-        let job_def = resolve_job_def(registry, &job_run, pool, email)?;
+        let Some(job_def) = resolve_job_def(registry, &job_run, pool, email) else {
+            continue;
+        };
 
-        let Some(job_def) = job_def else { continue };
-
-        spawn_job_execution(SpawnJobInput {
+        spawn_job_execution(&SpawnJobInput {
             pool,
             hook_runner,
             running_jobs,
@@ -455,15 +463,15 @@ async fn poll_and_execute(
 
 /// Read per-slug concurrency limits from the registry.
 #[cfg(not(tarpaulin_include))]
-fn read_job_concurrency(registry: &Registry) -> Result<HashMap<String, u32>> {
-    Ok(registry
+fn read_job_concurrency(registry: &Registry) -> HashMap<String, u32> {
+    registry
         .jobs
         .iter()
         .map(|(slug, def)| (slug.to_string(), def.concurrency))
-        .collect())
+        .collect()
 }
 
-/// Claim pending jobs, using IMMEDIATE transaction for SQLite.
+/// Claim pending jobs, using IMMEDIATE transaction for `SQLite`.
 #[cfg(not(tarpaulin_include))]
 fn claim_pending_jobs(
     conn: &mut BoxedConnection,
@@ -496,18 +504,18 @@ fn resolve_job_def(
     job_run: &JobRun,
     pool: &DbPool,
     email: &EmailQueueConfig,
-) -> Result<Option<JobDefinition>> {
+) -> Option<JobDefinition> {
     if let Some(def) = registry.get_job(&job_run.slug) {
-        return Ok(Some(def.clone()));
+        return Some(def.clone());
     }
 
     if job_run.slug == SYSTEM_EMAIL_JOB {
-        return Ok(Some(
+        return Some(
             JobDefinition::builder(SYSTEM_EMAIL_JOB, "_system")
                 .timeout(email.timeout)
                 .concurrency(email.concurrency)
                 .build(),
-        ));
+        );
     }
 
     warn!(
@@ -525,7 +533,7 @@ fn resolve_job_def(
         );
     }
 
-    Ok(None)
+    None
 }
 
 struct SpawnJobInput<'a> {
@@ -539,7 +547,7 @@ struct SpawnJobInput<'a> {
 
 /// Spawn a tokio task to execute a job with timeout enforcement.
 #[cfg(not(tarpaulin_include))]
-fn spawn_job_execution(s: SpawnJobInput<'_>) {
+fn spawn_job_execution(s: &SpawnJobInput<'_>) {
     if let Ok(mut guard) = s.running_jobs.lock() {
         guard.push(s.job_run.id.clone());
     }
@@ -586,7 +594,7 @@ fn spawn_job_execution(s: SpawnJobInput<'_>) {
                     let _ = job_query::fail_job(
                         &c,
                         &id_log,
-                        &format!("timeout after {}s", timeout_secs),
+                        &format!("timeout after {timeout_secs}s"),
                         should_retry,
                         attempt,
                     );

@@ -28,16 +28,7 @@ pub(super) fn sync_relationship_table(
 
     let table_name = join_table(collection_slug, full_name);
 
-    if !table_exists(conn, &table_name)? {
-        create_junction_table(
-            conn,
-            &table_name,
-            collection_slug,
-            rc.is_polymorphic(),
-            has_locale_col,
-            locale_config,
-        )?;
-    } else {
+    if table_exists(conn, &table_name)? {
         if has_locale_col {
             ensure_locale_column(conn, &table_name, &locale_config.default_locale)?;
         }
@@ -54,6 +45,15 @@ pub(super) fn sync_relationship_table(
                 )?;
             }
         }
+    } else {
+        create_junction_table(
+            conn,
+            &table_name,
+            collection_slug,
+            rc.is_polymorphic(),
+            has_locale_col,
+            locale_config,
+        )?;
     }
 
     Ok(())
@@ -97,20 +97,19 @@ fn create_junction_table(
         )
     } else {
         format!(
-            "CREATE TABLE \"{}\" (\
-                parent_id TEXT NOT NULL REFERENCES \"{}\"(id) ON DELETE CASCADE, \
+            "CREATE TABLE \"{table_name}\" (\
+                parent_id TEXT NOT NULL REFERENCES \"{collection_slug}\"(id) ON DELETE CASCADE, \
                 related_id TEXT NOT NULL, \
-                {}\
+                {poly_col}\
                 _order INTEGER NOT NULL DEFAULT 0, \
-                PRIMARY KEY (parent_id, related_id{})\
-            )",
-            table_name, collection_slug, poly_col, poly_pk
+                PRIMARY KEY (parent_id, related_id{poly_pk})\
+            )"
         )
     };
 
     info!("Creating junction table: {}", table_name);
     conn.execute_ddl(&sql, &[])
-        .with_context(|| format!("Failed to create junction table {}", table_name))?;
+        .with_context(|| format!("Failed to create junction table {table_name}"))?;
 
     Ok(())
 }
@@ -122,42 +121,38 @@ fn rebuild_junction_table_for_polymorphic(
     collection_slug: &str,
     has_locale: bool,
 ) -> Result<()> {
-    let temp = format!("_{}_migrate", table_name);
+    let temp = format!("_{table_name}_migrate");
 
     conn.execute_batch_ddl(&format!(
-        "ALTER TABLE \"{}\" RENAME TO \"{}\"",
-        table_name, temp
+        "ALTER TABLE \"{table_name}\" RENAME TO \"{temp}\""
     ))?;
 
     let locale_col = if has_locale { ", _locale TEXT" } else { "" };
     let locale_pk = if has_locale { ", _locale" } else { "" };
 
     conn.execute_batch_ddl(&format!(
-        "CREATE TABLE \"{}\" (\
-            parent_id TEXT NOT NULL REFERENCES \"{}\"(id) ON DELETE CASCADE, \
+        "CREATE TABLE \"{table_name}\" (\
+            parent_id TEXT NOT NULL REFERENCES \"{collection_slug}\"(id) ON DELETE CASCADE, \
             related_id TEXT NOT NULL, \
             related_collection TEXT NOT NULL DEFAULT '', \
-            _order INTEGER NOT NULL DEFAULT 0{}, \
-            PRIMARY KEY (parent_id, related_id, related_collection{})\
-        )",
-        table_name, collection_slug, locale_col, locale_pk
+            _order INTEGER NOT NULL DEFAULT 0{locale_col}, \
+            PRIMARY KEY (parent_id, related_id, related_collection{locale_pk})\
+        )"
     ))?;
 
     if has_locale {
         conn.execute_batch(&format!(
-            "INSERT INTO \"{}\" (parent_id, related_id, related_collection, _order, _locale) \
-             SELECT parent_id, related_id, '' AS related_collection, _order, _locale FROM \"{}\"",
-            table_name, temp
+            "INSERT INTO \"{table_name}\" (parent_id, related_id, related_collection, _order, _locale) \
+             SELECT parent_id, related_id, '' AS related_collection, _order, _locale FROM \"{temp}\""
         ))?;
     } else {
         conn.execute_batch(&format!(
-            "INSERT INTO \"{}\" (parent_id, related_id, related_collection, _order) \
-             SELECT parent_id, related_id, '' AS related_collection, _order FROM \"{}\"",
-            table_name, temp
+            "INSERT INTO \"{table_name}\" (parent_id, related_id, related_collection, _order) \
+             SELECT parent_id, related_id, '' AS related_collection, _order FROM \"{temp}\""
         ))?;
     }
 
-    conn.execute_batch_ddl(&format!("DROP TABLE \"{}\"", temp))?;
+    conn.execute_batch_ddl(&format!("DROP TABLE \"{temp}\""))?;
 
     info!(
         "Rebuilt junction table {} for polymorphic upgrade (updated PRIMARY KEY)",

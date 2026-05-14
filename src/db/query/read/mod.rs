@@ -1,4 +1,4 @@
-//! Read operations: find, find_by_id, count, select filtering.
+//! Read operations: find, `find_by_id`, count, select filtering.
 
 mod back_references;
 mod count;

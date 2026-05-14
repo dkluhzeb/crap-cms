@@ -18,7 +18,7 @@ use crate::{
 
 use super::{join_data::extract_join_data_from_form, select_has_many::transform_select_has_many};
 
-/// Form-submission state: raw HashMap plus extracted join (array/blocks/relationship) data.
+/// Form-submission state: raw `HashMap` plus extracted join (array/blocks/relationship) data.
 #[derive(Debug, Clone, Default)]
 pub struct FormData {
     raw: HashMap<String, String>,

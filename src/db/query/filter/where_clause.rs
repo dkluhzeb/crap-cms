@@ -70,21 +70,20 @@ fn build_subquery_sql(
     match condition {
         SubqueryCondition::Column { col, field_type } => {
             if !is_valid_identifier(col) {
-                bail!("Invalid column name '{}' in subquery", col);
+                bail!("Invalid column name '{col}' in subquery");
             }
-            let cond = build_op_condition(conn, col, op, field_type.as_ref(), params);
+            let op_sql = build_op_condition(conn, col, op, field_type.as_ref(), params);
             let locale_sql = append_locale_clause(conn, join_table, locale_constraint, params);
             Ok(format!(
-                "EXISTS (SELECT 1 FROM \"{}\" WHERE parent_id = \"{}\".id AND {}{})",
-                join_table, parent_table, cond, locale_sql
+                "EXISTS (SELECT 1 FROM \"{join_table}\" WHERE parent_id = \"{parent_table}\".id AND {op_sql}{locale_sql})"
             ))
         }
         SubqueryCondition::BlockType => {
-            let cond = build_op_condition(conn, "_block_type", op, Some(&FieldType::Text), params);
+            let op_sql =
+                build_op_condition(conn, "_block_type", op, Some(&FieldType::Text), params);
             let locale_sql = append_locale_clause(conn, join_table, locale_constraint, params);
             Ok(format!(
-                "EXISTS (SELECT 1 FROM \"{}\" WHERE parent_id = \"{}\".id AND {}{})",
-                join_table, parent_table, cond, locale_sql
+                "EXISTS (SELECT 1 FROM \"{join_table}\" WHERE parent_id = \"{parent_table}\".id AND {op_sql}{locale_sql})"
             ))
         }
         SubqueryCondition::Json {
@@ -96,15 +95,11 @@ fn build_subquery_sql(
             for (source, alias) in each_joins {
                 from_parts.push(conn.json_each_source(source, alias));
             }
-            let cond = build_op_condition(conn, extract_expr, op, field_type.as_ref(), params);
+            let op_sql = build_op_condition(conn, extract_expr, op, field_type.as_ref(), params);
             let locale_sql = append_locale_clause(conn, join_table, locale_constraint, params);
             Ok(format!(
-                "EXISTS (SELECT 1 FROM {} WHERE \"{}\".parent_id = \"{}\".id AND {}{})",
+                "EXISTS (SELECT 1 FROM {} WHERE \"{join_table}\".parent_id = \"{parent_table}\".id AND {op_sql}{locale_sql})",
                 from_parts.join(", "),
-                join_table,
-                parent_table,
-                cond,
-                locale_sql
             ))
         }
     }
@@ -144,6 +139,10 @@ fn append_locale_clause(
 ///
 /// Returns an **empty string** when `filters` is empty (no WHERE at all),
 /// so callers can unconditionally append the result to their query.
+///
+/// # Errors
+///
+/// Returns an error if any filter references an unknown field or path.
 pub fn build_where_clause(
     conn: &dyn DbConnection,
     filters: &[FilterClause],
@@ -205,6 +204,10 @@ pub fn build_where_clause(
 /// [`resolve_filter_column`]. Non-localized fields pass through unchanged.
 ///
 /// This is a pure transformation — no database access required.
+///
+/// # Errors
+///
+/// Returns an error if any filter references an unknown field.
 pub fn resolve_filters(
     filters: &[FilterClause],
     def: &CollectionDefinition,
@@ -338,6 +341,20 @@ fn check_flat_sub_fields<'a>(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::*;
     use crate::config::LocaleConfig;
@@ -840,7 +857,7 @@ mod tests {
         let resolved = resolve_filters(&filters, &def, Some(&ctx)).unwrap();
         match &resolved[0] {
             FilterClause::Single(f) => assert_eq!(f.field, "status"),
-            other => panic!("Expected Single, got {:?}", other),
+            other => panic!("Expected Single, got {other:?}"),
         }
     }
 
@@ -867,7 +884,7 @@ mod tests {
                 assert_eq!(groups[0][0].field, "title__de");
                 assert_eq!(groups[1][0].field, "title__de");
             }
-            other => panic!("Expected Or, got {:?}", other),
+            other => panic!("Expected Or, got {other:?}"),
         }
     }
 
@@ -885,7 +902,7 @@ mod tests {
         let resolved = resolve_filters(&filters, &def, Some(&ctx)).unwrap();
         match &resolved[0] {
             FilterClause::Single(f) => assert_eq!(f.field, "title__de"),
-            other => panic!("Expected Single, got {:?}", other),
+            other => panic!("Expected Single, got {other:?}"),
         }
     }
 }

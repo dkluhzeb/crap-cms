@@ -13,6 +13,7 @@ use crate::{core::DocumentFields, db::LocaleContext};
 /// produce `DocumentFields` directly. This helper bridges the form side
 /// into the typed pipeline at a single point — the [`WriteInput::builder`]
 /// call site — so the rest of the code sees one typed shape end-to-end.
+#[must_use]
 pub fn values_from_strings(map: HashMap<String, String>) -> DocumentFields {
     map.into_iter()
         .map(|(k, v)| (k, Value::String(v)))

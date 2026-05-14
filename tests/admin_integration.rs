@@ -1,12 +1,26 @@
-//! Integration tests for admin HTTP handlers using tower::ServiceExt::oneshot.
+//! Integration tests for admin HTTP handlers using `tower::ServiceExt::oneshot`.
 //!
 //! Constructs the Axum router via `build_router()` without binding a TCP listener,
 //! then sends requests using `tower::ServiceExt::oneshot`.
 //!
 //! This file covers: health endpoints, static file serving.
-//! Auth tests → admin_auth.rs
-//! Collection tests → admin_collections.rs
-//! Global/upload/CSRF/CORS/access gate tests → admin_globals.rs
+//! Auth tests → `admin_auth.rs`
+//! Collection tests → `admin_collections.rs`
+//! Global/upload/CSRF/CORS/access gate tests → `admin_globals.rs`
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
 
 use std::sync::Arc;
 
@@ -119,7 +133,7 @@ fn setup_app_with_config(
     let has_auth = registry
         .collections
         .values()
-        .any(|d| d.is_auth_collection());
+        .any(crap_cms::core::CollectionDefinition::is_auth_collection);
 
     let state = AdminState {
         config,
@@ -167,7 +181,7 @@ fn setup_app_with_config(
         ),
         populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
         cache: None,
-        custom_pages: Default::default(),
+        custom_pages: crap_cms::admin::custom_pages::CustomPageRegistry::default(),
     };
 
     let router = build_router(state);
@@ -187,13 +201,13 @@ const TEST_CSRF: &str = "test-csrf-token-12345";
 /// Cookie string with just the CSRF token.
 #[allow(dead_code)]
 fn csrf_cookie() -> String {
-    format!("crap_csrf={}", TEST_CSRF)
+    format!("crap_csrf={TEST_CSRF}")
 }
 
 /// Combine an auth cookie with the CSRF cookie.
 #[allow(dead_code)]
 fn auth_and_csrf(auth_cookie: &str) -> String {
-    format!("{}; crap_csrf={}", auth_cookie, TEST_CSRF)
+    format!("{auth_cookie}; crap_csrf={TEST_CSRF}")
 }
 
 /// Helper to read response body as string.
@@ -260,7 +274,6 @@ async fn static_css_returns_200() {
         .map(|v| v.to_str().unwrap_or(""));
     assert!(
         ct.unwrap_or("").contains("css"),
-        "Content-Type should be CSS, got {:?}",
-        ct
+        "Content-Type should be CSS, got {ct:?}"
     );
 }

@@ -15,6 +15,11 @@ const LUA_API_TYPES: &str = include_str!("../../types/crap.lua");
 
 /// Generate Lua type definitions (default behavior, used on server startup).
 /// Writes to `<config_dir>/types/generated.lua`.
+///
+/// # Errors
+///
+/// Returns an error if the types directory can't be created or the output
+/// file can't be written.
 pub fn generate(config_dir: &Path, registry: &Registry) -> Result<PathBuf> {
     generate_lang(config_dir, registry, Language::Lua, None)
 }
@@ -22,15 +27,19 @@ pub fn generate(config_dir: &Path, registry: &Registry) -> Result<PathBuf> {
 /// Generate type definitions for a specific language.
 /// Writes to `<output_dir>/generated.<ext>` (defaults to `<config_dir>/types/`).
 /// Also writes `crap.lua` API surface types (keeps them in sync with CMS binary version).
+///
+/// # Errors
+///
+/// Returns an error if the types directory can't be created or any output
+/// file can't be written.
 pub fn generate_lang(
     config_dir: &Path,
     registry: &Registry,
     lang: Language,
     output_dir: Option<&Path>,
 ) -> Result<PathBuf> {
-    let types_dir = output_dir
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| config_dir.join("types"));
+    let types_dir =
+        output_dir.map_or_else(|| config_dir.join("types"), std::path::Path::to_path_buf);
     std::fs::create_dir_all(&types_dir)?;
 
     // Always write the API surface types (keeps them in sync with CMS version)
@@ -43,17 +52,21 @@ pub fn generate_lang(
     Ok(path)
 }
 
-/// Generate proto conversion code for Rust (prost_types → typed structs).
+/// Generate proto conversion code for Rust (`prost_types` → typed structs).
 /// Writes to `<output_dir>/generated_proto.rs`.
+///
+/// # Errors
+///
+/// Returns an error if the types directory can't be created or the output
+/// file can't be written.
 pub fn generate_proto_conversion(
     config_dir: &Path,
     registry: &Registry,
     proto_mod: &str,
     output_dir: Option<&Path>,
 ) -> Result<PathBuf> {
-    let types_dir = output_dir
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| config_dir.join("types"));
+    let types_dir =
+        output_dir.map_or_else(|| config_dir.join("types"), std::path::Path::to_path_buf);
     std::fs::create_dir_all(&types_dir)?;
 
     let output = rust_proto::render(registry, proto_mod);

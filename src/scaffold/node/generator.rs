@@ -32,6 +32,11 @@ pub struct MakeNodeOptions<'a> {
 }
 
 /// Scaffold the richtext-node Lua snippet.
+///
+/// # Errors
+///
+/// Returns an error if the name is invalid, the file already exists without
+/// `--force`, or writing the file fails.
 pub fn make_node(opts: &MakeNodeOptions) -> Result<()> {
     validate_slug(opts.name)?;
 

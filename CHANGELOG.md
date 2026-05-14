@@ -291,6 +291,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- **Clippy pedantic sweep — `cargo clippy --all-targets` is now clean.**
+  Production code (`--lib --bin`) is held to the strict pedantic set;
+  the only workspace-level allows remain `implicit_hasher` and
+  `struct_excessive_bools` (both pre-existing, both have documented
+  rationale in `Cargo.toml`). Test code is held to a narrower set —
+  pedantic lints that surface as noise without catching real issues in
+  tests (`cast_*`, `match_wildcard_for_single_variants`,
+  `needless_pass_by_value`, `similar_names`, `too_many_lines`,
+  `unreadable_literal`, `used_underscore_binding`,
+  `missing_panics_doc`, `items_after_statements`,
+  `case_sensitive_file_extension_comparisons`) are allowed
+  per-integration-test-file (`#![allow(…)]` on each `tests/*.rs`) and
+  per-`mod tests` block on the lib unit-test modules that have them.
+  Substantive findings (architectural fixes, real bugs, real docs
+  gaps) were applied as code changes rather than allows — e.g. handler
+  splits into thin orchestrators (`list_items`, `edit_form`,
+  `build_router`, `run`), bootstrap + per-server-task helpers in
+  `serve::startup`, a `JoinTarget` bundle in batch populate dispatch,
+  `Default::default()` → typed-constructor calls, and a few targeted
+  patterns (`writeln!` over `push_str(&format!(...))`, `let-else` over
+  `match` + `panic!`, `matches!` over identical-arm match).
+
 - **Stutter-rename pass.** Files whose names repeated their parent
   directory got their prefixes dropped — the prefix is informative
   inside the type name (`FieldDefinition`, `AuthConfig`) but

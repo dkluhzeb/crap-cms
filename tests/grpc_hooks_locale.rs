@@ -1,7 +1,21 @@
 //! Localization, drafts, versions, complex globals, has-many relationships,
 //! bulk operations, count, FTS search, and jobs RPC tests.
 //!
-//! Uses ContentService directly (no network) via ContentApi trait.
+//! Uses `ContentService` directly (no network) via `ContentApi` trait.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -181,7 +195,10 @@ fn setup_service_with_locale(
     let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
-    config.locale.locales = locales.iter().map(|s| s.to_string()).collect();
+    config.locale.locales = locales
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
     config.locale.default_locale = locales.first().unwrap_or(&"en").to_string();
     config.locale.fallback = true;
 
@@ -486,10 +503,7 @@ async fn create_and_find_with_locale_all() {
         }
         other => {
             // Some implementations may return it differently
-            panic!(
-                "Expected struct with locale keys for locale=all, got: {:?}",
-                other
-            );
+            panic!("Expected struct with locale keys for locale=all, got: {other:?}");
         }
     }
 }

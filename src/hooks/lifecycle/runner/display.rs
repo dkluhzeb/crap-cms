@@ -1,4 +1,4 @@
-//! HookRunner methods for display conditions and rendering.
+//! `HookRunner` methods for display conditions and rendering.
 
 use std::collections::HashMap;
 
@@ -25,6 +25,7 @@ impl HookRunner {
     /// Call a Lua function to compute a row label for an array/blocks row.
     /// Returns None if the function errors or returns nil.
     /// No CRUD access — pure formatting function.
+    #[must_use]
     pub fn call_row_label(&self, func_ref: &str, row_data: &JsonValue) -> Option<String> {
         let lua = self.pool.acquire().ok()?;
         let func = resolve_hook_function(&lua, func_ref).ok()?;
@@ -40,6 +41,7 @@ impl HookRunner {
     /// Returns `DisplayConditionResult::Bool(visible)` or
     /// `DisplayConditionResult::Table { condition, visible }` depending on what Lua returns.
     /// No CRUD access — pure evaluation function.
+    #[must_use]
     pub fn call_display_condition(
         &self,
         func_ref: &str,
@@ -50,7 +52,8 @@ impl HookRunner {
     }
 
     /// Evaluate display conditions for multiple fields using a single VM acquisition.
-    /// Returns a map from func_ref to the evaluation result.
+    /// Returns a map from `func_ref` to the evaluation result.
+    #[must_use]
     pub fn call_display_conditions_batch(
         &self,
         conditions: &[(&str, &JsonValue)],
@@ -58,9 +61,8 @@ impl HookRunner {
         if conditions.is_empty() {
             return HashMap::new();
         }
-        let lua = match self.pool.acquire() {
-            Ok(l) => l,
-            Err(_) => return HashMap::new(),
+        let Ok(lua) = self.pool.acquire() else {
+            return HashMap::new();
         };
         let mut results = HashMap::new();
 
@@ -127,6 +129,7 @@ impl HookRunner {
     ///
     /// Returns an empty Vec if Lua isn't available or no pages are
     /// registered.
+    #[must_use]
     pub fn extract_custom_pages(&self) -> Vec<CustomPage> {
         let Ok(lua) = self.pool.acquire() else {
             return Vec::new();

@@ -38,7 +38,7 @@ pub(super) fn register_jobs_init(lua: &Lua, crap: &Table, registry: SharedRegist
 /// Pool-VM registration: `define` is a no-op stub. Pool VMs DO
 /// re-run `jobs/*.lua` (handler functions live there as Lua module
 /// returns), but the top-level `crap.jobs.define` call lands here as
-/// a no-op since the init_lua VM already wrote the job to the
+/// a no-op since the `init_lua` VM already wrote the job to the
 /// registry. The handler module return (`return M`) still produces
 /// per-VM function handles via `require`.
 pub(super) fn register_jobs_pool_init(
@@ -63,7 +63,7 @@ pub(super) fn register_jobs_pool_init(
     Ok(())
 }
 
-/// Init-time define: parses + registers the job. The strict InitPhase
+/// Init-time define: parses + registers the job. The strict `InitPhase`
 /// guard rejects any caller that landed here outside init.
 fn define_init(lua: &Lua, reg: &SharedRegistry, slug: &str, config: &Table) -> mlua::Result<()> {
     if lua.app_data_ref::<InitPhase>().is_none() {

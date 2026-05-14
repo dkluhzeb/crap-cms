@@ -27,21 +27,15 @@ pub(crate) fn check_access_with_lua(
     id: Option<&str>,
     data: Option<&DocumentFields>,
 ) -> Result<AccessResult> {
-    let func_ref = match access_ref {
-        Some(r) => r,
-        None => {
-            // No access function configured — check if default-deny is enabled
-            let deny = lua
-                .app_data_ref::<DefaultDeny>()
-                .map(|d| d.0)
-                .unwrap_or(false);
+    let Some(func_ref) = access_ref else {
+        // No access function configured — check if default-deny is enabled
+        let deny = lua.app_data_ref::<DefaultDeny>().is_some_and(|d| d.0);
 
-            return Ok(if deny {
-                AccessResult::Denied
-            } else {
-                AccessResult::Allowed
-            });
-        }
+        return Ok(if deny {
+            AccessResult::Denied
+        } else {
+            AccessResult::Allowed
+        });
     };
 
     let func = resolve_hook_function(lua, func_ref)?;
@@ -147,6 +141,20 @@ fn parse_access_constraints(tbl: &mlua::Table) -> Result<AccessResult> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::super::test_helpers::*;
     use super::*;

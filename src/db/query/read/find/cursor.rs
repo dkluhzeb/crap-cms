@@ -6,6 +6,8 @@
 //! bucket plus rows in the same bucket past the inner sort/id keyset.
 //! Pre-composite cursors fall back to the original single-column keyset.
 
+use std::fmt::Write as _;
+
 use anyhow::{Result, bail};
 
 use crate::db::query::cursor::{CursorData, SortDirection};
@@ -60,7 +62,7 @@ pub(super) fn apply_cursor_keyset(
     };
 
     let prefix = if *has_where { " AND " } else { " WHERE " };
-    sql.push_str(&format!("{prefix}({clause})"));
+    let _ = write!(sql, "{prefix}({clause})");
     *has_where = true;
 
     Ok(())
@@ -98,6 +100,20 @@ fn inner_keyset_clause(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use serde_json::{Value, json};
 
@@ -146,7 +162,7 @@ mod tests {
         // Insert 5 rows with deterministic titles
         for i in 1..=5 {
             let mut data = DocumentFields::new();
-            data.insert("title".to_string(), Value::String(format!("Post {:02}", i)));
+            data.insert("title".to_string(), Value::String(format!("Post {i:02}")));
             create(&conn, "posts", &def, &data, None).unwrap();
         }
 
@@ -206,7 +222,7 @@ mod tests {
 
         for i in 1..=4 {
             let mut data = DocumentFields::new();
-            data.insert("title".to_string(), Value::String(format!("Post {:02}", i)));
+            data.insert("title".to_string(), Value::String(format!("Post {i:02}")));
             create(&conn, "posts", &def, &data, None).unwrap();
         }
 
@@ -268,7 +284,7 @@ mod tests {
 
         for i in 1..=5 {
             let mut data = DocumentFields::new();
-            data.insert("title".to_string(), Value::String(format!("Post {:02}", i)));
+            data.insert("title".to_string(), Value::String(format!("Post {i:02}")));
             create(&conn, "posts", &def, &data, None).unwrap();
         }
 
@@ -325,7 +341,7 @@ mod tests {
 
         for i in 1..=4 {
             let mut data = DocumentFields::new();
-            data.insert("title".to_string(), Value::String(format!("Post {:02}", i)));
+            data.insert("title".to_string(), Value::String(format!("Post {i:02}")));
             create(&conn, "posts", &def, &data, None).unwrap();
         }
 
@@ -625,7 +641,7 @@ mod tests {
         // Insert some docs
         for i in 1..=3 {
             let mut data = DocumentFields::new();
-            data.insert("title".to_string(), Value::String(format!("Post {:02}", i)));
+            data.insert("title".to_string(), Value::String(format!("Post {i:02}")));
             data.insert("status".to_string(), json!("active"));
             create(&conn, "posts", &def, &data, None).unwrap();
         }
@@ -688,8 +704,7 @@ mod tests {
         for i in 1..=14 {
             conn.execute(
                 &format!(
-                    "INSERT INTO posts (id, title, created_at, updated_at) VALUES ('d{:02}', 'Post {}', '2024-01-{:02}T12:00:00.000Z', '2024-01-{:02}T12:00:00.000Z')",
-                    i, i, i, i
+                    "INSERT INTO posts (id, title, created_at, updated_at) VALUES ('d{i:02}', 'Post {i}', '2024-01-{i:02}T12:00:00.000Z', '2024-01-{i:02}T12:00:00.000Z')"
                 ),
                 &[],
             ).unwrap();

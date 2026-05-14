@@ -47,7 +47,7 @@ fn resolve_full_name(field: &FieldDefinition, name_prefix: &str) -> String {
 }
 
 /// Build the typed common base data shared by every variant. Returns
-/// `(base, full_name, value)` so callers can keep using full_name and the
+/// `(base, full_name, value)` so callers can keep using `full_name` and the
 /// raw value string for type-specific logic.
 fn build_base_field_data(
     field: &FieldDefinition,
@@ -59,12 +59,10 @@ fn build_base_field_data(
     let full_name = resolve_full_name(field, name_prefix);
     let value_str = values.get(&full_name).cloned().unwrap_or_default();
 
-    let label = field
-        .admin
-        .label
-        .as_ref()
-        .map(|ls| ls.resolve_default().to_string())
-        .unwrap_or_else(|| auto_label_from_name(&field.name));
+    let label = field.admin.label.as_ref().map_or_else(
+        || auto_label_from_name(&field.name),
+        |ls| ls.resolve_default().to_string(),
+    );
 
     let locale_locked = non_default_locale && !field.localized;
 
@@ -249,10 +247,10 @@ fn construct_code(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
         .filter(|s| !s.is_empty())
         .unwrap_or(default_lang);
 
-    let languages = if !fc.field.admin.languages.is_empty() {
-        Some(fc.field.admin.languages.clone())
-    } else {
+    let languages = if fc.field.admin.languages.is_empty() {
         None
+    } else {
+        Some(fc.field.admin.languages.clone())
     };
 
     FieldContext::Code(CodeField {
@@ -264,10 +262,10 @@ fn construct_code(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
 
 fn construct_richtext(mut base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
     let resizable = fc.field.admin.resizable;
-    let features = if !fc.field.admin.features.is_empty() {
-        Some(fc.field.admin.features.clone())
-    } else {
+    let features = if fc.field.admin.features.is_empty() {
         None
+    } else {
+        Some(fc.field.admin.features.clone())
     };
     let richtext_format = fc
         .field
@@ -276,10 +274,10 @@ fn construct_richtext(mut base: BaseFieldData, fc: &SingleFieldCtx) -> FieldCont
         .as_deref()
         .unwrap_or("html")
         .to_string();
-    let node_names = if !fc.field.admin.nodes.is_empty() {
-        Some(fc.field.admin.nodes.clone())
-    } else {
+    let node_names = if fc.field.admin.nodes.is_empty() {
         None
+    } else {
+        Some(fc.field.admin.nodes.clone())
     };
 
     // Node-attribute errors fall back when there's no direct error for the
@@ -312,8 +310,7 @@ fn construct_date(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
     let tz_value = fc
         .values
         .get(&tz_key)
-        .map(|s| s.as_str())
-        .unwrap_or("")
+        .map_or("", std::string::String::as_str)
         .trim();
 
     let display_value = if !tz_value.is_empty() && !fc.value.is_empty() {
@@ -488,7 +485,7 @@ fn construct_join(mut base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext 
 // ── Composites ────────────────────────────────────────────────────
 
 /// Build sub-fields for layout wrappers (Row, Collapsible, Tabs).
-/// Top-level wrappers use empty prefix, nested ones use the full_name.
+/// Top-level wrappers use empty prefix, nested ones use the `full_name`.
 fn build_layout_sub_fields(
     fields: &[FieldDefinition],
     values: &HashMap<String, String>,
@@ -694,11 +691,10 @@ fn construct_blocks(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
                     })
                     .collect();
 
-                let label = bd
-                    .label
-                    .as_ref()
-                    .map(|ls| ls.resolve_default().to_string())
-                    .unwrap_or_else(|| bd.block_type.clone());
+                let label = bd.label.as_ref().map_or_else(
+                    || bd.block_type.clone(),
+                    |ls| ls.resolve_default().to_string(),
+                );
 
                 BlockDefCtx {
                     block_type: bd.block_type.clone(),
@@ -733,6 +729,20 @@ fn construct_blocks(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use crate::core::BlockDefinition;
     use std::collections::HashMap;
@@ -930,8 +940,8 @@ mod tests {
 
     /// Mirrors the projects example: a code field inside a `code_block`
     /// block-definition with `admin.languages` set. The picker MUST show up
-    /// (data-languages attribute and hidden _lang input both rely on
-    /// ctx["languages"]) — verify the block-template rendering carries it.
+    /// (data-languages attribute and hidden `_lang` input both rely on
+    /// `ctx["languages"]`) — verify the block-template rendering carries it.
     #[test]
     fn code_subfield_inside_blocks_carries_languages_allowlist() {
         let code =

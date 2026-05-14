@@ -19,6 +19,12 @@ use super::{
 };
 
 /// Dispatch user management subcommands.
+///
+/// # Errors
+///
+/// Returns an error from the dispatched action (create / delete /
+/// modify / list / lock / unlock) — collection not found, password
+/// validation, DB constraint violations, etc.
 #[cfg(not(tarpaulin_include))]
 pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
     match action {

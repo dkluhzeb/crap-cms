@@ -1,8 +1,22 @@
 //! Validation-focused tests for crap-cms hook lifecycle.
 //!
-//! Tests for validate_fields: required, unique, custom functions,
+//! Tests for `validate_fields`: required, unique, custom functions,
 //! block/array sub-fields, groups, min/max rows, date format, nested
 //! structures, and related edge cases.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
 
 use std::path::PathBuf;
 use std::sync::Arc;

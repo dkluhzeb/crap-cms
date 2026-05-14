@@ -53,15 +53,14 @@ pub(super) fn register_hooks(lua: &Lua, crap: &Table) -> Result<()> {
 fn get_or_create_hook_list(lua: &Lua, event: &str) -> mlua::Result<Table> {
     let event_hooks: Table = lua.named_registry_value("_crap_event_hooks")?;
 
-    match event_hooks.get::<Value>(event)? {
-        Value::Table(t) => Ok(t),
-        _ => {
-            let t = lua.create_table()?;
+    if let Value::Table(t) = event_hooks.get::<Value>(event)? {
+        Ok(t)
+    } else {
+        let t = lua.create_table()?;
 
-            event_hooks.set(event, t.clone())?;
+        event_hooks.set(event, t.clone())?;
 
-            Ok(t)
-        }
+        Ok(t)
     }
 }
 

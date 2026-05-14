@@ -11,6 +11,11 @@ use super::helpers::{lookup_embedded, split_kind};
 /// Run `crap-cms templates diff` for a single overlay path. The path is
 /// relative to the config dir (e.g. `templates/layout/base.hbs` or
 /// `static/styles.css`).
+///
+/// # Errors
+///
+/// Returns an error if the overlay path doesn't exist or has no compiled-in
+/// counterpart, or if reading either file fails.
 pub fn diff(config_dir: &Path, rel_path: &str) -> Result<()> {
     let abs = config_dir.join(rel_path);
     if !abs.exists() {
@@ -25,23 +30,17 @@ pub fn diff(config_dir: &Path, rel_path: &str) -> Result<()> {
         fs::read_to_string(&abs).with_context(|| format!("read overlay file {}", abs.display()))?;
 
     let Some((kind, sub_path)) = split_kind(rel_path) else {
-        bail!(
-            "Overlay path must start with `templates/` or `static/`, got: {}",
-            rel_path
-        );
+        bail!("Overlay path must start with `templates/` or `static/`, got: {rel_path}");
     };
 
     let embedded = lookup_embedded(kind, sub_path).with_context(|| {
-        format!(
-            "no embedded upstream for {}/{} — has it been removed in this version?",
-            kind, sub_path
-        )
+        format!("no embedded upstream for {kind}/{sub_path} — has it been removed in this version?")
     })?;
 
     let upstream = String::from_utf8_lossy(embedded);
 
     print_unified_diff(
-        &format!("upstream/{}", rel_path),
+        &format!("upstream/{rel_path}"),
         &abs.display().to_string(),
         &upstream,
         &user,
@@ -56,8 +55,8 @@ pub fn diff(config_dir: &Path, rel_path: &str) -> Result<()> {
 /// have been inserted (the previous lockstep heuristic produced
 /// unreadable noise on overlays that added more than a couple of lines).
 fn print_unified_diff(label_a: &str, label_b: &str, a: &str, b: &str) {
-    println!("--- {}", label_a);
-    println!("+++ {}", label_b);
+    println!("--- {label_a}");
+    println!("+++ {label_b}");
 
     let diff = TextDiff::from_lines(a, b);
 

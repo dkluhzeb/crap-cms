@@ -5,40 +5,68 @@ use anyhow::{Context as _, Result};
 use crate::db::{DbConnection, DbValue};
 
 /// Lock a user account (prevent login).
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
 pub fn lock_user(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> {
     set_bool_column(conn, slug, id, "_locked", true)
 }
 
 /// Unlock a user account (allow login).
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
 pub fn unlock_user(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> {
     set_bool_column(conn, slug, id, "_locked", false)
 }
 
 /// Check if a user account is locked.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails.
 pub fn is_locked(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
     get_bool_column(conn, slug, id, "_locked")
 }
 
 /// Check if a user is verified.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails.
 pub fn is_verified(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<bool> {
     get_bool_column(conn, slug, user_id, "_verified")
 }
 
 /// Get the session version for a user. Returns 0 if no version set (NULL or missing).
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails or the column fails to parse.
 pub fn get_session_version(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<u64> {
     let sql = format!(
         "SELECT COALESCE(_session_version, 0) AS sv FROM \"{slug}\" WHERE id = {}",
         conn.placeholder(1)
     );
 
-    Ok(conn
+    let raw = conn
         .query_one(&sql, &[DbValue::Text(id.to_string())])?
         .map(|row| row.get_i64("sv"))
         .transpose()?
-        .unwrap_or(0) as u64)
+        .unwrap_or(0);
+    // `_session_version` is a monotonically-increasing counter, never
+    // negative in well-formed rows. Treat a stored negative value as 0
+    // (the user's session is "version 0") rather than wrapping.
+    Ok(u64::try_from(raw).unwrap_or(0))
 }
 
 /// Check whether a user exists in the given collection.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails.
 pub fn user_exists(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
     let sql = format!(
         "SELECT 1 FROM \"{slug}\" WHERE id = {}",
@@ -71,7 +99,7 @@ fn set_bool_column(
     col: &str,
     value: bool,
 ) -> Result<()> {
-    let val = if value { 1 } else { 0 };
+    let val = i32::from(value);
     let sql = format!(
         "UPDATE \"{slug}\" SET {col} = {val} WHERE id = {}",
         conn.placeholder(1)

@@ -51,7 +51,7 @@ impl Drop for SseConnectionGuard {
     }
 }
 
-/// Stream wrapper that ends when a CancellationToken fires.
+/// Stream wrapper that ends when a `CancellationToken` fires.
 /// Holds an optional SSE connection guard that decrements the counter on drop.
 struct CancellableStream {
     inner: Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>,
@@ -182,7 +182,7 @@ fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document>) -> SseAc
     access
 }
 
-/// Build the JSON payload for an SSE event, applying access control, after_read hooks,
+/// Build the JSON payload for an SSE event, applying access control, `after_read` hooks,
 /// and field stripping. Returns `None` when the subscriber should not receive this event.
 ///
 /// Separated from [`event_to_sse`] so it can be unit-tested without depending on
@@ -269,7 +269,7 @@ fn build_event_payload(
     }))
 }
 
-/// Convert a mutation event to an SSE Event, applying access control, after_read hooks,
+/// Convert a mutation event to an SSE Event, applying access control, `after_read` hooks,
 /// and field stripping to match normal read operations.
 fn event_to_sse(
     event: &MutationEvent,

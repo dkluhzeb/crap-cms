@@ -3,7 +3,7 @@ use serde_json::Value;
 use crate::core::{FieldDefinition, validate::FieldError};
 
 /// Validate min / max bounds for number fields.
-/// Skipped for has_many fields (validated per-element in `check_has_many_elements`).
+/// Skipped for `has_many` fields (validated per-element in `check_has_many_elements`).
 pub(crate) fn check_numeric_bounds(
     field: &FieldDefinition,
     data_key: &str,

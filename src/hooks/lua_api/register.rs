@@ -31,20 +31,25 @@ use super::{
     utils::{load_lua_helpers, register_util},
 };
 
-/// Register the `crap` global table for the **init_lua** VM — the single
+/// Register the `crap` global table for the **`init_lua`** VM — the single
 /// VM that owns the writeable `SharedRegistry` and processes every
 /// `<config_dir>/{collections,globals,jobs}/*.lua` plus `init.lua`.
 /// Definition writes here are real (`register_collection`,
 /// `register_global`, `register_job`, `register_richtext_node`).
-pub fn register_api(lua: &Lua, registry: SharedRegistry, config: &CrapConfig) -> Result<()> {
+///
+/// # Errors
+///
+/// Returns an error if any sub-module's Lua registration fails (e.g. a Lua
+/// runtime error setting up the global table).
+pub fn register_api(lua: &Lua, registry: &SharedRegistry, config: &CrapConfig) -> Result<()> {
     let crap = lua.create_table().context("Failed to create crap table")?;
 
-    register_collections_init(lua, &crap, Arc::clone(&registry))?;
-    register_globals_init(lua, &crap, Arc::clone(&registry))?;
-    register_common(lua, &crap, &registry, config)?;
-    register_jobs_init(lua, &crap, Arc::clone(&registry))?;
+    register_collections_init(lua, &crap, Arc::clone(registry))?;
+    register_globals_init(lua, &crap, Arc::clone(registry))?;
+    register_common(lua, &crap, registry, config)?;
+    register_jobs_init(lua, &crap, Arc::clone(registry))?;
     register_email(lua, &crap, config)?;
-    register_richtext_init(lua, &crap, Arc::clone(&registry))?;
+    register_richtext_init(lua, &crap, Arc::clone(registry))?;
     register_fields(lua, &crap)?;
     register_template_data(lua, &crap)?;
     register_pages(lua, &crap)?;
@@ -62,8 +67,12 @@ pub fn register_api(lua: &Lua, registry: SharedRegistry, config: &CrapConfig) ->
 /// `jobs/*.lua` (to populate per-VM Lua state: hook functions,
 /// richtext renderers, handler modules, etc.) but skip
 /// `collections/` and `globals/` files. Definition writes here are
-/// no-ops — the init_lua VM already populated the registry; pool VMs
+/// no-ops — the `init_lua` VM already populated the registry; pool VMs
 /// only need the per-VM Lua-side side effects.
+///
+/// # Errors
+///
+/// Returns an error if any sub-module's Lua registration fails.
 pub fn register_api_pool_init(
     lua: &Lua,
     registry: Arc<Registry>,
@@ -91,8 +100,8 @@ pub fn register_api_pool_init(
     Ok(())
 }
 
-/// Common register calls for the init_lua VM — passes SharedRegistry
-/// to access/schema (locks per read; fine since init_lua is single-VM
+/// Common register calls for the `init_lua` VM — passes `SharedRegistry`
+/// to access/schema (locks per read; fine since `init_lua` is single-VM
 /// and the writes happen on the same thread).
 fn register_common(
     lua: &Lua,
@@ -120,8 +129,8 @@ fn register_common(
 }
 
 /// Common register calls for pool VMs — passes `Arc<Registry>` to
-/// access/schema for lock-free reads. Same generic register_access /
-/// register_schema fns as `register_common` — just different
+/// access/schema for lock-free reads. Same generic `register_access` /
+/// `register_schema` fns as `register_common` — just different
 /// `RegistryRead` impl monomorphized in.
 fn register_common_with_arc(
     lua: &Lua,

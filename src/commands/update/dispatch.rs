@@ -54,6 +54,12 @@ pub enum UpdateCmd {
 }
 
 /// Execute an `UpdateCmd`. `None` means "install latest + use latest".
+///
+/// # Errors
+///
+/// Returns an error from the dispatched subcommand — download / archive
+/// extraction / symlink swap / GitHub API failures, or Windows refusing
+/// the write-paths that need symlinks.
 pub fn run<C: CommandFactory>(cmd: Option<UpdateCmd>, yes: bool, force: bool) -> Result<()> {
     match cmd {
         Some(UpdateCmd::Check) => run_check(),

@@ -47,7 +47,7 @@ fn fetch_delete_title(
         Ok(Some(doc)) => Ok(def
             .title_field()
             .and_then(|f| doc.get_str(f))
-            .map(|s| s.to_string())),
+            .map(std::string::ToString::to_string)),
         Ok(None) => Err(()),
         Err(e) => {
             warn!(
@@ -68,7 +68,7 @@ pub async fn delete_confirm(
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
     let Some(def) = state.registry.get_collection(&slug).cloned() else {
-        return not_found(&state, &format!("Collection '{}' not found", slug));
+        return not_found(&state, &format!("Collection '{slug}' not found"));
     };
 
     // For soft-delete collections, use trash access (falls back to update).
@@ -79,7 +79,7 @@ pub async fn delete_confirm(
         def.access.delete.as_deref()
     };
 
-    match check_access_or_forbid(&state, access_fn, &auth_user, Some(&id), None) {
+    match check_access_or_forbid(&state, access_fn, auth_user.as_ref(), Some(&id), None) {
         Ok(AccessResult::Denied) => {
             return forbidden(&state, "You don't have permission to delete this item");
         }
@@ -88,9 +88,8 @@ pub async fn delete_confirm(
     }
 
     let user_doc = auth_user.as_ref().map(|Extension(au)| &au.user_doc);
-    let title_value = match fetch_delete_title(&state, &slug, &def, &id, user_doc) {
-        Ok(title) => title,
-        Err(()) => return not_found(&state, &format!("Document '{}' not found", id)),
+    let Ok(title_value) = fetch_delete_title(&state, &slug, &def, &id, user_doc) else {
+        return not_found(&state, &format!("Document '{id}' not found"));
     };
 
     let ref_count = lookup_ref_count(&state.pool, &slug, &id);
@@ -107,7 +106,7 @@ pub async fn delete_confirm(
     let base = BasePageContext::for_handler(
         &state,
         claims_ref,
-        &auth_user,
+        auth_user.as_ref(),
         PageMeta::new(PageType::CollectionDelete, "delete_name")
             .with_title_name(def.singular_name()),
     )

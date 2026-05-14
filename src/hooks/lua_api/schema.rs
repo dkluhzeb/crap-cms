@@ -23,16 +23,16 @@ fn labels_to_lua_table(lua: &Lua, labels: &Labels) -> LuaResult<Table> {
 }
 
 /// Look up a single collection by slug and return its Lua table (or Nil).
-fn get_collection(lua: &Lua, registry: &Registry, slug: String) -> LuaResult<Value> {
-    match registry.get_collection(&slug) {
+fn get_collection(lua: &Lua, registry: &Registry, slug: &str) -> LuaResult<Value> {
+    match registry.get_collection(slug) {
         Some(def) => Ok(Value::Table(collection_def_to_lua_table(lua, def)?)),
         None => Ok(Value::Nil),
     }
 }
 
 /// Look up a single global by slug and return its Lua table (or Nil).
-fn get_global(lua: &Lua, registry: &Registry, slug: String) -> LuaResult<Value> {
-    match registry.get_global(&slug) {
+fn get_global(lua: &Lua, registry: &Registry, slug: &str) -> LuaResult<Value> {
+    match registry.get_global(slug) {
         Some(def) => Ok(Value::Table(global_def_to_lua_table(lua, def)?)),
         None => Ok(Value::Nil),
     }
@@ -98,7 +98,7 @@ pub(super) fn register_schema<R: RegistryRead>(lua: &Lua, crap: &Table, registry
     schema_table.set(
         "get_collection",
         lua.create_function(move |lua, slug: String| {
-            reg.with(|r| get_collection(lua, r, slug))
+            reg.with(|r| get_collection(lua, r, &slug))
                 .map_err(|e| RuntimeError(e.to_string()))?
         })?,
     )?;
@@ -107,7 +107,7 @@ pub(super) fn register_schema<R: RegistryRead>(lua: &Lua, crap: &Table, registry
     schema_table.set(
         "get_global",
         lua.create_function(move |lua, slug: String| {
-            reg.with(|r| get_global(lua, r, slug))
+            reg.with(|r| get_global(lua, r, &slug))
                 .map_err(|e| RuntimeError(e.to_string()))?
         })?,
     )?;
@@ -158,151 +158,170 @@ fn collection_def_to_lua_table(lua: &Lua, def: &CollectionDefinition) -> LuaResu
     Ok(tbl)
 }
 
-/// Convert a FieldDefinition to a Lua table for schema introspection.
+/// Convert a `FieldDefinition` to a Lua table for schema introspection.
+///
+/// Sections (basics, relationship, validation bounds, admin, join, options,
+/// sub-fields, blocks) are populated by per-section helpers — the top-level
+/// dispatcher reads top-to-bottom in the same order the introspection format
+/// documents the fields.
 fn field_def_to_lua_table(lua: &Lua, f: &FieldDefinition) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
 
+    set_schema_basics(&tbl, f)?;
+    set_schema_relationship(lua, &tbl, f)?;
+    set_schema_validation_bounds(&tbl, f)?;
+    set_schema_admin(lua, &tbl, f)?;
+    set_schema_join(&tbl, f)?;
+    set_schema_options(lua, &tbl, f)?;
+    set_schema_sub_fields(lua, &tbl, f)?;
+    set_schema_blocks(lua, &tbl, f)?;
+
+    Ok(tbl)
+}
+
+/// Set always-present basics: `name`, `type`, `required`, `localized`,
+/// `unique`.
+fn set_schema_basics(tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
     tbl.set("name", f.name.as_str())?;
     tbl.set("type", f.field_type.as_str())?;
     tbl.set("required", f.required)?;
     tbl.set("localized", f.localized)?;
-    tbl.set("unique", f.unique)?;
+    tbl.set("unique", f.unique)
+}
 
-    if let Some(ref rc) = f.relationship {
-        let rel = lua.create_table()?;
-
-        if rc.is_polymorphic() {
-            let arr = lua.create_table()?;
-
-            for (i, slug) in rc.polymorphic.iter().enumerate() {
-                arr.set(i + 1, &**slug)?;
-            }
-
-            rel.set("collection", arr)?;
-        } else {
-            rel.set("collection", &*rc.collection)?;
+/// Set the `relationship` sub-table when the field carries a
+/// [`RelationshipConfig`]. Polymorphic configs render `collection` as an
+/// array of target slugs; non-polymorphic as a single string.
+fn set_schema_relationship(lua: &Lua, tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
+    let Some(ref rc) = f.relationship else {
+        return Ok(());
+    };
+    let rel = lua.create_table()?;
+    if rc.is_polymorphic() {
+        let arr = lua.create_table()?;
+        for (i, slug) in rc.polymorphic.iter().enumerate() {
+            arr.set(i + 1, &**slug)?;
         }
-
-        rel.set("has_many", rc.has_many)?;
-
-        if let Some(md) = rc.max_depth {
-            rel.set("max_depth", md)?;
-        }
-
-        tbl.set("relationship", rel)?;
+        rel.set("collection", arr)?;
+    } else {
+        rel.set("collection", &*rc.collection)?;
     }
+    rel.set("has_many", rc.has_many)?;
+    if let Some(md) = rc.max_depth {
+        rel.set("max_depth", md)?;
+    }
+    tbl.set("relationship", rel)
+}
 
+/// Set the optional validation-bound keys: `min_length`, `max_length`,
+/// `min`, `max`, `has_many`, `min_date`, `max_date`.
+fn set_schema_validation_bounds(tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
     if let Some(ml) = f.min_length {
         tbl.set("min_length", ml)?;
     }
-
     if let Some(ml) = f.max_length {
         tbl.set("max_length", ml)?;
     }
-
     if let Some(v) = f.min {
         tbl.set("min", v)?;
     }
-
     if let Some(v) = f.max {
         tbl.set("max", v)?;
     }
-
     if f.has_many {
         tbl.set("has_many", true)?;
     }
-
     if let Some(ref md) = f.min_date {
         tbl.set("min_date", md.as_str())?;
     }
-
     if let Some(ref md) = f.max_date {
         tbl.set("max_date", md.as_str())?;
     }
+    Ok(())
+}
 
+/// Set the admin-config keys that the introspection format exposes:
+/// `language`, `features` (Richtext toolbar), `picker`.
+fn set_schema_admin(lua: &Lua, tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
     if let Some(ref lang) = f.admin.language {
         tbl.set("language", lang.as_str())?;
     }
-
     if !f.admin.features.is_empty() {
         let features = lua.create_table()?;
-
         for (i, feat) in f.admin.features.iter().enumerate() {
             features.set(i + 1, feat.as_str())?;
         }
-
         tbl.set("features", features)?;
     }
-
     if let Some(ref p) = f.admin.picker {
         tbl.set("picker", p.as_str())?;
     }
+    Ok(())
+}
 
-    if let Some(ref jc) = f.join {
-        tbl.set("collection", &*jc.collection)?;
-        tbl.set("on", jc.on.as_str())?;
+/// Set `collection` and `on` for Join fields.
+fn set_schema_join(tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
+    let Some(ref jc) = f.join else {
+        return Ok(());
+    };
+    tbl.set("collection", &*jc.collection)?;
+    tbl.set("on", jc.on.as_str())
+}
+
+/// Set the `options` array for Select/Radio fields.
+fn set_schema_options(lua: &Lua, tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
+    if f.options.is_empty() {
+        return Ok(());
     }
+    let opts = lua.create_table()?;
+    for (i, opt) in f.options.iter().enumerate() {
+        let o = lua.create_table()?;
+        o.set("label", opt.label.resolve_default())?;
+        o.set("value", opt.value.as_str())?;
+        opts.set(i + 1, o)?;
+    }
+    tbl.set("options", opts)
+}
 
-    if !f.options.is_empty() {
-        let opts = lua.create_table()?;
+/// Set the `fields` array for Group/Array sub-fields (recursive).
+fn set_schema_sub_fields(lua: &Lua, tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
+    if f.fields.is_empty() {
+        return Ok(());
+    }
+    let sub = lua.create_table()?;
+    for (i, sf) in f.fields.iter().enumerate() {
+        sub.set(i + 1, field_def_to_lua_table(lua, sf)?)?;
+    }
+    tbl.set("fields", sub)
+}
 
-        for (i, opt) in f.options.iter().enumerate() {
-            let o = lua.create_table()?;
-            o.set("label", opt.label.resolve_default())?;
-            o.set("value", opt.value.as_str())?;
-            opts.set(i + 1, o)?;
+/// Set the `blocks` array for Blocks fields. Each block carries its own
+/// label / group / `image_url` metadata plus a recursive `fields` array.
+fn set_schema_blocks(lua: &Lua, tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
+    if f.blocks.is_empty() {
+        return Ok(());
+    }
+    let blocks = lua.create_table()?;
+    for (i, b) in f.blocks.iter().enumerate() {
+        let bt = lua.create_table()?;
+        bt.set("type", b.block_type.as_str())?;
+        if let Some(ref lbl) = b.label {
+            bt.set("label", lbl.resolve_default())?;
         }
-
-        tbl.set("options", opts)?;
-    }
-
-    // Recurse into sub-fields (array, group)
-    if !f.fields.is_empty() {
-        let sub = lua.create_table()?;
-
-        for (i, sf) in f.fields.iter().enumerate() {
-            sub.set(i + 1, field_def_to_lua_table(lua, sf)?)?;
+        if let Some(ref g) = b.group {
+            bt.set("group", g.as_str())?;
         }
-
-        tbl.set("fields", sub)?;
-    }
-
-    // Blocks
-    if !f.blocks.is_empty() {
-        let blocks = lua.create_table()?;
-
-        for (i, b) in f.blocks.iter().enumerate() {
-            let bt = lua.create_table()?;
-
-            bt.set("type", b.block_type.as_str())?;
-
-            if let Some(ref lbl) = b.label {
-                bt.set("label", lbl.resolve_default())?;
-            }
-
-            if let Some(ref g) = b.group {
-                bt.set("group", g.as_str())?;
-            }
-
-            if let Some(ref url) = b.image_url {
-                bt.set("image_url", url.as_str())?;
-            }
-
-            let bf = lua.create_table()?;
-
-            for (j, sf) in b.fields.iter().enumerate() {
-                bf.set(j + 1, field_def_to_lua_table(lua, sf)?)?;
-            }
-
-            bt.set("fields", bf)?;
-
-            blocks.set(i + 1, bt)?;
+        if let Some(ref url) = b.image_url {
+            bt.set("image_url", url.as_str())?;
         }
-
-        tbl.set("blocks", blocks)?;
+        let bf = lua.create_table()?;
+        for (j, sf) in b.fields.iter().enumerate() {
+            bf.set(j + 1, field_def_to_lua_table(lua, sf)?)?;
+        }
+        bt.set("fields", bf)?;
+        blocks.set(i + 1, bt)?;
     }
-
-    Ok(tbl)
+    tbl.set("blocks", blocks)
 }
 
 #[cfg(test)]

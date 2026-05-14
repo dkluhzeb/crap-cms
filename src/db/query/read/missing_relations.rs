@@ -25,6 +25,7 @@ pub struct MissingRelation {
 }
 
 impl MissingRelation {
+    #[must_use]
     pub fn new(
         field_name: String,
         field_label: String,
@@ -109,7 +110,7 @@ fn collect_missing_fields(
                 let ids = extract_ref_ids(val, rc.is_polymorphic());
                 let label = field_display_label(field);
 
-                push_if_missing(conn, registry, ids, rc, field.name.clone(), label, results);
+                push_if_missing(conn, registry, &ids, rc, field.name.clone(), label, results);
             }
             FieldType::Array => {
                 if let Some(arr) = obj.get(&field.name).and_then(|v| v.as_array()) {
@@ -249,7 +250,7 @@ fn query_existing_ids(
 fn push_if_missing(
     conn: &dyn DbConnection,
     registry: &Registry,
-    all_ids: Vec<(String, String)>,
+    all_ids: &[(String, String)],
     rc: &RelationshipConfig,
     field_name: String,
     label: String,
@@ -259,7 +260,7 @@ fn push_if_missing(
         return;
     }
 
-    let missing = check_ids_exist(conn, registry, &all_ids, rc);
+    let missing = check_ids_exist(conn, registry, all_ids, rc);
     if missing.is_empty() {
         return;
     }
@@ -303,7 +304,7 @@ fn collect_missing_in_array(
         push_if_missing(
             conn,
             registry,
-            all_ids,
+            &all_ids,
             rc,
             format!("{}.{}", array_name, sub.name),
             label,
@@ -344,17 +345,16 @@ fn collect_missing_in_blocks(
             let label = format!(
                 "{} > {} > {}",
                 to_title_case(blocks_name),
-                block
-                    .label
-                    .as_ref()
-                    .map(|l| l.resolve_default().to_string())
-                    .unwrap_or_else(|| to_title_case(&block.block_type)),
+                block.label.as_ref().map_or_else(
+                    || to_title_case(&block.block_type),
+                    |l| l.resolve_default().to_string()
+                ),
                 field_display_label(sub),
             );
             push_if_missing(
                 conn,
                 registry,
-                all_ids,
+                &all_ids,
                 rc,
                 format!("{}.{}.{}", blocks_name, block.block_type, sub.name),
                 label,
@@ -412,7 +412,7 @@ mod tests {
 
     fn insert_doc(conn: &dyn DbConnection, table: &str, id: &str) {
         conn.execute(
-            &format!("INSERT INTO \"{}\" (id) VALUES (?1)", table),
+            &format!("INSERT INTO \"{table}\" (id) VALUES (?1)"),
             &[DbValue::Text(id.to_string())],
         )
         .unwrap();

@@ -3,6 +3,20 @@
 //! Covers: global CRUD, versioning, locale, drafts, upload serving,
 //! static assets, dashboard, CSRF, CORS, access gate.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -99,7 +113,7 @@ fn setup_app_with_config(
     setup_app_inner(collections, globals, config, None)
 }
 
-/// Build a TestApp whose HookRunner loads collections, globals, and hooks
+/// Build a `TestApp` whose `HookRunner` loads collections, globals, and hooks
 /// from `fixture_dir`. The programmatically-passed `collections` / `globals`
 /// vecs are *additive* — they're registered on top of whatever the fixture's
 /// `init_lua` already populated. This lets access-control tests use a real
@@ -170,7 +184,7 @@ fn setup_app_inner(
     let has_auth = registry
         .collections
         .values()
-        .any(|d| d.is_auth_collection());
+        .any(crap_cms::core::CollectionDefinition::is_auth_collection);
 
     let state = AdminState {
         config,
@@ -218,7 +232,7 @@ fn setup_app_inner(
         ),
         populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
         cache: None,
-        custom_pages: Default::default(),
+        custom_pages: crap_cms::admin::custom_pages::CustomPageRegistry::default(),
     };
 
     let router = build_router(state);
@@ -280,13 +294,13 @@ fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
         .build()
         .unwrap();
     let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();
-    format!("crap_session={}", token)
+    format!("crap_session={token}")
 }
 
 const TEST_CSRF: &str = "test-csrf-token-12345";
 
 fn auth_and_csrf(auth_cookie: &str) -> String {
-    format!("{}; crap_csrf={}", auth_cookie, TEST_CSRF)
+    format!("{auth_cookie}; crap_csrf={TEST_CSRF}")
 }
 
 async fn body_string(body: Body) -> String {
@@ -373,8 +387,7 @@ async fn global_update_action() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::FOUND || status == StatusCode::OK,
-        "Global update should redirect or HX-Redirect, got {}",
-        status
+        "Global update should redirect or HX-Redirect, got {status}"
     );
 }
 
@@ -401,8 +414,7 @@ async fn global_update_returns_redirect() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::FOUND || status == StatusCode::OK,
-        "Global update should redirect or HX-Redirect, got {}",
-        status
+        "Global update should redirect or HX-Redirect, got {status}"
     );
 }
 
@@ -430,8 +442,7 @@ async fn global_versions_page_returns_200() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Global update should succeed, got {}",
-        status
+        "Global update should succeed, got {status}"
     );
 
     let resp = app
@@ -474,8 +485,7 @@ async fn global_versions_page_non_versioned_redirects() {
         status == StatusCode::SEE_OTHER
             || status == StatusCode::FOUND
             || status == StatusCode::TEMPORARY_REDIRECT,
-        "Non-versioned global versions page should redirect, got {}",
-        status
+        "Non-versioned global versions page should redirect, got {status}"
     );
 }
 
@@ -521,8 +531,7 @@ async fn global_update_with_draft_action() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Draft save should succeed, got {}",
-        status
+        "Draft save should succeed, got {status}"
     );
 }
 
@@ -564,8 +573,7 @@ async fn global_update_unpublish_action() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Unpublish should succeed, got {}",
-        status
+        "Unpublish should succeed, got {status}"
     );
 }
 
@@ -627,8 +635,7 @@ async fn global_restore_version() {
         let status = resp.status();
         assert!(
             status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-            "Restore should succeed, got {}",
-            status
+            "Restore should succeed, got {status}"
         );
     }
 }
@@ -656,8 +663,7 @@ async fn global_restore_non_versioned_redirects() {
             || status == StatusCode::FOUND
             || status == StatusCode::TEMPORARY_REDIRECT
             || status == StatusCode::OK,
-        "Non-versioned restore should redirect, got {}",
-        status
+        "Non-versioned restore should redirect, got {status}"
     );
 }
 
@@ -748,8 +754,7 @@ async fn localized_global_update_with_locale() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Localized global update should succeed, got {}",
-        status
+        "Localized global update should succeed, got {status}"
     );
 }
 
@@ -805,8 +810,7 @@ async fn global_update_nonexistent_redirects() {
         status == StatusCode::SEE_OTHER
             || status == StatusCode::FOUND
             || status == StatusCode::TEMPORARY_REDIRECT,
-        "Update nonexistent global should redirect, got {}",
-        status
+        "Update nonexistent global should redirect, got {status}"
     );
 }
 
@@ -931,10 +935,10 @@ async fn global_update_access_denied_returns_403_admin() {
     );
 }
 
-/// Service-layer control: verify the fixture's admin_only hook correctly allows
+/// Service-layer control: verify the fixture's `admin_only` hook correctly allows
 /// a role=admin user when we skip the HTTP middleware path entirely. This
-/// isolates whether the bug is in the HTTP chain (auth_middleware /
-/// load_auth_user) or the service/access layer.
+/// isolates whether the bug is in the HTTP chain (`auth_middleware` /
+/// `load_auth_user`) or the service/access layer.
 #[test]
 fn global_read_admin_via_service_layer_allowed() {
     use crap_cms::core::Document;
@@ -1009,8 +1013,7 @@ async fn global_read_access_allowed_for_admin() {
         assert_eq!(
             role.as_deref(),
             Some("admin"),
-            "DB sanity: role column must be 'admin', got {:?}",
-            role
+            "DB sanity: role column must be 'admin', got {role:?}"
         );
     }
 
@@ -1034,7 +1037,6 @@ async fn global_read_access_allowed_for_admin() {
     assert_eq!(
         status,
         StatusCode::OK,
-        "admin read should be 200; body was: {}",
-        body
+        "admin read should be 200; body was: {body}"
     );
 }

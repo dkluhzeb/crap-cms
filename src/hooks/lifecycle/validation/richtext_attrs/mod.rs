@@ -1,11 +1,11 @@
-//! Richtext custom-node-attr extraction, validation, and before_validate
+//! Richtext custom-node-attr extraction, validation, and `before_validate`
 //! transform pipeline. The three-step pipeline:
 //!
-//! 1. **extract** — walk ProseMirror JSON or HTML and pull every custom node
+//! 1. **extract** — walk `ProseMirror` JSON or HTML and pull every custom node
 //!    instance with its attr values
 //! 2. **validate** — run per-attr checks (required, length, numeric, email,
 //!    select, date, custom Lua) against each instance
-//! 3. **before_validate** — transform attr values in-place via per-attr Lua
+//! 3. **`before_validate`** — transform attr values in-place via per-attr Lua
 //!    `before_validate` hooks, writing the result back into the field content
 
 mod before_validate;

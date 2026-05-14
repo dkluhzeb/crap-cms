@@ -30,8 +30,12 @@ use super::richtext::apply_richtext_before_validate;
 /// - [`RunnerWriteHooks`]: acquires a Lua VM from the pool (admin, gRPC, MCP)
 /// - [`LuaWriteHooks`]: uses the current Lua VM inline (Lua CRUD hooks)
 pub trait WriteHooks {
-    /// Full before-write pipeline: field BeforeValidate → richtext attr hooks →
-    /// collection BeforeValidate → validate → field BeforeChange → collection BeforeChange.
+    /// Full before-write pipeline: field `BeforeValidate` → richtext attr hooks →
+    /// collection `BeforeValidate` → validate → field `BeforeChange` → collection `BeforeChange`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any hook stage or validation fails.
     fn run_before_write(
         &self,
         hooks: &Hooks,
@@ -40,7 +44,11 @@ pub trait WriteHooks {
         val_ctx: &ValidationCtx,
     ) -> Result<HookContext>;
 
-    /// After-write hooks: field AfterChange → collection AfterChange → registered hooks.
+    /// After-write hooks: field `AfterChange` → collection `AfterChange` → registered hooks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any hook execution fails.
     fn run_after_write(
         &self,
         hooks: &Hooks,
@@ -50,7 +58,11 @@ pub trait WriteHooks {
         conn: &dyn DbConnection,
     ) -> Result<HookContext>;
 
-    /// Run collection-level hooks with CRUD access (for BeforeDelete / AfterDelete).
+    /// Run collection-level hooks with CRUD access (for `BeforeDelete` / `AfterDelete`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any hook execution fails.
     fn run_hooks_with_conn(
         &self,
         hooks: &Hooks,
@@ -64,6 +76,10 @@ pub trait WriteHooks {
     -> Vec<String>;
 
     /// Collection-level access check. Returns the access result (Allowed/Denied/Constrained).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the access hook itself raises (e.g. a Lua runtime error).
     fn check_access(
         &self,
         access_ref: Option<&str>,
@@ -85,6 +101,13 @@ pub trait WriteHooks {
     /// the version restore path so a snapshot whose data violates the current
     /// schema (e.g. an old version from before a `required = true` tightening)
     /// is rejected rather than silently overwriting valid live data.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ValidationError` (containing per-field error messages) when
+    /// any schema check fails. Never raises a runtime/IO error — `ValidateResult`
+    /// is a `Result<(), ValidationError>` purely as a structured way to surface
+    /// the collected errors.
     fn validate_fields(
         &self,
         fields: &[FieldDefinition],
@@ -113,6 +136,7 @@ pub struct RunnerWriteHooks<'a> {
 
 impl<'a> RunnerWriteHooks<'a> {
     /// Create with hooks enabled and no field access connection (the common case).
+    #[must_use]
     pub fn new(runner: &'a HookRunner) -> Self {
         Self {
             runner,
@@ -124,12 +148,14 @@ impl<'a> RunnerWriteHooks<'a> {
     }
 
     /// Set the connection for field-level access checks.
+    #[must_use]
     pub fn with_conn(mut self, conn: &'a dyn DbConnection) -> Self {
         self.conn = Some(conn);
         self
     }
 
     /// Set whether hooks are enabled.
+    #[must_use]
     pub fn with_hooks_enabled(mut self, hooks_enabled: bool) -> Self {
         self.hooks_enabled = hooks_enabled;
         self
@@ -137,12 +163,14 @@ impl<'a> RunnerWriteHooks<'a> {
 
     /// Bypass all access checks (returns Allowed unconditionally).
     /// Used by MCP tools which run on a trusted local transport.
+    #[must_use]
     pub fn with_override_access(mut self) -> Self {
         self.override_access = true;
         self
     }
 
     /// Attach infrastructure for Lua CRUD event/cache operations.
+    #[must_use]
     pub fn with_infra(mut self, infra: LuaCrudInfra) -> Self {
         self.infra = Some(infra);
         self
@@ -269,6 +297,7 @@ pub struct LuaWriteHooks<'a> {
 
 impl<'a> LuaWriteHooks<'a> {
     /// Create a builder with the required Lua VM reference.
+    #[must_use]
     pub fn builder(lua: &'a mlua::Lua) -> LuaWriteHooksBuilder<'a> {
         LuaWriteHooksBuilder::new(lua)
     }

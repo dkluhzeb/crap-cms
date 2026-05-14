@@ -15,24 +15,21 @@ pub(super) fn delete_junction_rows(
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
 
         conn.execute(
-            &format!(
-                "DELETE FROM \"{}\" WHERE parent_id = {p1} AND _locale = {p2}",
-                table_name
-            ),
+            &format!("DELETE FROM \"{table_name}\" WHERE parent_id = {p1} AND _locale = {p2}"),
             &[
                 DbValue::Text(parent_id.to_string()),
                 DbValue::Text(loc.to_string()),
             ],
         )
-        .with_context(|| format!("Failed to clear join table {}", table_name))?;
+        .with_context(|| format!("Failed to clear join table {table_name}"))?;
     } else {
         let p1 = conn.placeholder(1);
 
         conn.execute(
-            &format!("DELETE FROM \"{}\" WHERE parent_id = {p1}", table_name),
+            &format!("DELETE FROM \"{table_name}\" WHERE parent_id = {p1}"),
             &[DbValue::Text(parent_id.to_string())],
         )
-        .with_context(|| format!("Failed to clear join table {}", table_name))?;
+        .with_context(|| format!("Failed to clear join table {table_name}"))?;
     }
 
     Ok(())

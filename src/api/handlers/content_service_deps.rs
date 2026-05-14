@@ -41,6 +41,7 @@ pub struct ContentServiceDeps {
 
 impl ContentServiceDeps {
     /// Create a builder for `ContentServiceDeps`.
+    #[must_use]
     pub fn builder() -> ContentServiceDepsBuilder {
         ContentServiceDepsBuilder::new()
     }
@@ -90,60 +91,70 @@ impl ContentServiceDepsBuilder {
         }
     }
 
+    #[must_use]
     pub fn pool(mut self, pool: DbPool) -> Self {
         self.pool = Some(pool);
 
         self
     }
 
+    #[must_use]
     pub fn registry(mut self, registry: Arc<Registry>) -> Self {
         self.registry = Some(registry);
 
         self
     }
 
+    #[must_use]
     pub fn hook_runner(mut self, hook_runner: HookRunner) -> Self {
         self.hook_runner = Some(hook_runner);
 
         self
     }
 
+    #[must_use]
     pub fn config(mut self, config: CrapConfig) -> Self {
         self.config = Some(config);
 
         self
     }
 
+    #[must_use]
     pub fn config_dir(mut self, config_dir: PathBuf) -> Self {
         self.config_dir = Some(config_dir);
 
         self
     }
 
+    #[must_use]
     pub fn email_renderer(mut self, email_renderer: Arc<EmailRenderer>) -> Self {
         self.email_renderer = Some(email_renderer);
 
         self
     }
 
+    #[must_use]
     pub fn event_transport(mut self, transport: Option<SharedEventTransport>) -> Self {
         self.event_transport = transport;
 
         self
     }
 
+    #[must_use]
     pub fn login_limiter(mut self, login_limiter: Arc<LoginRateLimiter>) -> Self {
         self.login_limiter = Some(login_limiter);
 
         self
     }
 
+    #[must_use]
     pub fn ip_login_limiter(mut self, ip_login_limiter: Arc<LoginRateLimiter>) -> Self {
         self.ip_login_limiter = Some(ip_login_limiter);
 
         self
     }
 
+    #[must_use]
     pub fn forgot_password_limiter(
         mut self,
         forgot_password_limiter: Arc<LoginRateLimiter>,
@@ -153,6 +164,7 @@ impl ContentServiceDepsBuilder {
         self
     }
 
+    #[must_use]
     pub fn ip_forgot_password_limiter(
         mut self,
         ip_forgot_password_limiter: Arc<LoginRateLimiter>,
@@ -162,42 +174,54 @@ impl ContentServiceDepsBuilder {
         self
     }
 
+    #[must_use]
     pub fn storage(mut self, storage: SharedStorage) -> Self {
         self.storage = Some(storage);
 
         self
     }
 
+    #[must_use]
     pub fn cache(mut self, cache: SharedCache) -> Self {
         self.cache = Some(cache);
 
         self
     }
 
+    #[must_use]
     pub fn token_provider(mut self, token_provider: SharedTokenProvider) -> Self {
         self.token_provider = Some(token_provider);
 
         self
     }
 
+    #[must_use]
     pub fn password_provider(mut self, password_provider: SharedPasswordProvider) -> Self {
         self.password_provider = Some(password_provider);
 
         self
     }
 
+    #[must_use]
     pub fn invalidation_transport(mut self, transport: SharedInvalidationTransport) -> Self {
         self.invalidation_transport = Some(transport);
 
         self
     }
 
+    #[must_use]
     pub fn populate_singleflight(mut self, singleflight: SharedPopulateSingleflight) -> Self {
         self.populate_singleflight = Some(singleflight);
 
         self
     }
 
+    /// # Panics
+    ///
+    /// Panics if any required field (`pool`, `registry`, `hook_runner`,
+    /// `config`, `config_dir`, `email_renderer`, `login_limiter`, etc.)
+    /// was not set on the builder.
+    #[must_use]
     pub fn build(self) -> ContentServiceDeps {
         ContentServiceDeps {
             pool: self.pool.expect("pool is required"),

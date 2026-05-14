@@ -1,6 +1,20 @@
 //! Binary invocation tests for operational CLI commands:
 //! typegen, proto, db cleanup, jobs, images, migrate, blueprint, make hook/job.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::path::{Path, PathBuf};
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -51,7 +65,7 @@ fn run_ok(args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).to_string()
 }
 
-/// Run the binary with CRAP_CONFIG_DIR set, return raw Output.
+/// Run the binary with `CRAP_CONFIG_DIR` set, return raw Output.
 fn run_in(config_dir: &Path, args: &[&str]) -> std::process::Output {
     std::process::Command::new(crap_bin())
         .env("CRAP_CONFIG_DIR", config_dir)
@@ -60,7 +74,7 @@ fn run_in(config_dir: &Path, args: &[&str]) -> std::process::Output {
         .expect("failed to run binary")
 }
 
-/// Run the binary with CRAP_CONFIG_DIR set, assert success, return stdout.
+/// Run the binary with `CRAP_CONFIG_DIR` set, assert success, return stdout.
 fn run_ok_in(config_dir: &Path, args: &[&str]) -> String {
     let output = run_in(config_dir, args);
     assert!(
@@ -89,7 +103,7 @@ fn run_ok_env(args: &[&str], env: &[(&str, &str)]) -> String {
     String::from_utf8_lossy(&output.stdout).to_string()
 }
 
-/// Run the binary with CRAP_CONFIG_DIR and extra env vars, assert success, return stdout.
+/// Run the binary with `CRAP_CONFIG_DIR` and extra env vars, assert success, return stdout.
 fn run_ok_in_env(config_dir: &Path, args: &[&str], env: &[(&str, &str)]) -> String {
     let mut cmd = std::process::Command::new(crap_bin());
     cmd.env("CRAP_CONFIG_DIR", config_dir).args(args);
@@ -106,7 +120,7 @@ fn run_ok_in_env(config_dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Stri
     String::from_utf8_lossy(&output.stdout).to_string()
 }
 
-/// Copy fixture to tempdir and return (TempDir, config_dir path).
+/// Copy fixture to tempdir and return (`TempDir`, `config_dir` path).
 fn setup() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("config");
@@ -154,7 +168,7 @@ fn typegen_lua() {
     let types_dir = config_dir.join("types");
     let has_lua = std::fs::read_dir(&types_dir)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .any(|e| e.file_name().to_string_lossy().ends_with(".lua"));
     assert!(has_lua, "types/ should contain a .lua file");
 }
@@ -168,16 +182,14 @@ fn typegen_all_languages() {
     let types_dir = config_dir.join("types");
     let files: Vec<String> = std::fs::read_dir(&types_dir)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();
 
     for ext in &[".lua", ".ts", ".go", ".py", ".rs"] {
         assert!(
             files.iter().any(|f| f.ends_with(ext)),
-            "types/ should contain a {} file, got: {:?}",
-            ext,
-            files
+            "types/ should contain a {ext} file, got: {files:?}"
         );
     }
 }
@@ -225,8 +237,7 @@ fn db_cleanup_dry_run() {
     // Should succeed and show status (either clean or listing orphans)
     assert!(
         stdout.contains("orphan") || stdout.contains("clean") || stdout.contains("column"),
-        "cleanup output should report orphan status, got: {}",
-        stdout
+        "cleanup output should report orphan status, got: {stdout}"
     );
 }
 
@@ -242,16 +253,14 @@ fn jobs_trigger_and_status() {
     let stdout = run_ok_in(&config_dir, &["jobs", "trigger", "cleanup"]);
     assert!(
         stdout.contains("Queued job"),
-        "should confirm job queued, got: {}",
-        stdout
+        "should confirm job queued, got: {stdout}"
     );
 
     // Check status
     let stdout = run_ok_in(&config_dir, &["jobs", "status", "--slug", "cleanup"]);
     assert!(
         stdout.contains("cleanup") && stdout.contains("run"),
-        "status should show the triggered job run, got: {}",
-        stdout
+        "status should show the triggered job run, got: {stdout}"
     );
 }
 
@@ -266,8 +275,7 @@ fn jobs_cancel() {
     let stdout = run_ok_in(&config_dir, &["jobs", "cancel", "--slug", "cleanup"]);
     assert!(
         stdout.contains("Cancelled"),
-        "should confirm cancellation, got: {}",
-        stdout
+        "should confirm cancellation, got: {stdout}"
     );
 }
 
@@ -278,13 +286,11 @@ fn jobs_healthcheck() {
     let stdout = run_ok_in(&config_dir, &["jobs", "healthcheck"]);
     assert!(
         stdout.contains("Job system health"),
-        "should show health status, got: {}",
-        stdout
+        "should show health status, got: {stdout}"
     );
     assert!(
         stdout.contains("Defined:"),
-        "should show defined jobs count, got: {}",
-        stdout
+        "should show defined jobs count, got: {stdout}"
     );
 }
 
@@ -298,8 +304,7 @@ fn jobs_purge() {
     let stdout = run_ok_in(&config_dir, &["jobs", "purge", "--older-than", "0s"]);
     assert!(
         stdout.contains("Purged"),
-        "should confirm purge, got: {}",
-        stdout
+        "should confirm purge, got: {stdout}"
     );
 }
 
@@ -317,8 +322,7 @@ fn images_list_empty() {
     let stdout = run_ok_in(&config_dir, &["images", "list"]);
     assert!(
         stdout.contains("No queue entries") || stdout.contains("0 entr"),
-        "should show empty queue, got: {}",
-        stdout
+        "should show empty queue, got: {stdout}"
     );
 }
 
@@ -332,13 +336,11 @@ fn images_stats_empty() {
     let stdout = run_ok_in(&config_dir, &["images", "stats"]);
     assert!(
         stdout.contains("Image processing queue"),
-        "should show queue stats header, got: {}",
-        stdout
+        "should show queue stats header, got: {stdout}"
     );
     assert!(
         stdout.contains("Total:"),
-        "should show total count, got: {}",
-        stdout
+        "should show total count, got: {stdout}"
     );
 }
 
@@ -352,8 +354,7 @@ fn images_purge_empty() {
     let stdout = run_ok_in(&config_dir, &["images", "purge", "--older-than", "0s"]);
     assert!(
         stdout.contains("Purged"),
-        "should confirm purge, got: {}",
-        stdout
+        "should confirm purge, got: {stdout}"
     );
 }
 
@@ -374,21 +375,18 @@ fn migrate_up_and_list() {
         stdout.contains("applied")
             || stdout.contains("Applied")
             || stdout.contains("Schema sync complete"),
-        "migrate up should show progress, got: {}",
-        stdout
+        "migrate up should show progress, got: {stdout}"
     );
 
     // List migrations
     let stdout = run_ok_in(&config_dir, &["migrate", "list"]);
     assert!(
         stdout.contains("add_categories"),
-        "migrate list should show the migration, got: {}",
-        stdout
+        "migrate list should show the migration, got: {stdout}"
     );
     assert!(
         stdout.contains("applied"),
-        "migration should show as applied, got: {}",
-        stdout
+        "migration should show as applied, got: {stdout}"
     );
 }
 
@@ -404,16 +402,14 @@ fn migrate_down() {
     let stdout = run_ok_in(&config_dir, &["migrate", "down"]);
     assert!(
         stdout.contains("Rolled back") || stdout.contains("rolled back"),
-        "migrate down should confirm rollback, got: {}",
-        stdout
+        "migrate down should confirm rollback, got: {stdout}"
     );
 
     // Verify via list
     let stdout = run_ok_in(&config_dir, &["migrate", "list"]);
     assert!(
         stdout.contains("pending"),
-        "migration should show as pending after rollback, got: {}",
-        stdout
+        "migration should show as pending after rollback, got: {stdout}"
     );
 }
 
@@ -440,16 +436,14 @@ fn migrate_fresh_confirm() {
     let stdout = run_ok_in(&config_dir, &["migrate", "fresh", "-y"]);
     assert!(
         stdout.contains("Fresh migration complete"),
-        "should confirm fresh migration, got: {}",
-        stdout
+        "should confirm fresh migration, got: {stdout}"
     );
 
     // Verify data is wiped
     let list_out = run_ok_in(&config_dir, &["user", "list"]);
     assert!(
         list_out.contains("No users"),
-        "user list should be empty after fresh, got: {}",
-        list_out
+        "user list should be empty after fresh, got: {list_out}"
     );
 }
 
@@ -468,32 +462,28 @@ fn blueprint_save_list_remove() {
     let stdout = run_ok_in_env(&config_dir, &["blueprint", "save", "test-bp"], &env);
     assert!(
         stdout.contains("Saved blueprint 'test-bp'"),
-        "should confirm save, got: {}",
-        stdout
+        "should confirm save, got: {stdout}"
     );
 
     // List
     let stdout = run_ok_env(&["blueprint", "list"], &env);
     assert!(
         stdout.contains("test-bp"),
-        "list should include the blueprint, got: {}",
-        stdout
+        "list should include the blueprint, got: {stdout}"
     );
 
     // Remove
     let stdout = run_ok_env(&["blueprint", "remove", "test-bp"], &env);
     assert!(
         stdout.contains("Removed blueprint 'test-bp'"),
-        "should confirm removal, got: {}",
-        stdout
+        "should confirm removal, got: {stdout}"
     );
 
     // List should be empty now
     let stdout = run_ok_env(&["blueprint", "list"], &env);
     assert!(
         stdout.contains("No blueprints"),
-        "list should be empty after remove, got: {}",
-        stdout
+        "list should be empty after remove, got: {stdout}"
     );
 }
 
@@ -515,8 +505,7 @@ fn blueprint_use() {
     );
     assert!(
         stdout.contains("Created project from blueprint 'test-bp'"),
-        "should confirm project creation, got: {}",
-        stdout
+        "should confirm project creation, got: {stdout}"
     );
 
     assert!(
@@ -550,21 +539,18 @@ fn make_hook_via_binary() {
 
     assert!(
         stdout.contains("Created"),
-        "should confirm hook creation, got: {}",
-        stdout
+        "should confirm hook creation, got: {stdout}"
     );
     assert!(
         stdout.contains("Hook ref:"),
-        "should show hook ref, got: {}",
-        stdout
+        "should show hook ref, got: {stdout}"
     );
 
     // Verify file exists
     let hook_path = config_dir.join("hooks/posts/auto_slug.lua");
     assert!(
         hook_path.exists(),
-        "hook file should be created at {:?}",
-        hook_path
+        "hook file should be created at {hook_path:?}"
     );
 
     let content = std::fs::read_to_string(&hook_path).unwrap();
@@ -593,21 +579,18 @@ fn make_job_via_binary() {
 
     assert!(
         stdout.contains("Created"),
-        "should confirm job creation, got: {}",
-        stdout
+        "should confirm job creation, got: {stdout}"
     );
     assert!(
         stdout.contains("Handler ref:"),
-        "should show handler ref, got: {}",
-        stdout
+        "should show handler ref, got: {stdout}"
     );
 
     // Verify file exists
     let job_path = config_dir.join("jobs/cleanup.lua");
     assert!(
         job_path.exists(),
-        "job file should be created at {:?}",
-        job_path
+        "job file should be created at {job_path:?}"
     );
 
     let content = std::fs::read_to_string(&job_path).unwrap();

@@ -84,13 +84,6 @@ fn warn_on_snapshot_drift(
     slug: &str,
     version_id: &str,
 ) {
-    let Some(obj) = snapshot.as_object() else {
-        return;
-    };
-
-    let mut known: HashSet<String> = HashSet::new();
-    collect_known_keys(fields, "", &mut known);
-
     // Accept standard document metadata + locale suffixes transparently.
     const METADATA: &[&str] = &[
         "id",
@@ -100,6 +93,13 @@ fn warn_on_snapshot_drift(
         "_trashed_at",
         "_ref_count",
     ];
+
+    let Some(obj) = snapshot.as_object() else {
+        return;
+    };
+
+    let mut known: HashSet<String> = HashSet::new();
+    collect_known_keys(fields, "", &mut known);
 
     for key in obj.keys() {
         if METADATA.contains(&key.as_str()) {
@@ -130,6 +130,11 @@ type Result<T> = std::result::Result<T, ServiceError>;
 ///
 /// **Pool mode** (`ctx.pool` set): opens a transaction, commits after success.
 /// **Conn mode** (`ctx.conn` set, Lua CRUD path): runs on the existing connection.
+///
+/// # Errors
+///
+/// Returns `AccessDenied`, `NotFound`, or `Validation` errors as appropriate.
+/// Returns a backend error if the DB transaction or persistence fails.
 pub fn restore_collection_version(
     ctx: &ServiceContext,
     document_id: &str,
@@ -263,6 +268,12 @@ pub(crate) fn restore_collection_version_core(
 }
 
 /// Restore a global document to a specific version snapshot.
+///
+/// # Errors
+///
+/// Returns `AccessDenied`, `NotFound`, `HookError` (for constrained access on
+/// a global, which is not supported), or `Validation` errors as appropriate.
+/// Returns a backend error if the DB transaction or persistence fails.
 pub fn restore_global_version(
     ctx: &ServiceContext,
     version_id: &str,
@@ -394,7 +405,7 @@ mod tests {
     }
 
     /// Regression: when a snapshot contains keys that no longer exist in the
-    /// current schema, warn_on_snapshot_drift must emit a `warn!` for each.
+    /// current schema, `warn_on_snapshot_drift` must emit a `warn!` for each.
     /// We can't capture tracing output without extra deps, so at minimum assert
     /// that (1) the drift helper does not panic for the drift scenario and
     /// (2) `collect_known_keys` does not accept the stale key — the warn path

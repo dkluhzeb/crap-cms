@@ -22,7 +22,7 @@ static STATIC_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/static");
 
 /// Middleware that sets `Cache-Control: public, no-cache` on successful responses.
 /// This ensures browsers always revalidate (using Last-Modified / If-Modified-Since
-/// for config-dir files, or ETag / If-None-Match for embedded files).
+/// for config-dir files, or `ETag` / If-None-Match for embedded files).
 async fn cache_control_middleware(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     if response.status().is_success() || response.status() == StatusCode::NOT_MODIFIED {
@@ -33,7 +33,7 @@ async fn cache_control_middleware(request: Request, next: Next) -> Response {
     response
 }
 
-/// Create a service that checks config_dir/static/ first, then falls back to embedded.
+/// Create a service that checks `config_dir/static`/ first, then falls back to embedded.
 pub fn overlay_service(config_dir: &StdPath) -> Router {
     let config_static = config_dir.join("static");
 
@@ -60,7 +60,7 @@ async fn embedded_static(uri: Uri, headers: HeaderMap) -> Response {
             .body(Body::empty())
             .unwrap_or_else(|_| StatusCode::NOT_FOUND.into_response()),
         Some(file) => {
-            let etag_value = format!("\"{}\"", BUILD_HASH);
+            let etag_value = format!("\"{BUILD_HASH}\"");
 
             // If the client sent a matching ETag, return 304.
             if let Some(inm) = headers.get(IF_NONE_MATCH)

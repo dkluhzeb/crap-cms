@@ -10,6 +10,10 @@ use crate::core::JobRun;
 use crate::db::{DbConnection, DbValue};
 
 /// Insert a new pending job run.
+///
+/// # Errors
+///
+/// Returns a backend error if the INSERT fails.
 pub fn insert_job(
     conn: &dyn DbConnection,
     slug: &str,
@@ -38,7 +42,7 @@ pub fn insert_job(
             DbValue::Text(slug.to_string()),
             DbValue::Text(queue.to_string()),
             DbValue::Text(data.to_string()),
-            DbValue::Integer(max_attempts as i64),
+            DbValue::Integer(i64::from(max_attempts)),
             DbValue::Text(scheduled_by.to_string()),
         ],
     )
@@ -53,6 +57,10 @@ pub fn insert_job(
 }
 
 /// Mark a job as completed with an optional result.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
 pub fn complete_job(conn: &dyn DbConnection, id: &str, result_json: Option<&str>) -> Result<()> {
     let result_val = match result_json {
         Some(r) => DbValue::Text(r.to_string()),
@@ -78,13 +86,17 @@ pub fn complete_job(conn: &dyn DbConnection, id: &str, result_json: Option<&str>
 /// Formula: `min(2^(attempt-1) * 5, 300)` — yields 5s, 10s, 20s, 40s, 80s, 160s, 300s cap.
 /// `attempt` is 1-based (first failure = attempt 1).
 fn backoff_seconds(attempt: u32) -> i64 {
-    let exp = attempt.saturating_sub(1).min(6) as i64;
+    let exp = i64::from(attempt.saturating_sub(1).min(6));
 
     cmp::min(5 * (1i64 << exp), 300)
 }
 
-/// Mark a job as failed. If should_retry is true, resets to pending with exponential backoff.
+/// Mark a job as failed. If `should_retry` is true, resets to pending with exponential backoff.
 /// `attempt` is the current attempt number (already incremented by claim).
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
 pub fn fail_job(
     conn: &dyn DbConnection,
     id: &str,
@@ -101,7 +113,7 @@ pub fn fail_job(
         // date_offset_expr returns e.g. ("datetime('now', ?3)", _) — we override the
         // param to "+N seconds" instead of the default "-N seconds".
         let (offset_sql, _) = conn.date_offset_expr(delay, 3);
-        let offset_param = DbValue::Text(format!("+{} seconds", delay));
+        let offset_param = DbValue::Text(format!("+{delay} seconds"));
 
         conn.execute(
             &format!(
@@ -136,6 +148,10 @@ pub fn fail_job(
 }
 
 /// Update the heartbeat timestamp for a running job.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
 pub fn update_heartbeat(conn: &dyn DbConnection, id: &str) -> Result<()> {
     conn.execute(
         &format!(
@@ -151,6 +167,10 @@ pub fn update_heartbeat(conn: &dyn DbConnection, id: &str) -> Result<()> {
 }
 
 /// Mark a running job as stale.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
 pub fn mark_stale(conn: &dyn DbConnection, id: &str, error: &str) -> Result<()> {
     let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
     conn.execute(
@@ -235,8 +255,8 @@ mod tests {
         assert_eq!(fetched.status, JobStatus::Pending);
     }
 
-    /// Regression: fail_job with retry did not clear heartbeat_at, causing the
-    /// re-queued job to be immediately detected as stale by find_stale_jobs.
+    /// Regression: `fail_job` with retry did not clear `heartbeat_at`, causing the
+    /// re-queued job to be immediately detected as stale by `find_stale_jobs`.
     #[test]
     fn test_fail_job_retry_clears_heartbeat() {
         let (_dir, conn) = setup_db();
@@ -308,7 +328,7 @@ mod tests {
         assert_eq!(backoff_seconds(100), 300);
     }
 
-    /// Regression: fail_job with retry did not set retry_after, causing immediate re-execution.
+    /// Regression: `fail_job` with retry did not set `retry_after`, causing immediate re-execution.
     #[test]
     fn test_fail_job_retry_sets_retry_after() {
         let (_dir, conn) = setup_db();

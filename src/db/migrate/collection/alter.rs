@@ -26,7 +26,7 @@ struct AlterCtx<'a> {
     slug: &'a str,
     def: &'a CollectionDefinition,
     existing: &'a HashSet<String>,
-    /// Column name -> DB type (from PRAGMA table_info) for type mismatch detection.
+    /// Column name -> DB type (from PRAGMA `table_info`) for type mismatch detection.
     column_types: &'a HashMap<String, String>,
 }
 
@@ -60,7 +60,7 @@ fn add_field_column(
     if !spec.companion_text {
         append_default_value_for(
             &mut col_def,
-            &spec.field.default_value,
+            spec.field.default_value.as_ref(),
             &spec.field.field_type,
             ctx.conn.kind(),
         );
@@ -178,7 +178,7 @@ fn add_auth_columns(ctx: &AlterCtx) -> Result<()> {
     Ok(())
 }
 
-/// Add _deleted_at column for soft-delete collections.
+/// Add _`deleted_at` column for soft-delete collections.
 fn add_soft_delete_columns(ctx: &AlterCtx) -> Result<()> {
     if ctx.def.soft_delete && !ctx.existing.contains("_deleted_at") {
         let col_def = format!("_deleted_at {}", ctx.conn.timestamp_column_type());
@@ -188,12 +188,12 @@ fn add_soft_delete_columns(ctx: &AlterCtx) -> Result<()> {
     Ok(())
 }
 
-/// Add _ref_count column for delete protection.
+/// Add _`ref_count` column for delete protection.
 fn add_ref_count_column(ctx: &AlterCtx) -> Result<()> {
     ensure_column(ctx, "_ref_count INTEGER NOT NULL DEFAULT 0")
 }
 
-/// Add created_at/updated_at timestamp columns.
+/// Add `created_at/updated_at` timestamp columns.
 fn add_timestamp_columns(ctx: &AlterCtx) -> Result<()> {
     if !ctx.def.timestamps {
         return Ok(());
@@ -202,7 +202,7 @@ fn add_timestamp_columns(ctx: &AlterCtx) -> Result<()> {
     let ts_type = ctx.conn.timestamp_column_type();
 
     for col_name in ["created_at", "updated_at"] {
-        let col_def = format!("{} {}", col_name, ts_type);
+        let col_def = format!("{col_name} {ts_type}");
         ensure_column(ctx, &col_def)?;
     }
 
@@ -307,7 +307,7 @@ pub(super) fn alter_collection_table(
 /// Rebuild a table to remove inline UNIQUE constraints, replacing them with
 /// partial unique indexes managed by `sync_indexes`.
 ///
-/// Uses the standard SQLite table rebuild pattern:
+/// Uses the standard `SQLite` table rebuild pattern:
 /// 1. Get column list from old table
 /// 2. Rename old table to a temp name
 /// 3. Create new table via `create_collection_table` (no inline UNIQUE for soft-delete)
@@ -325,9 +325,9 @@ fn rebuild_without_inline_unique(
     );
 
     let old_cols = get_table_columns(conn, slug)?;
-    let temp = format!("_rebuild_{}", slug);
+    let temp = format!("_rebuild_{slug}");
 
-    conn.execute_batch_ddl(&format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", slug, temp))?;
+    conn.execute_batch_ddl(&format!("ALTER TABLE \"{slug}\" RENAME TO \"{temp}\""))?;
 
     create_collection_table(conn, slug, def, locale_config)?;
 
@@ -342,10 +342,7 @@ fn rebuild_without_inline_unique(
         .join(", ");
 
     let copy_result = conn.execute(
-        &format!(
-            "INSERT INTO \"{}\" ({}) SELECT {} FROM \"{}\"",
-            slug, col_list, col_list, temp
-        ),
+        &format!("INSERT INTO \"{slug}\" ({col_list}) SELECT {col_list} FROM \"{temp}\""),
         &[],
     );
 
@@ -355,13 +352,13 @@ fn rebuild_without_inline_unique(
             "Failed to copy data during rebuild of '{}', attempting recovery: {}",
             slug, e
         );
-        let _ = conn.execute_batch_ddl(&format!("DROP TABLE IF EXISTS \"{}\"", slug));
-        let _ = conn.execute_batch_ddl(&format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", temp, slug));
+        let _ = conn.execute_batch_ddl(&format!("DROP TABLE IF EXISTS \"{slug}\""));
+        let _ = conn.execute_batch_ddl(&format!("ALTER TABLE \"{temp}\" RENAME TO \"{slug}\""));
 
-        return Err(e).with_context(|| format!("Failed to copy data during rebuild of '{}'", slug));
+        return Err(e).with_context(|| format!("Failed to copy data during rebuild of '{slug}'"));
     }
 
-    conn.execute_batch_ddl(&format!("DROP TABLE \"{}\"", temp))?;
+    conn.execute_batch_ddl(&format!("DROP TABLE \"{temp}\""))?;
 
     info!("Table '{}' rebuilt successfully", slug);
 
@@ -803,7 +800,7 @@ mod tests {
         );
     }
 
-    /// Regression: rebuild_without_inline_unique must restore the original table
+    /// Regression: `rebuild_without_inline_unique` must restore the original table
     /// when the INSERT-SELECT copy step fails, not leave the database with an
     /// empty new table and orphaned temp table.
     #[test]
@@ -855,7 +852,7 @@ mod tests {
         assert!(temp_exists.is_none(), "temp table should be dropped");
     }
 
-    /// Regression: locale-suffixed columns (e.g., title__en) must be recognized
+    /// Regression: locale-suffixed columns (e.g., `title__en`) must be recognized
     /// as expected when the field is localized. Previously they were falsely
     /// reported as orphans.
     #[test]

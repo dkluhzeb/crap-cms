@@ -17,6 +17,14 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::fmt::format;
 
+/// Format Handlebars templates: format files in-place, or check them
+/// without modification (`--check`), or read one template from stdin
+/// and write formatted output to stdout (`--stdio`).
+///
+/// # Errors
+///
+/// Returns an error if a path can't be read or written, if `--check`
+/// finds an unformatted file, or if stdio mode receives malformed input.
 pub fn run(paths: Vec<PathBuf>, check: bool, stdio: bool) -> Result<()> {
     if stdio {
         return run_stdio();

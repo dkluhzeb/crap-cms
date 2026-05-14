@@ -34,6 +34,11 @@ pub trait RegistryRead: Clone + Send + Sync + 'static {
     /// Invoke `f` with a borrow of the underlying [`Registry`]. Returns
     /// `Err` if the underlying lock is poisoned (only possible for the
     /// `SharedRegistry` implementation).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryLockPoisoned`] when the `SharedRegistry` mutex is
+    /// poisoned. The `Arc<Registry>` snapshot implementation never errors.
     fn with<R>(&self, f: impl FnOnce(&Registry) -> R) -> Result<R, RegistryLockPoisoned>;
 }
 
@@ -65,11 +70,13 @@ impl RegistryRead for Arc<Registry> {
 
 impl Registry {
     /// Create an empty registry with no collections or globals.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Create a new registry wrapped in `Arc<RwLock<>>` for shared ownership.
+    #[must_use]
     pub fn shared() -> SharedRegistry {
         Arc::new(RwLock::new(Self::default()))
     }
@@ -148,11 +155,13 @@ impl Registry {
     }
 
     /// Look up a collection definition by slug.
+    #[must_use]
     pub fn get_collection(&self, slug: &str) -> Option<&CollectionDefinition> {
         self.collections.get(slug)
     }
 
     /// Look up a global definition by slug.
+    #[must_use]
     pub fn get_global(&self, slug: &str) -> Option<&GlobalDefinition> {
         self.globals.get(slug)
     }
@@ -165,6 +174,7 @@ impl Registry {
     }
 
     /// Look up a job definition by slug.
+    #[must_use]
     pub fn get_job(&self, slug: &str) -> Option<&JobDefinition> {
         self.jobs.get(slug)
     }
@@ -177,6 +187,7 @@ impl Registry {
     }
 
     /// Look up a custom richtext node definition by name.
+    #[must_use]
     pub fn get_richtext_node(&self, name: &str) -> Option<&RichtextNodeDef> {
         self.richtext_nodes.get(name)
     }
@@ -185,6 +196,11 @@ impl Registry {
     ///
     /// Call once after startup (after all `define()` writes) and pass the snapshot
     /// to hot-path consumers (admin UI, gRPC API) that only read the registry.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the registry's `RwLock` is poisoned (another thread panicked
+    /// while holding the write lock during startup).
     pub fn snapshot(shared: &SharedRegistry) -> Arc<Registry> {
         let reg = shared
             .read()
@@ -287,7 +303,7 @@ mod tests {
         assert_eq!(snap.globals.len(), 1);
     }
 
-    /// Wrap a child field inside a layout container for testing field_exists_recursive.
+    /// Wrap a child field inside a layout container for testing `field_exists_recursive`.
     fn wrap_in_container(container_type: FieldType, child_name: &str) -> Vec<FieldDefinition> {
         let child = FieldDefinition::builder(child_name, FieldType::Text).build();
 
@@ -312,14 +328,12 @@ mod tests {
 
             assert!(
                 Registry::field_exists_recursive("target", &fields),
-                "Should find field inside {:?}",
-                container
+                "Should find field inside {container:?}"
             );
 
             assert!(
                 !Registry::field_exists_recursive("nonexistent", &fields),
-                "Should not find nonexistent field in {:?}",
-                container
+                "Should not find nonexistent field in {container:?}"
             );
         }
     }

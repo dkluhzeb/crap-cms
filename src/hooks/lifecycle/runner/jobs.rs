@@ -1,4 +1,4 @@
-//! HookRunner methods for job execution and arbitrary Lua evaluation.
+//! `HookRunner` methods for job execution and arbitrary Lua evaluation.
 
 use anyhow::{Result, anyhow};
 use mlua::Value;
@@ -15,9 +15,14 @@ use crate::{
 };
 
 impl HookRunner {
-    /// Execute a job handler function with CRUD access via TxContext.
+    /// Execute a job handler function with CRUD access via `TxContext`.
     /// The handler receives a context table `{ data, job = { slug, attempt, max_attempts, queued_at } }`.
     /// Returns the handler's return value as JSON string (or None if nil).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if VM acquisition, handler resolution, the handler
+    /// call itself, or return-value serialization fails.
     pub fn run_job_handler(
         &self,
         handler_ref: &str,
@@ -65,6 +70,10 @@ impl HookRunner {
 
     /// Execute arbitrary Lua code within a transaction + user context.
     /// Used by integration tests for CRUD closure testing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if VM acquisition or Lua evaluation fails.
     pub fn eval_lua_with_conn(
         &self,
         code: &str,
@@ -74,9 +83,7 @@ impl HookRunner {
         let lua = self.pool.acquire()?;
         let _guard = TxContextGuard::set(&lua, conn, user.cloned(), None, None);
 
-        lua.load(code)
-            .eval::<String>()
-            .map_err(|e| anyhow!("{}", e))
+        lua.load(code).eval::<String>().map_err(|e| anyhow!("{e}"))
     }
 
     /// Like [`eval_lua_with_conn`] but with [`InitPhase`] set on the VM,
@@ -85,6 +92,10 @@ impl HookRunner {
     /// (`crap.collections.define`, `crap.globals.define`,
     /// `crap.jobs.define`, `crap.richtext.register_node`) which are
     /// init-only at runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if VM acquisition or Lua evaluation fails.
     pub fn eval_lua_init_with_conn(
         &self,
         code: &str,
@@ -95,10 +106,7 @@ impl HookRunner {
         let _guard = TxContextGuard::set(&lua, conn, user.cloned(), None, None);
 
         lua.set_app_data(InitPhase);
-        let r = lua
-            .load(code)
-            .eval::<String>()
-            .map_err(|e| anyhow!("{}", e));
+        let r = lua.load(code).eval::<String>().map_err(|e| anyhow!("{e}"));
         lua.remove_app_data::<InitPhase>();
         r
     }

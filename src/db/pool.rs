@@ -19,14 +19,14 @@ use crate::db::backend::sqlite::SqliteConnection;
 
 /// Trait for pool backends.
 ///
-/// Each backend (SQLite, PostgreSQL, ...) implements this once.
+/// Each backend (`SQLite`, `PostgreSQL`, ...) implements this once.
 /// `DbPool` holds an `Arc<dyn PoolBackend>` and delegates `get()` to it.
 pub(crate) trait PoolBackend: Send + Sync {
     fn get(&self) -> Result<BoxedConnection>;
     fn kind(&self) -> &'static str;
 }
 
-/// SQLite pool backend.
+/// `SQLite` pool backend.
 #[cfg(feature = "sqlite")]
 struct SqlitePoolBackend {
     pool: Pool<SqliteConnectionManager>,
@@ -55,17 +55,24 @@ pub struct DbPool {
 
 impl DbPool {
     /// Get a connection from the pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the pool is exhausted or the backend fails to
+    /// hand out a connection.
     pub fn get(&self) -> Result<BoxedConnection> {
         self.inner.get()
     }
 
     /// Return the backend identifier (e.g. `"sqlite"`, `"postgres"`).
+    #[must_use]
     pub fn kind(&self) -> &str {
         self.inner.kind()
     }
 
-    /// Wrap an existing r2d2 SQLite pool. Used in tests.
+    /// Wrap an existing r2d2 `SQLite` pool. Used in tests.
     #[cfg(feature = "sqlite")]
+    #[must_use]
     pub fn from_pool(pool: Pool<SqliteConnectionManager>) -> Self {
         Self {
             inner: Arc::new(SqlitePoolBackend { pool }),
@@ -81,8 +88,13 @@ impl DbPool {
 
 /// Create a connection pool based on the configured backend.
 ///
-/// `config_dir` is used by the SQLite backend to resolve relative DB paths;
+/// `config_dir` is used by the `SQLite` backend to resolve relative DB paths;
 /// the Postgres backend ignores it (connection is fully URL-driven).
+///
+/// # Errors
+///
+/// Returns an error if the backend pool cannot be initialized (bad
+/// configuration, unreachable database, missing feature flag, …).
 pub fn create_pool(config_dir: &Path, config: &CrapConfig) -> Result<DbPool> {
     // Silence unused-param warning when built without the sqlite feature.
     let _ = config_dir;
@@ -111,7 +123,7 @@ fn supported_backends() -> &'static str {
     return "(none — enable the 'sqlite' or 'postgres' feature)";
 }
 
-/// Create a SQLite connection pool.
+/// Create a `SQLite` connection pool.
 #[cfg(feature = "sqlite")]
 fn create_sqlite_pool(config_dir: &Path, config: &CrapConfig) -> Result<DbPool> {
     let db_path = config.db_path(config_dir);

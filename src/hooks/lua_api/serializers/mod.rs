@@ -1,4 +1,4 @@
-//! Lua table serializers for CollectionDefinition, GlobalDefinition, and FieldDefinition.
+//! Lua table serializers for `CollectionDefinition`, `GlobalDefinition`, and `FieldDefinition`.
 //! These produce round-trip compatible tables that can be passed back to
 //! `crap.collections.define()` / `crap.globals.define()`.
 

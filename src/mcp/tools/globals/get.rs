@@ -35,7 +35,7 @@ pub(in crate::mcp::tools) fn exec_read_global(slug: &str, ctx: &ToolExecCtx<'_>)
             if is_missing {
                 Ok(to_string_pretty(&json!({}))?)
             } else {
-                Err(e).context(format!("Failed to read global '{}'", slug))
+                Err(e).context(format!("Failed to read global '{slug}'"))
             }
         }
     }

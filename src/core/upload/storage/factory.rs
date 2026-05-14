@@ -10,6 +10,11 @@ use crate::config::UploadConfig;
 use super::{LocalStorage, SharedStorage};
 
 /// Create the appropriate storage backend from config.
+///
+/// # Errors
+///
+/// Returns an error if the storage backend name is unknown or the chosen
+/// backend fails to initialize.
 pub fn create_storage(config_dir: &Path, config: &UploadConfig) -> Result<SharedStorage> {
     match config.storage.as_str() {
         "local" | "" => {
@@ -27,6 +32,6 @@ pub fn create_storage(config_dir: &Path, config: &UploadConfig) -> Result<Shared
 
             Ok(Arc::new(LocalStorage::new(base_dir)))
         }
-        other => bail!("Unknown upload storage backend: '{}'", other),
+        other => bail!("Unknown upload storage backend: '{other}'"),
     }
 }

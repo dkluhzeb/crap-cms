@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 pub struct PasswordPolicy {
     /// Minimum password length. Default: 8. Recommended: 12+ for modern security.
     pub min_length: usize,
-    /// Maximum password length. Default: 128. Prevents DoS via Argon2 on huge inputs.
+    /// Maximum password length. Default: 128. Prevents `DoS` via Argon2 on huge inputs.
     pub max_length: usize,
     /// Require at least one uppercase letter (A-Z). Default: false.
     pub require_uppercase: bool,
@@ -38,6 +38,11 @@ impl Default for PasswordPolicy {
 impl PasswordPolicy {
     /// Validate a password against this policy. Returns `Ok(())` if the password
     /// meets all requirements, or `Err` with a human-readable message.
+    ///
+    /// # Errors
+    ///
+    /// Returns a descriptive error if the password violates length, character
+    /// class, or any other configured requirement.
     pub fn validate(&self, password: &str) -> Result<()> {
         if password.chars().count() < self.min_length {
             bail!("Password must be at least {} characters", self.min_length);
@@ -106,7 +111,7 @@ mod tests {
         assert!(policy.validate("12345678901").is_err());
     }
 
-    /// Regression: max_length error message said "characters" but the check uses byte length.
+    /// Regression: `max_length` error message said "characters" but the check uses byte length.
     #[test]
     fn password_policy_max_length_error_says_bytes() {
         let policy = PasswordPolicy {
@@ -117,13 +122,11 @@ mod tests {
         let msg = err.to_string();
         assert!(
             msg.contains("bytes"),
-            "error message should say 'bytes', got: {}",
-            msg
+            "error message should say 'bytes', got: {msg}"
         );
         assert!(
             !msg.contains("characters"),
-            "error message should not say 'characters', got: {}",
-            msg
+            "error message should not say 'characters', got: {msg}"
         );
     }
 
@@ -190,12 +193,12 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             tmp.path().join("crap.toml"),
-            r#"
+            r"
 [auth.password_policy]
 min_length = 12
 require_uppercase = true
 require_digit = true
-"#,
+",
         )
         .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();

@@ -25,6 +25,7 @@ pub struct InProcessEventBus {
 
 impl InProcessEventBus {
     /// Create a new in-process event bus with the given channel capacity.
+    #[must_use]
     pub fn new(capacity: usize) -> Self {
         let (sender, _) = broadcast::channel(capacity);
 
@@ -70,6 +71,7 @@ impl Default for InProcessInvalidationBus {
 
 impl InProcessInvalidationBus {
     /// Create a new bus with the internal fixed capacity.
+    #[must_use]
     pub fn new() -> Self {
         let (sender, _) = broadcast::channel(USER_INVALIDATION_CAPACITY);
 
@@ -190,7 +192,7 @@ mod tests {
 
         match rx.recv().await {
             Err(RecvError::Lagged(_)) => {}
-            other => panic!("expected Lagged, got {:?}", other),
+            other => panic!("expected Lagged, got {other:?}"),
         }
     }
 

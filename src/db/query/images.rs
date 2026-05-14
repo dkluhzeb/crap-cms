@@ -19,7 +19,12 @@ fn row_to_queue_entry(row: &DbRow) -> ImageQueueEntry {
         source_path: text(row, 3),
         target_path: text(row, 4),
         format: text(row, 5),
-        quality: row.i64_at(6).unwrap_or(0) as u8,
+        // Quality is 0..=100 by domain; clamp to 0 if the stored value is
+        // out of u8 range (corrupt row) rather than silently truncating.
+        quality: row
+            .i64_at(6)
+            .and_then(|v| u8::try_from(v).ok())
+            .unwrap_or(0),
         url_column: text(row, 7),
         url_value: text(row, 8),
     }
@@ -79,6 +84,10 @@ pub struct ImageQueueListEntry {
 }
 
 /// Insert a pending image conversion into the queue.
+///
+/// # Errors
+///
+/// Returns a backend error if the INSERT fails.
 pub fn insert_image_queue_entry(
     conn: &dyn DbConnection,
     entry: &NewImageEntry<'_>,
@@ -100,7 +109,7 @@ pub fn insert_image_queue_entry(
             DbValue::Text(entry.source_path.to_string()),
             DbValue::Text(entry.target_path.to_string()),
             DbValue::Text(entry.format.to_string()),
-            DbValue::Integer(entry.quality as i64),
+            DbValue::Integer(i64::from(entry.quality)),
             DbValue::Text(entry.url_column.to_string()),
             DbValue::Text(entry.url_value.to_string()),
         ],
@@ -121,10 +130,15 @@ pub fn insert_image_queue_entry(
 ///
 /// The returned count matches `execute`'s affected-row count, ensuring no
 /// double-claiming.
+///
+/// # Errors
+///
+/// Returns a backend error if any SELECT or UPDATE fails.
 pub fn claim_pending_images(conn: &dyn DbConnection, limit: usize) -> Result<Vec<ImageQueueEntry>> {
     let p1 = conn.placeholder(1);
 
     // Step 1: Find the candidate pending IDs.
+    let limit_i64 = i64::try_from(limit).context("limit exceeds i64::MAX")?;
     let id_rows = conn.query_all(
         &format!(
             "SELECT id FROM _crap_image_queue
@@ -132,7 +146,7 @@ pub fn claim_pending_images(conn: &dyn DbConnection, limit: usize) -> Result<Vec
              ORDER BY created_at ASC
              LIMIT {p1}"
         ),
-        &[DbValue::Integer(limit as i64)],
+        &[DbValue::Integer(limit_i64)],
     )?;
 
     if id_rows.is_empty() {
@@ -185,6 +199,10 @@ pub fn claim_pending_images(conn: &dyn DbConnection, limit: usize) -> Result<Vec
 }
 
 /// Mark an entry as completed.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
 pub fn complete_image_entry(conn: &dyn DbConnection, id: &str) -> Result<()> {
     let p1 = conn.placeholder(1);
 
@@ -200,6 +218,10 @@ pub fn complete_image_entry(conn: &dyn DbConnection, id: &str) -> Result<()> {
 }
 
 /// Mark an entry as failed with an error message.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
 pub fn fail_image_entry(conn: &dyn DbConnection, id: &str, error: &str) -> Result<()> {
     let p1 = conn.placeholder(1);
     let p2 = conn.placeholder(2);
@@ -215,16 +237,24 @@ pub fn fail_image_entry(conn: &dyn DbConnection, id: &str, error: &str) -> Resul
 /// Reset stale `processing` entries back to `pending`.
 /// These are entries that were claimed but never completed — e.g., due to a server
 /// crash mid-conversion. Called on scheduler startup.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
 pub fn recover_stale_images(conn: &dyn DbConnection) -> Result<i64> {
     let updated = conn.execute(
         "UPDATE _crap_image_queue SET status = 'pending' WHERE status = 'processing'",
         &[],
     )?;
 
-    Ok(updated as i64)
+    i64::try_from(updated).context("recovered count exceeds i64::MAX")
 }
 
 /// Count entries by status.
+///
+/// # Errors
+///
+/// Returns a backend error if the COUNT query fails.
 pub fn count_image_entries_by_status(conn: &dyn DbConnection, status: &str) -> Result<i64> {
     let p1 = conn.placeholder(1);
     let row = conn
@@ -238,6 +268,10 @@ pub fn count_image_entries_by_status(conn: &dyn DbConnection, status: &str) -> R
 }
 
 /// List queue entries with optional status filter and limit.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails.
 pub fn list_image_entries(
     conn: &dyn DbConnection,
     status_filter: Option<&str>,
@@ -269,6 +303,10 @@ pub fn list_image_entries(
 }
 
 /// Reset a single failed entry to pending for retry.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
 pub fn retry_image_entry(conn: &dyn DbConnection, id: &str) -> Result<bool> {
     let p1 = conn.placeholder(1);
     let updated = conn.execute(
@@ -283,6 +321,10 @@ pub fn retry_image_entry(conn: &dyn DbConnection, id: &str) -> Result<bool> {
 }
 
 /// Reset all failed entries to pending. Returns the count of reset entries.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
 pub fn retry_all_failed_images(conn: &dyn DbConnection) -> Result<i64> {
     let updated = conn.execute(
         "UPDATE _crap_image_queue SET status = 'pending', error = NULL, completed_at = NULL \
@@ -290,27 +332,36 @@ pub fn retry_all_failed_images(conn: &dyn DbConnection) -> Result<i64> {
         &[],
     )?;
 
-    Ok(updated as i64)
+    i64::try_from(updated).context("retry count exceeds i64::MAX")
 }
 
 /// Purge completed/failed entries older than the given number of seconds.
+///
+/// # Errors
+///
+/// Returns a backend error if the DELETE fails.
 pub fn purge_old_image_entries(conn: &dyn DbConnection, older_than_secs: u64) -> Result<i64> {
-    let (offset_sql, offset_param) = conn.date_offset_expr(older_than_secs as i64, 1);
+    let older = i64::try_from(older_than_secs)
+        .context("older_than_secs exceeds the SQL TIMESTAMP arithmetic range")?;
+    let (offset_sql, offset_param) = conn.date_offset_expr(older, 1);
     let deleted = conn.execute(
         &format!(
             "DELETE FROM _crap_image_queue WHERE status IN ('completed', 'failed')
-             AND completed_at < {}",
-            offset_sql
+             AND completed_at < {offset_sql}"
         ),
         &[offset_param],
     )?;
 
-    Ok(deleted as i64)
+    i64::try_from(deleted).context("delete count exceeds i64::MAX")
 }
 
 /// Delete all pending/processing image queue entries for a document.
 /// Called when a document is deleted to prevent the scheduler from
 /// processing orphaned conversion jobs.
+///
+/// # Errors
+///
+/// Returns a backend error if the DELETE fails.
 pub fn delete_entries_for_document(
     conn: &dyn DbConnection,
     collection: &str,
@@ -666,7 +717,7 @@ mod tests {
         assert_eq!(reclaimed.len(), 2);
     }
 
-    /// Regression: claim_pending_images must use an atomic UPDATE so that
+    /// Regression: `claim_pending_images` must use an atomic UPDATE so that
     /// concurrent callers cannot SELECT the same pending rows before either
     /// marks them as processing (race condition).
     #[test]

@@ -49,7 +49,7 @@ fn restore_collection_version_blocking(
     restore_collection_version(&ctx, &input.id, &input.version_id, &input.locale_config)
 }
 
-/// POST /admin/collections/{slug}/{id}/versions/{version_id}/restore — restore a version
+/// `POST /admin/collections/{slug}/{id}/versions/{version_id}/restore` — restore a version
 pub async fn restore_version(
     State(state): State<AdminState>,
     Path((slug, id, version_id)): Path<(String, String, String)>,
@@ -69,7 +69,7 @@ pub async fn restore_version(
         runner: state.hook_runner.clone(),
         slug,
         def,
-        user_doc: get_user_doc(&auth_user).cloned(),
+        user_doc: get_user_doc(auth_user.as_ref()).cloned(),
         event_transport: state.event_transport.clone(),
         cache: state.cache.clone(),
         id,

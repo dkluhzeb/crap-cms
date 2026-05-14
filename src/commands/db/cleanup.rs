@@ -21,6 +21,11 @@ use crate::{
 ///
 /// By default runs in dry-run mode (report only). Pass `confirm = true` to actually
 /// drop orphan columns.
+///
+/// # Errors
+///
+/// Returns an error if config loading, Lua init, pool creation, schema
+/// inspection, or column drops fail.
 #[cfg(not(tarpaulin_include))]
 pub fn cleanup(config_dir: &Path, confirm: bool) -> Result<()> {
     let config_dir = config_dir
@@ -59,14 +64,14 @@ fn display_orphans(orphans: &[(String, Vec<String>)]) {
 
     for (table, cols) in orphans {
         for col in cols {
-            cli::dim(&format!("  {}.{}", table, col));
+            cli::dim(&format!("  {table}.{col}"));
         }
     }
 
     let total: usize = orphans.iter().map(|(_, cols)| cols.len()).sum();
 
     println!();
-    cli::info(&format!("{} orphan column(s) found.", total));
+    cli::info(&format!("{total} orphan column(s) found."));
 }
 
 /// Drop the identified orphan columns from the database.
@@ -82,24 +87,24 @@ fn drop_orphan_columns(conn: &dyn DbConnection, orphans: &[(String, Vec<String>)
 
     for (table, cols) in orphans {
         for col in cols {
-            let sql = format!("ALTER TABLE \"{}\" DROP COLUMN \"{}\"", table, col);
+            let sql = format!("ALTER TABLE \"{table}\" DROP COLUMN \"{col}\"");
 
             conn.execute(&sql, &[])
-                .with_context(|| format!("Failed to drop column {}.{}", table, col))?;
+                .with_context(|| format!("Failed to drop column {table}.{col}"))?;
 
-            cli::success(&format!("Dropped: {}.{}", table, col));
+            cli::success(&format!("Dropped: {table}.{col}"));
             total += 1;
         }
     }
 
-    cli::success(&format!("{} column(s) dropped.", total));
+    cli::success(&format!("{total} column(s) dropped."));
 
     Ok(())
 }
 
 /// Find orphan columns across all collection tables.
 ///
-/// Returns a vec of (table_name, vec_of_orphan_column_names).
+/// Returns a vec of (`table_name`, `vec_of_orphan_column_names`).
 /// System columns (`_`-prefixed, `id`, `created_at`, `updated_at`) are excluded.
 /// Plugin columns are NOT orphans because plugins run during `init_lua` and their
 /// fields are included in the registry definitions.
@@ -347,8 +352,7 @@ mod tests {
         let orphans = find_orphan_columns(&conn, &reg, &no_locale()).unwrap();
         assert!(
             orphans.is_empty(),
-            "nested Group→Row→Tabs columns should not be orphans: {:?}",
-            orphans
+            "nested Group→Row→Tabs columns should not be orphans: {orphans:?}"
         );
     }
 }

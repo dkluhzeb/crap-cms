@@ -15,16 +15,17 @@ use crate::{
 
 use super::response::{forbidden, server_error};
 
-/// Extract the user document from AuthUser extension (for access checks).
-pub fn get_user_doc(auth_user: &Option<Extension<AuthUser>>) -> Option<&Document> {
-    auth_user.as_ref().map(|Extension(au)| &au.user_doc)
+/// Extract the user document from `AuthUser` extension (for access checks).
+#[must_use]
+pub fn get_user_doc(auth_user: Option<&Extension<AuthUser>>) -> Option<&Document> {
+    auth_user.map(|Extension(au)| &au.user_doc)
 }
 
-/// Helper to check collection/global-level access. Returns AccessResult or renders a 403 page.
+/// Helper to check collection/global-level access. Returns `AccessResult` or renders a 403 page.
 pub fn check_access_or_forbid(
     state: &AdminState,
     access_ref: Option<&str>,
-    auth_user: &Option<Extension<AuthUser>>,
+    auth_user: Option<&Extension<AuthUser>>,
     id: Option<&str>,
     data: Option<&DocumentFields>,
 ) -> Result<AccessResult, Box<axum::response::Response>> {
@@ -63,7 +64,7 @@ pub fn check_access_or_forbid(
 /// Skips the check entirely (returns empty vec) if no field has read access configured.
 pub fn compute_denied_read_fields(
     state: &AdminState,
-    auth_user: &Option<Extension<AuthUser>>,
+    auth_user: Option<&Extension<AuthUser>>,
     fields: &[FieldDefinition],
 ) -> Result<Vec<String>, Box<axum::response::Response>> {
     if !has_any_field_access(fields, |f| f.access.read.as_deref()) {
@@ -129,7 +130,7 @@ pub struct EvaluateConditionsRequest {
     pub conditions: HashMap<String, String>,
 }
 
-/// Evaluate display conditions and return a field_name → visible map.
+/// Evaluate display conditions and return a `field_name` → visible map.
 ///
 /// Validates each function ref against the set of known condition refs from the
 /// field definitions to prevent calling arbitrary Lua functions.
@@ -210,14 +211,12 @@ pub fn has_read_access(
         return !state.config.access.default_deny;
     }
 
-    let mut conn = match state.pool.get() {
-        Ok(c) => c,
-        Err(_) => return false,
+    let Ok(mut conn) = state.pool.get() else {
+        return false;
     };
 
-    let tx = match conn.transaction() {
-        Ok(t) => t,
-        Err(_) => return false,
+    let Ok(tx) = conn.transaction() else {
+        return false;
     };
 
     let allowed = has_access_with_conn(state, access_ref, user_doc, &tx);

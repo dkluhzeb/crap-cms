@@ -4,147 +4,173 @@ use mlua::{Error::RuntimeError, Result as LuaResult, Table, Value};
 use serde_json::Value as JsonValue;
 
 use crate::{
-    core::{FieldAdmin, validate_template_name},
+    core::{FieldAdmin, FieldAdminBuilder, validate_template_name},
     hooks::lua_api::lua_to_json,
 };
 
-use super::helpers::*;
+use super::helpers::{get_bool, get_localized_string, get_string, get_table};
 
 /// Parse the `admin` subtable of a field Lua definition into a `FieldAdmin`.
+///
+/// Sections (boolean flags, localized strings, identifier strings, the
+/// `labels` sub-table, the `rows` numeric knob, sequence-typed lists, the
+/// template-ref string, the freeform `extra` map) are applied in turn by
+/// per-section helpers.
 pub(super) fn parse_field_admin(admin_tbl: &Table) -> LuaResult<FieldAdmin> {
-    let (labels_singular, labels_plural) = if let Ok(labels_tbl) = get_table(admin_tbl, "labels") {
-        (
-            get_localized_string(&labels_tbl, "singular"),
-            get_localized_string(&labels_tbl, "plural"),
-        )
-    } else {
-        (None, None)
-    };
+    let mut builder = parse_admin_booleans(admin_tbl)?;
+    builder = apply_localized_strings(builder, admin_tbl);
+    builder = apply_identifier_strings(builder, admin_tbl);
+    builder = apply_label_overrides(builder, admin_tbl);
+    builder = apply_rows(builder, admin_tbl);
+    builder = apply_sequence_lists(builder, admin_tbl);
+    builder = apply_template(builder, admin_tbl)?;
+    builder = apply_extra(builder, admin_tbl)?;
+    Ok(builder.build())
+}
 
-    let mut builder = FieldAdmin::builder()
+/// Seed the builder with the four boolean flags (`collapsed`, `hidden`,
+/// `readonly`, `resizable`). `collapsed`/`resizable` default to `true`;
+/// `hidden`/`readonly` default to `false`.
+fn parse_admin_booleans(admin_tbl: &Table) -> LuaResult<FieldAdminBuilder> {
+    Ok(FieldAdmin::builder()
         .collapsed(get_bool(admin_tbl, "collapsed", true)?)
         .hidden(get_bool(admin_tbl, "hidden", false)?)
         .readonly(get_bool(admin_tbl, "readonly", false)?)
-        .resizable(get_bool(admin_tbl, "resizable", true)?);
+        .resizable(get_bool(admin_tbl, "resizable", true)?))
+}
 
+/// Apply the three localized-string fields (`label`, `placeholder`,
+/// `description`). Each is optional.
+fn apply_localized_strings(mut builder: FieldAdminBuilder, admin_tbl: &Table) -> FieldAdminBuilder {
     if let Some(v) = get_localized_string(admin_tbl, "label") {
         builder = builder.label(v);
     }
-
     if let Some(v) = get_localized_string(admin_tbl, "placeholder") {
         builder = builder.placeholder(v);
     }
-
     if let Some(v) = get_localized_string(admin_tbl, "description") {
         builder = builder.description(v);
     }
+    builder
+}
 
+/// Apply the optional plain-string admin knobs (`width`, `label_field`,
+/// `row_label`, `position`, `condition`, `step`, `language`, `picker`,
+/// `format`).
+fn apply_identifier_strings(
+    mut builder: FieldAdminBuilder,
+    admin_tbl: &Table,
+) -> FieldAdminBuilder {
     if let Some(v) = get_string(admin_tbl, "width") {
         builder = builder.width(v);
     }
-
     if let Some(v) = get_string(admin_tbl, "label_field") {
         builder = builder.label_field(v);
     }
-
     if let Some(v) = get_string(admin_tbl, "row_label") {
         builder = builder.row_label(v);
     }
-
-    if let Some(v) = labels_singular {
-        builder = builder.labels_singular(v);
-    }
-
-    if let Some(v) = labels_plural {
-        builder = builder.labels_plural(v);
-    }
-
     if let Some(v) = get_string(admin_tbl, "position") {
         builder = builder.position(v);
     }
-
     if let Some(v) = get_string(admin_tbl, "condition") {
         builder = builder.condition(v);
     }
-
     if let Some(v) = get_string(admin_tbl, "step") {
         builder = builder.step(v);
     }
-
-    if let Some(v) = admin_tbl.get::<Option<u32>>("rows").ok().flatten() {
-        builder = builder.rows(v);
-    }
-
     if let Some(v) = get_string(admin_tbl, "language") {
         builder = builder.language(v);
     }
-
-    let languages: Vec<String> = if let Ok(tbl) = get_table(admin_tbl, "languages") {
-        tbl.sequence_values::<String>()
-            .filter_map(|r| r.ok())
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    builder = builder.languages(languages);
-
     if let Some(v) = get_string(admin_tbl, "picker") {
         builder = builder.picker(v);
     }
-
     if let Some(v) = get_string(admin_tbl, "format") {
         builder = builder.richtext_format(v);
     }
+    builder
+}
 
-    let features: Vec<String> = if let Ok(tbl) = get_table(admin_tbl, "features") {
-        tbl.sequence_values::<String>()
-            .filter_map(|r| r.ok())
-            .collect()
-    } else {
-        Vec::new()
+/// Apply the singular/plural label overrides from the `labels` sub-table.
+fn apply_label_overrides(mut builder: FieldAdminBuilder, admin_tbl: &Table) -> FieldAdminBuilder {
+    let Ok(labels_tbl) = get_table(admin_tbl, "labels") else {
+        return builder;
     };
+    if let Some(v) = get_localized_string(&labels_tbl, "singular") {
+        builder = builder.labels_singular(v);
+    }
+    if let Some(v) = get_localized_string(&labels_tbl, "plural") {
+        builder = builder.labels_plural(v);
+    }
+    builder
+}
 
-    builder = builder.features(features);
+/// Apply the optional `rows: u32` textarea knob.
+fn apply_rows(mut builder: FieldAdminBuilder, admin_tbl: &Table) -> FieldAdminBuilder {
+    if let Some(v) = admin_tbl.get::<Option<u32>>("rows").ok().flatten() {
+        builder = builder.rows(v);
+    }
+    builder
+}
 
-    let nodes: Vec<String> = if let Ok(tbl) = get_table(admin_tbl, "nodes") {
-        tbl.sequence_values::<String>()
-            .filter_map(|r| r.ok())
-            .collect()
-    } else {
-        Vec::new()
+/// Apply the three sequence-typed lists (`languages`, `features`, `nodes`).
+/// Each is always set on the builder; an absent or invalid Lua sequence
+/// becomes an empty Vec.
+fn apply_sequence_lists(mut builder: FieldAdminBuilder, admin_tbl: &Table) -> FieldAdminBuilder {
+    builder = builder.languages(string_sequence(admin_tbl, "languages"));
+    builder = builder.features(string_sequence(admin_tbl, "features"));
+    builder = builder.nodes(string_sequence(admin_tbl, "nodes"));
+    builder
+}
+
+/// Collect a Lua sequence at `key` into a `Vec<String>`. Returns an empty
+/// vec when the key is absent or the value isn't a sequence of strings.
+fn string_sequence(admin_tbl: &Table, key: &str) -> Vec<String> {
+    let Ok(tbl) = get_table(admin_tbl, key) else {
+        return Vec::new();
     };
+    tbl.sequence_values::<String>()
+        .filter_map(std::result::Result::ok)
+        .collect()
+}
 
-    builder = builder.nodes(nodes);
-
+/// Apply the optional `template` ref, validating it against the allowed
+/// template-name shape before storing.
+fn apply_template(
+    mut builder: FieldAdminBuilder,
+    admin_tbl: &Table,
+) -> LuaResult<FieldAdminBuilder> {
     if let Some(v) = get_string(admin_tbl, "template") {
         validate_template_name(&v)
             .map_err(|e| RuntimeError(format!("crap.fields.*: invalid `admin.template`: {e}")))?;
         builder = builder.template(v);
     }
+    Ok(builder)
+}
 
-    // Freeform per-field config — JSON-serializable values the field's
-    // template can read at `{{admin.extra.<key>}}`. Parsed once at
-    // field-definition time; static per field instance.
-    if let Ok(extra_tbl) = get_table(admin_tbl, "extra") {
-        let json = lua_to_json(&Value::Table(extra_tbl)).map_err(|e| {
-            RuntimeError(format!(
-                "crap.fields.*: invalid `admin.extra` (must be JSON-serializable): {e}"
-            ))
-        })?;
-        match json {
-            JsonValue::Object(map) => builder = builder.extra(map),
-            _ => {
-                return Err(RuntimeError(
-                    "crap.fields.*: `admin.extra` must be a table (Lua dictionary), \
-                     not a sequence or scalar"
-                        .to_string(),
-                ));
-            }
+/// Apply the freeform `admin.extra` map — JSON-serializable values the
+/// field's template can read at `{{admin.extra.<key>}}`. Parsed once at
+/// field-definition time; static per field instance.
+fn apply_extra(mut builder: FieldAdminBuilder, admin_tbl: &Table) -> LuaResult<FieldAdminBuilder> {
+    let Ok(extra_tbl) = get_table(admin_tbl, "extra") else {
+        return Ok(builder);
+    };
+    let json = lua_to_json(&Value::Table(extra_tbl)).map_err(|e| {
+        RuntimeError(format!(
+            "crap.fields.*: invalid `admin.extra` (must be JSON-serializable): {e}"
+        ))
+    })?;
+    match json {
+        JsonValue::Object(map) => {
+            builder = builder.extra(map);
+            Ok(builder)
         }
+        _ => Err(RuntimeError(
+            "crap.fields.*: `admin.extra` must be a table (Lua dictionary), \
+             not a sequence or scalar"
+                .to_string(),
+        )),
     }
-
-    Ok(builder.build())
 }
 
 #[cfg(test)]
@@ -253,11 +279,17 @@ mod tests {
             Some("star")
         );
         assert_eq!(
-            admin.extra.get("max_stars").and_then(|v| v.as_i64()),
+            admin
+                .extra
+                .get("max_stars")
+                .and_then(serde_json::Value::as_i64),
             Some(5)
         );
         assert_eq!(
-            admin.extra.get("rounded").and_then(|v| v.as_bool()),
+            admin
+                .extra
+                .get("rounded")
+                .and_then(serde_json::Value::as_bool),
             Some(true)
         );
         let colors = admin.extra.get("colors").and_then(|v| v.as_object());

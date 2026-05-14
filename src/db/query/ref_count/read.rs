@@ -74,7 +74,7 @@ fn collect_refs(
                         &rc.collection,
                         rc.is_polymorphic(),
                         refs,
-                    )?;
+                    );
 
                     continue;
                 }
@@ -103,13 +103,13 @@ fn collect_refs(
             FieldType::Array => {
                 let array_table = join_table(table, &prefixed_name(prefix, &field.name));
 
-                collect_array_refs(conn, &array_table, id, &field.fields, refs)?;
+                collect_array_refs(conn, &array_table, id, &field.fields, refs);
             }
 
             FieldType::Blocks => {
                 let blocks_table = join_table(table, &prefixed_name(prefix, &field.name));
 
-                collect_blocks_refs(conn, &blocks_table, id, &field.blocks, refs)?;
+                collect_blocks_refs(conn, &blocks_table, id, &field.blocks, refs);
             }
 
             _ => {}
@@ -151,6 +151,11 @@ fn collect_has_one_refs(
 }
 
 /// Read has-many references from a junction table.
+///
+/// Query errors are intentionally swallowed (logged at debug level) — a
+/// missing or unreadable junction table at scan time can't poison the
+/// caller's transaction, so the function infallibly returns the refs
+/// it could collect.
 fn collect_has_many_refs(
     conn: &dyn DbConnection,
     junction_table: &str,
@@ -158,7 +163,7 @@ fn collect_has_many_refs(
     default_collection: &str,
     is_polymorphic: bool,
     refs: &mut Vec<OutgoingRef>,
-) -> Result<()> {
+) {
     let p1 = conn.placeholder(1);
     let params = &[DbValue::Text(parent_id.to_string())];
 
@@ -175,7 +180,7 @@ fn collect_has_many_refs(
             Err(e) => {
                 debug!("Ref count scan skipping {junction_table}: {e}");
 
-                return Ok(());
+                return;
             }
         };
 
@@ -192,7 +197,7 @@ fn collect_has_many_refs(
             Err(e) => {
                 debug!("Ref count scan skipping {junction_table}: {e}");
 
-                return Ok(());
+                return;
             }
         };
 
@@ -202,18 +207,18 @@ fn collect_has_many_refs(
             }
         }
     }
-
-    Ok(())
 }
 
 /// Read outgoing refs from array sub-fields (has-one relationship columns in array rows).
+///
+/// Query errors are swallowed for the same reason as `collect_has_many_refs`.
 fn collect_array_refs(
     conn: &dyn DbConnection,
     array_table: &str,
     parent_id: &str,
     fields: &[FieldDefinition],
     refs: &mut Vec<OutgoingRef>,
-) -> Result<()> {
+) {
     let flat = flatten_array_sub_fields(fields);
 
     // Collect relationship columns we need to read
@@ -235,7 +240,7 @@ fn collect_array_refs(
         .collect();
 
     if rel_fields.is_empty() {
-        return Ok(());
+        return;
     }
 
     let col_list = rel_fields
@@ -245,17 +250,14 @@ fn collect_array_refs(
         .join(", ");
 
     let p1 = conn.placeholder(1);
-    let sql = format!(
-        "SELECT {} FROM \"{}\" WHERE parent_id = {p1}",
-        col_list, array_table
-    );
+    let sql = format!("SELECT {col_list} FROM \"{array_table}\" WHERE parent_id = {p1}");
 
     let rows = match conn.query_all(&sql, &[DbValue::Text(parent_id.to_string())]) {
         Ok(r) => r,
         Err(e) => {
             debug!("Ref count scan skipping {}: {}", array_table, e);
 
-            return Ok(());
+            return;
         }
     };
 
@@ -266,18 +268,18 @@ fn collect_array_refs(
             }
         }
     }
-
-    Ok(())
 }
 
 /// Read outgoing refs from blocks sub-fields (relationship values in JSON data).
+///
+/// Query errors are swallowed for the same reason as `collect_has_many_refs`.
 fn collect_blocks_refs(
     conn: &dyn DbConnection,
     blocks_table: &str,
     parent_id: &str,
     blocks: &[BlockDefinition],
     refs: &mut Vec<OutgoingRef>,
-) -> Result<()> {
+) {
     for block in blocks {
         let flat = flatten_array_sub_fields(&block.fields);
 
@@ -334,8 +336,6 @@ fn collect_blocks_refs(
             }
         }
     }
-
-    Ok(())
 }
 
 #[cfg(test)]

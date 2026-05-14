@@ -41,13 +41,13 @@ pub enum ServiceError {
 impl fmt::Display for ServiceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::AccessDenied(msg) => write!(f, "{msg}"),
-            Self::NotFound(msg) => write!(f, "{msg}"),
+            Self::AccessDenied(msg) | Self::NotFound(msg) | Self::HookError(msg) => {
+                write!(f, "{msg}")
+            }
             Self::Referenced { id, count } => {
                 write!(f, "Cannot delete '{id}': referenced by {count} document(s)")
             }
             Self::Validation(ve) => write!(f, "{ve}"),
-            Self::HookError(msg) => write!(f, "{msg}"),
             Self::UniqueViolation(field) => {
                 write!(f, "Unique constraint violated for field '{field}'")
             }
@@ -57,8 +57,7 @@ impl fmt::Display for ServiceError {
             Self::InvalidToken { kind, reason } => {
                 write!(f, "Invalid {kind} token: {reason}")
             }
-            Self::Transient(e) => write!(f, "{e:#}"),
-            Self::Internal(e) => write!(f, "{e:#}"),
+            Self::Transient(e) | Self::Internal(e) => write!(f, "{e:#}"),
         }
     }
 }
@@ -91,9 +90,10 @@ impl From<ValidationError> for ServiceError {
 impl ServiceError {
     /// Classify an anyhow error into the appropriate `ServiceError` variant.
     ///
-    /// Checks for known error types (ValidationError) and string patterns
+    /// Checks for known error types (`ValidationError`) and string patterns
     /// (transient DB errors, hook errors, unique constraint violations).
     /// `db_kind` selects backend-specific patterns (`"sqlite"`, `"postgres"`).
+    #[must_use]
     pub fn classify(e: anyhow::Error, db_kind: &str) -> Self {
         // Structured validation errors — preserve the typed variant.
         if let Some(ve) = e.downcast_ref::<ValidationError>() {
@@ -127,8 +127,7 @@ impl ServiceError {
         if let Some(rest) = msg.strip_prefix("UNIQUE constraint failed: ") {
             let field = rest
                 .find('.')
-                .map(|pos| rest[pos + 1..].to_string())
-                .unwrap_or_else(|| rest.to_string());
+                .map_or_else(|| rest.to_string(), |pos| rest[pos + 1..].to_string());
             return Self::UniqueViolation(field);
         }
         if msg.contains("duplicate key value violates unique constraint") {
@@ -154,6 +153,7 @@ impl ServiceError {
     ///
     /// Non-Internal variants pass through unchanged. This is used at the surface
     /// boundary (gRPC, admin) where the backend kind is known.
+    #[must_use]
     pub fn reclassify(self, db_kind: &str) -> Self {
         match self {
             Self::Internal(e) => Self::classify(e, db_kind),
@@ -161,7 +161,8 @@ impl ServiceError {
         }
     }
 
-    /// Convert to an anyhow::Error, preserving the original error chain for Internal/Transient.
+    /// Convert to an `anyhow::Error`, preserving the original error chain for Internal/Transient.
+    #[must_use]
     pub fn into_anyhow(self) -> anyhow::Error {
         match self {
             Self::Internal(inner) | Self::Transient(inner) => inner,
@@ -171,11 +172,13 @@ impl ServiceError {
     }
 
     /// Returns `true` if this is a validation error.
+    #[must_use]
     pub fn is_validation(&self) -> bool {
         matches!(self, Self::Validation(_))
     }
 
     /// Extract the `ValidationError` if this is a Validation variant.
+    #[must_use]
     pub fn into_validation(self) -> Option<ValidationError> {
         match self {
             Self::Validation(ve) => Some(ve),

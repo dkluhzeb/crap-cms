@@ -1,4 +1,4 @@
-//! DescribeCollection handler — describe a collection's or global's schema.
+//! `DescribeCollection` handler — describe a collection's or global's schema.
 
 use tonic::{Request, Response, Status};
 
@@ -10,7 +10,7 @@ use crate::api::{
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
     /// Describe a collection's schema (fields, timestamps, auth, upload).
-    pub(in crate::api::handlers) async fn describe_collection_impl(
+    pub(in crate::api::handlers) fn describe_collection_impl(
         &self,
         request: Request<content::DescribeCollectionRequest>,
     ) -> Result<Response<content::DescribeCollectionResponse>, Status> {

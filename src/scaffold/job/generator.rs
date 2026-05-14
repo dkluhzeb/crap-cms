@@ -43,6 +43,11 @@ pub struct MakeJobOptions<'a> {
 /// Scaffold a job Lua file in `jobs/<slug>.lua`.
 ///
 /// Generates a module with a `run` handler, followed by `crap.jobs.define()`.
+///
+/// # Errors
+///
+/// Returns an error if the slug is invalid, the file already exists without
+/// `--force`, or writing the file fails.
 pub fn make_job(opts: &MakeJobOptions) -> Result<()> {
     validate_slug(opts.slug)?;
 

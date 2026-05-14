@@ -4,6 +4,20 @@
 //! 1. Library function tests — direct Rust calls with temp dirs.
 //! 2. Binary invocation tests — `std::process::Command` for clap parsing.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::path::{Path, PathBuf};
 
 use crap_cms::config::CrapConfig;
@@ -28,7 +42,7 @@ fn crap_bin() -> PathBuf {
 }
 
 /// Copy fixture dir to a temp dir, init Lua, create pool, sync schema.
-/// Returns (TempDir, DbPool, Arc<Registry>).
+/// Returns (`TempDir`, `DbPool`, Arc<Registry>).
 fn full_setup() -> (
     tempfile::TempDir,
     DbPool,
@@ -61,7 +75,7 @@ fn copy_dir(src: &Path, dst: &Path) {
     }
 }
 
-/// Create a user in an auth collection via query::create + update_password.
+/// Create a user in an auth collection via `query::create` + `update_password`.
 fn create_user(
     pool: &DbPool,
     def: &crap_cms::core::CollectionDefinition,
@@ -111,9 +125,7 @@ fn help_shows_all_commands() {
     ] {
         assert!(
             stdout.contains(cmd),
-            "help should list '{}' command, got:\n{}",
-            cmd,
-            stdout
+            "help should list '{cmd}' command, got:\n{stdout}"
         );
     }
 }
@@ -150,9 +162,7 @@ fn user_subcommand_help() {
     ] {
         assert!(
             stdout.contains(sub),
-            "user help should list '{}', got:\n{}",
-            sub,
-            stdout
+            "user help should list '{sub}', got:\n{stdout}"
         );
     }
 }
@@ -168,9 +178,7 @@ fn make_subcommand_help() {
     for sub in &["collection", "global", "hook", "migration"] {
         assert!(
             stdout.contains(sub),
-            "make help should list '{}', got:\n{}",
-            sub,
-            stdout
+            "make help should list '{sub}', got:\n{stdout}"
         );
     }
 }
@@ -186,9 +194,7 @@ fn migrate_subcommand_help() {
     for sub in &["create", "up", "down", "list", "fresh"] {
         assert!(
             stdout.contains(sub),
-            "migrate help should list '{}', got:\n{}",
-            sub,
-            stdout
+            "migrate help should list '{sub}', got:\n{stdout}"
         );
     }
 }
@@ -213,11 +219,11 @@ fn migrate_create_via_binary() {
     let migrations_dir = config_dir.join("migrations");
     let files: Vec<_> = std::fs::read_dir(&migrations_dir)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .collect();
     assert_eq!(files.len(), 1);
     let filename = files[0].file_name().to_string_lossy().to_string();
-    assert!(filename.ends_with("_add_tags.lua"), "got: {}", filename);
+    assert!(filename.ends_with("_add_tags.lua"), "got: {filename}");
 
     let content = std::fs::read_to_string(files[0].path()).unwrap();
     assert!(content.contains("function M.up()"));
@@ -705,15 +711,11 @@ fn make_migration_creates_file() {
 
     let files: Vec<_> = std::fs::read_dir(tmp.path().join("migrations"))
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .collect();
     assert_eq!(files.len(), 1);
     let filename = files[0].file_name().to_string_lossy().to_string();
-    assert!(
-        filename.ends_with("_add_categories.lua"),
-        "got: {}",
-        filename
-    );
+    assert!(filename.ends_with("_add_categories.lua"), "got: {filename}");
 }
 
 #[test]
@@ -723,7 +725,7 @@ fn make_migration_has_up_down() {
 
     let files: Vec<_> = std::fs::read_dir(tmp.path().join("migrations"))
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .collect();
     let content = std::fs::read_to_string(files[0].path()).unwrap();
     assert!(content.contains("function M.up()"));
@@ -1143,7 +1145,7 @@ fn import_basic() {
             "posts",
             parent_cols
                 .iter()
-                .map(|c| format!("\"{}\"", c))
+                .map(|c| format!("\"{c}\""))
                 .collect::<Vec<_>>()
                 .join(", "),
             placeholders.join(", ")
@@ -1192,10 +1194,7 @@ fn import_collection_filter() {
         let id = obj["id"].as_str().unwrap();
         let title = obj.get("title").and_then(|v| v.as_str()).unwrap_or("");
         tx.execute(
-            &format!(
-                "INSERT OR REPLACE INTO \"{}\" (id, title) VALUES (?1, ?2)",
-                slug
-            ),
+            &format!("INSERT OR REPLACE INTO \"{slug}\" (id, title) VALUES (?1, ?2)"),
             &[
                 DbValue::Text(id.to_string()),
                 DbValue::Text(title.to_string()),

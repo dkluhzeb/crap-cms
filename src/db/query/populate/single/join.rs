@@ -36,14 +36,12 @@ pub(super) fn populate_join_fields(
             continue;
         }
 
-        let jc = match &field.join {
-            Some(jc) => jc,
-            None => continue,
+        let Some(jc) = &field.join else {
+            continue;
         };
 
-        let target_def = match ctx.registry.get_collection(&jc.collection) {
-            Some(d) => d.clone(),
-            None => continue,
+        let Some(target_def) = ctx.registry.get_collection(&jc.collection).cloned() else {
+            continue;
         };
 
         let populated = populate_join_docs(ctx, doc, jc, &target_def, visited, opts, cache)?;

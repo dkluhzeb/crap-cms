@@ -1,4 +1,4 @@
-//! HookRunner: thread-safe hook execution engine with a pool of Lua VMs.
+//! `HookRunner`: thread-safe hook execution engine with a pool of Lua VMs.
 
 mod access;
 mod broadcast;

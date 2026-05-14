@@ -31,8 +31,14 @@ pub(in crate::mcp::tools) fn exec_count(
     let conn = ctx.pool.get().context("DB connection")?;
 
     let filters = parse_where_filters(args);
-    let include_drafts = args.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
-    let trash = args.get("trash").and_then(|v| v.as_bool()).unwrap_or(false);
+    let include_drafts = args
+        .get("draft")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let trash = args
+        .get("trash")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
 
     let hooks = RunnerReadHooks::new(ctx.runner, &conn);
     let svc_ctx = ServiceContext::collection(slug, def)

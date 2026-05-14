@@ -147,8 +147,8 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        /// Generate prost_types conversion code for Rust. Value is the proto module path
-        /// (e.g. "crate::proto"). Writes generated_proto.rs alongside generated.rs.
+        /// Generate `prost_types` conversion code for Rust. Value is the proto module path
+        /// (e.g. "`crate::proto`"). Writes `generated_proto.rs` alongside generated.rs.
         #[arg(long)]
         proto: Option<String>,
     },
@@ -169,7 +169,7 @@ enum Command {
 
     /// Backup database and optionally uploads
     Backup {
-        /// Output directory (default: <config_dir>/backups/)
+        /// Output directory (default: <`config_dir>/backups`/)
         #[arg(short, long)]
         output: Option<PathBuf>,
 
@@ -302,264 +302,383 @@ enum Command {
 async fn main() {
     let cli_args = Cli::parse();
 
-    if let Err(e) = run(cli_args).await {
-        cli::error(&format!("{:#}", e));
+    // Box the future: `run` covers every CLI command's startup path, so the
+    // generated state machine is ~18 KiB. Heap-allocating avoids blowing the
+    // top-level task's stack on debug builds.
+    if let Err(e) = Box::pin(run(cli_args)).await {
+        cli::error(&format!("{e:#}"));
         std::process::exit(1);
     }
 }
 
-/// Dispatch the parsed CLI command to the appropriate handler.
+/// Args for the `serve` command dispatcher — grouped because the
+/// underlying Clap variant holds the same set of fields and they're all
+/// required.
+struct ServeArgs {
+    config_flag: Option<PathBuf>,
+    detach: bool,
+    stop: bool,
+    restart: bool,
+    status: bool,
+    only: Option<ServeMode>,
+    no_scheduler: bool,
+}
+
+/// Args for the `work` command dispatcher.
+struct WorkArgs {
+    config_flag: Option<PathBuf>,
+    detach: bool,
+    stop: bool,
+    restart: bool,
+    status: bool,
+    queues: Option<Vec<String>>,
+    concurrency: Option<usize>,
+    no_cron: bool,
+}
+
+/// Dispatch `serve` (and its `--stop/--status/--restart/--detach` variants).
+///
+/// Accepts the full [`Command`] enum (rather than a pre-unpacked
+/// `ServeArgs`) so the caller in [`dispatch_command`] stays a single
+/// line per arm. Panics if the variant isn't `Command::Serve`; routing
+/// is the caller's responsibility.
+#[cfg(not(tarpaulin_include))]
+async fn dispatch_serve(command: Command, config_flag: Option<PathBuf>) -> Result<()> {
+    let Command::Serve {
+        detach,
+        stop,
+        restart,
+        status,
+        only,
+        no_scheduler,
+        ..
+    } = command
+    else {
+        unreachable!("dispatch_serve called with non-Serve command");
+    };
+    let args = ServeArgs {
+        config_flag,
+        detach,
+        stop,
+        restart,
+        status,
+        only,
+        no_scheduler,
+    };
+    let config = commands::resolve_config_dir(args.config_flag)?;
+    if args.stop {
+        #[cfg(unix)]
+        return commands::serve::stop(&config);
+        #[cfg(not(unix))]
+        anyhow::bail!("--stop is not supported on this platform");
+    }
+    if args.status {
+        #[cfg(unix)]
+        return commands::serve::status(&config);
+        #[cfg(not(unix))]
+        anyhow::bail!("--status is not supported on this platform");
+    }
+    if args.restart {
+        #[cfg(unix)]
+        return commands::serve::restart(&config, args.only, args.no_scheduler);
+        #[cfg(not(unix))]
+        anyhow::bail!("--restart is not supported on this platform");
+    }
+    if args.detach {
+        return commands::serve::detach(&config, args.only, args.no_scheduler);
+    }
+    // Box the future: serve startup wires both admin+API servers and
+    // is the largest async state machine in the binary.
+    Box::pin(commands::serve::run(&config, args.only, args.no_scheduler)).await
+}
+
+/// Dispatch `work` (and its `--stop/--status/--restart/--detach` variants).
+///
+/// See [`dispatch_serve`] for the rationale behind taking the full
+/// [`Command`] enum instead of a pre-unpacked `WorkArgs`. Panics if the
+/// variant isn't `Command::Work`; routing is the caller's responsibility.
+#[cfg(not(tarpaulin_include))]
+async fn dispatch_work(command: Command, config_flag: Option<PathBuf>) -> Result<()> {
+    let Command::Work {
+        detach,
+        stop,
+        restart,
+        status,
+        queues,
+        concurrency,
+        no_cron,
+    } = command
+    else {
+        unreachable!("dispatch_work called with non-Work command");
+    };
+    let args = WorkArgs {
+        config_flag,
+        detach,
+        stop,
+        restart,
+        status,
+        queues,
+        concurrency,
+        no_cron,
+    };
+    let config = commands::resolve_config_dir(args.config_flag)?;
+    if args.stop {
+        #[cfg(unix)]
+        return commands::work::stop(&config);
+        #[cfg(not(unix))]
+        anyhow::bail!("--stop is not supported on this platform");
+    }
+    if args.status {
+        #[cfg(unix)]
+        return commands::work::status(&config);
+        #[cfg(not(unix))]
+        anyhow::bail!("--status is not supported on this platform");
+    }
+    if args.restart {
+        #[cfg(unix)]
+        return commands::work::restart(
+            &config,
+            args.queues.as_deref(),
+            args.concurrency,
+            args.no_cron,
+        );
+        #[cfg(not(unix))]
+        anyhow::bail!("--restart is not supported on this platform");
+    }
+    if args.detach {
+        return commands::work::detach(
+            &config,
+            args.queues.as_deref(),
+            args.concurrency,
+            args.no_cron,
+        );
+    }
+    commands::work::run(&config, args.queues, args.concurrency, args.no_cron).await
+}
+
+/// Dispatch `blueprint` subcommands. The interactive `Select` prompts
+/// for `Use` / `Remove` when no name is supplied stay in this helper —
+/// they're command-specific UI rather than shared CLI plumbing.
+#[cfg(not(tarpaulin_include))]
+fn dispatch_blueprint(action: BlueprintAction, config_flag: Option<PathBuf>) -> Result<()> {
+    match action {
+        BlueprintAction::Save { name, force } => {
+            let config = commands::resolve_config_dir(config_flag)?;
+            crap_cms::scaffold::blueprint_save(&config, &name, force)
+        }
+        BlueprintAction::Use { name, dir } => {
+            let name = if let Some(n) = name {
+                n
+            } else {
+                let names = crap_cms::scaffold::list_blueprint_names()?;
+
+                if names.is_empty() {
+                    bail!(
+                        "No blueprints saved yet.\nSave one with: crap-cms blueprint save <name>"
+                    );
+                }
+                let selection = Select::with_theme(&crap_theme())
+                    .with_prompt("Select blueprint")
+                    .items(&names)
+                    .interact()
+                    .context("Failed to read blueprint selection")?;
+                names[selection].clone()
+            };
+            crap_cms::scaffold::blueprint_use(&name, dir)
+        }
+        BlueprintAction::List => crap_cms::scaffold::blueprint_list(),
+        BlueprintAction::Remove { name } => {
+            let name = if let Some(n) = name {
+                n
+            } else {
+                let names = crap_cms::scaffold::list_blueprint_names()?;
+
+                if names.is_empty() {
+                    bail!("No blueprints saved yet.");
+                }
+                let selection = Select::with_theme(&crap_theme())
+                    .with_prompt("Select blueprint to remove")
+                    .items(&names)
+                    .interact()
+                    .context("Failed to read blueprint selection")?;
+                names[selection].clone()
+            };
+            crap_cms::scaffold::blueprint_remove(&name)
+        }
+    }
+}
+
+/// Dispatch `templates` subcommands (list / extract / status / diff / layout).
+#[cfg(not(tarpaulin_include))]
+fn dispatch_templates(action: TemplatesAction, config_flag: Option<PathBuf>) -> Result<()> {
+    match action {
+        TemplatesAction::List { r#type, verbose } => {
+            commands::templates::list(r#type.as_deref(), verbose)
+        }
+        TemplatesAction::Extract {
+            paths,
+            all,
+            r#type,
+            force,
+        } => {
+            let config = commands::resolve_config_dir(config_flag)?;
+            commands::templates::extract(&config, &paths, all, r#type.as_deref(), force)
+        }
+        TemplatesAction::Status => {
+            let config = commands::resolve_config_dir(config_flag)?;
+            commands::templates::status(&config)
+        }
+        TemplatesAction::Diff { path } => {
+            let config = commands::resolve_config_dir(config_flag)?;
+            commands::templates::diff(&config, &path)
+        }
+        TemplatesAction::Layout => {
+            let config = commands::resolve_config_dir(config_flag)?;
+            commands::templates::layout(&config)
+        }
+    }
+}
+
+/// Pre-match logging setup result: optional file-logging config (for
+/// long-running commands) plus the resolved `dev_mode` flag used to pick
+/// the default tracing filter.
+struct LoggingSetup {
+    serve_logging: Option<(PathBuf, crap_cms::config::LoggingConfig)>,
+    dev_mode: bool,
+}
+
+/// For long-running commands (`serve`, `work`, `mcp`), load config up
+/// front so file-logging can be initialized before any tracing call.
+/// Auto-enables file logging when the process is a detached child
+/// (stdout/stderr go to /dev/null in that case).
+#[cfg(not(tarpaulin_include))]
+fn prepare_logging_setup(
+    command: &Command,
+    config_flag: Option<PathBuf>,
+    is_detached_child: bool,
+) -> Result<LoggingSetup> {
+    let is_long_running = matches!(
+        command,
+        Command::Serve { .. } | Command::Work { .. } | Command::Mcp
+    );
+    if !is_long_running {
+        return Ok(LoggingSetup {
+            serve_logging: None,
+            dev_mode: false,
+        });
+    }
+
+    let config_dir = commands::resolve_config_dir(config_flag)?;
+    let mut config = CrapConfig::load(&config_dir)?;
+
+    if is_detached_child && !config.logging.file {
+        config.logging.file = true;
+    }
+
+    Ok(LoggingSetup {
+        serve_logging: Some((config_dir, config.logging)),
+        dev_mode: config.admin.dev_mode,
+    })
+}
+
+/// Parse the CLI, set up logging, and hand off to [`dispatch_command`].
 #[cfg(not(tarpaulin_include))]
 async fn run(cli: Cli) -> Result<()> {
     let use_json = matches!(&cli.command, Command::Serve { json: true, .. })
-        || std::env::var("CRAP_LOG_FORMAT")
-            .map(|v| v == "json")
-            .unwrap_or(false);
-
-    let is_long_running = matches!(
-        &cli.command,
-        Command::Serve { .. } | Command::Work { .. } | Command::Mcp
-    );
+        || std::env::var("CRAP_LOG_FORMAT").is_ok_and(|v| v == "json");
 
     // _CRAP_DETACHED is set by detach() on the child process.
     let is_detached_child = std::env::var("_CRAP_DETACHED").is_ok();
 
     let config_flag = cli.config;
 
-    // For serve/work: load config before tracing init so we can set up file logging.
-    // Config will be loaded again inside serve::run()/work::run() — intentional and cheap.
-    let (serve_logging, dev_mode) = if is_long_running {
-        let config_dir = commands::resolve_config_dir(config_flag.clone())?;
-        let mut config = CrapConfig::load(&config_dir)?;
-
-        // Auto-enable file logging for detached mode — stdout/stderr go to /dev/null.
-        if is_detached_child && !config.logging.file {
-            config.logging.file = true;
-        }
-
-        let dev = config.admin.dev_mode;
-        (Some((config_dir, config.logging)), dev)
-    } else {
-        (None, false)
-    };
+    let logging_setup =
+        prepare_logging_setup(&cli.command, config_flag.clone(), is_detached_child)?;
 
     let default_filter = match &cli.command {
-        Command::Serve { .. } if dev_mode => "crap_cms=debug,info",
-        Command::Serve { .. } => "crap_cms=info",
-        Command::Work { .. } if dev_mode => "crap_cms=debug,info",
-        Command::Work { .. } => "crap_cms=info",
-        Command::Mcp => "crap_cms=info",
+        Command::Serve { .. } | Command::Work { .. } if logging_setup.dev_mode => {
+            "crap_cms=debug,info"
+        }
+        Command::Serve { .. } | Command::Work { .. } | Command::Mcp => "crap_cms=info",
         _ => "crap_cms=error",
     };
 
-    let _guard = init_logging(use_json, default_filter, serve_logging.as_ref());
+    let _guard = init_logging(
+        use_json,
+        default_filter,
+        logging_setup.serve_logging.as_ref(),
+    );
 
-    match cli.command {
-        Command::Serve {
-            detach,
-            stop,
-            restart,
-            status,
-            only,
-            no_scheduler,
-            ..
-        } => {
-            let config = commands::resolve_config_dir(config_flag)?;
-            if stop {
-                #[cfg(unix)]
-                return commands::serve::stop(&config);
-                #[cfg(not(unix))]
-                anyhow::bail!("--stop is not supported on this platform");
-            }
-            if status {
-                #[cfg(unix)]
-                return commands::serve::status(&config);
-                #[cfg(not(unix))]
-                anyhow::bail!("--status is not supported on this platform");
-            }
-            if restart {
-                #[cfg(unix)]
-                return commands::serve::restart(&config, only, no_scheduler);
-                #[cfg(not(unix))]
-                anyhow::bail!("--restart is not supported on this platform");
-            }
-            if detach {
-                return commands::serve::detach(&config, only, no_scheduler);
-            }
-            commands::serve::run(&config, only, no_scheduler).await
-        }
-        Command::Work {
-            detach,
-            stop,
-            restart,
-            status,
-            queues,
-            concurrency,
-            no_cron,
-        } => {
-            let config = commands::resolve_config_dir(config_flag)?;
-            if stop {
-                #[cfg(unix)]
-                return commands::work::stop(&config);
-                #[cfg(not(unix))]
-                anyhow::bail!("--stop is not supported on this platform");
-            }
-            if status {
-                #[cfg(unix)]
-                return commands::work::status(&config);
-                #[cfg(not(unix))]
-                anyhow::bail!("--status is not supported on this platform");
-            }
-            if restart {
-                #[cfg(unix)]
-                return commands::work::restart(&config, queues, concurrency, no_cron);
-                #[cfg(not(unix))]
-                anyhow::bail!("--restart is not supported on this platform");
-            }
-            if detach {
-                return commands::work::detach(&config, queues, concurrency, no_cron);
-            }
-            commands::work::run(&config, queues, concurrency, no_cron).await
-        }
-        Command::Status { check } => {
-            let config = commands::resolve_config_dir(config_flag)?;
-            commands::status::run(&config, check)
-        }
-        Command::User { action } => {
-            let config = commands::resolve_config_dir(config_flag)?;
-            commands::user::run(&config, action)
-        }
+    dispatch_command(cli.command, config_flag).await
+}
+
+/// Resolve the config directory from the optional `-C/--config` flag and
+/// hand the resolved path to `f`. Used to compress the dozens of CLI
+/// dispatch arms that follow the same `let c = resolve_config_dir(...)?;
+/// commands::X::run(&c, ...)` pattern into single-line expressions.
+#[cfg(not(tarpaulin_include))]
+fn with_config<F, R>(config_flag: Option<PathBuf>, f: F) -> Result<R>
+where
+    F: FnOnce(&Path) -> Result<R>,
+{
+    let config = commands::resolve_config_dir(config_flag)?;
+    f(&config)
+}
+
+/// Big-match dispatcher mapping each parsed `Command` variant to the
+/// command-specific handler module. Verbose variants (`serve`, `work`,
+/// `blueprint`, `templates`) delegate to dedicated dispatchers; smaller
+/// variants use `with_config` to keep each arm to a single expression.
+#[cfg(not(tarpaulin_include))]
+async fn dispatch_command(command: Command, config_flag: Option<PathBuf>) -> Result<()> {
+    match command {
+        cmd @ Command::Serve { .. } => dispatch_serve(cmd, config_flag).await,
+        cmd @ Command::Work { .. } => dispatch_work(cmd, config_flag).await,
+        Command::Status { check } => with_config(config_flag, |c| commands::status::run(c, check)),
+        Command::User { action } => with_config(config_flag, |c| commands::user::run(c, action)),
         Command::Init { dir, no_input } => commands::init::run(dir, no_input),
-        Command::Make { action } => {
-            let config = commands::resolve_config_dir(config_flag)?;
-            commands::make::run(&config, action)
-        }
-        Command::Blueprint { action } => match action {
-            BlueprintAction::Save { name, force } => {
-                let config = commands::resolve_config_dir(config_flag)?;
-                crap_cms::scaffold::blueprint_save(&config, &name, force)
-            }
-            BlueprintAction::Use { name, dir } => {
-                let name = match name {
-                    Some(n) => n,
-                    None => {
-                        let names = crap_cms::scaffold::list_blueprint_names()?;
-
-                        if names.is_empty() {
-                            bail!(
-                                "No blueprints saved yet.\nSave one with: crap-cms blueprint save <name>"
-                            );
-                        }
-                        let selection = Select::with_theme(&crap_theme())
-                            .with_prompt("Select blueprint")
-                            .items(&names)
-                            .interact()
-                            .context("Failed to read blueprint selection")?;
-                        names[selection].clone()
-                    }
-                };
-                crap_cms::scaffold::blueprint_use(&name, dir)
-            }
-            BlueprintAction::List => crap_cms::scaffold::blueprint_list(),
-            BlueprintAction::Remove { name } => {
-                let name = match name {
-                    Some(n) => n,
-                    None => {
-                        let names = crap_cms::scaffold::list_blueprint_names()?;
-
-                        if names.is_empty() {
-                            bail!("No blueprints saved yet.");
-                        }
-                        let selection = Select::with_theme(&crap_theme())
-                            .with_prompt("Select blueprint to remove")
-                            .items(&names)
-                            .interact()
-                            .context("Failed to read blueprint selection")?;
-                        names[selection].clone()
-                    }
-                };
-                crap_cms::scaffold::blueprint_remove(&name)
-            }
-        },
+        Command::Make { action } => with_config(config_flag, |c| commands::make::run(c, action)),
+        Command::Blueprint { action } => dispatch_blueprint(action, config_flag),
         Command::Typegen {
             lang,
             output,
             proto,
-        } => {
-            let config = commands::resolve_config_dir(config_flag)?;
-            commands::typegen::run(&config, &lang, output.as_deref(), proto.as_deref())
-        }
+        } => with_config(config_flag, |c| {
+            commands::typegen::run(c, &lang, output.as_deref(), proto.as_deref())
+        }),
         Command::Proto { output } => crap_cms::scaffold::proto_export(output.as_deref()),
         Command::Migrate { action } => {
-            let config = commands::resolve_config_dir(config_flag)?;
-            commands::db::migrate(&config, action)
+            with_config(config_flag, |c| commands::db::migrate(c, &action))
         }
         Command::Backup {
             output,
             include_uploads,
-        } => {
-            let config = commands::resolve_config_dir(config_flag)?;
-            commands::db::backup(&config, output, include_uploads)
-        }
+        } => with_config(config_flag, |c| {
+            commands::db::backup(c, output, include_uploads)
+        }),
         Command::Restore {
             backup,
             include_uploads,
             confirm,
-        } => {
-            let config = commands::resolve_config_dir(config_flag)?;
-            commands::db::restore(&config, &backup, include_uploads, confirm)
-        }
-        Command::Db { action } => {
-            let config = commands::resolve_config_dir(config_flag)?;
-            match action {
-                DbAction::Console => commands::db::console(&config),
-                DbAction::Cleanup { confirm } => commands::db::cleanup(&config, confirm),
-            }
-        }
-        Command::Export { collection, output } => {
-            let config = commands::resolve_config_dir(config_flag)?;
-            commands::export::export(&config, collection, output)
-        }
-        Command::Import { file, collection } => {
-            let config = commands::resolve_config_dir(config_flag)?;
-            commands::export::import(&config, &file, collection)
-        }
-        Command::Templates { action } => match action {
-            TemplatesAction::List { r#type, verbose } => commands::templates::list(r#type, verbose),
-            TemplatesAction::Extract {
-                paths,
-                all,
-                r#type,
-                force,
-            } => {
-                let config = commands::resolve_config_dir(config_flag)?;
-                commands::templates::extract(&config, &paths, all, r#type, force)
-            }
-            TemplatesAction::Status => {
-                let config = commands::resolve_config_dir(config_flag)?;
-                commands::templates::status(&config)
-            }
-            TemplatesAction::Diff { path } => {
-                let config = commands::resolve_config_dir(config_flag)?;
-                commands::templates::diff(&config, &path)
-            }
-            TemplatesAction::Layout => {
-                let config = commands::resolve_config_dir(config_flag)?;
-                commands::templates::layout(&config)
-            }
-        },
-        Command::Jobs { action } => {
-            let config = commands::resolve_config_dir(config_flag)?;
-            commands::jobs::run(&config, action)
-        }
+        } => with_config(config_flag, |c| {
+            commands::db::restore(c, &backup, include_uploads, confirm)
+        }),
+        Command::Db { action } => with_config(config_flag, |c| match action {
+            DbAction::Console => commands::db::console(c),
+            DbAction::Cleanup { confirm } => commands::db::cleanup(c, confirm),
+        }),
+        Command::Export { collection, output } => with_config(config_flag, |c| {
+            commands::export::export(c, collection.as_deref(), output)
+        }),
+        Command::Import { file, collection } => with_config(config_flag, |c| {
+            commands::export::import(c, &file, collection.as_deref())
+        }),
+        Command::Templates { action } => dispatch_templates(action, config_flag),
+        Command::Jobs { action } => with_config(config_flag, |c| commands::jobs::run(c, action)),
         Command::Images { action } => {
-            let config = commands::resolve_config_dir(config_flag)?;
-            commands::images::run(&config, action)
+            with_config(config_flag, |c| commands::images::run(c, action))
         }
-        Command::Trash { action } => {
-            let config = commands::resolve_config_dir(config_flag)?;
-            commands::trash::run(action, &config)
-        }
+        Command::Trash { action } => with_config(config_flag, |c| commands::trash::run(action, c)),
         Command::Mcp => {
             let config = commands::resolve_config_dir(config_flag)?;
             commands::mcp::run(&config).await
@@ -568,14 +687,10 @@ async fn run(cli: Cli) -> Result<()> {
             follow,
             lines,
             action,
-        } => {
-            let config_dir = commands::resolve_config_dir(config_flag)?;
-            commands::logs::run(&config_dir, action, follow, lines)
-        }
-        Command::Bench { action } => {
-            let config = commands::resolve_config_dir(config_flag)?;
-            commands::bench::run(&config, action)
-        }
+        } => with_config(config_flag, |c| {
+            commands::logs::run(c, action, follow, lines)
+        }),
+        Command::Bench { action } => with_config(config_flag, |c| commands::bench::run(c, action)),
         Command::Fmt {
             paths,
             check,

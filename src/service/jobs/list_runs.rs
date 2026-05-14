@@ -15,6 +15,10 @@ pub struct ListJobRunsInput<'a> {
 }
 
 /// List job runs, optionally filtered by slug and/or status.
+///
+/// # Errors
+///
+/// Returns a backend error if the COUNT or SELECT fails.
 pub fn list_job_runs(
     conn: &dyn DbConnection,
     input: &ListJobRunsInput,

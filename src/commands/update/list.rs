@@ -13,16 +13,12 @@ pub(super) fn run_list() -> Result<()> {
         .as_ref()
         .and_then(|s| s.installed().ok())
         .unwrap_or_default();
-    let active = store.as_ref().and_then(|s| s.active_version());
+    let active = store.as_ref().and_then(super::store::Store::active_version);
 
     for release in releases {
         let is_installed = installed.contains(&release.tag_name);
         let is_active = active.as_deref() == Some(&release.tag_name);
-        let marker = match (is_active, is_installed) {
-            (true, _) => "*",
-            (false, true) => " ",
-            _ => " ",
-        };
+        let marker = if is_active { "*" } else { " " };
         let suffix = match (is_active, is_installed, release.prerelease) {
             (true, _, true) => " (active, prerelease)",
             (true, _, false) => " (active)",

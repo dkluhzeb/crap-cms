@@ -107,10 +107,16 @@ pub async fn create_form(
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
     let Some(def) = state.registry.get_collection(&slug).cloned() else {
-        return not_found(&state, &format!("Collection '{}' not found", slug));
+        return not_found(&state, &format!("Collection '{slug}' not found"));
     };
 
-    match check_access_or_forbid(&state, def.access.create.as_deref(), &auth_user, None, None) {
+    match check_access_or_forbid(
+        &state,
+        def.access.create.as_deref(),
+        auth_user.as_ref(),
+        None,
+        None,
+    ) {
         Ok(AccessResult::Denied) => {
             return forbidden(
                 &state,
@@ -137,7 +143,7 @@ pub async fn create_form(
     let base = BasePageContext::for_handler(
         &state,
         claims_ref,
-        &auth_user,
+        auth_user.as_ref(),
         PageMeta::new(PageType::CollectionCreate, "create_name")
             .with_title_name(def.singular_name()),
     )
@@ -148,7 +154,7 @@ pub async fn create_form(
         .is_upload_collection()
         .then(|| upload_accept_context(&def));
 
-    let perms = CollectionPermissions::for_user(&state, &def, &auth_user);
+    let perms = CollectionPermissions::for_user(&state, &def, auth_user.as_ref());
 
     let ctx = CollectionCreatePage {
         base,

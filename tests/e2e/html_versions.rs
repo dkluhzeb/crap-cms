@@ -67,7 +67,7 @@ async fn get_edit_form(app: &TestApp, slug: &str, id: &str, cookie: &str) -> Str
     body_string(resp.into_body()).await
 }
 
-/// POST create and return (status, body, redirect_location)
+/// POST create and return (status, body, `redirect_location`)
 async fn post_create_raw(
     app: &TestApp,
     slug: &str,
@@ -93,7 +93,7 @@ async fn post_create_raw(
         .get("location")
         .or_else(|| resp.headers().get("hx-redirect"))
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
     let body = body_string(resp.into_body()).await;
     (status, body, location)
 }

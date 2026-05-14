@@ -12,7 +12,7 @@ use crate::{
     },
 };
 
-use super::helpers::*;
+use super::helpers::{get_bool, get_string, get_table};
 
 pub(super) fn parse_collection_upload(config: &Table) -> LuaResult<Option<CollectionUpload>> {
     let val: Value = match config.get("upload") {
@@ -22,19 +22,20 @@ pub(super) fn parse_collection_upload(config: &Table) -> LuaResult<Option<Collec
 
     match val {
         Value::Boolean(true) => Ok(Some(CollectionUpload::new())),
-        Value::Boolean(false) | Value::Nil => Ok(None),
         Value::Table(tbl) => {
             let mime_types = if let Ok(mt_tbl) = get_table(&tbl, "mime_types") {
                 mt_tbl
                     .sequence_values::<String>()
-                    .filter_map(|r| r.ok())
+                    .filter_map(std::result::Result::ok)
                     .collect()
             } else {
                 Vec::new()
             };
 
             let max_file_size = match tbl.get::<mlua::Value>("max_file_size") {
-                Ok(mlua::Value::Integer(n)) => Some(n as u64),
+                // Negative integer max_file_size is malformed; reject rather
+                // than wrapping into a giant u64 limit.
+                Ok(mlua::Value::Integer(n)) => u64::try_from(n).ok(),
                 Ok(mlua::Value::String(s)) => {
                     let text = s.to_str().ok().map(|s| s.to_string());
                     text.and_then(|t| parse_filesize_string(&t))
@@ -69,9 +70,8 @@ pub(super) fn parse_image_sizes(tbl: &Table) -> Vec<ImageSize> {
     let mut sizes = Vec::new();
 
     for size_tbl in tbl.sequence_values::<Table>().flatten() {
-        let name = match get_string(&size_tbl, "name") {
-            Some(n) => n,
-            None => continue,
+        let Some(name) = get_string(&size_tbl, "name") else {
+            continue;
         };
         let width = size_tbl.get::<u32>("width").unwrap_or(0);
         let height = size_tbl.get::<u32>("height").unwrap_or(0);
@@ -81,10 +81,10 @@ pub(super) fn parse_image_sizes(tbl: &Table) -> Vec<ImageSize> {
         }
 
         let fit = match get_string(&size_tbl, "fit").as_deref() {
-            Some("cover") => ImageFit::Cover,
             Some("contain") => ImageFit::Contain,
             Some("inside") => ImageFit::Inside,
             Some("fill") => ImageFit::Fill,
+            // "cover" or unspecified — default
             _ => ImageFit::Cover,
         };
 
@@ -101,9 +101,8 @@ pub(super) fn parse_image_sizes(tbl: &Table) -> Vec<ImageSize> {
 }
 
 pub(super) fn parse_format_options(tbl: &Table) -> LuaResult<FormatOptions> {
-    let fo_tbl = match get_table(tbl, "format_options") {
-        Ok(t) => t,
-        Err(_) => return Ok(FormatOptions::default()),
+    let Ok(fo_tbl) = get_table(tbl, "format_options") else {
+        return Ok(FormatOptions::default());
     };
 
     let webp = match get_table(&fo_tbl, "webp") {
@@ -180,6 +179,20 @@ pub(super) fn inject_upload_fields(fields: &mut Vec<FieldDefinition>, upload: &C
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::*;
     use crate::core::{

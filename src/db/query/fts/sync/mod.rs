@@ -1,6 +1,6 @@
 //! FTS index synchronization, upsert, and delete operations.
 //!
-//! Supports SQLite (FTS5 virtual tables) and PostgreSQL (tsvector + GIN index).
+//! Supports `SQLite` (FTS5 virtual tables) and `PostgreSQL` (tsvector + GIN index).
 
 mod delete;
 mod helpers;

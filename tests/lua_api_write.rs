@@ -1,3 +1,17 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
@@ -38,7 +52,7 @@ fn eval_lua(runner: &HookRunner, code: &str) -> String {
 
 // ── Helper: setup with real DB tables ────────────────────────────────────────
 
-/// Set up a HookRunner with a real synced database (tables created from Lua definitions).
+/// Set up a `HookRunner` with a real synced database (tables created from Lua definitions).
 /// Returns (tempdir, pool, registry, runner). The tempdir must be kept alive for the DB.
 #[allow(dead_code)]
 fn setup_with_db() -> (tempfile::TempDir, DbPool, Arc<Registry>, HookRunner) {
@@ -192,8 +206,7 @@ crap.collections.define("users", {
         .expect("eval");
     assert!(
         !result.is_empty() && result != "CREATE_NIL" && result != "NO_ID",
-        "Should return a valid doc id, got: {}",
-        result
+        "Should return a valid doc id, got: {result}"
     );
 
     // Verify the password was actually hashed in the DB
@@ -269,13 +282,12 @@ crap.collections.define("users", {
         .eval_lua_with_conn(
             &format!(
                 r#"
-        local doc = crap.collections.update("users", "{}", {{
+        local doc = crap.collections.update("users", "{user_id}", {{
             name = "Updated Name",
             password = "newpass456",
         }})
         return "ok"
-    "#,
-                user_id
+    "#
             ),
             &conn,
             None,
@@ -574,7 +586,7 @@ crap.collections.define("media", {
         .eval_lua_with_conn(
             &format!(
                 r#"
-        local doc = crap.collections.find_by_id("media", "{}")
+        local doc = crap.collections.find_by_id("media", "{doc_id}")
         if doc == nil then return "NOT_FOUND" end
         if doc.sizes == nil then return "NO_SIZES" end
         if doc.sizes.thumbnail == nil then return "NO_THUMBNAIL" end
@@ -582,8 +594,7 @@ crap.collections.define("media", {
             return "WRONG_URL:" .. tostring(doc.sizes.thumbnail.url)
         end
         return "ok"
-    "#,
-                doc_id
+    "#
             ),
             &conn,
             None,
@@ -658,8 +669,7 @@ fn lua_config_get_dot_notation() {
     // An empty string is the default.
     assert!(
         result.is_empty() || result == "nil" || !result.is_empty(),
-        "crap.config.get('auth.secret') should return a value or nil, got: {}",
-        result
+        "crap.config.get('auth.secret') should return a value or nil, got: {result}"
     );
 
     // Also verify deeper dot notation works for a known value

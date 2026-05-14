@@ -11,7 +11,14 @@ use crate::{
     db::{FilterClause, LocaleContext, query::filter::normalize_filter_fields},
     hooks::{
         lifecycle::{LuaStorage, converters::lua_table_to_find_query},
-        lua_api::crud::{get_tx_conn, helpers::*},
+        lua_api::crud::{
+            get_tx_conn,
+            helpers::{
+                EnforceAccessParams, check_hook_depth, enforce_access, get_opt_bool,
+                get_opt_string, hook_invalidation_transport, hook_lua_infra, hook_ui_locale,
+                hook_user, resolve_collection,
+            },
+        },
     },
     service::{self, DeleteManyOptions, LuaWriteHooks, ServiceContext, validate_user_filters},
 };
@@ -36,7 +43,7 @@ fn build_delete_filters(
     query_table: &Table,
 ) -> mlua::Result<(Vec<FilterClause>, Option<LocaleContext>)> {
     let locale_ctx = LocaleContext::from_locale_string(
-        get_opt_string(&Some(query_table.clone()), "locale")?.as_deref(),
+        get_opt_string(Some(query_table), "locale").as_deref(),
         lc,
     )
     .map_err(|e| RuntimeError(e.to_string()))?;
@@ -74,13 +81,13 @@ fn delete_many_documents(
     lc: &LocaleConfig,
     collection: &str,
     query_table: &Table,
-    opts: &Option<Table>,
+    opts: Option<&Table>,
 ) -> mlua::Result<Table> {
     let conn = get_tx_conn(lua)?;
 
-    let override_access = get_opt_bool(opts, "overrideAccess", false)?;
-    let run_hooks = get_opt_bool(opts, "hooks", true)?;
-    let force_hard_delete = get_opt_bool(opts, "forceHardDelete", false)?;
+    let override_access = get_opt_bool(opts, "overrideAccess", false);
+    let run_hooks = get_opt_bool(opts, "hooks", true);
+    let force_hard_delete = get_opt_bool(opts, "forceHardDelete", false);
 
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
@@ -129,7 +136,7 @@ fn delete_many_documents(
         ..Default::default()
     };
 
-    let svc_result = service::delete_many(&ctx, filters, lc, &delete_opts)
+    let svc_result = service::delete_many(&ctx, &filters, lc, &delete_opts)
         .map_err(|e| RuntimeError(format!("{e}")))?;
 
     // Clean up upload files for hard deletes.
@@ -159,7 +166,14 @@ pub(crate) fn register_delete_many(
     let lc = locale_config.clone();
     let delete_many_fn = lua.create_function(
         move |lua, (collection, query_table, opts): (String, Table, Option<Table>)| {
-            delete_many_documents(lua, &registry, &lc, &collection, &query_table, &opts)
+            delete_many_documents(
+                lua,
+                &registry,
+                &lc,
+                &collection,
+                &query_table,
+                opts.as_ref(),
+            )
         },
     )?;
 

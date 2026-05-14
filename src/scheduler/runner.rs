@@ -21,6 +21,11 @@ use crate::{
 
 /// Execute a single job: call the Lua handler with CRUD access,
 /// or handle system jobs (like `_system_email`) directly in Rust.
+///
+/// # Errors
+///
+/// Returns an error if the connection acquisition, Lua hook execution,
+/// system-job handler, or job-status update fails.
 pub fn execute_job(
     pool: &DbPool,
     hook_runner: &HookRunner,
@@ -129,7 +134,7 @@ fn execute_system_email(
             );
         }
         Err(e) => {
-            let error_msg = format!("{:#}", e);
+            let error_msg = format!("{e:#}");
             let should_retry = job_run.attempt < job_run.max_attempts;
             let c = pool
                 .get()
@@ -152,6 +157,10 @@ fn execute_system_email(
 }
 
 /// Check cron schedules and insert pending jobs for due ones.
+///
+/// # Errors
+///
+/// Returns an error if the connection, transaction, or job insertion fails.
 pub fn check_cron_schedules(
     pool: &DbPool,
     registry: &Registry,
@@ -164,9 +173,8 @@ pub fn check_cron_schedules(
         .context("Failed to start cron check transaction")?;
 
     for (slug, def) in &registry.jobs {
-        let schedule_str = match &def.schedule {
-            Some(s) => s,
-            None => continue,
+        let Some(schedule_str) = &def.schedule else {
+            continue;
         };
 
         // Parse cron expression (the cron crate expects 6-7 fields with seconds;
@@ -233,6 +241,10 @@ pub fn check_cron_schedules(
 }
 
 /// Recover stale jobs on startup.
+///
+/// # Errors
+///
+/// Returns an error if listing stale jobs or marking any one stale fails.
 pub fn recover_stale_jobs(conn: &dyn DbConnection, registry: &Registry) -> Result<()> {
     // Find all running jobs — on startup, these are stale (server was restarted)
     let stale = job_query::find_stale_jobs(conn, 0)?;
@@ -241,14 +253,10 @@ pub fn recover_stale_jobs(conn: &dyn DbConnection, registry: &Registry) -> Resul
         let timeout = registry
             .jobs
             .get(job.slug.as_str())
-            .map(|d| d.timeout)
-            .unwrap_or(60);
+            .map_or(60, |d| d.timeout);
 
         // Any job that was running when we started is stale
-        let error = format!(
-            "stale: server restarted (was running, timeout={}s)",
-            timeout
-        );
+        let error = format!("stale: server restarted (was running, timeout={timeout}s)");
         job_query::mark_stale(conn, &job.id, &error)?;
         info!("Marked stale job {} ({})", job.id, job.slug);
     }
@@ -283,6 +291,10 @@ pub(crate) fn parse_retention_seconds(s: &str) -> Option<i64> {
 /// For each collection with `soft_delete` + `soft_delete_retention`, find docs
 /// where `_deleted_at` is older than the retention threshold and hard-delete them.
 /// Upload files are cleaned up before deletion.
+///
+/// # Errors
+///
+/// Returns an error if the collection scan, upload cleanup, or hard-delete fails.
 pub fn purge_soft_deleted(
     conn: &dyn DbConnection,
     registry: &Registry,
@@ -308,7 +320,7 @@ pub fn purge_soft_deleted(
             continue;
         };
 
-        let purged = purge_collection(PurgeCollectionInput {
+        let purged = purge_collection(&PurgeCollectionInput {
             conn,
             slug,
             def,
@@ -337,7 +349,7 @@ struct PurgeCollectionInput<'a> {
     locale_config: &'a LocaleConfig,
 }
 
-fn purge_collection(p: PurgeCollectionInput<'_>) -> Result<u64> {
+fn purge_collection(p: &PurgeCollectionInput<'_>) -> Result<u64> {
     // Find docs past the retention threshold
     let (offset_sql, offset_param) = p.conn.date_offset_expr(p.retention_seconds, 1);
     let threshold_sql = format!(

@@ -94,7 +94,7 @@ impl CspConfig {
                     .script_src
                     .iter()
                     .cloned()
-                    .chain(std::iter::once(format!("'nonce-{}'", n)))
+                    .chain(std::iter::once(format!("'nonce-{n}'")))
                     .collect();
 
                 &script_src_with_nonce

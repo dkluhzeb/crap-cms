@@ -46,8 +46,8 @@ pub enum FieldType {
     /// Layout-only tabbed container. Sub-fields (across all tabs) are promoted to
     /// parent-level columns (no prefix, like Row). Used for tabbed sections in the admin UI.
     Tabs,
-    /// Code editor field. Renders a CodeMirror editor in the admin UI.
-    /// Stored as plain TEXT in SQLite.
+    /// Code editor field. Renders a `CodeMirror` editor in the admin UI.
+    /// Stored as plain TEXT in `SQLite`.
     Code,
     /// Virtual reverse-relationship field. Shows documents from another collection
     /// that reference this document. No stored data — computed at read time.
@@ -90,6 +90,7 @@ impl FieldType {
     /// Only scalar types that can be rendered as a simple form input in the
     /// node edit modal are allowed. Complex/structural types are rejected at
     /// registration time.
+    #[must_use]
     pub fn is_node_attr_type(&self) -> bool {
         matches!(
             self,
@@ -107,6 +108,7 @@ impl FieldType {
     }
 
     /// Returns the string identifier for this field type.
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             FieldType::Text => "text",
@@ -219,8 +221,7 @@ mod tests {
         for ft in &allowed {
             assert!(
                 ft.is_node_attr_type(),
-                "{:?} should be a valid node attr type",
-                ft
+                "{ft:?} should be a valid node attr type"
             );
         }
     }
@@ -242,8 +243,7 @@ mod tests {
         for ft in &rejected {
             assert!(
                 !ft.is_node_attr_type(),
-                "{:?} should NOT be a valid node attr type",
-                ft
+                "{ft:?} should NOT be a valid node attr type"
             );
         }
     }

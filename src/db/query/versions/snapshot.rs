@@ -13,6 +13,10 @@ use crate::db::{
 };
 
 /// Build a JSON snapshot of a document's current state (fields + join data).
+///
+/// # Errors
+///
+/// Returns a backend error if hydration of join-table data fails.
 pub fn build_snapshot(
     conn: &dyn DbConnection,
     slug: &str,

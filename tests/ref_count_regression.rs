@@ -3,6 +3,20 @@
 //! Each test reproduces a specific bug that was found and fixed. These tests
 //! must not be removed — they prevent silent reintroduction of data corruption.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -442,7 +456,7 @@ async fn version_restore_adjusts_ref_counts() {
 // ── Regression: creating a reference to a vanished target must fail ─────
 
 /// If a referenced document has been hard-deleted out from under us (e.g.
-/// by a concurrent process that bypassed the ref_count guard, or a direct
+/// by a concurrent process that bypassed the `ref_count` guard, or a direct
 /// SQL delete), attempting to create a new document referencing it must
 /// fail loudly rather than silently writing a dangling reference.
 #[tokio::test]

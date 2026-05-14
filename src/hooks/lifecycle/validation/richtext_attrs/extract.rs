@@ -1,5 +1,5 @@
 //! Extract custom node instances (with their attribute values) from richtext
-//! content. Supports both ProseMirror JSON and HTML serialisation formats.
+//! content. Supports both `ProseMirror` JSON and HTML serialisation formats.
 
 use std::collections::HashMap;
 
@@ -14,7 +14,7 @@ pub(super) struct NodeInstance {
     pub(super) attrs: HashMap<String, Value>,
 }
 
-/// Extract custom node instances from ProseMirror JSON content.
+/// Extract custom node instances from `ProseMirror` JSON content.
 pub(super) fn extract_nodes_from_json(
     json_str: &str,
     known_nodes: &HashMap<&str, &[FieldDefinition]>,
@@ -36,14 +36,12 @@ fn collect_nodes_recursive(
     counters: &mut HashMap<String, usize>,
     out: &mut Vec<NodeInstance>,
 ) {
-    let obj = match value.as_object() {
-        Some(o) => o,
-        None => return,
+    let Some(obj) = value.as_object() else {
+        return;
     };
 
-    let node_type = match obj.get("type").and_then(|t| t.as_str()) {
-        Some(t) => t,
-        None => return,
+    let Some(node_type) = obj.get("type").and_then(|t| t.as_str()) else {
+        return;
     };
 
     if known_nodes.contains_key(node_type) {

@@ -10,8 +10,14 @@ use crate::{
     core::Registry,
     db::LocaleContext,
     hooks::{
-        lifecycle::converters::*,
-        lua_api::crud::{get_tx_conn, helpers::*},
+        lifecycle::converters::document_to_lua_table,
+        lua_api::crud::{
+            get_tx_conn,
+            helpers::{
+                ExtractedData, check_hook_depth, extract_data, get_opt_bool, get_opt_string,
+                hook_lua_infra, hook_ui_locale, hook_user, resolve_collection,
+            },
+        },
     },
     service::{LuaWriteHooks, ServiceContext, WriteInput, create_document},
 };
@@ -21,26 +27,26 @@ fn create_document_lua(
     lua: &Lua,
     reg: &Registry,
     lc: &LocaleConfig,
-    collection: String,
-    data_table: Table,
-    opts: Option<Table>,
+    collection: &str,
+    data_table: &Table,
+    opts: Option<&Table>,
 ) -> mlua::Result<Table> {
     let conn = get_tx_conn(lua)?;
 
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
     let lua_infra = hook_lua_infra(lua);
-    let locale_str = get_opt_string(&opts, "locale")?;
+    let locale_str = get_opt_string(opts, "locale");
     let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), lc)
         .map_err(|e| RuntimeError(e.to_string()))?;
-    let override_access = get_opt_bool(&opts, "overrideAccess", false)?;
-    let run_hooks = get_opt_bool(&opts, "hooks", true)?;
-    let draft = get_opt_bool(&opts, "draft", false)?;
-    let def = resolve_collection(reg, &collection)?;
+    let override_access = get_opt_bool(opts, "overrideAccess", false);
+    let run_hooks = get_opt_bool(opts, "hooks", true);
+    let draft = get_opt_bool(opts, "draft", false);
+    let def = resolve_collection(reg, collection)?;
 
-    let ExtractedData { data, password } = extract_data(&data_table, &def)?;
+    let ExtractedData { data, password } = extract_data(data_table, &def)?;
 
-    let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, &collection, "create");
+    let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, collection, "create");
 
     let write_hooks = LuaWriteHooks::builder(lua)
         .user(user.as_ref())
@@ -58,7 +64,7 @@ fn create_document_lua(
         .ui_locale(ui_locale.clone())
         .build();
 
-    let ctx = ServiceContext::collection(&collection, &def)
+    let ctx = ServiceContext::collection(collection, &def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
@@ -83,7 +89,7 @@ pub(crate) fn register_create(
     let lc = locale_config.clone();
     let create_fn = lua.create_function(
         move |lua, (collection, data_table, opts): (String, mlua::Table, Option<mlua::Table>)| {
-            create_document_lua(lua, &registry, &lc, collection, data_table, opts)
+            create_document_lua(lua, &registry, &lc, &collection, &data_table, opts.as_ref())
         },
     )?;
 

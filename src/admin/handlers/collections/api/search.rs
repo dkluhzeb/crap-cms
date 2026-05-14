@@ -80,28 +80,29 @@ pub async fn search_collection(
     };
 
     let search_term = params.q.unwrap_or_default().to_lowercase();
-    let limit = params
-        .limit
-        .unwrap_or(state.config.pagination.default_limit as usize)
-        .min(state.config.pagination.max_limit as usize);
+    let default_limit = usize::try_from(state.config.pagination.default_limit.max(0)).unwrap_or(20);
+    let max_limit = usize::try_from(state.config.pagination.max_limit.max(0)).unwrap_or(1000);
+    let limit = params.limit.unwrap_or(default_limit).min(max_limit);
 
     let Ok(conn) = state.pool.get() else {
         return Json(json!([]));
     };
 
     let locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale).unwrap_or(None);
-    let user_doc = get_user_doc(&auth_user);
+    let user_doc = get_user_doc(auth_user.as_ref());
 
     let read_hooks = service::RunnerReadHooks::new(&state.hook_runner, &conn);
 
     let search = if search_term.is_empty() {
         None
     } else {
-        Some(search_term.to_string())
+        Some(search_term.clone())
     };
 
+    // Overflow path falls back to a small page rather than i64::MAX —
+    // an unbounded LIMIT would return the entire collection.
     let fq = FindQuery::builder()
-        .limit(Some(limit as i64))
+        .limit(Some(i64::try_from(limit).unwrap_or(20)))
         .search(search)
         .build();
 
@@ -123,17 +124,13 @@ pub async fn search_collection(
         include_drafts: true,
     };
 
-    let result = match service::search_documents(&ctx, &search_input) {
-        Ok(r) => r,
-        Err(_) => return Json(json!([])),
+    let Ok(result) = service::search_documents(&ctx, &search_input) else {
+        return Json(json!([]));
     };
 
-    let title_field = def.title_field().map(|s| s.to_string());
+    let title_field = def.title_field().map(std::string::ToString::to_string);
     let is_upload = def.upload.as_ref().is_some_and(|u| u.enabled);
-    let admin_thumbnail = def
-        .upload
-        .as_ref()
-        .and_then(|u| u.admin_thumbnail.as_ref().cloned());
+    let admin_thumbnail = def.upload.as_ref().and_then(|u| u.admin_thumbnail.clone());
 
     let results: Vec<_> = result
         .docs

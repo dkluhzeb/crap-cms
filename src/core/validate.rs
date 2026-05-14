@@ -47,6 +47,7 @@ impl FieldError {
     ///     .with_param("field", display_name)
     ///     .with_param("min", min_len.to_string())
     /// ```
+    #[must_use]
     pub fn with_param(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.params.insert(name.into(), value.into());
         self
@@ -60,12 +61,14 @@ pub struct ValidationError {
 }
 
 impl ValidationError {
+    #[must_use]
     pub fn new(errors: Vec<FieldError>) -> Self {
         Self { errors }
     }
 
     /// Convert errors into a field-name-keyed map for template rendering.
     /// When multiple errors exist for the same field, messages are joined with "; ".
+    #[must_use]
     pub fn to_field_map(&self) -> HashMap<String, String> {
         let mut map = HashMap::new();
         for e in &self.errors {

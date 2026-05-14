@@ -3,7 +3,7 @@ use serde_json::Value;
 use tracing::warn;
 
 /// Handlebars helper that renders the appropriate field partial.
-/// Usage: {{render_field field_context}}
+/// Usage: {{`render_field` `field_context`}}
 pub(super) struct RenderFieldHelper;
 
 impl HelperDef for RenderFieldHelper {
@@ -37,8 +37,7 @@ impl HelperDef for RenderFieldHelper {
         let template_name = field_data
             .get("template")
             .and_then(|t| t.as_str())
-            .map(String::from)
-            .unwrap_or_else(|| format!("fields/{}", field_type));
+            .map_or_else(|| format!("fields/{field_type}"), String::from);
 
         // Inject _locale from parent context so {{t}} works inside field partials
         let render_data = if let Some(locale) = ctx.data().get("_locale") {

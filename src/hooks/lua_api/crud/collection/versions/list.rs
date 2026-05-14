@@ -9,7 +9,10 @@ use crate::{
     core::Registry,
     hooks::{
         lifecycle::converters::pagination_result_to_lua_table,
-        lua_api::crud::{get_tx_conn, helpers::*},
+        lua_api::crud::{
+            get_tx_conn,
+            helpers::{get_opt_bool, hook_user, resolve_collection},
+        },
     },
     service::{ListVersionsInput, LuaReadHooks, ServiceContext, list_versions},
 };
@@ -18,14 +21,14 @@ use crate::{
 fn list_versions_inner(
     lua: &Lua,
     reg: &Registry,
-    collection: String,
-    id: String,
-    opts: Option<Table>,
+    collection: &str,
+    id: &str,
+    opts: Option<&Table>,
 ) -> LuaResult<Table> {
     let conn = get_tx_conn(lua)?;
 
     // Validate collection exists
-    let def = resolve_collection(reg, &collection)?;
+    let def = resolve_collection(reg, collection)?;
 
     let limit: Option<i64> = opts
         .as_ref()
@@ -33,7 +36,7 @@ fn list_versions_inner(
     let offset: Option<i64> = opts
         .as_ref()
         .and_then(|o| o.get::<Option<i64>>("offset").ok().flatten());
-    let override_access = get_opt_bool(&opts, "overrideAccess", false)?;
+    let override_access = get_opt_bool(opts, "overrideAccess", false);
 
     let user = hook_user(lua);
     let hooks = LuaReadHooks::builder(lua)
@@ -41,14 +44,14 @@ fn list_versions_inner(
         .override_access(override_access)
         .build();
 
-    let ctx = ServiceContext::collection(&collection, &def)
+    let ctx = ServiceContext::collection(collection, &def)
         .conn(conn)
         .read_hooks(&hooks)
         .user(user.as_ref())
         .override_access(override_access)
         .build();
 
-    let input = ListVersionsInput::builder(&id)
+    let input = ListVersionsInput::builder(id)
         .limit(limit)
         .offset(offset)
         .build();
@@ -88,7 +91,7 @@ pub(crate) fn register_list_versions(
 ) -> Result<()> {
     let list_versions_fn = lua.create_function(
         move |lua, (collection, id, opts): (String, String, Option<Table>)| {
-            list_versions_inner(lua, &registry, collection, id, opts)
+            list_versions_inner(lua, &registry, &collection, &id, opts.as_ref())
         },
     )?;
 

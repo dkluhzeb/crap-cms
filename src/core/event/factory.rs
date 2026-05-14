@@ -15,6 +15,11 @@ use crate::core::event::{
 /// `redis_url` from the cache config (when `transport = "redis"`).
 ///
 /// Returns `None` when live updates are disabled (`live.enabled = false`).
+///
+/// # Errors
+///
+/// Returns an error if the transport name is unknown, or the Redis transport
+/// fails to initialize.
 pub fn create_event_transport(
     live: &LiveConfig,
     redis_url: &str,
@@ -51,15 +56,19 @@ pub fn create_event_transport(
                  Rebuild with `--features redis`, or set `[live] transport = \"memory\"`."
             );
         }
-        other => bail!(
-            "Unknown live event transport '{}'. Valid values: \"memory\", \"redis\"",
-            other
-        ),
+        other => {
+            bail!("Unknown live event transport '{other}'. Valid values: \"memory\", \"redis\"")
+        }
     }
 }
 
 /// Build the invalidation transport using the same transport selection as
 /// [`create_event_transport`]. Operators don't configure the two separately.
+///
+/// # Errors
+///
+/// Returns an error if the transport name is unknown, or the Redis transport
+/// fails to initialize.
 pub fn create_invalidation_transport(
     live: &LiveConfig,
     redis_url: &str,
@@ -78,10 +87,9 @@ pub fn create_invalidation_transport(
                  Rebuild with `--features redis`, or set `[live] transport = \"memory\"`."
             );
         }
-        other => bail!(
-            "Unknown live event transport '{}'. Valid values: \"memory\", \"redis\"",
-            other
-        ),
+        other => {
+            bail!("Unknown live event transport '{other}'. Valid values: \"memory\", \"redis\"")
+        }
     }
 }
 
@@ -139,8 +147,7 @@ mod tests {
         };
         assert!(
             err.to_string().contains("redis` feature"),
-            "unexpected error: {}",
-            err
+            "unexpected error: {err}"
         );
     }
 

@@ -15,6 +15,7 @@ pub struct VersionsConfig {
 
 impl VersionsConfig {
     /// Create a new versioning configuration.
+    #[must_use]
     pub fn new(drafts: bool, max_versions: u32) -> Self {
         Self {
             drafts,

@@ -44,9 +44,7 @@ fn validate_api_key(
         return Ok(());
     }
 
-    let peer = peer_addr
-        .map(|a| a.ip().to_string())
-        .unwrap_or_else(|| "unknown".into());
+    let peer = peer_addr.map_or_else(|| "unknown".into(), |a| a.ip().to_string());
 
     warn!(
         peer = %peer,
@@ -84,7 +82,7 @@ async fn parse_rpc_body(request: Request<Body>) -> Result<JsonRpcRequest, Respon
             result: None,
             error: Some(JsonRpcError {
                 code: PARSE_ERROR,
-                message: format!("Parse error: {}", e),
+                message: format!("Parse error: {e}"),
                 data: None,
             }),
         })

@@ -4,6 +4,10 @@ use clap::Subcommand;
 use std::path::PathBuf;
 
 /// Parse a key=value pair for --field arguments.
+///
+/// # Errors
+///
+/// Returns a descriptive error string when the input has no `=` separator.
 pub fn parse_key_val(s: &str) -> Result<(String, String), String> {
     let (key, value) = s
         .split_once('=')
@@ -51,7 +55,7 @@ pub enum MakeAction {
 
     /// Generate a global Lua file
     Global {
-        /// Global slug (e.g., "site_settings"). Prompted if omitted.
+        /// Global slug (e.g., "`site_settings`"). Prompted if omitted.
         slug: Option<String>,
 
         /// Inline field shorthand (e.g., "title:text:required,tagline:textarea")
@@ -65,7 +69,7 @@ pub enum MakeAction {
 
     /// Generate a hook file (file-per-hook pattern)
     Hook {
-        /// Hook function name (e.g., "auto_slug"). Prompted if omitted.
+        /// Hook function name (e.g., "`auto_slug`"). Prompted if omitted.
         name: Option<String>,
 
         /// Hook type: collection, field, or access
@@ -76,7 +80,7 @@ pub enum MakeAction {
         #[arg(short, long)]
         collection: Option<String>,
 
-        /// Lifecycle position (e.g., before_change, after_read)
+        /// Lifecycle position (e.g., `before_change`, `after_read`)
         #[arg(short = 'l', long)]
         position: Option<String>,
 
@@ -91,7 +95,7 @@ pub enum MakeAction {
 
     /// Generate a job Lua file
     Job {
-        /// Job slug (e.g., "cleanup_expired"). Prompted if omitted.
+        /// Job slug (e.g., "`cleanup_expired`"). Prompted if omitted.
         slug: Option<String>,
 
         /// Cron schedule expression (e.g., "0 3 * * *")
@@ -131,7 +135,7 @@ pub enum MakeAction {
         #[arg(short, long)]
         icon: Option<String>,
 
-        /// Lua function ref for access control (e.g., "access.admin_only")
+        /// Lua function ref for access control (e.g., "`access.admin_only`")
         #[arg(short, long)]
         access: Option<String>,
 
@@ -141,7 +145,7 @@ pub enum MakeAction {
     },
     /// Generate a slot-widget HBS file
     Slot {
-        /// Slot name (e.g., "dashboard_widgets"). Prompted if omitted.
+        /// Slot name (e.g., "`dashboard_widgets`"). Prompted if omitted.
         slot: Option<String>,
 
         /// Filename inside the slot directory (default: "widget")
@@ -379,7 +383,7 @@ pub enum UserAction {
 pub enum MigrateAction {
     /// Create a new migration file
     Create {
-        /// Migration name (e.g., "add_categories")
+        /// Migration name (e.g., "`add_categories`")
         name: String,
     },
     /// Schema sync + run pending Lua data migrations
@@ -403,7 +407,7 @@ pub enum MigrateAction {
 /// Actions for the `db` subcommand.
 #[derive(Subcommand)]
 pub enum DbAction {
-    /// Open an interactive SQLite console
+    /// Open an interactive `SQLite` console
     Console,
     /// Detect and optionally remove orphan columns not in Lua definitions
     Cleanup {
@@ -615,7 +619,7 @@ pub enum BenchAction {
         #[arg(short, long)]
         collection: Option<String>,
 
-        /// Show EXPLAIN QUERY PLAN output (SQLite only)
+        /// Show EXPLAIN QUERY PLAN output (`SQLite` only)
         #[arg(long)]
         explain: bool,
 
@@ -648,7 +652,7 @@ pub enum BenchAction {
 }
 
 /// Actions for the `logs` subcommand.
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone, Copy, PartialEq, Eq)]
 pub enum LogsAction {
     /// Remove old rotated log files (keeps the current log file)
     Clear,

@@ -47,6 +47,10 @@ struct LayoutEntry {
 ///    roots that don't match either the old or new layout. These are
 ///    user-original files (custom widgets, bespoke themes); listed
 ///    informationally so the user knows the tool didn't lose them.
+///
+/// # Errors
+///
+/// Returns an error if scanning the overlay directory fails.
 pub fn layout(config_dir: &Path) -> Result<()> {
     let entries = collect_layout_entries(config_dir)?;
 
@@ -75,7 +79,7 @@ pub fn layout(config_dir: &Path) -> Result<()> {
     if !old_layout.is_empty() {
         println!("Old layout detected ({} files):", old_layout.len());
         for (old, new) in &old_layout {
-            println!("  {} → {}", old, new);
+            println!("  {old} → {new}");
         }
         println!();
 
@@ -110,7 +114,7 @@ pub fn layout(config_dir: &Path) -> Result<()> {
                 println!("  # MERGE — {} old files into {}", olds.len(), new);
                 println!("  cat {} > {}", olds.join(" "), new);
                 println!("  git rm {}", olds.join(" "));
-                println!("  git add {}", new);
+                println!("  git add {new}");
             }
         }
         println!();
@@ -133,7 +137,7 @@ pub fn layout(config_dir: &Path) -> Result<()> {
             unknowns.len()
         );
         for path in &unknowns {
-            println!("  {}", path);
+            println!("  {path}");
         }
     }
 
@@ -181,7 +185,7 @@ fn walk_layout_dir(root: &Path, cur: &Path, kind: &str, out: &mut Vec<LayoutEntr
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
-        let rel_path = format!("{}/{}", kind, sub_rel);
+        let rel_path = format!("{kind}/{sub_rel}");
 
         let layout_kind = classify_layout_path(kind, &sub_rel);
         out.push(LayoutEntry {
@@ -201,7 +205,7 @@ fn walk_layout_dir(root: &Path, cur: &Path, kind: &str, out: &mut Vec<LayoutEntr
 fn classify_layout_path(kind: &str, sub_path: &str) -> LayoutKind {
     if let Some(new_sub) = lookup_layout_move(kind, sub_path) {
         return LayoutKind::OldLayout {
-            new_path: format!("{}/{}", kind, new_sub),
+            new_path: format!("{kind}/{new_sub}"),
         };
     }
 
@@ -241,7 +245,7 @@ fn lookup_layout_move(kind: &str, sub_path: &str) -> Option<String> {
         if *k == kind
             && let Some(rest) = sub_path.strip_prefix(old_prefix)
         {
-            return Some(format!("{}{}", new_prefix, rest));
+            return Some(format!("{new_prefix}{rest}"));
         }
     }
 
@@ -453,7 +457,7 @@ mod tests {
         // path attached.
         match classify_layout_path("static", "styles.css") {
             LayoutKind::OldLayout { new_path } => {
-                assert_eq!(new_path, "static/styles/main.css")
+                assert_eq!(new_path, "static/styles/main.css");
             }
             other => panic!(
                 "expected OldLayout for static/styles.css, got {:?}",

@@ -227,8 +227,7 @@ pub(in crate::mcp::tools) fn exec_cli_reference(command: Option<&str>) -> Result
                 _ => {
                     let err = CliReferenceError {
                         error: format!(
-                            "Unknown command: '{}'. Call cli_reference without a command argument to see all available commands.",
-                            cmd
+                            "Unknown command: '{cmd}'. Call cli_reference without a command argument to see all available commands."
                         ),
                     };
                     return Ok(to_string_pretty(&err)?);
@@ -257,7 +256,7 @@ mod tests {
             .map(|c| c["name"].as_str().unwrap())
             .collect();
         for expected in &["serve", "migrate", "user", "backup", "jobs", "mcp"] {
-            assert!(names.contains(expected), "Missing command: {}", expected);
+            assert!(names.contains(expected), "Missing command: {expected}");
         }
     }
 

@@ -8,6 +8,10 @@ use crate::db::{DbConnection, DbValue};
 /// Delete a document from the FTS index.
 ///
 /// No-op if the FTS table doesn't exist.
+///
+/// # Errors
+///
+/// Returns a backend error if the DELETE fails.
 pub fn fts_delete(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> {
     let fts_table = fts_table_name(slug);
 
@@ -23,7 +27,7 @@ pub fn fts_delete(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> {
         ),
         &[DbValue::Text(id.to_string())],
     )
-    .with_context(|| format!("FTS delete in {}", fts_table))?;
+    .with_context(|| format!("FTS delete in {fts_table}"))?;
 
     Ok(())
 }

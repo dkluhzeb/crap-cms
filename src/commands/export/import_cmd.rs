@@ -20,7 +20,7 @@ struct ImportRow {
     join_data: DocumentFields,
 }
 
-/// Convert a JSON value to a typed DbValue based on the field type.
+/// Convert a JSON value to a typed `DbValue` based on the field type.
 fn json_to_db_value(val: &Value, field_type: &FieldType) -> Option<DbValue> {
     match val {
         Value::Null => None,
@@ -32,7 +32,7 @@ fn json_to_db_value(val: &Value, field_type: &FieldType) -> Option<DbValue> {
                 .map(DbValue::Integer)
                 .or_else(|| n.as_f64().map(DbValue::Real)),
         },
-        Value::Bool(b) => Some(DbValue::Integer(if *b { 1 } else { 0 })),
+        Value::Bool(b) => Some(DbValue::Integer(i64::from(*b))),
         other => Some(DbValue::Text(other.to_string())),
     }
 }
@@ -181,12 +181,12 @@ fn import_single_document(
 ) -> Result<()> {
     let doc_obj = doc_val
         .as_object()
-        .ok_or_else(|| anyhow!("Expected document object in '{}'", slug))?;
+        .ok_or_else(|| anyhow!("Expected document object in '{slug}'"))?;
 
     let id = doc_obj
         .get("id")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("Document missing 'id' in '{}'", slug))?;
+        .ok_or_else(|| anyhow!("Document missing 'id' in '{slug}'"))?;
 
     let row = collect_import_columns(doc_obj, def, id);
 
@@ -199,7 +199,7 @@ fn import_single_document(
     let sql = tx.build_upsert(slug, &col_refs, &placeholders.join(", "), "id");
 
     tx.execute(&sql, &row.parent_vals)
-        .with_context(|| format!("Failed to insert document {} into '{}'", id, slug))?;
+        .with_context(|| format!("Failed to insert document {id} into '{slug}'"))?;
 
     if !row.join_data.is_empty() {
         query::save_join_table_data(tx, slug, &def.fields, id, &row.join_data, None)?;
@@ -209,8 +209,13 @@ fn import_single_document(
 }
 
 /// Import collection data from JSON.
+///
+/// # Errors
+///
+/// Returns an error if config loading, file reading, JSON parsing, or any
+/// per-document write fails.
 #[cfg(not(tarpaulin_include))]
-pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>) -> Result<()> {
+pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<&str>) -> Result<()> {
     let (pool, registry) = load_config_and_sync(config_dir)?;
 
     let content =
@@ -225,11 +230,11 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
         cli::warning(&warning.replace("config requires", "export file was created with"));
     }
 
-    let slugs: Vec<String> = if let Some(ref slug) = collection_filter {
+    let slugs: Vec<String> = if let Some(slug) = collection_filter {
         if !export_file.collections.contains_key(slug) {
-            bail!("Collection '{}' not found in import file", slug);
+            bail!("Collection '{slug}' not found in import file");
         }
-        vec![slug.clone()]
+        vec![slug.to_string()]
     } else {
         export_file.collections.keys().cloned().collect()
     };
@@ -238,17 +243,14 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
 
     for slug in &slugs {
         let def = registry.get_collection(slug).ok_or_else(|| {
-            anyhow!(
-                "Collection '{}' exists in import file but not in schema",
-                slug
-            )
+            anyhow!("Collection '{slug}' exists in import file but not in schema")
         })?;
 
         let docs_array = export_file
             .collections
             .get(slug)
             .and_then(|v| v.as_array())
-            .ok_or_else(|| anyhow!("Expected array for collection '{}'", slug))?;
+            .ok_or_else(|| anyhow!("Expected array for collection '{slug}'"))?;
 
         let mut conn = pool.get().context("Failed to get database connection")?;
         let tx = conn.transaction().context("Failed to begin transaction")?;
@@ -259,7 +261,7 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
         }
 
         tx.commit()
-            .with_context(|| format!("Failed to commit import for '{}'", slug))?;
+            .with_context(|| format!("Failed to commit import for '{slug}'"))?;
 
         cli::success(&format!(
             "Imported {} document(s) into '{}'",
@@ -268,7 +270,7 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
         ));
     }
 
-    cli::success(&format!("Total: {} document(s) imported", total_imported));
+    cli::success(&format!("Total: {total_imported} document(s) imported"));
 
     Ok(())
 }

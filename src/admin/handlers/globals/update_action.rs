@@ -89,12 +89,9 @@ fn render_validation_error(
     def: &GlobalDefinition,
     form: &FormData,
     ve: &ValidationError,
-    auth_user: &Option<Extension<AuthUser>>,
+    auth_user: Option<&Extension<AuthUser>>,
 ) -> Response {
-    let locale = auth_user
-        .as_ref()
-        .map(|Extension(au)| au.ui_locale.as_str())
-        .unwrap_or("en");
+    let locale = auth_user.map_or("en", |Extension(au)| au.ui_locale.as_str());
 
     let error_map = translate_validation_errors(ve, &state.translations, locale);
     let toast_msg = state.translations.get(locale, "validation.error_summary");
@@ -181,7 +178,7 @@ pub async fn update_action(
         locale,
         locale_config: state.config.locale.clone(),
         draft: action == "save_draft",
-        user_doc: get_user_doc(&auth_user).cloned(),
+        user_doc: get_user_doc(auth_user.as_ref()).cloned(),
         ui_locale: auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone()),
         action,
     };
@@ -195,7 +192,7 @@ pub async fn update_action(
                 forbidden(&state, "You don't have permission to update this global")
             }
             ServiceError::Validation(ref ve) => {
-                render_validation_error(&state, &def, &form_for_error, ve, &auth_user)
+                render_validation_error(&state, &def, &form_for_error, ve, auth_user.as_ref())
             }
             other => {
                 error!("Global update error: {}", other);

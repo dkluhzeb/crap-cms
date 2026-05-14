@@ -1,13 +1,18 @@
 //! Read-only queries: counts, lists, single-row fetches.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 
 use crate::core::{JobRun, JobStatus};
 use crate::db::{DbConnection, DbRow, DbValue};
 
 /// Count running jobs, optionally filtered by slug.
+///
+/// # Errors
+///
+/// Returns a backend error if the COUNT query fails.
 pub fn count_running(conn: &dyn DbConnection, slug: Option<&str>) -> Result<i64> {
     let row = match slug {
         Some(s) => conn.query_one(
@@ -26,7 +31,11 @@ pub fn count_running(conn: &dyn DbConnection, slug: Option<&str>) -> Result<i64>
     Ok(row.as_ref().and_then(|r| r.i64_at(0)).unwrap_or(0))
 }
 
-/// Count running jobs per slug, returned as a HashMap.
+/// Count running jobs per slug, returned as a `HashMap`.
+///
+/// # Errors
+///
+/// Returns a backend error if the COUNT query fails.
 pub fn count_running_per_slug(conn: &dyn DbConnection) -> Result<HashMap<String, i64>> {
     let rows = conn.query_all(
         "SELECT slug, COUNT(*) FROM _crap_jobs WHERE status = 'running' GROUP BY slug",
@@ -47,6 +56,10 @@ pub fn count_running_per_slug(conn: &dyn DbConnection) -> Result<HashMap<String,
 }
 
 /// Count job runs with optional filters (same WHERE clause as [`list_job_runs`]).
+///
+/// # Errors
+///
+/// Returns a backend error if the COUNT query fails.
 pub fn count_job_runs(
     conn: &dyn DbConnection,
     slug: Option<&str>,
@@ -57,12 +70,12 @@ pub fn count_job_runs(
 
     if let Some(s) = slug {
         params.push(DbValue::Text(s.to_string()));
-        sql.push_str(&format!(" AND slug = {}", conn.placeholder(params.len())));
+        let _ = write!(sql, " AND slug = {}", conn.placeholder(params.len()));
     }
 
     if let Some(st) = status {
         params.push(DbValue::Text(st.to_string()));
-        sql.push_str(&format!(" AND status = {}", conn.placeholder(params.len())));
+        let _ = write!(sql, " AND status = {}", conn.placeholder(params.len()));
     }
 
     let row = conn.query_one(&sql, &params)?;
@@ -71,6 +84,10 @@ pub fn count_job_runs(
 }
 
 /// List job runs with optional filters.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT query fails or any row fails to parse.
 pub fn list_job_runs(
     conn: &dyn DbConnection,
     slug: Option<&str>,
@@ -87,28 +104,33 @@ pub fn list_job_runs(
 
     if let Some(s) = slug {
         params.push(DbValue::Text(s.to_string()));
-        sql.push_str(&format!(" AND slug = {}", conn.placeholder(params.len())));
+        let _ = write!(sql, " AND slug = {}", conn.placeholder(params.len()));
     }
     if let Some(st) = status {
         params.push(DbValue::Text(st.to_string()));
-        sql.push_str(&format!(" AND status = {}", conn.placeholder(params.len())));
+        let _ = write!(sql, " AND status = {}", conn.placeholder(params.len()));
     }
 
     params.push(DbValue::Integer(limit));
-    sql.push_str(&format!(
+    let _ = write!(
+        sql,
         " ORDER BY created_at DESC LIMIT {}",
         conn.placeholder(params.len())
-    ));
+    );
 
     params.push(DbValue::Integer(offset));
-    sql.push_str(&format!(" OFFSET {}", conn.placeholder(params.len())));
+    let _ = write!(sql, " OFFSET {}", conn.placeholder(params.len()));
 
     let rows = conn.query_all(&sql, &params)?;
 
-    rows.iter().map(row_to_job_run).collect()
+    Ok(rows.iter().map(row_to_job_run).collect())
 }
 
 /// Get a single job run by ID.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT query fails or the row fails to parse.
 pub fn get_job_run(conn: &dyn DbConnection, id: &str) -> Result<Option<JobRun>> {
     let row = conn.query_one(
         &format!(
@@ -120,30 +142,41 @@ pub fn get_job_run(conn: &dyn DbConnection, id: &str) -> Result<Option<JobRun>> 
         &[DbValue::Text(id.to_string())],
     )?;
 
-    row.map(|r| row_to_job_run(&r)).transpose()
+    Ok(row.map(|r| row_to_job_run(&r)))
 }
 
 /// Find jobs that are marked as running but have a stale heartbeat.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT query fails or any row fails to parse.
 pub fn find_stale_jobs(conn: &dyn DbConnection, stale_threshold_secs: u64) -> Result<Vec<JobRun>> {
-    let (offset_sql, offset_param) = conn.date_offset_expr(stale_threshold_secs as i64, 1);
+    let threshold = i64::try_from(stale_threshold_secs)
+        .context("stale_threshold_secs exceeds the SQL TIMESTAMP arithmetic range")?;
+    let (offset_sql, offset_param) = conn.date_offset_expr(threshold, 1);
     let rows = conn.query_all(
         &format!(
             "SELECT id, slug, status, queue, data, result, error, attempt, max_attempts,
                     scheduled_by, created_at, started_at, completed_at, heartbeat_at, retry_after
              FROM _crap_jobs
              WHERE status = 'running'
-               AND (heartbeat_at IS NULL OR heartbeat_at < {})",
-            offset_sql
+               AND (heartbeat_at IS NULL OR heartbeat_at < {offset_sql})"
         ),
         &[offset_param],
     )?;
 
-    rows.iter().map(row_to_job_run).collect()
+    Ok(rows.iter().map(row_to_job_run).collect())
 }
 
 /// Count failed jobs within a recent time window (in seconds).
+///
+/// # Errors
+///
+/// Returns a backend error if the COUNT query fails.
 pub fn count_failed_since(conn: &dyn DbConnection, since_secs: u64) -> Result<i64> {
-    let (offset_sql, offset_param) = conn.date_offset_expr(since_secs as i64, 1);
+    let since = i64::try_from(since_secs)
+        .context("since_secs exceeds the SQL TIMESTAMP arithmetic range")?;
+    let (offset_sql, offset_param) = conn.date_offset_expr(since, 1);
     let row = conn.query_one(
         &format!(
             "SELECT COUNT(*) FROM _crap_jobs
@@ -156,8 +189,14 @@ pub fn count_failed_since(conn: &dyn DbConnection, since_secs: u64) -> Result<i6
 }
 
 /// Count pending jobs that have been waiting longer than the given threshold (in seconds).
+///
+/// # Errors
+///
+/// Returns a backend error if the COUNT query fails.
 pub fn count_pending_older_than(conn: &dyn DbConnection, older_than_secs: u64) -> Result<i64> {
-    let (offset_sql, offset_param) = conn.date_offset_expr(older_than_secs as i64, 1);
+    let older = i64::try_from(older_than_secs)
+        .context("older_than_secs exceeds the SQL TIMESTAMP arithmetic range")?;
+    let (offset_sql, offset_param) = conn.date_offset_expr(older, 1);
     let row = conn.query_one(
         &format!(
             "SELECT COUNT(*) FROM _crap_jobs
@@ -170,6 +209,10 @@ pub fn count_pending_older_than(conn: &dyn DbConnection, older_than_secs: u64) -
 }
 
 /// Get the most recent completed run for a given job slug.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT query fails or the row fails to parse.
 pub fn last_completed_run(conn: &dyn DbConnection, slug: &str) -> Result<Option<JobRun>> {
     let row = conn.query_one(
         &format!(
@@ -184,11 +227,15 @@ pub fn last_completed_run(conn: &dyn DbConnection, slug: &str) -> Result<Option<
         &[DbValue::Text(slug.to_string())],
     )?;
 
-    row.map(|r| row_to_job_run(&r)).transpose()
+    Ok(row.map(|r| row_to_job_run(&r)))
 }
 
 /// Build a `JobRun` from a wide DB row that includes all 15 columns.
-fn row_to_job_run(row: &DbRow) -> Result<JobRun> {
+///
+/// All column accessors fall back to sensible defaults (empty string,
+/// `JobStatus::Pending`, `0` for counters), so this never fails — a
+/// malformed row produces a logically-empty `JobRun` rather than an error.
+fn row_to_job_run(row: &DbRow) -> JobRun {
     let text_or =
         |idx: usize, default: &str| -> String { row.text_at(idx).unwrap_or(default).to_string() };
 
@@ -201,8 +248,16 @@ fn row_to_job_run(row: &DbRow) -> Result<JobRun> {
         .status(status)
         .queue(text_or(3, "default"))
         .data(text_or(4, "{}"))
-        .attempt(row.i64_at(7).unwrap_or(0) as u32)
-        .max_attempts(row.i64_at(8).unwrap_or(0) as u32);
+        .attempt(
+            row.i64_at(7)
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or(0),
+        )
+        .max_attempts(
+            row.i64_at(8)
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or(0),
+        );
 
     if let Some(r) = row.opt_text_at(5) {
         b = b.result(r);
@@ -236,7 +291,7 @@ fn row_to_job_run(row: &DbRow) -> Result<JobRun> {
         b = b.retry_after(ra);
     }
 
-    Ok(b.build())
+    b.build()
 }
 
 #[cfg(test)]

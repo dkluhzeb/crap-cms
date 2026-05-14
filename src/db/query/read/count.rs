@@ -15,6 +15,10 @@ use crate::db::{
 use crate::db::query::helpers::append_sql_condition;
 
 /// Count documents in a collection.
+///
+/// # Errors
+///
+/// Returns a backend error if the COUNT query fails or any filter field is invalid.
 pub fn count(
     conn: &dyn DbConnection,
     slug: &str,
@@ -29,6 +33,10 @@ pub fn count(
 ///
 /// When `include_deleted` is true, soft-deleted documents are included in the count
 /// (used by the trash view).
+///
+/// # Errors
+///
+/// Returns a backend error if the COUNT query fails or any filter field is invalid.
 pub fn count_with_search(
     conn: &dyn DbConnection,
     slug: &str,
@@ -104,6 +112,11 @@ pub fn count_with_search(
 
 /// Count rows where a field equals a value, optionally excluding an ID.
 /// Used for unique constraint validation.
+///
+/// # Errors
+///
+/// Returns an error if the field name is invalid, or a backend error if the
+/// COUNT query fails.
 pub fn count_where_field_eq(
     conn: &dyn DbConnection,
     table: &str,
@@ -113,10 +126,7 @@ pub fn count_where_field_eq(
     soft_delete: bool,
 ) -> Result<i64> {
     if !is_valid_identifier(field) {
-        bail!(
-            "Invalid field name '{}': must be alphanumeric/underscore",
-            field
-        );
+        bail!("Invalid field name '{field}': must be alphanumeric/underscore");
     }
 
     let soft_filter = if soft_delete {
@@ -125,28 +135,24 @@ pub fn count_where_field_eq(
         ""
     };
 
-    let row = match exclude_id {
-        Some(eid) => {
-            let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-            let sql = format!(
-                "SELECT COUNT(*) FROM \"{table}\" WHERE \"{field}\" = {p1} AND id != {p2}{soft_filter}"
-            );
-            conn.query_one(
-                &sql,
-                &[
-                    DbValue::Text(value.to_string()),
-                    DbValue::Text(eid.to_string()),
-                ],
-            )
+    let row = if let Some(eid) = exclude_id {
+        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+        let sql = format!(
+            "SELECT COUNT(*) FROM \"{table}\" WHERE \"{field}\" = {p1} AND id != {p2}{soft_filter}"
+        );
+        conn.query_one(
+            &sql,
+            &[
+                DbValue::Text(value.to_string()),
+                DbValue::Text(eid.to_string()),
+            ],
+        )
+        .with_context(|| format!("Unique check on {table}.{field}"))?
+    } else {
+        let p1 = conn.placeholder(1);
+        let sql = format!("SELECT COUNT(*) FROM \"{table}\" WHERE \"{field}\" = {p1}{soft_filter}");
+        conn.query_one(&sql, &[DbValue::Text(value.to_string())])
             .with_context(|| format!("Unique check on {table}.{field}"))?
-        }
-        None => {
-            let p1 = conn.placeholder(1);
-            let sql =
-                format!("SELECT COUNT(*) FROM \"{table}\" WHERE \"{field}\" = {p1}{soft_filter}");
-            conn.query_one(&sql, &[DbValue::Text(value.to_string())])
-                .with_context(|| format!("Unique check on {table}.{field}"))?
-        }
     };
 
     let count = row

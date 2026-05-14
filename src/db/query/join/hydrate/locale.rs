@@ -7,7 +7,7 @@ use crate::{
 
 /// Resolve the effective locale string for a join table operation.
 /// Returns Some("en") when the field is localized and locale is enabled,
-/// None otherwise (same pattern as locale_write_column for regular columns).
+/// None otherwise (same pattern as `locale_write_column` for regular columns).
 pub(super) fn resolve_join_locale(
     field: &FieldDefinition,
     locale_ctx: Option<&LocaleContext>,

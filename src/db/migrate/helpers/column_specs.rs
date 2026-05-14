@@ -17,7 +17,7 @@ use super::introspection::{get_table_columns, sanitize_locale};
 /// A column specification derived from a field definition.
 /// Used by migration code to generate CREATE TABLE / ALTER TABLE statements.
 pub(in crate::db::migrate) struct ColumnSpec<'a> {
-    /// The column name (e.g., "title", "social__github")
+    /// The column name (e.g., "title", "`social__github`")
     pub col_name: String,
     /// The field definition this column comes from (used for type, constraints)
     pub field: &'a FieldDefinition,
@@ -101,7 +101,7 @@ pub(in crate::db::migrate) fn ensure_locale_column(
         );
         info!("Adding _locale column to {}", table_name);
         conn.execute_ddl(&sql, &[])
-            .with_context(|| format!("Failed to add _locale to {}", table_name))?;
+            .with_context(|| format!("Failed to add _locale to {table_name}"))?;
     }
 
     Ok(())

@@ -19,7 +19,7 @@ use crate::{
         AdminState,
         context::{
             BasePageContext, Breadcrumb, CollectionContext, CollectionPermissions, DocumentRef,
-            PageMeta, PageType,
+            LocaleTemplateData, PageMeta, PageType,
             page::collections::{CollectionEditPage, UploadFormContext, UploadInfo},
         },
         handlers::shared::{
@@ -53,7 +53,7 @@ struct ReadParams {
 }
 
 /// Fetch the document via the shared service layer read lifecycle.
-fn read_document_blocking(params: ReadParams) -> Result<Option<Document>, ServiceError> {
+fn read_document_blocking(params: &ReadParams) -> Result<Option<Document>, ServiceError> {
     let conn = params.pool.get().map_err(ServiceError::Internal)?;
 
     let hooks = RunnerReadHooks::new(&params.runner, &conn);
@@ -194,20 +194,25 @@ impl<'a> UploadMeta<'a> {
             filesize: document
                 .fields
                 .get("filesize")
-                .and_then(|v| v.as_f64())
-                .map(|v| v as u64),
+                .and_then(serde_json::Value::as_u64),
             width: document
                 .fields
                 .get("width")
-                .and_then(|v| v.as_f64())
-                .map(|v| v as u32),
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|v| u32::try_from(v).ok()),
             height: document
                 .fields
                 .get("height")
-                .and_then(|v| v.as_f64())
-                .map(|v| v as u32),
-            focal_x: document.fields.get("focal_x").and_then(|v| v.as_f64()),
-            focal_y: document.fields.get("focal_y").and_then(|v| v.as_f64()),
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|v| u32::try_from(v).ok()),
+            focal_x: document
+                .fields
+                .get("focal_x")
+                .and_then(serde_json::Value::as_f64),
+            focal_y: document
+                .fields
+                .get("focal_y")
+                .and_then(serde_json::Value::as_f64),
         }
     }
 }
@@ -240,7 +245,7 @@ fn build_upload_context(def: &CollectionDefinition, document: &Document) -> Uplo
                     .and_then(|v| v.get(thumb_name))
                     .and_then(|v| v.get("url"))
                     .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
+                    .map(std::string::ToString::to_string)
             })
             .unwrap_or_else(|| url.to_string());
 
@@ -249,7 +254,7 @@ fn build_upload_context(def: &CollectionDefinition, document: &Document) -> Uplo
 
     if let Some(fname) = meta.filename {
         let dimensions = match (meta.width, meta.height) {
-            (Some(w), Some(h)) => Some(format!("{}x{}", w, h)),
+            (Some(w), Some(h)) => Some(format!("{w}x{h}")),
             _ => None,
         };
 
@@ -263,7 +268,12 @@ fn build_upload_context(def: &CollectionDefinition, document: &Document) -> Uplo
     ctx
 }
 
-/// GET /admin/collections/{slug}/{id} — show edit form
+/// GET /admin/collections/{slug}/{id} — show edit form.
+///
+/// Thin orchestrator (per CLAUDE.md): resolve def → load document via
+/// `spawn_blocking` → compute denied fields → prepare main+sidebar field
+/// contexts → assemble the page context and render. Per-phase logic
+/// lives in the helpers above.
 pub async fn edit_form(
     State(state): State<AdminState>,
     Path((slug, id)): Path<(String, String)>,
@@ -272,43 +282,19 @@ pub async fn edit_form(
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
     let Some(def) = state.registry.get_collection(&slug).cloned() else {
-        return not_found(&state, &format!("Collection '{}' not found", slug));
+        return not_found(&state, &format!("Collection '{slug}' not found"));
     };
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let (locale_ctx, locale_data) = build_locale_template_data(&state, editor_locale.as_deref());
 
-    let read_params = ReadParams {
-        pool: state.pool.clone(),
-        runner: state.hook_runner.clone(),
-        slug: slug.clone(),
-        id: id.clone(),
-        def: def.clone(),
-        locale_ctx,
-        has_drafts: def.has_drafts(),
-        user_doc: auth_user.as_ref().map(|Extension(au)| au.user_doc.clone()),
-    };
+    let document =
+        match load_document(&state, &slug, &id, &def, locale_ctx, auth_user.as_ref()).await {
+            Ok(doc) => doc,
+            Err(resp) => return resp,
+        };
 
-    let read_result = task::spawn_blocking(move || read_document_blocking(read_params)).await;
-
-    let document = match read_result {
-        Ok(Ok(Some(doc))) => doc,
-        Ok(Ok(None)) => {
-            return not_found(&state, &format!("Document '{}' not found", id));
-        }
-        Ok(Err(e)) => {
-            return service_error_to_admin_response(
-                &state,
-                e,
-                "You don't have permission to view this item",
-            );
-        }
-        Err(e) => return task_join_error_response(&state, e),
-    };
-
-    // Compute read-denied fields to exclude from form rendering.
-    // The service already stripped their values — this filters the form fields themselves.
-    let denied = match compute_denied_read_fields(&state, &auth_user, &def.fields) {
+    let denied = match compute_denied_read_fields(&state, auth_user.as_ref(), &def.fields) {
         Ok(d) => d,
         Err(resp) => return *resp,
     };
@@ -322,74 +308,162 @@ pub async fn edit_form(
         &denied,
     );
 
-    let doc_title = def
-        .title_field()
-        .and_then(|f| document.get_str(f))
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| document.id.to_string());
+    let ctx = build_edit_page_context(EditPageContextInput {
+        state: &state,
+        slug: &slug,
+        id: &id,
+        def: &def,
+        document: &document,
+        claims: claims.as_ref(),
+        auth_user: auth_user.as_ref(),
+        editor_locale: editor_locale.as_deref(),
+        locale_data,
+        main_fields,
+        sidebar_fields,
+    });
 
-    let has_drafts = def.has_drafts();
-    let has_versions = def.has_versions();
+    render_page(&state, "collections/edit", &ctx)
+}
 
-    let doc_status = extract_doc_status(&document, has_drafts);
-
-    let (versions, total_versions) = if has_versions {
-        if let Ok(vc) = state.pool.get() {
-            let vh = RunnerReadHooks::new(&state.hook_runner, &vc);
-            let version_ctx = ServiceContext::collection(&slug, &def)
-                .conn(&vc)
-                .read_hooks(&vh)
-                .build();
-            fetch_version_sidebar_data(&version_ctx, &document.id)
-        } else {
-            (vec![], 0)
-        }
-    } else {
-        (vec![], 0)
+/// Run the blocking document read on a tokio task and fold the
+/// nested Result/Option into a single page-level outcome — either
+/// the loaded document, or the error response that the handler should
+/// return verbatim.
+async fn load_document(
+    state: &AdminState,
+    slug: &str,
+    id: &str,
+    def: &CollectionDefinition,
+    locale_ctx: Option<LocaleContext>,
+    auth_user: Option<&Extension<AuthUser>>,
+) -> Result<Document, Response> {
+    let read_params = ReadParams {
+        pool: state.pool.clone(),
+        runner: state.hook_runner.clone(),
+        slug: slug.to_string(),
+        id: id.to_string(),
+        def: def.clone(),
+        locale_ctx,
+        has_drafts: def.has_drafts(),
+        user_doc: auth_user.map(|Extension(au)| au.user_doc.clone()),
     };
 
-    let claims_ref = claims.as_ref().map(|Extension(c)| c);
+    let read_result = task::spawn_blocking(move || read_document_blocking(&read_params)).await;
+
+    match read_result {
+        Ok(Ok(Some(doc))) => Ok(doc),
+        Ok(Ok(None)) => Err(not_found(state, &format!("Document '{id}' not found"))),
+        Ok(Err(e)) => Err(service_error_to_admin_response(
+            state,
+            e,
+            "You don't have permission to view this item",
+        )),
+        Err(e) => Err(task_join_error_response(state, &e)),
+    }
+}
+
+/// Fetch the version-sidebar items + total version count for a
+/// versioned collection. Returns `(vec![], 0)` when versioning is off
+/// or the connection pool is exhausted (best-effort sidebar; the rest
+/// of the page still renders).
+fn fetch_versions_for_sidebar(
+    state: &AdminState,
+    slug: &str,
+    def: &CollectionDefinition,
+    doc_id: &str,
+) -> (Vec<Value>, i64) {
+    if !def.has_versions() {
+        return (vec![], 0);
+    }
+    let Ok(vc) = state.pool.get() else {
+        return (vec![], 0);
+    };
+    let vh = RunnerReadHooks::new(&state.hook_runner, &vc);
+    let version_ctx = ServiceContext::collection(slug, def)
+        .conn(&vc)
+        .read_hooks(&vh)
+        .build();
+    fetch_version_sidebar_data(&version_ctx, doc_id)
+}
+
+/// Bundled inputs for [`build_edit_page_context`] — keeps the call
+/// site readable instead of a 10-arg positional call.
+struct EditPageContextInput<'a> {
+    state: &'a AdminState,
+    slug: &'a str,
+    id: &'a str,
+    def: &'a CollectionDefinition,
+    document: &'a Document,
+    claims: Option<&'a Extension<Claims>>,
+    auth_user: Option<&'a Extension<AuthUser>>,
+    editor_locale: Option<&'a str>,
+    locale_data: Option<LocaleTemplateData>,
+    main_fields: Vec<FieldContext>,
+    sidebar_fields: Vec<FieldContext>,
+}
+
+/// Compose the [`CollectionEditPage`] view-model from the loaded
+/// document + prepared field contexts. All the "wrap presentation
+/// state into a typed page context" work lives here.
+fn build_edit_page_context(input: EditPageContextInput<'_>) -> CollectionEditPage {
+    let doc_title = input
+        .def
+        .title_field()
+        .and_then(|f| input.document.get_str(f))
+        .map_or_else(
+            || input.document.id.to_string(),
+            std::string::ToString::to_string,
+        );
+
+    let has_drafts = input.def.has_drafts();
+    let has_versions = input.def.has_versions();
+    let doc_status = extract_doc_status(input.document, has_drafts);
+
+    let (versions, total_versions) =
+        fetch_versions_for_sidebar(input.state, input.slug, input.def, &input.document.id);
+
+    let claims_ref = input.claims.map(|Extension(c)| c);
 
     let breadcrumbs = vec![
         Breadcrumb::link("collections", paths::COLLECTIONS_ROOT),
-        Breadcrumb::link(def.display_name(), paths::collection(&slug)),
+        Breadcrumb::link(input.def.display_name(), paths::collection(input.slug)),
         Breadcrumb::current(doc_title.clone()),
     ];
 
     let base = BasePageContext::for_handler(
-        &state,
+        input.state,
         claims_ref,
-        &auth_user,
-        PageMeta::new(PageType::CollectionEdit, "edit_name").with_title_name(def.singular_name()),
+        input.auth_user,
+        PageMeta::new(PageType::CollectionEdit, "edit_name")
+            .with_title_name(input.def.singular_name()),
     )
-    .with_editor_locale(editor_locale.as_deref(), &state)
+    .with_editor_locale(input.editor_locale, input.state)
     .with_breadcrumbs(breadcrumbs);
 
-    let upload = def
+    let upload = input
+        .def
         .is_upload_collection()
-        .then(|| build_upload_context(&def, &document));
+        .then(|| build_upload_context(input.def, input.document));
 
-    let perms = CollectionPermissions::for_user(&state, &def, &auth_user);
+    let perms = CollectionPermissions::for_user(input.state, input.def, input.auth_user);
 
-    let ctx = CollectionEditPage {
+    CollectionEditPage {
         base,
-        collection: CollectionContext::from_def(&def),
+        collection: CollectionContext::from_def(input.def),
         perms,
-        document: DocumentRef::with_status(&document, &doc_status),
-        fields: main_fields,
-        sidebar_fields,
+        document: DocumentRef::with_status(input.document, &doc_status),
+        fields: input.main_fields,
+        sidebar_fields: input.sidebar_fields,
         editing: true,
         has_drafts,
         has_versions,
         versions,
         has_more_versions: total_versions > 3,
-        restore_url_prefix: paths::collection_item(&slug, &id),
-        versions_url: paths::collection_item_versions(&slug, &id),
+        restore_url_prefix: paths::collection_item(input.slug, input.id),
+        versions_url: paths::collection_item_versions(input.slug, input.id),
         document_title: doc_title,
-        ref_count: lookup_ref_count(&state.pool, &slug, &id),
-        locale_data,
+        ref_count: lookup_ref_count(&input.state.pool, input.slug, input.id),
+        locale_data: input.locale_data,
         upload,
-    };
-
-    render_page(&state, "collections/edit", &ctx)
+    }
 }

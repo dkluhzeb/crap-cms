@@ -35,30 +35,29 @@ pub(crate) fn check_option_valid(
     }
 }
 
-/// Validate each value in a has_many select/radio JSON array against the options list.
+/// Validate each value in a `has_many` select/radio JSON array against the options list.
 fn check_has_many_options(
     field: &FieldDefinition,
     data_key: &str,
     json_str: &str,
     errors: &mut Vec<FieldError>,
 ) {
-    let values: Vec<String> = match serde_json::from_str(json_str) {
-        Ok(v) => v,
-        Err(_) => {
-            errors.push(
-                FieldError::with_key(
-                    data_key.to_owned(),
-                    format!(
-                        "{} has invalid multi-select value (malformed JSON)",
-                        field.name
-                    ),
-                    "validation.invalid_multi_select_json",
-                )
-                .with_param("field", field.name.clone()),
-            );
+    let values: Vec<String> = if let Ok(v) = serde_json::from_str(json_str) {
+        v
+    } else {
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!(
+                    "{} has invalid multi-select value (malformed JSON)",
+                    field.name
+                ),
+                "validation.invalid_multi_select_json",
+            )
+            .with_param("field", field.name.clone()),
+        );
 
-            return;
-        }
+        return;
     };
 
     for v in &values {
@@ -249,7 +248,7 @@ mod tests {
         );
     }
 
-    /// Regression: malformed JSON in a has_many select must produce a
+    /// Regression: malformed JSON in a `has_many` select must produce a
     /// validation error, not silently pass.
     #[test]
     fn test_validate_has_many_select_malformed_json_rejected() {
@@ -282,7 +281,7 @@ mod tests {
         );
     }
 
-    /// Regression: has_many select must report ALL invalid options, not just the first.
+    /// Regression: `has_many` select must report ALL invalid options, not just the first.
     /// Previously, `break` after the first error caused subsequent violations to be hidden.
     #[test]
     fn test_has_many_select_reports_all_invalid_options() {

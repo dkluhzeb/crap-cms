@@ -11,7 +11,7 @@ pub struct LocaleConfig {
     pub default_locale: String,
     /// All supported locale codes. Empty = localization disabled.
     pub locales: Vec<String>,
-    /// When true, reading a locale falls back to default_locale if the field is NULL.
+    /// When true, reading a locale falls back to `default_locale` if the field is NULL.
     pub fallback: bool,
 }
 
@@ -27,6 +27,7 @@ impl Default for LocaleConfig {
 
 impl LocaleConfig {
     /// Returns true if localization is enabled (at least one locale defined).
+    #[must_use]
     pub fn is_enabled(&self) -> bool {
         !self.locales.is_empty()
     }
@@ -34,6 +35,10 @@ impl LocaleConfig {
     /// Validate that all locale codes are safe identifiers (alphanumeric, hyphens,
     /// underscores only). This prevents SQL injection via locale strings that are
     /// interpolated into DDL during migrations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any locale code contains disallowed characters.
     pub fn validate(&self) -> Result<()> {
         Self::validate_locale_code(&self.default_locale)?;
 
@@ -63,8 +68,7 @@ impl LocaleConfig {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         {
             bail!(
-                "Invalid locale code '{}': only ASCII alphanumeric, hyphens, and underscores allowed",
-                code
+                "Invalid locale code '{code}': only ASCII alphanumeric, hyphens, and underscores allowed"
             );
         }
 
@@ -120,7 +124,7 @@ mod tests {
     #[test]
     fn locale_validation_rejects_empty() {
         let config = LocaleConfig {
-            default_locale: "".to_string(),
+            default_locale: String::new(),
             locales: vec![],
             fallback: true,
         };

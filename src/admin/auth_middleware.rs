@@ -56,7 +56,7 @@ fn validate_jwt_and_load_user(
             .user_doc
             .fields
             .get("_locked")
-            .and_then(|v| v.as_i64())
+            .and_then(serde_json::Value::as_i64)
             .unwrap_or(0)
             != 0;
 
@@ -97,7 +97,7 @@ fn try_strategy_auth(
                         .to_string();
                     let expiry = auth_config.token_expiry;
 
-                    let now = Utc::now().timestamp().max(0) as u64;
+                    let now = Utc::now().timestamp().max(0).cast_unsigned();
 
                     let claims = match ClaimsBuilder::new(user.id.clone(), slug.clone())
                         .email(user_email)
@@ -115,13 +115,12 @@ fn try_strategy_auth(
                     result = Some(claims);
                     break;
                 }
-                Ok(None) => continue,
+                Ok(None) => {}
                 Err(e) => {
                     warn!(
                         "Auth strategy '{}' error for {}: {}",
                         strategy.name, slug, e
                     );
-                    continue;
                 }
             }
         }
@@ -211,12 +210,7 @@ pub(super) async fn auth_middleware(
         .collections
         .values()
         .filter(|d| d.is_auth_collection())
-        .filter(|d| {
-            d.auth
-                .as_ref()
-                .map(|a| !a.strategies.is_empty())
-                .unwrap_or(false)
-        })
+        .filter(|d| d.auth.as_ref().is_some_and(|a| !a.strategies.is_empty()))
         .map(|d| (d.slug.clone(), d.auth.clone().expect("guarded by filter")))
         .collect();
 
@@ -314,7 +308,7 @@ fn serialize_auth_base(state: &AdminState, page: PageMeta) -> Value {
         .expect("AuthBasePageContext serializes infallibly")
 }
 
-/// Render the "setup required" page (no auth collection exists, require_auth is on).
+/// Render the "setup required" page (no auth collection exists, `require_auth` is on).
 fn auth_required_response(state: &AdminState) -> Response {
     let data = serialize_auth_base(
         state,
@@ -386,7 +380,7 @@ pub(crate) fn load_auth_user(
         .and_then(|v| {
             v.get("ui_locale")
                 .and_then(|l| l.as_str())
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
         })
         .unwrap_or_else(|| locale_config.default_locale.clone());
 

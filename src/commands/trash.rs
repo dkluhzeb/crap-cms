@@ -13,15 +13,15 @@ use crate::{
     db::{DbConnection, DbPool, DbValue, query},
 };
 
-/// Validate that a collection exists and has soft_delete enabled.
+/// Validate that a collection exists and has `soft_delete` enabled.
 fn validate_soft_delete(registry: &Registry, slug: &str) -> Result<()> {
     let def = registry
         .collections
         .get(slug)
-        .ok_or_else(|| anyhow!("Collection '{}' not found", slug))?;
+        .ok_or_else(|| anyhow!("Collection '{slug}' not found"))?;
 
     if !def.soft_delete {
-        bail!("Collection '{}' does not have soft_delete enabled", slug);
+        bail!("Collection '{slug}' does not have soft_delete enabled");
     }
 
     Ok(())
@@ -47,7 +47,7 @@ fn resolve_collections(registry: &Registry, filter: Option<&str>) -> Result<Vec<
     Ok(slugs)
 }
 
-/// Build a FindQuery that returns only soft-deleted documents.
+/// Build a `FindQuery` that returns only soft-deleted documents.
 ///
 /// CLI bypasses the service layer (`find_documents`) intentionally — there is
 /// no auth/hook context for a CLI invocation, so we go direct to `query::find`.
@@ -98,7 +98,7 @@ fn run_list(
         cli::info("No trashed documents found.");
     } else {
         table.print();
-        table.footer(&format!("{} trashed document(s)", total));
+        table.footer(&format!("{total} trashed document(s)"));
     }
 
     Ok(())
@@ -164,8 +164,7 @@ fn parse_threshold(older_than: &str) -> Result<Option<i64>> {
 
     let secs = parse_older_than(older_than).ok_or_else(|| {
         anyhow!(
-            "Invalid duration '{}'. Use format like '30d' (days), '24h' (hours), '30m' (minutes), '60s' (seconds), or 'all'",
-            older_than
+            "Invalid duration '{older_than}'. Use format like '30d' (days), '24h' (hours), '30m' (minutes), '60s' (seconds), or 'all'"
         )
     })?;
 
@@ -185,7 +184,7 @@ struct PurgeParams<'a> {
 }
 
 /// Purge (permanently delete) trashed documents, optionally filtered by age.
-fn run_purge(p: PurgeParams<'_>) -> Result<()> {
+fn run_purge(p: &PurgeParams<'_>) -> Result<()> {
     let slugs = resolve_collections(p.registry, p.collection)?;
 
     if slugs.is_empty() {
@@ -211,7 +210,7 @@ fn run_purge(p: PurgeParams<'_>) -> Result<()> {
 
         if p.dry_run {
             for id in &ids {
-                cli::info(&format!("Would purge: {} / {}", slug, id));
+                cli::info(&format!("Would purge: {slug} / {id}"));
             }
         } else {
             let tx = conn.transaction().context("Start transaction")?;
@@ -226,9 +225,9 @@ fn run_purge(p: PurgeParams<'_>) -> Result<()> {
     }
 
     if p.dry_run {
-        cli::info(&format!("{} document(s) would be purged.", total));
+        cli::info(&format!("{total} document(s) would be purged."));
     } else {
-        cli::success(&format!("Purged {} trashed document(s).", total));
+        cli::success(&format!("Purged {total} trashed document(s)."));
     }
 
     Ok(())
@@ -267,15 +266,14 @@ fn find_purge_candidates(
             let (offset_sql, offset_param) = conn.date_offset_expr(secs, 1);
             (
                 format!(
-                    "SELECT id FROM \"{}\" WHERE _deleted_at IS NOT NULL \
-                     AND _deleted_at < {}",
-                    slug, offset_sql
+                    "SELECT id FROM \"{slug}\" WHERE _deleted_at IS NOT NULL \
+                     AND _deleted_at < {offset_sql}"
                 ),
                 vec![offset_param],
             )
         }
         None => (
-            format!("SELECT id FROM \"{}\" WHERE _deleted_at IS NOT NULL", slug),
+            format!("SELECT id FROM \"{slug}\" WHERE _deleted_at IS NOT NULL"),
             vec![],
         ),
     };
@@ -299,7 +297,7 @@ fn run_restore(registry: &Registry, pool: &DbPool, collection: &str, id: &str) -
     let def = registry
         .collections
         .get(collection)
-        .with_context(|| format!("Collection '{}' not found", collection))?;
+        .with_context(|| format!("Collection '{collection}' not found"))?;
 
     let mut conn = pool.get().context("Failed to get DB connection")?;
     let tx = conn.transaction().context("Start transaction")?;
@@ -307,7 +305,7 @@ fn run_restore(registry: &Registry, pool: &DbPool, collection: &str, id: &str) -
     let restored = query::restore(&tx, collection, id)?;
 
     if !restored {
-        bail!("Document '{}' not found or not in trash", id);
+        bail!("Document '{id}' not found or not in trash");
     }
 
     // Re-sync FTS index (FTS row was deleted on soft-delete)
@@ -319,7 +317,7 @@ fn run_restore(registry: &Registry, pool: &DbPool, collection: &str, id: &str) -
 
     tx.commit().context("Commit restore")?;
 
-    cli::success(&format!("Restored document '{}' in '{}'.", id, collection));
+    cli::success(&format!("Restored document '{id}' in '{collection}'."));
 
     Ok(())
 }
@@ -337,7 +335,7 @@ fn run_empty(
     let def = registry
         .collections
         .get(collection)
-        .with_context(|| format!("Collection '{}' not found", collection))?
+        .with_context(|| format!("Collection '{collection}' not found"))?
         .clone();
 
     let mut conn = pool.get().context("Failed to get DB connection")?;
@@ -345,7 +343,7 @@ fn run_empty(
     let docs = query::find(&conn, collection, &def, &fq, None)?;
 
     if docs.is_empty() {
-        cli::info(&format!("No trashed documents in '{}'.", collection));
+        cli::info(&format!("No trashed documents in '{collection}'."));
         return Ok(());
     }
 
@@ -376,6 +374,11 @@ fn run_empty(
 }
 
 /// Handle the `trash` subcommand.
+///
+/// # Errors
+///
+/// Returns an error if config loading, pool creation, storage init, or the
+/// dispatched action fails.
 #[cfg(not(tarpaulin_include))]
 pub fn run(action: TrashAction, config_dir: &Path) -> Result<()> {
     let config_dir = config_dir
@@ -391,7 +394,7 @@ pub fn run(action: TrashAction, config_dir: &Path) -> Result<()> {
             collection,
             older_than,
             dry_run,
-        } => run_purge(PurgeParams {
+        } => run_purge(&PurgeParams {
             registry: &registry,
             pool: &pool,
             storage: &*storage,

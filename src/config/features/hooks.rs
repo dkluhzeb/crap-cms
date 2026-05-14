@@ -1,4 +1,4 @@
-//! Lua hook configuration -- on_init scripts, recursion limits, VM resources.
+//! Lua hook configuration -- `on_init` scripts, recursion limits, VM resources.
 
 use std::thread;
 
@@ -16,18 +16,18 @@ pub struct HooksConfig {
     /// Max hook recursion depth for Lua CRUD -> hook -> CRUD chains.
     /// 0 = disable hooks from Lua CRUD entirely. Default: 3.
     pub max_depth: u32,
-    /// Number of Lua VMs in the hook runner pool. Default: max(available_parallelism, 4), capped at 32.
+    /// Number of Lua VMs in the hook runner pool. Default: `max(available_parallelism`, 4), capped at 32.
     /// Higher values allow more concurrent hook execution.
     pub vm_pool_size: usize,
-    /// Maximum Lua instructions per hook invocation. 0 = unlimited. Default: 10_000_000.
+    /// Maximum Lua instructions per hook invocation. 0 = unlimited. Default: `10_000_000`.
     pub max_instructions: u64,
-    /// Maximum Lua memory in bytes per VM. 0 = unlimited. Default: 52_428_800 (50 MB).
+    /// Maximum Lua memory in bytes per VM. 0 = unlimited. Default: `52_428_800` (50 MB).
     /// Accepts integer bytes or human-readable string ("50MB", "100MB").
     #[serde(with = "serde_filesize")]
     pub max_memory: u64,
     /// Allow Lua HTTP requests to private/internal networks. Default: false.
     pub allow_private_networks: bool,
-    /// Maximum HTTP response body size in bytes for `crap.http.request`. Default: 10_485_760 (10 MB).
+    /// Maximum HTTP response body size in bytes for `crap.http.request`. Default: `10_485_760` (10 MB).
     /// Increase if hooks need to download large files (e.g. video processing).
     /// Accepts integer bytes or human-readable string ("10MB", "1GB").
     #[serde(with = "serde_filesize")]
@@ -39,9 +39,7 @@ impl Default for HooksConfig {
         Self {
             on_init: Vec::new(),
             max_depth: 3,
-            vm_pool_size: thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4),
+            vm_pool_size: thread::available_parallelism().map_or(4, std::num::NonZero::get),
             max_instructions: 10_000_000,
             max_memory: 52_428_800, // 50 MB
             allow_private_networks: false,

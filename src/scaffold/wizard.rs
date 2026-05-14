@@ -17,6 +17,11 @@ const MAX_WIZARD_DEPTH: usize = 4;
 /// directly (empty vec = no fields).
 ///
 /// `locales_enabled` controls whether the "Localized?" prompt is shown.
+///
+/// # Errors
+///
+/// Returns an error if any prompt fails to read (e.g. stdin closed) or
+/// the nesting limit is exceeded.
 #[cfg(not(tarpaulin_include))]
 pub fn interactive_field_wizard(locales_enabled: bool) -> anyhow::Result<Vec<FieldStub>> {
     field_loop(locales_enabled, &[])
@@ -50,7 +55,7 @@ fn field_loop(locales_enabled: bool, breadcrumb: &[String]) -> anyhow::Result<Ve
 
     loop {
         let name: String = Input::with_theme(&crap_theme())
-            .with_prompt(format!("{}Field name", indent))
+            .with_prompt(format!("{indent}Field name"))
             .allow_empty(true)
             .interact_text()
             .context("Failed to read field name")?;
@@ -60,7 +65,7 @@ fn field_loop(locales_enabled: bool, breadcrumb: &[String]) -> anyhow::Result<Ve
         }
 
         let type_idx = Select::with_theme(&crap_theme())
-            .with_prompt(format!("{}Field type", indent))
+            .with_prompt(format!("{indent}Field type"))
             .items(VALID_FIELD_TYPES)
             .default(0)
             .interact()
@@ -68,14 +73,14 @@ fn field_loop(locales_enabled: bool, breadcrumb: &[String]) -> anyhow::Result<Ve
         let field_type = VALID_FIELD_TYPES[type_idx];
 
         let required = Confirm::with_theme(&crap_theme())
-            .with_prompt(format!("{}Required?", indent))
+            .with_prompt(format!("{indent}Required?"))
             .default(false)
             .interact()
             .context("Failed to read required flag")?;
 
         let localized = if locales_enabled {
             Confirm::with_theme(&crap_theme())
-                .with_prompt(format!("{}Localized?", indent))
+                .with_prompt(format!("{indent}Localized?"))
                 .default(false)
                 .interact()
                 .context("Failed to read localized flag")?
@@ -134,7 +139,7 @@ fn block_loop(
 
     loop {
         let block_type: String = Input::with_theme(&crap_theme())
-            .with_prompt(format!("{}Block type", indent))
+            .with_prompt(format!("{indent}Block type"))
             .allow_empty(true)
             .interact_text()
             .context("Failed to read block type")?;
@@ -144,7 +149,7 @@ fn block_loop(
         }
 
         let label: String = Input::with_theme(&crap_theme())
-            .with_prompt(format!("{}Block label", indent))
+            .with_prompt(format!("{indent}Block label"))
             .default(to_title_case(&block_type))
             .interact_text()
             .context("Failed to read block label")?;
@@ -183,7 +188,7 @@ fn tab_loop(
 
     loop {
         let label: String = Input::with_theme(&crap_theme())
-            .with_prompt(format!("{}Tab label", indent))
+            .with_prompt(format!("{indent}Tab label"))
             .allow_empty(true)
             .interact_text()
             .context("Failed to read tab label")?;

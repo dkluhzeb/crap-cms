@@ -34,6 +34,7 @@ impl<V: Clone> Default for Singleflight<V> {
 
 impl<V: Clone> Singleflight<V> {
     /// Create an empty `Singleflight` with no in-flight entries.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             inflight: DashMap::new(),
@@ -43,6 +44,12 @@ impl<V: Clone> Singleflight<V> {
     /// Fetch the value for `key`. If another thread is already fetching
     /// the same key, this call blocks until that thread's fetch completes
     /// and returns a clone of the same value.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the slot mutex is poisoned (another thread panicked while
+    /// running its `fetch`). This is intentional fail-fast behaviour:
+    /// silently retrying after a panicked fetch would reuse a broken state.
     pub fn get_or_fetch<F>(&self, key: &str, fetch: F) -> V
     where
         F: FnOnce() -> V,
@@ -165,20 +172,20 @@ mod tests {
             let counter = Arc::clone(&counter);
             let barrier = Arc::clone(&barrier);
 
-            let key = format!("k{}", i);
+            let key = format!("k{i}");
 
             handles.push(thread::spawn(move || {
                 barrier.wait();
 
                 sf.get_or_fetch(&key, || {
                     counter.fetch_add(1, Ordering::SeqCst);
-                    format!("v{}", i)
+                    format!("v{i}")
                 })
             }));
         }
 
         for (i, h) in handles.into_iter().enumerate() {
-            assert_eq!(h.join().unwrap(), format!("v{}", i));
+            assert_eq!(h.join().unwrap(), format!("v{i}"));
         }
 
         assert_eq!(

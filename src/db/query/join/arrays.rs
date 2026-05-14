@@ -18,6 +18,10 @@ use super::helpers::delete_junction_rows;
 /// Set array rows for an array field join table.
 /// Deletes all existing rows for the parent and inserts new ones with nanoid + _order.
 /// When `locale` is Some, scopes the DELETE to that locale and includes `_locale` in INSERT.
+///
+/// # Errors
+///
+/// Returns a backend error if the DELETE or any per-row INSERT fails.
 pub fn set_array_rows(
     conn: &dyn DbConnection,
     collection: &str,
@@ -48,7 +52,7 @@ pub fn set_array_rows(
 
     let col_list = col_names.join(", ");
     let (all_cols, placeholders) = if locale.is_some() {
-        let all_cols = format!("id, parent_id, _order, _locale, {}", col_list);
+        let all_cols = format!("id, parent_id, _order, _locale, {col_list}");
         let placeholders = format!(
             "{}, {}, {}, {}, {}",
             conn.placeholder(1),
@@ -62,7 +66,7 @@ pub fn set_array_rows(
         );
         (all_cols, placeholders)
     } else {
-        let all_cols = format!("id, parent_id, _order, {}", col_list);
+        let all_cols = format!("id, parent_id, _order, {col_list}");
         let placeholders = format!(
             "{}, {}, {}, {}",
             conn.placeholder(1),
@@ -75,17 +79,17 @@ pub fn set_array_rows(
         );
         (all_cols, placeholders)
     };
-    let sql = format!(
-        "INSERT INTO \"{}\" ({}) VALUES ({})",
-        table_name, all_cols, placeholders
-    );
+    let sql = format!("INSERT INTO \"{table_name}\" ({all_cols}) VALUES ({placeholders})");
 
     for (order, row) in rows.iter().enumerate() {
         let id = nanoid::nanoid!();
+        // Row indices saturate at i64::MAX for the unreachable case of >9.2e18
+        // rows — it'd only affect sort key ordering at that point.
+        let order_i64 = i64::try_from(order).unwrap_or(i64::MAX);
         let mut params: Vec<DbValue> = vec![
             DbValue::Text(id),
             DbValue::Text(parent_id.to_string()),
-            DbValue::Integer(order as i64),
+            DbValue::Integer(order_i64),
         ];
 
         if let Some(loc) = locale {
@@ -126,6 +130,10 @@ pub fn set_array_rows(
 
 /// Find array rows for an array field join table, ordered.
 /// When `locale` is Some, filters by `_locale`.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails.
 pub fn find_array_rows(
     conn: &dyn DbConnection,
     collection: &str,
@@ -154,8 +162,7 @@ pub fn find_array_rows(
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
         (
             format!(
-                "SELECT {} FROM \"{}\" WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order",
-                select_cols, table_name
+                "SELECT {select_cols} FROM \"{table_name}\" WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order"
             ),
             vec![
                 DbValue::Text(parent_id.to_string()),
@@ -166,8 +173,7 @@ pub fn find_array_rows(
         let p1 = conn.placeholder(1);
         (
             format!(
-                "SELECT {} FROM \"{}\" WHERE parent_id = {p1} ORDER BY _order",
-                select_cols, table_name
+                "SELECT {select_cols} FROM \"{table_name}\" WHERE parent_id = {p1} ORDER BY _order"
             ),
             vec![DbValue::Text(parent_id.to_string())],
         )
@@ -189,7 +195,6 @@ pub fn find_array_rows(
             col_idx += 1;
 
             let json_val = match val {
-                DbValue::Null => Value::Null,
                 DbValue::Integer(n) => json!(n),
                 DbValue::Real(f) => json!(f),
                 DbValue::Text(s) => {
@@ -206,7 +211,7 @@ pub fn find_array_rows(
                         _ => Value::String(s),
                     }
                 }
-                DbValue::Blob(_) => Value::Null,
+                DbValue::Null | DbValue::Blob(_) => Value::Null,
             };
             map.insert(sf.name.clone(), json_val);
 

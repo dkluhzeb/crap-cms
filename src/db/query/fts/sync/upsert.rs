@@ -19,6 +19,10 @@ use super::helpers::get_fts_table_columns;
 /// at runtime, so callers don't need locale awareness.
 ///
 /// If `def` is provided, JSON-format richtext fields are extracted to plain text.
+///
+/// # Errors
+///
+/// Returns a backend error if the DELETE or INSERT fails.
 pub fn fts_upsert(
     conn: &dyn DbConnection,
     slug: &str,
@@ -39,9 +43,8 @@ pub(crate) fn fts_upsert_with_registry(
 ) -> Result<()> {
     let fts_table = fts_table_name(slug);
 
-    let fts_cols = match get_fts_table_columns(conn, &fts_table) {
-        Some(cols) => cols,
-        None => return Ok(()),
+    let Some(fts_cols) = get_fts_table_columns(conn, &fts_table) else {
+        return Ok(());
     };
 
     let json_rt_cols = def.map(json_richtext_columns).unwrap_or_default();
@@ -52,7 +55,7 @@ pub(crate) fn fts_upsert_with_registry(
     let field_texts = extract_field_texts(doc, &logical_cols, &json_rt_cols, &node_searchable);
 
     if is_postgres {
-        upsert_postgres(conn, &fts_table, doc, field_texts)?;
+        upsert_postgres(conn, &fts_table, doc, &field_texts)?;
     } else {
         upsert_sqlite(conn, &fts_table, doc, &fts_cols, field_texts)?;
     }
@@ -60,7 +63,7 @@ pub(crate) fn fts_upsert_with_registry(
     Ok(())
 }
 
-/// Determine which columns to index: Postgres uses all string fields, SQLite uses FTS columns.
+/// Determine which columns to index: Postgres uses all string fields, `SQLite` uses FTS columns.
 fn resolve_logical_columns(doc: &Document, fts_cols: &[String], is_postgres: bool) -> Vec<String> {
     if is_postgres {
         doc.fields
@@ -109,26 +112,25 @@ fn upsert_postgres(
     conn: &dyn DbConnection,
     fts_table: &str,
     doc: &Document,
-    field_texts: Vec<String>,
+    field_texts: &[String],
 ) -> Result<()> {
     let combined = field_texts.join(" ");
     let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
     let sql = format!(
-        "INSERT INTO {}(id, tsv) VALUES ({}, to_tsvector('simple', {})) \
-         ON CONFLICT (id) DO UPDATE SET tsv = EXCLUDED.tsv",
-        fts_table, p1, p2
+        "INSERT INTO {fts_table}(id, tsv) VALUES ({p1}, to_tsvector('simple', {p2})) \
+         ON CONFLICT (id) DO UPDATE SET tsv = EXCLUDED.tsv"
     );
 
     conn.execute(
         &sql,
         &[DbValue::Text(doc.id.to_string()), DbValue::Text(combined)],
     )
-    .with_context(|| format!("FTS upsert in {}", fts_table))?;
+    .with_context(|| format!("FTS upsert in {fts_table}"))?;
 
     Ok(())
 }
 
-/// Upsert into SQLite FTS5 (delete + insert, no ON CONFLICT support).
+/// Upsert into `SQLite` FTS5 (delete + insert, no ON CONFLICT support).
 fn upsert_sqlite(
     conn: &dyn DbConnection,
     fts_table: &str,
@@ -144,7 +146,7 @@ fn upsert_sqlite(
         ),
         &[DbValue::Text(doc.id.to_string())],
     )
-    .with_context(|| format!("FTS delete before upsert in {}", fts_table))?;
+    .with_context(|| format!("FTS delete before upsert in {fts_table}"))?;
 
     let mut values: Vec<DbValue> = vec![DbValue::Text(doc.id.to_string())];
 
@@ -161,7 +163,7 @@ fn upsert_sqlite(
     );
 
     conn.execute(&sql, &values)
-        .with_context(|| format!("FTS upsert in {}", fts_table))?;
+        .with_context(|| format!("FTS upsert in {fts_table}"))?;
 
     Ok(())
 }

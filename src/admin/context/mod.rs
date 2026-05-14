@@ -22,15 +22,15 @@ mod pagination;
 mod permissions;
 mod user;
 
-pub use collection::{CollectionContext, VersionsMeta};
+pub use collection::{AdminMeta, AuthMeta, CollectionContext, UploadMeta, VersionsMeta};
 pub use crap::CrapMeta;
 pub use document::DocumentRef;
 pub use editor_locale::{EditorLocaleContext, EditorLocaleOption};
 pub use field::FieldContext;
-pub use fields_meta::FieldMeta;
+pub use fields_meta::{FieldAdminMeta, FieldMeta};
 pub use global::GlobalContext;
 pub use locale_template::LocaleTemplateData;
-pub use nav::NavData;
+pub use nav::{NavCollection, NavData, NavGlobal};
 pub use page::{AuthBasePageContext, BasePageContext, Breadcrumb, PageMeta, PageType};
 pub use pagination::PaginationContext;
 pub use permissions::{CollectionPermissions, GlobalPermissions};

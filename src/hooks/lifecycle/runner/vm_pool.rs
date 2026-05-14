@@ -32,7 +32,7 @@ impl VmPool {
         let mut pool = self
             .vms
             .lock()
-            .map_err(|e| anyhow!("VM pool lock poisoned: {}", e))?;
+            .map_err(|e| anyhow!("VM pool lock poisoned: {e}"))?;
         loop {
             if let Some(vm) = pool.pop() {
                 set_instruction_hook(&vm);
@@ -44,7 +44,7 @@ impl VmPool {
             let (guard, wait_result) = self
                 .available
                 .wait_timeout(pool, timeout)
-                .map_err(|e| anyhow!("VM pool condvar wait failed: {}", e))?;
+                .map_err(|e| anyhow!("VM pool condvar wait failed: {e}"))?;
             pool = guard;
 
             if wait_result.timed_out() {
@@ -95,10 +95,7 @@ impl Drop for VmGuard<'_> {
 
 /// Set an instruction-counting hook on the VM if `MaxInstructions` is configured.
 fn set_instruction_hook(vm: &Lua) {
-    let max = vm
-        .app_data_ref::<MaxInstructions>()
-        .map(|m| m.0)
-        .unwrap_or(0);
+    let max = vm.app_data_ref::<MaxInstructions>().map_or(0, |m| m.0);
     if max > 0 {
         let counter = Arc::new(AtomicU64::new(0));
         let c = counter.clone();
@@ -118,6 +115,20 @@ fn set_instruction_hook(vm: &Lua) {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::*;
     use std::sync::Arc;

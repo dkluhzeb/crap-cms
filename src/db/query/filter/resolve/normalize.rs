@@ -27,9 +27,8 @@ fn normalize_field_name(field: &mut String, fields: &[FieldDefinition]) {
     if !field.contains('.') {
         return;
     }
-    let first_segment = match field.split('.').next() {
-        Some(s) => s,
-        None => return,
+    let Some(first_segment) = field.split('.').next() else {
+        return;
     };
 
     if is_group_field(first_segment, fields) {
@@ -64,6 +63,20 @@ fn is_group_field(name: &str, fields: &[FieldDefinition]) -> bool {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::*;
     use crate::core::{FieldDefinition, FieldTab, FieldType};
@@ -97,7 +110,7 @@ mod tests {
         normalize_filter_fields(&mut filters, &fields);
         match &filters[0] {
             FilterClause::Single(f) => assert_eq!(f.field, "seo__meta_title"),
-            other => panic!("Expected Single, got {:?}", other),
+            other => panic!("Expected Single, got {other:?}"),
         }
     }
 
@@ -114,7 +127,7 @@ mod tests {
         normalize_filter_fields(&mut filters, &fields);
         match &filters[0] {
             FilterClause::Single(f) => assert_eq!(f.field, "items.name"),
-            other => panic!("Expected Single, got {:?}", other),
+            other => panic!("Expected Single, got {other:?}"),
         }
     }
 
@@ -128,7 +141,7 @@ mod tests {
         normalize_filter_fields(&mut filters, &fields);
         match &filters[0] {
             FilterClause::Single(f) => assert_eq!(f.field, "content.body"),
-            other => panic!("Expected Single, got {:?}", other),
+            other => panic!("Expected Single, got {other:?}"),
         }
     }
 
@@ -151,7 +164,7 @@ mod tests {
                 assert_eq!(groups[0][0].field, "seo__title");
                 assert_eq!(groups[1][0].field, "seo__desc");
             }
-            other => panic!("Expected Or, got {:?}", other),
+            other => panic!("Expected Or, got {other:?}"),
         }
     }
 
@@ -165,7 +178,7 @@ mod tests {
         normalize_filter_fields(&mut filters, &fields);
         match &filters[0] {
             FilterClause::Single(f) => assert_eq!(f.field, "title"),
-            other => panic!("Expected Single, got {:?}", other),
+            other => panic!("Expected Single, got {other:?}"),
         }
     }
 

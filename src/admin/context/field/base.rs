@@ -120,23 +120,27 @@ pub struct ValidationAttrs {
 
 /// Display-condition state injected by
 /// [`apply_display_conditions`](crate::admin::handlers::field_context::apply_display_conditions).
+///
+/// JSON keys keep the `condition_*` prefix for the JS evaluator at
+/// `static/components/conditions.js`; Rust field names drop it because the
+/// struct itself is named `ConditionData`.
 #[derive(Serialize, Deserialize, Default, JsonSchema)]
 pub struct ConditionData {
     /// Initial visibility resolved by the Lua condition function.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub condition_visible: Option<bool>,
+    #[serde(rename = "condition_visible", skip_serializing_if = "Option::is_none")]
+    pub visible: Option<bool>,
 
     /// Server-side function reference (set when the condition function
     /// returns a bool). The client re-asks the server when the form changes.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub condition_ref: Option<String>,
+    #[serde(rename = "condition_ref", skip_serializing_if = "Option::is_none")]
+    pub func_ref: Option<String>,
 
     /// Client-evaluable condition expression (set when the condition function
     /// returns a Lua table). The client evaluates this directly without a
     /// round-trip. Serializes to the same JSON shape the JS evaluator at
     /// `static/components/conditions.js` expects.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub condition_json: Option<ConditionExpr>,
+    #[serde(rename = "condition_json", skip_serializing_if = "Option::is_none")]
+    pub expr: Option<ConditionExpr>,
 }
 
 #[cfg(test)]
@@ -209,8 +213,8 @@ mod tests {
         b.validation.max_length = Some(120);
         b.validation.min = Some(1.0);
         b.validation.has_min = Some(true);
-        b.condition.condition_visible = Some(true);
-        b.condition.condition_ref = Some("conditions.is_admin".to_string());
+        b.condition.visible = Some(true);
+        b.condition.func_ref = Some("conditions.is_admin".to_string());
 
         let f = TextField {
             base: b,

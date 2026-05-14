@@ -1,5 +1,7 @@
 //! Collection table creation from Lua definitions.
 
+use std::fmt::Write as _;
+
 use anyhow::{Context as _, Result};
 use serde_json::Value;
 use tracing::{debug, info, warn};
@@ -15,14 +17,14 @@ struct ColumnConstraints<'a> {
     required: bool,
     unique: bool,
     soft_delete: bool,
-    default_value: &'a Option<Value>,
+    default_value: Option<&'a Value>,
     field_type: &'a FieldType,
     db_kind: &'a str,
 }
 
 /// Build a column definition string with type, constraints, and default.
 fn build_column_def(col_name: &str, col_type: &str, constraints: &ColumnConstraints) -> String {
-    let mut col = format!("{} {}", col_name, col_type);
+    let mut col = format!("{col_name} {col_type}");
 
     if constraints.required {
         col.push_str(" NOT NULL");
@@ -62,7 +64,7 @@ pub(crate) fn create_collection_table(
     debug!("SQL: {}", sql);
 
     conn.execute_ddl(&sql, &[])
-        .with_context(|| format!("Failed to create table {}", slug))?;
+        .with_context(|| format!("Failed to create table {slug}"))?;
 
     Ok(())
 }
@@ -90,13 +92,13 @@ fn collect_field_columns(
                     && !def.has_drafts();
 
                 if spec.companion_text {
-                    columns.push(format!("{} TEXT", col_name));
+                    columns.push(format!("{col_name} TEXT"));
                 } else {
                     let c = ColumnConstraints {
                         required: is_required,
                         unique: spec.field.unique,
                         soft_delete: def.soft_delete,
-                        default_value: &spec.field.default_value,
+                        default_value: spec.field.default_value.as_ref(),
                         field_type: &spec.field.field_type,
                         db_kind: conn.kind(),
                     };
@@ -110,7 +112,7 @@ fn collect_field_columns(
                 required: spec.field.required && !def.has_drafts(),
                 unique: spec.field.unique,
                 soft_delete: def.soft_delete,
-                default_value: &spec.field.default_value,
+                default_value: spec.field.default_value.as_ref(),
                 field_type: &spec.field.field_type,
                 db_kind: conn.kind(),
             };
@@ -166,7 +168,7 @@ fn collect_system_columns(
 #[cfg(test)]
 pub(crate) fn append_default_value(
     col: &mut String,
-    default_value: &Option<Value>,
+    default_value: Option<&Value>,
     field_type: &FieldType,
 ) {
     append_default_value_for(col, default_value, field_type, "sqlite");
@@ -175,17 +177,23 @@ pub(crate) fn append_default_value(
 /// Append a DEFAULT clause. Uses `0`/`1` for booleans (INTEGER on all backends).
 pub(crate) fn append_default_value_for(
     col: &mut String,
-    default_value: &Option<Value>,
+    default_value: Option<&Value>,
     field_type: &FieldType,
     _db_kind: &str,
 ) {
-    if let Some(default) = &default_value {
+    if let Some(default) = default_value {
         warn_default_type_mismatch(default, field_type);
 
         match default {
-            Value::String(s) => col.push_str(&format!(" DEFAULT '{}'", s.replace('\'', "''"))),
-            Value::Number(n) => col.push_str(&format!(" DEFAULT {}", n)),
-            Value::Bool(b) => col.push_str(&format!(" DEFAULT {}", if *b { 1 } else { 0 })),
+            Value::String(s) => {
+                let _ = write!(col, " DEFAULT '{}'", s.replace('\'', "''"));
+            }
+            Value::Number(n) => {
+                let _ = write!(col, " DEFAULT {n}");
+            }
+            Value::Bool(b) => {
+                let _ = write!(col, " DEFAULT {}", i32::from(*b));
+            }
             _ => {}
         }
     } else if *field_type == FieldType::Checkbox {
@@ -670,35 +678,35 @@ mod tests {
     #[test]
     fn append_default_string() {
         let mut col = "name TEXT".to_string();
-        append_default_value(&mut col, &Some(json!("hello")), &FieldType::Text);
+        append_default_value(&mut col, Some(&json!("hello")), &FieldType::Text);
         assert!(col.contains("DEFAULT 'hello'"));
     }
 
     #[test]
     fn append_default_number() {
         let mut col = "count REAL".to_string();
-        append_default_value(&mut col, &Some(json!(42)), &FieldType::Number);
+        append_default_value(&mut col, Some(&json!(42)), &FieldType::Number);
         assert!(col.contains("DEFAULT 42"));
     }
 
     #[test]
     fn append_default_bool() {
         let mut col = "active INTEGER".to_string();
-        append_default_value(&mut col, &Some(json!(true)), &FieldType::Checkbox);
+        append_default_value(&mut col, Some(&json!(true)), &FieldType::Checkbox);
         assert!(col.contains("DEFAULT 1"));
     }
 
     #[test]
     fn append_default_checkbox_none() {
         let mut col = "active INTEGER".to_string();
-        append_default_value(&mut col, &None, &FieldType::Checkbox);
+        append_default_value(&mut col, None, &FieldType::Checkbox);
         assert!(col.contains("DEFAULT 0"));
     }
 
     #[test]
     fn append_default_none_non_checkbox() {
         let mut col = "name TEXT".to_string();
-        append_default_value(&mut col, &None, &FieldType::Text);
+        append_default_value(&mut col, None, &FieldType::Text);
         assert!(!col.contains("DEFAULT"));
     }
 

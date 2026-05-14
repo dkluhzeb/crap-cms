@@ -30,7 +30,7 @@ pub struct S3Config {
     /// AWS region (e.g., `"us-east-1"`). Default: `"us-east-1"`.
     #[serde(default = "default_s3_region")]
     pub region: String,
-    /// S3 endpoint URL. Default: AWS. Set for MinIO, R2, etc.
+    /// S3 endpoint URL. Default: AWS. Set for `MinIO`, R2, etc.
     #[serde(default)]
     pub endpoint: Option<String>,
     /// Access key ID.
@@ -48,7 +48,7 @@ pub struct S3Config {
     /// If empty, generates S3 URLs.
     #[serde(default)]
     pub public_url_base: String,
-    /// Use path-style addressing (required for MinIO and some providers).
+    /// Use path-style addressing (required for `MinIO` and some providers).
     #[serde(default)]
     pub path_style: bool,
 }

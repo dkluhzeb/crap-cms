@@ -7,7 +7,10 @@
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::admin::{AdminState, custom_pages::CustomPage};
+use crate::{
+    admin::{AdminState, custom_pages::CustomPage},
+    typegen::LuaAnnotation,
+};
 
 /// Top-level nav data exposed at `{{nav.*}}`.
 #[derive(Serialize, JsonSchema)]
@@ -34,6 +37,36 @@ pub struct NavCollection {
 pub struct NavGlobal {
     pub slug: String,
     pub display_name: String,
+}
+
+impl LuaAnnotation for NavCollection {
+    fn render_lua_annotation(out: &mut String) {
+        out.push_str("---@class crap.template.nav_collection\n");
+        out.push_str("---@field slug string\n");
+        out.push_str("---@field display_name string\n");
+        out.push_str("---@field is_auth boolean\n");
+        out.push_str("---@field is_upload boolean\n");
+        out.push('\n');
+    }
+}
+
+impl LuaAnnotation for NavGlobal {
+    fn render_lua_annotation(out: &mut String) {
+        out.push_str("---@class crap.template.nav_global\n");
+        out.push_str("---@field slug string\n");
+        out.push_str("---@field display_name string\n");
+        out.push('\n');
+    }
+}
+
+impl LuaAnnotation for NavData {
+    fn render_lua_annotation(out: &mut String) {
+        out.push_str("---@class crap.template.nav\n");
+        out.push_str("---@field collections crap.template.nav_collection[]\n");
+        out.push_str("---@field globals crap.template.nav_global[]\n");
+        out.push_str("---@field custom_pages? crap.template.custom_page[]\n");
+        out.push('\n');
+    }
 }
 
 impl NavData {

@@ -68,6 +68,7 @@ fn default_token_expiry() -> u64 {
 
 impl Auth {
     /// Create a new authentication configuration with the given enabled status.
+    #[must_use]
     pub fn new(enabled: bool) -> Self {
         Self {
             enabled,

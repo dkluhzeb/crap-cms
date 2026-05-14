@@ -3,6 +3,20 @@
 //!
 //! These tests drive `ContentService` directly (no network).
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -176,10 +190,8 @@ async fn create_user_and_login(ts: &TestSetup, email: &str, password: &str) -> (
 }
 
 fn add_auth<T>(req: &mut Request<T>, token: &str) {
-    req.metadata_mut().insert(
-        "authorization",
-        format!("Bearer {}", token).parse().unwrap(),
-    );
+    req.metadata_mut()
+        .insert("authorization", format!("Bearer {token}").parse().unwrap());
 }
 
 // ── SEC-D: slow-client drop ────────────────────────────────────────────────
@@ -188,7 +200,7 @@ fn add_auth<T>(req: &mut Request<T>, token: &str) {
 /// it must be dropped (stream ends) rather than left to block publishers.
 ///
 /// We force this by:
-/// 1. Using a tiny channel_capacity (4) and a short send_timeout (100ms).
+/// 1. Using a tiny `channel_capacity` (4) and a short `send_timeout` (100ms).
 /// 2. Not reading from our subscriber stream at all.
 /// 3. Publishing more events than the capacity — broadcast Lagged kicks in
 ///    and drops the subscriber, closing the stream.
@@ -213,7 +225,7 @@ async fn subscriber_dropped_on_lagged() {
         ts.service
             .create(Request::new(content::CreateRequest {
                 collection: "posts".to_string(),
-                data: Some(make_struct(&[("title", &format!("post {}", i))])),
+                data: Some(make_struct(&[("title", &format!("post {i}"))])),
                 locale: None,
                 draft: None,
             }))
@@ -230,7 +242,7 @@ async fn subscriber_dropped_on_lagged() {
     let ended = timeout(deadline, async {
         loop {
             match stream.next().await {
-                Some(Ok(_)) => continue,
+                Some(Ok(_)) => {}
                 Some(Err(_)) | None => return true,
             }
         }
@@ -243,7 +255,7 @@ async fn subscriber_dropped_on_lagged() {
 
 /// When the per-subscriber outbound channel stays full past the send timeout,
 /// the subscriber is dropped. We use a large broadcast capacity (so Lagged
-/// doesn't kick in first) and a short send_timeout. The stream is NOT read
+/// doesn't kick in first) and a short `send_timeout`. The stream is NOT read
 /// while events are published, so the per-subscriber outbound mpsc fills, the
 /// pump task's `send_timeout` fires, and the pump exits.
 #[tokio::test]
@@ -270,7 +282,7 @@ async fn subscriber_dropped_on_send_timeout() {
         ts.service
             .create(Request::new(content::CreateRequest {
                 collection: "posts".to_string(),
-                data: Some(make_struct(&[("title", &format!("p{}", i))])),
+                data: Some(make_struct(&[("title", &format!("p{i}"))])),
                 locale: None,
                 draft: None,
             }))
@@ -287,7 +299,7 @@ async fn subscriber_dropped_on_send_timeout() {
     let ended = timeout(Duration::from_secs(2), async {
         loop {
             match stream.next().await {
-                Some(Ok(_)) => continue,
+                Some(Ok(_)) => {}
                 Some(Err(_)) | None => return true,
             }
         }
@@ -327,7 +339,7 @@ async fn subscriber_dropped_when_user_locked() {
     let result = timeout(Duration::from_secs(3), async {
         loop {
             match stream.next().await {
-                Some(Ok(_)) => continue,
+                Some(Ok(_)) => {}
                 Some(Err(status)) => return Some(status),
                 None => return None,
             }
@@ -340,8 +352,7 @@ async fn subscriber_dropped_when_user_locked() {
         Some(status) => assert_eq!(
             status.code(),
             Code::PermissionDenied,
-            "expected PermissionDenied on invalidation; got {:?}",
-            status
+            "expected PermissionDenied on invalidation; got {status:?}"
         ),
         None => panic!("stream ended without a terminal status"),
     }
@@ -374,7 +385,7 @@ async fn subscriber_dropped_when_user_deleted() {
     let ended = timeout(Duration::from_secs(3), async {
         loop {
             match stream.next().await {
-                Some(Ok(_)) => continue,
+                Some(Ok(_)) => {}
                 Some(Err(_)) | None => return true,
             }
         }

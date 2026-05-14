@@ -1,4 +1,4 @@
-//! Bulk DeleteMany RPC handler.
+//! Bulk `DeleteMany` RPC handler.
 
 use std::sync::Arc;
 
@@ -54,7 +54,7 @@ fn delete_many_blocking(input: DeleteManyBlockingInput) -> Result<DeleteManyResu
 
     let read_access = ContentService::check_access_blocking(
         input.def.access.read.as_deref(),
-        &auth_user,
+        auth_user.as_ref(),
         None,
         None,
         &input.hook_runner,
@@ -91,7 +91,7 @@ fn delete_many_blocking(input: DeleteManyBlockingInput) -> Result<DeleteManyResu
         ..Default::default()
     };
 
-    let result = delete_many(&ctx, filters, &input.locale_cfg, &delete_opts)
+    let result = delete_many(&ctx, &filters, &input.locale_cfg, &delete_opts)
         .map_err(|e| Status::from(e.reclassify(&input.db_kind)))?;
 
     for fields in &result.upload_fields_to_clean {

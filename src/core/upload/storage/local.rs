@@ -122,7 +122,7 @@ impl StorageBackend for LocalStorage {
     }
 
     fn public_url(&self, key: &str) -> String {
-        format!("/uploads/{}", key)
+        format!("/uploads/{key}")
     }
 
     fn kind(&self) -> &'static str {

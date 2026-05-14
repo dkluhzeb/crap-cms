@@ -1,4 +1,4 @@
-//! Bulk UpdateMany RPC handler.
+//! Bulk `UpdateMany` RPC handler.
 
 use std::sync::Arc;
 
@@ -58,7 +58,7 @@ fn update_many_blocking(input: UpdateManyBlockingInput) -> Result<i64, Status> {
 
     let read_access = ContentService::check_access_blocking(
         input.def.access.read.as_deref(),
-        &auth_user,
+        auth_user.as_ref(),
         None,
         None,
         &input.hook_runner,
@@ -98,8 +98,8 @@ fn update_many_blocking(input: UpdateManyBlockingInput) -> Result<i64, Status> {
 
     let result = service::update_many(
         &ctx,
-        filters,
-        input.data,
+        &filters,
+        &input.data,
         &input.locale_config,
         &update_opts,
     )

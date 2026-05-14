@@ -1,4 +1,4 @@
-//! Per-field parsing: orchestrates the full Lua → FieldDefinition conversion
+//! Per-field parsing: orchestrates the full Lua → `FieldDefinition` conversion
 //! for a single field table, plus the small helper parsers (name, sub-fields,
 //! access, hooks).
 
@@ -14,7 +14,9 @@ use crate::{
 
 use super::super::admin::parse_field_admin;
 use super::super::blocks::{parse_block_definitions, parse_tab_definitions};
-use super::super::helpers::*;
+use super::super::helpers::{
+    get_bool, get_string, get_string_val, get_table, parse_select_options, parse_string_list,
+};
 use super::super::relationship::parse_field_relationship;
 use super::constraints::{parse_constraints, parse_date_config, parse_default_value};
 use super::top::parse_fields;
@@ -24,16 +26,12 @@ fn parse_field_name(field_tbl: &Table) -> Result<String> {
         get_string_val(field_tbl, "name").map_err(|_| anyhow!("Field missing 'name'"))?;
 
     if !query::is_valid_identifier(&name) {
-        bail!(
-            "Invalid field name '{}' — use alphanumeric and underscores only",
-            name
-        );
+        bail!("Invalid field name '{name}' — use alphanumeric and underscores only");
     }
 
     if name.contains("__") {
         bail!(
-            "Field name '{}' must not contain double underscores — reserved for group field separation",
-            name
+            "Field name '{name}' must not contain double underscores — reserved for group field separation"
         );
     }
 
@@ -54,12 +52,38 @@ fn parse_sub_fields(
         return Ok(Vec::new());
     }
 
-    get_table(field_tbl, "fields")
-        .map(|tbl| parse_fields(lua, &tbl))
-        .unwrap_or(Ok(Vec::new()))
+    get_table(field_tbl, "fields").map_or(Ok(Vec::new()), |tbl| parse_fields(lua, &tbl))
+}
+
+/// All parsed parts of a Lua field definition, bundled so the
+/// parse and assemble phases stay cleanly separated.
+struct ParsedFieldParts {
+    name: String,
+    field_type: FieldType,
+    default_value: Option<serde_json::Value>,
+    relationship: Option<crate::core::RelationshipConfig>,
+    picker_appearance: Option<String>,
+    timezone: bool,
+    default_timezone: Option<String>,
+    constraints: super::constraints::Constraints,
+    options: Vec<crate::core::SelectOption>,
+    admin: FieldAdmin,
+    hooks: FieldHooks,
+    access: FieldAccess,
+    sub_fields: Vec<FieldDefinition>,
+    block_defs: Vec<crate::core::BlockDefinition>,
+    tab_defs: Vec<crate::core::FieldTab>,
+    join: Option<JoinConfig>,
+    mcp: McpFieldConfig,
 }
 
 pub(super) fn parse_single_field(lua: &Lua, field_tbl: &Table) -> Result<FieldDefinition> {
+    let parts = parse_field_parts(lua, field_tbl)?;
+    assemble_field_definition(field_tbl, parts)
+}
+
+/// Phase 1 — extract every sub-structure from the Lua field table.
+fn parse_field_parts(lua: &Lua, field_tbl: &Table) -> Result<ParsedFieldParts> {
     let name = parse_field_name(field_tbl)?;
 
     let type_str: String = get_string_val(field_tbl, "type").unwrap_or_else(|_| "text".to_string());
@@ -71,129 +95,179 @@ pub(super) fn parse_single_field(lua: &Lua, field_tbl: &Table) -> Result<FieldDe
         parse_date_config(field_tbl, &name, &field_type)?;
     let constraints = parse_constraints(field_tbl, &name)?;
 
-    let options = get_table(field_tbl, "options")
-        .map(|tbl| parse_select_options(&tbl))
-        .unwrap_or(Ok(Vec::new()))?;
+    let options =
+        get_table(field_tbl, "options").map_or(Ok(Vec::new()), |tbl| parse_select_options(&tbl))?;
 
     let admin = get_table(field_tbl, "admin")
-        .map(|tbl| parse_field_admin(&tbl))
-        .unwrap_or(Ok(FieldAdmin::default()))?;
+        .map_or(Ok(FieldAdmin::default()), |tbl| parse_field_admin(&tbl))?;
 
     let hooks = get_table(field_tbl, "hooks")
-        .map(|tbl| parse_field_hooks(&tbl))
-        .unwrap_or(Ok(FieldHooks::default()))?;
+        .map_or(Ok(FieldHooks::default()), |tbl| parse_field_hooks(&tbl))?;
 
     let access = get_table(field_tbl, "access")
         .map(|tbl| parse_field_access(&tbl))
         .unwrap_or_default();
 
     let sub_fields = parse_sub_fields(lua, field_tbl, &field_type)?;
-    let block_defs = if field_type == FieldType::Blocks {
-        get_table(field_tbl, "blocks")
-            .map(|tbl| parse_block_definitions(lua, &tbl))
-            .unwrap_or(Ok(Vec::new()))?
-    } else {
-        Vec::new()
-    };
-    let tab_defs = if field_type == FieldType::Tabs {
-        get_table(field_tbl, "tabs")
-            .map(|tbl| parse_tab_definitions(lua, &tbl))
-            .unwrap_or(Ok(Vec::new()))?
-    } else {
-        Vec::new()
-    };
+    let block_defs = parse_block_defs(lua, field_tbl, &field_type)?;
+    let tab_defs = parse_tab_defs(lua, field_tbl, &field_type)?;
+    let join = parse_join(field_tbl, &field_type);
+    let mcp = parse_mcp(field_tbl);
 
-    let join = if field_type == FieldType::Join {
-        let collection = get_string(field_tbl, "collection").unwrap_or_default();
-        let on = get_string(field_tbl, "on").unwrap_or_default();
-        Some(JoinConfig::new(collection, on))
-    } else {
-        None
-    };
+    Ok(ParsedFieldParts {
+        name,
+        field_type,
+        default_value,
+        relationship,
+        picker_appearance,
+        timezone,
+        default_timezone,
+        constraints,
+        options,
+        admin,
+        hooks,
+        access,
+        sub_fields,
+        block_defs,
+        tab_defs,
+        join,
+        mcp,
+    })
+}
 
-    let mcp = get_table(field_tbl, "mcp")
+/// Parse the `blocks` sub-table — only meaningful for `FieldType::Blocks`.
+fn parse_block_defs(
+    lua: &Lua,
+    field_tbl: &Table,
+    field_type: &FieldType,
+) -> Result<Vec<crate::core::BlockDefinition>> {
+    if *field_type != FieldType::Blocks {
+        return Ok(Vec::new());
+    }
+    get_table(field_tbl, "blocks").map_or(Ok(Vec::new()), |tbl| parse_block_definitions(lua, &tbl))
+}
+
+/// Parse the `tabs` sub-table — only meaningful for `FieldType::Tabs`.
+fn parse_tab_defs(
+    lua: &Lua,
+    field_tbl: &Table,
+    field_type: &FieldType,
+) -> Result<Vec<crate::core::FieldTab>> {
+    if *field_type != FieldType::Tabs {
+        return Ok(Vec::new());
+    }
+    get_table(field_tbl, "tabs").map_or(Ok(Vec::new()), |tbl| parse_tab_definitions(lua, &tbl))
+}
+
+/// Build the `JoinConfig` for `FieldType::Join`. Missing `collection`/`on`
+/// default to empty strings — schema validation surfaces the error later.
+fn parse_join(field_tbl: &Table, field_type: &FieldType) -> Option<JoinConfig> {
+    if *field_type != FieldType::Join {
+        return None;
+    }
+    let collection = get_string(field_tbl, "collection").unwrap_or_default();
+    let on = get_string(field_tbl, "on").unwrap_or_default();
+    Some(JoinConfig::new(collection, on))
+}
+
+/// Parse the optional `mcp` sub-table for MCP introspection metadata.
+fn parse_mcp(field_tbl: &Table) -> McpFieldConfig {
+    get_table(field_tbl, "mcp")
         .map(|tbl| McpFieldConfig {
             description: get_string(&tbl, "description"),
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
 
-    let mut fd_builder = FieldDefinition::builder(&name, field_type)
+/// Phase 2 — fold parsed parts into a [`FieldDefinition`] via the builder.
+fn assemble_field_definition(
+    field_tbl: &Table,
+    parts: ParsedFieldParts,
+) -> Result<FieldDefinition> {
+    let mut fd_builder = FieldDefinition::builder(&parts.name, parts.field_type)
         .required(get_bool(field_tbl, "required", false)?)
         .unique(get_bool(field_tbl, "unique", false)?)
         .index(get_bool(field_tbl, "index", false)?)
-        .admin(admin)
-        .hooks(hooks)
-        .access(access)
-        .mcp(mcp)
-        .fields(sub_fields)
-        .blocks(block_defs)
-        .tabs(tab_defs)
+        .admin(parts.admin)
+        .hooks(parts.hooks)
+        .access(parts.access)
+        .mcp(parts.mcp)
+        .fields(parts.sub_fields)
+        .blocks(parts.block_defs)
+        .tabs(parts.tab_defs)
         .localized(get_bool(field_tbl, "localized", false)?)
         .has_many(get_bool(field_tbl, "has_many", false)?)
         .hidden(get_bool(field_tbl, "hidden", false)?)
-        .options(options);
+        .options(parts.options);
 
     if let Some(v) = get_string(field_tbl, "validate") {
         fd_builder = fd_builder.validate(v);
     }
-
-    if let Some(v) = default_value {
+    if let Some(v) = parts.default_value {
         fd_builder = fd_builder.default_value(v);
     }
-
-    if let Some(v) = relationship {
+    if let Some(v) = parts.relationship {
         fd_builder = fd_builder.relationship(v);
     }
-
-    if let Some(v) = picker_appearance {
+    if let Some(v) = parts.picker_appearance {
         fd_builder = fd_builder.picker_appearance(v);
     }
 
-    if let Some(v) = constraints.min_rows {
-        fd_builder = fd_builder.min_rows(v);
-    }
+    fd_builder = apply_constraint_bounds(fd_builder, &parts.constraints);
+    fd_builder = apply_date_bounds(fd_builder, field_tbl);
 
-    if let Some(v) = constraints.max_rows {
-        fd_builder = fd_builder.max_rows(v);
-    }
-
-    if let Some(v) = constraints.min_length {
-        fd_builder = fd_builder.min_length(v);
-    }
-
-    if let Some(v) = constraints.max_length {
-        fd_builder = fd_builder.max_length(v);
-    }
-
-    if let Some(v) = constraints.min {
-        fd_builder = fd_builder.min(v);
-    }
-
-    if let Some(v) = constraints.max {
-        fd_builder = fd_builder.max(v);
-    }
-
-    if let Some(v) = get_string(field_tbl, "min_date") {
-        fd_builder = fd_builder.min_date(v);
-    }
-
-    if let Some(v) = get_string(field_tbl, "max_date") {
-        fd_builder = fd_builder.max_date(v);
-    }
-
-    if timezone {
+    if parts.timezone {
         fd_builder = fd_builder.timezone(true);
     }
-
-    if let Some(v) = default_timezone {
+    if let Some(v) = parts.default_timezone {
         fd_builder = fd_builder.default_timezone(v);
     }
-
-    if let Some(v) = join {
+    if let Some(v) = parts.join {
         fd_builder = fd_builder.join(v);
     }
 
     Ok(fd_builder.build())
+}
+
+/// Apply the six numeric-range constraint bounds (`min_rows`/`max_rows`,
+/// `min_length`/`max_length`, `min`/`max`) parsed from the field table.
+fn apply_constraint_bounds(
+    mut builder: crate::core::FieldDefinitionBuilder,
+    constraints: &super::constraints::Constraints,
+) -> crate::core::FieldDefinitionBuilder {
+    if let Some(v) = constraints.min_rows {
+        builder = builder.min_rows(v);
+    }
+    if let Some(v) = constraints.max_rows {
+        builder = builder.max_rows(v);
+    }
+    if let Some(v) = constraints.min_length {
+        builder = builder.min_length(v);
+    }
+    if let Some(v) = constraints.max_length {
+        builder = builder.max_length(v);
+    }
+    if let Some(v) = constraints.min {
+        builder = builder.min(v);
+    }
+    if let Some(v) = constraints.max {
+        builder = builder.max(v);
+    }
+    builder
+}
+
+/// Apply the optional `min_date`/`max_date` string bounds.
+fn apply_date_bounds(
+    mut builder: crate::core::FieldDefinitionBuilder,
+    field_tbl: &Table,
+) -> crate::core::FieldDefinitionBuilder {
+    if let Some(v) = get_string(field_tbl, "min_date") {
+        builder = builder.min_date(v);
+    }
+    if let Some(v) = get_string(field_tbl, "max_date") {
+        builder = builder.max_date(v);
+    }
+    builder
 }
 
 pub(in crate::hooks::lua_api::parse) fn parse_field_access(access_tbl: &Table) -> FieldAccess {
@@ -698,8 +772,7 @@ mod tests {
         let err = parse_fields(&lua, &fields_tbl).unwrap_err();
         assert!(
             err.to_string().contains("default_value type mismatch"),
-            "Expected type mismatch error: {}",
-            err,
+            "Expected type mismatch error: {err}",
         );
     }
 
@@ -716,8 +789,7 @@ mod tests {
         let err = parse_fields(&lua, &fields_tbl).unwrap_err();
         assert!(
             err.to_string().contains("default_value type mismatch"),
-            "Expected type mismatch error: {}",
-            err,
+            "Expected type mismatch error: {err}",
         );
     }
 
@@ -734,8 +806,7 @@ mod tests {
         let err = parse_fields(&lua, &fields_tbl).unwrap_err();
         assert!(
             err.to_string().contains("default_value type mismatch"),
-            "Expected type mismatch error: {}",
-            err,
+            "Expected type mismatch error: {err}",
         );
     }
 

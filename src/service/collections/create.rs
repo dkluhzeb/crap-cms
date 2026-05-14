@@ -23,6 +23,11 @@ type Result<T> = std::result::Result<T, ServiceError>;
 /// **Conn mode** (`ctx.conn` set, Lua CRUD path): runs on the existing
 /// connection. Events are queued via `ctx.event_queue` for the parent to flush
 /// after commit.
+///
+/// # Errors
+///
+/// Returns service-layer errors (access denied, validation, hook errors) or
+/// a backend error if the DB transaction or persistence fails.
 #[cfg(not(tarpaulin_include))]
 pub fn create_document(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<WriteResult> {
     if ctx.pool.is_some() {

@@ -1,3 +1,17 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -281,8 +295,7 @@ fn validate_required_field_errors() {
     let err_msg = format!("{}", result.unwrap_err());
     assert!(
         err_msg.contains("title") || err_msg.contains("required") || err_msg.contains("Validation"),
-        "Error should reference the missing required field, got: {}",
-        err_msg
+        "Error should reference the missing required field, got: {err_msg}"
     );
 }
 
@@ -949,8 +962,8 @@ fn field_after_change_modifications_flow_on_update() {
 // ── 6N. Nested field hooks (group/row sub-fields) ────────────────────────────
 
 /// Regression: field hooks on sub-fields inside Group/Row must execute.
-/// The Group "seo" contains "title" with a trim_value before_change hook,
-/// and the data key is "seo__title".
+/// The Group "seo" contains "title" with a `trim_value` `before_change` hook,
+/// and the data key is "`seo__title`".
 #[test]
 fn nested_group_field_hooks_execute() {
     let (_tmp, pool, registry, runner) = setup();
@@ -1017,7 +1030,7 @@ fn nested_row_field_hooks_execute() {
     );
 }
 
-/// Regression: after_read field hooks on Group sub-fields must execute.
+/// Regression: `after_read` field hooks on Group sub-fields must execute.
 #[test]
 fn nested_group_after_read_hooks_execute() {
     let (_tmp, _pool, registry, runner) = setup();

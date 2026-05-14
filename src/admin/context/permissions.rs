@@ -47,17 +47,15 @@ impl CollectionPermissions {
     pub fn for_user(
         state: &AdminState,
         def: &CollectionDefinition,
-        auth_user: &Option<Extension<AuthUser>>,
+        auth_user: Option<&Extension<AuthUser>>,
     ) -> Self {
         let user_doc = get_user_doc(auth_user);
 
-        let mut conn = match state.pool.get() {
-            Ok(c) => c,
-            Err(_) => return Self::default(),
+        let Ok(mut conn) = state.pool.get() else {
+            return Self::default();
         };
-        let tx = match conn.transaction() {
-            Ok(t) => t,
-            Err(_) => return Self::default(),
+        let Ok(tx) = conn.transaction() else {
+            return Self::default();
         };
 
         let read = has_access_with_conn(state, def.access.read.as_deref(), user_doc, &tx);
@@ -101,17 +99,15 @@ impl GlobalPermissions {
     pub fn for_user(
         state: &AdminState,
         def: &GlobalDefinition,
-        auth_user: &Option<Extension<AuthUser>>,
+        auth_user: Option<&Extension<AuthUser>>,
     ) -> Self {
         let user_doc = get_user_doc(auth_user);
 
-        let mut conn = match state.pool.get() {
-            Ok(c) => c,
-            Err(_) => return Self::default(),
+        let Ok(mut conn) = state.pool.get() else {
+            return Self::default();
         };
-        let tx = match conn.transaction() {
-            Ok(t) => t,
-            Err(_) => return Self::default(),
+        let Ok(tx) = conn.transaction() else {
+            return Self::default();
         };
 
         let read = has_access_with_conn(state, def.access.read.as_deref(), user_doc, &tx);

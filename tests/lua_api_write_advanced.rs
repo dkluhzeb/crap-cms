@@ -1,3 +1,17 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
@@ -38,7 +52,7 @@ fn eval_lua(runner: &HookRunner, code: &str) -> String {
 
 // ── Helper: setup with real DB tables ────────────────────────────────────────
 
-/// Set up a HookRunner with a real synced database (tables created from Lua definitions).
+/// Set up a `HookRunner` with a real synced database (tables created from Lua definitions).
 /// Returns (tempdir, pool, registry, runner). The tempdir must be kept alive for the DB.
 #[allow(dead_code)]
 fn setup_with_db() -> (tempfile::TempDir, DbPool, Arc<Registry>, HookRunner) {
@@ -371,8 +385,7 @@ fn lua_crud_without_tx_context_errors() {
     let msg = result.unwrap();
     assert!(
         msg.starts_with("ERROR:"),
-        "Should error for nonexistent collection: {}",
-        msg
+        "Should error for nonexistent collection: {msg}"
     );
 }
 
@@ -503,13 +516,11 @@ fn lua_find_unknown_filter_operator_errors() {
     let msg = result.unwrap();
     assert!(
         msg.starts_with("ERROR:"),
-        "Unknown filter operator should error: {}",
-        msg
+        "Unknown filter operator should error: {msg}"
     );
     assert!(
         msg.contains("unknown filter operator"),
-        "Error should mention unknown operator: {}",
-        msg
+        "Error should mention unknown operator: {msg}"
     );
 }
 

@@ -44,15 +44,21 @@ pub(in crate::mcp::tools) fn exec_create_many(
             let password = doc_val
                 .get("password")
                 .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+                .map(std::string::ToString::to_string);
 
             CreateManyItem { data, password }
         })
         .collect();
 
-    let run_hooks = args.get("hooks").and_then(|v| v.as_bool()).unwrap_or(true);
+    let run_hooks = args
+        .get("hooks")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
 
-    let draft = args.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
+    let draft = args
+        .get("draft")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
 
     let svc_ctx = ServiceContext::collection(slug, def)
         .pool(ctx.pool)
@@ -64,7 +70,7 @@ pub(in crate::mcp::tools) fn exec_create_many(
 
     let opts = CreateManyOptions { run_hooks, draft };
 
-    let result = service::create_many(&svc_ctx, items, &opts)?;
+    let result = service::create_many(&svc_ctx, &items, &opts)?;
 
     info!(
         "MCP create_many {}: {} created [client={}]",

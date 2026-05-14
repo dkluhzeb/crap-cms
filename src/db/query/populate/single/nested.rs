@@ -228,9 +228,8 @@ fn populate_rel_in_map(
     field: &FieldDefinition,
     visited: &mut HashSet<(String, String)>,
 ) -> Result<()> {
-    let rel = match &field.relationship {
-        Some(rc) => rc,
-        None => return Ok(()),
+    let Some(rel) = &field.relationship else {
+        return Ok(());
     };
 
     let effective_depth = match rel.max_depth {
@@ -363,7 +362,7 @@ fn populate_has_many_in_map(
     let ids: Vec<String> = match map.get(name) {
         Some(Value::Array(arr)) => arr
             .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
             .collect(),
         _ => return Ok(()),
     };
@@ -439,9 +438,8 @@ fn populate_poly_has_one_in_map(
         _ => return Ok(()),
     };
 
-    let (col, id) = match parse_poly_ref(&raw) {
-        Some(pair) => pair,
-        None => return Ok(()),
+    let Some((col, id)) = parse_poly_ref(&raw) else {
+        return Ok(());
     };
 
     if visited.contains(&(col.clone(), id.clone())) {
@@ -511,19 +509,16 @@ fn populate_poly_has_many_in_map(
     let items: Vec<String> = match map.get(name) {
         Some(Value::Array(arr)) => arr
             .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
             .collect(),
         _ => return Ok(()),
     };
 
     let mut populated = Vec::new();
     for item in &items {
-        let (col, id) = match parse_poly_ref(item) {
-            Some(pair) => pair,
-            None => {
-                populated.push(Value::String(item.clone()));
-                continue;
-            }
+        let Some((col, id)) = parse_poly_ref(item) else {
+            populated.push(Value::String(item.clone()));
+            continue;
         };
 
         if visited.contains(&(col.clone(), id.clone())) {
@@ -531,12 +526,9 @@ fn populate_poly_has_many_in_map(
             continue;
         }
 
-        let item_def = match pctx.registry.get_collection(&col) {
-            Some(d) => d.clone(),
-            None => {
-                populated.push(Value::String(item.clone()));
-                continue;
-            }
+        let Some(item_def) = pctx.registry.get_collection(&col).cloned() else {
+            populated.push(Value::String(item.clone()));
+            continue;
         };
 
         let locale_key = locale_cache_key(pctx.locale_ctx);

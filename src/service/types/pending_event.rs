@@ -24,7 +24,7 @@ pub struct PendingEvent {
 }
 
 /// Shared queue for events accumulated during a transaction.
-/// Cloning is cheap (Rc + RefCell).
+/// Cloning is cheap (Rc + `RefCell`).
 pub type EventQueue = Rc<RefCell<Vec<PendingEvent>>>;
 
 /// Flush all events from a queue, publishing each via the given context's runner + transport.

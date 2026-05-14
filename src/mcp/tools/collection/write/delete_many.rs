@@ -38,11 +38,14 @@ pub(in crate::mcp::tools) fn exec_delete_many(
 
     let filters = parse_where_filters(args);
 
-    let run_hooks = args.get("hooks").and_then(|v| v.as_bool()).unwrap_or(true);
+    let run_hooks = args
+        .get("hooks")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
 
     let force_hard_delete = args
         .get("force_hard_delete")
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
 
     if force_hard_delete && def.soft_delete {
@@ -63,7 +66,7 @@ pub(in crate::mcp::tools) fn exec_delete_many(
         ..Default::default()
     };
 
-    let result = service::delete_many(&svc_ctx, filters, &ctx.config.locale, &opts)?;
+    let result = service::delete_many(&svc_ctx, &filters, &ctx.config.locale, &opts)?;
 
     info!(
         "MCP delete_many {}: {} hard, {} soft, {} skipped [client={}]",

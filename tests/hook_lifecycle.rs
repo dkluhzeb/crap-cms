@@ -1,3 +1,17 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -370,8 +384,8 @@ fn make_field_with_write_access(
     update_ref: Option<&str>,
 ) -> FieldDefinition {
     let mut f = make_field(name, FieldType::Text);
-    f.access.create = create_ref.map(|s| s.to_string());
-    f.access.update = update_ref.map(|s| s.to_string());
+    f.access.create = create_ref.map(std::string::ToString::to_string);
+    f.access.update = update_ref.map(std::string::ToString::to_string);
     f
 }
 
@@ -434,7 +448,7 @@ fn check_access_returns_constrained() {
                 "Constrained should have at least one clause"
             );
         }
-        other => panic!("Expected Constrained, got {:?}", other),
+        other => panic!("Expected Constrained, got {other:?}"),
     }
 }
 
@@ -517,8 +531,7 @@ fn check_field_read_access_no_access_config() {
     let denied = runner.check_field_read_access(&fields, None, &conn);
     assert!(
         denied.is_empty(),
-        "Fields without access config should not be in denied list, got: {:?}",
-        denied
+        "Fields without access config should not be in denied list, got: {denied:?}"
     );
 }
 

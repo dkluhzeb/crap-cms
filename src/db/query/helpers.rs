@@ -17,6 +17,7 @@ use super::sanitize_locale;
 ///
 /// - `None` → `default_limit`
 /// - `Some(v)` → clamped to `[1, max_limit]`
+#[must_use]
 pub fn apply_pagination_limits(requested: Option<i64>, default_limit: i64, max_limit: i64) -> i64 {
     match requested {
         None => default_limit,
@@ -86,7 +87,7 @@ pub(crate) fn normalize_date_value(value: &str) -> String {
 fn normalize_date_with_timezone(value: &str, tz_str: &str) -> Result<String> {
     let tz: Tz = tz_str
         .parse()
-        .map_err(|_| anyhow!("Invalid timezone: {}", tz_str))?;
+        .map_err(|_| anyhow!("Invalid timezone: {tz_str}"))?;
 
     let trimmed = value.trim();
 
@@ -96,12 +97,12 @@ fn normalize_date_with_timezone(value: &str, tz_str: &str) -> Result<String> {
     {
         let local_noon = date
             .and_hms_opt(12, 0, 0)
-            .ok_or_else(|| anyhow!("Failed to construct noon time for {}", trimmed))?;
+            .ok_or_else(|| anyhow!("Failed to construct noon time for {trimmed}"))?;
 
         let utc = tz
             .from_local_datetime(&local_noon)
             .earliest()
-            .ok_or_else(|| anyhow!("Invalid local time for {} in {}", trimmed, tz_str))?
+            .ok_or_else(|| anyhow!("Invalid local time for {trimmed} in {tz_str}"))?
             .with_timezone(&Utc);
 
         return Ok(utc.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
@@ -115,7 +116,7 @@ fn normalize_date_with_timezone(value: &str, tz_str: &str) -> Result<String> {
             let utc = tz
                 .from_local_datetime(&naive)
                 .earliest()
-                .ok_or_else(|| anyhow!("Invalid local time for {} in {}", trimmed, tz_str))?
+                .ok_or_else(|| anyhow!("Invalid local time for {trimmed} in {tz_str}"))?
                 .with_timezone(&Utc);
 
             return Ok(utc.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
@@ -196,14 +197,13 @@ pub(crate) fn coerce_value(field_type: &FieldType, value: &str) -> DbValue {
 
     match field_type {
         FieldType::Checkbox => {
-            DbValue::Integer(matches!(value, "on" | "true" | "1" | "yes") as i64)
+            DbValue::Integer(i64::from(matches!(value, "on" | "true" | "1" | "yes")))
         }
         FieldType::Number => value
             .parse::<f64>()
             .ok()
             .filter(|f| f.is_finite())
-            .map(DbValue::Real)
-            .unwrap_or(DbValue::Null),
+            .map_or(DbValue::Null, DbValue::Real),
         FieldType::Date => DbValue::Text(normalize_date_value(value)),
         _ => DbValue::Text(value.to_string()),
     }
@@ -225,7 +225,7 @@ pub(crate) fn coerce_value(field_type: &FieldType, value: &str) -> DbValue {
 pub(crate) fn coerce_json_value(field_type: &FieldType, val: &Value) -> DbValue {
     match (field_type, val) {
         (FieldType::Number, Value::Number(n)) => return DbValue::Real(n.as_f64().unwrap_or(0.0)),
-        (FieldType::Checkbox, Value::Bool(b)) => return DbValue::Integer(*b as i64),
+        (FieldType::Checkbox, Value::Bool(b)) => return DbValue::Integer(i64::from(*b)),
         _ => {}
     }
 
@@ -255,8 +255,7 @@ pub(crate) fn coerce_date_value(field_type: &FieldType, value: &str, tz: Option<
     }
 
     normalize_date_with_timezone(value, tz)
-        .map(DbValue::Text)
-        .unwrap_or_else(|_| coerce_value(field_type, value))
+        .map_or_else(|_| coerce_value(field_type, value), DbValue::Text)
 }
 
 /// Value-aware date+tz coercion. Date inputs flow as `Value::String` (the
@@ -283,7 +282,7 @@ pub(crate) fn prefixed_name(prefix: &str, name: &str) -> String {
     if prefix.is_empty() {
         name.to_string()
     } else {
-        format!("{}__{}", prefix, name)
+        format!("{prefix}__{name}")
     }
 }
 
@@ -452,8 +451,7 @@ mod tests {
             assert_eq!(
                 coerce_value(&FieldType::Checkbox, input),
                 DbValue::Integer(1),
-                "Expected Integer(1) for checkbox input '{}'",
-                input
+                "Expected Integer(1) for checkbox input '{input}'"
             );
         }
     }
@@ -464,8 +462,7 @@ mod tests {
             assert_eq!(
                 coerce_value(&FieldType::Checkbox, input),
                 DbValue::Integer(0),
-                "Expected Integer(0) for checkbox input '{}'",
-                input
+                "Expected Integer(0) for checkbox input '{input}'"
             );
         }
     }

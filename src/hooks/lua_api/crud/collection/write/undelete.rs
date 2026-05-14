@@ -7,7 +7,10 @@ use mlua::{Error::RuntimeError, Lua, Table};
 
 use crate::{
     core::Registry,
-    hooks::lua_api::crud::{get_tx_conn, helpers::*},
+    hooks::lua_api::crud::{
+        get_tx_conn,
+        helpers::{get_opt_bool, hook_lua_infra, hook_user, resolve_collection},
+    },
     service::{LuaWriteHooks, ServiceContext, undelete_document},
 };
 
@@ -20,19 +23,18 @@ fn undelete_document_lua(
     reg: &Registry,
     collection: &str,
     id: &str,
-    opts: &Option<Table>,
+    opts: Option<&Table>,
 ) -> mlua::Result<bool> {
     let conn = get_tx_conn(lua)?;
 
-    let override_access = get_opt_bool(opts, "overrideAccess", false)?;
+    let override_access = get_opt_bool(opts, "overrideAccess", false);
     let user = hook_user(lua);
     let lua_infra = hook_lua_infra(lua);
     let def = resolve_collection(reg, collection)?;
 
     if !def.soft_delete {
         return Err(RuntimeError(format!(
-            "Collection '{}' does not have soft_delete enabled",
-            collection
+            "Collection '{collection}' does not have soft_delete enabled"
         )));
     }
 
@@ -61,7 +63,7 @@ fn undelete_document_lua(
 pub(crate) fn register_undelete(lua: &Lua, table: &Table, registry: Arc<Registry>) -> Result<()> {
     let undelete_fn = lua.create_function(
         move |lua, (collection, id, opts): (String, String, Option<Table>)| {
-            undelete_document_lua(lua, &registry, &collection, &id, &opts)
+            undelete_document_lua(lua, &registry, &collection, &id, opts.as_ref())
         },
     )?;
     table.set("undelete", undelete_fn)?;

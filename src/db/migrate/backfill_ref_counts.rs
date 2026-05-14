@@ -27,7 +27,7 @@ struct BackfillCtx<'a> {
 
 /// Build the per-collection meta key for tracking backfill status.
 fn collection_meta_key(slug: &str) -> String {
-    format!("ref_count_backfilled:{}", slug)
+    format!("ref_count_backfilled:{slug}")
 }
 
 /// Check if a specific collection/global has been backfilled.
@@ -97,7 +97,7 @@ pub(crate) fn backfill_if_needed(
     // Phase 1: Reset ref counts to 0 for ALL collections (not just new ones),
     // because new collections may be referenced by existing ones.
     for slug in registry.collections.keys() {
-        conn.execute(&format!("UPDATE \"{}\" SET _ref_count = 0", slug), &[])?;
+        conn.execute(&format!("UPDATE \"{slug}\" SET _ref_count = 0"), &[])?;
     }
 
     for slug in registry.globals.keys() {
@@ -218,8 +218,7 @@ fn backfill_column_refs(
     rc: &RelationshipConfig,
 ) -> Result<()> {
     let sql = format!(
-        "SELECT \"{}\", COUNT(*) FROM \"{}\" WHERE \"{}\" IS NOT NULL AND \"{}\" != '' GROUP BY \"{}\"",
-        col_name, table, col_name, col_name, col_name
+        "SELECT \"{col_name}\", COUNT(*) FROM \"{table}\" WHERE \"{col_name}\" IS NOT NULL AND \"{col_name}\" != '' GROUP BY \"{col_name}\""
     );
 
     let rows = match ctx.conn.query_all(&sql, &[]) {
@@ -297,11 +296,10 @@ fn backfill_has_many(
     Ok(())
 }
 
-/// Backfill polymorphic junction table refs (related_collection + related_id pairs).
+/// Backfill polymorphic junction table refs (`related_collection` + `related_id` pairs).
 fn backfill_polymorphic_junction(ctx: &BackfillCtx<'_>, junction_table: &str) -> Result<()> {
     let sql = format!(
-        "SELECT related_collection, related_id, COUNT(*) FROM \"{}\" GROUP BY related_collection, related_id",
-        junction_table
+        "SELECT related_collection, related_id, COUNT(*) FROM \"{junction_table}\" GROUP BY related_collection, related_id"
     );
 
     let rows = match ctx.conn.query_all(&sql, &[]) {
@@ -406,8 +404,7 @@ fn backfill_blocks(
             let extract = ctx.conn.json_extract_expr("data", &sub.name);
             let p1 = ctx.conn.placeholder(1);
             let sql = format!(
-                "SELECT {}, COUNT(*) FROM \"{}\" WHERE _block_type = {p1} AND {} IS NOT NULL AND {} != '' GROUP BY {}",
-                extract, blocks_table, extract, extract, extract
+                "SELECT {extract}, COUNT(*) FROM \"{blocks_table}\" WHERE _block_type = {p1} AND {extract} IS NOT NULL AND {extract} != '' GROUP BY {extract}"
             );
             let rows = match ctx
                 .conn
@@ -448,7 +445,7 @@ fn backfill_blocks(
     Ok(())
 }
 
-/// Increment _ref_count on a target document by the given amount.
+/// Increment _`ref_count` on a target document by the given amount.
 fn increment_ref_count(
     conn: &dyn DbConnection,
     collection: &str,
@@ -457,15 +454,12 @@ fn increment_ref_count(
 ) -> Result<()> {
     let p1 = conn.placeholder(1);
     let p2 = conn.placeholder(2);
-    let sql = format!(
-        "UPDATE \"{}\" SET _ref_count = _ref_count + {p2} WHERE id = {p1}",
-        collection
-    );
+    let sql = format!("UPDATE \"{collection}\" SET _ref_count = _ref_count + {p2} WHERE id = {p1}");
     conn.execute(
         &sql,
         &[DbValue::Text(id.to_string()), DbValue::Integer(count)],
     )
-    .with_context(|| format!("Failed to increment _ref_count on {}/{}", collection, id))?;
+    .with_context(|| format!("Failed to increment _ref_count on {collection}/{id}"))?;
 
     Ok(())
 }

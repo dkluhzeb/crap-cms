@@ -1,4 +1,4 @@
-//! HookRunner methods for event broadcasting.
+//! `HookRunner` methods for event broadcasting.
 
 use anyhow::Result;
 use mlua::Value;
@@ -32,6 +32,7 @@ pub struct PublishEventInput {
 
 impl PublishEventInput {
     /// Create a builder with the required target and operation.
+    #[must_use]
     pub fn builder(target: EventTarget, operation: EventOperation) -> PublishEventInputBuilder {
         PublishEventInputBuilder::new(target, operation)
     }
@@ -104,9 +105,13 @@ impl PublishEventInputBuilder {
 }
 
 impl HookRunner {
-    /// Run before_broadcast hooks. Returns Ok(Some(data)) to broadcast (possibly
+    /// Run `before_broadcast` hooks. Returns Ok(Some(data)) to broadcast (possibly
     /// with transformed data), or Ok(None) to suppress the event.
-    /// No CRUD access (fires after commit, same as after_change).
+    /// No CRUD access (fires after commit, same as `after_change`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if VM acquisition or any hook call fails.
     pub fn run_before_broadcast(
         &self,
         hooks: &Hooks,
@@ -114,7 +119,7 @@ impl HookRunner {
         operation: &str,
         data: DocumentFields,
     ) -> Result<Option<DocumentFields>> {
-        let hook_refs = get_hook_refs(hooks, &HookEvent::BeforeBroadcast);
+        let hook_refs = get_hook_refs(hooks, HookEvent::BeforeBroadcast);
 
         // Skip VM acquisition entirely when no work to do
         if hook_refs.is_empty() && !self.has_registered_hooks_for("before_broadcast") {
@@ -150,6 +155,10 @@ impl HookRunner {
     /// Check if a live event should be broadcast for this mutation.
     /// Returns Ok(true) to broadcast, Ok(false) to suppress.
     /// Runs WITHOUT transaction access (after write committed).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if VM acquisition or the live-setting evaluation fails.
     pub fn check_live_setting(
         &self,
         live: Option<&LiveSetting>,
@@ -184,9 +193,9 @@ impl HookRunner {
         }
     }
 
-    /// Publish a mutation event: check live setting → run before_broadcast hooks → transport.publish().
-    /// Spawns into a background task (non-blocking, like fire_after_event).
-    /// Untestable: spawns tokio::task::spawn_blocking for async event dispatch.
+    /// Publish a mutation event: check live setting → run `before_broadcast` hooks → `transport.publish()`.
+    /// Spawns into a background task (non-blocking, like `fire_after_event`).
+    /// Untestable: spawns `tokio::task::spawn_blocking` for async event dispatch.
     #[cfg(not(tarpaulin_include))]
     pub fn publish_event(
         &self,
@@ -195,31 +204,24 @@ impl HookRunner {
         live_setting: Option<&LiveSetting>,
         input: PublishEventInput,
     ) {
-        let transport = match event_transport {
-            Some(t) => t.clone(),
-            None => return,
+        let Some(transport) = event_transport else {
+            return;
         };
 
         // Run inline — callers are already on a blocking thread
         // (spawn_blocking in gRPC/admin handlers). Avoids spawning a
         // nested blocking task that competes for the thread pool.
-        publish_event_blocking(
-            self.clone(),
-            transport,
-            hooks.clone(),
-            live_setting.cloned(),
-            input,
-        );
+        publish_event_blocking(self, transport, hooks, live_setting, input);
     }
 }
 
 /// Background worker for [`HookRunner::publish_event`]:
-/// check live setting → run before_broadcast hooks → transport.publish().
+/// check live setting → run `before_broadcast` hooks → `transport.publish()`.
 fn publish_event_blocking(
-    runner: HookRunner,
-    transport: SharedEventTransport,
-    hooks: Hooks,
-    live: Option<LiveSetting>,
+    runner: &HookRunner,
+    transport: &SharedEventTransport,
+    hooks: &Hooks,
+    live: Option<&LiveSetting>,
     input: PublishEventInput,
 ) {
     let op_str = match &input.operation {
@@ -228,7 +230,7 @@ fn publish_event_blocking(
         EventOperation::Delete => "delete",
     };
 
-    match runner.check_live_setting(live.as_ref(), &input.collection, op_str, &input.data) {
+    match runner.check_live_setting(live, &input.collection, op_str, &input.data) {
         Ok(false) => return,
         Err(e) => {
             warn!("live setting check error for {}: {e}", input.collection);
@@ -247,7 +249,7 @@ fn publish_event_blocking(
         edited_by,
     } = input;
 
-    let broadcast_data = match runner.run_before_broadcast(&hooks, &collection, op_str, data) {
+    let broadcast_data = match runner.run_before_broadcast(hooks, &collection, op_str, data) {
         Ok(Some(d)) => d,
         Ok(None) => return,
         Err(e) => {

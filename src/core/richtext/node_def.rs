@@ -1,10 +1,10 @@
-//! Custom ProseMirror node type registered from Lua, plus its builder.
+//! Custom `ProseMirror` node type registered from Lua, plus its builder.
 
 use serde::{Deserialize, Serialize};
 
 use crate::core::FieldDefinition;
 
-/// A registered custom ProseMirror node type.
+/// A registered custom `ProseMirror` node type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RichtextNodeDef {
     pub name: String,
@@ -49,26 +49,31 @@ impl RichtextNodeDefBuilder {
         }
     }
 
+    #[must_use]
     pub fn inline(mut self, b: bool) -> Self {
         self.inline = b;
         self
     }
 
+    #[must_use]
     pub fn attrs(mut self, a: Vec<FieldDefinition>) -> Self {
         self.attrs = a;
         self
     }
 
+    #[must_use]
     pub fn searchable_attrs(mut self, s: Vec<String>) -> Self {
         self.searchable_attrs = s;
         self
     }
 
+    #[must_use]
     pub fn has_render(mut self, b: bool) -> Self {
         self.has_render = b;
         self
     }
 
+    #[must_use]
     pub fn build(self) -> RichtextNodeDef {
         RichtextNodeDef {
             name: self.name,

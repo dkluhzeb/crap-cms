@@ -2,8 +2,8 @@ use serde_json::Value;
 
 use crate::core::{FieldDefinition, validate::FieldError};
 
-/// Validate min_length / max_length for text/textarea fields.
-/// Skipped for has_many fields (validated per-element in `check_has_many_elements`).
+/// Validate `min_length` / `max_length` for text/textarea fields.
+/// Skipped for `has_many` fields (validated per-element in `check_has_many_elements`).
 pub(crate) fn check_length_bounds(
     field: &FieldDefinition,
     data_key: &str,

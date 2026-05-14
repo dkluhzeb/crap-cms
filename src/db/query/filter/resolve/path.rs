@@ -47,7 +47,7 @@ pub(in crate::db::query::filter) fn resolve_filter(
     let rest = &field[dot_pos + 1..];
 
     let field_def = find_field_recursive(root, fields)
-        .ok_or_else(|| anyhow!("Unknown field '{}' in filter path '{}'", root, field))?;
+        .ok_or_else(|| anyhow!("Unknown field '{root}' in filter path '{field}'"))?;
 
     // The junction table has a `_locale` column iff the container field is
     // itself localized. Transparent layout wrappers (Row/Collapsible/Tabs)
@@ -235,6 +235,20 @@ fn resolve_relationship_filter(ctx: SubFilterCtx<'_>) -> Result<ResolvedFilter> 
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::*;
     use crate::core::RelationshipConfig;
@@ -249,7 +263,7 @@ mod tests {
                 assert_eq!(col, "status");
                 assert_eq!(field_type, None);
             }
-            other => panic!("Expected Column, got {:?}", other),
+            other => panic!("Expected Column, got {other:?}"),
         }
     }
 
@@ -276,10 +290,10 @@ mod tests {
                         assert_eq!(col, "name");
                         assert_eq!(field_type, Some(FieldType::Text));
                     }
-                    other => panic!("Expected Column, got {:?}", other),
+                    other => panic!("Expected Column, got {other:?}"),
                 }
             }
-            other => panic!("Expected Subquery, got {:?}", other),
+            other => panic!("Expected Subquery, got {other:?}"),
         }
     }
 
@@ -302,9 +316,9 @@ mod tests {
                     assert_eq!(extract_expr, "json_extract(address, '$.city')");
                     assert_eq!(field_type, Some(FieldType::Text));
                 }
-                other => panic!("Expected Json, got {:?}", other),
+                other => panic!("Expected Json, got {other:?}"),
             },
-            other => panic!("Expected Subquery, got {:?}", other),
+            other => panic!("Expected Subquery, got {other:?}"),
         }
     }
 
@@ -318,7 +332,7 @@ mod tests {
             ResolvedFilter::Subquery { condition, .. } => {
                 assert!(matches!(condition, SubqueryCondition::BlockType));
             }
-            other => panic!("Expected Subquery, got {:?}", other),
+            other => panic!("Expected Subquery, got {other:?}"),
         }
     }
 
@@ -344,9 +358,9 @@ mod tests {
                     assert_eq!(extract_expr, "json_extract(data, '$.body')");
                     assert_eq!(field_type, Some(FieldType::Textarea));
                 }
-                other => panic!("Expected Json, got {:?}", other),
+                other => panic!("Expected Json, got {other:?}"),
             },
-            other => panic!("Expected Subquery, got {:?}", other),
+            other => panic!("Expected Subquery, got {other:?}"),
         }
     }
 
@@ -367,10 +381,10 @@ mod tests {
                         assert_eq!(col, "related_id");
                         assert_eq!(field_type, Some(FieldType::Text));
                     }
-                    other => panic!("Expected Column, got {:?}", other),
+                    other => panic!("Expected Column, got {other:?}"),
                 }
             }
-            other => panic!("Expected Subquery, got {:?}", other),
+            other => panic!("Expected Subquery, got {other:?}"),
         }
     }
 

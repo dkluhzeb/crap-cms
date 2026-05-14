@@ -53,10 +53,15 @@ fn build_col_def(
     field: &crate::core::FieldDefinition,
     db_kind: &str,
 ) -> String {
-    let mut col = format!("{} {}", col_name, col_type);
+    let mut col = format!("{col_name} {col_type}");
 
     if !companion_text {
-        append_default_value_for(&mut col, &field.default_value, &field.field_type, db_kind);
+        append_default_value_for(
+            &mut col,
+            field.default_value.as_ref(),
+            &field.field_type,
+            db_kind,
+        );
     }
 
     col
@@ -113,7 +118,7 @@ fn create_global_table(
     info!("Creating global table: {}", table_name);
 
     conn.execute_ddl(&sql, &[])
-        .with_context(|| format!("Failed to create table {}", table_name))?;
+        .with_context(|| format!("Failed to create table {table_name}"))?;
 
     conn.execute(
         &conn.build_insert_ignore(table_name, "id", "'default'"),
@@ -212,12 +217,12 @@ fn add_column_if_missing(
     }
 
     let col_def = build_col_def(col_name, col_type, companion_text, field, conn.kind());
-    let sql = format!("ALTER TABLE \"{}\" ADD COLUMN {}", table_name, col_def);
+    let sql = format!("ALTER TABLE \"{table_name}\" ADD COLUMN {col_def}");
 
     info!("Adding column to {}: {}", table_name, col_name);
 
     conn.execute_ddl(&sql, &[])
-        .with_context(|| format!("Failed to add column {} to {}", col_name, table_name))?;
+        .with_context(|| format!("Failed to add column {col_name} to {table_name}"))?;
 
     Ok(())
 }
@@ -235,15 +240,12 @@ fn add_system_column(
         return Ok(());
     }
 
-    let sql = format!(
-        "ALTER TABLE \"{}\" ADD COLUMN {} {}",
-        table_name, col_name, col_def
-    );
+    let sql = format!("ALTER TABLE \"{table_name}\" ADD COLUMN {col_name} {col_def}");
 
     info!("Adding {} column to {}", col_name, table_name);
 
     conn.execute_ddl(&sql, &[])
-        .with_context(|| format!("Failed to add {} to {}", col_name, table_name))?;
+        .with_context(|| format!("Failed to add {col_name} to {table_name}"))?;
 
     Ok(())
 }

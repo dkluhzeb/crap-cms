@@ -237,7 +237,7 @@ struct SubscribeAccess {
     constraints: HashMap<String, Vec<FilterClause>>,
     /// Per-collection event delivery mode.
     modes: HashMap<String, LiveMode>,
-    /// The subscriber's user document (for per-user after_read hooks).
+    /// The subscriber's user document (for per-user `after_read` hooks).
     user_doc: Option<Document>,
 }
 
@@ -289,7 +289,7 @@ async fn handle_event(
     }
 }
 
-/// Handle an invalidation signal. Sends a terminal PermissionDenied before
+/// Handle an invalidation signal. Sends a terminal `PermissionDenied` before
 /// closing if the signal targets this subscriber.
 async fn handle_invalidation(
     tx: &mpsc::Sender<OutboundItem>,
@@ -392,7 +392,7 @@ impl ContentService {
         let requested_ops: HashSet<String> = if req.operations.is_empty() {
             ["create", "update", "delete"]
                 .iter()
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
                 .collect()
         } else {
             req.operations.into_iter().collect()
@@ -515,7 +515,7 @@ fn resolve_subscribe_access_blocking(
             .registry
             .collections
             .keys()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect()
     } else {
         input.collections_req
@@ -543,7 +543,7 @@ fn resolve_subscribe_access_blocking(
             .registry
             .globals
             .keys()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect()
     } else {
         input.globals_req

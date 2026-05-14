@@ -32,8 +32,7 @@ pub(crate) fn validate_fields_inner(
 /// on empty fields).
 pub(in crate::hooks::lifecycle::validation) fn is_empty_value(value: Option<&Value>) -> bool {
     match value {
-        None => true,
-        Some(Value::Null) => true,
+        None | Some(Value::Null) => true,
         Some(Value::String(s)) => s.is_empty(),
         _ => false,
     }

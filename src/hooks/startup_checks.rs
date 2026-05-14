@@ -62,10 +62,9 @@ pub fn validate_hook_references(lua: &Lua, registry: &Registry) -> Result<()> {
 
     let body = missing.join("\n  - ");
     bail!(
-        "Unresolved hook/access references at startup:\n  - {}\n\n\
+        "Unresolved hook/access references at startup:\n  - {body}\n\n\
          Each line shows `source: kind: 'ref'`. Either create the Lua module/function, \
-         fix the typo, or remove the reference from the definition.",
-        body
+         fix the typo, or remove the reference from the definition."
     );
 }
 
@@ -126,10 +125,9 @@ pub fn validate_locale_field_collisions(registry: &Registry, locales: &[String])
 
     let body = collisions.join("\n  - ");
     bail!(
-        "Field name collides with locale-suffixed column pattern '{{name}}__{{locale}}':\n  - {}\n\n\
+        "Field name collides with locale-suffixed column pattern '{{name}}__{{locale}}':\n  - {body}\n\n\
          Rename the field (or change its locale suffix) to avoid a silent collision \
-         with the generated localized column.",
-        body
+         with the generated localized column."
     );
 }
 

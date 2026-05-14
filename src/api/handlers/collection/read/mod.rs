@@ -1,4 +1,4 @@
-//! Read-oriented collection RPC handlers: Find, FindByID, Count.
+//! Read-oriented collection RPC handlers: Find, `FindByID`, Count.
 
 mod count;
 mod find;

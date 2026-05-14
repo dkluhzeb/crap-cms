@@ -8,13 +8,18 @@ use mlua::Table;
 
 use crate::core::{JobDefinition, JobLabels};
 
-use super::helpers::*;
+use super::helpers::{get_bool, get_string, get_table};
 use crate::core::job::JobDefinitionBuilder;
 
 /// Parse a Lua table into a `JobDefinition`.
+///
+/// # Errors
+///
+/// Returns an error if `handler` is missing or the cron expression is
+/// invalid.
 pub fn parse_job_definition(slug: &str, config: &Table) -> Result<JobDefinition> {
     let handler = get_string(config, "handler")
-        .ok_or_else(|| anyhow!("Job '{}' missing required 'handler' field", slug))?;
+        .ok_or_else(|| anyhow!("Job '{slug}' missing required 'handler' field"))?;
 
     let schedule = get_string(config, "schedule");
 

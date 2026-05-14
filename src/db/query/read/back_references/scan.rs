@@ -17,6 +17,10 @@ use super::types::{BackRefScan, BackReference};
 use super::helpers::field_display_label;
 
 /// Scan all collections and globals for back-references to `target_id` in `target_collection`.
+///
+/// # Errors
+///
+/// Returns a backend error if any of the back-reference queries fails.
 pub fn find_back_references(
     conn: &dyn DbConnection,
     registry: &Registry,
@@ -184,7 +188,7 @@ fn query_has_one(
         let p1 = scan.conn.placeholder(1);
         let conditions: Vec<String> = locale_cols
             .iter()
-            .map(|c| format!("\"{}\" = {p1}", c))
+            .map(|c| format!("\"{c}\" = {p1}"))
             .collect();
         let sql = format!(
             "SELECT id FROM \"{}\" WHERE {}",
@@ -203,7 +207,7 @@ fn query_has_one(
     } else if is_polymorphic {
         let match_value = format!("{}/{}", scan.target_collection, scan.target_id);
         let p1 = scan.conn.placeholder(1);
-        let sql = format!("SELECT id FROM \"{}\" WHERE \"{}\" = {p1}", table, col);
+        let sql = format!("SELECT id FROM \"{table}\" WHERE \"{col}\" = {p1}");
         Ok(query_ids(
             scan.conn,
             &sql,
@@ -215,7 +219,7 @@ fn query_has_one(
         ))
     } else {
         let p1 = scan.conn.placeholder(1);
-        let sql = format!("SELECT id FROM \"{}\" WHERE \"{}\" = {p1}", table, col);
+        let sql = format!("SELECT id FROM \"{table}\" WHERE \"{col}\" = {p1}");
         Ok(query_ids(
             scan.conn,
             &sql,
@@ -239,8 +243,7 @@ fn query_has_many(
     if is_polymorphic {
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
         let sql = format!(
-            "SELECT DISTINCT parent_id FROM \"{}\" WHERE related_id = {p1} AND related_collection = {p2}",
-            junction_table
+            "SELECT DISTINCT parent_id FROM \"{junction_table}\" WHERE related_id = {p1} AND related_collection = {p2}"
         );
         let params = vec![
             DbValue::Text(target_id.to_string()),
@@ -258,10 +261,8 @@ fn query_has_many(
         }
     } else {
         let p1 = conn.placeholder(1);
-        let sql = format!(
-            "SELECT DISTINCT parent_id FROM \"{}\" WHERE related_id = {p1}",
-            junction_table
-        );
+        let sql =
+            format!("SELECT DISTINCT parent_id FROM \"{junction_table}\" WHERE related_id = {p1}");
         let params = vec![DbValue::Text(target_id.to_string())];
         match conn.query_all(&sql, &params) {
             Ok(rows) => rows

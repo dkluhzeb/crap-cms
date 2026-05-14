@@ -5,7 +5,10 @@ use mlua::{Lua, Table};
 
 use crate::core::{BlockDefinition, FieldTab};
 
-use super::{fields::parse_fields, helpers::*};
+use super::{
+    fields::parse_fields,
+    helpers::{get_localized_string, get_string, get_string_val, get_table},
+};
 
 pub(super) fn parse_block_definitions(
     lua: &Lua,
@@ -14,14 +17,14 @@ pub(super) fn parse_block_definitions(
     let mut blocks = Vec::new();
 
     for entry in blocks_tbl.clone().sequence_values::<Table>() {
-        let block_tbl = entry?;
-        let block_type: String = get_string_val(&block_tbl, "type")
-            .map_err(|_| anyhow!("Block definition missing 'type'"))?;
-        let label = get_localized_string(&block_tbl, "label");
-        let label_field = get_string(&block_tbl, "label_field");
-        let group = get_string(&block_tbl, "group");
-        let image_url = get_string(&block_tbl, "image_url");
-        let fields = if let Ok(fields_tbl) = get_table(&block_tbl, "fields") {
+        let def = entry?;
+        let block_type: String =
+            get_string_val(&def, "type").map_err(|_| anyhow!("Block definition missing 'type'"))?;
+        let label = get_localized_string(&def, "label");
+        let label_field = get_string(&def, "label_field");
+        let group = get_string(&def, "group");
+        let image_url = get_string(&def, "image_url");
+        let fields = if let Ok(fields_tbl) = get_table(&def, "fields") {
             parse_fields(lua, &fields_tbl)?
         } else {
             Vec::new()
@@ -42,10 +45,10 @@ pub(super) fn parse_tab_definitions(lua: &Lua, tabs_tbl: &Table) -> Result<Vec<F
     let mut tabs = Vec::new();
 
     for entry in tabs_tbl.clone().sequence_values::<Table>() {
-        let tab_tbl = entry?;
-        let label = get_string(&tab_tbl, "label").unwrap_or_default();
-        let description = get_string(&tab_tbl, "description");
-        let fields = if let Ok(fields_tbl) = get_table(&tab_tbl, "fields") {
+        let def = entry?;
+        let label = get_string(&def, "label").unwrap_or_default();
+        let description = get_string(&def, "description");
+        let fields = if let Ok(fields_tbl) = get_table(&def, "fields") {
             parse_fields(lua, &fields_tbl)?
         } else {
             Vec::new()

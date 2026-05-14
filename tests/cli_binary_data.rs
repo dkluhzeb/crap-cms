@@ -1,6 +1,20 @@
 //! Binary invocation tests for data-oriented CLI commands:
 //! export, import, backup, restore, and user management.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::path::{Path, PathBuf};
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -31,7 +45,7 @@ fn copy_dir(src: &Path, dst: &Path) {
     }
 }
 
-/// Run the binary with CRAP_CONFIG_DIR set, return raw Output.
+/// Run the binary with `CRAP_CONFIG_DIR` set, return raw Output.
 fn run_in(config_dir: &Path, args: &[&str]) -> std::process::Output {
     std::process::Command::new(crap_bin())
         .env("CRAP_CONFIG_DIR", config_dir)
@@ -40,7 +54,7 @@ fn run_in(config_dir: &Path, args: &[&str]) -> std::process::Output {
         .expect("failed to run binary")
 }
 
-/// Run the binary with CRAP_CONFIG_DIR set, assert success, return stdout.
+/// Run the binary with `CRAP_CONFIG_DIR` set, assert success, return stdout.
 fn run_ok_in(config_dir: &Path, args: &[&str]) -> String {
     let output = run_in(config_dir, args);
     assert!(
@@ -52,7 +66,7 @@ fn run_ok_in(config_dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).to_string()
 }
 
-/// Copy fixture to tempdir and return (TempDir, config_dir path).
+/// Copy fixture to tempdir and return (`TempDir`, `config_dir` path).
 fn setup() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("config");
@@ -84,8 +98,8 @@ fn create_test_user(config_dir: &Path) -> String {
 
 #[test]
 fn export_to_file() {
-    let (_tmp, config_dir) = setup();
-    let out_file = _tmp.path().join("export.json");
+    let (tmp, config_dir) = setup();
+    let out_file = tmp.path().join("export.json");
 
     run_ok_in(&config_dir, &["export", "-o", out_file.to_str().unwrap()]);
 
@@ -103,8 +117,8 @@ fn export_to_file() {
 
 #[test]
 fn export_single_collection() {
-    let (_tmp, config_dir) = setup();
-    let out_file = _tmp.path().join("export.json");
+    let (tmp, config_dir) = setup();
+    let out_file = tmp.path().join("export.json");
 
     run_ok_in(
         &config_dir,
@@ -120,8 +134,8 @@ fn export_single_collection() {
 
 #[test]
 fn export_nonexistent_collection_fails() {
-    let (_tmp, config_dir) = setup();
-    let out_file = _tmp.path().join("export.json");
+    let (tmp, config_dir) = setup();
+    let out_file = tmp.path().join("export.json");
 
     let output = run_in(
         &config_dir,
@@ -142,8 +156,8 @@ fn export_nonexistent_collection_fails() {
 
 #[test]
 fn import_roundtrip() {
-    let (_tmp, config_dir) = setup();
-    let export_file = _tmp.path().join("export.json");
+    let (tmp, config_dir) = setup();
+    let export_file = tmp.path().join("export.json");
 
     // Create a user
     create_test_user(&config_dir);
@@ -164,8 +178,7 @@ fn import_roundtrip() {
     let list_out = run_ok_in(&config_dir, &["user", "list"]);
     assert!(
         list_out.contains("No users"),
-        "user should be deleted, got: {}",
-        list_out
+        "user should be deleted, got: {list_out}"
     );
 
     // Import the exported data
@@ -175,8 +188,7 @@ fn import_roundtrip() {
     let list_out = run_ok_in(&config_dir, &["user", "list"]);
     assert!(
         list_out.contains("test@example.com"),
-        "user should be restored after import, got: {}",
-        list_out
+        "user should be restored after import, got: {list_out}"
     );
 }
 
@@ -186,8 +198,8 @@ fn import_roundtrip() {
 
 #[test]
 fn backup_creates_directory() {
-    let (_tmp, config_dir) = setup();
-    let backup_dir = _tmp.path().join("backups");
+    let (tmp, config_dir) = setup();
+    let backup_dir = tmp.path().join("backups");
 
     // Initialize the database by running status (triggers schema sync)
     run_ok_in(&config_dir, &["status"]);
@@ -196,14 +208,13 @@ fn backup_creates_directory() {
 
     assert!(
         stdout.contains("Backup complete"),
-        "should print backup complete, got: {}",
-        stdout
+        "should print backup complete, got: {stdout}"
     );
 
     // Find the backup subdirectory (named backup-<timestamp>)
     let entries: Vec<_> = std::fs::read_dir(&backup_dir)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .collect();
     assert_eq!(entries.len(), 1, "should create one backup subdirectory");
 
@@ -220,8 +231,8 @@ fn backup_creates_directory() {
 
 #[test]
 fn backup_restore_roundtrip() {
-    let (_tmp, config_dir) = setup();
-    let backup_dir = _tmp.path().join("backups");
+    let (tmp, config_dir) = setup();
+    let backup_dir = tmp.path().join("backups");
 
     // Create a user
     create_test_user(&config_dir);
@@ -232,7 +243,7 @@ fn backup_restore_roundtrip() {
     // Find the backup subdirectory
     let entries: Vec<_> = std::fs::read_dir(&backup_dir)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .collect();
     let backup_subdir = entries[0].path();
 
@@ -252,15 +263,14 @@ fn backup_restore_roundtrip() {
     let list_out = run_ok_in(&config_dir, &["user", "list"]);
     assert!(
         list_out.contains("test@example.com"),
-        "user should exist after restore, got: {}",
-        list_out
+        "user should exist after restore, got: {list_out}"
     );
 }
 
 #[test]
 fn restore_requires_confirm() {
-    let (_tmp, config_dir) = setup();
-    let backup_dir = _tmp.path().join("backups");
+    let (tmp, config_dir) = setup();
+    let backup_dir = tmp.path().join("backups");
 
     // Initialize the database
     run_ok_in(&config_dir, &["status"]);
@@ -270,7 +280,7 @@ fn restore_requires_confirm() {
 
     let entries: Vec<_> = std::fs::read_dir(&backup_dir)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .collect();
     let backup_subdir = entries[0].path();
 
@@ -281,8 +291,7 @@ fn restore_requires_confirm() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("confirm") || stderr.contains("-y"),
-        "error should mention confirm flag, got: {}",
-        stderr
+        "error should mention confirm flag, got: {stderr}"
     );
 }
 
@@ -297,20 +306,17 @@ fn user_create_and_list() {
     let stdout = create_test_user(&config_dir);
     assert!(
         stdout.contains("Created user"),
-        "should confirm user creation, got: {}",
-        stdout
+        "should confirm user creation, got: {stdout}"
     );
 
     let list_out = run_ok_in(&config_dir, &["user", "list"]);
     assert!(
         list_out.contains("test@example.com"),
-        "user list should contain the email, got: {}",
-        list_out
+        "user list should contain the email, got: {list_out}"
     );
     assert!(
         list_out.contains("1 user(s)"),
-        "should show user count, got: {}",
-        list_out
+        "should show user count, got: {list_out}"
     );
 }
 
@@ -323,18 +329,15 @@ fn user_info_by_email() {
 
     assert!(
         stdout.contains("test@example.com"),
-        "info should show email, got: {}",
-        stdout
+        "info should show email, got: {stdout}"
     );
     assert!(
         stdout.contains("users"),
-        "info should show collection, got: {}",
-        stdout
+        "info should show collection, got: {stdout}"
     );
     assert!(
         stdout.contains("Test User"),
-        "info should show name field, got: {}",
-        stdout
+        "info should show name field, got: {stdout}"
     );
 }
 
@@ -347,32 +350,28 @@ fn user_lock_and_unlock() {
     let stdout = run_ok_in(&config_dir, &["user", "lock", "-e", "test@example.com"]);
     assert!(
         stdout.contains("Locked user"),
-        "should confirm lock, got: {}",
-        stdout
+        "should confirm lock, got: {stdout}"
     );
 
     // Verify locked via info
     let info = run_ok_in(&config_dir, &["user", "info", "-e", "test@example.com"]);
     assert!(
         info.contains("Locked:") && info.contains("yes"),
-        "should show locked status, got: {}",
-        info
+        "should show locked status, got: {info}"
     );
 
     // Unlock
     let stdout = run_ok_in(&config_dir, &["user", "unlock", "-e", "test@example.com"]);
     assert!(
         stdout.contains("Unlocked user"),
-        "should confirm unlock, got: {}",
-        stdout
+        "should confirm unlock, got: {stdout}"
     );
 
     // Verify unlocked via info
     let info = run_ok_in(&config_dir, &["user", "info", "-e", "test@example.com"]);
     assert!(
         info.contains("Locked:") && info.contains("no"),
-        "should show unlocked status, got: {}",
-        info
+        "should show unlocked status, got: {info}"
     );
 }
 
@@ -419,32 +418,28 @@ fn user_verify_and_unverify() {
     let stdout = run_ok_in(&config_dir, &["user", "verify", "-e", "test@example.com"]);
     assert!(
         stdout.contains("Verified user"),
-        "should confirm verify, got: {}",
-        stdout
+        "should confirm verify, got: {stdout}"
     );
 
     // Check via info
     let info = run_ok_in(&config_dir, &["user", "info", "-e", "test@example.com"]);
     assert!(
         info.contains("Verified:") && info.contains("yes"),
-        "should show verified status, got: {}",
-        info
+        "should show verified status, got: {info}"
     );
 
     // Unverify
     let stdout = run_ok_in(&config_dir, &["user", "unverify", "-e", "test@example.com"]);
     assert!(
         stdout.contains("Unverified user"),
-        "should confirm unverify, got: {}",
-        stdout
+        "should confirm unverify, got: {stdout}"
     );
 
     // Check via info
     let info = run_ok_in(&config_dir, &["user", "info", "-e", "test@example.com"]);
     assert!(
         info.contains("Verified:") && info.contains("no"),
-        "should show unverified status, got: {}",
-        info
+        "should show unverified status, got: {info}"
     );
 }
 
@@ -459,15 +454,13 @@ fn user_delete_with_confirm() {
     );
     assert!(
         stdout.contains("Deleted user"),
-        "should confirm deletion, got: {}",
-        stdout
+        "should confirm deletion, got: {stdout}"
     );
 
     let list_out = run_ok_in(&config_dir, &["user", "list"]);
     assert!(
         list_out.contains("No users"),
-        "user list should be empty after delete, got: {}",
-        list_out
+        "user list should be empty after delete, got: {list_out}"
     );
 }
 
@@ -489,7 +482,6 @@ fn user_change_password() {
     );
     assert!(
         stdout.contains("Password changed"),
-        "should confirm password change, got: {}",
-        stdout
+        "should confirm password change, got: {stdout}"
     );
 }

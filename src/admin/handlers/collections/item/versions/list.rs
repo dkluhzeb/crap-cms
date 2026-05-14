@@ -40,7 +40,7 @@ fn fetch_version_data(
         Ok(None) => {
             return Err(Box::new(not_found(
                 state,
-                &format!("Document '{}' not found", id),
+                &format!("Document '{id}' not found"),
             )));
         }
         Err(e) => {
@@ -52,12 +52,10 @@ fn fetch_version_data(
     let doc_title = def
         .title_field()
         .and_then(|f| document.get_str(f))
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| document.id.to_string());
+        .map_or_else(|| document.id.to_string(), std::string::ToString::to_string);
 
-    let conn = match state.pool.get() {
-        Ok(c) => c,
-        Err(_) => return Err(Box::new(server_error(state, "Database error"))),
+    let Ok(conn) = state.pool.get() else {
+        return Err(Box::new(server_error(state, "Database error")));
     };
 
     let hooks = RunnerReadHooks::new(&state.hook_runner, &conn);
@@ -74,7 +72,7 @@ fn fetch_version_data(
 
     let result = list_versions(&ctx, &input).unwrap_or_default();
 
-    let versions: Vec<Value> = result.docs.into_iter().map(version_to_json).collect();
+    let versions: Vec<Value> = result.docs.iter().map(version_to_json).collect();
 
     Ok((doc_title, versions, result.pagination))
 }
@@ -89,7 +87,7 @@ pub async fn list_versions_page(
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
     let Some(def) = state.registry.get_collection(&slug).cloned() else {
-        return not_found(&state, &format!("Collection '{}' not found", slug));
+        return not_found(&state, &format!("Collection '{slug}' not found"));
     };
 
     if !def.has_versions() {
@@ -97,7 +95,7 @@ pub async fn list_versions_page(
     }
 
     let pg = params.resolve(&state.config.pagination);
-    let user_doc = get_user_doc(&auth_user);
+    let user_doc = get_user_doc(auth_user.as_ref());
 
     let (doc_title, versions, pagination) =
         match fetch_version_data(&state, &slug, &def, &id, &pg, user_doc) {
@@ -108,9 +106,12 @@ pub async fn list_versions_page(
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
-    let prev_url =
-        paths::collection_item_versions_page(&slug, &id, pg.page.saturating_sub(1).max(1) as u64);
-    let next_url = paths::collection_item_versions_page(&slug, &id, (pg.page + 1) as u64);
+    let prev_url = paths::collection_item_versions_page(
+        &slug,
+        &id,
+        pg.page.saturating_sub(1).max(1).cast_unsigned(),
+    );
+    let next_url = paths::collection_item_versions_page(&slug, &id, (pg.page + 1).cast_unsigned());
 
     let breadcrumbs = vec![
         Breadcrumb::link("collections", paths::COLLECTIONS_ROOT),
@@ -122,7 +123,7 @@ pub async fn list_versions_page(
     let base = BasePageContext::for_handler(
         &state,
         claims_ref,
-        &auth_user,
+        auth_user.as_ref(),
         PageMeta::new(PageType::CollectionVersions, "version_history_for")
             .with_title_name(doc_title.clone()),
     )

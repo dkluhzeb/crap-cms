@@ -24,8 +24,8 @@ struct CrudRegisterCtx<'a> {
 
 /// Register the CRUD functions on `crap.collections`, `crap.globals`, and `crap.jobs`.
 ///
-/// They read the active connection from Lua app_data (set by `run_hooks_with_conn`).
-/// Untestable as unit: registers Lua closures that require TxContext + full DB.
+/// They read the active connection from Lua `app_data` (set by `run_hooks_with_conn`).
+/// Untestable as unit: registers Lua closures that require `TxContext` + full DB.
 /// Covered by integration tests (hook CRUD operations in tests/).
 #[cfg(not(tarpaulin_include))]
 pub(crate) fn register_crud_functions(

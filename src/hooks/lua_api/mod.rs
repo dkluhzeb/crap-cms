@@ -5,7 +5,7 @@
 //!
 //! - One file per `crap.<area>` for the simple, no-DB-transaction
 //!   bits (auth, cache, crypto, email, env, fields, http, log, pages,
-//!   richtext, schema, template_data, vm_label, …).
+//!   richtext, schema, `template_data`, `vm_label`, …).
 //! - **`crud/`** holds the runtime CRUD surface (`crap.collections.find`,
 //!   `crap.collections.create`, `crap.globals.update`, …) — the bits
 //!   that need the active transaction. They depend on the

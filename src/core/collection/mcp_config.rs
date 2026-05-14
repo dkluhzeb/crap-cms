@@ -12,6 +12,7 @@ pub struct McpConfig {
 
 impl McpConfig {
     /// Create a new MCP configuration with the given description.
+    #[must_use]
     pub fn new(description: Option<String>) -> Self {
         Self { description }
     }

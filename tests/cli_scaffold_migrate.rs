@@ -1,8 +1,21 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
 #![cfg(feature = "sqlite")]
 
 //! CLI integration tests: roundtrip, typegen, migrate, backup, blueprint, jobs.
 //!
-//! Split from cli_integration.rs for faster parallel compilation.
+//! Split from `cli_integration.rs` for faster parallel compilation.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -30,7 +43,7 @@ fn crap_bin() -> PathBuf {
 }
 
 /// Copy fixture dir to a temp dir, init Lua, create pool, sync schema.
-/// Returns (TempDir, DbPool, Arc<Registry>).
+/// Returns (`TempDir`, `DbPool`, Arc<Registry>).
 fn full_setup() -> (
     tempfile::TempDir,
     DbPool,
@@ -100,7 +113,7 @@ fn roundtrip_data_preserved() {
             let mut data = DocumentFields::new();
             data.insert(
                 "title".to_string(),
-                Value::String(format!("Roundtrip Post {}", i)),
+                Value::String(format!("Roundtrip Post {i}")),
             );
             data.insert("status".to_string(), json!("published"));
             query::create(&tx, "posts", def, &data, None).unwrap();
@@ -247,7 +260,7 @@ fn typegen_all_languages() {
 
     for lang in typegen::Language::all() {
         let path = typegen::generate_lang(&config_dir, &registry, *lang, None).unwrap();
-        assert!(path.exists(), "file should exist for {:?}", lang);
+        assert!(path.exists(), "file should exist for {lang:?}");
         let expected_ext = format!("generated.{}", lang.file_extension());
         assert!(
             path.to_string_lossy().ends_with(&expected_ext),
@@ -296,7 +309,7 @@ fn migrate_up() {
     std::fs::create_dir_all(&migrations_dir).unwrap();
     std::fs::write(
         migrations_dir.join("20240101000000_test.lua"),
-        r#"
+        r"
 local M = {}
 function M.up()
     -- no-op for test
@@ -305,7 +318,7 @@ function M.down()
     -- no-op for test
 end
 return M
-"#,
+",
     )
     .unwrap();
 
@@ -351,14 +364,14 @@ fn migrate_down() {
     std::fs::create_dir_all(&migrations_dir).unwrap();
     std::fs::write(
         migrations_dir.join("20240101000000_rollback.lua"),
-        r#"
+        r"
 local M = {}
 function M.up()
 end
 function M.down()
 end
 return M
-"#,
+",
     )
     .unwrap();
 
@@ -562,7 +575,7 @@ fn blueprint_save_and_list() {
     let bp_base = tmp.path().join("blueprints");
     let names: Vec<String> = std::fs::read_dir(&bp_base)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.path().is_dir())
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();
@@ -877,7 +890,7 @@ fn cmd_restore_roundtrip() {
 
     let backup_dirs: Vec<_> = std::fs::read_dir(&backup_output)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.path().is_dir())
         .collect();
     let backup_dir = backup_dirs[0].path();
@@ -1053,8 +1066,7 @@ fn make_collection_via_binary_no_slug_no_input_fails() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("required") || stderr.contains("slug"),
-        "error should mention slug is required, got: {}",
-        stderr
+        "error should mention slug is required, got: {stderr}"
     );
 }
 
@@ -1158,7 +1170,7 @@ fn templates_extract_via_binary() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Helper: scaffold a fresh project, add a collection with given Lua, load config, sync schema.
-/// Returns (TempDir, DbPool, Arc<Registry>).
+/// Returns (`TempDir`, `DbPool`, Arc<Registry>).
 fn setup_with_collection(
     slug: &str,
     lua_content: &str,
@@ -1173,7 +1185,7 @@ fn setup_with_collection(
 
     // Write the collection Lua file
     std::fs::write(
-        config_dir.join(format!("collections/{}.lua", slug)),
+        config_dir.join(format!("collections/{slug}.lua")),
         lua_content,
     )
     .unwrap();
@@ -1495,11 +1507,7 @@ fn init_no_input_creates_default_structure() {
         "migrations",
         "types",
     ] {
-        assert!(
-            dir.join(subdir).is_dir(),
-            "{} directory should exist",
-            subdir
-        );
+        assert!(dir.join(subdir).is_dir(), "{subdir} directory should exist");
     }
 }
 
@@ -1601,8 +1609,7 @@ fn init_no_input_requires_dir() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("required"),
-        "stderr should mention 'required': {}",
-        stderr
+        "stderr should mention 'required': {stderr}"
     );
 }
 
@@ -1627,8 +1634,7 @@ fn init_via_binary_refuses_existing() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("refusing to overwrite"),
-        "should mention refusing to overwrite: {}",
-        stderr
+        "should mention refusing to overwrite: {stderr}"
     );
 }
 

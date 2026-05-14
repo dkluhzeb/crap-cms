@@ -31,7 +31,7 @@ pub(in crate::db::query::filter) enum ResolvedFilter {
 /// How to access the filtered value within a subquery.
 #[derive(Debug)]
 pub(in crate::db::query::filter) enum SubqueryCondition {
-    /// Direct column on join table (array sub-fields, has-many related_id).
+    /// Direct column on join table (array sub-fields, has-many `related_id`).
     ///
     /// `field_type` drives operand casting; `None` means fall back to Text.
     Column {

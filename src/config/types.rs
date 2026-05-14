@@ -124,6 +124,11 @@ impl CrapConfig {
     /// value of `VAR` from the environment. `${VAR:-default}` uses `default` if
     /// `VAR` is unset or empty. A reference to an unset variable without a default
     /// causes an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file can't be read, TOML parsing fails, env
+    /// substitution references an unset variable without a default, or validation fails.
     pub fn load(config_dir: &Path) -> Result<Self> {
         let config_path = config_dir.join("crap.toml");
 
@@ -162,6 +167,7 @@ impl CrapConfig {
     ///
     /// Same as `Default` but with `access.default_deny = false` so tests that don't
     /// configure access functions aren't blocked.
+    #[must_use]
     pub fn test_default() -> Self {
         let mut config = Self::default();
         config.access.default_deny = false;
@@ -170,9 +176,14 @@ impl CrapConfig {
 
     /// Validate configuration for common misconfigurations.
     ///
-    /// Returns errors for fatal issues (e.g., pool_max_size = 0) and logs
+    /// Returns errors for fatal issues (e.g., `pool_max_size` = 0) and logs
     /// warnings for non-fatal but suspicious settings. Per-section helpers
     /// live in `validate.rs`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for any fatal misconfiguration surfaced by the
+    /// per-section validators.
     pub fn validate(&self) -> Result<()> {
         self.validate_database()?;
         self.validate_server()?;
@@ -184,7 +195,7 @@ impl CrapConfig {
         self.validate_logging()?;
         self.validate_mcp()?;
         self.validate_live()?;
-        self.validate_cache()?;
+        self.validate_cache();
 
         Ok(())
     }
@@ -196,12 +207,14 @@ impl CrapConfig {
     /// the message via `tracing::warn!`.
     ///
     /// Supports exact match (`"0.1.0"`) and prefix match (`"0.1"` matches any `0.1.x`).
+    #[must_use]
     pub fn check_version(&self) -> Option<String> {
         Self::check_version_against(self.crap_version.as_deref(), env!("CARGO_PKG_VERSION"))
     }
 
     /// Version check against an explicit version string, testable without
     /// depending on the compile-time package version.
+    #[must_use]
     pub fn check_version_against(crap_version: Option<&str>, pkg_version: &str) -> Option<String> {
         let required = match crap_version {
             Some(v) if !v.is_empty() => v,
@@ -222,8 +235,7 @@ impl CrapConfig {
         }
 
         Some(format!(
-            "crap_version mismatch: config requires \"{}\", but running version is \"{}\"",
-            required, pkg_version
+            "crap_version mismatch: config requires \"{required}\", but running version is \"{pkg_version}\""
         ))
     }
 

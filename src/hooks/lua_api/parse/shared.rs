@@ -11,9 +11,12 @@ use crate::core::{
     },
 };
 
-use super::{fields::parse_fields, helpers::*};
+use super::{
+    fields::parse_fields,
+    helpers::{get_bool, get_localized_string, get_string, get_table, parse_hooks},
+};
 
-/// Admin UI max nesting depth for rendering fields (must match `MAX_FIELD_DEPTH` in field_context.rs).
+/// Admin UI max nesting depth for rendering fields (must match `MAX_FIELD_DEPTH` in `field_context.rs`).
 const ADMIN_MAX_FIELD_DEPTH: usize = 5;
 
 /// Compute the maximum nesting depth of a field list.
@@ -108,10 +111,6 @@ pub(super) fn parse_live_setting(config: &Table) -> LiveConfig {
             setting: Some(LiveSetting::Disabled),
             mode: LiveMode::default(),
         },
-        Value::Boolean(true) | Value::Nil => LiveConfig {
-            setting: None,
-            mode: LiveMode::default(),
-        },
         Value::String(s) => {
             let func_ref = s.to_str().map(|s| s.to_string()).unwrap_or_default();
 
@@ -168,7 +167,6 @@ pub(super) fn parse_versions_config(config: &Table) -> LuaResult<Option<Versions
 
     match val {
         Value::Boolean(true) => Ok(Some(VersionsConfig::new(true, 0))),
-        Value::Boolean(false) | Value::Nil => Ok(None),
         Value::Table(tbl) => {
             let drafts = get_bool(&tbl, "drafts", true)?;
             let max_versions = tbl.get::<u32>("max_versions").unwrap_or(0);
@@ -193,7 +191,7 @@ pub(super) fn parse_indexes(config: &Table) -> LuaResult<Vec<IndexDefinition>> {
         };
         let fields: Vec<String> = fields_tbl
             .sequence_values::<String>()
-            .filter_map(|r| r.ok())
+            .filter_map(std::result::Result::ok)
             .collect();
 
         if fields.is_empty() {
@@ -323,7 +321,7 @@ mod tests {
         tbl.set("live", "hooks.live.filter_published").unwrap();
         match parse_live_setting(&tbl).setting {
             Some(LiveSetting::Function(ref s)) => assert_eq!(s, "hooks.live.filter_published"),
-            other => panic!("Expected Function, got {:?}", other),
+            other => panic!("Expected Function, got {other:?}"),
         }
     }
 
@@ -493,7 +491,7 @@ mod tests {
             if depth == 0 {
                 FieldDefinition::builder("leaf", FieldType::Text).build()
             } else {
-                FieldDefinition::builder(format!("level_{}", depth), FieldType::Group)
+                FieldDefinition::builder(format!("level_{depth}"), FieldType::Group)
                     .fields(vec![nest(depth - 1)])
                     .build()
             }
@@ -512,7 +510,7 @@ mod tests {
         let labels = parse_labels(&config);
         match labels.singular {
             Some(LocalizedString::Plain(s)) => assert_eq!(s, "Settings"),
-            other => panic!("Expected Plain label, got {:?}", other),
+            other => panic!("Expected Plain label, got {other:?}"),
         }
     }
 }

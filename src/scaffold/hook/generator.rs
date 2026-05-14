@@ -64,6 +64,7 @@ pub enum HookType {
 
 impl HookType {
     /// Parse from string (CLI input).
+    #[must_use]
     pub fn from_name(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "collection" => Some(Self::Collection),
@@ -75,6 +76,7 @@ impl HookType {
     }
 
     /// Valid lifecycle positions for this hook type.
+    #[must_use]
     pub fn valid_positions(&self) -> &'static [&'static str] {
         match self {
             Self::Collection => &[
@@ -99,6 +101,7 @@ impl HookType {
     }
 
     /// Human-readable label.
+    #[must_use]
     pub fn label(&self) -> &'static str {
         match self {
             Self::Collection => "collection",
@@ -217,8 +220,7 @@ fn render_condition_boolean(opts: &MakeHookOptions) -> Result<String> {
     let field_name = opts
         .condition_field
         .as_ref()
-        .map(|cf| cf.name.as_str())
-        .unwrap_or("field_name");
+        .map_or("field_name", |cf| cf.name.as_str());
 
     render(
         "hook_condition_boolean",
@@ -239,14 +241,11 @@ fn condition_table_body(cf: &ConditionFieldInfo) -> String {
                 cf.name, cf.select_options[0]
             )
         }
-        "checkbox" => format!(
-            r#"    return {{ field = "{}", is_truthy = true }}"#,
-            cf.name
-        ),
         "number" => format!(
             r#"    return {{ field = "{}", not_equals = "0" }}"#,
             cf.name
         ),
+        // "checkbox" and anything else fall back to the truthy form.
         _ => format!(
             r#"    return {{ field = "{}", is_truthy = true }}"#,
             cf.name
@@ -304,6 +303,11 @@ fn validate_inputs(opts: &MakeHookOptions) -> Result<()> {
 // == Public entry point ===================================================
 
 /// Generate a hook file at `<config_dir>/hooks/<collection>/<name>.lua`.
+///
+/// # Errors
+///
+/// Returns an error if any input is invalid, the file already exists without
+/// `--force`, or writing fails.
 pub fn make_hook(opts: &MakeHookOptions) -> Result<()> {
     validate_inputs(opts)?;
 
@@ -353,8 +357,7 @@ fn integration_hint(opts: &MakeHookOptions, hook_ref: &str) -> String {
             opts.position, hook_ref
         ),
         HookType::Condition => format!(
-            "Add to your field definition:\n  admin = {{\n      condition = \"{}\",\n  }},",
-            hook_ref
+            "Add to your field definition:\n  admin = {{\n      condition = \"{hook_ref}\",\n  }},"
         ),
     }
 }

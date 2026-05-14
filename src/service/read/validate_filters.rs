@@ -42,6 +42,10 @@ use crate::{
 /// Any field path whose first dot-segment starts with `_` is rejected. To reach
 /// system-scoped data (trash, drafts), callers must use the typed request flags;
 /// the service layer injects the corresponding system filters post-validation.
+///
+/// # Errors
+///
+/// Returns `HookError` for the first filter whose first dot-segment starts with `_`.
 pub fn validate_user_filters(filters: &[FilterClause]) -> Result<(), ServiceError> {
     for clause in filters {
         match clause {
@@ -89,6 +93,12 @@ fn check_single_filter(filter: &Filter) -> Result<(), ServiceError> {
 ///   error that names the `slug` and offending field — a typo on a system
 ///   column name (e.g. `_password_hash` instead of `password_hash_status`)
 ///   would otherwise silently break the query or leak data.
+///
+/// # Errors
+///
+/// Returns `HookError` for the first filter targeting a system column outside
+/// the allowed exceptions (`_deleted_at` in trash mode, `_status` when
+/// injecting status).
 pub fn validate_access_constraints(
     filters: &[FilterClause],
     trash: bool,

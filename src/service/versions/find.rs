@@ -12,6 +12,11 @@ use crate::{
 ///
 /// Checks read access and strips read-denied fields from the snapshot.
 /// Derives the version table from `ctx.slug` + `ctx.def`.
+///
+/// # Errors
+///
+/// Returns `AccessDenied` or `HookError`, or a backend error if the
+/// SELECT fails.
 pub fn find_version_by_id(
     ctx: &ServiceContext,
     version_id: &str,
@@ -27,26 +32,21 @@ pub fn find_version_by_id(
         return Err(ServiceError::AccessDenied("Read access denied".into()));
     }
 
-    let mut version = match query::find_version_by_id(conn, &table, version_id)? {
-        Some(v) => v,
-        None => return Ok(None),
+    let Some(mut version) = query::find_version_by_id(conn, &table, version_id)? else {
+        return Ok(None);
     };
 
     // Constrained: for collections enforce against the version's parent id;
     // for globals, the filter table is meaningless (single row) and is rejected.
     if matches!(access, AccessResult::Constrained(_)) {
-        match &ctx.def {
-            Def::Global(_) => {
-                return Err(ServiceError::HookError(format!(
-                    "Access hook for global '{}' returned a filter table; globals don't support filter-based access — return true/false based on ctx.user fields instead.",
-                    ctx.slug
-                )));
-            }
-            _ => {
-                let parent_id = version.parent.to_string();
-                helpers::enforce_access_constraints(ctx, &parent_id, &access, "Read", false)?;
-            }
+        if let Def::Global(_) = &ctx.def {
+            return Err(ServiceError::HookError(format!(
+                "Access hook for global '{}' returned a filter table; globals don't support filter-based access — return true/false based on ctx.user fields instead.",
+                ctx.slug
+            )));
         }
+        let parent_id = version.parent.to_string();
+        helpers::enforce_access_constraints(ctx, &parent_id, &access, "Read", false)?;
     }
 
     // Strip read-denied fields from the snapshot JSON

@@ -14,6 +14,7 @@ use crate::{
 };
 
 /// Get column names for a collection (id + field columns + timestamps).
+#[must_use]
 pub fn get_column_names(def: &CollectionDefinition) -> Vec<String> {
     let mut names = vec!["id".to_string()];
     collect_column_names(&def.fields, &mut names);
@@ -52,6 +53,10 @@ pub fn collect_column_names(fields: &[FieldDefinition], names: &mut Vec<String>)
 
 /// Get expected column names including locale suffixes for localized fields.
 /// Used by orphan column detection where actual DB columns have locale suffixes.
+///
+/// # Errors
+///
+/// Returns an error if any field name conflicts with locale-suffixed naming.
 pub fn get_expected_column_names(
     def: &CollectionDefinition,
     locale_config: &LocaleConfig,
@@ -709,20 +714,17 @@ mod tests {
         // _tz columns must also be locale-expanded
         assert!(
             expected.contains("event_date_tz__en"),
-            "missing event_date_tz__en, got: {:?}",
-            expected
+            "missing event_date_tz__en, got: {expected:?}"
         );
         assert!(
             expected.contains("event_date_tz__de"),
-            "missing event_date_tz__de, got: {:?}",
-            expected
+            "missing event_date_tz__de, got: {expected:?}"
         );
 
         // Bare _tz column should NOT exist when localized
         assert!(
             !expected.contains("event_date_tz"),
-            "bare event_date_tz should not exist when localized, got: {:?}",
-            expected
+            "bare event_date_tz should not exist when localized, got: {expected:?}"
         );
     }
 

@@ -2,6 +2,20 @@
 //!
 //! Covers: login/logout, auth middleware, email verification, forgot/reset password.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use serde_json::json;
 use std::{net::SocketAddr, sync::Arc};
 
@@ -121,7 +135,7 @@ fn setup_app_with_config(
     let has_auth = registry
         .collections
         .values()
-        .any(|d| d.is_auth_collection());
+        .any(crap_cms::core::CollectionDefinition::is_auth_collection);
 
     let state = AdminState {
         config,
@@ -165,7 +179,7 @@ fn setup_app_with_config(
         ),
         populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
         cache: None,
-        custom_pages: Default::default(),
+        custom_pages: crap_cms::admin::custom_pages::CustomPageRegistry::default(),
     };
 
     let router = build_router(state);
@@ -208,18 +222,18 @@ fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
         .build()
         .unwrap();
     let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();
-    format!("crap_session={}", token)
+    format!("crap_session={token}")
 }
 
 const TEST_CSRF: &str = "test-csrf-token-12345";
 
 fn csrf_cookie() -> String {
-    format!("crap_csrf={}", TEST_CSRF)
+    format!("crap_csrf={TEST_CSRF}")
 }
 
 #[allow(dead_code)]
 fn auth_and_csrf(auth_cookie: &str) -> String {
-    format!("{}; crap_csrf={}", auth_cookie, TEST_CSRF)
+    format!("{auth_cookie}; crap_csrf={TEST_CSRF}")
 }
 
 async fn body_string(body: Body) -> String {
@@ -335,8 +349,7 @@ async fn login_page_csp_nonce_matches_inline_scripts() {
 
     assert!(
         !script_src.contains("'unsafe-inline'"),
-        "script-src must not include 'unsafe-inline' — got {:?}",
-        script_src,
+        "script-src must not include 'unsafe-inline' — got {script_src:?}",
     );
 
     let style_src = csp
@@ -347,8 +360,7 @@ async fn login_page_csp_nonce_matches_inline_scripts() {
 
     assert!(
         !style_src.contains("'unsafe-inline'"),
-        "style-src must not include 'unsafe-inline' — got {:?}",
-        style_src,
+        "style-src must not include 'unsafe-inline' — got {style_src:?}",
     );
 
     let nonce_prefix = "'nonce-";
@@ -361,11 +373,10 @@ async fn login_page_csp_nonce_matches_inline_scripts() {
     assert!(!nonce.is_empty(), "nonce must not be empty");
 
     let body = body_string(resp.into_body()).await;
-    let expected_attr = format!("nonce=\"{}\"", nonce);
+    let expected_attr = format!("nonce=\"{nonce}\"");
     assert!(
         body.contains(&expected_attr),
-        "rendered HTML must carry matching nonce attribute {:?}",
-        expected_attr,
+        "rendered HTML must carry matching nonce attribute {expected_attr:?}",
     );
 }
 
@@ -392,8 +403,7 @@ async fn login_action_invalid_credentials() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER || status == StatusCode::FOUND,
-        "Expected 200 or redirect, got {}",
-        status
+        "Expected 200 or redirect, got {status}"
     );
 }
 
@@ -420,8 +430,7 @@ async fn login_action_valid_credentials() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::FOUND,
-        "Expected redirect, got {}",
-        status
+        "Expected redirect, got {status}"
     );
     let cookie = resp
         .headers()
@@ -531,8 +540,7 @@ async fn logout_clears_cookie() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::FOUND,
-        "Expected redirect, got {}",
-        status
+        "Expected redirect, got {status}"
     );
     let cookie = resp
         .headers()
@@ -543,8 +551,7 @@ async fn logout_clears_cookie() {
             c.contains("Max-Age=0")
                 || c.contains("max-age=0")
                 || c.contains("expires=Thu, 01 Jan 1970"),
-            "Cookie should be expired: {}",
-            c
+            "Cookie should be expired: {c}"
         );
     }
 }
@@ -633,8 +640,7 @@ async fn login_locked_account() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER || status == StatusCode::FOUND,
-        "Expected 200 or redirect, got {}",
-        status
+        "Expected 200 or redirect, got {status}"
     );
 
     if status == StatusCode::SEE_OTHER || status == StatusCode::FOUND {
@@ -645,8 +651,7 @@ async fn login_locked_account() {
         if let Some(loc) = location {
             assert!(
                 loc.contains("login"),
-                "Locked account should redirect to login, not {}",
-                loc
+                "Locked account should redirect to login, not {loc}"
             );
         }
     }
@@ -764,8 +769,7 @@ async fn verify_email_invalid_token() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER || status == StatusCode::FOUND,
-        "Expected 200 or redirect, got {}",
-        status
+        "Expected 200 or redirect, got {status}"
     );
 }
 
@@ -808,8 +812,7 @@ async fn login_unverified_email() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Unverified login should fail gracefully, got {}",
-        status
+        "Unverified login should fail gracefully, got {status}"
     );
     if status == StatusCode::OK {
         let body = body_string(resp.into_body()).await;
@@ -849,7 +852,7 @@ async fn verify_email_with_valid_token() {
     let resp = app
         .router
         .oneshot(
-            Request::get(format!("/admin/verify-email?token={}", token))
+            Request::get(format!("/admin/verify-email?token={token}"))
                 .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(Body::empty())
                 .unwrap(),
@@ -859,15 +862,13 @@ async fn verify_email_with_valid_token() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::FOUND,
-        "Successful verification should redirect, got {}",
-        status
+        "Successful verification should redirect, got {status}"
     );
     if let Some(location) = resp.headers().get("location") {
         let loc = location.to_str().unwrap_or("");
         assert!(
             loc.contains("login") && loc.contains("success"),
-            "Should redirect to login with success message, got {}",
-            loc
+            "Should redirect to login with success message, got {loc}"
         );
     }
 }
@@ -910,8 +911,7 @@ async fn forgot_password_action() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER || status == StatusCode::FOUND,
-        "Forgot password should return 200 or redirect, never error, got {}",
-        status
+        "Forgot password should return 200 or redirect, never error, got {status}"
     );
 }
 
@@ -962,8 +962,7 @@ async fn reset_password_page_invalid_token() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER || status == StatusCode::FOUND,
-        "Expected 200 or redirect for invalid token, got {}",
-        status
+        "Expected 200 or redirect for invalid token, got {status}"
     );
 }
 
@@ -988,8 +987,7 @@ async fn reset_password_expired_token() {
                 .header("X-CSRF-Token", TEST_CSRF)
                 .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(Body::from(format!(
-                    "collection=users&token={}&password=newpass123&password_confirm=newpass123",
-                    expired_token
+                    "collection=users&token={expired_token}&password=newpass123&password_confirm=newpass123"
                 )))
                 .unwrap(),
         )
@@ -1002,8 +1000,7 @@ async fn reset_password_expired_token() {
             || status == StatusCode::SEE_OTHER
             || status == StatusCode::FOUND
             || status == StatusCode::UNPROCESSABLE_ENTITY,
-        "Expected 200, redirect, or 422 for expired token, got {}",
-        status
+        "Expected 200, redirect, or 422 for expired token, got {status}"
     );
 
     if status != StatusCode::SEE_OTHER && status != StatusCode::FOUND {
@@ -1038,7 +1035,7 @@ async fn reset_password_valid_flow() {
         .router
         .clone()
         .oneshot(
-            Request::get(format!("/admin/reset-password?token={}", valid_token))
+            Request::get(format!("/admin/reset-password?token={valid_token}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1060,8 +1057,7 @@ async fn reset_password_valid_flow() {
                 .header("X-CSRF-Token", TEST_CSRF)
                 .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(Body::from(format!(
-                    "token={}&password=newpass456&password_confirm=newpass456",
-                    valid_token
+                    "token={valid_token}&password=newpass456&password_confirm=newpass456"
                 )))
                 .unwrap(),
         )
@@ -1070,15 +1066,13 @@ async fn reset_password_valid_flow() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::FOUND,
-        "Successful password reset should redirect, got {}",
-        status
+        "Successful password reset should redirect, got {status}"
     );
     if let Some(location) = resp.headers().get("location") {
         let loc = location.to_str().unwrap_or("");
         assert!(
             loc.contains("login") && loc.contains("success"),
-            "Should redirect to login with success, got {}",
-            loc
+            "Should redirect to login with success, got {loc}"
         );
     }
 }
@@ -1177,8 +1171,7 @@ async fn reset_password_too_short() {
     let body = body_string(resp.into_body()).await;
     assert!(
         body.to_lowercase().contains("at least") && body.to_lowercase().contains("characters"),
-        "Should show minimum password length error, got: {}",
-        body
+        "Should show minimum password length error, got: {body}"
     );
 }
 
@@ -1309,7 +1302,7 @@ end"#,
     let has_auth = registry
         .collections
         .values()
-        .any(|d| d.is_auth_collection());
+        .any(crap_cms::core::CollectionDefinition::is_auth_collection);
 
     let state = AdminState {
         config,
@@ -1349,7 +1342,7 @@ end"#,
         ),
         populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
         cache: None,
-        custom_pages: Default::default(),
+        custom_pages: crap_cms::admin::custom_pages::CustomPageRegistry::default(),
     };
 
     let router = build_router(state);

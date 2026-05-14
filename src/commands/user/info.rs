@@ -22,7 +22,7 @@ pub(super) fn user_info(
     id: Option<String>,
 ) -> Result<()> {
     let (def, doc) = resolve_user(pool, registry, collection, email, id)?;
-    let verify_email = def.auth.as_ref().map(|a| a.verify_email).unwrap_or(false);
+    let verify_email = def.auth.as_ref().is_some_and(|a| a.verify_email);
 
     let conn = pool.get().context("Failed to get database connection")?;
     let ctx = ServiceContext::slug_only(collection).conn(&conn).build();

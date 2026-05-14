@@ -2,7 +2,21 @@
 //! filters, filter operators, unique constraints, custom validators,
 //! field-level hooks, and collection-level hooks.
 //!
-//! Uses ContentService directly (no network) via ContentApi trait.
+//! Uses `ContentService` directly (no network) via `ContentApi` trait.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -777,14 +791,14 @@ async fn field_level_after_read_hook() {
 
     std::fs::write(
         hooks_dir.join("transform.lua"),
-        r#"
+        r"
 local M = {}
 function M.uppercase_on_read(value, ctx)
     if value then return value:upper() end
     return value
 end
 return M
-        "#,
+        ",
     )
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
@@ -1226,17 +1240,14 @@ async fn find_depth_0_returns_id_only() {
             );
         }
         other => {
-            panic!(
-                "At depth=0, category should be a StringValue (ID), got: {:?}",
-                other
-            );
+            panic!("At depth=0, category should be a StringValue (ID), got: {other:?}");
         }
     }
 }
 
 /// Regression: user-supplied `where` clauses that target system columns
 /// (field paths starting with `_`) must be rejected at parse time with an
-/// InvalidArgument status. System columns (`_status`, `_deleted_at`, ...) are
+/// `InvalidArgument` status. System columns (`_status`, `_deleted_at`, ...) are
 /// engine-internal — the supported entry points are the typed flags
 /// `trash = true` / `draft = true`.
 #[tokio::test]

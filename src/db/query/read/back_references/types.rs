@@ -18,6 +18,7 @@ pub struct BackReference {
 }
 
 impl BackReference {
+    #[must_use]
     pub fn new(
         owner_slug: String,
         owner_label: String,

@@ -1,38 +1,49 @@
 //! Bulk delete operations: cancel pending, purge old.
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 
 use crate::db::{DbConnection, DbValue};
 
 /// Cancel pending jobs. Optionally filter by job slug.
+///
+/// # Errors
+///
+/// Returns a backend error if the DELETE fails.
 pub fn cancel_pending_jobs(conn: &dyn DbConnection, slug: Option<&str>) -> Result<i64> {
-    let deleted = if let Some(slug) = slug {
+    let affected = if let Some(slug) = slug {
         conn.execute(
             &format!(
                 "DELETE FROM _crap_jobs WHERE status = 'pending' AND slug = {}",
                 conn.placeholder(1)
             ),
             &[DbValue::Text(slug.to_string())],
-        )? as i64
+        )?
     } else {
-        conn.execute("DELETE FROM _crap_jobs WHERE status = 'pending'", &[])? as i64
+        conn.execute("DELETE FROM _crap_jobs WHERE status = 'pending'", &[])?
     };
 
-    Ok(deleted)
+    i64::try_from(affected).context("cancelled count exceeds i64::MAX")
 }
 
 /// Delete completed/failed/stale job runs older than the given threshold.
 /// Returns the number of rows deleted.
+///
+/// # Errors
+///
+/// Returns a backend error if the DELETE fails.
 pub fn purge_old_jobs(conn: &dyn DbConnection, older_than_secs: u64) -> Result<i64> {
-    let (offset_sql, offset_param) = conn.date_offset_expr(older_than_secs as i64, 1);
-    let deleted = conn.execute(
+    let older = i64::try_from(older_than_secs)
+        .context("older_than_secs exceeds the SQL TIMESTAMP arithmetic range")?;
+    let (offset_sql, offset_param) = conn.date_offset_expr(older, 1);
+    let deleted = i64::try_from(conn.execute(
         &format!(
             "DELETE FROM _crap_jobs
              WHERE status IN ('completed', 'failed', 'stale')
                AND created_at < {offset_sql}"
         ),
         &[offset_param],
-    )? as i64;
+    )?)
+    .context("delete count exceeds i64::MAX")?;
 
     Ok(deleted)
 }
@@ -65,7 +76,7 @@ mod tests {
         assert_eq!(remaining[0].id, "new1");
     }
 
-    /// Regression: cancel_pending_jobs used `name` instead of `slug` column.
+    /// Regression: `cancel_pending_jobs` used `name` instead of `slug` column.
     #[test]
     fn test_cancel_pending_jobs_by_slug() {
         let (_dir, conn) = setup_db();

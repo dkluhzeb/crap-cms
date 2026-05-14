@@ -26,22 +26,28 @@ pub(super) fn resize_image(img: &DynamicImage, size: &ImageSize) -> Option<Dynam
     let filter = imageops::FilterType::CatmullRom;
     Some(match size.fit {
         ImageFit::Cover => {
-            // Resize to fill, then center crop
-            let src_ratio = img.width() as f64 / img.height() as f64;
-            let dst_ratio = size.width as f64 / size.height as f64;
+            // Resize to fill, then center crop. Compare aspect ratios via
+            // u64 cross-multiplication and compute the new dimension via
+            // integer math; u32 image dimensions fit in u32 even after
+            // multiplying by another u32 in u64.
+            let src_wide = u64::from(img.width()) * u64::from(size.height)
+                > u64::from(img.height()) * u64::from(size.width);
 
-            let (resize_w, resize_h) = if src_ratio > dst_ratio {
+            // A computed dimension that exceeds u32 means the source image
+            // dimensions are pathological; bail rather than asking the image
+            // crate to allocate a ~4-billion-pixel canvas.
+            let (resize_w, resize_h) = if src_wide {
                 // Source is wider — fit height, crop width
                 let h = size.height;
-                let w = (img.width() as f64 * (size.height as f64 / img.height() as f64))
-                    .min(u32::MAX as f64) as u32;
-                (w.max(1), h)
+                let w_u64 = u64::from(img.width()) * u64::from(size.height)
+                    / u64::from(img.height().max(1));
+                (u32::try_from(w_u64).ok()?.max(1), h)
             } else {
                 // Source is taller — fit width, crop height
                 let w = size.width;
-                let h = (img.height() as f64 * (size.width as f64 / img.width() as f64))
-                    .min(u32::MAX as f64) as u32;
-                (w, h.max(1))
+                let h_u64 =
+                    u64::from(img.height()) * u64::from(size.width) / u64::from(img.width().max(1));
+                (w, u32::try_from(h_u64).ok()?.max(1))
             };
 
             let resized = img.resize_exact(resize_w, resize_h, filter);
@@ -70,7 +76,7 @@ pub(super) fn resize_image(img: &DynamicImage, size: &ImageSize) -> Option<Dynam
 pub(super) fn webp_to_bytes(img: &DynamicImage, quality: u8) -> Vec<u8> {
     let rgba = img.to_rgba8();
     let encoder = webp::Encoder::from_rgba(&rgba, img.width(), img.height());
-    let mem = encoder.encode(quality as f32);
+    let mem = encoder.encode(f32::from(quality));
 
     mem.to_vec()
 }
@@ -117,6 +123,11 @@ pub(super) fn save_avif(img: &DynamicImage, path: &Path, quality: u8) -> Result<
 /// Returns Ok(()) on success, Err on failure.
 /// Process a queued image conversion using storage backend.
 /// `source_key` and `target_key` are storage keys (or filesystem paths for local).
+///
+/// # Errors
+///
+/// Returns an error if the source can't be read, the conversion fails, or
+/// the target can't be written.
 pub fn process_image_entry_with_storage(
     source_key: &str,
     target_key: &str,
@@ -126,15 +137,15 @@ pub fn process_image_entry_with_storage(
 ) -> Result<()> {
     let source_data = storage
         .get(source_key)
-        .with_context(|| format!("Source image not found: {}", source_key))?;
+        .with_context(|| format!("Source image not found: {source_key}"))?;
 
     let img = image::load_from_memory(&source_data)
-        .with_context(|| format!("Failed to decode image: {}", source_key))?;
+        .with_context(|| format!("Failed to decode image: {source_key}"))?;
 
     let target_data = match format {
         "webp" => webp_to_bytes(&img, quality),
         "avif" => avif_to_bytes(&img, quality)?,
-        _ => bail!("Unsupported format: {}", format),
+        _ => bail!("Unsupported format: {format}"),
     };
 
     let content_type = match format {
@@ -145,7 +156,7 @@ pub fn process_image_entry_with_storage(
 
     storage
         .put(target_key, &target_data, content_type)
-        .with_context(|| format!("Failed to save converted image: {}", target_key))?;
+        .with_context(|| format!("Failed to save converted image: {target_key}"))?;
 
     Ok(())
 }
@@ -178,7 +189,7 @@ pub(super) fn save_resized_image(
             &mut buf,
             ImageFormat::from_extension(input.ext).unwrap_or(ImageFormat::Png),
         )
-        .with_context(|| format!("Failed to encode resized image: {}", size_key))?;
+        .with_context(|| format!("Failed to encode resized image: {size_key}"))?;
 
     let size_mime = mime_guess::from_path(&size_filename)
         .first_or_octet_stream()
@@ -187,11 +198,11 @@ pub(super) fn save_resized_image(
     input
         .storage
         .put(&size_key, &buf.into_inner(), &size_mime)
-        .with_context(|| format!("Failed to save resized image: {}", size_key))?;
+        .with_context(|| format!("Failed to save resized image: {size_key}"))?;
 
     guard.push(size_key.clone());
 
-    let size_url = format!("/uploads/{}", size_key);
+    let size_url = format!("/uploads/{size_key}");
 
     Ok((size_key, size_url))
 }
@@ -218,7 +229,7 @@ pub(super) fn process_format_variant(
 ) -> Result<()> {
     let variant_filename = format!("{}_{}.{}", ctx.stem, ctx.size_name, ctx.format_name);
     let variant_key = format!("{}/{}", ctx.collection_slug, variant_filename);
-    let variant_url = format!("/uploads/{}", variant_key);
+    let variant_url = format!("/uploads/{variant_key}");
 
     if ctx.opts.queue {
         // Enqueue storage KEYS, not absolute filesystem paths. The scheduler
@@ -274,16 +285,13 @@ pub(super) fn process_image_sizes(
         .unwrap_or((unique_filename, "bin"));
 
     for size_def in &upload_config.image_sizes {
-        let resized = match resize_image(img, size_def) {
-            Some(r) => r,
-            None => {
-                warn!(
-                    "Skipping size '{}' — source image has zero dimensions",
-                    size_def.name
-                );
+        let Some(resized) = resize_image(img, size_def) else {
+            warn!(
+                "Skipping size '{}' — source image has zero dimensions",
+                size_def.name
+            );
 
-                continue;
-            }
+            continue;
         };
 
         let (size_key, size_url) = save_resized_image(
@@ -356,11 +364,11 @@ pub fn process_image_entry(
     let source = Path::new(source_path);
 
     if !source.exists() {
-        bail!("Source image not found: {}", source_path);
+        bail!("Source image not found: {source_path}");
     }
 
     let img =
-        image::open(source).with_context(|| format!("Failed to decode image: {}", source_path))?;
+        image::open(source).with_context(|| format!("Failed to decode image: {source_path}"))?;
 
     let target = Path::new(target_path);
 
@@ -371,13 +379,27 @@ pub fn process_image_entry(
     match format {
         "webp" => save_webp(&img, target, quality)?,
         "avif" => save_avif(&img, target, quality)?,
-        _ => bail!("Unsupported format: {}", format),
+        _ => bail!("Unsupported format: {format}"),
     }
 
     Ok(())
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use image::{ImageBuffer, ImageEncoder, Rgba};
     use std::fs;

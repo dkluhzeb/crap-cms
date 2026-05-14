@@ -1,12 +1,12 @@
 //! Type generation for multiple languages from the collection registry.
 //!
-//! - `lua` — LuaLS annotations for hook/init IDE support (internal,
+//! - `lua` — `LuaLS` annotations for hook/init IDE support (internal,
 //!   default backend used on server startup)
 //! - `typescript` — TypeScript interfaces for gRPC clients
 //! - `go` — Go structs with json tags
 //! - `python` — Python dataclasses
 //! - `rust_types` — Rust structs with serde derives
-//! - `rust_proto` — Rust prost_types → typed-struct conversion impls
+//! - `rust_proto` — Rust `prost_types` → typed-struct conversion impls
 //!
 //! ## Layout
 //!
@@ -38,3 +38,4 @@ mod typescript;
 pub use dispatch::{generate, generate_lang, generate_proto_conversion};
 pub(crate) use helpers::to_pascal_case;
 pub use language::Language;
+pub use lua::LuaAnnotation;

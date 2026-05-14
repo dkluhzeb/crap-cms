@@ -11,6 +11,11 @@ use super::{
 };
 
 /// Dispatch the `make` subcommand to the appropriate handler.
+///
+/// # Errors
+///
+/// Propagates whatever the dispatched subcommand returns (template
+/// writes, slug validation, file-overwrite refusals, …).
 #[cfg(not(tarpaulin_include))]
 pub fn run(config_dir: &Path, action: MakeAction) -> Result<()> {
     match action {

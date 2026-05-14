@@ -497,8 +497,7 @@ mod tests {
             let result = build_value_contexts(&fields, &values, &HashMap::new(), false, false);
             assert_eq!(
                 result[0]["checked"], true,
-                "Checkbox should be checked for value '{}'",
-                val
+                "Checkbox should be checked for value '{val}'"
             );
         }
     }
@@ -512,8 +511,7 @@ mod tests {
             let result = build_value_contexts(&fields, &values, &HashMap::new(), false, false);
             assert_eq!(
                 result[0]["checked"], false,
-                "Checkbox should be unchecked for value '{}'",
-                val
+                "Checkbox should be unchecked for value '{val}'"
             );
         }
     }
@@ -767,10 +765,22 @@ mod tests {
         assert_eq!(block_defs[0]["image_url"], "/static/blocks/hero.svg");
 
         assert_eq!(block_defs[1]["group"], "Content");
-        assert!(block_defs[1].get("image_url").is_none_or(|v| v.is_null()));
+        assert!(
+            block_defs[1]
+                .get("image_url")
+                .is_none_or(serde_json::Value::is_null)
+        );
 
-        assert!(block_defs[2].get("group").is_none_or(|v| v.is_null()));
-        assert!(block_defs[2].get("image_url").is_none_or(|v| v.is_null()));
+        assert!(
+            block_defs[2]
+                .get("group")
+                .is_none_or(serde_json::Value::is_null)
+        );
+        assert!(
+            block_defs[2]
+                .get("image_url")
+                .is_none_or(serde_json::Value::is_null)
+        );
     }
 
     #[test]
@@ -904,7 +914,7 @@ mod tests {
     fn max_depth_prevents_infinite_recursion() {
         fn make_nested_array(depth: usize) -> crate::core::FieldDefinition {
             let mut field =
-                crate::core::FieldDefinition::builder(format!("level{}", depth), FieldType::Array)
+                crate::core::FieldDefinition::builder(format!("level{depth}"), FieldType::Array)
                     .build();
             if depth < 10 {
                 field.fields = vec![make_nested_array(depth + 1)];

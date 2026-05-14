@@ -24,6 +24,11 @@ pub struct UserDeleteParams<'a> {
 }
 
 /// Delete a user from an auth collection.
+///
+/// # Errors
+///
+/// Returns an error if the user can't be resolved, the prompt fails, the DB
+/// transaction fails, or any of the delete/ref-count steps fails.
 #[cfg(not(tarpaulin_include))]
 pub fn user_delete(p: UserDeleteParams<'_>) -> Result<()> {
     let (_, doc) = resolve_user(p.pool, p.registry, p.collection, p.email, p.id)?;
@@ -73,6 +78,11 @@ pub fn user_delete(p: UserDeleteParams<'_>) -> Result<()> {
 }
 
 /// Lock a user account.
+///
+/// # Errors
+///
+/// Returns an error if the user can't be resolved, the connection fails, or
+/// the lock operation fails.
 #[cfg(not(tarpaulin_include))]
 pub fn user_lock(
     pool: &DbPool,
@@ -102,6 +112,11 @@ pub fn user_lock(
 }
 
 /// Unlock a user account.
+///
+/// # Errors
+///
+/// Returns an error if the user can't be resolved, the connection fails, or
+/// the unlock operation fails.
 #[cfg(not(tarpaulin_include))]
 pub fn user_unlock(
     pool: &DbPool,
@@ -203,6 +218,11 @@ pub struct UserChangePasswordParams<'a> {
 }
 
 /// Change a user's password.
+///
+/// # Errors
+///
+/// Returns an error if the user can't be resolved, the password prompt
+/// fails, the password fails policy validation, or the DB update fails.
 #[cfg(not(tarpaulin_include))]
 pub fn user_change_password(p: UserChangePasswordParams<'_>) -> Result<()> {
     let (_, doc) = resolve_user(p.pool, p.registry, p.collection, p.email, p.id)?;

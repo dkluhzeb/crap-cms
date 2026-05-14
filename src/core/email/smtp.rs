@@ -56,7 +56,7 @@ fn build_message(
 
     let to_mailbox: Mailbox = to
         .parse()
-        .with_context(|| format!("Invalid recipient address: {}", to))?;
+        .with_context(|| format!("Invalid recipient address: {to}"))?;
 
     if let Some(plain) = text {
         Message::builder()
@@ -143,7 +143,7 @@ pub(super) fn send_email_smtp(
 
     transport
         .send(&message)
-        .with_context(|| format!("Failed to send email to {}", to))?;
+        .with_context(|| format!("Failed to send email to {to}"))?;
 
     info!("Email sent to {} (subject: {})", to, subject);
 

@@ -66,7 +66,7 @@ fn try_strategy_auth(
     for strategy in &auth.strategies {
         match hook_runner.run_auth_strategy(&strategy.authenticate, slug, headers, conn) {
             Ok(Some(doc)) => return Some(doc),
-            Ok(None) => continue,
+            Ok(None) => {}
             Err(e) => {
                 // Log and fall through to the next strategy. Operators need visibility
                 // into strategy failures (DB errors, bad config, Lua panics) that
@@ -77,7 +77,6 @@ fn try_strategy_auth(
                     error = ?e,
                     "Custom auth strategy returned an error; continuing to next strategy"
                 );
-                continue;
             }
         }
     }
@@ -88,7 +87,7 @@ fn try_strategy_auth(
 /// Synchronous body of [`verify_credentials`], extracted so the
 /// `spawn_blocking` call is a single fn invocation (CLAUDE.md).
 fn verify_credentials_blocking(
-    params: VerifyParams,
+    params: &VerifyParams,
 ) -> anyhow::Result<Option<Result<LoginSuccess, String>>> {
     let conn = params.pool.get()?;
     let slug = &params.slug;
@@ -142,8 +141,8 @@ fn verify_credentials_blocking(
             return Ok(None);
         }
 
-        let session_version =
-            service::auth::get_session_version(&ctx, &user.id).map_err(|e| e.into_anyhow())?;
+        let session_version = service::auth::get_session_version(&ctx, &user.id)
+            .map_err(crate::service::ServiceError::into_anyhow)?;
         return Ok(Some(Ok(LoginSuccess {
             user,
             session_version,
@@ -160,7 +159,7 @@ fn verify_credentials_blocking(
 async fn verify_credentials(
     params: VerifyParams,
 ) -> Result<Result<Option<Result<LoginSuccess, String>>, anyhow::Error>, task::JoinError> {
-    task::spawn_blocking(move || verify_credentials_blocking(params)).await
+    task::spawn_blocking(move || verify_credentials_blocking(&params)).await
 }
 
 /// MFA pending token expiry in seconds (5 minutes).
@@ -180,7 +179,7 @@ struct MfaCodeParams {
 ///
 /// Runs inside `spawn_blocking`. Errors are logged but not propagated —
 /// the caller has already redirected to the MFA page.
-fn send_mfa_code(params: MfaCodeParams, code: &str) {
+fn send_mfa_code(params: &MfaCodeParams, code: &str) {
     let conn = match params.pool.get() {
         Ok(c) => c,
         Err(e) => {
@@ -189,7 +188,9 @@ fn send_mfa_code(params: MfaCodeParams, code: &str) {
         }
     };
 
-    let exp = Utc::now().timestamp() + MFA_PENDING_EXPIRY as i64;
+    // Saturate to 0 (immediate expiry) on the impossible overflow path —
+    // never-expires is the wrong fallback for security-sensitive timeouts.
+    let exp = Utc::now().timestamp() + i64::try_from(MFA_PENDING_EXPIRY).unwrap_or(0);
 
     let ctx = ServiceContext::slug_only(&params.slug).conn(&conn).build();
 
@@ -244,7 +245,7 @@ fn handle_mfa_challenge(
     // Create a short-lived MFA pending token (5 min)
     let claims = match ClaimsBuilder::new(user.id.clone(), Slug::new(&form.collection))
         .email(user_email.clone())
-        .exp((Utc::now().timestamp().max(0) as u64).saturating_add(MFA_PENDING_EXPIRY))
+        .exp((Utc::now().timestamp().max(0).cast_unsigned()).saturating_add(MFA_PENDING_EXPIRY))
         .session_version(session_version)
         .build()
     {
@@ -276,7 +277,7 @@ fn handle_mfa_challenge(
         email_renderer: state.email_renderer.clone(),
     };
 
-    task::spawn_blocking(move || send_mfa_code(params, &code_for_db));
+    task::spawn_blocking(move || send_mfa_code(&params, &code_for_db));
 
     // Set MFA pending cookie and redirect to MFA page
     let cookie = mfa_pending_cookie(&mfa_token, state.config.admin.dev_mode);
@@ -307,7 +308,7 @@ fn build_session_response(
         &form.collection,
         user_email,
         session_version,
-        Utc::now().timestamp().max(0) as u64,
+        Utc::now().timestamp().max(0).cast_unsigned(),
     ) {
         Ok(s) => s,
         Err(e) => {
@@ -337,7 +338,7 @@ pub async fn login_action(
         .registry
         .get_collection(&form.collection)
         .cloned()
-        .filter(|d| d.is_auth_collection())
+        .filter(crate::core::CollectionDefinition::is_auth_collection)
     else {
         return login_error(&state, "error_invalid_collection", &form.email);
     };

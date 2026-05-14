@@ -6,7 +6,7 @@
 //! the user can add the sidebar entry without remembering the exact
 //! shape -- sidebar registration is optional, the page routes either way.
 
-use std::{fs, path::Path};
+use std::{fmt::Write as _, fs, path::Path};
 
 use anyhow::{Context as _, Result};
 use serde::Serialize;
@@ -41,6 +41,11 @@ pub struct MakePageOptions<'a> {
 }
 
 /// Scaffold the page template.
+///
+/// # Errors
+///
+/// Returns an error if the slug is invalid, the file already exists without
+/// `--force`, or writing the file fails.
 pub fn make_page(opts: &MakePageOptions) -> Result<()> {
     validate_template_slug(opts.slug)?;
 
@@ -53,8 +58,7 @@ pub fn make_page(opts: &MakePageOptions) -> Result<()> {
 
     let label = opts
         .label
-        .map(str::to_string)
-        .unwrap_or_else(|| to_title_case(opts.slug));
+        .map_or_else(|| to_title_case(opts.slug), str::to_string);
 
     let hbs = render_page_hbs(opts.slug, &label)?;
     fs::write(&file_path, &hbs)
@@ -74,20 +78,20 @@ fn render_page_hbs(slug: &str, label: &str) -> Result<String> {
 fn print_register_hint(opts: &MakePageOptions, label: &str) {
     let mut snippet = String::new();
     snippet.push_str("\nAdd this to your init.lua so the sidebar shows the entry:\n\n");
-    snippet.push_str(&format!("  crap.pages.register(\"{}\", {{\n", opts.slug));
+    let _ = writeln!(snippet, "  crap.pages.register(\"{}\", {{", opts.slug);
     if let Some(section) = opts.section {
-        snippet.push_str(&format!("    section = \"{}\",\n", section));
+        let _ = writeln!(snippet, "    section = \"{section}\",");
     } else {
         snippet.push_str("    -- section = \"Tools\",  -- optional sidebar group heading\n");
     }
-    snippet.push_str(&format!("    label = \"{}\",\n", label));
+    let _ = writeln!(snippet, "    label = \"{label}\",");
     if let Some(icon) = opts.icon {
-        snippet.push_str(&format!("    icon = \"{}\",\n", icon));
+        let _ = writeln!(snippet, "    icon = \"{icon}\",");
     } else {
         snippet.push_str("    -- icon = \"monitoring\",  -- Material Symbols icon name\n");
     }
     if let Some(access) = opts.access {
-        snippet.push_str(&format!("    access = \"{}\",\n", access));
+        let _ = writeln!(snippet, "    access = \"{access}\",");
     } else {
         snippet.push_str("    -- access = \"access.admin_only\",  -- optional Lua access fn\n");
     }

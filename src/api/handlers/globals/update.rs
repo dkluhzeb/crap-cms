@@ -1,4 +1,4 @@
-//! UpdateGlobal handler — update a global's document.
+//! `UpdateGlobal` handler — update a global's document.
 
 use std::sync::Arc;
 

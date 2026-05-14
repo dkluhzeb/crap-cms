@@ -66,7 +66,7 @@ pub fn run(
         let result = query::find(conn, slug, def, &find_query, None);
         let elapsed = start.elapsed();
 
-        let row_count = result.as_ref().map(|docs| docs.len()).unwrap_or(0);
+        let row_count = result.as_ref().map_or(0, std::vec::Vec::len);
         let read_hooks = collect_read_hooks(def);
         let hook_summary = if read_hooks.is_empty() {
             "-".to_string()
@@ -150,7 +150,7 @@ fn run_explain(
     Ok(lines)
 }
 
-/// Collect read-path hooks for a collection (access.read, before_read, after_read).
+/// Collect read-path hooks for a collection (access.read, `before_read`, `after_read`).
 fn collect_read_hooks(def: &CollectionDefinition) -> Vec<String> {
     let mut hooks = Vec::new();
 
