@@ -1,0 +1,28 @@
+[package]
+name = "crap-cms-e2e"
+description = "End-to-end and HTML integration tests for crap-cms"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+crap-cms = { path = ".." }
+
+axum.workspace = true
+chromiumoxide = { version = "0.9", default-features = false }
+chrono.workspace = true
+http-body-util.workspace = true
+scraper.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tokio-util.workspace = true
+tower.workspace = true

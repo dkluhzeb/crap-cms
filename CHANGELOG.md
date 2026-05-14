@@ -291,6 +291,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- **Cargo workspace migration.** The repo is now a Cargo workspace
+  with three members at the root: `crap-cms` (main crate, unchanged
+  binary), `crap-cms-e2e` (`e2e/` — end-to-end and HTML integration
+  tests, formerly `tests/e2e/`, now in the canonical Rust layout
+  with shared fixtures in `e2e/src/{browser,helpers,html}.rs` and
+  one integration-test binary per `e2e/tests/<name>.rs`), and
+  `crap-cms-macros` (`macros/` — proc-macro crate, currently an
+  empty stub). Shared dependency,
+  metadata, and lint configuration moved to `[workspace.package]`,
+  `[workspace.dependencies]`, and `[workspace.lints]` so all current
+  and future members inherit them via `*.workspace = true`. The
+  `browser-tests` feature went away entirely — the e2e crate's own
+  membership boundary is the gate, so an internal feature flag is
+  redundant. `chromiumoxide` is a regular dep of the e2e crate.
+  CI's `check` job now runs
+  `cargo test --workspace --exclude crap-cms-e2e` (the dedicated
+  `e2e` job runs `cargo test -p crap-cms-e2e -- --test-threads=1`).
+  Release/nightly cross-builds
+  pin `-p crap-cms` to skip the test-only e2e crate. The
+  `default-members = [".", "macros"]` setting keeps plain
+  `cargo build` / `cargo test` from root focused on the main crate
+  + macros stub, avoiding accidental chromiumoxide compiles during
+  routine development. New CLAUDE.md `Workspace layout` section
+  documents the structure and how to add future members.
+
 - **Clippy pedantic sweep — `cargo clippy --all-targets` is now clean.**
   Production code (`--lib --bin`) is held to the strict pedantic set;
   the only workspace-level allows remain `implicit_hasher` and

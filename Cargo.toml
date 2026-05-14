@@ -1,29 +1,31 @@
-[package]
-name = "crap-cms"
+[workspace]
+members = ["e2e", "macros"]
+default-members = [".", "macros"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0-alpha.9"
 edition = "2024"
-default-run = "crap-cms"
-description = "Headless CMS in Rust with Lua hooks, gRPC API, and HTMX admin UI"
 license = "MIT"
 repository = "https://github.com/dkluhzeb/crap-cms"
 homepage = "https://github.com/dkluhzeb/crap-cms"
 authors = ["dkluhzeb"]
-keywords = ["cms", "headless", "grpc", "lua", "htmx"]
-categories = ["web-programming", "database"]
 readme = "README.md"
 
-[[bin]]
-name = "crap-cms"
-path = "src/main.rs"
-
-[dependencies]
+[workspace.dependencies]
 # Web framework
 axum = { version = "0.8", features = ["form", "macros", "query", "multipart"] }
 tower-http = { version = "0.6", features = ["fs", "cors", "compression-gzip", "compression-br", "trace"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "io-util", "io-std"] }
 
 # Database
-r2d2 = { version = "0.8", optional = true }
+r2d2 = "0.8"
+rusqlite = { version = "0.38", features = ["bundled"] }
+r2d2_sqlite = "0.32"
+tokio-postgres = { version = "0.7", features = ["with-serde_json-1"] }
+deadpool-postgres = "0.14"
+deadpool = { version = "0.12", features = ["managed", "rt_tokio_1"] }
+parking_lot = "0.12"
 
 # Templates
 handlebars = { version = "6", features = ["dir_source"] }
@@ -118,74 +120,22 @@ sha2 = "0.11"
 semver = "1"
 similar = { version = "3.1.0", features = ["text"] }
 
-[features]
-default = ["sqlite"]
-sqlite = ["dep:rusqlite", "dep:r2d2", "dep:r2d2_sqlite"]
-postgres = ["dep:tokio-postgres", "dep:deadpool-postgres", "dep:deadpool", "dep:parking_lot"]
-s3-storage = ["dep:rust-s3"]
-redis = ["dep:redis"]
-browser-tests = ["dep:chromiumoxide"]
+# Storage / cache backends (optional in main crate)
+rust-s3 = { version = "0.37", default-features = false, features = ["tokio-rustls-tls"] }
+redis = { version = "1", features = ["tokio-comp"] }
 
-[dependencies.rusqlite]
-version = "0.38"
-optional = true
-features = ["bundled"]
-
-[dependencies.r2d2_sqlite]
-version = "0.32"
-optional = true
-
-[dependencies.tokio-postgres]
-version = "0.7"
-optional = true
-features = ["with-serde_json-1"]
-
-[dependencies.deadpool-postgres]
-version = "0.14"
-optional = true
-
-[dependencies.deadpool]
-version = "0.12"
-optional = true
-features = ["managed", "rt_tokio_1"]
-
-[dependencies.parking_lot]
-version = "0.12"
-optional = true
-
-[dependencies.chromiumoxide]
-version = "0.9"
-optional = true
-default-features = false
-
-[dependencies.redis]
-version = "1"
-optional = true
-features = ["tokio-comp"]
-
-[dependencies.rust-s3]
-version = "0.37"
-optional = true
-default-features = false
-features = ["tokio-rustls-tls"]
-
-[dev-dependencies]
+# Dev / test
 tempfile = "3"
 http-body-util = "0.1"
 scraper = "0.26"
 
-[profile.dev.package.image]
-opt-level = 2
-[profile.dev.package.webp]
-opt-level = 2
-
-[build-dependencies]
+# Build
 tonic-prost-build = "0.14"
 
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin)', 'cfg(tarpaulin_include)', 'cfg(feature, values("browser-tests", "sqlite", "postgres", "s3-storage", "redis"))'] }
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin)', 'cfg(tarpaulin_include)', 'cfg(feature, values("sqlite", "postgres", "s3-storage", "redis"))'] }
 
-[lints.clippy]
+[workspace.lints.clippy]
 # Pedantic at warn-level. We fix what we can — suppressions get added
 # below only after we've examined the warnings and decided the rule
 # isn't worth following in this codebase.
@@ -210,6 +160,159 @@ implicit_hasher = "allow"
 # surfaces — and the struct-of-args bundles literally exist to
 # undo `needless_pass_by_value`. No call site uses positional booleans.
 struct_excessive_bools = "allow"
+
+[package]
+name = "crap-cms"
+description = "Headless CMS in Rust with Lua hooks, gRPC API, and HTMX admin UI"
+keywords = ["cms", "headless", "grpc", "lua", "htmx"]
+categories = ["web-programming", "database"]
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme.workspace = true
+default-run = "crap-cms"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "crap-cms"
+path = "src/main.rs"
+
+[dependencies]
+# Web framework
+axum.workspace = true
+tower-http.workspace = true
+tokio.workspace = true
+
+# Database (optional, gated by features)
+r2d2 = { workspace = true, optional = true }
+rusqlite = { workspace = true, optional = true }
+r2d2_sqlite = { workspace = true, optional = true }
+tokio-postgres = { workspace = true, optional = true }
+deadpool-postgres = { workspace = true, optional = true }
+deadpool = { workspace = true, optional = true }
+parking_lot = { workspace = true, optional = true }
+
+# Templates
+handlebars.workspace = true
+include_dir.workspace = true
+
+# gRPC
+tonic.workspace = true
+tonic-prost.workspace = true
+prost.workspace = true
+prost-types.workspace = true
+tonic-reflection.workspace = true
+tokio-stream.workspace = true
+
+# Lua
+mlua.workspace = true
+
+# Config & CLI
+clap.workspace = true
+clap_complete.workspace = true
+dialoguer.workspace = true
+console.workspace = true
+indicatif.workspace = true
+toml.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+
+# Auth
+argon2.workspace = true
+jsonwebtoken.workspace = true
+
+# Email
+lettre.workspace = true
+
+# Image processing
+image.workspace = true
+webp.workspace = true
+kamadak-exif.workspace = true
+
+# HTTP client
+reqwest.workspace = true
+
+# Crypto
+ring.workspace = true
+base64.workspace = true
+rand.workspace = true
+aes-gcm.workspace = true
+
+# Cron
+cron.workspace = true
+
+# HTTP/2
+hyper.workspace = true
+hyper-util.workspace = true
+
+# Tower
+tower.workspace = true
+
+# URL
+url.workspace = true
+
+# Utilities
+nanoid.workspace = true
+dirs.workspace = true
+chrono.workspace = true
+mime_guess.workspace = true
+ipnet.workspace = true
+anyhow.workspace = true
+
+# Process management
+libc.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+form_urlencoded.workspace = true
+regex.workspace = true
+dashmap.workspace = true
+subtle.workspace = true
+infer.workspace = true
+tokio-util.workspace = true
+tonic-health.workspace = true
+chrono-tz.workspace = true
+sha2.workspace = true
+semver.workspace = true
+similar.workspace = true
+
+# Storage / cache backends (optional, gated by features)
+rust-s3 = { workspace = true, optional = true }
+redis = { workspace = true, optional = true }
+
+# Workspace member — proc-macro crate. Currently a stub; will host
+# `#[derive(LuaAnnotation)]` and `#[derive(ProtoMessage)]` derives.
+crap-cms-macros = { path = "macros" }
+
+[features]
+default = ["sqlite"]
+sqlite = ["dep:rusqlite", "dep:r2d2", "dep:r2d2_sqlite"]
+postgres = ["dep:tokio-postgres", "dep:deadpool-postgres", "dep:deadpool", "dep:parking_lot"]
+s3-storage = ["dep:rust-s3"]
+redis = ["dep:redis"]
+
+[dev-dependencies]
+tempfile.workspace = true
+http-body-util.workspace = true
+scraper.workspace = true
+
+[build-dependencies]
+tonic-prost-build.workspace = true
+
+[profile.dev.package.image]
+opt-level = 2
+[profile.dev.package.webp]
+opt-level = 2
 
 [profile.release]
 lto = true

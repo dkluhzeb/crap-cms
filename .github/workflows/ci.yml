@@ -77,7 +77,7 @@ jobs:
         run: biome ci
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Handlebars template formatting (crap-cms fmt)
         run: cargo run --quiet --bin crap-cms -- fmt --check
@@ -92,7 +92,10 @@ jobs:
           cargo audit
 
       - name: Run tests
-        run: cargo test --workspace
+        # Exclude the e2e crate — it spins up axum servers and (with
+        # `--features browser-tests`) Chrome. The dedicated `e2e` job
+        # below runs it with `--test-threads=1` and Chrome installed.
+        run: cargo test --workspace --exclude crap-cms-e2e
 
   features:
     name: feature matrix (${{ matrix.label }})
@@ -110,10 +113,10 @@ jobs:
           - label: postgres-only
             flags: --no-default-features --features postgres
             test: false
-          # all features — catches feature-interaction compile errors across
-          # s3-storage, redis, browser-tests, and both backends. Compile-only;
-          # browser-tests needs Chrome at runtime and runs in the dedicated
-          # `e2e` job below.
+          # all features — catches feature-interaction compile errors
+          # across s3-storage, redis, and both DB backends. Compile-only.
+          # The e2e crate's `browser-tests` feature is covered by the
+          # dedicated `e2e` job below (which sets up Chrome).
           - label: all-features
             flags: --all-features
             test: false
@@ -141,14 +144,14 @@ jobs:
             ${{ runner.os }}-registry-
 
       - name: Build
-        run: cargo build ${{ matrix.flags }}
+        run: cargo build -p crap-cms ${{ matrix.flags }}
 
       - name: Clippy
-        run: cargo clippy ${{ matrix.flags }} --all-targets -- -D warnings
+        run: cargo clippy -p crap-cms ${{ matrix.flags }} --all-targets -- -D warnings
 
       - name: Test
         if: matrix.test
-        run: cargo test ${{ matrix.flags }} --workspace
+        run: cargo test -p crap-cms ${{ matrix.flags }}
 
   e2e:
     name: e2e (browser tests)
@@ -187,4 +190,4 @@ jobs:
         # Chrome instances race for the same SingletonLock — all but one
         # exit with "Failed to create a ProcessSingleton for your profile
         # directory" and the test panics on `Browser::launch().unwrap()`.
-        run: cargo test --test e2e --features browser-tests -- --test-threads=1
+        run: cargo test -p crap-cms-e2e -- --test-threads=1

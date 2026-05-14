@@ -1,0 +1,18 @@
+[package]
+name = "crap-cms-macros"
+description = "Procedural macros for crap-cms (LuaAnnotation, ProtoMessage)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]

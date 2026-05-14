@@ -889,12 +889,12 @@ dependencies = [
  "argon2",
  "axum",
  "base64",
- "chromiumoxide",
  "chrono",
  "chrono-tz",
  "clap",
  "clap_complete",
  "console",
+ "crap-cms-macros",
  "cron",
  "dashmap",
  "deadpool",
@@ -957,6 +957,28 @@ dependencies = [
  "url",
  "webp",
 ]
+
+[[package]]
+name = "crap-cms-e2e"
+version = "0.1.0-alpha.9"
+dependencies = [
+ "axum",
+ "chromiumoxide",
+ "chrono",
+ "crap-cms",
+ "http-body-util",
+ "scraper",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tower",
+]
+
+[[package]]
+name = "crap-cms-macros"
+version = "0.1.0-alpha.9"
 
 [[package]]
 name = "crc32fast"
