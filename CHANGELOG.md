@@ -52,6 +52,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     login → MFA challenge redirect + cookie → email-code capture →
     POST /admin/mfa with code → session cookie set. The full-flow
     test caught the `_mfa_code` column migration bug fixed above.
+  - `html_email_verify::verify_email_valid_token_marks_verified` and
+    `verify_email_invalid_token_redirects_to_login` — admin-side
+    consume path: token planted via `query::set_verification_token`,
+    GET /admin/verify-email → user marked verified, login works.
+    (Send-side test moves to a future CLI e2e workstream since
+    email triggers come from `service::create_document`.)
+  - `html_trash::soft_delete_moves_doc_to_trash`,
+    `undelete_restores_doc_to_active_list`, and
+    `empty_trash_purges_all_soft_deleted` — full trash lifecycle on
+    a `soft_delete = true` collection: DELETE → ?trash=1 list →
+    POST /undelete → POST /empty-trash.
+  - `html_delete_refcount::hard_delete_blocked_when_referenced` and
+    `back_references_shows_referring_documents` — verifies a
+    referenced doc cannot be hard-deleted (400 + "Cannot delete:
+    referenced by N document(s)" via the dialog path) and that the
+    back-references endpoint returns metadata identifying the
+    referring collection + field + count.
+  - `html_version_restore::version_restore_reverts_doc_to_snapshot`
+    — create, update (creates a snapshot), POST
+    /admin/collections/{slug}/{id}/versions/{vid}/restore, verify
+    the doc reverts to the snapshotted state.
+  - `html_access_enforcement` (6 tests) — counterpart to the
+    existing `html_access_gating.rs` (which tests UI button
+    visibility). This file verifies the server **actually** rejects
+    forbidden requests when a user crafts them directly (bypassing
+    the hidden UI): `viewer_create_post_returns_403`,
+    `viewer_update_post_returns_403`,
+    `editor_delete_post_returns_403` (admin_only check),
+    `admin_delete_post_succeeds` (positive control),
+    `no_read_access_blocks_item_get` (read-fn returning false hides
+    document data), `unauthenticated_post_returns_unauthorized`
+    (no session → blocked or redirected).
 
 ### Changed
 
