@@ -21,6 +21,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   e2e test added as part of the alpha.9 regression net.
   (`src/db/migrate/collection/create.rs::collect_system_columns`)
 
+- **Stale-JWT authentication bypass on non-`AuthUser`-gated handlers.**
+  `validate_jwt_and_load_user` returned `Some((claims, None))` when the
+  JWT signature was valid but `load_auth_user` couldn't resolve the
+  user — typically because `_session_version` had been bumped (after a
+  password change), the user was deleted, or the JWT's referenced
+  collection was removed from the registry. The middleware accepted
+  this partial result: it inserted `Claims` into request extensions
+  but no `AuthUser`. Handlers that gate on `AuthUser` 403'd correctly,
+  but handlers that don't (some list pages, JSON endpoints) served
+  the request normally. Stale sessions could therefore still read
+  data after their "invalidation". Fix: `validate_jwt_and_load_user`
+  now returns `None` whenever `load_auth_user` returns `None`, forcing
+  the middleware down the unauthenticated path (redirect to login).
+  Found via the new `html_session_expiry::stale_jwt_blocked_after_session_version_bump`
+  e2e test.
+  (`src/admin/auth_middleware.rs::validate_jwt_and_load_user`)
+
 ### Security
 
 - **`lettre` 0.11.21 → 0.11.22** (RUSTSEC-2026-0141). The advisory
@@ -84,6 +101,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     `no_read_access_blocks_item_get` (read-fn returning false hides
     document data), `unauthenticated_post_returns_unauthorized`
     (no session → blocked or redirected).
+  - `html_csrf` (3 tests) — POST without `crap_csrf` cookie → 403;
+    POST with mismatched `X-CSRF-Token` → 403; POST with matching
+    cookie+header redirects normally (positive control).
+  - `html_404` (3 tests) — unknown collection list, unknown item id,
+    and unknown global all return 404 (no 5xx, no content leak).
+  - `html_dashboard` (2 tests) — GET /admin renders collection and
+    global cards; unauthenticated GET /admin redirects to login.
+  - `html_sort` (2 tests) — `?sort=title` orders rows asc, `?sort=-title`
+    orders desc; verified by substring positions in the rendered HTML.
+  - `html_custom_page` (2 tests) — Lua-registered custom page via
+    `crap.pages.register` + `templates/pages/{slug}.hbs` renders at
+    `/admin/p/{slug}`; unknown slug returns 404.
+  - `html_search` (3 tests) — GET /admin/api/search/{slug} returns a
+    JSON array; `?limit=N` caps results; unknown slug returns `[]`;
+    `?q=...` filters by FTS match (test populates FTS via `fts_upsert`
+    since `query::create` skips the service-layer side effect).
+  - `html_optimistic_lock` (1 test) — pins the *current*
+    last-write-wins semantics: two sequential POSTs to the same doc
+    both succeed and B's data wins. When optimistic locking ships, the
+    test will fail and force an explicit semantic update.
+  - `html_conditional` (3 tests) — server-side display-condition
+    evaluation. Registers `hooks/conditions/show_when_online.lua`,
+    sets `condition = "hooks.conditions.show_when_online"` on a field,
+    POSTs to `/admin/collections/{slug}/evaluate-conditions` with
+    form state, verifies visible/hidden response. Includes the
+    security gate that unknown condition refs fail open (visible).
+  - `html_session_expiry` (1 test) — confirms a stale JWT
+    (session_version mismatch) is rejected. Caught the auth-middleware
+    bug fixed above.
 
 ### Changed
 

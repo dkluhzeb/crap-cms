@@ -63,6 +63,15 @@ fn validate_jwt_and_load_user(
         if locked {
             return None;
         }
+    } else {
+        // Claims are well-formed but the user record can't be loaded.
+        // This covers: session_version mismatch (password change /
+        // forced logout), user deleted, or the JWT's referenced
+        // collection no longer exists in the registry. In every case
+        // the JWT is stale and authentication must fail — otherwise
+        // a holder of an invalidated token could still hit
+        // non-AuthUser-gated handlers (list pages, JSON endpoints).
+        return None;
     }
 
     Some((claims, auth_user))
