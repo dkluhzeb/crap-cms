@@ -8,6 +8,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking Changes
 
+### Fixed
+
+- **MFA-enabled auth collections now provision `_mfa_code` columns at
+  creation time.** Previously the columns were only added during the
+  ALTER path (which runs on existing tables on schema sync). On a
+  freshly-created auth collection with `mfa = Email`, the migration
+  omitted `_mfa_code` and `_mfa_code_exp`, so `set_mfa_code` failed
+  silently when a user tried to log in and the verification email
+  never got queued. The MFA challenge page would render but no code
+  would ever arrive. Found via the new `html_mfa::mfa_email_full_flow`
+  e2e test added as part of the alpha.9 regression net.
+  (`src/db/migrate/collection/create.rs::collect_system_columns`)
+
 ### Security
 
 - **`lettre` 0.11.21 → 0.11.22** (RUSTSEC-2026-0141). The advisory
@@ -19,6 +32,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   spec already permitted the patch.
 
 ### Added
+
+- **e2e regression-net expansion (6 new tests across 3 files).** New
+  test infrastructure: `e2e/src/email.rs` reads queued emails directly
+  from `_crap_jobs` (the scheduler isn't running in tests, so emails
+  sent via `email::queue_email` sit pending). Exposes `CapturedEmail`,
+  `wait_for_queued_email`, `extract_token`, `extract_mfa_code`,
+  `clear_queued_emails`. New tests:
+  - `html_logout::logout_clears_session_cookies` and
+    `logout_redirects_protected_request_to_login` — verifies POST
+    /admin/logout clears `crap_session` and that subsequent
+    unauthenticated requests redirect to login.
+  - `html_password_reset::password_reset_full_flow` and
+    `password_reset_rejects_mismatched_confirmation` — full round-trip
+    through POST /admin/forgot-password → email capture → token
+    extraction → POST /admin/reset-password → login with new
+    password.
+  - `html_mfa::mfa_email_full_flow` and `mfa_wrong_code_rejected` —
+    login → MFA challenge redirect + cookie → email-code capture →
+    POST /admin/mfa with code → session cookie set. The full-flow
+    test caught the `_mfa_code` column migration bug fixed above.
 
 ### Changed
 

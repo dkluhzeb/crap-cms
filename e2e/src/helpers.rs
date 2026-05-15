@@ -7,8 +7,12 @@ use serde_json::json;
 use crap_cms::{
     admin::{AdminState, server::build_router, templates, translations::Translations},
     config::CrapConfig,
+    config::EmailConfig,
     core::{
-        DocumentFields, JwtSecret, Registry, auth, collection::*, email::EmailRenderer, field::*,
+        DocumentFields, JwtSecret, Registry, auth,
+        collection::*,
+        email::{EmailRenderer, create_email_provider},
+        field::*,
     },
     db::{migrate, pool, query},
     hooks::lifecycle::HookRunner,
@@ -127,10 +131,7 @@ pub fn setup_app_at(
         hook_runner,
         jwt_secret: "test-jwt-secret".into(),
         email_renderer,
-        email_provider: crap_cms::core::email::create_email_provider(
-            &crap_cms::config::EmailConfig::default(),
-        )
-        .unwrap(),
+        email_provider: create_email_provider(&EmailConfig::default()).unwrap(),
         event_transport: None,
         login_limiter: Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
         ip_login_limiter: Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(20, 300)),

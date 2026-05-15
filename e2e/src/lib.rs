@@ -22,7 +22,13 @@
 )]
 
 pub mod browser;
+pub mod email;
 pub mod helpers;
 pub mod html;
+
 pub use browser::{BrowserTestCtx, setup_browser_test, setup_browser_test_with_config};
+pub use email::{
+    CapturedEmail, clear_queued_emails, extract_mfa_code, extract_token, find_queued_email,
+    read_queued_emails, wait_for_queued_email,
+};
 pub use helpers::HtmlTestCtx;

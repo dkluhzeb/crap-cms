@@ -8,7 +8,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, FieldType},
+    core::{CollectionDefinition, FieldType, collection::MfaMode},
     db::{DbConnection, migrate::helpers::collect_column_specs, query::helpers::locale_column},
 };
 
@@ -154,6 +154,17 @@ fn collect_system_columns(
                 "_verified INTEGER DEFAULT 0".to_string(),
                 "_verification_token TEXT".to_string(),
                 "_verification_token_exp INTEGER".to_string(),
+            ]);
+        }
+
+        // MFA columns (parallel to alter::alter_collection_table). Without
+        // these, `set_mfa_code` fails silently on a freshly-created auth
+        // collection with `mfa = Email`, which means the MFA challenge
+        // email never gets queued.
+        if def.auth.as_ref().is_some_and(|a| a.mfa != MfaMode::Off) {
+            columns.extend([
+                "_mfa_code TEXT".to_string(),
+                "_mfa_code_exp INTEGER".to_string(),
             ]);
         }
     }
