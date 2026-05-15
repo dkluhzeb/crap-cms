@@ -13,11 +13,11 @@
 )]
 use std::time::Duration;
 
-use crap_cms_e2e::browser;
-use crap_cms_e2e::helpers::*;
+use tokio::time::sleep;
 
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
+use crap_cms::core::{collection::*, field::*};
+
+use crap_cms_e2e::{BrowserTestCtx, browser, helpers::*, setup_browser_test};
 
 fn make_toast_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -38,15 +38,18 @@ fn make_toast_def() -> CollectionDefinition {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn toast_on_validation_error() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_toast_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "btoast@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "btoast@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "btoast@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_toast_def(), make_users_def()],
+        vec![],
+        "btoast@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/posts/create"))
         .await
@@ -55,14 +58,14 @@ async fn toast_on_validation_error() {
         .await
         .unwrap();
     // Wait for JS/HTMX to initialize
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Submit with empty required field using requestSubmit to ensure HTMX intercepts
     page.evaluate("() => document.querySelector('#edit-form')?.requestSubmit()")
         .await
         .unwrap();
     // Wait for validation fetch + toast rendering
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    sleep(Duration::from_secs(2)).await;
 
     // Toast should exist
     let has_toast = page
@@ -79,15 +82,18 @@ async fn toast_on_validation_error() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn toast_on_successful_save() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_toast_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "bsave@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "bsave@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "bsave@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_toast_def(), make_users_def()],
+        vec![],
+        "bsave@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/posts/create"))
         .await
@@ -113,7 +119,7 @@ async fn toast_on_successful_save() {
         .click()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    sleep(Duration::from_secs(1)).await;
 
     // After successful save, should redirect to edit page (htmx or standard)
     // Toast may or may not be visible depending on redirect behavior
@@ -135,15 +141,18 @@ async fn toast_on_successful_save() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn window_crap_namespace_dispatches_toast() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_toast_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "bcrapns@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "bcrapns@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "bcrapns@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_toast_def(), make_users_def()],
+        vec![],
+        "bcrapns@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/posts"))
         .await
@@ -151,14 +160,14 @@ async fn window_crap_namespace_dispatches_toast() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Call the sugar — should dispatch crap:toast-request and the
     // singleton renders it.
     page.evaluate("() => window.crap.toast({ message: 'hello from crap', type: 'info' })")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(200)).await;
 
     let result = browser::shadow_eval(
         &page,

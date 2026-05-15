@@ -11,6 +11,7 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
+
 //! HTML access-gating tests — verify the admin UI hides action buttons
 //! that the current user isn't allowed to use.
 //!
@@ -18,15 +19,21 @@
 //! elsewhere; this file covers the *template-level* gates added to keep
 //! users from seeing buttons that would always 403.
 
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use std::collections::HashMap;
+
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
+use serde_json::json;
 use tower::ServiceExt;
 
-use crap_cms_e2e::helpers::*;
-use crap_cms_e2e::html;
+use crap_cms::{
+    core::{DocumentFields, collection::*, field::*},
+    db::query,
+};
 
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
+use crap_cms_e2e::{helpers::*, html};
 
 // ── Lua access fns used in these tests ───────────────────────────────────
 //
@@ -188,14 +195,10 @@ async fn edit_page_hides_save_panel_when_user_lacks_update() {
 
     // Seed a post as admin (write directly).
     let post_id = {
-        use crap_cms::core::DocumentFields;
-        use crap_cms::db::query;
         let def = app.registry.get_collection("posts").unwrap().clone();
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let data: DocumentFields =
-            std::collections::HashMap::from([("title".to_string(), serde_json::json!("Hello"))])
-                .into();
+        let data: DocumentFields = HashMap::from([("title".to_string(), json!("Hello"))]).into();
         let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
         tx.commit().unwrap();
         doc.id.to_string()
@@ -238,14 +241,10 @@ async fn edit_page_hides_delete_panel_when_user_lacks_delete() {
     );
 
     let post_id = {
-        use crap_cms::core::DocumentFields;
-        use crap_cms::db::query;
         let def = app.registry.get_collection("posts").unwrap().clone();
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let data: DocumentFields =
-            std::collections::HashMap::from([("title".to_string(), serde_json::json!("Hello"))])
-                .into();
+        let data: DocumentFields = HashMap::from([("title".to_string(), json!("Hello"))]).into();
         let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
         tx.commit().unwrap();
         doc.id.to_string()
@@ -288,14 +287,10 @@ async fn edit_page_shows_save_and_delete_for_admin() {
     );
 
     let post_id = {
-        use crap_cms::core::DocumentFields;
-        use crap_cms::db::query;
         let def = app.registry.get_collection("posts").unwrap().clone();
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let data: DocumentFields =
-            std::collections::HashMap::from([("title".to_string(), serde_json::json!("Hello"))])
-                .into();
+        let data: DocumentFields = HashMap::from([("title".to_string(), json!("Hello"))]).into();
         let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
         tx.commit().unwrap();
         doc.id.to_string()

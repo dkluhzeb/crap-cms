@@ -13,12 +13,14 @@
 )]
 use std::time::Duration;
 
-use crap_cms_e2e::browser;
-use crap_cms_e2e::helpers::*;
+use tokio::time::sleep;
 
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
-use crap_cms::db::DbConnection;
+use crap_cms::{
+    core::{collection::*, field::*},
+    db::DbConnection,
+};
+
+use crap_cms_e2e::{BrowserTestCtx, browser, helpers::*, setup_browser_test};
 
 fn make_array_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("teams");
@@ -44,15 +46,18 @@ fn make_array_def() -> CollectionDefinition {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn add_row_button_creates_row() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_array_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "badd@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "badd@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "badd@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_array_def(), make_users_def()],
+        vec![],
+        "badd@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/teams/create"))
         .await
@@ -72,7 +77,7 @@ async fn add_row_button_creates_row() {
         .click()
         .await
         .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     let rows = page.find_elements(".form__array-row").await.unwrap();
     assert_eq!(rows.len(), 1, "should have 1 row after clicking add");
@@ -84,15 +89,18 @@ async fn add_row_button_creates_row() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_row_button_removes_row() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_array_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "brem@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "brem@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "brem@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_array_def(), make_users_def()],
+        vec![],
+        "brem@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/teams/create"))
         .await
@@ -109,14 +117,14 @@ async fn remove_row_button_removes_row() {
         .click()
         .await
         .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(200)).await;
     page.find_element("button[data-action=\"add-array-row\"]")
         .await
         .unwrap()
         .click()
         .await
         .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(200)).await;
 
     let rows = page.find_elements(".form__array-row").await.unwrap();
     assert_eq!(rows.len(), 2, "should have 2 rows");
@@ -128,7 +136,7 @@ async fn remove_row_button_removes_row() {
         .click()
         .await
         .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     let rows = page.find_elements(".form__array-row").await.unwrap();
     assert_eq!(rows.len(), 1, "should have 1 row after removal");
@@ -140,15 +148,18 @@ async fn remove_row_button_removes_row() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn reorder_rows_updates_indices() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_array_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "breorder@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "breorder@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "breorder@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_array_def(), make_users_def()],
+        vec![],
+        "breorder@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/teams/create"))
         .await
@@ -165,14 +176,14 @@ async fn reorder_rows_updates_indices() {
         .click()
         .await
         .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(200)).await;
     page.find_element("button[data-action=\"add-array-row\"]")
         .await
         .unwrap()
         .click()
         .await
         .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(200)).await;
 
     // Type into first row
     let inputs = page
@@ -202,7 +213,7 @@ async fn reorder_rows_updates_indices() {
         .click()
         .await
         .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // After reorder, the first row's input should now have "Second" and vice versa
     let inputs = page
@@ -218,15 +229,19 @@ async fn reorder_rows_updates_indices() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn array_rows_persist_after_save() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_array_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "barrsave@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "barrsave@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "barrsave@test.com", "pass123").await;
+    let BrowserTestCtx {
+        app,
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_array_def(), make_users_def()],
+        vec![],
+        "barrsave@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/teams/create"))
         .await
@@ -234,7 +249,7 @@ async fn array_rows_persist_after_save() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Fill name
     page.find_element("input[name=\"name\"]")
@@ -255,7 +270,7 @@ async fn array_rows_persist_after_save() {
             .click()
             .await
             .unwrap();
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        sleep(Duration::from_millis(300)).await;
 
         let selector = format!("input[name=\"members[{i}][member_name]\"]");
         page.evaluate(format!(
@@ -270,7 +285,7 @@ async fn array_rows_persist_after_save() {
     page.evaluate("() => document.querySelector('#edit-form')?.requestSubmit()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    sleep(Duration::from_secs(2)).await;
 
     // Verify in database
     let conn = app.pool.get().unwrap();

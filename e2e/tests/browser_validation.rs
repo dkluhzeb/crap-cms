@@ -13,11 +13,11 @@
 )]
 use std::time::Duration;
 
-use crap_cms_e2e::browser;
-use crap_cms_e2e::helpers::*;
+use tokio::time::sleep;
 
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
+use crap_cms::core::{collection::*, field::*};
+
+use crap_cms_e2e::{BrowserTestCtx, browser, helpers::*, setup_browser_test};
 
 fn make_validated_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -39,15 +39,18 @@ fn make_validated_def() -> CollectionDefinition {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn client_side_validation_shows_errors() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_validated_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "bval@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "bval@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "bval@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_validated_def(), make_users_def()],
+        vec![],
+        "bval@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/posts/create"))
         .await
@@ -56,14 +59,14 @@ async fn client_side_validation_shows_errors() {
         .await
         .unwrap();
     // Wait for JS/HTMX to initialize
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Submit with empty required field using requestSubmit
     page.evaluate("() => document.querySelector('#edit-form')?.requestSubmit()")
         .await
         .unwrap();
     // Wait for validation fetch + error rendering
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    sleep(Duration::from_secs(2)).await;
 
     let result = page
         .evaluate("() => document.querySelectorAll('.form__error').length")
@@ -82,15 +85,18 @@ async fn client_side_validation_shows_errors() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn validation_clears_on_valid_resubmit() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_validated_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "bclear@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "bclear@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "bclear@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_validated_def(), make_users_def()],
+        vec![],
+        "bclear@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/posts/create"))
         .await
@@ -99,13 +105,13 @@ async fn validation_clears_on_valid_resubmit() {
         .await
         .unwrap();
     // Wait for JS/HTMX to initialize
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Trigger validation error
     page.evaluate("() => document.querySelector('#edit-form')?.requestSubmit()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    sleep(Duration::from_secs(2)).await;
 
     // Fill in the required field
     page.find_element("input[name=\"title\"]")
@@ -122,7 +128,7 @@ async fn validation_clears_on_valid_resubmit() {
     page.evaluate("() => document.querySelector('#edit-form')?.requestSubmit()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    sleep(Duration::from_secs(2)).await;
 
     let result = page
         .evaluate("() => document.querySelectorAll('.form__error').length")
@@ -160,15 +166,18 @@ async fn validation_expands_collapsed_array_row() {
             .build(),
     ];
 
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![def, make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "barray@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "barray@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "barray@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![def, make_users_def()],
+        vec![],
+        "barray@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/teams/create"))
         .await
@@ -177,13 +186,13 @@ async fn validation_expands_collapsed_array_row() {
         .await
         .unwrap();
     // Wait for JS to initialize
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Add a row
     page.evaluate("() => document.querySelector('button[data-action=\"add-array-row\"]')?.click()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Fill name but leave array sub-field empty
     page.find_element("input[name=\"name\"]")
@@ -200,7 +209,7 @@ async fn validation_expands_collapsed_array_row() {
     page.evaluate("() => document.querySelector('#edit-form')?.requestSubmit()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    sleep(Duration::from_secs(2)).await;
 
     // Error badge or expanded state should appear on the array row
     let result = page
@@ -274,14 +283,14 @@ async fn save_as_draft_skips_required_via_validate_endpoint() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Leave `title` (required) empty. Click "Save as draft" — the
     // button with `name="_action" value="save_draft"`.
     page.evaluate("() => document.querySelector('button[value=\"save_draft\"]')?.click()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    sleep(Duration::from_secs(2)).await;
 
     // No inline `form__error` with `data-validate-error` should be
     // present. Pre-fix, the validate endpoint would return

@@ -11,20 +11,23 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
+
 //! Pagination e2e tests — cursor-based and page-based navigation consistency.
 
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-use crap_cms::config::{CrapConfig, PaginationMode};
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
-use crap_cms::db::DbConnection;
+use crap_cms::{
+    config::{CrapConfig, PaginationMode},
+    core::{collection::*, field::*},
+    db::DbConnection,
+};
 
-use crap_cms_e2e::helpers::*;
-use crap_cms_e2e::html;
+use crap_cms_e2e::{helpers::*, html};
 
 fn make_posts_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -58,9 +61,13 @@ fn setup_cursor(limit: i64) -> Ctx {
     config.admin.require_auth = true;
     config.pagination.default_limit = limit;
     config.pagination.mode = PaginationMode::Cursor;
-    let app = setup_app_with_config(vec![make_posts_def(), make_users_def()], vec![], config);
-    let user_id = create_test_user(&app, "test@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "test@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test_with_config(
+        vec![make_posts_def(), make_users_def()],
+        vec![],
+        config,
+        "test@test.com",
+        "pass123",
+    );
     Ctx { app, cookie }
 }
 
@@ -71,9 +78,13 @@ fn setup_paged(limit: i64) -> Ctx {
     config.admin.require_auth = true;
     config.pagination.default_limit = limit;
     config.pagination.mode = PaginationMode::Page;
-    let app = setup_app_with_config(vec![make_posts_def(), make_users_def()], vec![], config);
-    let user_id = create_test_user(&app, "test@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "test@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test_with_config(
+        vec![make_posts_def(), make_users_def()],
+        vec![],
+        config,
+        "test@test.com",
+        "pass123",
+    );
     Ctx { app, cookie }
 }
 

@@ -11,11 +11,13 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use crap_cms_e2e::browser;
-use crap_cms_e2e::helpers::*;
+use std::time::Duration;
 
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
+use tokio::time::sleep;
+
+use crap_cms::core::{collection::*, field::*};
+
+use crap_cms_e2e::{BrowserTestCtx, helpers::*, setup_browser_test};
 
 fn make_tabs_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("profiles");
@@ -47,15 +49,18 @@ fn make_tabs_def() -> CollectionDefinition {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn tab_switching_shows_correct_panel() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_tabs_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "btabs@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "btabs@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "btabs@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_tabs_def(), make_users_def()],
+        vec![],
+        "btabs@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/profiles/create"))
         .await
@@ -75,7 +80,7 @@ async fn tab_switching_shows_correct_panel() {
     let tabs = page.find_elements("[role=\"tab\"]").await.unwrap();
     assert_eq!(tabs.len(), 2, "should have 2 tab buttons");
     tabs[1].click().await.unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Second tab should now be selected
     let second_tab_selected = page

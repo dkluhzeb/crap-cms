@@ -298,7 +298,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   with shared fixtures in `e2e/src/{browser,helpers,html}.rs` and
   one integration-test binary per `e2e/tests/<name>.rs`), and
   `crap-cms-macros` (`macros/` — proc-macro crate, currently an
-  empty stub). Shared dependency,
+  empty stub). New `setup_html_test` / `setup_html_test_with_config`
+  / `setup_html_test_with_access_files` helpers in
+  `e2e/src/helpers.rs` and `setup_browser_test` /
+  `setup_browser_test_with_config` in `e2e/src/browser.rs` collapse
+  the 3-line HTML setup ritual (`setup_app` + `create_test_user` +
+  `make_auth_cookie`) and 7-line browser setup ritual (`spawn_server`
+  + user + cookie + `launch_browser` + `new_page` + `browser_login`)
+  into a single call per test. 117 of 153 e2e tests adopt the new
+  helpers; remaining 36 have setup variations (data injection
+  between auth and browser launch, custom page configuration,
+  role-based users, auth-flow tests) and stay on the underlying
+  primitives. Shared dependency,
   metadata, and lint configuration moved to `[workspace.package]`,
   `[workspace.dependencies]`, and `[workspace.lints]` so all current
   and future members inherit them via `*.workspace = true`. The

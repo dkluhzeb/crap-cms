@@ -13,11 +13,11 @@
 )]
 use std::time::Duration;
 
-use crap_cms_e2e::browser;
-use crap_cms_e2e::helpers::*;
+use tokio::time::sleep;
 
-use crap_cms::core::collection::*;
-use crap_cms::core::field::LocalizedString;
+use crap_cms::core::{collection::*, field::LocalizedString};
+
+use crap_cms_e2e::{browser, helpers::*};
 
 fn make_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -37,7 +37,7 @@ async fn password_toggle_reveals_and_hides_value() {
     let page = browser.new_page("about:blank").await.unwrap();
 
     page.goto(format!("{base_url}/admin/login")).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     let initial_type = page
         .evaluate("() => document.querySelector('crap-password-toggle input').type")
@@ -61,7 +61,7 @@ async fn password_toggle_reveals_and_hides_value() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     let revealed_type = page
         .evaluate("() => document.querySelector('crap-password-toggle input').type")
@@ -77,7 +77,7 @@ async fn password_toggle_reveals_and_hides_value() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     let final_type = page
         .evaluate("() => document.querySelector('crap-password-toggle input').type")
@@ -104,7 +104,7 @@ async fn password_toggle_icon_renders_with_icon_font() {
     let page = browser.new_page("about:blank").await.unwrap();
 
     page.goto(format!("{base_url}/admin/login")).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     let font_family = browser::shadow_eval(
         &page,

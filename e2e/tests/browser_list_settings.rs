@@ -11,18 +11,17 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use std::collections::HashMap;
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
-use crap_cms_e2e::browser;
-use crap_cms_e2e::helpers::*;
-
-use crap_cms::core::DocumentFields;
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
-use crap_cms::db::query;
-use crap_cms::db::{DbConnection, DbValue};
 use serde_json::json;
+use tokio::time::sleep;
+
+use crap_cms::{
+    core::{DocumentFields, collection::*, field::*},
+    db::{DbConnection, DbValue, query},
+};
+
+use crap_cms_e2e::{browser, helpers::*};
 
 fn make_list_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -136,13 +135,13 @@ async fn column_picker_opens_drawer() {
         .await
         .unwrap();
     // Wait for JS components to initialize
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Click the "Columns" button
     page.evaluate("() => document.querySelector('[data-action=\"open-column-picker\"]')?.click()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // The drawer dialog should be open (shadow DOM)
     let result = browser::shadow_eval(
@@ -192,13 +191,13 @@ async fn filter_builder_adds_condition() {
         .await
         .unwrap();
     // Wait for JS components
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Click "Filters" button
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // The drawer should be open
     let result = browser::shadow_eval(
@@ -217,7 +216,7 @@ async fn filter_builder_adds_condition() {
         "root.querySelector('.filter-builder > button.button--ghost')?.click(); return '';",
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(200)).await;
 
     // Now exactly one condition row should exist.
     let row_count = browser::shadow_eval(
@@ -277,13 +276,13 @@ async fn filter_builder_preset_value_change_applies() {
     .wait_for_navigation()
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Open filter drawer.
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Sanity: the preset row hydrated to status/equals/published.
     let initial = browser::shadow_eval(
@@ -314,7 +313,7 @@ async fn filter_builder_preset_value_change_applies() {
     .await;
 
     // Wait for `htmx.ajax(...)` navigation in `list-settings.js::navigate()`.
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    sleep(Duration::from_millis(1500)).await;
 
     let url = page
         .evaluate("() => window.location.href")
@@ -367,7 +366,7 @@ async fn filter_builder_apply_actually_filters_the_list() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
     let unfiltered = page
         .evaluate("() => document.querySelectorAll('tbody tr').length")
         .await
@@ -380,7 +379,7 @@ async fn filter_builder_apply_actually_filters_the_list() {
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Drawer opens empty (no URL filter). Click "+ Add condition" to
     // create a row, then configure it.
@@ -390,7 +389,7 @@ async fn filter_builder_apply_actually_filters_the_list() {
         "root.querySelector('.filter-builder > button.button--ghost')?.click(); return '';",
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(200)).await;
 
     // The new row defaults to title field. Switch it to status.
     let _ = browser::shadow_eval(
@@ -402,7 +401,7 @@ async fn filter_builder_apply_actually_filters_the_list() {
          return '';",
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(200)).await;
 
     // Now value-input should be a select with status options. Pick 'draft'.
     let _ = browser::shadow_eval(
@@ -422,7 +421,7 @@ async fn filter_builder_apply_actually_filters_the_list() {
         "root.querySelector('.filter-builder__footer .button--primary').click(); return '';",
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    sleep(Duration::from_millis(1500)).await;
 
     // After navigation: list must now show ONLY the draft post.
     let row_count = page
@@ -487,13 +486,13 @@ async fn filter_builder_multi_row_reopen_edit_persists() {
     .wait_for_navigation()
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Open drawer, add a second filter row, apply.
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Click "Add condition" — the "+" button.
     let _ = browser::shadow_eval(
@@ -503,7 +502,7 @@ async fn filter_builder_multi_row_reopen_edit_persists() {
          addBtn.click(); return '';",
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(200)).await;
 
     // Now there should be two rows. Configure row 2: change its
     // field to "title" and put a value.
@@ -529,7 +528,7 @@ async fn filter_builder_multi_row_reopen_edit_persists() {
         "root.querySelector('.filter-builder__footer .button--primary').click(); return '';",
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    sleep(Duration::from_millis(1500)).await;
 
     let url1 = page
         .evaluate("() => window.location.href")
@@ -554,7 +553,7 @@ async fn filter_builder_multi_row_reopen_edit_persists() {
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     let row_count = browser::shadow_eval(
         &page,
@@ -586,7 +585,7 @@ async fn filter_builder_multi_row_reopen_edit_persists() {
         "root.querySelector('.filter-builder__footer .button--primary').click(); return '';",
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    sleep(Duration::from_millis(1500)).await;
 
     let url2 = page
         .evaluate("() => window.location.href")
@@ -649,13 +648,13 @@ async fn filter_builder_preserves_user_edit_across_op_change() {
     .wait_for_navigation()
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Open filter drawer.
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Sanity-check: drawer rendered the preset row with status/equals/published.
     let preset_value = browser::shadow_eval(
@@ -741,13 +740,13 @@ async fn filter_apply_strips_stale_cursor() {
     .wait_for_navigation()
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Open drawer, change the filter (title=foo → title=bar), apply.
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     let _ = browser::shadow_eval(
         &page,
@@ -759,7 +758,7 @@ async fn filter_apply_strips_stale_cursor() {
          return '';",
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    sleep(Duration::from_millis(1500)).await;
 
     let url = page
         .evaluate("() => window.location.href")
@@ -809,12 +808,12 @@ async fn filter_drawer_empty_when_no_url_filters() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Empty URL → empty drawer. Zero rows, just the "+ Add condition"
     // button + footer.
@@ -838,7 +837,7 @@ async fn filter_drawer_empty_when_no_url_filters() {
         "root.querySelector('.filter-builder__footer .button--primary').click(); return '';",
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    sleep(Duration::from_millis(1500)).await;
 
     let url = page
         .evaluate("() => window.location.href")
@@ -885,7 +884,7 @@ async fn filter_drawer_status_field_narrows_and_clears() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     let initial = page
         .evaluate("() => document.querySelectorAll('tbody tr').length")
@@ -902,7 +901,7 @@ async fn filter_drawer_status_field_narrows_and_clears() {
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     let _ = browser::shadow_eval(
         &page,
@@ -910,7 +909,7 @@ async fn filter_drawer_status_field_narrows_and_clears() {
         "root.querySelector('.filter-builder > button.button--ghost')?.click(); return '';",
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(200)).await;
 
     let _ = browser::shadow_eval(
         &page,
@@ -921,7 +920,7 @@ async fn filter_drawer_status_field_narrows_and_clears() {
          return '';",
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(200)).await;
 
     let _ = browser::shadow_eval(
         &page,
@@ -939,7 +938,7 @@ async fn filter_drawer_status_field_narrows_and_clears() {
         "root.querySelector('.filter-builder__footer .button--primary').click(); return '';",
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    sleep(Duration::from_millis(1500)).await;
 
     let url = page
         .evaluate("() => window.location.href")
@@ -972,7 +971,7 @@ async fn filter_drawer_status_field_narrows_and_clears() {
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     let _ = browser::shadow_eval(
         &page,
@@ -990,7 +989,7 @@ async fn filter_drawer_status_field_narrows_and_clears() {
         "root.querySelector('.filter-builder__footer .button--primary').click(); return '';",
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    sleep(Duration::from_millis(1500)).await;
 
     let url2 = page
         .evaluate("() => window.location.href")
@@ -1046,12 +1045,12 @@ async fn filter_drawer_status_field_hidden_without_drafts() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     let _ = browser::shadow_eval(
         &page,
@@ -1059,7 +1058,7 @@ async fn filter_drawer_status_field_hidden_without_drafts() {
         "root.querySelector('.filter-builder > button.button--ghost')?.click(); return '';",
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(200)).await;
 
     let has_status_option = browser::shadow_eval(
         &page,

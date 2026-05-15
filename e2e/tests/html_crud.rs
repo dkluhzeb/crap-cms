@@ -11,18 +11,21 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use std::collections::HashMap;
+
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use serde_json::json;
 use tower::ServiceExt;
 
-use crap_cms::core::DocumentFields;
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
-use crap_cms::db::query;
+use crap_cms::{
+    core::{DocumentFields, collection::*, field::*},
+    db::query,
+};
 
-use crap_cms_e2e::helpers::*;
-use crap_cms_e2e::html;
+use crap_cms_e2e::{helpers::*, html};
 
 fn make_crud_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -48,9 +51,12 @@ fn make_crud_def() -> CollectionDefinition {
 
 #[tokio::test]
 async fn create_redirects_to_edit_with_data() {
-    let app = setup_app(vec![make_crud_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "crud@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "crud@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_crud_def(), make_users_def()],
+        vec![],
+        "crud@test.com",
+        "pass123",
+    );
 
     let resp = app
         .router
@@ -138,15 +144,18 @@ async fn create_redirects_to_edit_with_data() {
 
 #[tokio::test]
 async fn update_redirects_with_updated_data() {
-    let app = setup_app(vec![make_crud_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "update@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "update@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_crud_def(), make_users_def()],
+        vec![],
+        "update@test.com",
+        "pass123",
+    );
 
     let def = app.registry.get_collection("posts").unwrap().clone();
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let data: DocumentFields =
-        std::collections::HashMap::from([("title".to_string(), json!("Original Title"))]).into();
+        HashMap::from([("title".to_string(), json!("Original Title"))]).into();
     let doc_record = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -193,15 +202,18 @@ async fn update_redirects_with_updated_data() {
 
 #[tokio::test]
 async fn delete_removes_from_list() {
-    let app = setup_app(vec![make_crud_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "delete@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "delete@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_crud_def(), make_users_def()],
+        vec![],
+        "delete@test.com",
+        "pass123",
+    );
 
     let def = app.registry.get_collection("posts").unwrap().clone();
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let data: DocumentFields =
-        std::collections::HashMap::from([("title".to_string(), json!("Delete Me Please"))]).into();
+        HashMap::from([("title".to_string(), json!("Delete Me Please"))]).into();
     let doc_record = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -248,16 +260,18 @@ async fn delete_removes_from_list() {
 
 #[tokio::test]
 async fn list_page_shows_documents() {
-    let app = setup_app(vec![make_crud_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "list@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "list@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_crud_def(), make_users_def()],
+        vec![],
+        "list@test.com",
+        "pass123",
+    );
 
     let def = app.registry.get_collection("posts").unwrap().clone();
     for title in &["Alpha Post", "Beta Post", "Gamma Post"] {
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let data: DocumentFields =
-            std::collections::HashMap::from([("title".to_string(), json!(title))]).into();
+        let data: DocumentFields = HashMap::from([("title".to_string(), json!(title))]).into();
         query::create(&tx, "posts", &def, &data, None).unwrap();
         tx.commit().unwrap();
     }

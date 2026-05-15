@@ -11,17 +11,17 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use std::collections::HashMap;
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
-use crap_cms_e2e::browser;
-use crap_cms_e2e::helpers::*;
-
-use crap_cms::core::DocumentFields;
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
-use crap_cms::db::query;
 use serde_json::json;
+use tokio::time::sleep;
+
+use crap_cms::{
+    core::{DocumentFields, collection::*, field::*},
+    db::query,
+};
+
+use crap_cms_e2e::{browser, helpers::*};
 
 fn make_time_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -71,7 +71,7 @@ async fn time_element_renders_formatted() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // <crap-time> should contain formatted text, not empty or raw ISO
     let result = page

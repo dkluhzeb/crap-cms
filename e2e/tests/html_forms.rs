@@ -11,18 +11,21 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use std::collections::HashMap;
+
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use serde_json::json;
 use tower::ServiceExt;
 
-use crap_cms::core::DocumentFields;
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
-use crap_cms::db::query;
+use crap_cms::{
+    core::{DocumentFields, collection::*, field::*},
+    db::query,
+};
 
-use crap_cms_e2e::helpers::*;
-use crap_cms_e2e::html;
+use crap_cms_e2e::{helpers::*, html};
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -256,9 +259,12 @@ async fn get_create_form(app: &TestApp, slug: &str, cookie: &str) -> String {
 
 #[tokio::test]
 async fn create_form_renders_all_field_types() {
-    let app = setup_app(vec![make_all_field_types_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "fields@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "fields@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_all_field_types_def(), make_users_def()],
+        vec![],
+        "fields@test.com",
+        "pass123",
+    );
 
     let body = get_create_form(&app, "articles", &cookie).await;
     let doc = html::parse(&body);
@@ -303,14 +309,17 @@ async fn create_form_renders_all_field_types() {
 
 #[tokio::test]
 async fn edit_form_populates_values() {
-    let app = setup_app(vec![make_all_field_types_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "edit@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "edit@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_all_field_types_def(), make_users_def()],
+        vec![],
+        "edit@test.com",
+        "pass123",
+    );
 
     let def = app.registry.get_collection("articles").unwrap().clone();
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data: DocumentFields = std::collections::HashMap::from([
+    let data: DocumentFields = HashMap::from([
         ("title".to_string(), json!("My Article")),
         ("count".to_string(), json!("42")),
         ("contact".to_string(), json!("test@example.com")),
@@ -358,9 +367,12 @@ async fn edit_form_populates_values() {
 
 #[tokio::test]
 async fn create_form_array_field_structure() {
-    let app = setup_app(vec![make_array_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "array@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "array@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_array_def(), make_users_def()],
+        vec![],
+        "array@test.com",
+        "pass123",
+    );
 
     let body = get_create_form(&app, "teams", &cookie).await;
     let doc = html::parse(&body);
@@ -387,9 +399,12 @@ async fn create_form_array_field_structure() {
 
 #[tokio::test]
 async fn edit_form_array_populated_rows() {
-    let app = setup_app(vec![make_array_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "arraypop@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "arraypop@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_array_def(), make_users_def()],
+        vec![],
+        "arraypop@test.com",
+        "pass123",
+    );
 
     // Create via HTTP POST to get array data stored properly
     let create_resp = app
@@ -469,9 +484,12 @@ async fn edit_form_array_populated_rows() {
 
 #[tokio::test]
 async fn create_form_blocks_field_structure() {
-    let app = setup_app(vec![make_blocks_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "blocks@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "blocks@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_blocks_def(), make_users_def()],
+        vec![],
+        "blocks@test.com",
+        "pass123",
+    );
 
     let body = get_create_form(&app, "pages", &cookie).await;
     let doc = html::parse(&body);
@@ -502,9 +520,12 @@ async fn create_form_blocks_field_structure() {
 
 #[tokio::test]
 async fn create_form_tabs_layout() {
-    let app = setup_app(vec![make_tabs_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "tabs@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "tabs@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_tabs_def(), make_users_def()],
+        vec![],
+        "tabs@test.com",
+        "pass123",
+    );
 
     let body = get_create_form(&app, "profiles", &cookie).await;
     let doc = html::parse(&body);
@@ -538,9 +559,12 @@ async fn create_form_tabs_layout() {
 
 #[tokio::test]
 async fn create_form_group_layout() {
-    let app = setup_app(vec![make_group_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "group@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "group@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_group_def(), make_users_def()],
+        vec![],
+        "group@test.com",
+        "pass123",
+    );
 
     let body = get_create_form(&app, "events", &cookie).await;
     let doc = html::parse(&body);
@@ -557,9 +581,12 @@ async fn create_form_group_layout() {
 
 #[tokio::test]
 async fn create_form_row_layout() {
-    let app = setup_app(vec![make_row_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "row@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "row@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_row_def(), make_users_def()],
+        vec![],
+        "row@test.com",
+        "pass123",
+    );
 
     let body = get_create_form(&app, "contacts", &cookie).await;
     let doc = html::parse(&body);
@@ -576,12 +603,12 @@ async fn create_form_row_layout() {
 
 #[tokio::test]
 async fn create_form_nested_array_tabs_row() {
-    let app = setup_app(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
         vec![make_nested_array_tabs_row_def(), make_users_def()],
         vec![],
+        "nested@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "nested@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "nested@test.com");
 
     let body = get_create_form(&app, "organizations", &cookie).await;
     let doc = html::parse(&body);
@@ -610,9 +637,8 @@ async fn create_form_nested_array_tabs_row() {
 
 #[tokio::test]
 async fn create_form_auth_collection() {
-    let app = setup_app(vec![make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "auth@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "auth@test.com");
+    let HtmlTestCtx { app, cookie, .. } =
+        setup_html_test(vec![make_users_def()], vec![], "auth@test.com", "pass123");
 
     let body = get_create_form(&app, "users", &cookie).await;
     let doc = html::parse(&body);

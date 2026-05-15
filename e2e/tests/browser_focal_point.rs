@@ -13,12 +13,11 @@
 )]
 use std::time::Duration;
 
-use crap_cms_e2e::browser;
-use crap_cms_e2e::helpers::*;
+use tokio::time::sleep;
 
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
-use crap_cms::core::upload::CollectionUpload;
+use crap_cms::core::{collection::*, field::*, upload::CollectionUpload};
+
+use crap_cms_e2e::{browser, helpers::*};
 
 fn make_media_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("media");
@@ -74,7 +73,7 @@ async fn focal_point_click_updates_inputs() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // The page's CSP `style-src` blocks the inline `style=...` attribute
     // we wrote into the HTML — it's stored on the element but not applied
@@ -93,7 +92,7 @@ async fn focal_point_click_updates_inputs() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(100)).await;
 
     // Simulate a click in the top-left quadrant on the slotted img.
     page.evaluate(
@@ -109,7 +108,7 @@ async fn focal_point_click_updates_inputs() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Check that hidden inputs were updated (should be near 0.25)
     let result = page

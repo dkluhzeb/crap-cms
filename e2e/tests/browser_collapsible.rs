@@ -13,11 +13,11 @@
 )]
 use std::time::Duration;
 
-use crap_cms_e2e::browser;
-use crap_cms_e2e::helpers::*;
+use tokio::time::sleep;
 
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
+use crap_cms::core::{collection::*, field::*};
+
+use crap_cms_e2e::{BrowserTestCtx, helpers::*, setup_browser_test};
 
 fn make_collapsible_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("articles");
@@ -45,15 +45,18 @@ fn make_collapsible_def() -> CollectionDefinition {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn collapsible_starts_expanded() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_collapsible_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "bcoll1@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "bcoll1@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "bcoll1@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_collapsible_def(), make_users_def()],
+        vec![],
+        "bcoll1@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/articles/create"))
         .await
@@ -63,7 +66,7 @@ async fn collapsible_starts_expanded() {
         .unwrap();
 
     // Wait for JS components to initialize
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Collapsible should start expanded (no --collapsed class)
     let collapsed = page
@@ -92,15 +95,18 @@ async fn collapsible_starts_expanded() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn collapsible_toggles_on_click() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_collapsible_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "bcoll2@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "bcoll2@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "bcoll2@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_collapsible_def(), make_users_def()],
+        vec![],
+        "bcoll2@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/articles/create"))
         .await
@@ -116,7 +122,7 @@ async fn collapsible_toggles_on_click() {
         .click()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Should now be collapsed
     let collapsed = page
@@ -149,15 +155,18 @@ async fn collapsible_toggles_on_click() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn collapsible_re_expands() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_collapsible_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "bcoll3@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "bcoll3@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "bcoll3@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_collapsible_def(), make_users_def()],
+        vec![],
+        "bcoll3@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/articles/create"))
         .await
@@ -173,7 +182,7 @@ async fn collapsible_re_expands() {
         .click()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Re-expand
     page.find_element("[data-action=\"toggle-group\"]")
@@ -182,7 +191,7 @@ async fn collapsible_re_expands() {
         .click()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Should no longer be collapsed
     let collapsed = page

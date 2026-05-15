@@ -13,11 +13,11 @@
 )]
 use std::time::Duration;
 
-use crap_cms_e2e::browser;
-use crap_cms_e2e::helpers::*;
+use tokio::time::sleep;
 
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
+use crap_cms::core::{collection::*, field::*};
+
+use crap_cms_e2e::{BrowserTestCtx, helpers::*, setup_browser_test};
 
 fn make_theme_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -38,15 +38,18 @@ fn make_theme_def() -> CollectionDefinition {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn theme_picker_changes_data_attribute() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_theme_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "btheme1@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "btheme1@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "btheme1@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_theme_def(), make_users_def()],
+        vec![],
+        "btheme1@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/posts"))
         .await
@@ -62,7 +65,7 @@ async fn theme_picker_changes_data_attribute() {
         .click()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Select "tokyo-night" theme
     page.find_element("[data-theme-value=\"tokyo-night\"]")
@@ -71,7 +74,7 @@ async fn theme_picker_changes_data_attribute() {
         .click()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Check that data-theme is set on <html>
     let result = page
@@ -91,15 +94,18 @@ async fn theme_picker_changes_data_attribute() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn theme_persists_across_navigation() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_theme_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "btheme2@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "btheme2@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "btheme2@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_theme_def(), make_users_def()],
+        vec![],
+        "btheme2@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/posts"))
         .await
@@ -112,7 +118,7 @@ async fn theme_persists_across_navigation() {
     page.evaluate("() => { window.crap.theme.set('gruvbox'); }")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(200)).await;
 
     // Navigate to create page
     page.goto(format!("{base_url}/admin/collections/posts/create"))
@@ -121,7 +127,7 @@ async fn theme_persists_across_navigation() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Theme should persist (read from localStorage and applied on load)
     let result = page

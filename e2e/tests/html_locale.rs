@@ -11,19 +11,23 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use std::collections::HashMap;
+
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
+use query::LocaleContext;
 use serde_json::json;
 use tower::ServiceExt;
 
-use crap_cms::config::{CrapConfig, LocaleConfig};
-use crap_cms::core::DocumentFields;
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
-use crap_cms::db::query::LocaleContext;
+use crap_cms::{
+    config::{CrapConfig, LocaleConfig},
+    core::{DocumentFields, collection::*, field::*},
+    db::query,
+};
 
-use crap_cms_e2e::helpers::*;
-use crap_cms_e2e::html;
+use crap_cms_e2e::{helpers::*, html};
 
 // ── Definition builders ──────────────────────────────────────────────────
 
@@ -136,9 +140,13 @@ async fn get_edit_form_with_locale(
 #[tokio::test]
 async fn locale_enabled_shows_locale_picker() {
     let config = make_locale_config();
-    let app = setup_app_with_config(vec![make_localized_def(), make_users_def()], vec![], config);
-    let user_id = create_test_user(&app, "loc1@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "loc1@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test_with_config(
+        vec![make_localized_def(), make_users_def()],
+        vec![],
+        config,
+        "loc1@test.com",
+        "pass123",
+    );
 
     let body = get_create_form(&app, "articles", &cookie).await;
     let doc = html::parse(&body);
@@ -158,9 +166,12 @@ async fn locale_enabled_shows_locale_picker() {
 #[tokio::test]
 async fn locale_disabled_no_picker() {
     // Default config has empty locales
-    let app = setup_app(vec![make_localized_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "loc2@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "loc2@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_localized_def(), make_users_def()],
+        vec![],
+        "loc2@test.com",
+        "pass123",
+    );
 
     let body = get_create_form(&app, "articles", &cookie).await;
     let doc = html::parse(&body);
@@ -176,9 +187,13 @@ async fn locale_disabled_no_picker() {
 #[tokio::test]
 async fn default_locale_fields_not_locked() {
     let config = make_locale_config();
-    let app = setup_app_with_config(vec![make_localized_def(), make_users_def()], vec![], config);
-    let user_id = create_test_user(&app, "loc3@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "loc3@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test_with_config(
+        vec![make_localized_def(), make_users_def()],
+        vec![],
+        config,
+        "loc3@test.com",
+        "pass123",
+    );
 
     let body = get_create_form_with_locale(&app, "articles", &cookie, "en").await;
     let doc = html::parse(&body);
@@ -200,9 +215,13 @@ async fn default_locale_fields_not_locked() {
 #[tokio::test]
 async fn non_default_locale_non_localized_field_locked() {
     let config = make_locale_config();
-    let app = setup_app_with_config(vec![make_localized_def(), make_users_def()], vec![], config);
-    let user_id = create_test_user(&app, "loc4@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "loc4@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test_with_config(
+        vec![make_localized_def(), make_users_def()],
+        vec![],
+        config,
+        "loc4@test.com",
+        "pass123",
+    );
 
     let body = get_create_form_with_locale(&app, "articles", &cookie, "de").await;
     let doc = html::parse(&body);
@@ -219,9 +238,13 @@ async fn non_default_locale_non_localized_field_locked() {
 #[tokio::test]
 async fn non_default_locale_localized_field_editable() {
     let config = make_locale_config();
-    let app = setup_app_with_config(vec![make_localized_def(), make_users_def()], vec![], config);
-    let user_id = create_test_user(&app, "loc5@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "loc5@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test_with_config(
+        vec![make_localized_def(), make_users_def()],
+        vec![],
+        config,
+        "loc5@test.com",
+        "pass123",
+    );
 
     let body = get_create_form_with_locale(&app, "articles", &cookie, "de").await;
     let doc = html::parse(&body);
@@ -238,9 +261,13 @@ async fn non_default_locale_localized_field_editable() {
 #[tokio::test]
 async fn form_includes_locale_hidden_field() {
     let config = make_locale_config();
-    let app = setup_app_with_config(vec![make_localized_def(), make_users_def()], vec![], config);
-    let user_id = create_test_user(&app, "loc6@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "loc6@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test_with_config(
+        vec![make_localized_def(), make_users_def()],
+        vec![],
+        config,
+        "loc6@test.com",
+        "pass123",
+    );
 
     let body = get_create_form_with_locale(&app, "articles", &cookie, "de").await;
     let doc = html::parse(&body);
@@ -257,9 +284,13 @@ async fn form_includes_locale_hidden_field() {
 #[tokio::test]
 async fn create_in_default_locale_roundtrip() {
     let config = make_locale_config();
-    let app = setup_app_with_config(vec![make_localized_def(), make_users_def()], vec![], config);
-    let user_id = create_test_user(&app, "loc7@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "loc7@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test_with_config(
+        vec![make_localized_def(), make_users_def()],
+        vec![],
+        config,
+        "loc7@test.com",
+        "pass123",
+    );
 
     // Create with default locale
     let resp = app
@@ -310,9 +341,13 @@ async fn create_in_default_locale_roundtrip() {
 #[tokio::test]
 async fn edit_in_non_default_locale_shows_localized_values() {
     let config = make_locale_config();
-    let app = setup_app_with_config(vec![make_localized_def(), make_users_def()], vec![], config);
-    let user_id = create_test_user(&app, "loc8@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "loc8@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test_with_config(
+        vec![make_localized_def(), make_users_def()],
+        vec![],
+        config,
+        "loc8@test.com",
+        "pass123",
+    );
 
     // Create a doc in the default locale (en)
     let locale_config = LocaleConfig {
@@ -324,22 +359,21 @@ async fn edit_in_non_default_locale_shows_localized_values() {
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let en_locale_ctx = LocaleContext::from_locale_string(Some("en"), &locale_config).unwrap();
-    let data: DocumentFields = std::collections::HashMap::from([
+    let data: DocumentFields = HashMap::from([
         ("title".to_string(), json!("Hello")),
         ("slug".to_string(), json!("hello")),
         ("body".to_string(), json!("World")),
     ])
     .into();
-    let doc_record =
-        crap_cms::db::query::create(&tx, "articles", &def, &data, en_locale_ctx.as_ref()).unwrap();
+    let doc_record = query::create(&tx, "articles", &def, &data, en_locale_ctx.as_ref()).unwrap();
     // Write de locale values
     let de_locale_ctx = LocaleContext::from_locale_string(Some("de"), &locale_config).unwrap();
-    let de_data: DocumentFields = std::collections::HashMap::from([
+    let de_data: DocumentFields = HashMap::from([
         ("title".to_string(), json!("Hallo")),
         ("body".to_string(), json!("Welt")),
     ])
     .into();
-    crap_cms::db::query::update(
+    query::update(
         &tx,
         "articles",
         &def,

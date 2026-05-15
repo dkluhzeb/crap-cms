@@ -24,3 +24,5 @@
 pub mod browser;
 pub mod helpers;
 pub mod html;
+pub use browser::{BrowserTestCtx, setup_browser_test, setup_browser_test_with_config};
+pub use helpers::HtmlTestCtx;

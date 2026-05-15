@@ -11,18 +11,17 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use tower::ServiceExt;
 
-use crap_cms::core::field::*;
+use crap_cms::core::{collection::*, field::*};
 
-use crap_cms_e2e::helpers::*;
-use crap_cms_e2e::html;
+use crap_cms_e2e::{helpers::*, html};
 
 fn make_global_with_fields() -> crap_cms::core::collection::GlobalDefinition {
-    use crap_cms::core::collection::*;
-
     let mut def = GlobalDefinition::new("settings");
     def.labels = Labels {
         singular: Some(LocalizedString::Plain("Settings".to_string())),
@@ -41,9 +40,12 @@ fn make_global_with_fields() -> crap_cms::core::collection::GlobalDefinition {
 
 #[tokio::test]
 async fn global_edit_form_renders_fields() {
-    let app = setup_app(vec![make_users_def()], vec![make_global_with_fields()]);
-    let user_id = create_test_user(&app, "global@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "global@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_users_def()],
+        vec![make_global_with_fields()],
+        "global@test.com",
+        "pass123",
+    );
 
     let resp = app
         .router
@@ -69,9 +71,12 @@ async fn global_edit_form_renders_fields() {
 
 #[tokio::test]
 async fn global_form_has_validate_wrapper() {
-    let app = setup_app(vec![make_users_def()], vec![make_global_with_fields()]);
-    let user_id = create_test_user(&app, "gval@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "gval@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_users_def()],
+        vec![make_global_with_fields()],
+        "gval@test.com",
+        "pass123",
+    );
 
     let resp = app
         .router
@@ -102,9 +107,12 @@ async fn global_form_has_validate_wrapper() {
 
 #[tokio::test]
 async fn global_edit_form_has_loading_indicator() {
-    let app = setup_app(vec![make_users_def()], vec![make_global_with_fields()]);
-    let user_id = create_test_user(&app, "gload@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "gload@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_users_def()],
+        vec![make_global_with_fields()],
+        "gload@test.com",
+        "pass123",
+    );
 
     let resp = app
         .router

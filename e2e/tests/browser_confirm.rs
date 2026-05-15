@@ -11,17 +11,17 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use std::collections::HashMap;
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
-use crap_cms_e2e::browser;
-use crap_cms_e2e::helpers::*;
-
-use crap_cms::core::DocumentFields;
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
-use crap_cms::db::query;
 use serde_json::json;
+use tokio::time::sleep;
+
+use crap_cms::{
+    core::{DocumentFields, collection::*, field::*},
+    db::query,
+};
+
+use crap_cms_e2e::{browser, helpers::*};
 
 fn make_confirm_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -75,7 +75,7 @@ async fn delete_shows_confirm_dialog() {
     .await
     .unwrap();
     // Wait for JS components (especially <crap-confirm>) to register
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Click the delete button (the form is wrapped by <crap-confirm>; the
     // confirm prompt is rendered by the page-singleton <crap-confirm-dialog>).
@@ -126,7 +126,7 @@ async fn confirm_cancel_stays_on_page() {
     .await
     .unwrap();
     // Wait for JS components to register
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Click delete to open confirm dialog
     page.find_element("button.button--danger")
@@ -135,7 +135,7 @@ async fn confirm_cancel_stays_on_page() {
         .click()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Click cancel in the confirm-dialog shadow DOM
     page.evaluate(
@@ -143,7 +143,7 @@ async fn confirm_cancel_stays_on_page() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Should still be on the delete page
     let url = page.url().await.unwrap().unwrap_or_default();
@@ -188,7 +188,7 @@ async fn confirm_accept_deletes() {
     .await
     .unwrap();
     // Wait for JS components to register
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Click delete to trigger confirm
     page.find_element("button.button--danger")
@@ -197,7 +197,7 @@ async fn confirm_accept_deletes() {
         .click()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Click confirm in the confirm-dialog shadow DOM
     page.evaluate(
@@ -205,7 +205,7 @@ async fn confirm_accept_deletes() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    sleep(Duration::from_secs(1)).await;
 
     // Should redirect away from the delete page (to the list)
     let url = page.url().await.unwrap().unwrap_or_default();

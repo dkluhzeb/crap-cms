@@ -11,17 +11,21 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use std::collections::HashMap;
+
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use serde_json::json;
 use tower::ServiceExt;
 
-use crap_cms::core::DocumentFields;
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
+use crap_cms::{
+    core::{DocumentFields, collection::*, field::*},
+    db::query,
+};
 
-use crap_cms_e2e::helpers::*;
-use crap_cms_e2e::html;
+use crap_cms_e2e::{helpers::*, html};
 
 // ── Definition builders ──────────────────────────────────────────────────
 
@@ -116,9 +120,12 @@ async fn post_create_raw(
 // 1. Versioned create form shows Publish + Save Draft buttons
 #[tokio::test]
 async fn versioned_create_form_shows_draft_button() {
-    let app = setup_app(vec![make_versioned_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "ver1@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "ver1@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_versioned_def(), make_users_def()],
+        vec![],
+        "ver1@test.com",
+        "pass123",
+    );
 
     let body = get_create_form(&app, "articles", &cookie).await;
     let doc = html::parse(&body);
@@ -142,11 +149,12 @@ async fn versioned_create_form_shows_draft_button() {
 // server-side draft-aware validation pipeline runs.
 #[tokio::test]
 async fn save_draft_button_carries_formnovalidate() {
-    use crap_cms::db::query;
-
-    let app = setup_app(vec![make_versioned_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "ver1b@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "ver1b@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_versioned_def(), make_users_def()],
+        vec![],
+        "ver1b@test.com",
+        "pass123",
+    );
 
     // Create page (no document yet → uses the create-flow draft button).
     let body = get_create_form(&app, "articles", &cookie).await;
@@ -179,9 +187,12 @@ async fn save_draft_button_carries_formnovalidate() {
 // 2. Non-versioned form has no draft buttons
 #[tokio::test]
 async fn non_versioned_form_no_draft_button() {
-    let app = setup_app(vec![make_posts_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "ver2@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "ver2@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_posts_def(), make_users_def()],
+        vec![],
+        "ver2@test.com",
+        "pass123",
+    );
 
     let body = get_create_form(&app, "posts", &cookie).await;
 
@@ -194,9 +205,12 @@ async fn non_versioned_form_no_draft_button() {
 // 3. Create as draft skips required validation
 #[tokio::test]
 async fn create_as_draft_skips_required_validation() {
-    let app = setup_app(vec![make_versioned_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "ver3@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "ver3@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_versioned_def(), make_users_def()],
+        vec![],
+        "ver3@test.com",
+        "pass123",
+    );
 
     let (status, _body, location) = post_create_raw(
         &app,
@@ -218,9 +232,12 @@ async fn create_as_draft_skips_required_validation() {
 // 4. Create as published validates required fields
 #[tokio::test]
 async fn create_as_published_validates_required() {
-    let app = setup_app(vec![make_versioned_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "ver4@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "ver4@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_versioned_def(), make_users_def()],
+        vec![],
+        "ver4@test.com",
+        "pass123",
+    );
 
     let (status, body, _location) = post_create_raw(
         &app,
@@ -242,9 +259,12 @@ async fn create_as_published_validates_required() {
 // 5. Publish then edit shows published status
 #[tokio::test]
 async fn publish_then_edit_shows_published_status() {
-    let app = setup_app(vec![make_versioned_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "ver5@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "ver5@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_versioned_def(), make_users_def()],
+        vec![],
+        "ver5@test.com",
+        "pass123",
+    );
 
     // Create as published
     let (status, _body, location) = post_create_raw(
@@ -289,20 +309,23 @@ async fn publish_then_edit_shows_published_status() {
 // 6. Edit form shows version sidebar
 #[tokio::test]
 async fn edit_form_shows_version_sidebar() {
-    let app = setup_app(vec![make_versioned_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "ver6@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "ver6@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_versioned_def(), make_users_def()],
+        vec![],
+        "ver6@test.com",
+        "pass123",
+    );
 
     // Create a doc via query::create
     let def = app.registry.get_collection("articles").unwrap().clone();
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data: DocumentFields = std::collections::HashMap::from([
+    let data: DocumentFields = HashMap::from([
         ("title".to_string(), json!("Versioned Article")),
         ("body".to_string(), json!("Some body")),
     ])
     .into();
-    let doc_record = crap_cms::db::query::create(&tx, "articles", &def, &data, None).unwrap();
+    let doc_record = query::create(&tx, "articles", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
     let body = get_edit_form(&app, "articles", &doc_record.id, &cookie).await;
@@ -318,9 +341,12 @@ async fn edit_form_shows_version_sidebar() {
 // 7. Update creates version entry
 #[tokio::test]
 async fn update_creates_version_entry() {
-    let app = setup_app(vec![make_versioned_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "ver7@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "ver7@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_versioned_def(), make_users_def()],
+        vec![],
+        "ver7@test.com",
+        "pass123",
+    );
 
     // Create via POST
     let (status, _body, _location) = post_create_raw(
@@ -397,9 +423,12 @@ async fn update_creates_version_entry() {
 // 8. Unpublish changes status
 #[tokio::test]
 async fn unpublish_changes_status() {
-    let app = setup_app(vec![make_versioned_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "ver8@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "ver8@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_versioned_def(), make_users_def()],
+        vec![],
+        "ver8@test.com",
+        "pass123",
+    );
 
     // Create published doc
     let (status, _body, _location) = post_create_raw(

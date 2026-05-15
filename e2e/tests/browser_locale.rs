@@ -13,12 +13,14 @@
 )]
 use std::time::Duration;
 
-use crap_cms_e2e::browser;
-use crap_cms_e2e::helpers::*;
+use tokio::time::sleep;
 
-use crap_cms::config::{CrapConfig, LocaleConfig};
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
+use crap_cms::{
+    config::{CrapConfig, LocaleConfig},
+    core::{collection::*, field::*},
+};
+
+use crap_cms_e2e::{browser, helpers::*};
 
 fn make_locale_config() -> CrapConfig {
     let mut config = CrapConfig::test_default();
@@ -77,7 +79,7 @@ async fn locale_picker_switches_locale() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // The locale picker should be visible (since locales are enabled)
     let pickers = page.find_elements("crap-locale-picker").await.unwrap();
@@ -93,7 +95,7 @@ async fn locale_picker_switches_locale() {
         .click()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Click the "de" locale option
     page.find_element("[data-locale-value=\"de\"]")
@@ -102,7 +104,7 @@ async fn locale_picker_switches_locale() {
         .click()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    sleep(Duration::from_secs(1)).await;
 
     // After clicking, a cookie should be set and page reloaded
     // Check the locale badge shows "de"

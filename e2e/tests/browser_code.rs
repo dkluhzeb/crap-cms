@@ -13,11 +13,11 @@
 )]
 use std::time::Duration;
 
-use crap_cms_e2e::browser;
-use crap_cms_e2e::helpers::*;
+use tokio::time::sleep;
 
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
+use crap_cms::core::{collection::*, field::*};
+
+use crap_cms_e2e::{BrowserTestCtx, browser, helpers::*, setup_browser_test};
 
 fn make_code_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("snippets");
@@ -39,15 +39,18 @@ fn make_code_def() -> CollectionDefinition {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn code_renders_codemirror() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_code_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "bcode1@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "bcode1@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "bcode1@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_code_def(), make_users_def()],
+        vec![],
+        "bcode1@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/snippets/create"))
         .await
@@ -55,7 +58,7 @@ async fn code_renders_codemirror() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Check for CodeMirror editor inside shadow root
     let has_editor = browser::shadow_eval(
@@ -76,15 +79,18 @@ async fn code_renders_codemirror() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn code_typing_updates_hidden_input() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_code_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "bcode2@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "bcode2@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "bcode2@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_code_def(), make_users_def()],
+        vec![],
+        "bcode2@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/snippets/create"))
         .await
@@ -92,7 +98,7 @@ async fn code_typing_updates_hidden_input() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Type into the CodeMirror editor via JS (direct interaction with shadow DOM)
     page.evaluate(
@@ -106,7 +112,7 @@ async fn code_typing_updates_hidden_input() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Check that the hidden textarea has been updated
     let result = page
@@ -135,15 +141,18 @@ async fn code_typing_updates_hidden_input() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn code_syntax_highlighting_renders() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_code_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "bcode3@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "bcode3@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "bcode3@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_code_def(), make_users_def()],
+        vec![],
+        "bcode3@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/snippets/create"))
         .await
@@ -151,7 +160,7 @@ async fn code_syntax_highlighting_renders() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Insert a JSON snippet with at least a string and a number — both
     // should be tagged by the parser.
@@ -166,7 +175,7 @@ async fn code_syntax_highlighting_renders() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Look for any highlighted span. CodeMirror's HighlightStyle generates
     // scoped class names (`ͼ` Greek-iota prefix from style-mod). The real
@@ -225,15 +234,18 @@ fn make_picker_def() -> CollectionDefinition {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn code_language_picker_persists_choice() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_picker_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "bcode4@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "bcode4@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "bcode4@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_picker_def(), make_users_def()],
+        vec![],
+        "bcode4@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/snippets/create"))
         .await
@@ -241,7 +253,7 @@ async fn code_language_picker_persists_choice() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Picker is in the shadow root; hidden input is a sibling of <crap-code>.
     let picker_state = browser::shadow_eval(
@@ -277,7 +289,7 @@ async fn code_language_picker_persists_choice() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(100)).await;
 
     let after_hidden = page
         .evaluate(
@@ -335,15 +347,18 @@ fn make_blocks_picker_def() -> CollectionDefinition {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn code_picker_appears_inside_blocks_after_add() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_blocks_picker_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "bcode5@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "bcode5@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "bcode5@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_blocks_picker_def(), make_users_def()],
+        vec![],
+        "bcode5@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/snippets/create"))
         .await
@@ -351,7 +366,7 @@ async fn code_picker_appears_inside_blocks_after_add() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Click the "Add Code" button — the block-picker dispatches add-block-row.
     page.evaluate(
@@ -362,7 +377,7 @@ async fn code_picker_appears_inside_blocks_after_add() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // The newly cloned <crap-code> should render its picker in the shadow root.
     let picker_present = browser::shadow_eval(

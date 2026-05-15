@@ -13,11 +13,11 @@
 )]
 use std::time::Duration;
 
-use crap_cms_e2e::browser;
-use crap_cms_e2e::helpers::*;
+use tokio::time::sleep;
 
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
+use crap_cms::core::{collection::*, field::*};
+
+use crap_cms_e2e::{BrowserTestCtx, helpers::*, setup_browser_test};
 
 fn make_dirty_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -38,15 +38,18 @@ fn make_dirty_def() -> CollectionDefinition {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn dirty_form_not_armed_on_clean() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_dirty_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "bdirty1@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "bdirty1@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "bdirty1@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_dirty_def(), make_users_def()],
+        vec![],
+        "bdirty1@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/posts/create"))
         .await
@@ -56,7 +59,7 @@ async fn dirty_form_not_armed_on_clean() {
         .unwrap();
 
     // Wait for the component to arm itself (requestAnimationFrame)
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Without any interaction, _dirty should be false
     let result = page
@@ -73,15 +76,18 @@ async fn dirty_form_not_armed_on_clean() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn dirty_form_armed_after_input() {
-    let (base_url, server_handle, app) =
-        browser::spawn_server(vec![make_dirty_def(), make_users_def()], vec![]).await;
-    let user_id = create_test_user(&app, "bdirty2@test.com", "pass123");
-    let _ = make_auth_cookie(&app, &user_id, "bdirty2@test.com");
-
-    let (browser, _browser_handle) = browser::launch_browser().await;
-    let page = browser.new_page("about:blank").await.unwrap();
-
-    browser::browser_login(&page, &base_url, "bdirty2@test.com", "pass123").await;
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        ..
+    } = setup_browser_test(
+        vec![make_dirty_def(), make_users_def()],
+        vec![],
+        "bdirty2@test.com",
+        "pass123",
+    )
+    .await;
 
     page.goto(format!("{base_url}/admin/collections/posts/create"))
         .await
@@ -91,7 +97,7 @@ async fn dirty_form_armed_after_input() {
         .unwrap();
 
     // Wait for arming
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Type into the title field
     page.find_element("input[name=\"title\"]")
@@ -103,7 +109,7 @@ async fn dirty_form_armed_after_input() {
         .type_str("Some title")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // _dirty should now be true
     let result = page

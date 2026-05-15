@@ -11,19 +11,23 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use std::collections::HashMap;
+
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
+use query::LocaleContext;
+use serde_json::json;
 use tower::ServiceExt;
 
-use crap_cms::config::{CrapConfig, LocaleConfig};
-use crap_cms::core::DocumentFields;
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
-use crap_cms::db::query::LocaleContext;
+use crap_cms::{
+    config::{CrapConfig, LocaleConfig},
+    core::{DocumentFields, collection::*, field::*},
+    db::query,
+};
 
-use crap_cms_e2e::helpers::*;
-use crap_cms_e2e::html;
-use serde_json::json;
+use crap_cms_e2e::{helpers::*, html};
 
 // ── Definition builders ──────────────────────────────────────────────────
 
@@ -222,9 +226,12 @@ async fn post_create(app: &TestApp, slug: &str, cookie: &str, form_body: &str) -
 // 1. Blocks field renders with block type templates
 #[tokio::test]
 async fn create_form_blocks_renders() {
-    let app = setup_app(vec![make_blocks_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "blocks@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "blocks@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_blocks_def(), make_users_def()],
+        vec![],
+        "blocks@test.com",
+        "pass123",
+    );
 
     let body = get_create_form(&app, "pages", &cookie).await;
     let doc = html::parse(&body);
@@ -243,9 +250,12 @@ async fn create_form_blocks_renders() {
 // 2. Blocks validation error on required sub-field
 #[tokio::test]
 async fn blocks_validation_error_on_required_sub_field() {
-    let app = setup_app(vec![make_blocks_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "blkval@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "blkval@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_blocks_def(), make_users_def()],
+        vec![],
+        "blkval@test.com",
+        "pass123",
+    );
 
     let body = post_create(
         &app,
@@ -266,9 +276,12 @@ async fn blocks_validation_error_on_required_sub_field() {
 // 3. Group > Group renders nested fieldsets
 #[tokio::test]
 async fn create_form_group_group_renders() {
-    let app = setup_app(vec![make_group_group_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "gg@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "gg@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_group_group_def(), make_users_def()],
+        vec![],
+        "gg@test.com",
+        "pass123",
+    );
 
     let body = get_create_form(&app, "companies", &cookie).await;
     let doc = html::parse(&body);
@@ -294,21 +307,24 @@ async fn create_form_group_group_renders() {
 // 4. Group > Group CRUD roundtrip — create with flat columns, verify edit form shows values
 #[tokio::test]
 async fn group_group_crud_roundtrip() {
-    let app = setup_app(vec![make_group_group_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "ggcrud@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "ggcrud@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_group_group_def(), make_users_def()],
+        vec![],
+        "ggcrud@test.com",
+        "pass123",
+    );
 
     // Insert a doc with nested group data via flat column names
     let def = app.registry.get_collection("companies").unwrap().clone();
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data: DocumentFields = std::collections::HashMap::from([
+    let data: DocumentFields = HashMap::from([
         ("name".to_string(), json!("Corp")),
         ("address__geo__lat".to_string(), json!("40.7128")),
         ("address__geo__lng".to_string(), json!("-74.0060")),
     ])
     .into();
-    let doc_record = crap_cms::db::query::create(&tx, "companies", &def, &data, None).unwrap();
+    let doc_record = query::create(&tx, "companies", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
     // GET edit form and verify nested group values are populated
@@ -336,9 +352,12 @@ async fn group_group_crud_roundtrip() {
 // 5. Array > Collapsible renders
 #[tokio::test]
 async fn create_form_array_collapsible_renders() {
-    let app = setup_app(vec![make_array_collapsible_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "acol@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "acol@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_array_collapsible_def(), make_users_def()],
+        vec![],
+        "acol@test.com",
+        "pass123",
+    );
 
     let body = get_create_form(&app, "faqs", &cookie).await;
     let doc = html::parse(&body);
@@ -361,9 +380,12 @@ async fn create_form_array_collapsible_renders() {
 // 6. Array > Collapsible validation error
 #[tokio::test]
 async fn array_collapsible_validation_error() {
-    let app = setup_app(vec![make_array_collapsible_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "acolval@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "acolval@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_array_collapsible_def(), make_users_def()],
+        vec![],
+        "acolval@test.com",
+        "pass123",
+    );
 
     let body = post_create(
         &app,
@@ -384,9 +406,12 @@ async fn array_collapsible_validation_error() {
 // 7. Array > Row renders
 #[tokio::test]
 async fn create_form_array_row_renders() {
-    let app = setup_app(vec![make_array_row_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "arow@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "arow@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_array_row_def(), make_users_def()],
+        vec![],
+        "arow@test.com",
+        "pass123",
+    );
 
     let body = get_create_form(&app, "schedules", &cookie).await;
     let doc = html::parse(&body);
@@ -404,9 +429,12 @@ async fn create_form_array_row_renders() {
 // 8. Array > Row validation error
 #[tokio::test]
 async fn array_row_validation_error() {
-    let app = setup_app(vec![make_array_row_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "arowval@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "arowval@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_array_row_def(), make_users_def()],
+        vec![],
+        "arowval@test.com",
+        "pass123",
+    );
 
     let body = post_create(
         &app,
@@ -427,9 +455,12 @@ async fn array_row_validation_error() {
 // 9. Array > Group > Group renders all levels (triple nesting)
 #[tokio::test]
 async fn create_form_triple_nesting_renders() {
-    let app = setup_app(vec![make_triple_nesting_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "triple@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "triple@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_triple_nesting_def(), make_users_def()],
+        vec![],
+        "triple@test.com",
+        "pass123",
+    );
 
     let body = get_create_form(&app, "deep", &cookie).await;
     let doc = html::parse(&body);
@@ -452,9 +483,12 @@ async fn create_form_triple_nesting_renders() {
 // 10. Triple nesting validation error
 #[tokio::test]
 async fn triple_nesting_validation_error() {
-    let app = setup_app(vec![make_triple_nesting_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "tripleval@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "tripleval@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_triple_nesting_def(), make_users_def()],
+        vec![],
+        "tripleval@test.com",
+        "pass123",
+    );
 
     let body = post_create(
         &app,
@@ -521,9 +555,12 @@ fn make_five_level_def() -> CollectionDefinition {
 // 11. Five-level deep group nesting renders correct __ names
 #[tokio::test]
 async fn five_level_group_nesting_renders() {
-    let app = setup_app(vec![make_five_level_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "deep5@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "deep5@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_five_level_def(), make_users_def()],
+        vec![],
+        "deep5@test.com",
+        "pass123",
+    );
 
     let body = get_create_form(&app, "orgs", &cookie).await;
     let doc = html::parse(&body);
@@ -549,14 +586,17 @@ async fn five_level_group_nesting_renders() {
 // 12. Five-level deep group CRUD roundtrip
 #[tokio::test]
 async fn five_level_group_crud_roundtrip() {
-    let app = setup_app(vec![make_five_level_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "deep5rt@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "deep5rt@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_five_level_def(), make_users_def()],
+        vec![],
+        "deep5rt@test.com",
+        "pass123",
+    );
 
     let def = app.registry.get_collection("orgs").unwrap().clone();
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data: DocumentFields = std::collections::HashMap::from([
+    let data: DocumentFields = HashMap::from([
         ("name".to_string(), json!("Acme")),
         (
             "org__dept__team__lead__contact__phone".to_string(),
@@ -568,7 +608,7 @@ async fn five_level_group_crud_roundtrip() {
         ),
     ])
     .into();
-    let doc_record = crap_cms::db::query::create(&tx, "orgs", &def, &data, None).unwrap();
+    let doc_record = query::create(&tx, "orgs", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
     let resp = app
@@ -715,13 +755,13 @@ async fn get_edit_form_with_locale(
 #[tokio::test]
 async fn nested_groups_locale_default_all_editable() {
     let config = make_locale_nesting_config();
-    let app = setup_app_with_config(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test_with_config(
         vec![make_locale_nesting_def(), make_users_def()],
         vec![],
         config,
+        "nloc1@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "nloc1@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "nloc1@test.com");
 
     let body = get_create_form_with_locale(&app, "products", &cookie, "en").await;
     let doc = html::parse(&body);
@@ -762,13 +802,13 @@ async fn nested_groups_locale_default_all_editable() {
 #[tokio::test]
 async fn nested_groups_locale_non_default_locking() {
     let config = make_locale_nesting_config();
-    let app = setup_app_with_config(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test_with_config(
         vec![make_locale_nesting_def(), make_users_def()],
         vec![],
         config,
+        "nloc2@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "nloc2@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "nloc2@test.com");
 
     let body = get_create_form_with_locale(&app, "products", &cookie, "de").await;
     let doc = html::parse(&body);
@@ -802,13 +842,13 @@ async fn nested_groups_locale_non_default_locking() {
 #[tokio::test]
 async fn nested_groups_locale_roundtrip() {
     let config = make_locale_nesting_config();
-    let app = setup_app_with_config(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test_with_config(
         vec![make_locale_nesting_def(), make_users_def()],
         vec![],
         config,
+        "nloc3@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "nloc3@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "nloc3@test.com");
 
     let locale_config = LocaleConfig {
         default_locale: "en".to_string(),
@@ -821,7 +861,7 @@ async fn nested_groups_locale_roundtrip() {
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let en_locale_ctx = LocaleContext::from_locale_string(Some("en"), &locale_config).unwrap();
-    let en_data: DocumentFields = std::collections::HashMap::from([
+    let en_data: DocumentFields = HashMap::from([
         ("name".to_string(), json!("Widget")),
         ("details__title".to_string(), json!("Great Widget")),
         ("details__info__tagline".to_string(), json!("Best in class")),
@@ -831,12 +871,11 @@ async fn nested_groups_locale_roundtrip() {
     ])
     .into();
     let doc_record =
-        crap_cms::db::query::create(&tx, "products", &def, &en_data, en_locale_ctx.as_ref())
-            .unwrap();
+        query::create(&tx, "products", &def, &en_data, en_locale_ctx.as_ref()).unwrap();
 
     // Update DE locale translations for localized fields
     let de_locale_ctx = LocaleContext::from_locale_string(Some("de"), &locale_config).unwrap();
-    let de_data: DocumentFields = std::collections::HashMap::from([
+    let de_data: DocumentFields = HashMap::from([
         ("details__title".to_string(), json!("Tolles Widget")),
         (
             "details__info__tagline".to_string(),
@@ -845,7 +884,7 @@ async fn nested_groups_locale_roundtrip() {
         ("details__info__notes".to_string(), json!("DE Notizen hier")),
     ])
     .into();
-    crap_cms::db::query::update(
+    query::update(
         &tx,
         "products",
         &def,
@@ -1090,9 +1129,12 @@ fn make_array_row_group_def() -> CollectionDefinition {
 // 16. Group > Array: create form renders __ for group + brackets for array
 #[tokio::test]
 async fn group_array_create_form_renders() {
-    let app = setup_app(vec![make_group_array_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "ga@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "ga@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_group_array_def(), make_users_def()],
+        vec![],
+        "ga@test.com",
+        "pass123",
+    );
 
     let body = get_create_form(&app, "candidates", &cookie).await;
     let doc = html::parse(&body);
@@ -1119,12 +1161,12 @@ async fn group_array_create_form_renders() {
 // 17. Array > Collapsible > Group: template renders with collapsible transparency + group
 #[tokio::test]
 async fn array_collapsible_group_create_form_renders() {
-    let app = setup_app(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
         vec![make_array_collapsible_group_def(), make_users_def()],
         vec![],
+        "acg@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "acg@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "acg@test.com");
 
     let body = get_create_form(&app, "configs", &cookie).await;
     let doc = html::parse(&body);
@@ -1150,12 +1192,12 @@ async fn array_collapsible_group_create_form_renders() {
 // 18. Array > Collapsible > Group: validation error on required field
 #[tokio::test]
 async fn array_collapsible_group_validation_error() {
-    let app = setup_app(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
         vec![make_array_collapsible_group_def(), make_users_def()],
         vec![],
+        "acgval@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "acgval@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "acgval@test.com");
 
     let body = post_create(
         &app,
@@ -1176,9 +1218,12 @@ async fn array_collapsible_group_validation_error() {
 // 20. Array > Tabs > Group: create form renders with tabs transparency
 #[tokio::test]
 async fn array_tabs_group_create_form_renders() {
-    let app = setup_app(vec![make_array_tabs_group_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "atg@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "atg@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_array_tabs_group_def(), make_users_def()],
+        vec![],
+        "atg@test.com",
+        "pass123",
+    );
 
     let body = get_create_form(&app, "articles", &cookie).await;
     let doc = html::parse(&body);
@@ -1204,9 +1249,12 @@ async fn array_tabs_group_create_form_renders() {
 // 21. Array > Tabs > Group: validation error on required field inside tab
 #[tokio::test]
 async fn array_tabs_group_validation_error() {
-    let app = setup_app(vec![make_array_tabs_group_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "atgval@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "atgval@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_array_tabs_group_def(), make_users_def()],
+        vec![],
+        "atgval@test.com",
+        "pass123",
+    );
 
     let body = post_create(
         &app,
@@ -1227,12 +1275,12 @@ async fn array_tabs_group_validation_error() {
 // 22. Blocks > Group: create form renders block definitions with nested group
 #[tokio::test]
 async fn blocks_group_create_form_renders() {
-    let app = setup_app(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
         vec![make_blocks_nested_group_def(), make_users_def()],
         vec![],
+        "bg@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "bg@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "bg@test.com");
 
     let body = get_create_form(&app, "landing", &cookie).await;
     let doc = html::parse(&body);
@@ -1265,12 +1313,12 @@ async fn blocks_group_create_form_renders() {
 // 23. Blocks > Group: validation error on required field in block with group
 #[tokio::test]
 async fn blocks_group_validation_error() {
-    let app = setup_app(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
         vec![make_blocks_nested_group_def(), make_users_def()],
         vec![],
+        "bgval@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "bgval@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "bgval@test.com");
 
     let body = post_create(
         &app,
@@ -1291,9 +1339,12 @@ async fn blocks_group_validation_error() {
 // 24. Array > Row > Group: create form renders row transparency + group bracket naming
 #[tokio::test]
 async fn array_row_group_create_form_renders() {
-    let app = setup_app(vec![make_array_row_group_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "arg@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "arg@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_array_row_group_def(), make_users_def()],
+        vec![],
+        "arg@test.com",
+        "pass123",
+    );
 
     let body = get_create_form(&app, "contacts", &cookie).await;
     let doc = html::parse(&body);
@@ -1315,9 +1366,12 @@ async fn array_row_group_create_form_renders() {
 // 25. Array > Row > Group: validation error on required field
 #[tokio::test]
 async fn array_row_group_validation_error() {
-    let app = setup_app(vec![make_array_row_group_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "argval@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "argval@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_array_row_group_def(), make_users_def()],
+        vec![],
+        "argval@test.com",
+        "pass123",
+    );
 
     // POST with empty required label
     let body = post_create(
@@ -1409,12 +1463,12 @@ fn make_group_with_layouts_def() -> CollectionDefinition {
 // 26. Group > Layout wrappers: create form renders with transparent naming
 #[tokio::test]
 async fn group_layout_wrappers_create_form_renders() {
-    let app = setup_app(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
         vec![make_group_with_layouts_def(), make_users_def()],
         vec![],
+        "glw@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "glw@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "glw@test.com");
 
     let body = get_create_form(&app, "widgets", &cookie).await;
 
@@ -1455,14 +1509,17 @@ async fn group_layout_wrappers_create_form_renders() {
 #[tokio::test]
 async fn group_layout_wrappers_crud_roundtrip() {
     let def = make_group_with_layouts_def();
-    let app = setup_app(vec![def.clone(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "glwrt@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "glwrt@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![def.clone(), make_users_def()],
+        vec![],
+        "glwrt@test.com",
+        "pass123",
+    );
 
     // Insert a row with flat column names
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data: DocumentFields = std::collections::HashMap::from([
+    let data: DocumentFields = HashMap::from([
         ("name".to_string(), json!("TestWidget")),
         ("config__theme".to_string(), json!("dark")),
         ("config__font_size".to_string(), json!("16")),
@@ -1472,7 +1529,7 @@ async fn group_layout_wrappers_crud_roundtrip() {
         ("config__height".to_string(), json!("600")),
     ])
     .into();
-    let doc_record = crap_cms::db::query::create(&tx, "widgets", &def, &data, None).unwrap();
+    let doc_record = query::create(&tx, "widgets", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
     // GET edit form and verify all values are populated
@@ -1504,12 +1561,12 @@ async fn group_layout_wrappers_crud_roundtrip() {
 // 28. Group > Layout wrappers: validation error on required field inside collapsible
 #[tokio::test]
 async fn group_layout_wrappers_validation() {
-    let app = setup_app(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
         vec![make_group_with_layouts_def(), make_users_def()],
         vec![],
+        "glwval@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "glwval@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "glwval@test.com");
 
     // POST with empty required config__theme
     let body = post_create(
@@ -1533,9 +1590,12 @@ async fn group_layout_wrappers_validation() {
 // 29. Group > Array: full CRUD roundtrip via form POST
 #[tokio::test]
 async fn group_array_crud_roundtrip() {
-    let app = setup_app(vec![make_group_array_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "ga_crud@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "ga_crud@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_group_array_def(), make_users_def()],
+        vec![],
+        "ga_crud@test.com",
+        "pass123",
+    );
 
     // POST create form with Group > Array data
     let resp = app
@@ -1564,7 +1624,7 @@ async fn group_array_crud_roundtrip() {
     // Verify via DB — use find to get ID, then find_by_id for full hydration
     let conn = app.pool.get().unwrap();
     let def = app.registry.get_collection("candidates").unwrap().clone();
-    let docs = crap_cms::db::query::find(
+    let docs = query::find(
         &conn,
         "candidates",
         &def,
@@ -1575,7 +1635,7 @@ async fn group_array_crud_roundtrip() {
     assert_eq!(docs.len(), 1);
     let doc_id = &*docs[0].id;
 
-    let doc = crap_cms::db::query::find_by_id(&conn, "candidates", &def, doc_id, None)
+    let doc = query::find_by_id(&conn, "candidates", &def, doc_id, None)
         .unwrap()
         .expect("document should exist");
 
@@ -1628,9 +1688,12 @@ async fn group_collapsible_array_crud_roundtrip() {
             .build(),
     ];
 
-    let app = setup_app(vec![def, make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "gca@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "gca@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![def, make_users_def()],
+        vec![],
+        "gca@test.com",
+        "pass123",
+    );
 
     // Verify create form renders Array template with correct __ naming
     let body = get_create_form(&app, "products", &cookie).await;
@@ -1665,7 +1728,7 @@ async fn group_collapsible_array_crud_roundtrip() {
     // Verify via DB — use find_by_id for full hydration
     let conn = app.pool.get().unwrap();
     let def = app.registry.get_collection("products").unwrap().clone();
-    let docs = crap_cms::db::query::find(
+    let docs = query::find(
         &conn,
         "products",
         &def,
@@ -1676,7 +1739,7 @@ async fn group_collapsible_array_crud_roundtrip() {
     assert_eq!(docs.len(), 1);
     let doc_id = &*docs[0].id;
 
-    let doc = crap_cms::db::query::find_by_id(&conn, "products", &def, doc_id, None)
+    let doc = query::find_by_id(&conn, "products", &def, doc_id, None)
         .unwrap()
         .expect("document should exist");
 
@@ -1752,12 +1815,12 @@ fn make_group_array_blocks_def() -> CollectionDefinition {
 // 31. Group > Array + Blocks: create form renders
 #[tokio::test]
 async fn group_array_blocks_create_form_renders() {
-    let app = setup_app(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
         vec![make_group_array_blocks_def(), make_users_def()],
         vec![],
+        "gab1@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "gab1@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "gab1@test.com");
 
     let body = get_create_form(&app, "projects", &cookie).await;
 
@@ -1776,12 +1839,12 @@ async fn group_array_blocks_create_form_renders() {
 // 32. Group > Array + Blocks: CRUD roundtrip
 #[tokio::test]
 async fn group_array_blocks_crud_roundtrip() {
-    let app = setup_app(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
         vec![make_group_array_blocks_def(), make_users_def()],
         vec![],
+        "gab2@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "gab2@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "gab2@test.com");
 
     let resp = app
         .router
@@ -1812,7 +1875,7 @@ async fn group_array_blocks_crud_roundtrip() {
     // Verify via DB
     let conn = app.pool.get().unwrap();
     let def = app.registry.get_collection("projects").unwrap().clone();
-    let docs = crap_cms::db::query::find(
+    let docs = query::find(
         &conn,
         "projects",
         &def,
@@ -1822,7 +1885,7 @@ async fn group_array_blocks_crud_roundtrip() {
     .unwrap();
     assert_eq!(docs.len(), 1);
 
-    let doc = crap_cms::db::query::find_by_id(&conn, "projects", &def, &docs[0].id, None)
+    let doc = query::find_by_id(&conn, "projects", &def, &docs[0].id, None)
         .unwrap()
         .expect("document should exist");
 
@@ -1912,12 +1975,12 @@ fn make_group_mixed_layout_array_blocks_def() -> CollectionDefinition {
 // 33. Group > Layout > Array + Blocks: form renders
 #[tokio::test]
 async fn group_layout_array_blocks_create_form_renders() {
-    let app = setup_app(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
         vec![make_group_mixed_layout_array_blocks_def(), make_users_def()],
         vec![],
+        "glab1@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "glab1@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "glab1@test.com");
 
     let body = get_create_form(&app, "dashboards", &cookie).await;
 
@@ -1936,12 +1999,12 @@ async fn group_layout_array_blocks_create_form_renders() {
 // 34. Group > Layout > Array + Blocks: CRUD roundtrip
 #[tokio::test]
 async fn group_layout_array_blocks_crud_roundtrip() {
-    let app = setup_app(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
         vec![make_group_mixed_layout_array_blocks_def(), make_users_def()],
         vec![],
+        "glab2@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "glab2@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "glab2@test.com");
 
     let resp = app
         .router
@@ -1969,7 +2032,7 @@ async fn group_layout_array_blocks_crud_roundtrip() {
 
     let conn = app.pool.get().unwrap();
     let def = app.registry.get_collection("dashboards").unwrap().clone();
-    let docs = crap_cms::db::query::find(
+    let docs = query::find(
         &conn,
         "dashboards",
         &def,
@@ -1979,7 +2042,7 @@ async fn group_layout_array_blocks_crud_roundtrip() {
     .unwrap();
     assert_eq!(docs.len(), 1);
 
-    let doc = crap_cms::db::query::find_by_id(&conn, "dashboards", &def, &docs[0].id, None)
+    let doc = query::find_by_id(&conn, "dashboards", &def, &docs[0].id, None)
         .unwrap()
         .expect("document should exist");
 
@@ -2060,13 +2123,13 @@ fn make_locale_config() -> CrapConfig {
 async fn localized_group_array_blocks_crud_roundtrip() {
     let config = make_locale_config();
     let locale_config = config.locale.clone();
-    let app = setup_app_with_config(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test_with_config(
         vec![make_localized_group_array_blocks_def(), make_users_def()],
         vec![],
         config,
+        "lgab1@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "lgab1@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "lgab1@test.com");
 
     let def = app.registry.get_collection("pages").unwrap().clone();
 
@@ -2074,16 +2137,15 @@ async fn localized_group_array_blocks_crud_roundtrip() {
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let en_locale_ctx = LocaleContext::from_locale_string(Some("en"), &locale_config).unwrap();
-    let en_data: DocumentFields = std::collections::HashMap::from([
+    let en_data: DocumentFields = HashMap::from([
         ("slug".to_string(), json!("hello")),
         ("content__headline".to_string(), json!("EN Headline")),
     ])
     .into();
-    let doc_record =
-        crap_cms::db::query::create(&tx, "pages", &def, &en_data, en_locale_ctx.as_ref()).unwrap();
+    let doc_record = query::create(&tx, "pages", &def, &en_data, en_locale_ctx.as_ref()).unwrap();
 
     // Save array + block data for EN
-    let en_join_data: DocumentFields = std::collections::HashMap::from([
+    let en_join_data: DocumentFields = HashMap::from([
         (
             "content__items".to_string(),
             json!([{"label": "EN One"}, {"label": "EN Two"}]),
@@ -2094,7 +2156,7 @@ async fn localized_group_array_blocks_crud_roundtrip() {
         ),
     ])
     .into();
-    crap_cms::db::query::save_join_table_data(
+    query::save_join_table_data(
         &tx,
         "pages",
         &def.fields,
@@ -2106,12 +2168,9 @@ async fn localized_group_array_blocks_crud_roundtrip() {
 
     // Update DE locale
     let de_locale_ctx = LocaleContext::from_locale_string(Some("de"), &locale_config).unwrap();
-    let de_data: DocumentFields = std::collections::HashMap::from([(
-        "content__headline".to_string(),
-        json!("DE Schlagzeile"),
-    )])
-    .into();
-    crap_cms::db::query::update(
+    let de_data: DocumentFields =
+        HashMap::from([("content__headline".to_string(), json!("DE Schlagzeile"))]).into();
+    query::update(
         &tx,
         "pages",
         &def,
@@ -2122,7 +2181,7 @@ async fn localized_group_array_blocks_crud_roundtrip() {
     .unwrap();
 
     // Save array + block data for DE
-    let de_join_data: DocumentFields = std::collections::HashMap::from([
+    let de_join_data: DocumentFields = HashMap::from([
         ("content__items".to_string(), json!([{"label": "DE Eins"}])),
         (
             "content__sections".to_string(),
@@ -2130,7 +2189,7 @@ async fn localized_group_array_blocks_crud_roundtrip() {
         ),
     ])
     .into();
-    crap_cms::db::query::save_join_table_data(
+    query::save_join_table_data(
         &tx,
         "pages",
         &def.fields,
@@ -2143,15 +2202,10 @@ async fn localized_group_array_blocks_crud_roundtrip() {
 
     // Verify EN data via find_by_id with locale context
     let conn = app.pool.get().unwrap();
-    let en_doc_record = crap_cms::db::query::find_by_id(
-        &conn,
-        "pages",
-        &def,
-        &doc_record.id,
-        en_locale_ctx.as_ref(),
-    )
-    .unwrap()
-    .expect("EN document should exist");
+    let en_doc_record =
+        query::find_by_id(&conn, "pages", &def, &doc_record.id, en_locale_ctx.as_ref())
+            .unwrap()
+            .expect("EN document should exist");
 
     let content = en_doc_record
         .fields
@@ -2172,15 +2226,10 @@ async fn localized_group_array_blocks_crud_roundtrip() {
     assert_eq!(en_sections_arr[0]["body"], "EN body");
 
     // Verify DE data via find_by_id
-    let de_doc_record = crap_cms::db::query::find_by_id(
-        &conn,
-        "pages",
-        &def,
-        &doc_record.id,
-        de_locale_ctx.as_ref(),
-    )
-    .unwrap()
-    .expect("DE document should exist");
+    let de_doc_record =
+        query::find_by_id(&conn, "pages", &def, &doc_record.id, de_locale_ctx.as_ref())
+            .unwrap()
+            .expect("DE document should exist");
 
     let de_content = de_doc_record
         .fields
@@ -2220,13 +2269,13 @@ async fn localized_group_array_blocks_crud_roundtrip() {
 #[tokio::test]
 async fn localized_group_array_blocks_non_default_editable() {
     let config = make_locale_config();
-    let app = setup_app_with_config(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test_with_config(
         vec![make_localized_group_array_blocks_def(), make_users_def()],
         vec![],
         config,
+        "lgab2@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "lgab2@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "lgab2@test.com");
 
     let body = get_create_form_with_locale(&app, "pages", &cookie, "de").await;
     let doc = html::parse(&body);
@@ -2305,13 +2354,13 @@ fn make_mixed_locale_group_def() -> CollectionDefinition {
 #[tokio::test]
 async fn mixed_locale_group_array_editable_blocks_locked() {
     let config = make_locale_config();
-    let app = setup_app_with_config(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test_with_config(
         vec![make_mixed_locale_group_def(), make_users_def()],
         vec![],
         config,
+        "mlg1@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "mlg1@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "mlg1@test.com");
 
     let body = get_create_form_with_locale(&app, "articles", &cookie, "de").await;
     let doc = html::parse(&body);
@@ -2368,13 +2417,12 @@ async fn mixed_locale_group_crud_roundtrip() {
     let tx = conn.transaction().unwrap();
     let en_locale_ctx = LocaleContext::from_locale_string(Some("en"), &locale_config).unwrap();
     let en_data: DocumentFields =
-        std::collections::HashMap::from([("title".to_string(), json!("Test Article"))]).into();
+        HashMap::from([("title".to_string(), json!("Test Article"))]).into();
     let doc_record =
-        crap_cms::db::query::create(&tx, "articles", &def, &en_data, en_locale_ctx.as_ref())
-            .unwrap();
+        query::create(&tx, "articles", &def, &en_data, en_locale_ctx.as_ref()).unwrap();
 
     // Save EN tags (localized) + layout blocks (non-localized)
-    let en_join_data: DocumentFields = std::collections::HashMap::from([
+    let en_join_data: DocumentFields = HashMap::from([
         (
             "meta__tags".to_string(),
             json!([{"tag": "rust"}, {"tag": "wasm"}]),
@@ -2385,7 +2433,7 @@ async fn mixed_locale_group_crud_roundtrip() {
         ),
     ])
     .into();
-    crap_cms::db::query::save_join_table_data(
+    query::save_join_table_data(
         &tx,
         "articles",
         &def.fields,
@@ -2398,9 +2446,8 @@ async fn mixed_locale_group_crud_roundtrip() {
     // Save DE tags only (layout is non-localized, shared)
     let de_locale_ctx = LocaleContext::from_locale_string(Some("de"), &locale_config).unwrap();
     let de_join_data: DocumentFields =
-        std::collections::HashMap::from([("meta__tags".to_string(), json!([{"tag": "rost"}]))])
-            .into();
-    crap_cms::db::query::save_join_table_data(
+        HashMap::from([("meta__tags".to_string(), json!([{"tag": "rost"}]))]).into();
+    query::save_join_table_data(
         &tx,
         "articles",
         &def.fields,
@@ -2413,7 +2460,7 @@ async fn mixed_locale_group_crud_roundtrip() {
 
     // Verify EN data via find_by_id
     let conn = app.pool.get().unwrap();
-    let en_doc = crap_cms::db::query::find_by_id(
+    let en_doc = query::find_by_id(
         &conn,
         "articles",
         &def,
@@ -2436,7 +2483,7 @@ async fn mixed_locale_group_crud_roundtrip() {
     assert_eq!(layout_arr[0]["kind"], "sidebar");
 
     // Verify DE data: different tags, same layout
-    let de_doc = crap_cms::db::query::find_by_id(
+    let de_doc = query::find_by_id(
         &conn,
         "articles",
         &def,
@@ -2537,12 +2584,12 @@ fn make_deep_blocks_nesting_def() -> CollectionDefinition {
 // 39. Deep Blocks nesting: form renders nested block type templates
 #[tokio::test]
 async fn deep_blocks_nesting_create_form_renders() {
-    let app = setup_app(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
         vec![make_deep_blocks_nesting_def(), make_users_def()],
         vec![],
+        "dbn1@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "dbn1@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "dbn1@test.com");
 
     let body = get_create_form(&app, "layouts", &cookie).await;
     let doc = html::parse(&body);
@@ -2567,12 +2614,12 @@ async fn deep_blocks_nesting_create_form_renders() {
 // 40. Deep Blocks nesting: CRUD roundtrip with deeply nested data
 #[tokio::test]
 async fn deep_blocks_nesting_crud_roundtrip() {
-    let app = setup_app(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
         vec![make_deep_blocks_nesting_def(), make_users_def()],
         vec![],
+        "dbn2@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "dbn2@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "dbn2@test.com");
 
     let resp = app
         .router
@@ -2605,7 +2652,7 @@ async fn deep_blocks_nesting_crud_roundtrip() {
     // Verify via DB
     let conn = app.pool.get().unwrap();
     let def = app.registry.get_collection("layouts").unwrap().clone();
-    let docs = crap_cms::db::query::find(
+    let docs = query::find(
         &conn,
         "layouts",
         &def,
@@ -2615,7 +2662,7 @@ async fn deep_blocks_nesting_crud_roundtrip() {
     .unwrap();
     assert_eq!(docs.len(), 1);
 
-    let doc = crap_cms::db::query::find_by_id(&conn, "layouts", &def, &docs[0].id, None)
+    let doc = query::find_by_id(&conn, "layouts", &def, &docs[0].id, None)
         .unwrap()
         .expect("document should exist");
 
@@ -2701,12 +2748,12 @@ fn make_double_nested_group_array_def() -> CollectionDefinition {
 // 41. Group > Group > Array: form renders with correct prefixed names
 #[tokio::test]
 async fn double_nested_group_array_create_form_renders() {
-    let app = setup_app(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
         vec![make_double_nested_group_array_def(), make_users_def()],
         vec![],
+        "dng1@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "dng1@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "dng1@test.com");
 
     let body = get_create_form(&app, "reports", &cookie).await;
     let doc = html::parse(&body);
@@ -2739,16 +2786,16 @@ async fn double_nested_group_array_crud_roundtrip() {
     // Create via query API
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data: DocumentFields = std::collections::HashMap::from([
+    let data: DocumentFields = HashMap::from([
         ("title".to_string(), json!("Test Report")),
         ("outer__summary".to_string(), json!("A summary")),
         ("outer__inner__label".to_string(), json!("Deep Label")),
     ])
     .into();
-    let doc_record = crap_cms::db::query::create(&tx, "reports", &def, &data, None).unwrap();
+    let doc_record = query::create(&tx, "reports", &def, &data, None).unwrap();
 
     // Save array rows
-    let join_data: DocumentFields = std::collections::HashMap::from([(
+    let join_data: DocumentFields = HashMap::from([(
         "outer__inner__items".to_string(),
         json!([
             {"name": "Item1", "qty": "10"},
@@ -2756,7 +2803,7 @@ async fn double_nested_group_array_crud_roundtrip() {
         ]),
     )])
     .into();
-    crap_cms::db::query::save_join_table_data(
+    query::save_join_table_data(
         &tx,
         "reports",
         &def.fields,
@@ -2769,7 +2816,7 @@ async fn double_nested_group_array_crud_roundtrip() {
 
     // Verify via find_by_id
     let conn = app.pool.get().unwrap();
-    let doc = crap_cms::db::query::find_by_id(&conn, "reports", &def, &doc_record.id, None)
+    let doc = query::find_by_id(&conn, "reports", &def, &doc_record.id, None)
         .unwrap()
         .expect("document should exist");
 
@@ -2840,9 +2887,12 @@ fn make_code_blocks_def() -> CollectionDefinition {
 
 #[tokio::test]
 async fn code_field_inside_blocks_renders_language_picker() {
-    let app = setup_app(vec![make_code_blocks_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "blockcode@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "blockcode@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_code_blocks_def(), make_users_def()],
+        vec![],
+        "blockcode@test.com",
+        "pass123",
+    );
 
     let resp = app
         .router

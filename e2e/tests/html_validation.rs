@@ -11,15 +11,15 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use tower::ServiceExt;
 
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
+use crap_cms::core::{collection::*, field::*};
 
-use crap_cms_e2e::helpers::*;
-use crap_cms_e2e::html;
+use crap_cms_e2e::{helpers::*, html};
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -205,9 +205,12 @@ async fn post_create(app: &TestApp, slug: &str, cookie: &str, form_body: &str) -
 
 #[tokio::test]
 async fn validation_error_on_required_field() {
-    let app = setup_app(vec![make_required_fields_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "val@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "val@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_required_fields_def(), make_users_def()],
+        vec![],
+        "val@test.com",
+        "pass123",
+    );
 
     let body = post_create(&app, "articles", &cookie, "title=&body=some+content").await;
     let doc = html::parse(&body);
@@ -224,12 +227,12 @@ async fn validation_error_on_required_field() {
 
 #[tokio::test]
 async fn validation_error_on_array_sub_field() {
-    let app = setup_app(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
         vec![make_array_required_sub_def(), make_users_def()],
         vec![],
+        "arrval@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "arrval@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "arrval@test.com");
 
     let body = post_create(
         &app,
@@ -252,9 +255,12 @@ async fn validation_error_on_array_sub_field() {
 
 #[tokio::test]
 async fn validation_error_on_nested_tabs_row_field() {
-    let app = setup_app(vec![make_nested_tabs_row_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "nested@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "nested@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_nested_tabs_row_def(), make_users_def()],
+        vec![],
+        "nested@test.com",
+        "pass123",
+    );
 
     let body = post_create(
         &app,
@@ -277,9 +283,12 @@ async fn validation_error_on_nested_tabs_row_field() {
 
 #[tokio::test]
 async fn validation_error_on_group_sub_field() {
-    let app = setup_app(vec![make_group_required_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "grpval@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "grpval@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_group_required_def(), make_users_def()],
+        vec![],
+        "grpval@test.com",
+        "pass123",
+    );
 
     let body = post_create(
         &app,
@@ -302,9 +311,12 @@ async fn validation_error_on_group_sub_field() {
 
 #[tokio::test]
 async fn multiple_validation_errors() {
-    let app = setup_app(vec![make_multi_required_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "multi@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "multi@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_multi_required_def(), make_users_def()],
+        vec![],
+        "multi@test.com",
+        "pass123",
+    );
 
     let body = post_create(&app, "posts", &cookie, "title=&slug=&body=content").await;
     let doc = html::parse(&body);
@@ -320,9 +332,12 @@ async fn multiple_validation_errors() {
 
 #[tokio::test]
 async fn validation_preserves_values_on_error() {
-    let app = setup_app(vec![make_multi_required_def(), make_users_def()], vec![]);
-    let user_id = create_test_user(&app, "preserve@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "preserve@test.com");
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
+        vec![make_multi_required_def(), make_users_def()],
+        vec![],
+        "preserve@test.com",
+        "pass123",
+    );
 
     // Submit with title empty (required) but slug filled
     let body = post_create(&app, "posts", &cookie, "title=&slug=my-slug&body=content").await;
@@ -343,12 +358,12 @@ async fn validation_preserves_values_on_error() {
 
 #[tokio::test]
 async fn validation_error_on_array_group_sub_field() {
-    let app = setup_app(
+    let HtmlTestCtx { app, cookie, .. } = setup_html_test(
         vec![make_array_group_required_def(), make_users_def()],
         vec![],
+        "agrp@test.com",
+        "pass123",
     );
-    let user_id = create_test_user(&app, "agrp@test.com", "pass123");
-    let cookie = make_auth_cookie(&app, &user_id, "agrp@test.com");
 
     // Submit with required full_name empty inside Array > Group
     let body = post_create(

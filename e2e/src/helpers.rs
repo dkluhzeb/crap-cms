@@ -1,21 +1,18 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use axum::body::Body;
 use http_body_util::BodyExt;
+use serde_json::json;
 
-use crap_cms::admin::AdminState;
-use crap_cms::admin::server::build_router;
-use crap_cms::admin::templates;
-use crap_cms::admin::translations::Translations;
-use crap_cms::config::CrapConfig;
-use crap_cms::core::DocumentFields;
-use crap_cms::core::auth;
-use crap_cms::core::collection::*;
-use crap_cms::core::email::EmailRenderer;
-use crap_cms::core::field::*;
-use crap_cms::core::{JwtSecret, Registry};
-use crap_cms::db::{migrate, pool, query};
-use crap_cms::hooks::lifecycle::HookRunner;
+use crap_cms::{
+    admin::{AdminState, server::build_router, templates, translations::Translations},
+    config::CrapConfig,
+    core::{
+        DocumentFields, JwtSecret, Registry, auth, collection::*, email::EmailRenderer, field::*,
+    },
+    db::{migrate, pool, query},
+    hooks::lifecycle::HookRunner,
+};
 
 pub struct TestApp {
     pub _tmp: tempfile::TempDir,
@@ -165,7 +162,7 @@ pub fn setup_app_at(
         invalidation_transport: std::sync::Arc::new(
             crap_cms::core::event::InProcessInvalidationBus::new(),
         ),
-        populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
+        populate_singleflight: std::sync::Arc::new(query::Singleflight::new()),
         cache: None,
         custom_pages: crap_cms::admin::custom_pages::CustomPageRegistry::default(),
     };
@@ -186,9 +183,9 @@ pub fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data: DocumentFields = std::collections::HashMap::from([
-        ("email".to_string(), serde_json::json!(email)),
-        ("name".to_string(), serde_json::json!("Test User")),
+    let data: DocumentFields = HashMap::from([
+        ("email".to_string(), json!(email)),
+        ("name".to_string(), json!("Test User")),
     ])
     .into();
     let doc = query::create(&tx, "users", &def, &data, None).unwrap();
@@ -210,10 +207,10 @@ pub fn create_test_user_with_role(
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data: DocumentFields = std::collections::HashMap::from([
-        ("email".to_string(), serde_json::json!(email)),
-        ("name".to_string(), serde_json::json!("Test User")),
-        ("role".to_string(), serde_json::json!(role)),
+    let data: DocumentFields = HashMap::from([
+        ("email".to_string(), json!(email)),
+        ("name".to_string(), json!("Test User")),
+        ("role".to_string(), json!(role)),
     ])
     .into();
     let doc = query::create(&tx, "users", &def, &data, None).unwrap();
@@ -307,4 +304,60 @@ pub fn make_settings_def() -> GlobalDefinition {
     };
     def.fields = vec![FieldDefinition::builder("site_name", FieldType::Text).build()];
     def
+}
+
+pub struct HtmlTestCtx {
+    pub app: TestApp,
+    pub user_id: String,
+    pub cookie: String,
+}
+
+pub fn setup_html_test(
+    collections: Vec<CollectionDefinition>,
+    globals: Vec<GlobalDefinition>,
+    email: &str,
+    password: &str,
+) -> HtmlTestCtx {
+    let app = setup_app(collections, globals);
+    let user_id = create_test_user(&app, email, password);
+    let cookie = make_auth_cookie(&app, &user_id, email);
+    HtmlTestCtx {
+        app,
+        user_id,
+        cookie,
+    }
+}
+
+pub fn setup_html_test_with_config(
+    collections: Vec<CollectionDefinition>,
+    globals: Vec<GlobalDefinition>,
+    config: CrapConfig,
+    email: &str,
+    password: &str,
+) -> HtmlTestCtx {
+    let app = setup_app_with_config(collections, globals, config);
+    let user_id = create_test_user(&app, email, password);
+    let cookie = make_auth_cookie(&app, &user_id, email);
+    HtmlTestCtx {
+        app,
+        user_id,
+        cookie,
+    }
+}
+
+pub fn setup_html_test_with_access_files(
+    collections: Vec<CollectionDefinition>,
+    globals: Vec<GlobalDefinition>,
+    access_files: &[(&str, &str)],
+    email: &str,
+    password: &str,
+) -> HtmlTestCtx {
+    let app = setup_app_with_access_files(collections, globals, access_files);
+    let user_id = create_test_user(&app, email, password);
+    let cookie = make_auth_cookie(&app, &user_id, email);
+    HtmlTestCtx {
+        app,
+        user_id,
+        cookie,
+    }
 }

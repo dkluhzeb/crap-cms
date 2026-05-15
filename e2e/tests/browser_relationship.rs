@@ -11,17 +11,17 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use std::collections::HashMap;
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
-use crap_cms_e2e::browser;
-use crap_cms_e2e::helpers::*;
-
-use crap_cms::core::DocumentFields;
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
-use crap_cms::db::{DbConnection, query};
 use serde_json::json;
+use tokio::time::sleep;
+
+use crap_cms::{
+    core::{DocumentFields, collection::*, field::*},
+    db::{DbConnection, query},
+};
+
+use crap_cms_e2e::{browser, helpers::*};
 
 fn make_categories_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("categories");
@@ -105,7 +105,7 @@ async fn relationship_search_shows_results() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Focus the has-one relationship input to trigger a search (shows all results)
     page.evaluate(
@@ -117,7 +117,7 @@ async fn relationship_search_shows_results() {
     .await
     .unwrap();
     // Wait for debounce (250ms) + fetch
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    sleep(Duration::from_millis(800)).await;
 
     // Dropdown should appear with results
     let result = page
@@ -162,13 +162,13 @@ async fn relationship_select_sets_value() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Focus the has-one input to trigger initial search
     page.evaluate("() => document.querySelector('.relationship-search__input')?.focus()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    sleep(Duration::from_millis(800)).await;
 
     // Click the first option via mousedown (how the component listens)
     page.evaluate(
@@ -179,7 +179,7 @@ async fn relationship_select_sets_value() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Hidden input should have a value
     let result = page
@@ -227,7 +227,7 @@ async fn relationship_has_many_multiple_chips() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Focus the has-many input (tags field) to trigger search
     page.evaluate(
@@ -240,7 +240,7 @@ async fn relationship_has_many_multiple_chips() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    sleep(Duration::from_millis(800)).await;
 
     // Select first option
     page.evaluate(
@@ -251,10 +251,10 @@ async fn relationship_has_many_multiple_chips() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Wait for dropdown to close after first selection
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Type a space then delete it to trigger input event which triggers search
     page.evaluate(
@@ -272,7 +272,7 @@ async fn relationship_has_many_multiple_chips() {
     .await
     .unwrap();
     // Wait for debounce (250ms) + network fetch
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    sleep(Duration::from_secs(1)).await;
 
     // Select the unselected option
     page.evaluate(
@@ -289,7 +289,7 @@ async fn relationship_has_many_multiple_chips() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Should have 2 chips
     let result = page
@@ -334,7 +334,7 @@ async fn relationship_remove_chip() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Focus the has-many input to trigger search
     page.evaluate(
@@ -347,7 +347,7 @@ async fn relationship_remove_chip() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    sleep(Duration::from_millis(800)).await;
 
     // Select first option
     page.evaluate(
@@ -358,7 +358,7 @@ async fn relationship_remove_chip() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Should have a chip
     let result = page
@@ -372,7 +372,7 @@ async fn relationship_remove_chip() {
     page.evaluate("() => document.querySelector('.pill-list__chip-remove')?.click()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     let result = page
         .evaluate("() => document.querySelectorAll('.pill-list__chip').length")
@@ -413,7 +413,7 @@ async fn relationship_enter_selects_first_result() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Focus has-many input and type to trigger search
     page.evaluate(
@@ -431,7 +431,7 @@ async fn relationship_enter_selects_first_result() {
     // Wait up to 3s for the search dropdown to populate (debounce + network).
     let mut options = 0i64;
     for _ in 0..30 {
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(100)).await;
         options = page
             .evaluate(
                 "() => document.querySelectorAll('crap-relationship-search[has-many] .relationship-search__option').length",
@@ -457,7 +457,7 @@ async fn relationship_enter_selects_first_result() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Should have a chip
     let result = page
@@ -502,7 +502,7 @@ async fn has_one_relationship_persists() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Fill title
     page.find_element("input[name=\"title\"]")
@@ -519,7 +519,7 @@ async fn has_one_relationship_persists() {
     page.evaluate("() => document.querySelector('.relationship-search__input')?.focus()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    sleep(Duration::from_millis(800)).await;
 
     // Select first option
     page.evaluate(
@@ -530,13 +530,13 @@ async fn has_one_relationship_persists() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Submit form
     page.evaluate("() => document.querySelector('#edit-form')?.requestSubmit()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    sleep(Duration::from_secs(2)).await;
 
     // Verify in database
     let conn = app.pool.get().unwrap();
@@ -593,7 +593,7 @@ async fn has_many_relationship_persists() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Fill title
     page.find_element("input[name=\"title\"]")
@@ -617,7 +617,7 @@ async fn has_many_relationship_persists() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    sleep(Duration::from_millis(800)).await;
 
     // Select first option
     page.evaluate(
@@ -628,7 +628,7 @@ async fn has_many_relationship_persists() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Re-trigger search to select second option
     page.evaluate(
@@ -642,7 +642,7 @@ async fn has_many_relationship_persists() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    sleep(Duration::from_secs(1)).await;
 
     // Select the unselected option
     page.evaluate(
@@ -659,7 +659,7 @@ async fn has_many_relationship_persists() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Should have 2 chips
     let result = page
@@ -673,7 +673,7 @@ async fn has_many_relationship_persists() {
     page.evaluate("() => document.querySelector('#edit-form')?.requestSubmit()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    sleep(Duration::from_secs(2)).await;
 
     // Verify in database — check join table has both references
     let conn = app.pool.get().unwrap();
@@ -734,7 +734,7 @@ async fn relationship_inline_create_selects_item() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Fill post title
     page.find_element("input[name=\"title\"]")
@@ -756,7 +756,7 @@ async fn relationship_inline_create_selects_item() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    sleep(Duration::from_secs(2)).await;
 
     // The create panel dialog should be open
     let panel_open = page
@@ -781,7 +781,7 @@ async fn relationship_inline_create_selects_item() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     page.evaluate(
         "() => { \
@@ -795,7 +795,7 @@ async fn relationship_inline_create_selects_item() {
     // Poll up to 6s for the panel to close (fetch + create + DB).
     let mut state2 = String::new();
     for _ in 0..60 {
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(100)).await;
         state2 = page
             .evaluate(
                 "() => { \
@@ -889,7 +889,7 @@ async fn relationship_inline_create_validation_error_rerenders() {
         .wait_for_navigation()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Open the inline-create panel for categories.
     page.evaluate(
@@ -900,7 +900,7 @@ async fn relationship_inline_create_validation_error_rerenders() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    sleep(Duration::from_secs(2)).await;
 
     // Submit the form with the required `name` left empty — this triggers
     // a 422 from the server and exercises the re-render path.
@@ -921,7 +921,7 @@ async fn relationship_inline_create_validation_error_rerenders() {
     // _server-rendered_ validation error element exists on the field.
     let mut has_error = false;
     for _ in 0..60 {
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(100)).await;
         let result = page
             .evaluate(
                 "() => { \

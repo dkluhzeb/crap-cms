@@ -16,12 +16,11 @@ use std::time::Duration;
 use chromiumoxide::cdp::browser_protocol::emulation::{
     SetDeviceMetricsOverrideParams, SetTouchEmulationEnabledParams,
 };
+use tokio::time::sleep;
 
-use crap_cms_e2e::browser;
-use crap_cms_e2e::helpers::*;
+use crap_cms::core::{collection::*, field::*};
 
-use crap_cms::core::collection::*;
-use crap_cms::core::field::*;
+use crap_cms_e2e::{browser, helpers::*};
 
 fn make_sidebar_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -87,7 +86,7 @@ async fn sidebar_toggle_opens_closes() {
     page.evaluate("() => document.querySelector('[data-action=\"toggle-sidebar\"]')?.click()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Sidebar should now be open
     let result = page
@@ -101,7 +100,7 @@ async fn sidebar_toggle_opens_closes() {
     page.evaluate("() => document.querySelector('[data-action=\"toggle-sidebar\"]')?.click()")
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
 
     // Sidebar should be closed again
     let result = page
