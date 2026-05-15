@@ -10,6 +10,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **`lettre` 0.11.21 → 0.11.22** (RUSTSEC-2026-0141). The advisory
+  flags TLS hostname verification being disabled when using the Boring
+  TLS backend. crap-cms ships with the `tokio1-rustls-tls` feature
+  (rustls backend), so the vulnerable code path is not active in this
+  project — but the upgrade clears the advisory and unblocks
+  `cargo audit` in CI. Cargo.lock-only change; the `lettre = "0.11"`
+  spec already permitted the patch.
+
 ### Added
 
 ### Changed
