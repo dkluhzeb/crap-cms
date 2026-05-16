@@ -42,6 +42,7 @@ async fn toast_on_validation_error() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_toast_def(), make_users_def()],
@@ -86,6 +87,7 @@ async fn toast_on_successful_save() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_toast_def(), make_users_def()],
@@ -145,6 +147,7 @@ async fn window_crap_namespace_dispatches_toast() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_toast_def(), make_users_def()],

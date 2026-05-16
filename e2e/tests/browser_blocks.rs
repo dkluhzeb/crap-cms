@@ -58,6 +58,7 @@ async fn block_picker_shows_options() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_blocks_def(), make_users_def()],
@@ -96,6 +97,7 @@ async fn block_picker_adds_block() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_blocks_def(), make_users_def()],
@@ -139,6 +141,7 @@ async fn blocks_remove_block() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_blocks_def(), make_users_def()],
@@ -187,6 +190,7 @@ async fn blocks_different_types() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_blocks_def(), make_users_def()],

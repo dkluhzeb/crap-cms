@@ -50,6 +50,7 @@ async fn add_row_button_creates_row() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_array_def(), make_users_def()],
@@ -93,6 +94,7 @@ async fn remove_row_button_removes_row() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_array_def(), make_users_def()],
@@ -152,6 +154,7 @@ async fn reorder_rows_updates_indices() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_array_def(), make_users_def()],
@@ -234,6 +237,7 @@ async fn array_rows_persist_after_save() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_array_def(), make_users_def()],

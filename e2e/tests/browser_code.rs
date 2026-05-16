@@ -43,6 +43,7 @@ async fn code_renders_codemirror() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_code_def(), make_users_def()],
@@ -83,6 +84,7 @@ async fn code_typing_updates_hidden_input() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_code_def(), make_users_def()],
@@ -145,6 +147,7 @@ async fn code_syntax_highlighting_renders() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_code_def(), make_users_def()],
@@ -238,6 +241,7 @@ async fn code_language_picker_persists_choice() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_picker_def(), make_users_def()],
@@ -351,6 +355,7 @@ async fn code_picker_appears_inside_blocks_after_add() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_blocks_picker_def(), make_users_def()],

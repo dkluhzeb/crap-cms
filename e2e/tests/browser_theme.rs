@@ -42,6 +42,7 @@ async fn theme_picker_changes_data_attribute() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_theme_def(), make_users_def()],
@@ -98,6 +99,7 @@ async fn theme_persists_across_navigation() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_theme_def(), make_users_def()],

@@ -43,6 +43,7 @@ async fn client_side_validation_shows_errors() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_validated_def(), make_users_def()],
@@ -89,6 +90,7 @@ async fn validation_clears_on_valid_resubmit() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_validated_def(), make_users_def()],
@@ -170,6 +172,7 @@ async fn validation_expands_collapsed_array_row() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![def, make_users_def()],

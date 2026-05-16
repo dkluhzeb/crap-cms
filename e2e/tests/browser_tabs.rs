@@ -53,6 +53,7 @@ async fn tab_switching_shows_correct_panel() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_tabs_def(), make_users_def()],

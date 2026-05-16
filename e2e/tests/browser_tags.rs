@@ -76,6 +76,7 @@ async fn tags_add_via_enter() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_tags_def(), make_users_def()],
@@ -112,6 +113,7 @@ async fn tags_remove_via_click() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_tags_def(), make_users_def()],
@@ -156,6 +158,7 @@ async fn tags_prevent_duplicates() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_tags_def(), make_users_def()],
@@ -194,6 +197,7 @@ async fn tags_submit_persists() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_tags_def(), make_users_def()],

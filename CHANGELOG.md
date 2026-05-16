@@ -21,22 +21,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   e2e test added as part of the alpha.9 regression net.
   (`src/db/migrate/collection/create.rs::collect_system_columns`)
 
-- **Stale-JWT authentication bypass on non-`AuthUser`-gated handlers.**
-  `validate_jwt_and_load_user` returned `Some((claims, None))` when the
-  JWT signature was valid but `load_auth_user` couldn't resolve the
-  user — typically because `_session_version` had been bumped (after a
-  password change), the user was deleted, or the JWT's referenced
-  collection was removed from the registry. The middleware accepted
-  this partial result: it inserted `Claims` into request extensions
-  but no `AuthUser`. Handlers that gate on `AuthUser` 403'd correctly,
-  but handlers that don't (some list pages, JSON endpoints) served
-  the request normally. Stale sessions could therefore still read
-  data after their "invalidation". Fix: `validate_jwt_and_load_user`
-  now returns `None` whenever `load_auth_user` returns `None`, forcing
-  the middleware down the unauthenticated path (redirect to login).
-  Found via the new `html_session_expiry::stale_jwt_blocked_after_session_version_bump`
-  e2e test.
-  (`src/admin/auth_middleware.rs::validate_jwt_and_load_user`)
 
 ### Security
 
@@ -127,9 +111,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     POSTs to `/admin/collections/{slug}/evaluate-conditions` with
     form state, verifies visible/hidden response. Includes the
     security gate that unknown condition refs fail open (visible).
-  - `html_session_expiry` (1 test) — confirms a stale JWT
-    (session_version mismatch) is rejected. Caught the auth-middleware
-    bug fixed above.
 
 ### Changed
 

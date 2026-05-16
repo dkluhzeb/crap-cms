@@ -43,6 +43,7 @@ async fn richtext_renders_editor() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_richtext_def(), make_users_def()],
@@ -83,6 +84,7 @@ async fn richtext_typing_updates_hidden_input() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_richtext_def(), make_users_def()],
@@ -137,6 +139,7 @@ async fn richtext_bold_toolbar() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_richtext_def(), make_users_def()],

@@ -49,6 +49,7 @@ async fn collapsible_starts_expanded() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_collapsible_def(), make_users_def()],
@@ -99,6 +100,7 @@ async fn collapsible_toggles_on_click() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_collapsible_def(), make_users_def()],
@@ -159,6 +161,7 @@ async fn collapsible_re_expands() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_collapsible_def(), make_users_def()],

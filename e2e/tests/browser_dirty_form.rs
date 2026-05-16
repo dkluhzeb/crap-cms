@@ -42,6 +42,7 @@ async fn dirty_form_not_armed_on_clean() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_dirty_def(), make_users_def()],
@@ -80,6 +81,7 @@ async fn dirty_form_armed_after_input() {
         base_url,
         server_handle,
         page,
+        browser: _browser,
         ..
     } = setup_browser_test(
         vec![make_dirty_def(), make_users_def()],
