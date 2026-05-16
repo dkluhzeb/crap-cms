@@ -112,6 +112,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     form state, verifies visible/hidden response. Includes the
     security gate that unknown condition refs fail open (visible).
 
+- **Browser e2e regression-net expansion (6 new tests across 3 files).**
+  Plugs gaps in the alpha.9 P0/P1 browser coverage; each test mounts
+  the relevant web component and exercises its public API.
+  - `browser_session_expiry` (2 tests) — verifies the
+    `<crap-session-dialog>` singleton (`templates/layout/base.hbs`)
+    mounts its shadow `<dialog>`, and that `dialog.show(message,
+    { onStay, onLogout })` opens the dialog with the message text
+    plus both action buttons. Bypasses the 5-minute `crap_session_exp`
+    timer so the test runs in seconds.
+  - `browser_locale_nav` (2 tests) — `<crap-ui-locale-picker>` only
+    renders when `available_locales` is non-empty; verifies it appears
+    with the configured locales (en + de), has one
+    `[data-ui-locale-value=…]` per locale, and the dropdown gains
+    `locale-picker__dropdown--open` after clicking the toggle.
+  - `browser_filter_advanced` (2 tests) — extends existing
+    `browser_list_settings::filter_builder_adds_condition` coverage:
+    clicking "Add" three times produces three condition rows; clicking
+    the per-row `.filter-builder__remove` drops one row back to one.
+
 ### Changed
 
 - **Lua typegen template-context emits now mirror every typed Rust
