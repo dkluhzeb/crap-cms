@@ -88,7 +88,7 @@ pub async fn spawn_grpc_server(
     collections: Vec<CollectionDefinition>,
     globals: Vec<GlobalDefinition>,
 ) -> GrpcTestCtx {
-    spawn_grpc_server_inner(collections, globals, Vec::new(), None).await
+    spawn_grpc_server_inner(collections, globals, Vec::new(), None, &[]).await
 }
 
 /// Like [`spawn_grpc_server`] but also registers `jobs` in the
@@ -99,7 +99,26 @@ pub async fn spawn_grpc_server_with_jobs(
     globals: Vec<GlobalDefinition>,
     jobs: Vec<JobDefinition>,
 ) -> GrpcTestCtx {
-    spawn_grpc_server_inner(collections, globals, jobs, None).await
+    spawn_grpc_server_inner(collections, globals, jobs, None, &[]).await
+}
+
+/// Like [`spawn_grpc_server`] but writes `lua_files` into the
+/// server's `config_dir` before the `HookRunner` is built. Each
+/// entry is `(relative_path, lua_source)` — e.g.
+/// `("access/admin_only.lua", "return function(ctx) … end")` to
+/// register a Lua function the field/collection access machinery
+/// can resolve via the path-derived ref `access.admin_only`. Same
+/// convention works for `hooks/`, `hooks/conditions/`, `hooks/before_change/`,
+/// etc. — anything `HookRunner` looks up by name.
+///
+/// Mirrors the shape of `helpers::setup_app_with_access_files` but
+/// allows any subdir, not just `access/`.
+pub async fn spawn_grpc_server_with_lua(
+    collections: Vec<CollectionDefinition>,
+    globals: Vec<GlobalDefinition>,
+    lua_files: &[(&str, &str)],
+) -> GrpcTestCtx {
+    spawn_grpc_server_inner(collections, globals, Vec::new(), None, lua_files).await
 }
 
 /// Like [`spawn_grpc_server`] but installs the `GrpcRateLimitLayer`
@@ -124,6 +143,7 @@ pub async fn spawn_grpc_server_with_rate_limit(
                 window_secs,
             ),
         ))),
+        &[],
     )
     .await
 }
@@ -133,12 +153,26 @@ async fn spawn_grpc_server_inner(
     globals: Vec<GlobalDefinition>,
     jobs: Vec<JobDefinition>,
     rate_limit_layer: Option<GrpcRateLimitLayer>,
+    lua_files: &[(&str, &str)],
 ) -> GrpcTestCtx {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().to_path_buf();
     let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = JWT_SECRET.into();
+
+    // Plant Lua fixtures before the HookRunner reads them. Each
+    // (relative_path, source) pair becomes a file under config_dir
+    // — e.g. ("access/admin_only.lua", "…") → resolvable via the
+    // function ref `access.admin_only`.
+    for (rel, src) in lua_files {
+        let path = config_dir.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .unwrap_or_else(|e| panic!("create lua fixture dir {}: {e}", parent.display()));
+        }
+        std::fs::write(&path, src).unwrap_or_else(|e| panic!("write lua fixture {rel}: {e}"));
+    }
 
     let pool = pool::create_pool(&config_dir, &config).expect("create pool");
 

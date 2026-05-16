@@ -34,6 +34,7 @@ pub use email::{
     wait_for_queued_email, wait_for_queued_email_in_pool,
 };
 pub use grpc::{
-    GrpcTestCtx, spawn_grpc_server, spawn_grpc_server_with_jobs, spawn_grpc_server_with_rate_limit,
+    GrpcTestCtx, spawn_grpc_server, spawn_grpc_server_with_jobs, spawn_grpc_server_with_lua,
+    spawn_grpc_server_with_rate_limit,
 };
 pub use helpers::HtmlTestCtx;

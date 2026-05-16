@@ -63,7 +63,24 @@ pub(crate) fn check_access_with_lua(
         ctx_table.set("data", data_table)?;
     }
 
-    let result: Value = func.call(ctx_table)?;
+    // A Lua error inside the access function (e.g. typo, runtime
+    // exception, called a nil method) is fail-safe: treat as
+    // Denied and warn. Without this catch the anyhow::Error
+    // bubbles out → `From<anyhow::Error> for ServiceError` wraps
+    // it as Internal → gRPC clients see `Status::internal` and
+    // retry. The correct behavior is the same "fail closed" as
+    // the unexpected-type branch below.
+    let result: Value = match func.call(ctx_table) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(
+                "Access function '{}' raised an error, denying access: {}",
+                func_ref, e
+            );
+
+            return Ok(AccessResult::Denied);
+        }
+    };
 
     match result {
         Value::Boolean(true) => Ok(AccessResult::Allowed),

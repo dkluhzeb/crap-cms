@@ -10,6 +10,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Access functions that raise a Lua error now deny access (and
+  log a warning) instead of returning `Status::internal`.**
+  `check_access_with_lua` previously propagated `func.call(...)`'s
+  `Err` as `anyhow::Error`, which `From<anyhow::Error> for
+  ServiceError` wrapped as `Internal` → over gRPC, clients saw
+  `Status::internal("Internal error")` and retried. The function
+  now mirrors its own unexpected-return-type handling: catch the
+  Lua error, log a `warn!` with the function ref + error, return
+  `AccessResult::Denied`. Production clients now see
+  `PERMISSION_DENIED` (correct) and stop retrying.
+  Surfaced by `grpc_hook_errors::access_fn_error_maps_to_permission_denied`.
+
 - **VerifyAccount / UnverifyAccount on a collection without
   `verify_email = true` now returns `FAILED_PRECONDITION` instead
   of `INTERNAL`.** The handlers wrap a SQL UPDATE that touches
@@ -280,10 +292,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     `verify_email = true` collection rejects for unverified users).
     Invalid token returns a non-`Internal` error.
 
-  Final coverage: all 31 RPCs in `proto/content.proto` now have
-  at least one wire-level test. `spawn_grpc_server` /
-  `spawn_grpc_server_with_jobs` / `spawn_grpc_server_with_rate_limit`
-  cover the three setup variants tests need.
+  Final RPC coverage: all 31 RPCs in `proto/content.proto` now
+  have at least one wire-level test. `spawn_grpc_server` /
+  `spawn_grpc_server_with_jobs` / `spawn_grpc_server_with_rate_limit` /
+  `spawn_grpc_server_with_lua` cover the four setup variants
+  tests need.
+
+  **Cross-cutting concerns** (Lua-driven access, hooks, custom auth)
+  added on top of the RPC coverage. The harness's
+  `spawn_grpc_server_with_lua(collections, globals, &[(path, src)])`
+  writes inline Lua fixtures under `config_dir` before the
+  `HookRunner` builds — same shape as
+  `helpers::setup_app_with_access_files` but accepts any subdir
+  (`access/`, `hooks/`, etc.).
+  - `grpc_access` (5 tests) — `access.read` allow/deny based on
+    `ctx.user`; `access.create`/`update`/`delete` map to
+    `PERMISSION_DENIED` over the wire; `access.never` blocks
+    everyone; constrained-access fn that returns a where-filter
+    `{author_id = ctx.user.id}` for non-admins makes `Find`
+    return only the caller's own rows.
+  - `grpc_field_access` (3 tests) — field with
+    `access.read = "access.admin_only"` is stripped from the
+    response for non-admins (admin still sees it); field with
+    write-denied `access.create`/`access.update` is silently
+    dropped from incoming `data` (Create+Update both).
+  - `grpc_hooks_lifecycle` (5 tests) — field-level
+    `before_change` derives a slug from `name`; collection-level
+    `before_change` stamps a field that survives a `FindByID`
+    round-trip; `before_validate` raising `error(…)` maps to
+    `INVALID_ARGUMENT`; `after_read` adds a computed field
+    visible over the wire; `before_read` runs without breaking
+    `Find`.
+  - `grpc_hook_errors` (3 tests) — Lua `error(…)` from a
+    lifecycle hook → `INVALID_ARGUMENT` (matches
+    `ServiceError::classify` "hook error:" pattern); access fn
+    raising an error → `PERMISSION_DENIED` (regression for the
+    third bug fixed in this changelog); structured
+    `crap.validation_error({field = "msg"})` → `INVALID_ARGUMENT`
+    with the field name in the error message.
+  - `grpc_auth_strategy` (3 tests) — Lua `authenticate` fn that
+    falls back to "first user in collection" rescues a wrong-
+    password Login; nil-returning strategy doesn't rescue; correct
+    password still works alongside the strategy. (gRPC Login
+    passes an empty headers map to strategies — a known
+    limitation; strategies can only authenticate based on
+    collection + DB lookup, not request metadata.)
 
 - **Browser e2e regression-net expansion (6 new tests across 3 files).**
   Plugs gaps in the alpha.9 P0/P1 browser coverage; each test mounts
