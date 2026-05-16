@@ -962,17 +962,22 @@ dependencies = [
 name = "crap-cms-e2e"
 version = "0.1.0-alpha.9"
 dependencies = [
+ "anyhow",
  "axum",
  "chromiumoxide",
  "chrono",
  "crap-cms",
  "http-body-util",
+ "prost-types",
  "scraper",
  "serde_json",
  "tempfile",
  "tokio",
  "tokio-stream",
  "tokio-util",
+ "tonic",
+ "tonic-health",
+ "tonic-reflection",
  "tower",
 ]
 

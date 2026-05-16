@@ -1,5 +1,7 @@
 //! Update operation and its helper.
 
+use std::fmt;
+
 use anyhow::{Context as _, Result, anyhow};
 use serde_json::Value;
 
@@ -18,6 +20,27 @@ use crate::{
         },
     },
 };
+
+/// Returned from `query::update` (and bubbled out via `anyhow::Error`)
+/// when the UPDATE statement matched zero rows — i.e. the document
+/// id doesn't exist (or was hard-deleted). `From<anyhow::Error> for
+/// ServiceError` downcasts to this type and maps it to
+/// `ServiceError::NotFound`, which the gRPC layer then surfaces as
+/// `Status::not_found` rather than the previous generic
+/// `Status::internal` (which production clients retry on).
+#[derive(Debug, Clone)]
+pub struct DocumentNotFound {
+    pub slug: String,
+    pub id: String,
+}
+
+impl fmt::Display for DocumentNotFound {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Document '{}' not found in '{}'", self.id, self.slug)
+    }
+}
+
+impl std::error::Error for DocumentNotFound {}
 
 /// Update a document by ID. Returns the updated document.
 ///
@@ -85,8 +108,12 @@ fn update_inner(
     }
 
     if col.set_clauses.is_empty() {
-        return find_by_id_raw(conn, slug, def, id, locale_ctx, false)?
-            .ok_or_else(|| anyhow!("Document not found"));
+        return find_by_id_raw(conn, slug, def, id, locale_ctx, false)?.ok_or_else(|| {
+            anyhow::Error::from(DocumentNotFound {
+                slug: slug.to_string(),
+                id: id.to_string(),
+            })
+        });
     }
 
     let sql = format!(
@@ -97,8 +124,17 @@ fn update_inner(
 
     col.params.push(DbValue::Text(id.to_string()));
 
-    conn.execute(&sql, &col.params)
+    let affected = conn
+        .execute(&sql, &col.params)
         .with_context(|| format!("Failed to update document {id} in '{slug}'"))?;
+
+    if affected == 0 {
+        return Err(DocumentNotFound {
+            slug: slug.to_string(),
+            id: id.to_string(),
+        }
+        .into());
+    }
 
     find_by_id_raw(conn, slug, def, id, locale_ctx, false)?
         .ok_or_else(|| anyhow!("Document not found after update"))
@@ -692,5 +728,30 @@ mod tests {
 
         // Falls back to normal (treat as UTC)
         assert_eq!(doc.get_str("start_date"), Some("2024-06-15T10:00:00.000Z"));
+    }
+
+    // Regression test for: update on a non-existent id used to bubble
+    // out as a generic `anyhow!("Document not found after update")`,
+    // which `From<anyhow::Error> for ServiceError` mapped to
+    // `ServiceError::Internal` → `Status::internal` over gRPC.
+    // Production clients retry on Internal (treating it as transient),
+    // so stale ids triggered a retry loop. Fixed by raising the typed
+    // `DocumentNotFound` error from `conn.execute`'s zero-affected-rows
+    // path so callers can downcast and map to NOT_FOUND.
+    #[test]
+    fn update_on_missing_id_returns_typed_document_not_found() {
+        let (_dir, conn) = setup_db(posts_ddl());
+        let def = test_def();
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Whatever"));
+
+        let err = update(&conn, "posts", &def, "no-such-id", &data, None)
+            .expect_err("update on missing id must error");
+
+        let dnf = err.downcast_ref::<DocumentNotFound>().unwrap_or_else(|| {
+            panic!("expected typed DocumentNotFound, got untyped anyhow: {err:#}")
+        });
+        assert_eq!(dnf.slug, "posts");
+        assert_eq!(dnf.id, "no-such-id");
     }
 }

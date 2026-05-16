@@ -10,6 +10,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **VerifyAccount / UnverifyAccount on a collection without
+  `verify_email = true` now returns `FAILED_PRECONDITION` instead
+  of `INTERNAL`.** The handlers wrap a SQL UPDATE that touches
+  `_verified`, `_verification_token`, and `_verification_token_exp` —
+  columns only provisioned when `auth.verify_email` is enabled.
+  Calling them on a non-verify-email collection failed with "no
+  such column", which `From<anyhow::Error> for ServiceError`
+  mapped to `ServiceError::Internal` → `Status::internal`. The
+  handlers now preflight-check the collection's `auth.verify_email`
+  flag in `validate_verify_email_enabled` and return
+  `FailedPrecondition` — correct per gRPC status-code semantics
+  (server healthy, request well-formed, system state doesn't
+  allow the operation).
+  - `src/api/handlers/auth/account.rs`: new
+    `validate_verify_email_enabled` helper, called from both
+    `verify_account_impl` and `unverify_account_impl` before
+    spawning the blocking task.
+  - Regression test:
+    `grpc_account_admin::verify_account_returns_failed_precondition_without_verify_email`.
+
+- **Update / UpdateMany on a non-existent document id now returns
+  `NOT_FOUND` instead of `INTERNAL`.** `query::update` raised an
+  untyped `anyhow!("Document not found after update")` when the SQL
+  UPDATE matched zero rows; `From<anyhow::Error> for ServiceError`
+  had no way to distinguish it from a real internal error, so it
+  surfaced as `ServiceError::Internal` → `Status::internal` over
+  gRPC. Production clients treat `Internal` as transient and retry
+  on it, so calling Update with a stale id triggered a retry loop
+  instead of failing fast.
+  - `src/db/query/write/update.rs` raises a new typed
+    `DocumentNotFound` error (`pub` from `query::write`) when
+    `conn.execute(UPDATE …)` reports 0 affected rows.
+  - `From<anyhow::Error> for ServiceError` downcasts it and maps
+    to `ServiceError::NotFound` → `Status::not_found`.
+  - Discovered by the new `grpc_errors` test suite; the test
+    `grpc_errors::update_unknown_id_returns_not_found` is the
+    e2e regression net, `query::write::update::tests::update_on_missing_id_returns_typed_document_not_found`
+    is the unit-level pin so future refactors of the query layer
+    can't reintroduce the untyped path.
+
 - **MFA-enabled auth collections now provision `_mfa_code` columns at
   creation time.** Previously the columns were only added during the
   ALTER path (which runs on existing tables on schema sync). On a
@@ -111,6 +151,139 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     POSTs to `/admin/collections/{slug}/evaluate-conditions` with
     form state, verifies visible/hidden response. Includes the
     security gate that unknown condition refs fail open (visible).
+
+- **gRPC e2e regression-net (8 new tests across 5 files, plus
+  `spawn_grpc_server` harness).** The existing `tests/grpc_*.rs`
+  files in the main crate construct `ContentService` directly and
+  call trait methods with `tonic::Request` objects — they cover
+  business-logic correctness per RPC but never cross the network,
+  so the actual `tonic::Server` layer stack (health, reflection,
+  HTTP/2 framing, real `tonic::Channel`) was untested. This bundle
+  adds the missing transport-level coverage.
+  - `e2e/src/grpc.rs::spawn_grpc_server` mirrors
+    `crap_cms::api::server::start` but binds via a caller-owned
+    `TcpListener` on `127.0.0.1:0` so each test gets an ephemeral
+    port. Returns `GrpcTestCtx { pool, registry, config, addr,
+    channel, shutdown, server_handle, … }` — pool + registry for
+    DB seeding, channel for RPCs over real TCP, shutdown for
+    clean teardown.
+  - `grpc_smoke` — proves the full stack works end-to-end
+    over real TCP via a single `Find` on an empty collection.
+  - `grpc_health` (2 tests) — `grpc.health.v1.Health/Check`
+    reports `SERVING` both for the empty-service overall query
+    and the specific `crap.ContentAPI` service. Would catch a
+    regression where `add_service(health_service)` falls out of
+    the layer chain.
+  - `grpc_reflection` — `grpc.reflection.v1.ServerReflection`
+    lists `crap.ContentAPI`. This is what `grpcurl -plaintext
+    HOST:PORT list` consumes; if it regresses, ad-hoc gRPC
+    debugging without local proto files stops working.
+  - `grpc_auth` (3 tests) — Login → use the returned token in
+    a follow-up `Me` request; invalid token returns
+    `UNAUTHENTICATED`; wrong password returns a non-`Internal`
+    error code over the wire (the exact code depends on the
+    handler's mapping; this test pins "not a server bug").
+  - `grpc_subscribe` — opens a server-streaming `Subscribe`
+    on a real `tonic::Channel`, issues a `Create` from a second
+    client multiplexed over the same HTTP/2 connection, and
+    verifies the create event arrives on the streaming connection
+    within 3 seconds. Pins the streaming framing + multi-client
+    HTTP/2 multiplexing that the in-process trait tests can't
+    exercise.
+  - `grpc_metadata_auth` (3 tests) — `ListJobs` requires the
+    Bearer token in `authorization` gRPC metadata (separate path
+    from the `Me`-style token-in-body). Verifies: missing metadata
+    → `UNAUTHENTICATED`; valid Bearer → succeeds; invalid Bearer
+    → `UNAUTHENTICATED` (not `INTERNAL`). Covers the HTTP/2
+    header → `MetadataMap` → `extract_token` chain end-to-end.
+  - `grpc_rate_limit` (2 tests) — `spawn_grpc_server_with_rate_limit`
+    installs `GrpcRateLimitLayer` with a tight budget; bursting
+    past the limit returns `RESOURCE_EXHAUSTED` over the wire,
+    and a high limit doesn't throttle. The layer sits at the
+    `tower::Service` level and is unreachable from the in-process
+    `ContentService` trait tests.
+  - `grpc_crud` (3 tests) — full CRUD round-trip
+    (`Create` → `FindByID` → `Update` → `Find` → `Delete` →
+    `Undelete`) over a real channel, plus `Count` happy paths and
+    `force_hard_delete` semantics on soft-delete collections.
+  - `grpc_bulk` (3 tests) — `CreateMany` / `UpdateMany` /
+    `DeleteMany` over the wire. Pins the `repeated
+    google.protobuf.Struct` framing the in-process tests can't
+    exercise.
+  - `grpc_globals` (2 tests) — `GetGlobal` auto-creates the
+    document on first access; `UpdateGlobal` round-trips through
+    `GetGlobal` and preserves unmodified fields under partial
+    update. Closes a previously-empty surface in the e2e crate.
+  - `grpc_schema` (3 tests) — `ListCollections` returns
+    registered collections + globals with correct flag values
+    (`auth`, `timestamps`); `DescribeCollection` returns field
+    definitions in declaration order; `DescribeCollection` with
+    `is_global = true` resolves globals correctly. Real clients
+    (JS SDK, etc.) depend on this introspection surface.
+  - `grpc_errors` (5 tests) — gRPC `Status` code mapping
+    over the wire: `NOT_FOUND` on unknown collection slug,
+    unknown document id, unknown global slug;
+    `INVALID_ARGUMENT` on missing required field (with field
+    name in message). **Surfaced one real bug**:
+    `update_unknown_id_returns_user_recoverable_error` documents
+    that Update on a missing id currently returns `INTERNAL`
+    (worst-possible mapping — production clients retry on it)
+    instead of `NOT_FOUND`. Test pins the negative invariant for
+    now; tighten to `assert_eq!(status.code(), Code::NotFound)`
+    when the handler is fixed.
+
+  Main-crate surface change: `src/api/rate_limit::GrpcRateLimitLayer`
+  is now `pub` (was `pub(crate)`) and gained `#[must_use]` on
+  `::new`. Required so the e2e harness can install the layer
+  without going through `api::server::start`, which only accepts
+  `addr: &str` and doesn't return the bound port — needed for
+  ephemeral-port-per-test isolation.
+
+  - `grpc_validate` (2 tests) — `Validate` RPC round-trip.
+    Valid data returns `valid=true` and an empty errors map;
+    missing-required-field returns `valid=false` and the offending
+    field name as a key in the `map<string, string> errors`.
+  - `grpc_versions` (2 tests) — `ListVersions` returns one
+    snapshot per create + per update with `latest=true` on the
+    newest; `RestoreVersion` reverts the live document to the
+    chosen snapshot's field values (verified via `FindByID` after
+    restore).
+  - `grpc_password_reset` (3 tests) — full forgot →
+    `wait_for_queued_email_in_pool` → `extract_token` → reset
+    flow over the wire, login with new password succeeds + old
+    password rejected. ForgotPassword always returns success
+    (no email-existence leak). Invalid token → non-Internal
+    error. The pool-based email helpers
+    (`read_queued_emails_from_pool`, `wait_for_queued_email_in_pool`,
+    `find_queued_email_in_pool`) are siblings of the
+    `TestApp`-based originals so harnesses without a `TestApp`
+    (the gRPC ctx, future MCP ctx) can read the queue too.
+  - `grpc_account_admin` (4 tests) — `LockAccount` /
+    `UnlockAccount` round-trip verified via login behavior;
+    `VerifyAccount` / `UnverifyAccount` round-trip on a
+    `verify_email = true` collection; missing-Bearer call returns
+    `UNAUTHENTICATED`. Regression test for the second bug fixed
+    in this changelog
+    (`verify_account_returns_failed_precondition_without_verify_email`).
+  - `grpc_jobs` (3 tests) — `spawn_grpc_server_with_jobs` registers
+    a `JobDefinition` in the registry; `TriggerJob` queues a run
+    (`status = "pending"` since the scheduler isn't running in
+    tests), `GetJobRun` fetches it by id with the input `data_json`
+    round-tripped intact, `ListJobRuns` filtered by slug includes
+    the new run. Unknown job slug → `NOT_FOUND`; unknown run id
+    → `NOT_FOUND`.
+  - `grpc_verify_email` (2 tests) — consume-side flow: plant a
+    verification token via `query::set_verification_token` (what
+    the send-side `service::email::send_verification_email` would
+    do, minus the email rendering), call `VerifyEmail` over the
+    wire, verify `_verified = 1` by attempting login (which a
+    `verify_email = true` collection rejects for unverified users).
+    Invalid token returns a non-`Internal` error.
+
+  Final coverage: all 31 RPCs in `proto/content.proto` now have
+  at least one wire-level test. `spawn_grpc_server` /
+  `spawn_grpc_server_with_jobs` / `spawn_grpc_server_with_rate_limit`
+  cover the three setup variants tests need.
 
 - **Browser e2e regression-net expansion (6 new tests across 3 files).**
   Plugs gaps in the alpha.9 P0/P1 browser coverage; each test mounts

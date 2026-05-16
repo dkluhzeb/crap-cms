@@ -23,12 +23,17 @@
 
 pub mod browser;
 pub mod email;
+pub mod grpc;
 pub mod helpers;
 pub mod html;
 
 pub use browser::{BrowserTestCtx, setup_browser_test, setup_browser_test_with_config};
 pub use email::{
     CapturedEmail, clear_queued_emails, extract_mfa_code, extract_token, find_queued_email,
-    read_queued_emails, wait_for_queued_email,
+    find_queued_email_in_pool, read_queued_emails, read_queued_emails_from_pool,
+    wait_for_queued_email, wait_for_queued_email_in_pool,
+};
+pub use grpc::{
+    GrpcTestCtx, spawn_grpc_server, spawn_grpc_server_with_jobs, spawn_grpc_server_with_rate_limit,
 };
 pub use helpers::HtmlTestCtx;

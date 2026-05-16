@@ -6,5 +6,5 @@ mod update;
 
 pub use create::create;
 pub use delete::{delete, restore, soft_delete};
+pub use update::{DocumentNotFound, update, update_partial};
 pub(in crate::db::query) use update::{UpdateCollector, collect_update_params};
-pub use update::{update, update_partial};

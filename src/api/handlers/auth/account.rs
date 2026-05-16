@@ -29,6 +29,27 @@ fn validate_auth_collection(service: &ContentService, collection: &str) -> Resul
     Ok(())
 }
 
+/// `VerifyAccount` / `UnverifyAccount` touch `_verified` and the
+/// verification-token columns, which are only provisioned when the
+/// auth collection has `verify_email = true`. Calling them on a
+/// collection without that feature fails the SQL with "no such
+/// column" — without this preflight, that surfaced over the wire as
+/// the generic `Status::internal("Internal error")`. `FailedPrecondition`
+/// is the correct mapping: the request is well-formed, the server is
+/// healthy, but the collection's schema doesn't support the action.
+fn validate_verify_email_enabled(service: &ContentService, collection: &str) -> Result<(), Status> {
+    let def = service.get_collection_def(collection)?;
+
+    let enabled = def.auth.as_ref().is_some_and(|a| a.verify_email);
+    if !enabled {
+        return Err(Status::failed_precondition(format!(
+            "Collection '{collection}' does not have verify_email enabled"
+        )));
+    }
+
+    Ok(())
+}
+
 /// Owned bundle for an account-action spawn-blocking body.
 ///
 /// `invalidation_transport` is wired only for the `lock_user` flow (which
@@ -153,6 +174,7 @@ impl ContentService {
         let token = Self::extract_token(&metadata);
         let req = request.into_inner();
         validate_auth_collection(self, &req.collection)?;
+        validate_verify_email_enabled(self, &req.collection)?;
 
         let input = self.account_action_input(token, &req, false);
 
@@ -175,6 +197,7 @@ impl ContentService {
         let token = Self::extract_token(&metadata);
         let req = request.into_inner();
         validate_auth_collection(self, &req.collection)?;
+        validate_verify_email_enabled(self, &req.collection)?;
 
         let input = self.account_action_input(token, &req, false);
 

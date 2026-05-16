@@ -77,6 +77,14 @@ impl From<anyhow::Error> for ServiceError {
         if let Some(ve) = e.downcast_ref::<ValidationError>() {
             return Self::Validation(ve.clone());
         }
+        // Preserve typed `DocumentNotFound` raised by `query::update` /
+        // `query::update_partial` when the UPDATE matched zero rows.
+        // Without this branch, Update / UpdateMany on a missing id would
+        // come back as `Internal` over gRPC — which production clients
+        // retry on, masking the underlying bug.
+        if let Some(dnf) = e.downcast_ref::<crate::db::query::DocumentNotFound>() {
+            return Self::NotFound(dnf.to_string());
+        }
         Self::Internal(e)
     }
 }

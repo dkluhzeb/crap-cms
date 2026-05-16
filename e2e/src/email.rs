@@ -11,7 +11,7 @@
 use std::time::{Duration, Instant};
 
 use crap_cms::core::email::SYSTEM_EMAIL_JOB;
-use crap_cms::db::{DbConnection, DbValue};
+use crap_cms::db::{DbConnection, DbPool, DbValue};
 
 use crate::helpers::TestApp;
 
@@ -27,7 +27,15 @@ pub struct CapturedEmail {
 /// test app's DB. Order matches insertion order via `created_at`.
 #[must_use]
 pub fn read_queued_emails(app: &TestApp) -> Vec<CapturedEmail> {
-    let conn = app.pool.get().expect("pool");
+    read_queued_emails_from_pool(&app.pool)
+}
+
+/// Pool-based variant of [`read_queued_emails`]. Same query, but
+/// usable from harnesses (e.g. `GrpcTestCtx`) that don't carry a
+/// `TestApp`.
+#[must_use]
+pub fn read_queued_emails_from_pool(pool: &DbPool) -> Vec<CapturedEmail> {
+    let conn = pool.get().expect("pool");
     let rows = conn
         .query_all(
             "SELECT data FROM _crap_jobs WHERE slug = ? AND status = 'pending' ORDER BY created_at",
@@ -56,7 +64,13 @@ pub fn read_queued_emails(app: &TestApp) -> Vec<CapturedEmail> {
 /// Latest queued email addressed to `to`, if any.
 #[must_use]
 pub fn find_queued_email(app: &TestApp, to: &str) -> Option<CapturedEmail> {
-    read_queued_emails(app)
+    find_queued_email_in_pool(&app.pool, to)
+}
+
+/// Pool-based variant of [`find_queued_email`].
+#[must_use]
+pub fn find_queued_email_in_pool(pool: &DbPool, to: &str) -> Option<CapturedEmail> {
+    read_queued_emails_from_pool(pool)
         .into_iter()
         .rev()
         .find(|e| e.to == to)
@@ -68,9 +82,19 @@ pub fn find_queued_email(app: &TestApp, to: &str) -> Option<CapturedEmail> {
 /// wait is normal.
 #[must_use]
 pub fn wait_for_queued_email(app: &TestApp, to: &str, timeout: Duration) -> Option<CapturedEmail> {
+    wait_for_queued_email_in_pool(&app.pool, to, timeout)
+}
+
+/// Pool-based variant of [`wait_for_queued_email`].
+#[must_use]
+pub fn wait_for_queued_email_in_pool(
+    pool: &DbPool,
+    to: &str,
+    timeout: Duration,
+) -> Option<CapturedEmail> {
     let deadline = Instant::now() + timeout;
     loop {
-        if let Some(email) = find_queued_email(app, to) {
+        if let Some(email) = find_queued_email_in_pool(pool, to) {
             return Some(email);
         }
         if Instant::now() >= deadline {

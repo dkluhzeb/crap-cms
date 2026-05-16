@@ -15,14 +15,19 @@ workspace = true
 [dependencies]
 crap-cms = { path = ".." }
 
+anyhow.workspace = true
 axum.workspace = true
 chromiumoxide = { version = "0.9", default-features = false }
 chrono.workspace = true
 http-body-util.workspace = true
+prost-types.workspace = true
 scraper.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tokio-util.workspace = true
+tonic.workspace = true
+tonic-health.workspace = true
+tonic-reflection.workspace = true
 tower.workspace = true

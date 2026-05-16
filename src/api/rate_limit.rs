@@ -21,6 +21,7 @@ pub struct GrpcRateLimitLayer {
 
 impl GrpcRateLimitLayer {
     /// Create a new rate limit layer with the given limiter.
+    #[must_use]
     pub fn new(limiter: Arc<GrpcRateLimiter>) -> Self {
         Self { limiter }
     }
