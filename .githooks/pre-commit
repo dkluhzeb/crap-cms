@@ -18,8 +18,8 @@ set -euo pipefail
 echo "[pre-commit] cargo fmt --check"
 cargo fmt --all -- --check
 
-echo "[pre-commit] cargo clippy --all-targets -- -D warnings"
-cargo clippy --all-targets -- -D warnings
+echo "[pre-commit] cargo clippy --all-targets --all-features -- -D warnings"
+cargo clippy --all-targets --all-features -- -D warnings
 
 echo "[pre-commit] crap-cms fmt --check (Handlebars templates)"
 cargo run --quiet --bin crap-cms -- fmt --check

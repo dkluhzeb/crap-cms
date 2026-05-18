@@ -1,4 +1,4 @@
-//! PostgreSQL backend — connection, transaction, and pool implementation.
+//! `PostgreSQL` backend — connection, transaction, and pool implementation.
 //!
 //! Uses `deadpool-postgres` (async pool) with `tokio::task::block_in_place`
 //! to provide the sync `DbConnection` interface expected by the rest of
@@ -121,11 +121,19 @@ macro_rules! pg_shared_methods {
             // Build the offset expression using make_interval() which takes
             // an integer (seconds), avoiding the TEXT→interval cast issue.
             // We pass seconds as an integer param, which tokio-postgres handles.
+            //
+            // Callers pass token/session expiries (hours/days as seconds, far
+            // below `2^53`), so the i64→f64 precision-loss lint doesn't bite in
+            // practice. Allow at the call site rather than wrap in `f64::from(
+            // i32::try_from(...))` which would silently saturate a future
+            // larger-interval caller.
+            #[allow(clippy::cast_precision_loss)]
+            let secs_real = seconds as f64;
             let sql = format!(
                 "to_char(NOW() + make_interval(secs => ${param_pos}), \
                  'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')"
             );
-            (sql, DbValue::Real(seconds as f64))
+            (sql, DbValue::Real(secs_real))
         }
 
         fn json_extract_expr(&self, column: &str, field: &str) -> String {
@@ -207,7 +215,7 @@ macro_rules! pg_shared_methods {
 
 // ── Statement-cached pool ────────────────────────────────────────────────
 
-/// A pooled tokio_postgres `Client` plus a per-connection prepared-statement
+/// A pooled `tokio_postgres` `Client` plus a per-connection prepared-statement
 /// cache. Statements are connection-bound, so the cache must live with the
 /// client across pool checkouts — we achieve that by making `CachedClient`
 /// the deadpool Manager's pooled `Type`.
@@ -292,7 +300,13 @@ where
 
 // ── Pool ─────────────────────────────────────────────────────────────────
 
-/// Create a PostgreSQL connection pool from config.
+/// Create a `PostgreSQL` connection pool from config.
+///
+/// # Errors
+///
+/// Returns an error when `database.url` is missing from the config,
+/// when the URL string fails to parse as a `tokio_postgres::Config`,
+/// or when the bb8 pool builder rejects the configured pool size.
 pub fn create_pool(config: &CrapConfig) -> Result<DbPool> {
     let url = config
         .database
@@ -323,7 +337,7 @@ struct PgPoolBackend {
 impl PoolBackend for PgPoolBackend {
     fn get(&self) -> Result<BoxedConnection> {
         let obj = block_in_place(|| tokio::runtime::Handle::current().block_on(self.pool.get()))
-            .map_err(|e| anyhow!("Failed to get Postgres connection: {}", e))?;
+            .map_err(|e| anyhow!("Failed to get Postgres connection: {e}"))?;
 
         Ok(BoxedConnection::new(Box::new(PgConnection { inner: obj })))
     }
@@ -366,8 +380,8 @@ impl ConnectionInner for PgConnection {
 ///
 /// Inputs:
 /// - `$exec_expr`: `self -> &impl GenericClient` accessor — used for the
-///   actual execute/query AND for prepare(). Both Client and Transaction
-///   have prepare(); Statements are connection-bound and survive the
+///   actual execute/query AND for `prepare()`. Both Client and Transaction
+///   have `prepare()`; Statements are connection-bound and survive the
 ///   surrounding transaction's commit/rollback so they're safe to cache
 ///   at the connection level.
 /// - `$cache_expr`: `self -> &Mutex<HashMap<String, Statement>>`.
@@ -386,7 +400,11 @@ macro_rules! pg_query_methods {
                 })
             })
             .with_context(|| format!("execute failed: {sql}"))?;
-            Ok(count as usize)
+            // tokio-postgres returns the row count as u64; we report it as
+            // usize. On 32-bit targets a single UPDATE / DELETE returning
+            // more than 4 billion rows is implausible, but saturate
+            // explicitly rather than silently truncate.
+            Ok(usize::try_from(count).unwrap_or(usize::MAX))
         }
 
         fn execute_batch(&self, sql: &str) -> Result<()> {
@@ -516,15 +534,15 @@ fn pg_row_to_dbrow(row: &tokio_postgres::Row) -> DbRow {
 fn pg_column_to_dbvalue(row: &tokio_postgres::Row, idx: usize, ty: &Type) -> DbValue {
     match *ty {
         Type::BOOL => match row.try_get::<_, Option<bool>>(idx) {
-            Ok(Some(b)) => DbValue::Integer(if b { 1 } else { 0 }),
+            Ok(Some(b)) => DbValue::Integer(i64::from(b)),
             _ => DbValue::Null,
         },
         Type::INT2 => match row.try_get::<_, Option<i16>>(idx) {
-            Ok(Some(v)) => DbValue::Integer(v as i64),
+            Ok(Some(v)) => DbValue::Integer(i64::from(v)),
             _ => DbValue::Null,
         },
         Type::INT4 => match row.try_get::<_, Option<i32>>(idx) {
-            Ok(Some(v)) => DbValue::Integer(v as i64),
+            Ok(Some(v)) => DbValue::Integer(i64::from(v)),
             _ => DbValue::Null,
         },
         Type::INT8 => match row.try_get::<_, Option<i64>>(idx) {
@@ -532,7 +550,7 @@ fn pg_column_to_dbvalue(row: &tokio_postgres::Row, idx: usize, ty: &Type) -> DbV
             _ => DbValue::Null,
         },
         Type::FLOAT4 => match row.try_get::<_, Option<f32>>(idx) {
-            Ok(Some(v)) => DbValue::Real(v as f64),
+            Ok(Some(v)) => DbValue::Real(f64::from(v)),
             _ => DbValue::Null,
         },
         Type::FLOAT8 => match row.try_get::<_, Option<f64>>(idx) {

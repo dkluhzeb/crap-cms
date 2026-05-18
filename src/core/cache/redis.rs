@@ -65,7 +65,7 @@ impl RedisCache {
         let mut guard = self
             .conn
             .lock()
-            .map_err(|e| anyhow!("Redis mutex poisoned: {}", e))?;
+            .map_err(|e| anyhow!("Redis mutex poisoned: {e}"))?;
 
         // Try the operation first
         match f(&mut guard) {

@@ -284,6 +284,10 @@ async fn try_forward<T>(tx: &mpsc::Sender<RemoteMessage<T>>, value: T) -> Result
 where
     T: Clone + Send + 'static,
 {
+    // Both error arms collapse to `Err(1)` — the channel is unusable
+    // for this caller whether the receiver dropped (Ok(Err(_))) or the
+    // send timed out because the queue was full (Err(_) from timeout).
+    // Caller treats either as "subscriber too slow / gone, evict."
     match timeout(
         Duration::from_millis(50),
         tx.send(RemoteMessage::Event(value)),
@@ -291,8 +295,7 @@ where
     .await
     {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(_)) => Err(1), // receiver dropped — treat as lagged-close
-        Err(_) => Err(1),     // queue full
+        Ok(Err(_)) | Err(_) => Err(1),
     }
 }
 
