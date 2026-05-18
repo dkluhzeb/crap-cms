@@ -10,6 +10,7 @@ use crate::{
 };
 
 use super::helpers::load_auth_collection;
+use crate::core::collection::Auth;
 
 /// List users in an auth collection.
 ///
@@ -20,7 +21,7 @@ use super::helpers::load_auth_collection;
 #[cfg(not(tarpaulin_include))]
 pub fn user_list(pool: &DbPool, registry: &Registry, collection: &str) -> Result<()> {
     let def = load_auth_collection(registry, collection)?;
-    let verify_email = def.auth.as_ref().is_some_and(|a| a.verify_email);
+    let verify_email = def.auth.as_ref().is_some_and(Auth::requires_verify_email);
 
     let conn = pool.get().context("Failed to get database connection")?;
     let find_query = query::FindQuery::default();

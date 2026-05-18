@@ -88,7 +88,7 @@ fn proto_struct(pairs: &[(&str, &str)]) -> Struct {
     Struct { fields }
 }
 
-fn users_def_with_strategy(strategy: AuthStrategy) -> CollectionDefinition {
+fn users_def_with_strategy(name: &str, authenticate: &str) -> CollectionDefinition {
     let mut def = CollectionDefinition::new("users");
     def.labels = Labels {
         singular: Some(LocalizedString::Plain("User".to_string())),
@@ -102,11 +102,7 @@ fn users_def_with_strategy(strategy: AuthStrategy) -> CollectionDefinition {
             .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth {
-        enabled: true,
-        strategies: vec![strategy],
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled().with_strategy(name, authenticate));
     def
 }
 
@@ -114,7 +110,7 @@ fn users_def_with_strategy(strategy: AuthStrategy) -> CollectionDefinition {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn strategy_authenticates_when_password_is_wrong() {
-    let def = users_def_with_strategy(AuthStrategy::new("any-user", "hooks.any_user.authenticate"));
+    let def = users_def_with_strategy("any-user", "hooks.any_user.authenticate");
 
     let ctx = spawn_grpc_server_with_lua(
         vec![def],
@@ -167,7 +163,7 @@ async fn strategy_authenticates_when_password_is_wrong() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn always_nil_strategy_does_not_rescue_wrong_password() {
-    let def = users_def_with_strategy(AuthStrategy::new("nope", "hooks.nope.authenticate"));
+    let def = users_def_with_strategy("nope", "hooks.nope.authenticate");
 
     let ctx = spawn_grpc_server_with_lua(
         vec![def],
@@ -215,7 +211,7 @@ async fn always_nil_strategy_does_not_rescue_wrong_password() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn correct_password_works_alongside_strategy() {
-    let def = users_def_with_strategy(AuthStrategy::new("any-user", "hooks.any_user.authenticate"));
+    let def = users_def_with_strategy("any-user", "hooks.any_user.authenticate");
 
     let ctx = spawn_grpc_server_with_lua(
         vec![def],

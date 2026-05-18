@@ -1,6 +1,7 @@
 //! `ContentService` struct definition and its impl blocks.
 
 use std::{
+    collections::HashMap,
     pin::Pin,
     sync::{Arc, atomic::AtomicUsize},
 };
@@ -18,7 +19,7 @@ use crate::{
     core::{
         AuthUser, CollectionDefinition, DocumentFields, GlobalDefinition, Registry, SharedCache,
         SharedEventTransport, SharedInvalidationTransport, SharedPasswordProvider, SharedStorage,
-        SharedTokenProvider, auth::TokenProvider, email::EmailRenderer,
+        SharedTokenProvider, auth::TokenProvider, collection::Surface, email::EmailRenderer,
         event::InProcessInvalidationBus, rate_limit::LoginRateLimiter,
     },
     db::{
@@ -26,7 +27,10 @@ use crate::{
         Singleflight, query,
     },
     hooks::HookRunner,
-    service::{self, EmailContext, ServiceContext},
+    service::{
+        self, EmailContext,
+        auth::{AuthFailure, AuthRequest, EvaluateDeps, Resolution},
+    },
 };
 
 /// Implements the gRPC `ContentAPI` service (Find, Create, Update, Delete, Login, etc.).
@@ -120,6 +124,27 @@ impl ContentService {
             .filter(|s| !s.is_empty())
             .map(std::string::ToString::to_string)
     }
+
+    /// Snapshot ASCII gRPC metadata into a plain `HashMap` for the
+    /// unified auth evaluator and for passing as `ctx.headers` to Lua
+    /// strategy hooks. Keys keep their original (gRPC-normalized,
+    /// lowercase) casing; case-insensitive matching is the evaluator's
+    /// job inside `activation_matches`. Binary metadata is skipped
+    /// silently — strategies that need it would need a dedicated
+    /// channel.
+    pub(in crate::api::handlers) fn extract_metadata_headers(
+        metadata: &MetadataMap,
+    ) -> HashMap<String, String> {
+        let mut out = HashMap::with_capacity(metadata.len());
+        for entry in metadata.iter() {
+            if let tonic::metadata::KeyAndValueRef::Ascii(name, value) = entry
+                && let Ok(v) = value.to_str()
+            {
+                out.insert(name.as_str().to_string(), v.to_string());
+            }
+        }
+        out
+    }
 }
 
 /// I/O-bound methods: constructor, DB-backed auth resolution, access checks.
@@ -178,48 +203,61 @@ impl ContentService {
         }
     }
 
-    /// Resolve an auth user from a token using an existing connection.
+    /// Resolve a request's principal via the unified auth evaluator.
     ///
-    /// Returns `Ok(None)` when no token is present (anonymous), `Ok(Some(user))`
-    /// for a valid token, or `Err(Status::unauthenticated)` for an invalid/expired token.
+    /// Returns `Ok(None)` when no method matched (anonymous request),
+    /// `Ok(Some(user))` when a method authenticated the request, or
+    /// `Err(Status::unauthenticated)` when a credential was supplied
+    /// but invalid (bad signature, stale session, revoked user).
     ///
-    /// Pure data lookup — safe to call inside `spawn_blocking`.
+    /// Honors per-method `surfaces` and `activates_on`: a strategy
+    /// only fires when its activation discriminator matches the
+    /// current request, and a Bearer JWT is only accepted on
+    /// surfaces the issuing collection explicitly listed.
+    ///
+    /// Pure data lookup (Lua may fire if a strategy matches) — safe
+    /// to call inside `spawn_blocking`.
     pub(in crate::api::handlers) fn resolve_auth_user(
-        token: Option<String>,
+        bearer: Option<&str>,
+        headers: &HashMap<String, String>,
         token_provider: &dyn TokenProvider,
+        hook_runner: &HookRunner,
         registry: &Registry,
         conn: &dyn DbConnection,
     ) -> Result<Option<AuthUser>, Status> {
-        let Some(token) = token else {
-            return Ok(None);
+        let request = AuthRequest {
+            surface: Surface::Grpc,
+            bearer_token: bearer,
+            session_cookie_token: None,
+            headers,
         };
-        let claims = token_provider
-            .validate_token(&token)
-            .map_err(|_| Status::unauthenticated("Invalid or expired token"))?;
-        let Some(def) = registry.get_collection(&claims.collection).cloned() else {
-            return Err(Status::unauthenticated("Auth collection no longer exists"));
+        let deps = EvaluateDeps {
+            registry,
+            token_provider,
+            hook_runner,
+            conn,
         };
-        // Auth infrastructure — direct query for user lookup, not a user-facing read.
-        let doc = match query::find_by_id(conn, &claims.collection, &def, &claims.sub, None) {
-            Ok(Some(d)) => d,
-            Ok(None) => return Err(Status::unauthenticated("User no longer exists")),
-            Err(_) => return Err(Status::unauthenticated("User lookup failed")),
-        };
-
-        // Reject tokens with stale session version (password was changed).
-        // On DB error, reject the token — do not silently default to 0 which
-        // would let stale tokens through during transient failures.
-        let ctx = ServiceContext::slug_only(&claims.collection)
-            .conn(conn)
-            .build();
-        let db_session_version = service::auth::get_session_version(&ctx, &claims.sub)
-            .map_err(|_| Status::unauthenticated("Session version lookup failed"))?;
-
-        if claims.session_version != db_session_version {
-            return Err(Status::unauthenticated("Session invalidated"));
+        match service::auth::evaluate(&request, &deps) {
+            Resolution::Authenticated(auth) => Ok(Some(auth.user)),
+            Resolution::Anonymous => Ok(None),
+            // Precise per-failure messages so callers see why their
+            // token was rejected. None expose user-existence — `Locked`
+            // and `StaleSession` only surface when the bearer already
+            // proved knowledge of a valid signed token for that user.
+            Resolution::Invalid(failure) => Err(match failure {
+                AuthFailure::Locked => Status::permission_denied("Account locked"),
+                AuthFailure::StaleSession => Status::unauthenticated("Session invalidated"),
+                AuthFailure::UserMissing => Status::unauthenticated("User no longer exists"),
+                AuthFailure::UnknownCollection => {
+                    Status::unauthenticated("Auth collection no longer exists")
+                }
+                AuthFailure::Lookup => Status::unavailable("User lookup failed"),
+                AuthFailure::BadToken => Status::unauthenticated("Invalid or expired token"),
+                AuthFailure::Unaccepted => {
+                    Status::unauthenticated("Credential not accepted on this surface")
+                }
+            }),
         }
-
-        Ok(Some(AuthUser::new(claims, doc)))
     }
 
     /// Check collection-level access using an existing connection.

@@ -55,11 +55,7 @@ fn make_users_def_verify_email() -> CollectionDefinition {
             .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth {
-        enabled: true,
-        verify_email: true,
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled().map_password_login(|b| b.verify_email(true)));
     def
 }
 

@@ -178,8 +178,12 @@ impl AuthMeta {
     fn from_def(a: &Auth) -> Self {
         Self {
             enabled: a.enabled,
-            disable_local: a.disable_local,
-            verify_email: a.verify_email,
+            // View-model name kept (template-facing) — `disable_local` is the
+            // historical Handlebars context key surfaced as `{{#if disable_local}}`
+            // in `templates/auth/login.hbs`. Internally we compute it as the
+            // negation of `password_login_enabled`.
+            disable_local: !a.password_login_enabled(),
+            verify_email: a.requires_verify_email(),
         }
     }
 }

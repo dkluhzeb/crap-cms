@@ -1,5 +1,6 @@
 //! `FindByID` handler — fetch a single document by ID.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::task;
@@ -21,6 +22,7 @@ use crate::{
 struct FindByIdBlockingInput {
     pool: DbPool,
     runner: HookRunner,
+    headers: HashMap<String, String>,
     token_provider: SharedTokenProvider,
     registry: Arc<Registry>,
     db_kind: String,
@@ -44,8 +46,10 @@ fn find_by_id_blocking(input: FindByIdBlockingInput) -> Result<Option<content::D
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
 
     let auth_user = ContentService::resolve_auth_user(
-        input.token,
+        input.token.as_deref(),
+        &input.headers,
         &*input.token_provider,
+        &input.runner,
         &input.registry,
         &conn,
     )?;
@@ -91,6 +95,7 @@ impl ContentService {
     ) -> Result<Response<content::FindByIdResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
+        let headers = Self::extract_metadata_headers(&metadata);
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
@@ -127,6 +132,7 @@ impl ContentService {
             singleflight: self.populate_singleflight.clone(),
             def,
             token,
+            headers,
             depth,
             select,
             locale_ctx,

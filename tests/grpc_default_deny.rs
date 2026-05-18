@@ -101,7 +101,7 @@ fn setup_default_deny() -> TestSetup {
         )))
         .cache(Arc::new(crap_cms::core::cache::NoneCache))
         .token_provider(Arc::new(crap_cms::core::auth::JwtTokenProvider::new(
-            "test-secret",
+            "test-jwt-secret",
         )))
         .password_provider(Arc::new(crap_cms::core::auth::Argon2PasswordProvider));
 

@@ -6,10 +6,31 @@ crap.collections.define("{{slug}}", {
     timestamps = {{timestamps}},
 {{#if auth}}
     auth = true,
-    -- Full auth config (uncomment and customize):
+    -- `auth = true` expands to the standard three methods:
+    --   password_login + bearer (all surfaces) + session_cookie (admin).
+    -- Customize by listing methods explicitly:
+    --
     -- auth = {
-    --     verify_email = false,
-    --     strategies = {},
+    --     enabled = true,
+    --     methods = crap.auth.with_defaults({
+    --         { type = "strategy",
+    --           name = "api-key",
+    --           authenticate = "hooks.auth.api_key",
+    --           activates_on = { header = "x-api-key" },
+    --           surfaces = { "grpc" } },
+    --     }),
+    -- },
+    --
+    -- To require email verification or enable MFA, tweak the
+    -- password_login entry:
+    --
+    -- auth = {
+    --     enabled = true,
+    --     methods = {
+    --         { type = "password_login", verify_email = true, mfa = "email" },
+    --         { type = "bearer", surfaces = { "grpc", "admin" } },
+    --         { type = "session_cookie", surfaces = { "admin" } },
+    --     },
     -- },
 {{/if}}
 {{#if upload}}

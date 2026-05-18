@@ -1,5 +1,6 @@
 //! `UpdateGlobal` handler — update a global's document.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::task;
@@ -27,6 +28,7 @@ use crate::{
 struct UpdateGlobalBlockingInput {
     pool: DbPool,
     runner: HookRunner,
+    headers: HashMap<String, String>,
     token_provider: SharedTokenProvider,
     registry: Arc<Registry>,
     event_transport: Option<SharedEventTransport>,
@@ -47,8 +49,10 @@ fn update_global_blocking(input: UpdateGlobalBlockingInput) -> Result<content::D
         .map_err(|_| Status::internal("Internal error"))?;
 
     let auth_user = ContentService::resolve_auth_user(
-        input.token,
+        input.token.as_deref(),
+        &input.headers,
         &*input.token_provider,
+        &input.runner,
         &input.registry,
         &conn,
     )?;
@@ -90,6 +94,7 @@ impl ContentService {
     ) -> Result<Response<content::UpdateGlobalResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
+        let headers = Self::extract_metadata_headers(&metadata);
         let req = request.into_inner();
         let def = self.get_global_def(&req.slug)?;
 
@@ -113,6 +118,7 @@ impl ContentService {
             slug: req.slug.clone(),
             def,
             token,
+            headers,
             data,
             locale_ctx,
         };

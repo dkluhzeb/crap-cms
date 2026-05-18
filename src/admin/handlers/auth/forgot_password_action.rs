@@ -8,6 +8,7 @@ use axum::{
 use tokio::task;
 use tracing::error;
 
+use crate::core::collection::Auth;
 use crate::{
     admin::{
         AdminState,
@@ -44,8 +45,8 @@ fn forgot_password_collection(
     let def = state.registry.get_collection(collection)?;
 
     if def.is_auth_collection()
-        && def.auth.as_ref().is_some_and(|a| a.forgot_password)
-        && !def.auth.as_ref().is_some_and(|a| a.disable_local)
+        && def.auth.as_ref().is_some_and(Auth::forgot_password_enabled)
+        && def.auth.as_ref().is_some_and(Auth::password_login_enabled)
     {
         Some(def.clone())
     } else {

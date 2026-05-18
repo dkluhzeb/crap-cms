@@ -416,18 +416,52 @@ function crap.fields.join(config) end
 --- @field headers    table<string, string>  Request headers (lowercase keys).
 --- @field collection string                 Auth collection slug.
 
---- @class crap.AuthStrategy
---- @field name          string  Strategy name (e.g., "api-key", "ldap").
---- @field authenticate  string  Lua function ref (module.function format). Receives `crap.AuthStrategyContext`, returns a user document or nil.
+--- Which host surfaces a method can fire on. Surface filtering is
+--- per-method: a method whose `surfaces` list omits the current
+--- request's surface is skipped by the evaluator.
+--- @alias crap.Surface "admin" | "grpc"
+
+--- Discriminator that decides whether a `strategy` method runs for a
+--- given request. Use `{ header = "x-..." }` for header-bound
+--- strategies (API keys, SSO assertions) — the strategy only fires
+--- when the named header is present. Use `{ always = true }` for
+--- catch-all strategies (mTLS, multi-signal, IdP introspection) that
+--- inspect the request internally; this is the explicit escape hatch
+--- and emits a startup warning since accidental always-on strategies
+--- run on every request.
+--- @class crap.Activation
+--- @field header? string  Strategy fires only when this header (lowercase) is present.
+--- @field always? boolean Strategy fires on every request (must be `true` if set).
+
+--- One authentication method on a collection. Methods are declared
+--- in an ordered list (`auth.methods`); the evaluator walks them and
+--- the first whose activation matches the current request wins.
+---
+--- Four variants, discriminated by `type`:
+---   * `"password_login"` — enables the `Login` RPC + issues JWTs.
+---     Owns the password-only flags: `mfa`, `verify_email`,
+---     `forgot_password`.
+---   * `"bearer"` — accepts the JWT in `Authorization: Bearer …` /
+---     gRPC metadata. Default surfaces: `{"grpc", "admin"}`.
+---   * `"session_cookie"` — accepts the admin `crap_session` cookie.
+---     Default surfaces: `{"admin"}`.
+---   * `"strategy"` — custom Lua authenticator declaring its own
+---     `activates_on` discriminator. Default surfaces: `{"admin"}`.
+---
+--- @class crap.AuthMethod
+--- @field type             "password_login"|"bearer"|"session_cookie"|"strategy"
+--- @field mfa?             "email"|false        (password_login only) Email MFA mode.
+--- @field verify_email?    boolean              (password_login only) Require email verification (default: false).
+--- @field forgot_password? boolean              (password_login only) Enable forgot-password flow (default: true).
+--- @field surfaces?        crap.Surface[]       Surfaces this method fires on (per-variant defaults apply if missing).
+--- @field name?            string               (strategy only) Identifier used in logging.
+--- @field authenticate?    string               (strategy only) Lua hook ref `"module.fn"`. Receives `crap.AuthStrategyContext`, returns user doc or nil.
+--- @field activates_on?    crap.Activation      (strategy only) Discriminator for when the strategy fires.
 
 --- @class crap.Auth
---- @field enabled?          boolean             Enable auth for this collection (default: false).
---- @field token_expiry?     integer             JWT token expiry in seconds (default: 7200).
---- @field strategies?       crap.AuthStrategy[] Custom auth strategies for request-level authentication.
---- @field disable_local?    boolean             Disable local password login (default: false). When true, only custom strategies can authenticate.
---- @field verify_email?     boolean             Require email verification before login (default: false). Sends a verification email on user create.
---- @field forgot_password?  boolean             Enable forgot password flow (default: true). Sends a reset email when requested.
---- @field mfa?              "email"|false        Multi-factor authentication mode (default: false). "email" sends a 6-digit code after password verification.
+--- @field enabled?      boolean            Enable auth for this collection. Required true when `methods` is non-empty.
+--- @field token_expiry? integer            JWT lifetime in seconds (default: 7200).
+--- @field methods?      crap.AuthMethod[]  Ordered list of auth methods. Use `crap.auth.default_methods()` for the standard set or `crap.auth.with_defaults({...})` to extend it.
 
 --- @alias crap.ImageFit "cover" | "contain" | "inside" | "fill"
 
@@ -1088,6 +1122,35 @@ function crap.auth.verify_password(password, hash) end
 --- Returns nil from init.lua, on unauthenticated requests, or outside a hook context.
 --- @return crap.Document?  user
 function crap.auth.user() end
+
+--- The standard 3-method auth set: `password_login` + `bearer` (all
+--- surfaces) + `session_cookie` (admin only). Use in collection
+--- definitions:
+---
+---     auth = {
+---       enabled = true,
+---       methods = crap.auth.default_methods(),
+---     }
+---
+--- @return crap.AuthMethod[] methods
+function crap.auth.default_methods() end
+
+--- Returns `default_methods()` with `extras` appended. The most
+--- common shape for "I want the standard auth plus my own strategy":
+---
+---     auth = {
+---       enabled = true,
+---       methods = crap.auth.with_defaults({
+---         { type = "strategy", name = "api-key",
+---           authenticate = "hooks.auth.api_key",
+---           activates_on = { header = "x-api-key" },
+---           surfaces = { "grpc" } },
+---       }),
+---     }
+---
+--- @param  extras crap.AuthMethod[]  Methods to append after the defaults.
+--- @return crap.AuthMethod[] methods
+function crap.auth.with_defaults(extras) end
 
 
 -- ── crap.env ─────────────────────────────────────────────────

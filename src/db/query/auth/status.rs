@@ -62,6 +62,30 @@ pub fn get_session_version(conn: &dyn DbConnection, slug: &str, id: &str) -> Res
     Ok(u64::try_from(raw).unwrap_or(0))
 }
 
+/// Atomically bump the user's `_session_version`, invalidating every
+/// JWT that was issued before this call. Used by logout / account
+/// lock / password reset — anything that should kick the user out
+/// across all live sessions.
+///
+/// Equivalent to the increment side of `update_password` but without
+/// touching the password hash. Returns the new version (post-bump)
+/// so callers that need to re-issue a session can hand the fresh
+/// number to `Claims::session_version`.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE or SELECT fails.
+pub fn bump_session_version(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<u64> {
+    let sql = format!(
+        "UPDATE \"{slug}\" SET _session_version = COALESCE(_session_version, 0) + 1 \
+         WHERE id = {}",
+        conn.placeholder(1)
+    );
+    conn.execute(&sql, &[DbValue::Text(id.to_string())])
+        .with_context(|| format!("Failed to bump _session_version for {id} in {slug}"))?;
+    get_session_version(conn, slug, id)
+}
+
 /// Check whether a user exists in the given collection.
 ///
 /// # Errors

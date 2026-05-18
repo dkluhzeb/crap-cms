@@ -1,5 +1,6 @@
 //! `GetGlobal` handler — get the single document for a global definition.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::task;
@@ -21,6 +22,7 @@ use crate::{
 struct GetGlobalBlockingInput {
     pool: DbPool,
     runner: HookRunner,
+    headers: HashMap<String, String>,
     token_provider: SharedTokenProvider,
     registry: Arc<Registry>,
     slug: String,
@@ -36,9 +38,14 @@ fn get_global_blocking(input: GetGlobalBlockingInput) -> Result<content::Documen
         .inspect_err(|e| error!("GetGlobal pool error: {}", e))
         .map_err(|_| Status::internal("Internal error"))?;
 
+    let token = input.token;
+    let headers = input.headers;
+
     let auth_user = ContentService::resolve_auth_user(
-        input.token,
+        token.as_deref(),
+        &headers,
         &*input.token_provider,
+        &input.runner,
         &input.registry,
         &conn,
     )?;
@@ -70,6 +77,7 @@ impl ContentService {
     ) -> Result<Response<content::GetGlobalResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
+        let headers = Self::extract_metadata_headers(&metadata);
         let req = request.into_inner();
         let def = self.get_global_def(&req.slug)?;
 
@@ -85,6 +93,7 @@ impl ContentService {
             slug: req.slug.clone(),
             def,
             token,
+            headers,
             locale_ctx,
         };
 

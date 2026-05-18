@@ -98,7 +98,7 @@ impl CookieBuilder<'_> {
 /// Resolve the configured `SameSite` attribute for the session cookie, honoring the
 /// `[auth] session_cookie_samesite` config key. `None` is reserved and falls back to
 /// `Lax` (see [`SessionCookieSameSite`] docs).
-pub(in crate::admin::handlers) fn session_same_site(state: &AdminState) -> &'static str {
+pub(in crate::admin) fn session_same_site(state: &AdminState) -> &'static str {
     if state.config.auth.session_cookie_samesite == SessionCookieSameSite::None {
         warn!(
             "[auth] session_cookie_samesite = \"none\" is reserved for future use; \
@@ -152,7 +152,7 @@ pub(in crate::admin::handlers) fn clear_mfa_pending_cookie(dev_mode: bool) -> St
 }
 
 /// Append `Set-Cookie` headers to an existing response.
-pub(in crate::admin::handlers) fn append_cookies(response: &mut Response, cookies: &[String]) {
+pub(in crate::admin) fn append_cookies(response: &mut Response, cookies: &[String]) {
     for cookie in cookies {
         response.headers_mut().append(
             SET_COOKIE,
@@ -165,7 +165,7 @@ pub(in crate::admin::handlers) fn append_cookies(response: &mut Response, cookie
 ///
 /// `same_site` must match the attribute used when the cookie was set — browsers treat
 /// a differing `SameSite` as a different cookie and the clear would silently no-op.
-pub(in crate::admin::handlers) fn clear_session_cookies(
+pub(in crate::admin) fn clear_session_cookies(
     dev_mode: bool,
     same_site: &'static str,
 ) -> Vec<String> {

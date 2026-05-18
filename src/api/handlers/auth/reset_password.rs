@@ -4,6 +4,7 @@ use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
 
+use crate::core::collection::Auth;
 use crate::{
     api::{content, handlers::ContentService},
     core::CollectionDefinition,
@@ -79,7 +80,7 @@ impl ContentService {
             )));
         }
 
-        if def.auth.as_ref().is_some_and(|a| a.disable_local) {
+        if !def.auth.as_ref().is_some_and(Auth::password_login_enabled) {
             return Err(Status::permission_denied(
                 "Local login is disabled for this collection",
             ));

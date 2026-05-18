@@ -12,6 +12,7 @@ use crate::{
     db::{BoxedConnection, DbPool, query},
 };
 
+use crate::core::collection::Auth;
 #[cfg(not(tarpaulin_include))]
 use dialoguer::Input;
 
@@ -42,7 +43,7 @@ pub(super) fn load_auth_collection(
 
 /// Check that the collection has email verification enabled.
 pub(super) fn require_verify_email(def: &CollectionDefinition, collection: &str) -> Result<()> {
-    if !def.auth.as_ref().is_some_and(|a| a.verify_email) {
+    if !def.auth.as_ref().is_some_and(Auth::requires_verify_email) {
         bail!(
             "Collection '{collection}' does not have email verification enabled (verify_email must be true)"
         );

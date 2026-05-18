@@ -78,6 +78,12 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
     super::startup_checks::validate_locale_field_collisions(&snapshot, &config.locale.locales)
         .context("Locale/field-name collision detected")?;
 
+    // Validate per-collection auth.methods configurations: hard errors
+    // for structural issues (enabled+empty methods, duplicate password_login,
+    // etc.), warnings for footgun patterns (always-active strategies).
+    super::startup_checks::validate_auth_methods(&snapshot)
+        .context("Auth method configuration invalid")?;
+
     // The init VM and `registry` (SharedRegistry) drop here. The
     // closures inside the VM that captured SharedRegistry clones are
     // also dropped; no writeable handle survives this function.

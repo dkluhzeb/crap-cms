@@ -379,10 +379,17 @@ fn user_lock_and_unlock() {
 fn user_verify_and_unverify() {
     let (_tmp, config_dir) = setup();
 
-    // Overwrite users.lua with verify_email enabled
+    // Overwrite users.lua with verify_email enabled (new `methods`
+    // shape: verify_email lives on the password_login method, not
+    // on auth itself).
     let users_lua = r#"crap.collections.define("users", {
     auth = {
-        verify_email = true,
+        enabled = true,
+        methods = {
+            { type = "password_login", verify_email = true },
+            { type = "bearer", surfaces = { "grpc", "admin" } },
+            { type = "session_cookie", surfaces = { "admin" } },
+        },
     },
     labels = {
         singular = "User",

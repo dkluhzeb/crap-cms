@@ -1,5 +1,6 @@
 //! Create handler — create a new document in a collection.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::task;
@@ -28,6 +29,7 @@ use crate::{
 struct CreateBlockingInput {
     pool: DbPool,
     runner: HookRunner,
+    headers: HashMap<String, String>,
     token_provider: SharedTokenProvider,
     registry: Arc<Registry>,
     db_kind: String,
@@ -50,8 +52,10 @@ fn create_blocking(input: CreateBlockingInput) -> Result<content::Document, Stat
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
 
     let auth_user = ContentService::resolve_auth_user(
-        input.token,
+        input.token.as_deref(),
+        &input.headers,
         &*input.token_provider,
+        &input.runner,
         &input.registry,
         &conn,
     )?;
@@ -92,6 +96,7 @@ impl ContentService {
     ) -> Result<Response<content::CreateResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
+        let headers = Self::extract_metadata_headers(&metadata);
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
@@ -124,6 +129,7 @@ impl ContentService {
             def,
             email_ctx: Some(self.email_context()),
             token,
+            headers,
             data,
             password,
             locale_ctx,

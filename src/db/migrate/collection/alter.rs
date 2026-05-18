@@ -17,6 +17,7 @@ use crate::{
 };
 
 use super::create::{append_default_value_for, create_collection_table};
+use crate::core::collection::Auth;
 
 /// Shared context for ALTER TABLE operations. All fields are required and
 /// the struct is constructed in one place (`alter_collection_table`); plain
@@ -159,7 +160,12 @@ fn add_auth_columns(ctx: &AlterCtx) -> Result<()> {
         ensure_column(ctx, col)?;
     }
 
-    if ctx.def.auth.as_ref().is_some_and(|a| a.verify_email) {
+    if ctx
+        .def
+        .auth
+        .as_ref()
+        .is_some_and(Auth::requires_verify_email)
+    {
         for col in [
             "_verified INTEGER DEFAULT 0",
             "_verification_token TEXT",
@@ -169,7 +175,12 @@ fn add_auth_columns(ctx: &AlterCtx) -> Result<()> {
         }
     }
 
-    if ctx.def.auth.as_ref().is_some_and(|a| a.mfa != MfaMode::Off) {
+    if ctx
+        .def
+        .auth
+        .as_ref()
+        .is_some_and(|a| a.mfa() != MfaMode::Off)
+    {
         for col in ["_mfa_code TEXT", "_mfa_code_exp INTEGER"] {
             ensure_column(ctx, col)?;
         }
@@ -397,11 +408,7 @@ mod tests {
 
         // Now make it an auth collection with verify_email
         let mut def2 = simple_collection("users", vec![text_field("email")]);
-        def2.auth = Some(Auth {
-            enabled: true,
-            verify_email: true,
-            ..Default::default()
-        });
+        def2.auth = Some(Auth::enabled().map_password_login(|b| b.verify_email(true)));
         alter_collection_table(&conn, "users", &def2, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "users").unwrap();

@@ -1,5 +1,6 @@
 //! `ListVersions` handler — list version history for a document.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::task;
@@ -19,6 +20,7 @@ use crate::{
 struct ListVersionsBlockingInput {
     pool: DbPool,
     runner: HookRunner,
+    headers: HashMap<String, String>,
     token_provider: SharedTokenProvider,
     registry: Arc<Registry>,
     collection: String,
@@ -37,9 +39,14 @@ fn list_versions_blocking(
         .inspect_err(|e| error!("ListVersions pool error: {}", e))
         .map_err(|_| Status::internal("Internal error"))?;
 
+    let token = input.token;
+    let headers = input.headers;
+
     let auth_user = ContentService::resolve_auth_user(
-        input.token,
+        token.as_deref(),
+        &headers,
         &*input.token_provider,
+        &input.runner,
         &input.registry,
         &conn,
     )?;
@@ -69,6 +76,7 @@ impl ContentService {
     ) -> Result<Response<content::ListVersionsResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
+        let headers = Self::extract_metadata_headers(&metadata);
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
@@ -89,6 +97,7 @@ impl ContentService {
             limit: req.limit,
             def,
             token,
+            headers,
         };
 
         let result = task::spawn_blocking(move || list_versions_blocking(input))

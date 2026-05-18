@@ -6,6 +6,7 @@ use anyhow::{Context as _, Result};
 use serde_json::Value;
 use tracing::{debug, info, warn};
 
+use crate::core::collection::Auth;
 use crate::{
     config::LocaleConfig,
     core::{CollectionDefinition, FieldType, collection::MfaMode},
@@ -149,7 +150,7 @@ fn collect_system_columns(
             "_session_version INTEGER DEFAULT 0".to_string(),
         ]);
 
-        if def.auth.as_ref().is_some_and(|a| a.verify_email) {
+        if def.auth.as_ref().is_some_and(Auth::requires_verify_email) {
             columns.extend([
                 "_verified INTEGER DEFAULT 0".to_string(),
                 "_verification_token TEXT".to_string(),
@@ -161,7 +162,7 @@ fn collect_system_columns(
         // these, `set_mfa_code` fails silently on a freshly-created auth
         // collection with `mfa = Email`, which means the MFA challenge
         // email never gets queued.
-        if def.auth.as_ref().is_some_and(|a| a.mfa != MfaMode::Off) {
+        if def.auth.as_ref().is_some_and(|a| a.mfa() != MfaMode::Off) {
             columns.extend([
                 "_mfa_code TEXT".to_string(),
                 "_mfa_code_exp INTEGER".to_string(),
@@ -283,11 +284,7 @@ mod tests {
     #[test]
     fn create_auth_collection_has_system_columns() {
         let mut def = simple_collection("users", vec![text_field("email")]);
-        def.auth = Some({
-            let mut auth = Auth::new(true);
-            auth.verify_email = true;
-            auth
-        });
+        def.auth = Some(Auth::enabled().map_password_login(|b| b.verify_email(true)));
         let cols = create_and_columns("users", &def, &no_locale());
         assert!(cols.contains("_password_hash"));
         assert!(cols.contains("_reset_token"));

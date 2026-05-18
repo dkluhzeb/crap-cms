@@ -13,7 +13,7 @@
 ---@field color? string
 ---@field seo? crap.group.CategoriesSeo
 
----@class crap.doc.Categories
+---@class crap.doc.Categories : crap.Document
 ---@field id string
 ---@field title string
 ---@field slug string
@@ -87,7 +87,7 @@
 ---@field client_projects? table[]
 ---@field seo? crap.group.ClientsSeo
 
----@class crap.doc.Clients
+---@class crap.doc.Clients : crap.Document
 ---@field id string
 ---@field company_name string
 ---@field logo? string
@@ -180,7 +180,7 @@
 ---@field registration_deadline? string
 ---@field seo? crap.group.EventsSeo
 
----@class crap.doc.Events
+---@class crap.doc.Events : crap.Document
 ---@field id string
 ---@field title string
 ---@field slug string
@@ -270,7 +270,7 @@
 ---@field internal_notes? string
 ---@field metadata? any
 
----@class crap.doc.Inquiries
+---@class crap.doc.Inquiries : crap.Document
 ---@field id string
 ---@field name string
 ---@field email string
@@ -367,7 +367,7 @@
 ---@field caption? string
 ---@field credit? string
 
----@class crap.doc.Media
+---@class crap.doc.Media : crap.Document
 ---@field id string
 ---@field filename string
 ---@field mime_type? string
@@ -480,7 +480,7 @@
 ---@field show_in_nav? boolean
 ---@field nav_order? number
 
----@class crap.doc.Pages
+---@class crap.doc.Pages : crap.Document
 ---@field id string
 ---@field title string
 ---@field slug string
@@ -560,7 +560,7 @@
 ---@field pinned? boolean
 ---@field seo? crap.group.PostsSeo
 
----@class crap.doc.Posts
+---@class crap.doc.Posts : crap.Document
 ---@field id string
 ---@field title string
 ---@field slug string
@@ -665,7 +665,7 @@
 ---@field external_url? string
 ---@field seo? crap.group.ProjectsSeo
 
----@class crap.doc.Projects
+---@class crap.doc.Projects : crap.Document
 ---@field id string
 ---@field title string
 ---@field slug string
@@ -770,7 +770,7 @@
 ---@field hero_image? string
 ---@field seo? crap.group.ServicesSeo
 
----@class crap.doc.Services
+---@class crap.doc.Services : crap.Document
 ---@field id string
 ---@field title string
 ---@field slug string
@@ -848,7 +848,7 @@
 ---@field tag_type "topic" | "technology" | "industry" | "skill"
 ---@field seo? crap.group.TagsSeo
 
----@class crap.doc.Tags
+---@class crap.doc.Tags : crap.Document
 ---@field id string
 ---@field name string
 ---@field slug string
@@ -943,7 +943,7 @@
 ---@field custom_css? string
 ---@field seo? crap.group.TestNestingSeo
 
----@class crap.doc.TestNesting
+---@class crap.doc.TestNesting : crap.Document
 ---@field id string
 ---@field name string
 ---@field tabbed_items? crap.array_row.TestNestingTabbedItems[]
@@ -1020,7 +1020,7 @@
 ---@field featured? boolean
 ---@field seo? crap.group.TestimonialsSeo
 
----@class crap.doc.Testimonials
+---@class crap.doc.Testimonials : crap.Document
 ---@field id string
 ---@field author_name string
 ---@field author_title? string
@@ -1091,7 +1091,7 @@
 ---@field bio? string
 ---@field authored_posts? table[]
 
----@class crap.doc.Users
+---@class crap.doc.Users : crap.Document
 ---@field id string
 ---@field email string
 ---@field name string
@@ -1156,7 +1156,7 @@
 ---@field show_social_links? boolean
 ---@field partner_logos? crap.array_row.FooterPartnerLogos[]
 
----@class crap.global_doc.Footer
+---@class crap.global_doc.Footer : crap.Document
 ---@field id string
 ---@field copyright_text? string
 ---@field show_social_links? boolean
@@ -1196,7 +1196,7 @@
 ---@class crap.global_data.Navigation
 ---@field main_nav? crap.array_row.NavigationMainNav[]
 
----@class crap.global_doc.Navigation
+---@class crap.global_doc.Navigation : crap.Document
 ---@field id string
 ---@field main_nav? crap.array_row.NavigationMainNav[]
 ---@field created_at? string
@@ -1240,7 +1240,7 @@
 ---@field secondary_color? string
 ---@field social? crap.group.SiteSettingsSocial
 
----@class crap.global_doc.SiteSettings
+---@class crap.global_doc.SiteSettings : crap.Document
 ---@field id string
 ---@field site_name string
 ---@field tagline? string

@@ -1,5 +1,6 @@
 //! Update handler — update an existing document by ID.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::task;
@@ -28,6 +29,7 @@ use crate::{
 struct UpdateBlockingInput {
     pool: DbPool,
     runner: HookRunner,
+    headers: HashMap<String, String>,
     token_provider: SharedTokenProvider,
     registry: Arc<Registry>,
     db_kind: String,
@@ -50,8 +52,10 @@ fn update_blocking(input: UpdateBlockingInput) -> Result<content::Document, Stat
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
 
     let auth_user = ContentService::resolve_auth_user(
-        input.token,
+        input.token.as_deref(),
+        &input.headers,
         &*input.token_provider,
+        &input.runner,
         &input.registry,
         &conn,
     )?;
@@ -92,11 +96,12 @@ impl ContentService {
     ) -> Result<Response<content::UpdateResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
+        let headers = Self::extract_metadata_headers(&metadata);
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
         if req.unpublish.unwrap_or(false) && def.has_versions() {
-            return self.unpublish_impl(token, &req, &def).await;
+            return self.unpublish_impl(token, headers, &req, &def).await;
         }
 
         let mut data: DocumentFields = req
@@ -128,6 +133,7 @@ impl ContentService {
             id: req.id.clone(),
             def,
             token,
+            headers,
             data,
             password,
             locale_ctx,

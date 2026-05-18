@@ -10,6 +10,7 @@ use rand::Rng;
 use tokio::task;
 use tracing::{debug, error};
 
+use crate::core::collection::Auth;
 use crate::{
     admin::{
         AdminState, auth_middleware,
@@ -47,7 +48,7 @@ struct VerifyParams {
     email: String,
     password: String,
     verify_email_flag: bool,
-    disable_local: bool,
+    allows_password: bool,
     hook_runner: Option<HookRunner>,
     headers: HashMap<String, String>,
 }
@@ -63,8 +64,8 @@ fn try_strategy_auth(
 ) -> Option<Document> {
     let auth = def.auth.as_ref()?;
 
-    for strategy in &auth.strategies {
-        match hook_runner.run_auth_strategy(&strategy.authenticate, slug, headers, conn) {
+    for strategy in auth.strategies() {
+        match hook_runner.run_auth_strategy(strategy.authenticate, slug, headers, conn) {
             Ok(Some(doc)) => return Some(doc),
             Ok(None) => {}
             Err(e) => {
@@ -94,7 +95,7 @@ fn verify_credentials_blocking(
     let def = &params.def;
 
     // Try local email+password authentication via service layer
-    if !params.disable_local {
+    if params.allows_password {
         let ctx = ServiceContext::collection(slug, def).conn(&conn).build();
 
         match authenticate_local(
@@ -149,7 +150,7 @@ fn verify_credentials_blocking(
         })));
     }
 
-    if !params.disable_local {
+    if params.allows_password {
         auth::dummy_verify();
     }
 
@@ -343,15 +344,15 @@ pub async fn login_action(
         return login_error(&state, "error_invalid_collection", &form.email);
     };
 
-    let disable_local = def.auth.as_ref().is_some_and(|a| a.disable_local);
-    let has_strategies = def.auth.as_ref().is_some_and(|a| !a.strategies.is_empty());
+    let allows_password = def.auth.as_ref().is_some_and(Auth::password_login_enabled);
+    let has_strategies = def.auth.as_ref().is_some_and(Auth::has_strategies);
 
-    // If local is disabled and no strategies, nothing can authenticate
-    if disable_local && !has_strategies {
+    // If password login is off and no strategies, nothing can authenticate
+    if !allows_password && !has_strategies {
         return login_error(&state, "error_invalid_collection", &form.email);
     }
 
-    let verify_email = def.auth.as_ref().is_some_and(|a| a.verify_email);
+    let verify_email = def.auth.as_ref().is_some_and(Auth::requires_verify_email);
 
     let result = verify_credentials(VerifyParams {
         pool: state.pool.clone(),
@@ -361,7 +362,7 @@ pub async fn login_action(
         email: form.email.clone(),
         password: form.password.clone(),
         verify_email_flag: verify_email,
-        disable_local,
+        allows_password,
         hook_runner: Some(state.hook_runner.clone()),
         headers: headers_to_map(&headers),
     })
@@ -406,7 +407,7 @@ pub async fn login_action(
     }
 
     // Check if MFA is required
-    let mfa_enabled = def.auth.as_ref().is_some_and(|a| a.mfa == MfaMode::Email);
+    let mfa_enabled = def.auth.as_ref().is_some_and(|a| a.mfa() == MfaMode::Email);
 
     if mfa_enabled {
         return handle_mfa_challenge(&state, &login.user, &form, login.session_version);

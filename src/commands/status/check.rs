@@ -6,6 +6,7 @@
 
 use std::path::Path;
 
+use crate::core::collection::Auth;
 use crate::{
     cli,
     config::{CompressionMode, CrapConfig},
@@ -49,6 +50,7 @@ fn gather_findings(
     check_pool(cfg, &mut findings);
     check_compression(cfg, &mut findings);
     check_auth(cfg, reg, &mut findings);
+    check_auth_methods(reg, &mut findings);
     check_access(cfg, reg, &mut findings);
     check_cors(cfg, &mut findings);
     check_rate_limiting(cfg, reg, &mut findings);
@@ -221,6 +223,126 @@ fn check_auth(cfg: &CrapConfig, reg: &Registry, findings: &mut Vec<Finding>) {
     }
 }
 
+/// Surface auth-method shape smells the startup validator would let
+/// through silently. Hard errors (enabled + empty methods, duplicate
+/// `password_login` / bearer) are already rejected at startup —
+/// `status` only flags configurations that *work* but probably
+/// aren't what the operator intended.
+fn check_auth_methods(reg: &Registry, findings: &mut Vec<Finding>) {
+    use crate::core::collection::{Activation, AuthMethod, Surface};
+    use std::collections::HashMap;
+
+    // Tracks every `Always`-activated strategy, keyed by the surface
+    // it covers. Used to flag the cross-collection race where two
+    // such strategies compete on the same surface.
+    let mut always_strategies_by_surface: HashMap<Surface, Vec<String>> = HashMap::new();
+    // Tracks every `Header`-activated strategy by `(lowercase header,
+    // surface)`. Two strategies sharing both fields race for the
+    // request — HashMap iteration order picks the winner.
+    let mut header_strategies_by_key: HashMap<(String, Surface), Vec<String>> = HashMap::new();
+
+    for (slug, def) in &reg.collections {
+        let Some(auth) = def.auth.as_ref() else {
+            continue;
+        };
+        if !auth.enabled {
+            continue;
+        }
+
+        let has_password = auth.password_login_enabled();
+        let has_bearer_anywhere =
+            auth.accepts_bearer(Surface::Admin) || auth.accepts_bearer(Surface::Grpc);
+
+        // Password-login without bearer: the Login RPC will issue a JWT
+        // that no subsequent request can use (every surface's bearer
+        // check fails). Almost always a config mistake.
+        if has_password && !has_bearer_anywhere {
+            findings.push(
+                Finding::new(format!(
+                    "Collection '{slug}' has password_login but no bearer method — \
+                     Login will issue a JWT that no future request can authenticate",
+                ))
+                .with_hint(
+                    "Add `{ type = \"bearer\", surfaces = { \"grpc\", \"admin\" } }` \
+                     to the methods list, or use crap.auth.with_defaults({...}).",
+                ),
+            );
+        }
+
+        for method in &auth.methods {
+            if let AuthMethod::Strategy {
+                name,
+                activates_on,
+                surfaces,
+                ..
+            } = method
+            {
+                let owner = format!("{slug}.{name}");
+                match activates_on {
+                    Activation::Always(_) => {
+                        for surface in surfaces {
+                            always_strategies_by_surface
+                                .entry(*surface)
+                                .or_default()
+                                .push(owner.clone());
+                        }
+                    }
+                    Activation::Header { header } => {
+                        let key = header.to_ascii_lowercase();
+                        for surface in surfaces {
+                            header_strategies_by_key
+                                .entry((key.clone(), *surface))
+                                .or_default()
+                                .push(owner.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Multiple Always-active strategies on the same surface: ordering
+    // of `registry.collections` determines which one wins. Operators
+    // rarely want this; prefer a header discriminator to bind each
+    // strategy to its own request signal.
+    for (surface, owners) in &always_strategies_by_surface {
+        if owners.len() > 1 {
+            findings.push(
+                Finding::new(format!(
+                    "Multiple always-active auth strategies on surface {surface:?}: {} — \
+                     request authentication depends on registration order",
+                    owners.join(", ")
+                ))
+                .with_hint(
+                    "Bind each strategy to its own request signal via \
+                     `activates_on = { header = \"x-...\" }`.",
+                ),
+            );
+        }
+    }
+
+    // Multiple header-activated strategies bound to the *same* header
+    // on the *same* surface: identical situation as the always case
+    // — HashMap iteration order picks the winner non-deterministically.
+    // Detected separately because a header discriminator that's used
+    // by exactly one strategy is fine; the collision is the issue.
+    for ((header, surface), owners) in &header_strategies_by_key {
+        if owners.len() > 1 {
+            findings.push(
+                Finding::new(format!(
+                    "Multiple auth strategies bound to header '{header}' on surface \
+                     {surface:?}: {} — request authentication depends on registration order",
+                    owners.join(", ")
+                ))
+                .with_hint(
+                    "Use distinct header names per strategy, or scope each strategy \
+                     to a different `surfaces` list.",
+                ),
+            );
+        }
+    }
+}
+
 fn check_cors(cfg: &CrapConfig, findings: &mut Vec<Finding>) {
     if cfg.cors.allowed_origins.iter().any(|o| o == "*") && cfg.cors.allow_credentials {
         findings.push(
@@ -252,7 +374,7 @@ fn check_email(cfg: &CrapConfig, reg: &Registry, findings: &mut Vec<Finding>) {
     let has_verify_email = reg
         .collections
         .values()
-        .any(|d| d.auth.as_ref().is_some_and(|auth| auth.verify_email));
+        .any(|d| d.auth.as_ref().is_some_and(Auth::requires_verify_email));
 
     if has_verify_email && cfg.email.provider == "log" {
         findings.push(
@@ -434,4 +556,297 @@ fn count_hooks(hooks: &Hooks) -> usize {
         + hooks.before_delete.len()
         + hooks.after_delete.len()
         + hooks.before_broadcast.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{
+        CollectionDefinition,
+        collection::{Activation, Auth, AuthMethod, SurfaceSet},
+    };
+
+    fn registry_with(defs: Vec<CollectionDefinition>) -> Registry {
+        let mut reg = Registry::new();
+        for def in defs {
+            reg.register_collection(def);
+        }
+        reg
+    }
+
+    fn auth_def_with(slug: &str, methods: Vec<AuthMethod>) -> CollectionDefinition {
+        let mut def = CollectionDefinition::new(slug);
+        def.auth = Some(Auth {
+            enabled: true,
+            methods,
+            ..Default::default()
+        });
+        def
+    }
+
+    #[test]
+    fn check_auth_methods_clean_default_methods_emits_nothing() {
+        let reg = registry_with(vec![auth_def_with("users", Auth::default_methods())]);
+        let mut findings = Vec::new();
+        check_auth_methods(&reg, &mut findings);
+        assert!(
+            findings.is_empty(),
+            "default methods should be clean: {:?}",
+            findings.iter().map(|f| &f.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn check_auth_methods_password_without_bearer_warns() {
+        let reg = registry_with(vec![auth_def_with(
+            "users",
+            vec![AuthMethod::password_login()],
+        )]);
+        let mut findings = Vec::new();
+        check_auth_methods(&reg, &mut findings);
+        assert_eq!(findings.len(), 1, "expected exactly one finding");
+        assert!(
+            findings[0].message.contains("password_login but no bearer"),
+            "wrong finding: {}",
+            findings[0].message
+        );
+    }
+
+    #[test]
+    fn check_auth_methods_disabled_auth_skipped() {
+        // enabled = false → not surveyed
+        let mut def = CollectionDefinition::new("users");
+        def.auth = Some(Auth {
+            enabled: false,
+            methods: vec![AuthMethod::password_login()],
+            ..Default::default()
+        });
+        let reg = registry_with(vec![def]);
+        let mut findings = Vec::new();
+        check_auth_methods(&reg, &mut findings);
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn check_auth_methods_multiple_always_strategies_on_same_surface_warns() {
+        let mtls_strategy = AuthMethod::Strategy {
+            name: "mtls".to_string(),
+            authenticate: "hooks.auth.mtls".to_string(),
+            activates_on: Activation::always(),
+            surfaces: SurfaceSet::admin_only(),
+        };
+        let proxy_strategy = AuthMethod::Strategy {
+            name: "proxy".to_string(),
+            authenticate: "hooks.auth.proxy".to_string(),
+            activates_on: Activation::always(),
+            surfaces: SurfaceSet::admin_only(),
+        };
+        let reg = registry_with(vec![
+            auth_def_with("users", vec![AuthMethod::bearer(), mtls_strategy]),
+            auth_def_with("admins", vec![AuthMethod::bearer(), proxy_strategy]),
+        ]);
+        let mut findings = Vec::new();
+        check_auth_methods(&reg, &mut findings);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.message.contains("Multiple always-active")),
+            "expected always-collision warning, got: {:?}",
+            findings.iter().map(|f| &f.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn check_auth_methods_header_activated_strategy_does_not_warn() {
+        let api_key = AuthMethod::strategy_on_header(
+            "api-key",
+            "hooks.auth.api_key",
+            "x-api-key",
+            SurfaceSet::grpc_only(),
+        );
+        let reg = registry_with(vec![auth_def_with(
+            "users",
+            vec![AuthMethod::password_login(), AuthMethod::bearer(), api_key],
+        )]);
+        let mut findings = Vec::new();
+        check_auth_methods(&reg, &mut findings);
+        assert!(findings.is_empty(), "header-discriminated strategy is fine");
+    }
+
+    #[test]
+    fn check_auth_methods_header_overlap_across_collections_warns() {
+        // Two different collections both register a strategy bound
+        // to the same header on the same surface. Whichever fires
+        // first depends on HashMap iteration order — almost always
+        // a config mistake.
+        let mk_strategy = |name: &str| {
+            AuthMethod::strategy_on_header(
+                name,
+                "hooks.auth.api_key",
+                "x-api-key",
+                SurfaceSet::grpc_only(),
+            )
+        };
+        let reg = registry_with(vec![
+            auth_def_with(
+                "users",
+                vec![
+                    AuthMethod::password_login(),
+                    AuthMethod::bearer(),
+                    mk_strategy("api-key"),
+                ],
+            ),
+            auth_def_with(
+                "service_accounts",
+                vec![
+                    AuthMethod::password_login(),
+                    AuthMethod::bearer(),
+                    mk_strategy("svc-key"),
+                ],
+            ),
+        ]);
+        let mut findings = Vec::new();
+        check_auth_methods(&reg, &mut findings);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.message.contains("strategies bound to header 'x-api-key'")),
+            "expected header-overlap warning, got: {:?}",
+            findings.iter().map(|f| &f.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn check_auth_methods_header_case_difference_still_collides() {
+        // `X-API-KEY` and `x-api-key` are the same HTTP header.
+        // Activation matching lowercases for comparison; the status
+        // check must do the same to catch operator-typo collisions.
+        let reg = registry_with(vec![
+            auth_def_with(
+                "users",
+                vec![
+                    AuthMethod::password_login(),
+                    AuthMethod::bearer(),
+                    AuthMethod::strategy_on_header(
+                        "lower",
+                        "hooks.auth.lower",
+                        "x-api-key",
+                        SurfaceSet::grpc_only(),
+                    ),
+                ],
+            ),
+            auth_def_with(
+                "service_accounts",
+                vec![
+                    AuthMethod::password_login(),
+                    AuthMethod::bearer(),
+                    AuthMethod::strategy_on_header(
+                        "upper",
+                        "hooks.auth.upper",
+                        "X-API-KEY",
+                        SurfaceSet::grpc_only(),
+                    ),
+                ],
+            ),
+        ]);
+        let mut findings = Vec::new();
+        check_auth_methods(&reg, &mut findings);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.message.contains("strategies bound to header 'x-api-key'")),
+            "case-different header names should still collide: {:?}",
+            findings.iter().map(|f| &f.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn check_auth_methods_distinct_headers_do_not_collide() {
+        // Two strategies, each bound to its own header → no warning.
+        let reg = registry_with(vec![auth_def_with(
+            "users",
+            vec![
+                AuthMethod::password_login(),
+                AuthMethod::bearer(),
+                AuthMethod::strategy_on_header(
+                    "api-key",
+                    "hooks.auth.api_key",
+                    "x-api-key",
+                    SurfaceSet::grpc_only(),
+                ),
+                AuthMethod::strategy_on_header(
+                    "sso",
+                    "hooks.auth.sso",
+                    "x-sso-assertion",
+                    SurfaceSet::admin_only(),
+                ),
+            ],
+        )]);
+        let mut findings = Vec::new();
+        check_auth_methods(&reg, &mut findings);
+        assert!(
+            findings.is_empty(),
+            "distinct headers should not collide: {:?}",
+            findings.iter().map(|f| &f.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn check_auth_methods_same_header_different_surfaces_does_not_collide() {
+        // Same header name but the strategies are scoped to different
+        // surfaces — they never race because they fire on different
+        // request paths.
+        let reg = registry_with(vec![
+            auth_def_with(
+                "users",
+                vec![
+                    AuthMethod::password_login(),
+                    AuthMethod::bearer(),
+                    AuthMethod::strategy_on_header(
+                        "admin-key",
+                        "hooks.auth.admin",
+                        "x-api-key",
+                        SurfaceSet::admin_only(),
+                    ),
+                ],
+            ),
+            auth_def_with(
+                "service_accounts",
+                vec![
+                    AuthMethod::password_login(),
+                    AuthMethod::bearer(),
+                    AuthMethod::strategy_on_header(
+                        "grpc-key",
+                        "hooks.auth.grpc",
+                        "x-api-key",
+                        SurfaceSet::grpc_only(),
+                    ),
+                ],
+            ),
+        ]);
+        let mut findings = Vec::new();
+        check_auth_methods(&reg, &mut findings);
+        assert!(
+            findings.is_empty(),
+            "same header on different surfaces should not collide: {:?}",
+            findings.iter().map(|f| &f.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn check_auth_methods_single_always_strategy_does_not_warn() {
+        // Only the multi-collection collision is a warning; one
+        // always-active strategy on its own is the operator's call
+        // (the startup validator already logs an info-level warning).
+        let reg = registry_with(vec![auth_def_with(
+            "users",
+            vec![
+                AuthMethod::bearer(),
+                AuthMethod::strategy_always("mtls", "hooks.auth.mtls"),
+            ],
+        )]);
+        let mut findings = Vec::new();
+        check_auth_methods(&reg, &mut findings);
+        assert!(findings.is_empty());
+    }
 }

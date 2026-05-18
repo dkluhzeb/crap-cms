@@ -24,7 +24,7 @@ use crate::{
         handlers::auth::SESSION_COOKIE,
         server::{extract_cookie, load_auth_user},
     },
-    core::{AuthUser, Document, auth::validate_token},
+    core::{AuthUser, Document},
     db::{AccessResult, DbPool},
     hooks::HookRunner,
 };
@@ -123,8 +123,12 @@ pub async fn serve_upload(
 }
 
 /// Try to authenticate from a raw token string (cookie value or Bearer token).
+/// Routes through `state.token_provider` (not the free `validate_token`
+/// function) so a future swap of the JWT backend / signing key flows
+/// here automatically — the older `jwt_secret`-direct form silently
+/// 401'd everything in that scenario.
 fn auth_from_token(token: &str, state: &AdminState) -> Option<AuthUser> {
-    let claims = validate_token(token, state.jwt_secret.as_ref()).ok()?;
+    let claims = state.token_provider.validate_token(token).ok()?;
     load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale)
 }
 

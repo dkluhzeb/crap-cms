@@ -70,10 +70,7 @@ fn make_users_def() -> CollectionDefinition {
             .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth {
-        enabled: true,
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled());
     def
 }
 
@@ -180,7 +177,7 @@ fn setup_app_with_config(
         )
         .unwrap(),
         token_provider: std::sync::Arc::new(crap_cms::core::auth::JwtTokenProvider::new(
-            "test-secret",
+            "test-jwt-secret",
         )),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,
@@ -220,8 +217,17 @@ fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
 }
 
 fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
+    // `update_password` bumps `_session_version` to 1 the moment a password
+    // is set; the evaluator rejects a default-built Claims (session_version
+    // = 0) as `Invalid(StaleSession)`. Read the user's current version so
+    // the test cookie matches the DB.
+    let conn = app.pool.get().unwrap();
+    let session_version =
+        crap_cms::db::query::auth::get_session_version(&conn, "users", user_id).unwrap_or(0);
+    drop(conn);
     let claims = auth::Claims::builder(user_id, "users")
         .email(email)
+        .session_version(session_version)
         .exp((chrono::Utc::now().timestamp() as u64) + 3600)
         .build()
         .unwrap();

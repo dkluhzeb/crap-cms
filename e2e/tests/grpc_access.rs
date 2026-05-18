@@ -91,10 +91,7 @@ fn make_users_def() -> CollectionDefinition {
         FieldDefinition::builder("name", FieldType::Text).build(),
         FieldDefinition::builder("role", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth {
-        enabled: true,
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled());
     def
 }
 

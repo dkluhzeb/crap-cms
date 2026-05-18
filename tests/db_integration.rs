@@ -421,11 +421,7 @@ fn make_users_def() -> CollectionDefinition {
         ..Default::default()
     };
     def.fields = vec![email, name];
-    def.auth = Some(Auth {
-        enabled: true,
-        verify_email: true,
-        ..Auth::default()
-    });
+    def.auth = Some(Auth::enabled().map_password_login(|b| b.verify_email(true)));
     def
 }
 

@@ -4,6 +4,7 @@ use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
 
+use crate::core::collection::Auth;
 use crate::{
     api::{content, handlers::ContentService},
     core::CollectionDefinition,
@@ -59,7 +60,7 @@ impl ContentService {
             )));
         }
 
-        if !def.auth.as_ref().is_some_and(|a| a.verify_email) {
+        if !def.auth.as_ref().is_some_and(Auth::requires_verify_email) {
             return Err(Status::invalid_argument(
                 "Email verification is not enabled for this collection",
             ));

@@ -1,5 +1,6 @@
 //! Unpublish handler — revert a published document to draft status.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::task;
@@ -24,6 +25,7 @@ use crate::{
 struct UnpublishBlockingInput {
     pool: DbPool,
     runner: HookRunner,
+    headers: HashMap<String, String>,
     token_provider: SharedTokenProvider,
     registry: Arc<Registry>,
     db_kind: String,
@@ -47,8 +49,10 @@ fn unpublish_blocking(input: UnpublishBlockingInput) -> Result<content::Document
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
 
     let auth_user = ContentService::resolve_auth_user(
-        input.token,
+        input.token.as_deref(),
+        &input.headers,
         &*input.token_provider,
+        &input.runner,
         &input.registry,
         &conn,
     )?;
@@ -78,6 +82,7 @@ impl ContentService {
     pub(in crate::api::handlers) async fn unpublish_impl(
         &self,
         token: Option<String>,
+        headers: HashMap<String, String>,
         req: &content::UpdateRequest,
         def: &CollectionDefinition,
     ) -> Result<Response<content::UpdateResponse>, Status> {
@@ -94,6 +99,7 @@ impl ContentService {
             def: def.clone(),
             locale_config: self.locale_config.clone(),
             token,
+            headers,
         };
 
         let proto_doc = task::spawn_blocking(move || unpublish_blocking(input))

@@ -1,6 +1,6 @@
 //! `ListJobRuns` handler — list job runs with optional filters.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use tokio::task;
 use tonic::{Request, Response, Status};
@@ -11,6 +11,7 @@ use crate::{
     api::{content, handlers::ContentService},
     core::{JobRun, Registry, SharedTokenProvider},
     db::DbPool,
+    hooks::HookRunner,
     service::{self, PaginatedResult},
 };
 
@@ -20,8 +21,10 @@ use super::job_run_to_proto;
 struct ListJobRunsBlockingInput {
     pool: DbPool,
     token_provider: SharedTokenProvider,
+    hook_runner: HookRunner,
     registry: Arc<Registry>,
     token: Option<String>,
+    headers: HashMap<String, String>,
     slug: Option<String>,
     status: Option<String>,
     limit: i64,
@@ -38,9 +41,14 @@ fn list_job_runs_blocking(
         .inspect_err(|e| error!("ListJobRuns pool error: {}", e))
         .map_err(|_| Status::internal("Internal error"))?;
 
+    let token = input.token;
+    let headers = input.headers;
+
     let auth_user = ContentService::resolve_auth_user(
-        input.token,
+        token.as_deref(),
+        &headers,
         &*input.token_provider,
+        &input.hook_runner,
         &input.registry,
         &conn,
     )?;
@@ -70,13 +78,16 @@ impl ContentService {
     ) -> Result<Response<content::ListJobRunsResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
+        let headers = Self::extract_metadata_headers(&metadata);
         let req = request.into_inner();
 
         let input = ListJobRunsBlockingInput {
             pool: self.pool.clone(),
             token_provider: self.token_provider.clone(),
+            hook_runner: self.hook_runner.clone(),
             registry: Arc::clone(&self.registry),
             token,
+            headers,
             slug: req.slug.clone(),
             status: req.status.clone(),
             limit: req.limit.unwrap_or(50).min(1000),

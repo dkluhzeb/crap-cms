@@ -367,7 +367,15 @@ mod tests {
         make_collection(tmp.path(), "users", None, &opts).unwrap();
 
         let content = fs::read_to_string(tmp.path().join("collections/users.lua")).unwrap();
-        assert!(content.contains("-- Full auth config"));
+        // The auth section should: (a) emit the shorthand `auth = true`,
+        // (b) include the methods-list example for customization, and
+        // (c) use the modern types (password_login / bearer / session_cookie),
+        // NOT the removed `strategies = {}` / top-level `verify_email` shape.
+        assert!(content.contains("auth = true"));
+        assert!(content.contains("crap.auth.with_defaults"));
+        assert!(content.contains("type = \"password_login\""));
+        assert!(content.contains("type = \"bearer\""));
+        assert!(!content.contains("strategies = {}"));
     }
 
     // == Nested field generation =========================================

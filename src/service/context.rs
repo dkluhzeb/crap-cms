@@ -5,6 +5,7 @@ use std::borrow::Cow;
 use anyhow::{Context as _, anyhow};
 use tracing::warn;
 
+use crate::core::collection::Auth;
 use crate::{
     config::LocaleConfig,
     core::{
@@ -261,7 +262,7 @@ impl<'a> ServiceContext<'a> {
         };
 
         let should_verify =
-            def.is_auth_collection() && def.auth.as_ref().is_some_and(|a| a.verify_email);
+            def.is_auth_collection() && def.auth.as_ref().is_some_and(Auth::requires_verify_email);
 
         if !should_verify {
             return;

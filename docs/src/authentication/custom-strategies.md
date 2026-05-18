@@ -1,34 +1,56 @@
 # Custom Strategies
 
-Custom auth strategies let you authenticate users via mechanisms other than password login — API keys, LDAP, SSO headers, etc.
+Custom auth strategies let you authenticate users via mechanisms other than password login — API keys, LDAP, SSO headers, etc. They are one variant of the `auth.methods` list (see [Auth Methods](auth-methods.md) for the overall model).
 
 ## Configuration
 
 ```lua
 crap.collections.define("users", {
     auth = {
-        strategies = {
-            {
-                name = "api-key",
-                authenticate = "hooks.auth.api_key_check",
-            },
-            {
-                name = "sso",
-                authenticate = "hooks.auth.sso_check",
-            },
-        },
-        -- disable_local = true,  -- optionally disable password login
+        enabled = true,
+        methods = crap.auth.with_defaults({
+            -- API-key strategy: only fires when `x-api-key` header is present.
+            { type = "strategy",
+              name = "api-key",
+              authenticate = "hooks.auth.api_key_check",
+              activates_on = { header = "x-api-key" },
+              surfaces = { "grpc", "admin" } },
+            -- SSO strategy: only fires when the SSO assertion header is present.
+            { type = "strategy",
+              name = "sso",
+              authenticate = "hooks.auth.sso_check",
+              activates_on = { header = "x-sso-assertion" },
+              surfaces = { "admin" } },
+        }),
     },
     -- ...
 })
+```
+
+To disable password login entirely (machine-to-machine collection), omit `password_login` from the methods list:
+
+```lua
+auth = {
+    enabled = true,
+    methods = {
+        { type = "strategy",
+          name = "svc-key",
+          authenticate = "hooks.auth.svc_key",
+          activates_on = { header = "x-service-key" },
+          surfaces = { "grpc" } },
+    },
+}
 ```
 
 ## Strategy Properties
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `name` | string | Strategy name for logging and identification |
-| `authenticate` | string | Lua function ref in `module.function` format |
+| `type` | `"strategy"` | Discriminator. Required. |
+| `name` | string | Strategy name for logging and identification. |
+| `authenticate` | string | Lua function ref in `module.function` format. |
+| `activates_on` | table | When the strategy fires: `{ header = "x-..." }` or `{ always = true }`. Required. |
+| `surfaces` | string[] | Host transports the strategy is allowed on (default: `{"admin"}`). |
 
 ## Authenticate Function
 
@@ -74,29 +96,58 @@ Strategy functions have full CRUD access (via the same TxContext pattern as hook
 
 ## Execution Order
 
-In admin UI middleware:
+For every request (admin or gRPC):
 
-1. JWT cookie check (fast path — always runs first)
-2. Custom strategies in definition order
-3. Redirect to `/admin/login` (if all fail)
+1. The evaluator walks every registered auth collection's `methods` in declaration order.
+2. For each method, it checks: (a) the surface filter includes the current request's surface, and (b) the activation discriminator matches (for `strategy`: the named header is present, or `always = true`).
+3. The first method that matches and produces a principal wins.
+4. If no method matches, the request is anonymous.
+
+Each strategy is bound to its own activation signal — cross-collection accidental authentication is structurally impossible.
 
 ## Disabling Password Login
 
-Set `disable_local = true` to hide the password login form:
+Omit `password_login` from the methods list:
 
 ```lua
 auth = {
-    disable_local = true,
-    strategies = {
-        { name = "sso", authenticate = "hooks.auth.sso_check" },
+    enabled = true,
+    methods = {
+        { type = "strategy", name = "sso",
+          authenticate = "hooks.auth.sso_check",
+          activates_on = { header = "x-sso-assertion" },
+          surfaces = { "admin" } },
     },
 }
 ```
 
-When `disable_local` is true:
-- The login form shows a message instead of email/password inputs
-- Only custom strategies can authenticate users
-- The `Login` gRPC RPC is effectively disabled for this collection
+When `password_login` is absent:
+- The login form shows a message instead of email/password inputs.
+- Only the listed strategy methods can authenticate users.
+- The `Login` gRPC RPC for this collection returns `INVALID_ARGUMENT`.
+
+Omit `bearer` similarly to refuse JWT authentication (rarely useful — usually paired with omitting `password_login` since the JWT can't be issued without it).
+
+## Performance + safety notes
+
+- **No per-call timeout.** Strategy hooks run synchronously inside a
+  spawn-blocking pool. mlua doesn't expose a clean interruption API,
+  and abandoning the worker would leak the blocking thread. A hostile
+  or buggy strategy can hang the request indefinitely. Keep strategies
+  fast (a DB lookup or two, no network calls), and prefer
+  header-discriminated activation over `always = true` so slow code
+  only runs when the activating header is present.
+- **Strategy returns are sanity-checked.** The evaluator refuses any
+  returned document with an empty `id` (would silently break session-
+  version lookups downstream) and re-runs `is_locked` / `verify_email`
+  against the returned doc (so a strategy can't authenticate a locked
+  or unverified user even if the strategy code overlooks the check).
+- **No session-version on strategy auth.** Bearer / cookie paths
+  reject a JWT whose `session_version` doesn't match the user's
+  current version; strategies don't issue a JWT to the client (the
+  Claims object is internal-only), so there's nothing to compare
+  against. Lock the user (`crap-cms user lock -e ...`) to revoke
+  strategy access — `is_locked` is the cross-method kill switch.
 
 ## Auth Callbacks (OAuth2 / OIDC)
 

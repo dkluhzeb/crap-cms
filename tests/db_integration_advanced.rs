@@ -106,11 +106,7 @@ fn make_users_def() -> CollectionDefinition {
             .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth {
-        enabled: true,
-        verify_email: true,
-        ..Auth::default()
-    });
+    def.auth = Some(Auth::enabled().map_password_login(|b| b.verify_email(true)));
     def
 }
 
@@ -442,11 +438,7 @@ fn alter_adds_auth_columns_on_upgrade() {
     .expect("First sync");
 
     // Upgrade to auth
-    def.auth = Some(Auth {
-        enabled: true,
-        verify_email: true,
-        ..Auth::default()
-    });
+    def.auth = Some(Auth::enabled().map_password_login(|b| b.verify_email(true)));
     {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());

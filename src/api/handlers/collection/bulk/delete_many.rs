@@ -1,5 +1,6 @@
 //! Bulk `DeleteMany` RPC handler.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::task;
@@ -24,6 +25,7 @@ use super::helpers::build_bulk_filters;
 struct DeleteManyBlockingInput {
     pool: DbPool,
     hook_runner: HookRunner,
+    headers: HashMap<String, String>,
     token_provider: SharedTokenProvider,
     registry: Arc<Registry>,
     db_kind: String,
@@ -46,8 +48,10 @@ fn delete_many_blocking(input: DeleteManyBlockingInput) -> Result<DeleteManyResu
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
 
     let auth_user = ContentService::resolve_auth_user(
-        input.token,
+        input.token.as_deref(),
+        &input.headers,
         &*input.token_provider,
+        &input.hook_runner,
         &input.registry,
         &conn,
     )?;
@@ -110,6 +114,7 @@ impl ContentService {
     ) -> Result<Response<content::DeleteManyResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
+        let headers = Self::extract_metadata_headers(&metadata);
         let req = request.into_inner();
         let mut def = self.get_collection_def(&req.collection)?;
         let run_hooks = req.hooks.unwrap_or(true);
@@ -133,6 +138,7 @@ impl ContentService {
             event_transport: self.event_transport.clone(),
             cache: Some(self.cache.clone()),
             token,
+            headers,
             run_hooks,
         };
 

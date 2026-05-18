@@ -113,8 +113,12 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     }
     out.push('\n');
 
-    // crap.doc.* — returned document (id + timestamps)
-    w!(out, "---@class crap.doc.{pascal}");
+    // crap.doc.* — returned document (id + timestamps). Inherits
+    // from crap.Document so functions annotated `@return crap.Document`
+    // (e.g. crap.collections.find_by_id, custom auth strategies)
+    // accept the per-collection types without union-mismatch
+    // diagnostics from lua-language-server.
+    w!(out, "---@class crap.doc.{pascal} : crap.Document");
     w!(out, "---@field id string");
     for f in &col.fields {
         write_field(out, f, &pascal);
@@ -211,8 +215,9 @@ fn render_global(out: &mut String, global: &GlobalDefinition) {
     }
     out.push('\n');
 
-    // crap.global_doc.* — always has timestamps
-    w!(out, "---@class crap.global_doc.{pascal}");
+    // crap.global_doc.* — always has timestamps. Same subclass
+    // reasoning as `crap.doc.{pascal}` above.
+    w!(out, "---@class crap.global_doc.{pascal} : crap.Document");
     w!(out, "---@field id string");
     for f in &global.fields {
         write_field(out, f, &pascal);
@@ -312,7 +317,7 @@ mod tests {
         assert!(out.contains("---@field content? string"));
         assert!(out.contains("---@field status \"draft\" | \"published\""));
         assert!(out.contains("---@field active? boolean"));
-        assert!(out.contains("---@class crap.doc.Posts"));
+        assert!(out.contains("---@class crap.doc.Posts : crap.Document"));
         assert!(out.contains("---@field id string"));
         assert!(out.contains("---@field created_at? string"));
         assert!(out.contains("---@field updated_at? string"));
@@ -350,7 +355,7 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
 
-        assert!(out.contains("---@class crap.doc.Tags"));
+        assert!(out.contains("---@class crap.doc.Tags : crap.Document"));
         assert!(!out.contains("created_at"));
     }
 
@@ -365,7 +370,7 @@ mod tests {
         assert!(out.contains("---@class crap.global_data.SiteSettings"));
         assert!(out.contains("---@field site_name string"));
         assert!(out.contains("---@field tagline? string"));
-        assert!(out.contains("---@class crap.global_doc.SiteSettings"));
+        assert!(out.contains("---@class crap.global_doc.SiteSettings : crap.Document"));
         assert!(out.contains("---@class crap.hook.global_site_settings"));
         assert!(out.contains("---@class crap.field_hook.global_site_settings"));
     }

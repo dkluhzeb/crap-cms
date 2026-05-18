@@ -160,11 +160,7 @@ async fn mfa_wrong_code_rejected() {
 
 fn make_users_def_mfa_email() -> crap_cms::core::collection::CollectionDefinition {
     let mut def = make_users_def();
-    def.auth = Some(Auth {
-        enabled: true,
-        mfa: MfaMode::Email,
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled().map_password_login(|b| b.mfa(MfaMode::Email)));
     def
 }
 

@@ -4,6 +4,7 @@ use tokio::task;
 use tonic::{Request, Response};
 use tracing::error;
 
+use crate::core::collection::Auth;
 use crate::{
     api::{content, handlers::ContentService},
     config::{EmailConfig, ServerConfig},
@@ -44,8 +45,8 @@ impl ContentService {
         };
 
         if !def.is_auth_collection()
-            || !def.auth.as_ref().is_some_and(|a| a.forgot_password)
-            || def.auth.as_ref().is_some_and(|a| a.disable_local)
+            || !def.auth.as_ref().is_some_and(Auth::forgot_password_enabled)
+            || !def.auth.as_ref().is_some_and(Auth::password_login_enabled)
         {
             return ok_response;
         }

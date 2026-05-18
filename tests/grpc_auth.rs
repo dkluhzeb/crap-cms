@@ -69,10 +69,7 @@ fn make_users_def() -> CollectionDefinition {
             .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth {
-        enabled: true,
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled());
     def
 }
 
@@ -169,7 +166,7 @@ fn setup_service(
             ))
             .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
             .token_provider(std::sync::Arc::new(
-                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+                crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
             ))
             .password_provider(std::sync::Arc::new(
                 crap_cms::core::auth::Argon2PasswordProvider,
@@ -197,11 +194,7 @@ fn make_verify_users_def() -> CollectionDefinition {
             .unique(true)
             .build(),
     ];
-    def.auth = Some(Auth {
-        enabled: true,
-        verify_email: true,
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled().map_password_login(|b| b.verify_email(true)));
     def
 }
 
@@ -304,7 +297,7 @@ async fn login_token_carries_auth_time() {
 
     let after = chrono::Utc::now().timestamp() as u64;
 
-    let provider = JwtTokenProvider::new("test-secret");
+    let provider = JwtTokenProvider::new("test-jwt-secret");
     let claims = provider
         .validate_token(&resp.token)
         .expect("token must validate");
@@ -543,8 +536,8 @@ async fn forgot_password_not_enabled() {
     // ForgotPassword returns success even when forgot_password is disabled to
     // avoid leaking collection configuration details to potential attackers.
     let mut def = make_users_def();
-    if let Some(ref mut auth) = def.auth {
-        auth.forgot_password = false;
+    if let Some(auth) = def.auth.take() {
+        def.auth = Some(auth.map_password_login(|b| b.forgot_password(false)));
     }
     let ts = setup_service(vec![def], vec![]);
 

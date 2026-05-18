@@ -12,6 +12,7 @@ use axum::{
 use chrono::Utc;
 use ipnet::IpNet;
 
+use crate::core::collection::Auth;
 use crate::{
     admin::{
         AdminState,
@@ -118,7 +119,9 @@ pub(in crate::admin::handlers) fn login_error(
     render_page(state, "auth/login", &ctx)
 }
 
-/// Check if all auth collections have `disable_local` = true.
+/// Check if every auth collection has password-login turned off
+/// (used by the login page to decide whether to render the
+/// email/password inputs at all).
 pub(in crate::admin::handlers) fn all_disable_local(state: &AdminState) -> bool {
     let auth_collections: Vec<_> = state
         .registry
@@ -133,7 +136,7 @@ pub(in crate::admin::handlers) fn all_disable_local(state: &AdminState) -> bool 
 
     auth_collections
         .iter()
-        .all(|def| def.auth.as_ref().is_some_and(|a| a.disable_local))
+        .all(|def| !def.auth.as_ref().is_some_and(Auth::password_login_enabled))
 }
 
 /// Check if "forgot password?" link should show on login page.
@@ -147,7 +150,7 @@ pub(in crate::admin::handlers) fn show_forgot_password(state: &AdminState) -> bo
         .collections
         .values()
         .filter(|def| def.is_auth_collection())
-        .any(|def| def.auth.as_ref().is_some_and(|a| a.forgot_password))
+        .any(|def| def.auth.as_ref().is_some_and(Auth::forgot_password_enabled))
 }
 
 pub(in crate::admin::handlers) fn get_auth_collections(state: &AdminState) -> Vec<AuthCollection> {

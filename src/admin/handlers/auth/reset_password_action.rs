@@ -9,6 +9,7 @@ use axum::{
 use tokio::task;
 use tracing::error;
 
+use crate::core::collection::Auth;
 use crate::{
     admin::{
         AdminState,
@@ -57,7 +58,7 @@ fn consume_reset_token(
             continue;
         }
 
-        if def.auth.as_ref().is_some_and(|a| a.disable_local) {
+        if !def.auth.as_ref().is_some_and(Auth::password_login_enabled) {
             continue;
         }
 

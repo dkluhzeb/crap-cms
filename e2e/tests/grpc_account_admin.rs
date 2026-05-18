@@ -69,18 +69,14 @@ fn make_users_def() -> CollectionDefinition {
     // `verify_account_returns_failed_precondition_without_verify_email`
     // test below exercises the opposite case to pin the preflight
     // check added to those handlers.
-    def.auth = Some(Auth {
-        enabled: true,
-        verify_email: true,
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled().map_password_login(|b| b.verify_email(true)));
     def
 }
 
 fn make_users_def_no_verify_email() -> CollectionDefinition {
     let mut def = make_users_def();
-    if let Some(ref mut auth) = def.auth {
-        auth.verify_email = false;
+    if let Some(auth) = def.auth.take() {
+        def.auth = Some(auth.map_password_login(|b| b.verify_email(false)));
     }
     def
 }

@@ -15,8 +15,12 @@
 
 use anyhow::{Result, bail};
 use mlua::Lua;
+use tracing::warn;
 
-use crate::core::{Access, FieldDefinition, Hooks, Registry};
+use crate::core::{
+    Access, FieldDefinition, Hooks, Registry, Slug,
+    collection::{Activation, AuthMethod, Surface},
+};
 use crate::hooks::lifecycle::resolve_hook_function;
 
 /// Validate every statically-known hook and access reference in the registry.
@@ -86,6 +90,173 @@ fn check_hooks(lua: &Lua, hooks: &Hooks, source: &str, out: &mut Vec<String>) {
             if resolve_hook_function(lua, r).is_err() {
                 out.push(format!("{source}: {kind}: '{r}'"));
             }
+        }
+    }
+}
+
+/// Validate per-collection `auth.methods` configurations.
+///
+/// Hard errors (boot fails):
+/// - `enabled = true` with no methods listed.
+/// - Duplicate `password_login` or `bearer` on one collection.
+/// - Any method with an empty `surfaces` set — would silently
+///   never fire on any request, almost certainly a config mistake.
+/// - Strategy with `activates_on = { header = "" }` — would
+///   silently never match (no HTTP header has an empty name).
+/// - Strategy with empty `authenticate` — no Lua hook to invoke.
+///
+/// Soft warnings (logged, boot continues):
+/// - `Always`-activated strategies (potential footgun — fires on
+///   every request that reaches the surface).
+/// - Multiple `Always` strategies sharing a surface (request-
+///   authentication outcome depends on registration order).
+pub fn validate_auth_methods(registry: &Registry) -> Result<()> {
+    let mut errors: Vec<String> = Vec::new();
+    let mut always_by_surface: std::collections::HashMap<Surface, Vec<(String, String)>> =
+        std::collections::HashMap::new();
+
+    for (slug, def) in &registry.collections {
+        let Some(auth) = def.auth.as_ref() else {
+            continue;
+        };
+        if !auth.enabled {
+            continue;
+        }
+        if auth.methods.is_empty() {
+            errors.push(format!(
+                "collection '{slug}': auth.enabled is true but auth.methods is empty. \
+                 Use crap.auth.default_methods() for the standard set."
+            ));
+            continue;
+        }
+        check_one_collection_methods(slug, &auth.methods, &mut errors, &mut always_by_surface);
+    }
+
+    warn_on_always_cross_collection_collisions(&always_by_surface);
+
+    if errors.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "Auth method configuration errors:\n  - {}",
+        errors.join("\n  - ")
+    );
+}
+
+/// Walk a single collection's methods, collecting per-method shape
+/// errors and tracking `Always`-active strategies for the cross-
+/// collection collision warning emitted by the caller.
+fn check_one_collection_methods(
+    slug: &Slug,
+    methods: &[AuthMethod],
+    errors: &mut Vec<String>,
+    always_by_surface: &mut std::collections::HashMap<Surface, Vec<(String, String)>>,
+) {
+    let mut password_count = 0;
+    let mut bearer_count = 0;
+    for m in methods {
+        if let Some(s) = method_surfaces(m)
+            && s.is_empty()
+        {
+            errors.push(format!(
+                "collection '{slug}': method has empty `surfaces` list — \
+                 it can never fire. Drop the method or list at least one surface."
+            ));
+        }
+        match m {
+            AuthMethod::PasswordLogin { .. } => password_count += 1,
+            AuthMethod::Bearer { .. } => bearer_count += 1,
+            AuthMethod::Strategy {
+                name,
+                authenticate,
+                activates_on,
+                surfaces,
+            } => check_strategy_shape(
+                slug,
+                name,
+                authenticate,
+                activates_on,
+                surfaces,
+                errors,
+                always_by_surface,
+            ),
+            AuthMethod::SessionCookie { .. } => {}
+        }
+    }
+    if password_count > 1 {
+        errors.push(format!(
+            "collection '{slug}': multiple password_login methods declared (one is enough)."
+        ));
+    }
+    if bearer_count > 1 {
+        errors.push(format!(
+            "collection '{slug}': multiple bearer methods declared (one is enough)."
+        ));
+    }
+}
+
+fn method_surfaces(m: &AuthMethod) -> Option<&crate::core::collection::SurfaceSet> {
+    match m {
+        AuthMethod::PasswordLogin { .. } => None,
+        AuthMethod::Bearer { surfaces }
+        | AuthMethod::SessionCookie { surfaces }
+        | AuthMethod::Strategy { surfaces, .. } => Some(surfaces),
+    }
+}
+
+fn check_strategy_shape(
+    slug: &Slug,
+    name: &str,
+    authenticate: &str,
+    activates_on: &Activation,
+    surfaces: &crate::core::collection::SurfaceSet,
+    errors: &mut Vec<String>,
+    always_by_surface: &mut std::collections::HashMap<Surface, Vec<(String, String)>>,
+) {
+    if authenticate.trim().is_empty() {
+        errors.push(format!(
+            "collection '{slug}': strategy '{name}' has empty `authenticate` \
+             — no Lua hook to invoke."
+        ));
+    }
+    if let Activation::Header { header } = activates_on
+        && header.trim().is_empty()
+    {
+        errors.push(format!(
+            "collection '{slug}': strategy '{name}' has empty \
+             `activates_on.header` — no HTTP header has an empty \
+             name, so the strategy could never fire."
+        ));
+    }
+    if matches!(activates_on, Activation::Always(_)) {
+        warn!(
+            "collection '{slug}': strategy '{name}' is always-active on every request. \
+             Consider a header discriminator for safer scoping."
+        );
+        for surface in surfaces {
+            always_by_surface
+                .entry(*surface)
+                .or_default()
+                .push((slug.to_string(), name.to_string()));
+        }
+    }
+}
+
+fn warn_on_always_cross_collection_collisions(
+    always_by_surface: &std::collections::HashMap<Surface, Vec<(String, String)>>,
+) {
+    for (surface, owners) in always_by_surface {
+        if owners.len() > 1 {
+            let list = owners
+                .iter()
+                .map(|(s, n)| format!("'{s}'.'{n}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            warn!(
+                "multiple always-active strategies on surface {surface:?}: {list}. \
+                 Request authentication may depend on registration order — prefer \
+                 header discriminators."
+            );
         }
     }
 }
@@ -356,5 +527,100 @@ mod tests {
         let msg = format!("{err:#}");
         assert!(msg.contains("access.read"), "expected kind: {msg}");
         assert!(msg.contains("hooks.gone"), "expected ref: {msg}");
+    }
+
+    // ── validate_auth_methods footgun tests ────────────────────────
+
+    use crate::core::collection::{Activation, Auth, AuthMethod, SurfaceSet};
+
+    fn auth_def(slug: &str, methods: Vec<AuthMethod>) -> CollectionDefinition {
+        let mut def = CollectionDefinition::new(slug);
+        def.auth = Some(Auth {
+            enabled: true,
+            methods,
+            ..Default::default()
+        });
+        def
+    }
+
+    #[test]
+    fn validate_auth_methods_rejects_empty_surfaces() {
+        let registry = Registry::shared();
+        registry.write().unwrap().register_collection(auth_def(
+            "users",
+            vec![
+                AuthMethod::password_login(),
+                AuthMethod::Bearer {
+                    surfaces: SurfaceSet::from_list(vec![]),
+                },
+            ],
+        ));
+        let err = validate_auth_methods(&registry.read().unwrap()).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("empty `surfaces`"),
+            "expected empty-surfaces error: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_auth_methods_rejects_empty_header_activation() {
+        let registry = Registry::shared();
+        registry.write().unwrap().register_collection(auth_def(
+            "users",
+            vec![
+                AuthMethod::password_login(),
+                AuthMethod::bearer(),
+                AuthMethod::Strategy {
+                    name: "bogus".to_string(),
+                    authenticate: "hooks.auth.bogus".to_string(),
+                    activates_on: Activation::Header {
+                        header: "  ".to_string(),
+                    },
+                    surfaces: SurfaceSet::admin_only(),
+                },
+            ],
+        ));
+        let err = validate_auth_methods(&registry.read().unwrap()).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("empty") && msg.contains("activates_on.header"),
+            "expected empty-header error: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_auth_methods_rejects_empty_authenticate_ref() {
+        let registry = Registry::shared();
+        registry.write().unwrap().register_collection(auth_def(
+            "users",
+            vec![
+                AuthMethod::password_login(),
+                AuthMethod::bearer(),
+                AuthMethod::Strategy {
+                    name: "incomplete".to_string(),
+                    authenticate: String::new(),
+                    activates_on: Activation::always(),
+                    surfaces: SurfaceSet::admin_only(),
+                },
+            ],
+        ));
+        let err = validate_auth_methods(&registry.read().unwrap()).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("empty `authenticate`"),
+            "expected empty-authenticate error: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_auth_methods_accepts_well_formed_default_set() {
+        let registry = Registry::shared();
+        registry
+            .write()
+            .unwrap()
+            .register_collection(auth_def("users", Auth::default_methods()));
+        validate_auth_methods(&registry.read().unwrap())
+            .expect("default methods should pass validation");
     }
 }

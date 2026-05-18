@@ -1,5 +1,6 @@
 //! Find handler — query documents with filters, sorting, and pagination.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::task;
@@ -25,6 +26,7 @@ use crate::api::handlers::proto::pagination_result_to_proto;
 struct FindBlockingInput {
     pool: DbPool,
     runner: HookRunner,
+    headers: HashMap<String, String>,
     token_provider: SharedTokenProvider,
     registry: Arc<Registry>,
     db_kind: String,
@@ -51,8 +53,10 @@ fn find_blocking(
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
 
     let auth_user = ContentService::resolve_auth_user(
-        input.token,
+        input.token.as_deref(),
+        &input.headers,
         &*input.token_provider,
+        &input.runner,
         &input.registry,
         &conn,
     )?;
@@ -140,6 +144,7 @@ impl ContentService {
     ) -> Result<Response<content::FindResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
+        let headers = Self::extract_metadata_headers(&metadata);
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
@@ -179,6 +184,7 @@ impl ContentService {
             pop_cache: self.cache.clone(),
             singleflight: self.populate_singleflight.clone(),
             token,
+            headers,
             find_query,
             locale_ctx,
             select,

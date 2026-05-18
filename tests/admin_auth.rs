@@ -72,10 +72,7 @@ fn make_users_def() -> CollectionDefinition {
         FieldDefinition::builder("name", FieldType::Text).build(),
         FieldDefinition::builder("role", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth {
-        enabled: true,
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled());
     def
 }
 
@@ -169,8 +166,13 @@ fn setup_app_with_config(
             &crap_cms::config::UploadConfig::default(),
         )
         .unwrap(),
+        // Must use the same secret as `jwt_secret` above — `make_auth_cookie`
+        // signs with `state.jwt_secret`, and the unified auth evaluator
+        // verifies via `state.token_provider`. A mismatch would silently
+        // reject every test cookie as `Invalid(BadToken)` and break every
+        // cookie-bound assertion.
         token_provider: std::sync::Arc::new(crap_cms::core::auth::JwtTokenProvider::new(
-            "test-secret",
+            "test-jwt-secret",
         )),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,
@@ -216,9 +218,21 @@ fn create_test_user_with_role(app: &TestApp, email: &str, password: &str, role: 
 }
 
 fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
+    // Read the user's current `_session_version` from the DB — the
+    // evaluator's bearer/cookie path rejects JWTs whose claim doesn't
+    // match (intentional: that's how password changes invalidate live
+    // sessions). `create_test_user` calls `update_password` which
+    // bumps the version to 1, so a default-built Claims (session_version
+    // = 0) would be stale by construction and the cookie path would
+    // return `Invalid(StaleSession)` → 303 redirect to /admin/login.
+    let conn = app.pool.get().unwrap();
+    let session_version = query::get_session_version(&conn, "users", user_id).unwrap();
+    drop(conn);
+
     let claims = auth::Claims::builder(user_id, "users")
         .email(email)
         .exp((chrono::Utc::now().timestamp() as u64) + 3600)
+        .session_version(session_version)
         .build()
         .unwrap();
     let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();
@@ -255,11 +269,7 @@ fn make_verify_users_def() -> CollectionDefinition {
             .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth {
-        enabled: true,
-        verify_email: true,
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled().map_password_login(|b| b.verify_email(true)));
     def
 }
 
@@ -1332,8 +1342,13 @@ end"#,
             &crap_cms::config::UploadConfig::default(),
         )
         .unwrap(),
+        // Must use the same secret as `jwt_secret` above — `make_auth_cookie`
+        // signs with `state.jwt_secret`, and the unified auth evaluator
+        // verifies via `state.token_provider`. A mismatch would silently
+        // reject every test cookie as `Invalid(BadToken)` and break every
+        // cookie-bound assertion.
         token_provider: std::sync::Arc::new(crap_cms::core::auth::JwtTokenProvider::new(
-            "test-secret",
+            "test-jwt-secret",
         )),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,

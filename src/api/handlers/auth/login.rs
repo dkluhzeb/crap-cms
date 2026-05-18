@@ -7,6 +7,7 @@ use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
 
+use crate::core::collection::Auth;
 use crate::{
     api::{
         content,
@@ -26,7 +27,7 @@ struct LoginBlockingInput {
     password: String,
     def: CollectionDefinition,
     check_verify_email: bool,
-    disable_local: bool,
+    allows_password: bool,
     password_provider: SharedPasswordProvider,
     hook_runner: HookRunner,
 }
@@ -43,7 +44,7 @@ fn login_blocking(input: &LoginBlockingInput) -> Result<Option<(Document, u64)>,
         .map_err(|_| Status::internal("Internal error"))?;
 
     // Try local email+password authentication via service layer
-    if !input.disable_local {
+    if input.allows_password {
         let ctx = ServiceContext::collection(&input.slug, &input.def)
             .conn(&conn)
             .build();
@@ -67,9 +68,9 @@ fn login_blocking(input: &LoginBlockingInput) -> Result<Option<(Document, u64)>,
 
     // Fallback: try custom auth strategies
     if let Some(auth) = &input.def.auth {
-        for strategy in &auth.strategies {
+        for strategy in auth.strategies() {
             if let Ok(Some(doc)) = input.hook_runner.run_auth_strategy(
-                &strategy.authenticate,
+                strategy.authenticate,
                 &input.slug,
                 &HashMap::new(),
                 &conn,
@@ -95,7 +96,7 @@ fn login_blocking(input: &LoginBlockingInput) -> Result<Option<(Document, u64)>,
 
     // Equalize timing when all auth methods fail — prevents distinguishing
     // "no valid user" (fast) from "wrong password" (Argon2-slow) via response time.
-    if !input.disable_local {
+    if input.allows_password {
         input.password_provider.dummy_verify();
     }
 
@@ -129,10 +130,10 @@ impl ContentService {
             )));
         }
 
-        let disable_local = def.auth.as_ref().is_some_and(|a| a.disable_local);
-        let has_strategies = def.auth.as_ref().is_some_and(|a| !a.strategies.is_empty());
+        let allows_password = def.auth.as_ref().is_some_and(Auth::password_login_enabled);
+        let has_strategies = def.auth.as_ref().is_some_and(Auth::has_strategies);
 
-        if disable_local && !has_strategies {
+        if !allows_password && !has_strategies {
             return Err(Status::permission_denied(
                 "Local login is disabled for this collection",
             ));
@@ -144,8 +145,8 @@ impl ContentService {
             email: req.email.clone(),
             password: req.password.clone(),
             def: def.clone(),
-            check_verify_email: def.auth.as_ref().is_some_and(|a| a.verify_email),
-            disable_local,
+            check_verify_email: def.auth.as_ref().is_some_and(Auth::requires_verify_email),
+            allows_password,
             password_provider: self.password_provider.clone(),
             hook_runner: self.hook_runner.clone(),
         };

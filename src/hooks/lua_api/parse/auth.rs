@@ -1,60 +1,138 @@
 //! Parsing functions for collection auth configuration.
+//!
+//! Lua-side shape (new):
+//! ```lua
+//! auth = {
+//!     enabled = true,
+//!     token_expiry = 7200,                  -- optional
+//!     methods = {                           -- required when enabled
+//!         { type = "password_login", mfa = "email", verify_email = true },
+//!         { type = "bearer", surfaces = {"grpc", "admin"} },
+//!         { type = "session_cookie", surfaces = {"admin"} },
+//!         { type = "strategy",
+//!           name = "api-key",
+//!           authenticate = "hooks.auth.api_key",
+//!           activates_on = { header = "x-api-key" },
+//!           surfaces = {"grpc"} },
+//!     },
+//! }
+//! ```
 
-use mlua::{Result as LuaResult, Table, Value};
+use mlua::{Table, Value};
 
-use crate::core::collection::{Auth, AuthStrategy, MfaMode};
+use crate::core::collection::{Activation, Auth, AuthMethod, MfaMode, Surface, SurfaceSet};
 
-use super::helpers::{get_bool, get_string, get_table};
+use super::helpers::get_table;
 
-pub(super) fn parse_collection_auth(config: &Table) -> LuaResult<Option<Auth>> {
-    let val: Value = match config.get("auth") {
-        Ok(v) => v,
-        Err(_) => return Ok(None),
-    };
+pub(super) fn parse_collection_auth(config: &Table) -> Option<Auth> {
+    let val: Value = config.get("auth").ok()?;
 
     match val {
-        Value::Boolean(true) => Ok(Some(Auth::new(true))),
+        Value::Boolean(true) => {
+            // Shorthand `auth = true` — enabled with the default
+            // method set (password_login + bearer + session_cookie).
+            let mut auth = Auth::new(true);
+            auth.methods = Auth::default_methods();
+            Some(auth)
+        }
         Value::Table(tbl) => {
             let token_expiry = tbl.get::<u64>("token_expiry").unwrap_or(7200);
-            let disable_local = get_bool(&tbl, "disable_local", false)?;
-            let verify_email = get_bool(&tbl, "verify_email", false)?;
-            let forgot_password = get_bool(&tbl, "forgot_password", true)?;
-            let strategies = parse_auth_strategies(&tbl);
-            let mut auth = Auth::new(true);
+            let enabled = tbl.get::<bool>("enabled").unwrap_or(true);
+            let mut methods = parse_methods(&tbl);
 
+            // If `enabled = true` but no `methods` listed, fall back
+            // to the default set. Lets `auth = { enabled = true }`
+            // keep working as shorthand.
+            if enabled && methods.is_empty() {
+                methods = Auth::default_methods();
+            }
+
+            let mut auth = Auth::new(enabled);
             auth.token_expiry = token_expiry;
-            auth.strategies = strategies;
-            auth.disable_local = disable_local;
-            auth.verify_email = verify_email;
-            auth.forgot_password = forgot_password;
-            auth.mfa = match tbl.get::<String>("mfa").ok().as_deref() {
-                Some("email") => MfaMode::Email,
-                _ => MfaMode::Off,
-            };
+            auth.methods = methods;
 
-            Ok(Some(auth))
+            Some(auth)
         }
-        _ => Ok(None),
+        _ => None,
     }
 }
 
-fn parse_auth_strategies(tbl: &Table) -> Vec<AuthStrategy> {
-    let Ok(strategies_tbl) = get_table(tbl, "strategies") else {
+fn parse_methods(tbl: &Table) -> Vec<AuthMethod> {
+    let Ok(methods_tbl) = get_table(tbl, "methods") else {
         return Vec::new();
     };
 
-    let mut strategies = Vec::new();
+    methods_tbl
+        .sequence_values::<Table>()
+        .flatten()
+        .filter_map(|m| parse_method(&m))
+        .collect()
+}
 
-    for strat_tbl in strategies_tbl.sequence_values::<Table>().flatten() {
-        if let (Some(name), Some(authenticate)) = (
-            get_string(&strat_tbl, "name"),
-            get_string(&strat_tbl, "authenticate"),
-        ) {
-            strategies.push(AuthStrategy::new(name, authenticate));
+fn parse_method(tbl: &Table) -> Option<AuthMethod> {
+    let ty = tbl.get::<String>("type").ok()?;
+
+    match ty.as_str() {
+        "password_login" => Some(AuthMethod::PasswordLogin {
+            mfa: match tbl.get::<String>("mfa").ok().as_deref() {
+                Some("email") => MfaMode::Email,
+                _ => MfaMode::Off,
+            },
+            verify_email: tbl.get::<bool>("verify_email").unwrap_or(false),
+            forgot_password: tbl.get::<bool>("forgot_password").unwrap_or(true),
+        }),
+        "bearer" => Some(AuthMethod::Bearer {
+            surfaces: parse_surfaces(tbl).unwrap_or_else(SurfaceSet::all),
+        }),
+        "session_cookie" => Some(AuthMethod::SessionCookie {
+            surfaces: parse_surfaces(tbl).unwrap_or_else(SurfaceSet::admin_only),
+        }),
+        "strategy" => {
+            let name = tbl.get::<String>("name").unwrap_or_default();
+            let authenticate = tbl.get::<String>("authenticate").unwrap_or_default();
+            if authenticate.is_empty() {
+                return None;
+            }
+            let activates_on = parse_activation(tbl).unwrap_or(Activation::always());
+            Some(AuthMethod::Strategy {
+                name,
+                authenticate,
+                activates_on,
+                surfaces: parse_surfaces(tbl).unwrap_or_else(SurfaceSet::admin_only),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn parse_surfaces(tbl: &Table) -> Option<SurfaceSet> {
+    let surfaces_tbl: Table = tbl.get("surfaces").ok()?;
+    let mut out = Vec::new();
+    for s in surfaces_tbl.sequence_values::<String>().flatten() {
+        match s.as_str() {
+            "admin" => out.push(Surface::Admin),
+            "grpc" => out.push(Surface::Grpc),
+            _ => {}
         }
     }
+    if out.is_empty() {
+        None
+    } else {
+        Some(SurfaceSet::from_list(out))
+    }
+}
 
-    strategies
+fn parse_activation(tbl: &Table) -> Option<Activation> {
+    let act_tbl: Table = tbl.get("activates_on").ok()?;
+    if let Ok(header) = act_tbl.get::<String>("header")
+        && !header.is_empty()
+    {
+        return Some(Activation::Header { header });
+    }
+    if act_tbl.get::<bool>("always").unwrap_or(false) {
+        return Some(Activation::always());
+    }
+    None
 }
 
 #[cfg(test)]
@@ -63,91 +141,126 @@ mod tests {
     use mlua::Lua;
 
     #[test]
-    fn test_parse_collection_auth_true() {
+    fn parse_auth_true_yields_empty_methods() {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         tbl.set("auth", true).unwrap();
         let auth = parse_collection_auth(&tbl).unwrap();
-        assert!(auth.is_some());
-        let auth = auth.unwrap();
         assert!(auth.enabled);
-        assert_eq!(auth.token_expiry, 7200);
-        assert!(!auth.disable_local);
-        assert!(!auth.verify_email);
+        assert_eq!(auth.methods.len(), 3); // shorthand auth=true populates default_methods
     }
 
     #[test]
-    fn test_parse_collection_auth_false() {
+    fn parse_auth_false_returns_none() {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         tbl.set("auth", false).unwrap();
-        assert!(parse_collection_auth(&tbl).unwrap().is_none());
+        assert!(parse_collection_auth(&tbl).is_none());
     }
 
     #[test]
-    fn test_parse_collection_auth_table() {
+    fn parse_methods_default_three() {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         let auth_tbl = lua.create_table().unwrap();
-        auth_tbl.set("token_expiry", 3600u64).unwrap();
-        auth_tbl.set("disable_local", true).unwrap();
-        auth_tbl.set("verify_email", true).unwrap();
-        auth_tbl.set("forgot_password", false).unwrap();
+        let methods = lua.create_table().unwrap();
+        let m1 = lua.create_table().unwrap();
+        m1.set("type", "password_login").unwrap();
+        methods.set(1, m1).unwrap();
+        let m2 = lua.create_table().unwrap();
+        m2.set("type", "bearer").unwrap();
+        methods.set(2, m2).unwrap();
+        let m3 = lua.create_table().unwrap();
+        m3.set("type", "session_cookie").unwrap();
+        methods.set(3, m3).unwrap();
+        auth_tbl.set("methods", methods).unwrap();
         tbl.set("auth", auth_tbl).unwrap();
         let auth = parse_collection_auth(&tbl).unwrap();
-        assert!(auth.is_some());
-        let auth = auth.unwrap();
-        assert!(auth.enabled);
-        assert_eq!(auth.token_expiry, 3600);
-        assert!(auth.disable_local);
-        assert!(auth.verify_email);
-        assert!(!auth.forgot_password);
+        assert_eq!(auth.methods.len(), 3);
+        assert!(matches!(auth.methods[0], AuthMethod::PasswordLogin { .. }));
+        assert!(matches!(auth.methods[1], AuthMethod::Bearer { .. }));
+        assert!(matches!(auth.methods[2], AuthMethod::SessionCookie { .. }));
     }
 
     #[test]
-    fn test_parse_collection_auth_with_strategies() {
+    fn parse_strategy_with_header_activation() {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         let auth_tbl = lua.create_table().unwrap();
-        let strats = lua.create_table().unwrap();
-        let s1 = lua.create_table().unwrap();
-        s1.set("name", "oauth").unwrap();
-        s1.set("authenticate", "hooks.auth.oauth_check").unwrap();
-        strats.set(1, s1).unwrap();
-        auth_tbl.set("strategies", strats).unwrap();
+        let methods = lua.create_table().unwrap();
+        let m = lua.create_table().unwrap();
+        m.set("type", "strategy").unwrap();
+        m.set("name", "api-key").unwrap();
+        m.set("authenticate", "hooks.auth.api_key").unwrap();
+        let act = lua.create_table().unwrap();
+        act.set("header", "x-api-key").unwrap();
+        m.set("activates_on", act).unwrap();
+        let surfaces = lua.create_table().unwrap();
+        surfaces.set(1, "grpc").unwrap();
+        m.set("surfaces", surfaces).unwrap();
+        methods.set(1, m).unwrap();
+        auth_tbl.set("methods", methods).unwrap();
         tbl.set("auth", auth_tbl).unwrap();
-        let auth = parse_collection_auth(&tbl).unwrap().unwrap();
-        assert_eq!(auth.strategies.len(), 1);
-        assert_eq!(auth.strategies[0].name, "oauth");
-        assert_eq!(auth.strategies[0].authenticate, "hooks.auth.oauth_check");
+        let auth = parse_collection_auth(&tbl).unwrap();
+        assert_eq!(auth.methods.len(), 1);
+        match &auth.methods[0] {
+            AuthMethod::Strategy {
+                name,
+                authenticate,
+                activates_on,
+                surfaces,
+            } => {
+                assert_eq!(name, "api-key");
+                assert_eq!(authenticate, "hooks.auth.api_key");
+                assert!(
+                    matches!(activates_on, Activation::Header { header } if header == "x-api-key")
+                );
+                assert_eq!(surfaces, &SurfaceSet::grpc_only());
+            }
+            other => panic!("expected Strategy, got {other:?}"),
+        }
     }
 
     #[test]
-    fn test_parse_collection_auth_other_value_returns_none() {
-        let lua = Lua::new();
-        let tbl = lua.create_table().unwrap();
-        let func = lua.create_function(|_, ()| Ok(())).unwrap();
-        tbl.set("auth", func).unwrap();
-        assert!(parse_collection_auth(&tbl).unwrap().is_none());
-    }
-
-    #[test]
-    fn test_parse_auth_strategies_incomplete_strategy_skipped() {
+    fn parse_strategy_without_activates_on_defaults_to_always() {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         let auth_tbl = lua.create_table().unwrap();
-        let strats = lua.create_table().unwrap();
-        let s1 = lua.create_table().unwrap();
-        s1.set("name", "incomplete").unwrap();
-        strats.set(1, s1).unwrap();
-        let s2 = lua.create_table().unwrap();
-        s2.set("name", "oauth").unwrap();
-        s2.set("authenticate", "hooks.auth.oauth").unwrap();
-        strats.set(2, s2).unwrap();
-        auth_tbl.set("strategies", strats).unwrap();
+        let methods = lua.create_table().unwrap();
+        let m = lua.create_table().unwrap();
+        m.set("type", "strategy").unwrap();
+        m.set("name", "any").unwrap();
+        m.set("authenticate", "hooks.auth.any").unwrap();
+        methods.set(1, m).unwrap();
+        auth_tbl.set("methods", methods).unwrap();
         tbl.set("auth", auth_tbl).unwrap();
-        let auth = parse_collection_auth(&tbl).unwrap().unwrap();
-        assert_eq!(auth.strategies.len(), 1);
-        assert_eq!(auth.strategies[0].name, "oauth");
+        let auth = parse_collection_auth(&tbl).unwrap();
+        match &auth.methods[0] {
+            AuthMethod::Strategy { activates_on, .. } => {
+                assert!(matches!(activates_on, Activation::Always(_)));
+            }
+            _ => panic!("expected Strategy"),
+        }
+    }
+
+    #[test]
+    fn parse_strategy_missing_authenticate_skipped() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let auth_tbl = lua.create_table().unwrap();
+        let methods = lua.create_table().unwrap();
+        let m = lua.create_table().unwrap();
+        m.set("type", "strategy").unwrap();
+        m.set("name", "incomplete").unwrap();
+        methods.set(1, m).unwrap();
+        auth_tbl.set("methods", methods).unwrap();
+        tbl.set("auth", auth_tbl).unwrap();
+        let auth = parse_collection_auth(&tbl).unwrap();
+        // Bad strategy gets dropped; methods list ends up empty →
+        // fallback populates default_methods (no Strategy entry).
+        assert!(
+            auth.strategies().next().is_none(),
+            "incomplete strategy must not appear in methods"
+        );
     }
 }

@@ -1,15 +1,17 @@
 //! Account management handlers: lock, unlock, verify, unverify.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
 
+use crate::core::collection::Auth;
 use crate::{
     api::{content, handlers::ContentService},
     core::{Registry, SharedInvalidationTransport, SharedTokenProvider},
     db::DbPool,
+    hooks::HookRunner,
     service::{self, ServiceContext, ServiceError},
 };
 
@@ -40,7 +42,7 @@ fn validate_auth_collection(service: &ContentService, collection: &str) -> Resul
 fn validate_verify_email_enabled(service: &ContentService, collection: &str) -> Result<(), Status> {
     let def = service.get_collection_def(collection)?;
 
-    let enabled = def.auth.as_ref().is_some_and(|a| a.verify_email);
+    let enabled = def.auth.as_ref().is_some_and(Auth::requires_verify_email);
     if !enabled {
         return Err(Status::failed_precondition(format!(
             "Collection '{collection}' does not have verify_email enabled"
@@ -58,11 +60,13 @@ fn validate_verify_email_enabled(service: &ContentService, collection: &str) -> 
 struct AccountActionBlockingInput {
     pool: DbPool,
     token_provider: SharedTokenProvider,
+    hook_runner: HookRunner,
     registry: Arc<Registry>,
     db_kind: String,
     collection: String,
     id: String,
     token: Option<String>,
+    headers: HashMap<String, String>,
     invalidation_transport: Option<SharedInvalidationTransport>,
 }
 
@@ -79,8 +83,10 @@ fn account_action_blocking(
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
 
     let auth_user = ContentService::resolve_auth_user(
-        input.token,
+        input.token.as_deref(),
+        &input.headers,
         &*input.token_provider,
+        &input.hook_runner,
         &input.registry,
         &conn,
     )?;
@@ -104,17 +110,20 @@ impl ContentService {
     fn account_action_input(
         &self,
         token: Option<String>,
+        headers: HashMap<String, String>,
         req: &content::AccountActionRequest,
         with_invalidation: bool,
     ) -> AccountActionBlockingInput {
         AccountActionBlockingInput {
             pool: self.pool.clone(),
             token_provider: self.token_provider.clone(),
+            hook_runner: self.hook_runner.clone(),
             registry: Arc::clone(&self.registry),
             db_kind: self.db_kind.clone(),
             collection: req.collection.clone(),
             id: req.id.clone(),
             token,
+            headers,
             invalidation_transport: with_invalidation.then(|| self.invalidation_transport.clone()),
         }
     }
@@ -126,12 +135,13 @@ impl ContentService {
     ) -> Result<Response<content::AccountActionResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
+        let headers = Self::extract_metadata_headers(&metadata);
         let req = request.into_inner();
         validate_auth_collection(self, &req.collection)?;
 
         // Service-layer lock_user publishes the invalidation signal
         // when a transport is attached to the context.
-        let input = self.account_action_input(token, &req, true);
+        let input = self.account_action_input(token, headers, &req, true);
 
         task::spawn_blocking(move || account_action_blocking(input, service::auth::lock_user))
             .await
@@ -150,10 +160,11 @@ impl ContentService {
     ) -> Result<Response<content::AccountActionResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
+        let headers = Self::extract_metadata_headers(&metadata);
         let req = request.into_inner();
         validate_auth_collection(self, &req.collection)?;
 
-        let input = self.account_action_input(token, &req, false);
+        let input = self.account_action_input(token, headers, &req, false);
 
         task::spawn_blocking(move || account_action_blocking(input, service::auth::unlock_user))
             .await
@@ -172,11 +183,12 @@ impl ContentService {
     ) -> Result<Response<content::AccountActionResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
+        let headers = Self::extract_metadata_headers(&metadata);
         let req = request.into_inner();
         validate_auth_collection(self, &req.collection)?;
         validate_verify_email_enabled(self, &req.collection)?;
 
-        let input = self.account_action_input(token, &req, false);
+        let input = self.account_action_input(token, headers, &req, false);
 
         task::spawn_blocking(move || account_action_blocking(input, service::auth::mark_verified))
             .await
@@ -195,11 +207,12 @@ impl ContentService {
     ) -> Result<Response<content::AccountActionResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
+        let headers = Self::extract_metadata_headers(&metadata);
         let req = request.into_inner();
         validate_auth_collection(self, &req.collection)?;
         validate_verify_email_enabled(self, &req.collection)?;
 
-        let input = self.account_action_input(token, &req, false);
+        let input = self.account_action_input(token, headers, &req, false);
 
         task::spawn_blocking(move || {
             account_action_blocking(input, service::auth::mark_unverified)

@@ -6,7 +6,115 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [0.1.0-alpha.9] — Unreleased
 
+### Security
+
+- **Strategy-authenticated users now pass the same
+  `is_locked` / `verify_email` checks as bearer / cookie
+  authentication.** Previously, a locked or unverified user could
+  re-enter via a strategy hook because the evaluator's strategy
+  branch skipped both checks. Closed.
+- **Logout now bumps `_session_version`.** Cookie clearing alone
+  left the issued JWT valid until exp — a captured token survived
+  logout. The bump invalidates every JWT for that user across all
+  surfaces. Also added to `lock_user` so a locked-out admin's
+  active sessions die on the next request, not at JWT exp.
+- **`Resolution::Invalid(Unaccepted)` for credentials that decode
+  cleanly but aren't accepted anywhere.** Previously, a user with
+  a cookie whose `session_cookie` method had been removed from
+  the collection's `methods` list would get `Anonymous` →
+  redirect to `/admin/login` → browser sends the same cookie →
+  infinite redirect loop. Now the cookie is cleared on the
+  redirect; gRPC returns 401 instead of silently treating the
+  request as unauthenticated.
+
+### Changed
+
+- **Unified per-request auth evaluator at
+  `service::auth::evaluate`.** Replaces the legacy split between
+  the admin middleware's cookie-only fast path, the standalone
+  strategy-fallback walker, and the gRPC handler's bearer-only
+  `resolve_auth_user`. The evaluator walks every auth collection's
+  `methods` in declaration order, honors the per-method `surfaces`
+  filter (a Bearer JWT scoped to `admin` is not accepted on gRPC),
+  and honors the `activates_on` discriminator on `strategy`
+  methods (a strategy with `activates_on = { header = "x-api-key" }`
+  fires only when that header is present on the request). The
+  previous "model expressed scoping in types but runtime ignored
+  it" gap is closed — these guarantees are now enforced end-to-end
+  and pinned by e2e tests at `e2e/tests/grpc_methods_evaluator.rs`.
+- `service/auth/` split into one file per concern: `local` (the
+  password-login flow), `tokens` (reset + verification), `account`
+  (lock / verified / session-version), `mfa`, `evaluator`.
+  `service/auth/mod.rs` is now pure module declarations and
+  re-exports (CLAUDE.md compliance).
+- Tweaking a `password_login` method goes through a typed
+  `PasswordLoginBuilder` (`AuthMethod::password_login_builder()
+  .mfa(...).verify_email(...).build()`). The previous
+  panic-on-missing / silent-no-op variants on `Auth` are still
+  available as convenience methods (no-op when no password_login)
+  but the builder is the recommended path for new code — misuse
+  is a compile error rather than a silent miss.
+- `Resolution::Invalid` carries a typed `AuthFailure`
+  (`BadToken`, `Locked`, `StaleSession`, `UserMissing`,
+  `UnknownCollection`, `Lookup`, `Unaccepted`) instead of a
+  free-form string. Callers map each failure to a precise
+  response — gRPC returns `PermissionDenied` for `Locked` and
+  `Unauthenticated` with a specific message for the others; the
+  admin middleware clears the stale session cookie before
+  redirecting to `/admin/login` (except on `Lookup`, which is
+  transient).
+- Strategy hook contract: `ctx.headers` preserves the casing the
+  transport delivered. Activation matching itself is
+  case-insensitive — `activates_on = { header = "x-api-key" }`
+  matches `X-API-Key`, `x-api-key`, etc. Existing Lua hooks that
+  index headers by specific case continue to work.
+- **Upload paths route through `state.token_provider`** instead
+  of calling `auth::validate_token(token, state.jwt_secret)`
+  directly. Removes the silent-mismatch risk if the JWT backend
+  is ever swapped (the test fixture once carried exactly this
+  bug — caught only when a refactor exposed it).
+- **`admin/auth_middleware/` is now a folder split** into
+  `middleware.rs`, `gate.rs`, `pages.rs`, `load_user.rs` — every
+  business-logic file under the 300-line CLAUDE.md soft limit.
+- **`crap-cms status --check` adds two new warnings:**
+  - Auth collection with `password_login` but no `bearer` method
+    (Login issues a JWT no future request can authenticate).
+  - Multiple strategies bound to the same `(header, surface)` pair
+    across collections — `HashMap` iteration order picks the
+    winner non-deterministically.
+- `Activation::Always` now wraps a private `AlwaysMarker` (the
+  inner `always: bool` field is private and constrained to the
+  literal `true`). `Activation::Always { always: false }` is no
+  longer constructible in Rust code; the deserialize-time check
+  was already in place. Wire format unchanged
+  (`{ always = true }`).
+- `is_locked` / `is_verified` on user documents now accept i64,
+  bool, or string-coercible-to-bool ("0"/"1"/"true"/"false"/"yes")
+  values. A strategy hook returning `_locked = "1"` (string) used
+  to silently bypass the lock check.
+
 ### Breaking Changes
+
+- **`auth.strategies`, `auth.disable_local`, `auth.verify_email`,
+  `auth.forgot_password`, `auth.mfa` removed from
+  `CollectionDefinition.auth`.** Replaced by a single ordered
+  `auth.methods` list of typed entries (`password_login`,
+  `bearer`, `session_cookie`, `strategy`). Password-only knobs
+  (`mfa`, `verify_email`, `forgot_password`) move inside the
+  `password_login` method variant. Each non-`password_login`
+  method takes an explicit `surfaces` list (`{"admin"}`,
+  `{"grpc"}`, or both) so per-surface auth is no longer
+  implicit. `strategy` methods declare an `activates_on`
+  discriminator (`{ header = "x-..." }` or `{ always = true }`)
+  so each strategy is bound to its own activation signal — cross-
+  collection accidental authentication is structurally
+  impossible. New Lua helpers `crap.auth.default_methods()` and
+  `crap.auth.with_defaults({...})` make the common cases
+  one-liners. Full model documented in
+  `docs/src/authentication/auth-methods.md`. Migration: rewrite
+  each `auth = { … }` block per the new shape; the shorthand
+  `auth = { enabled = true }` continues to work and populates
+  the default methods.
 
 ### Fixed
 

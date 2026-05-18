@@ -13,7 +13,7 @@ use tracing::{error, warn};
 use crate::{
     admin::{AdminState, server::load_auth_user},
     core::{
-        AuthUser, CollectionDefinition, Document, DocumentFields, auth,
+        AuthUser, CollectionDefinition, Document, DocumentFields,
         event::{EventOperation, EventTarget, EventUser},
     },
     db::AccessResult,
@@ -75,7 +75,12 @@ pub fn extract_bearer_user(
         )));
     };
 
-    let claims = auth::validate_token(token, state.jwt_secret.as_ref()).map_err(|_| {
+    // Route through `state.token_provider` (the trait-object form)
+    // rather than the free `validate_token` against `jwt_secret`.
+    // The two are wired with the same secret today (`startup.rs` ties
+    // them) but a future backend swap (Paseto, opaque tokens, …) flows
+    // here automatically only via the provider.
+    let claims = state.token_provider.validate_token(token).map_err(|_| {
         Box::new(json_error(
             StatusCode::UNAUTHORIZED,
             "Invalid or expired token",

@@ -1,5 +1,6 @@
 //! `TriggerJob` handler — trigger a job by slug, queuing it for execution.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::task;
@@ -18,6 +19,7 @@ use crate::{
 struct TriggerJobBlockingInput {
     pool: DbPool,
     hook_runner: HookRunner,
+    headers: HashMap<String, String>,
     token_provider: SharedTokenProvider,
     registry: Arc<Registry>,
     data_json: String,
@@ -34,9 +36,14 @@ fn trigger_job_blocking(input: TriggerJobBlockingInput) -> Result<String, Status
         .inspect_err(|e| error!("TriggerJob pool error: {}", e))
         .map_err(|_| Status::internal("Internal error"))?;
 
+    let token = input.token;
+    let headers = input.headers;
+
     let auth_user = ContentService::resolve_auth_user(
-        input.token,
+        token.as_deref(),
+        &headers,
         &*input.token_provider,
+        &input.hook_runner,
         &input.registry,
         &conn,
     )?;
@@ -79,6 +86,7 @@ impl ContentService {
     ) -> Result<Response<content::TriggerJobResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
+        let headers = Self::extract_metadata_headers(&metadata);
         let req = request.into_inner();
 
         let input = TriggerJobBlockingInput {
@@ -89,6 +97,7 @@ impl ContentService {
             data_json: req.data_json.unwrap_or_else(|| "{}".to_string()),
             slug: req.slug.clone(),
             token,
+            headers,
         };
 
         let job_id = task::spawn_blocking(move || trigger_job_blocking(input))

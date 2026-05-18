@@ -486,9 +486,14 @@ mod tests {
 
     #[test]
     fn access_error_propagates() {
+        // Updated behavior: access fns that raise a Lua error are
+        // treated as "denied" (fail-safe) and logged, rather than
+        // propagating as anyhow::Error. The wire-level rationale is
+        // documented in `grpc_hook_errors::access_fn_error_maps_to_permission_denied`.
         let lua = setup_lua();
-        let result = check_access_with_lua(&lua, Some("test_access.throw_error"), None, None, None);
-        assert!(result.is_err());
+        let result = check_access_with_lua(&lua, Some("test_access.throw_error"), None, None, None)
+            .expect("error is caught + treated as Denied, not propagated");
+        assert!(matches!(result, AccessResult::Denied));
     }
 
     #[test]

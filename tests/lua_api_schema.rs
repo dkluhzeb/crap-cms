@@ -204,8 +204,12 @@ fn parse_auth_config_table() {
         r#"
 crap.collections.define("members", {
     auth = {
-        verify_email = true,
-        forgot_password = false,
+        enabled = true,
+        methods = {
+            { type = "password_login", verify_email = true, forgot_password = false },
+            { type = "bearer", surfaces = { "grpc", "admin" } },
+            { type = "session_cookie", surfaces = { "admin" } },
+        },
     },
     fields = {
         { name = "role", type = "text" },
@@ -224,8 +228,8 @@ crap.collections.define("members", {
         .expect("members should be registered");
     assert!(def.is_auth_collection());
     let auth = def.auth.as_ref().unwrap();
-    assert!(auth.verify_email);
-    assert!(!auth.forgot_password);
+    assert!(auth.requires_verify_email());
+    assert!(!auth.forgot_password_enabled());
 }
 
 #[test]
@@ -319,10 +323,19 @@ fn parse_auth_strategies() {
         r#"
 crap.collections.define("users", {
     auth = {
-        strategies = {
-            { name = "api_key", authenticate = "hooks.auth.api_key" },
-            { name = "oauth", authenticate = "hooks.auth.oauth" },
-        },
+        enabled = true,
+        methods = crap.auth.with_defaults({
+            { type = "strategy",
+              name = "api_key",
+              authenticate = "hooks.auth.api_key",
+              activates_on = { header = "x-api-key" },
+              surfaces = { "grpc", "admin" } },
+            { type = "strategy",
+              name = "oauth",
+              authenticate = "hooks.auth.oauth",
+              activates_on = { header = "x-oauth-token" },
+              surfaces = { "admin" } },
+        }),
     },
     fields = {
         { name = "name", type = "text" },
@@ -340,10 +353,13 @@ crap.collections.define("users", {
         .expect("users should be registered");
     assert!(def.is_auth_collection());
     let auth = def.auth.as_ref().unwrap();
-    assert_eq!(auth.strategies.len(), 2);
-    assert_eq!(auth.strategies[0].name, "api_key");
-    assert_eq!(auth.strategies[0].authenticate, "hooks.auth.api_key");
-    assert_eq!(auth.strategies[1].name, "oauth");
+    assert_eq!(auth.strategies().count(), 2);
+    assert_eq!(auth.strategies().next().unwrap().name, "api_key");
+    assert_eq!(
+        auth.strategies().next().unwrap().authenticate,
+        "hooks.auth.api_key"
+    );
+    assert_eq!(auth.strategies().nth(1).unwrap().name, "oauth");
 }
 
 #[test]

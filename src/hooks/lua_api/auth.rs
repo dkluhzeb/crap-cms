@@ -24,9 +24,61 @@ pub(super) fn register_auth(lua: &Lua, crap: &Table) -> Result<()> {
 
     auth_table.set("user", lua.create_function(user)?)?;
 
+    // crap.auth.default_methods() — returns the standard 3-entry
+    // method list (password_login + bearer + session_cookie) for use
+    // in `auth = { enabled = true, methods = crap.auth.default_methods() }`.
+    auth_table.set(
+        "default_methods",
+        lua.create_function(|lua, ()| default_methods_table(lua))?,
+    )?;
+
+    // crap.auth.with_defaults(extras) — returns `default_methods() ++ extras`.
+    // `extras` is a sequence of method tables; appended after the defaults.
+    auth_table.set(
+        "with_defaults",
+        lua.create_function(|lua, extras: Option<Table>| {
+            let out = default_methods_table(lua)?;
+            if let Some(extras) = extras {
+                let start = out.len()?;
+                for (i, m) in extras.sequence_values::<Table>().flatten().enumerate() {
+                    out.set(start + i64::try_from(i).unwrap_or(i64::MAX) + 1, m)?;
+                }
+            }
+            Ok(out)
+        })?,
+    )?;
+
     crap.set("auth", auth_table)?;
 
     Ok(())
+}
+
+/// Build a Lua sequence table containing the three default methods.
+/// Kept literal (not synthesized from Rust types) so the Lua side
+/// owns the shape — user-facing API is "what you'd write yourself."
+fn default_methods_table(lua: &Lua) -> mlua::Result<Table> {
+    let methods = lua.create_table()?;
+
+    let password = lua.create_table()?;
+    password.set("type", "password_login")?;
+    methods.set(1, password)?;
+
+    let bearer = lua.create_table()?;
+    bearer.set("type", "bearer")?;
+    let bearer_surfaces = lua.create_table()?;
+    bearer_surfaces.set(1, "grpc")?;
+    bearer_surfaces.set(2, "admin")?;
+    bearer.set("surfaces", bearer_surfaces)?;
+    methods.set(2, bearer)?;
+
+    let cookie = lua.create_table()?;
+    cookie.set("type", "session_cookie")?;
+    let cookie_surfaces = lua.create_table()?;
+    cookie_surfaces.set(1, "admin")?;
+    cookie.set("surfaces", cookie_surfaces)?;
+    methods.set(3, cookie)?;
+
+    Ok(methods)
 }
 
 /// Return the current hook user document, or nil if no user is set.

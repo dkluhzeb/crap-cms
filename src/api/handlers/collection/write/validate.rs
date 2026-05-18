@@ -21,6 +21,7 @@ use crate::{
 struct ValidateBlockingInput {
     pool: DbPool,
     runner: HookRunner,
+    headers: HashMap<String, String>,
     token_provider: SharedTokenProvider,
     registry: Arc<Registry>,
     db_kind: String,
@@ -41,8 +42,10 @@ fn validate_blocking(input: ValidateBlockingInput) -> Result<content::ValidateRe
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
 
     let auth_user = ContentService::resolve_auth_user(
-        input.token,
+        input.token.as_deref(),
+        &input.headers,
         &*input.token_provider,
+        &input.runner,
         &input.registry,
         &conn,
     )?;
@@ -88,6 +91,7 @@ impl ContentService {
     ) -> Result<Response<content::ValidateResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
+        let headers = Self::extract_metadata_headers(&metadata);
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
@@ -110,6 +114,7 @@ impl ContentService {
             collection: req.collection.clone(),
             def,
             token,
+            headers,
             data,
             locale_ctx,
             operation: if req.id.is_some() { "update" } else { "create" },

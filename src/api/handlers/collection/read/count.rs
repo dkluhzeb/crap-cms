@@ -1,5 +1,6 @@
 //! Count handler — count documents matching filters.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::task;
@@ -23,6 +24,7 @@ use crate::{
 struct CountBlockingInput {
     pool: DbPool,
     runner: HookRunner,
+    headers: HashMap<String, String>,
     token_provider: SharedTokenProvider,
     registry: Arc<Registry>,
     db_kind: String,
@@ -42,9 +44,14 @@ fn count_blocking(input: CountBlockingInput) -> Result<i64, Status> {
         .get()
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
 
+    let token = input.token;
+    let headers = input.headers;
+
     let auth_user = ContentService::resolve_auth_user(
-        input.token,
+        token.as_deref(),
+        &headers,
         &*input.token_provider,
+        &input.runner,
         &input.registry,
         &conn,
     )?;
@@ -83,6 +90,7 @@ impl ContentService {
     ) -> Result<Response<content::CountResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
+        let headers = Self::extract_metadata_headers(&metadata);
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
@@ -99,6 +107,7 @@ impl ContentService {
             collection: req.collection.clone(),
             def,
             token,
+            headers,
             where_json: req.r#where.clone(),
             locale_ctx,
             search: req.search.clone(),

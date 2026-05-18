@@ -60,10 +60,7 @@ fn make_users_def() -> CollectionDefinition {
             .unique(true)
             .build(),
     ];
-    def.auth = Some(Auth {
-        enabled: true,
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled());
     def
 }
 

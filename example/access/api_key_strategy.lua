@@ -1,5 +1,7 @@
 --- Custom auth strategy: API key authentication via X-API-Key header.
---- Uses crap.crypto.hmac to verify HMAC-signed keys against the secret from env.
+--- Verifies HMAC-signed keys against the secret from env.
+---
+--- Key format on the wire: `<user_id>:<hex_hmac_sha256(user_id, secret)>`
 ---@param context crap.AuthStrategyContext
 ---@return crap.Document?
 return function(context)
@@ -14,21 +16,19 @@ return function(context)
 		return nil
 	end
 
-	-- Key format: <user_id>:<hmac_signature>
 	local user_id, signature = api_key:match("^([^:]+):(.+)$")
 	if not user_id or not signature then
 		return nil
 	end
 
-	-- Verify HMAC using double-HMAC pattern for constant-time comparison
-	local expected = crap.crypto.hmac("sha256", secret, user_id)
-	local verify_expected = crap.crypto.hmac("sha256", secret, expected)
-	local verify_actual = crap.crypto.hmac("sha256", secret, signature)
-	if verify_expected ~= verify_actual then
+	-- Compute the expected HMAC and compare in constant time.
+	-- Direct `==` on hex strings would short-circuit on first
+	-- byte difference and leak signature length / position info.
+	local expected = crap.crypto.hmac_sha256(user_id, secret)
+	if not crap.crypto.constant_time_eq(expected, signature) then
 		return nil
 	end
 
-	-- Look up user
 	local user = crap.collections.find_by_id(context.collection, user_id, { overrideAccess = true })
 	if not user then
 		return nil

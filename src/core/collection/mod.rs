@@ -14,7 +14,10 @@ mod versions_config;
 
 pub use access::{Access, AccessBuilder};
 pub use admin_config::{AdminConfig, AdminConfigBuilder};
-pub use auth::{Auth, AuthStrategy, MfaMode};
+pub use auth::{
+    Activation, Auth, AuthMethod, MfaMode, PasswordLoginBuilder, PasswordLoginCfg, StrategyCfg,
+    Surface, SurfaceSet,
+};
 pub use definition::{CollectionDefinition, CollectionDefinitionBuilder};
 pub use global_definition::{GlobalDefinition, GlobalDefinitionBuilder};
 pub use hooks::{Hooks, HooksBuilder};

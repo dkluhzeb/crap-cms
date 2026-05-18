@@ -10,6 +10,7 @@ use axum::{
 use tokio::task;
 use tracing::error;
 
+use crate::core::collection::Auth;
 use crate::{
     admin::{
         AdminState,
@@ -43,7 +44,7 @@ fn consume_verification_token(
             continue;
         }
 
-        if !def.auth.as_ref().is_some_and(|a| a.verify_email) {
+        if !def.auth.as_ref().is_some_and(Auth::requires_verify_email) {
             continue;
         }
 

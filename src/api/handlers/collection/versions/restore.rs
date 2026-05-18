@@ -1,5 +1,6 @@
 //! `RestoreVersion` handler — restore a document to a previous version.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::task;
@@ -24,6 +25,7 @@ use crate::{
 struct RestoreVersionBlockingInput {
     pool: DbPool,
     runner: HookRunner,
+    headers: HashMap<String, String>,
     token_provider: SharedTokenProvider,
     registry: Arc<Registry>,
     collection: String,
@@ -46,8 +48,10 @@ fn restore_version_blocking(
         .map_err(|_| Status::internal("Internal error"))?;
 
     let auth_user = ContentService::resolve_auth_user(
-        input.token,
+        input.token.as_deref(),
+        &input.headers,
         &*input.token_provider,
+        &input.runner,
         &input.registry,
         &conn,
     )?;
@@ -81,6 +85,7 @@ impl ContentService {
     ) -> Result<Response<content::RestoreVersionResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
+        let headers = Self::extract_metadata_headers(&metadata);
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
@@ -104,6 +109,7 @@ impl ContentService {
             event_transport: self.event_transport.clone(),
             cache: Some(self.cache.clone()),
             token,
+            headers,
         };
 
         let doc = task::spawn_blocking(move || restore_version_blocking(input))

@@ -128,11 +128,7 @@ async fn verify_email_invalid_token_redirects_to_login() {
 
 fn make_users_def_verify_email() -> CollectionDefinition {
     let mut def = make_users_def();
-    def.auth = Some(Auth {
-        enabled: true,
-        verify_email: true,
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled().map_password_login(|b| b.verify_email(true)));
     def
 }
 

@@ -388,6 +388,7 @@ impl ContentService {
             .ok_or_else(|| Status::unavailable("Live updates disabled"))?;
 
         let token = Self::extract_token(&metadata);
+        let headers = Self::extract_metadata_headers(&metadata);
 
         let requested_ops: HashSet<String> = if req.operations.is_empty() {
             ["create", "update", "delete"]
@@ -399,7 +400,7 @@ impl ContentService {
         };
 
         let access = self
-            .resolve_subscribe_access(token, req.collections, req.globals)
+            .resolve_subscribe_access(token, headers, req.collections, req.globals)
             .await?;
 
         if access.allowed_collections.is_empty() && access.allowed_globals.is_empty() {
@@ -450,6 +451,7 @@ impl ContentService {
     async fn resolve_subscribe_access(
         &self,
         token: Option<String>,
+        headers: HashMap<String, String>,
         collections_req: Vec<String>,
         globals_req: Vec<String>,
     ) -> Result<SubscribeAccess, Status> {
@@ -459,6 +461,7 @@ impl ContentService {
             registry: Arc::clone(&self.registry),
             hook_runner: self.hook_runner.clone(),
             token,
+            headers,
             collections_req,
             globals_req,
         };
@@ -476,6 +479,7 @@ struct ResolveSubscribeAccessBlockingInput {
     token_provider: SharedTokenProvider,
     registry: Arc<Registry>,
     hook_runner: HookRunner,
+    headers: HashMap<String, String>,
     token: Option<String>,
     collections_req: Vec<String>,
     globals_req: Vec<String>,
@@ -495,8 +499,10 @@ fn resolve_subscribe_access_blocking(
         .map_err(|_| Status::internal("Internal error"))?;
 
     let auth_user = ContentService::resolve_auth_user(
-        input.token,
+        input.token.as_deref(),
+        &input.headers,
         &*input.token_provider,
+        &input.hook_runner,
         &input.registry,
         &conn,
     )?;

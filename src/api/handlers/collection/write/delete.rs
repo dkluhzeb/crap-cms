@@ -1,5 +1,6 @@
 //! Delete handler — delete a document by ID (soft or hard).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::task;
@@ -22,6 +23,7 @@ use crate::{
 struct DeleteBlockingInput {
     pool: DbPool,
     runner: HookRunner,
+    headers: HashMap<String, String>,
     token_provider: SharedTokenProvider,
     registry: Arc<Registry>,
     db_kind: String,
@@ -43,8 +45,10 @@ fn delete_blocking(input: DeleteBlockingInput) -> Result<(), Status> {
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
 
     let auth_user = ContentService::resolve_auth_user(
-        input.token,
+        input.token.as_deref(),
+        &input.headers,
         &*input.token_provider,
+        &input.runner,
         &input.registry,
         &conn,
     )?;
@@ -86,6 +90,7 @@ impl ContentService {
     ) -> Result<Response<content::DeleteResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
+        let headers = Self::extract_metadata_headers(&metadata);
         let req = request.into_inner();
         let mut def = self.get_collection_def(&req.collection)?;
 
@@ -110,6 +115,7 @@ impl ContentService {
             event_transport: self.event_transport.clone(),
             cache: Some(self.cache.clone()),
             token,
+            headers,
         };
 
         task::spawn_blocking(move || delete_blocking(input))

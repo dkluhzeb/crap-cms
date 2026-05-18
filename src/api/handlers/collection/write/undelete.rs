@@ -1,5 +1,6 @@
 //! Undelete handler — restore a soft-deleted document from trash.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::task;
@@ -23,6 +24,7 @@ use crate::{
 struct UndeleteBlockingInput {
     pool: DbPool,
     runner: HookRunner,
+    headers: HashMap<String, String>,
     token_provider: SharedTokenProvider,
     registry: Arc<Registry>,
     db_kind: String,
@@ -41,8 +43,10 @@ fn undelete_blocking(input: UndeleteBlockingInput) -> Result<content::Document, 
         .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
 
     let auth_user = ContentService::resolve_auth_user(
-        input.token,
+        input.token.as_deref(),
+        &input.headers,
         &*input.token_provider,
+        &input.runner,
         &input.registry,
         &conn,
     )?;
@@ -73,6 +77,7 @@ impl ContentService {
     ) -> Result<Response<content::UndeleteResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
+        let headers = Self::extract_metadata_headers(&metadata);
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
@@ -94,6 +99,7 @@ impl ContentService {
             collection: req.collection.clone(),
             id: req.id.clone(),
             token,
+            headers,
         };
 
         let proto_doc = task::spawn_blocking(move || undelete_blocking(input))
