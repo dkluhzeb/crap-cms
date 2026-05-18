@@ -281,10 +281,15 @@ pub fn make_users_def() -> CollectionDefinition {
             .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth {
-        enabled: true,
-        ..Default::default()
-    });
+    // `Auth::enabled()` seeds the methods list with the standard
+    // `password_login` + `bearer` + `session_cookie` set. The struct-
+    // literal form `Auth { enabled: true, ..Default::default() }`
+    // leaves `methods = vec![]`, which the methods-driven login page
+    // interprets as "no password login configured" → renders the
+    // disable_local message instead of the email/password form, and
+    // every `browser_login` call then fails with
+    // `Could not find input[name=email]`.
+    def.auth = Some(Auth::enabled());
     def
 }
 

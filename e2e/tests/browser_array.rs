@@ -253,12 +253,16 @@ async fn array_rows_persist_after_save() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
 
-    // Fill name
-    page.find_element("input[name=\"name\"]")
+    // Fill name. Use the retry helper rather than a fixed sleep —
+    // `wait_for_navigation` returns when the navigation event fires,
+    // but the create form's DOM may not yet be queryable. The other
+    // tests in this file get away with a fixed sleep because their
+    // first interaction is `find_elements` (plural, returns empty Vec
+    // when nothing matches), not `find_element` (singular, errors
+    // with `Could not find node` on a not-yet-rendered DOM).
+    browser::find_element_after_nav(&page, "input[name=\"name\"]")
         .await
-        .unwrap()
         .click()
         .await
         .unwrap()
@@ -268,9 +272,8 @@ async fn array_rows_persist_after_save() {
 
     // Add 2 rows and fill them
     for i in 0..2 {
-        page.find_element("button[data-action=\"add-array-row\"]")
+        browser::find_element_after_nav(&page, "button[data-action=\"add-array-row\"]")
             .await
-            .unwrap()
             .click()
             .await
             .unwrap();

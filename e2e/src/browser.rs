@@ -109,12 +109,10 @@ pub async fn launch_browser() -> (Browser, JoinHandle<()>) {
 /// email/password, and submitting.
 pub async fn browser_login(page: &Page, base_url: &str, email: &str, password: &str) {
     page.goto(format!("{base_url}/admin/login")).await.unwrap();
-    // Wait for page to fully load
-    sleep(Duration::from_millis(500)).await;
-
-    page.find_element("input[name=\"email\"]")
+    // The login form's DOM may not be queryable the instant `goto`
+    // resolves — use the retry helper instead of a fixed sleep.
+    find_element_after_nav(page, "input[name=\"email\"]")
         .await
-        .unwrap()
         .click()
         .await
         .unwrap()
@@ -122,9 +120,8 @@ pub async fn browser_login(page: &Page, base_url: &str, email: &str, password: &
         .await
         .unwrap();
 
-    page.find_element("input[name=\"password\"]")
+    find_element_after_nav(page, "input[name=\"password\"]")
         .await
-        .unwrap()
         .click()
         .await
         .unwrap()
@@ -132,15 +129,29 @@ pub async fn browser_login(page: &Page, base_url: &str, email: &str, password: &
         .await
         .unwrap();
 
-    page.find_element("button[type=\"submit\"]")
+    find_element_after_nav(page, "button[type=\"submit\"]")
         .await
-        .unwrap()
         .click()
         .await
         .unwrap();
 
-    // Wait for login redirect to complete
-    sleep(Duration::from_secs(2)).await;
+    // Wait for the login → /admin redirect to settle. A fixed sleep
+    // was racy (CI hit < 2s of post-submit time and the next
+    // navigation landed back on /admin/login). Poll the URL instead;
+    // we know we've left /admin/login once the path changes.
+    for _ in 0..60 {
+        let path = page
+            .evaluate("() => location.pathname")
+            .await
+            .ok()
+            .and_then(|v| v.into_value::<String>().ok())
+            .unwrap_or_default();
+        if !path.starts_with("/admin/login") {
+            return;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    panic!("browser_login did not redirect away from /admin/login after 6s");
 }
 
 pub struct BrowserTestCtx {
