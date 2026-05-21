@@ -229,7 +229,150 @@ fn render_document_types(out: &mut String) {
 fn render_hook_context_types(out: &mut String) {
     FieldAccess::render_lua_annotation(out);
     HookContext::render_lua_annotation(out);
+    render_auth_user(out);
     AccessContext::render_lua_annotation(out);
+    render_callable_aliases(out);
+    render_any_factories(out);
+}
+
+/// `crap.AuthUser` — the type of `crap.AccessContext.user`. Extends
+/// `crap.Document` (so `id` / timestamps are typed) AND carries an
+/// `[string] any` index signature so arbitrary field access works
+/// (`context.user.role`, `context.user.email`) — necessary because
+/// a project can have multiple auth collections and we can't
+/// statically know which doc shape `user` will be.
+///
+/// Lives on a separate class (not on `crap.Document` itself)
+/// specifically so the `[string] any` index doesn't leak into typed
+/// subclasses like `crap.doc.X : crap.Document` — that's the bug
+/// that collapsed typed-doc hovers in earlier iterations.
+fn render_auth_user(out: &mut String) {
+    out.push_str(
+        "\
+--- The authenticated user attached to `crap.AccessContext.user`.
+--- Carries the base `crap.Document` shape (id + timestamps) plus an
+--- index signature for arbitrary field access — the static type
+--- can't narrow further because a project can have multiple auth
+--- collections. Cast explicitly when you know the collection:
+--- `local u = context.user --[[@as crap.doc.Users]]`.
+--- @class crap.AuthUser : crap.Document
+--- @field [string] any
+
+",
+    );
+}
+
+/// `crap.any.*` — cross-collection typing-helper factories. Each is
+/// a pass-through at runtime (`f(fn) = fn`) whose only purpose is to
+/// give `LuaLS` a typed parameter slot so `Lua.type.inferParamType =
+/// true` propagates the right `ctx` / `value` types into the
+/// function literal's body.
+///
+/// Pair this with the per-collection accessors
+/// (`crap.collections.<slug>.{hook,field_hook,condition}`) which
+/// give per-collection / per-field narrowing.
+fn render_any_factories(out: &mut String) {
+    out.push_str(
+        "\
+-- ── crap.any — cross-collection typing helpers ─────────────────────
+
+--- Typing helpers for callables that don't belong to a specific
+--- collection (generic-context collection/field hooks, access
+--- functions, auth strategies, job handlers, row labels). Each
+--- function is a no-op pass-through at runtime; its only purpose is
+--- to give LuaLS a typed parameter slot so the body's `value` / `ctx`
+--- params get inferred via `Lua.type.inferParamType`.
+---
+--- For per-collection narrowing use the slug accessors instead:
+--- `crap.collections.<slug>.{hook,field_hook,condition}` /
+--- `crap.globals.<slug>.{hook,field_hook,condition}`.
+--- @class crap.any
+crap.any = {}
+
+--- Wrap a collection hook that takes a generic `crap.HookContext`.
+--- @param fn crap.hook_fn
+--- @return crap.hook_fn
+function crap.any.collection_hook(fn) end
+
+--- Wrap a field hook that takes a generic `crap.FieldHookContext`.
+--- @param fn crap.field_hook_fn
+--- @return crap.field_hook_fn
+function crap.any.field_hook(fn) end
+
+--- Wrap an access control function.
+--- @param fn crap.access_fn
+--- @return crap.access_fn
+function crap.any.access(fn) end
+
+--- Wrap an auth strategy `authenticate` callback.
+--- @param fn crap.auth_strategy_fn
+--- @return crap.auth_strategy_fn
+function crap.any.auth_strategy(fn) end
+
+--- Wrap a job handler.
+--- @param fn crap.job_handler_fn
+--- @return crap.job_handler_fn
+function crap.any.job_handler(fn) end
+
+--- Wrap a row-label function for arrays/blocks.
+--- @param fn crap.row_label_fn
+--- @return crap.row_label_fn
+function crap.any.row_label(fn) end
+
+--- Wrap a generic display condition (no per-collection data narrowing).
+--- @param fn fun(data: table<string, any>): boolean | table
+--- @return fun(data: table<string, any>): boolean | table
+function crap.any.display_condition(fn) end
+
+",
+    );
+}
+
+/// Function-type aliases for every callable users define
+/// (hooks, access, auth strategies, job handlers, row labels).
+/// Each lets users replace 2–4 lines of `---@param` / `---@return`
+/// annotations with a single `---@type crap.X_fn` cast.
+///
+/// Per-collection variants (`crap.field_hook_fn.<Pascal>`,
+/// `crap.display_condition_fn.<Pascal>`) are emitted next to the
+/// per-collection types in `render::render_collection` — the static
+/// file only owns the slug-agnostic ones.
+fn render_callable_aliases(out: &mut String) {
+    out.push_str(
+        "\
+-- ── Function-type aliases (one-liner `---@type` for callables) ─────
+
+--- Generic collection hook. Use for hooks that take `crap.HookContext`
+--- (no per-collection narrowing); for typed contexts use
+--- `crap.hook_fn.<Pascal>` from `generated.lua`.
+--- @alias crap.hook_fn fun(ctx: crap.HookContext): crap.HookContext
+
+--- Generic field hook. Use for hooks that take the generic
+--- `crap.FieldHookContext`; for typed contexts use
+--- `crap.field_hook_fn.<Pascal>` from `generated.lua`. Same shape
+--- as the older `crap.FieldHookFn` alias — both are kept; new code
+--- should prefer this lowercase name for naming consistency with
+--- the per-collection variants.
+--- @alias crap.field_hook_fn fun(value: any, context: crap.FieldHookContext): any
+
+--- Access control function. Returns `true`/`false` for global allow /
+--- deny, or a filter table to constrain results.
+--- @alias crap.access_fn fun(ctx: crap.AccessContext): boolean | table
+
+--- Custom auth strategy `authenticate` callback. Receives request
+--- headers + the collection slug; returns a user document on success
+--- or `nil` to fall through to the next method.
+--- @alias crap.auth_strategy_fn fun(ctx: crap.AuthStrategyContext): crap.Document?
+
+--- Job handler entry point. The runtime ignores the return value.
+--- @alias crap.job_handler_fn fun(ctx: crap.JobHandlerContext)
+
+--- Computed row label for arrays/blocks. Receives the row table and
+--- returns the display string (or `nil` to fall back to `label_field`).
+--- @alias crap.row_label_fn fun(row: table<string, any>): string?
+
+",
+    );
 }
 fn render_crap_collections(out: &mut String) {
     render_crap_collections_init_root_lua(out);

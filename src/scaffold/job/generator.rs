@@ -141,8 +141,8 @@ mod tests {
 
         let content = fs::read_to_string(tmp.path().join("jobs/cleanup.lua")).unwrap();
         assert!(content.contains("local M = {}"));
-        assert!(content.contains("crap.JobHandlerContext"));
-        assert!(content.contains("function M.run(context)"));
+        assert!(content.contains("crap.any.job_handler("));
+        assert!(content.contains("M.run = crap.any.job_handler(function(context)"));
         assert!(content.contains("crap.jobs.define(\"cleanup\""));
         assert!(content.contains("handler = \"jobs.cleanup.run\""));
         assert!(content.contains("return M"));

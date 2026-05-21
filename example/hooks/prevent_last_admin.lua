@@ -1,13 +1,13 @@
---- Collection before_delete hook: prevent deleting the last admin user.
----@param context crap.HookContext
----@return crap.HookContext
-return function(context)
+--- Collection before_delete hook: prevent deleting the last admin
+--- user. `before_delete` always receives a generic `crap.HookContext`
+--- (per-collection narrowing doesn't apply on delete because
+--- `context.data` only carries `{ id = "..." }`), so the factory is
+--- `crap.any.collection_hook`.
+return crap.any.collection_hook(function(context)
   if not context.data or context.data.role ~= "admin" then
     return context
   end
 
-  -- Per-collection accessor — return type narrows to
-  -- `crap.find_result.Users` automatically.
   local result = crap.collections.users.find({
     where = { role = "admin" },
     overrideAccess = true,
@@ -19,4 +19,4 @@ return function(context)
   end
 
   return context
-end
+end)

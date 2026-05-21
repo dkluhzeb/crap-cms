@@ -1,25 +1,20 @@
---- Field before_validate hook: validate budget against max from config.
----@param value number|nil
----@param _context crap.field_hook.Inquiries
----@return number|nil
-return function(value, _context)
+--- Field before_validate hook for projects.budget: enforce
+--- non-negative budgets bounded by `CRAP_MAX_BUDGET` env var.
+---
+--- Per-field overload narrows `value` to `number` (projects.budget's
+--- declared field type).
+return crap.collections.projects.field_hook("budget", function(value, _context)
   if not value then
     return value
   end
 
-  local num = tonumber(value)
-  if not num then
-    return value
+  if value > (tonumber(crap.env.get("CRAP_MAX_BUDGET")) or 500000) then
+    error(string.format("Budget cannot exceed %d", value))
   end
 
-  local max_budget = tonumber(crap.env.get("CRAP_MAX_BUDGET")) or 500000
-  if num > max_budget then
-    error(string.format("Budget cannot exceed %d", max_budget))
-  end
-
-  if num < 0 then
+  if value < 0 then
     error("Budget cannot be negative")
   end
 
   return value
-end
+end)

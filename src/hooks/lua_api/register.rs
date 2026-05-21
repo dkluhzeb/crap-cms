@@ -61,6 +61,14 @@ pub fn register_api(lua: &Lua, registry: &SharedRegistry, config: &CrapConfig) -
     register_template_data(lua)?;
     register_pages(lua)?;
 
+    // `crap.any.*` typing helpers — needed on the init VM too because
+    // job files (loaded at init time via `load_def_dir`) wrap their
+    // handlers in `crap.any.job_handler(fn)`. Without this the file
+    // would fail at load time with "attempt to index a nil value
+    // (field 'any')". Pure no-ops at runtime, identical to the
+    // pool-VM registration in `register_api_pool_init`.
+    register_any_factories(lua)?;
+
     // Load pure Lua helpers onto crap.util (after crap global is set)
     load_lua_helpers(lua)?;
 
@@ -119,6 +127,103 @@ pub fn register_api_pool_init(
 /// the methods nil and the wrappers all fail with "converting Lua
 /// nil to function". Pool VM only; the init VM doesn't expose
 /// runtime CRUD methods.
+/// Register `crap.any.*` — the cross-collection typing-helper
+/// factories. Every entry is a pass-through (`f(fn) = fn`); the
+/// runtime never inspects the wrapped function. Type signatures
+/// live in `types/crap.lua`.
+pub(crate) fn register_any_factories(lua: &Lua) -> Result<()> {
+    const ANY_METHODS: &[&str] = &[
+        "collection_hook",
+        "field_hook",
+        "access",
+        "auth_strategy",
+        "job_handler",
+        "row_label",
+        "display_condition",
+    ];
+    let crap: mlua::Table = lua.globals().get("crap")?;
+    let any = lua.create_table()?;
+    for method in ANY_METHODS {
+        // Identity closure: `function(fn) return fn end`.
+        let factory: mlua::Function = lua
+            .load("return function(fn) return fn end")
+            .set_name(format!("crap.any.{method}"))
+            .eval()?;
+        any.set(*method, factory)?;
+    }
+    crap.set("any", any)?;
+    Ok(())
+}
+
+/// Same as [`register_per_slug_accessors`] but emits **only the
+/// typing-helper factories** (`hook`, `field_hook`, `condition`,
+/// `access`, `auth_strategy`, `row_label`) — no CRUD wrappers.
+/// Called on the init VM so hook/job files can refer to
+/// `crap.collections.<slug>.field_hook(...)` etc. during the
+/// `validate_hook_references` startup pass without tripping on a
+/// nil accessor. CRUD methods stay pool-only since the init VM
+/// doesn't expose runtime CRUD.
+pub(crate) fn register_per_slug_typing_helpers(
+    lua: &Lua,
+    registry: &crate::core::SharedRegistry,
+) -> Result<()> {
+    const COLLECTION_TYPING_HELPERS: &[(&str, usize)] = &[
+        ("hook", 1),
+        ("field_hook", 2),
+        ("condition", 1),
+        ("access", 1),
+        ("auth_strategy", 1),
+        ("row_label", 1),
+    ];
+    const GLOBAL_TYPING_HELPERS: &[(&str, usize)] = &[
+        ("hook", 1),
+        ("field_hook", 2),
+        ("condition", 1),
+        ("access", 1),
+        ("row_label", 1),
+    ];
+
+    let snapshot: Vec<(String, bool)> = {
+        let reg = registry
+            .read()
+            .map_err(|_| anyhow::anyhow!("registry lock poisoned"))?;
+        let mut v: Vec<(String, bool)> =
+            Vec::with_capacity(reg.collections.len() + reg.globals.len());
+        for k in reg.collections.keys() {
+            v.push((k.to_string(), false));
+        }
+        for k in reg.globals.keys() {
+            v.push((k.to_string(), true));
+        }
+        v
+    };
+
+    let crap: mlua::Table = lua.globals().get("crap")?;
+    let collections: mlua::Table = crap.get("collections")?;
+    let globals: mlua::Table = crap.get("globals")?;
+
+    for (slug, is_global) in snapshot {
+        let parent = if is_global { &globals } else { &collections };
+        let helpers = if is_global {
+            GLOBAL_TYPING_HELPERS
+        } else {
+            COLLECTION_TYPING_HELPERS
+        };
+        let existing: mlua::Value = parent.get(slug.as_str())?;
+        // If something's already there (e.g. real CRUD accessor on
+        // the pool VM) we leave it alone — the typing helpers will
+        // already be attached via `register_per_slug_accessors`.
+        if !matches!(existing, mlua::Value::Nil) {
+            continue;
+        }
+        let accessor = lua.create_table()?;
+        attach_typing_helpers(lua, &accessor, helpers)?;
+        parent.set(slug.as_str(), accessor)?;
+    }
+
+    Ok(())
+}
+
 pub(crate) fn register_per_slug_accessors(lua: &Lua, registry: &Arc<Registry>) -> Result<()> {
     const COLLECTION_METHODS: &[&str] = &[
         "find",
@@ -139,6 +244,26 @@ pub(crate) fn register_per_slug_accessors(lua: &Lua, registry: &Arc<Registry>) -
     ];
     const GLOBAL_METHODS: &[&str] = &["get", "update"];
 
+    // Typing-helper factories that exist purely so LuaLS can infer
+    // callback param types via `Lua.type.inferParamType`. Each is a
+    // pass-through (`f(fn) = fn` or `f(_, fn) = fn` for the
+    // two-arg variant) — no real registration, no transformation.
+    const COLLECTION_TYPING_HELPERS: &[(&str, usize)] = &[
+        ("hook", 1),
+        ("field_hook", 2), // (field, fn) — also accepts (fn) via overload
+        ("condition", 1),
+        ("access", 1),        // discoverability alias for crap.any.access
+        ("auth_strategy", 1), // discoverability alias for crap.any.auth_strategy
+        ("row_label", 1),     // discoverability alias for crap.any.row_label
+    ];
+    const GLOBAL_TYPING_HELPERS: &[(&str, usize)] = &[
+        ("hook", 1),
+        ("field_hook", 2),
+        ("condition", 1),
+        ("access", 1),
+        ("row_label", 1),
+    ];
+
     let crap: mlua::Table = lua.globals().get("crap")?;
     let collections: mlua::Table = crap.get("collections")?;
     let globals: mlua::Table = crap.get("globals")?;
@@ -158,6 +283,7 @@ pub(crate) fn register_per_slug_accessors(lua: &Lua, registry: &Arc<Registry>) -
             COLLECTION_METHODS,
             "crap.collections",
         )?;
+        attach_typing_helpers(lua, &accessor, COLLECTION_TYPING_HELPERS)?;
         collections.set(slug.as_str(), accessor)?;
     }
 
@@ -170,9 +296,39 @@ pub(crate) fn register_per_slug_accessors(lua: &Lua, registry: &Arc<Registry>) -
             );
         }
         let accessor = build_slug_accessor(lua, &globals, &slug, GLOBAL_METHODS, "crap.globals")?;
+        attach_typing_helpers(lua, &accessor, GLOBAL_TYPING_HELPERS)?;
         globals.set(slug.as_str(), accessor)?;
     }
 
+    Ok(())
+}
+
+/// Attach pass-through typing-helper factories to a per-slug
+/// accessor. The arity controls whether the wrapper takes
+/// `(fn) -> fn` or `(_, fn) -> fn` — the two-arg form covers
+/// `field_hook(field, fn)` where the field name is positional but
+/// unused at runtime (the same function value is returned either
+/// way; the field-name parameter exists purely to let `LuaLS`
+/// narrow per-field via overloads).
+fn attach_typing_helpers(
+    lua: &Lua,
+    accessor: &mlua::Table,
+    helpers: &[(&str, usize)],
+) -> Result<()> {
+    for (method, arity) in helpers {
+        let chunk = if *arity == 1 {
+            "return function(fn) return fn end"
+        } else {
+            // 2-arg: (field, fn) — also handles single-arg call via overload
+            // where field is the function and the second is nil.
+            "return function(field, fn) if fn == nil then return field else return fn end end"
+        };
+        let factory: mlua::Function = lua
+            .load(chunk)
+            .set_name(format!("typing-helper:{method}"))
+            .eval()?;
+        accessor.set(*method, factory)?;
+    }
     Ok(())
 }
 

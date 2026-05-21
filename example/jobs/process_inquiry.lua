@@ -8,8 +8,7 @@ local M = {}
 ---@field email string
 ---@field service? string
 
----@param context crap.JobHandlerContext
-function M.run(context)
+M.run = crap.any.job_handler(function(context)
   ---@type ProcessInquiryData
   local data = context.data
   local inquiry_id = data and data.inquiry_id
@@ -73,7 +72,7 @@ function M.run(context)
   }, { overrideAccess = true })
 
   crap.log.info("Processed inquiry: " .. inquiry_id)
-end
+end)
 
 crap.jobs.define("process_inquiry", {
   handler = "jobs.process_inquiry.run",

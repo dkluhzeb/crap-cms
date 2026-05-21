@@ -12,8 +12,15 @@ use crate::typegen::lua::LuaAnnotation;
 #[lua(class = "crap.AccessContext")]
 pub struct AccessContext<'a> {
     /// Full user document from the auth collection (nil if anonymous).
+    /// Typed as `crap.AuthUser` (a `crap.Document` variant with an
+    /// `[string] any` index signature) so access functions can read
+    /// `context.user.role` / `context.user.email` etc. without
+    /// per-call casts — the static type can't narrow to a specific
+    /// auth-collection doc since projects may have multiple auth
+    /// collections. Users who know their auth collection can still
+    /// cast: `local u = context.user --[[@as crap.doc.Users]]`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[lua(ty = "crap.Document", optional)]
+    #[lua(ty = "crap.AuthUser", optional)]
     pub user: Option<&'a Document>,
     /// Document ID (for `update` / `delete` / `find_by_id`).
     #[serde(skip_serializing_if = "Option::is_none")]

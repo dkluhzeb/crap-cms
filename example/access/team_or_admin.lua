@@ -1,7 +1,5 @@
 --- Access for project team members or admins/directors.
----@param context crap.AccessContext
----@return boolean
-return function(context)
+return crap.any.access(function(context)
 	if not context.user then
 		return false
 	end
@@ -18,4 +16,4 @@ return function(context)
 		end
 	end
 	return false
-end
+end)

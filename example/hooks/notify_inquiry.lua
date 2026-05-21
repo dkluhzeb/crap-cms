@@ -1,7 +1,7 @@
---- Collection after_change hook: queue email notification for new inquiries.
----@param context crap.hook.Inquiries
----@return crap.hook.Inquiries
-return function(context)
+--- Collection after_change hook for inquiries: queue an email
+--- notification when a new inquiry is created. Per-collection
+--- factory narrows `context` to `crap.hook.Inquiries`.
+return crap.collections.inquiries.hook(function(context)
   if context.operation ~= "create" then
     return context
   end
@@ -21,4 +21,4 @@ return function(context)
   crap.log.info(string.format("Inquiry from %s queued for processing", data.email or "unknown"))
 
   return context
-end
+end)

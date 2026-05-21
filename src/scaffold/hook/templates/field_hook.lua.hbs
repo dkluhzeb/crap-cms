@@ -1,10 +1,6 @@
 --- {{position}} field hook for {{collection}}.{{field}}.
----@param value any
----@param context {{context_type}}
----@return any
-
-return function(value, context)
+return {{{factory_expr}}}function(value, context)
     -- Example: return string.lower(value)
 
     return value
-end
+end)

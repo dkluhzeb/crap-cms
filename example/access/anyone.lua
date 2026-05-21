@@ -1,5 +1,3 @@
----@param context crap.AccessContext
----@return boolean
-return function(context)
+return crap.any.access(function(_context)
 	return true
-end
+end)

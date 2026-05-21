@@ -68,7 +68,7 @@ fn write_field_inner(
 }
 
 /// Map a field definition to its Lua type string.
-fn field_to_lua_type(field: &FieldDefinition, parent_pascal: &str) -> String {
+pub(super) fn field_to_lua_type(field: &FieldDefinition, parent_pascal: &str) -> String {
     match &field.field_type {
         FieldType::Text => {
             if field.has_many {

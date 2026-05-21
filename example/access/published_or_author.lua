@@ -1,7 +1,5 @@
 --- Read access: admins see all, authenticated see all, anonymous see published only.
----@param context crap.AccessContext
----@return boolean|table
-return function(context)
+return crap.any.access(function(context)
 	if context.user then
 		local role = context.user.role
 		if role == "admin" or role == "director" or role == "editor" then
@@ -14,4 +12,4 @@ return function(context)
 	end
 	-- Anonymous: published only
 	return { _status = "published" }
-end
+end)

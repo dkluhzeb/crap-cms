@@ -34,12 +34,17 @@ When the function returns a **table**, it is serialized to JSON and embedded in 
 
 ```lua
 -- hooks/posts/show_external_url.lua
----@param data crap.data.Posts
----@return table
-return function(data)
+return crap.collections.posts.condition(function(data)
+    -- data is typed crap.data.Posts; data.post_type narrows to its select union
     return { field = "post_type", equals = "link" }
-end
+end)
 ```
+
+The `crap.collections.posts.condition(fn)` factory narrows `data` to
+`crap.data.Posts` for body-level autocomplete. See
+[`crap.collections.<slug>.condition`](../../lua-api/collections.md)
+and [`crap.any.display_condition`](../../lua-api/typing-factories.md)
+for the generic equivalent.
 
 ### Server-Side (Boolean)
 
@@ -47,16 +52,14 @@ When the function returns a **boolean**, the field visibility is re-evaluated on
 
 ```lua
 -- hooks/posts/show_premium_options.lua
----@param data crap.data.Posts
----@return boolean
-return function(data)
+return crap.collections.posts.condition(function(data)
     -- Complex logic that needs server-side evaluation
     local tags = data.tags or {}
     for _, tag in ipairs(tags) do
         if tag == "premium" then return true end
     end
     return false
-end
+end)
 ```
 
 > **Performance tip:** Prefer condition tables over booleans whenever possible. Tables evaluate instantly in the browser; booleans require a server round-trip on every field change.
@@ -78,14 +81,12 @@ Return an array of condition tables to require all conditions to be true:
 
 ```lua
 -- hooks/posts/show_advanced.lua
----@param data crap.data.Posts
----@return table
-return function(data)
+return crap.collections.posts.condition(function(data)
     return {
         { field = "post_type", not_equals = "link" },
         { field = "excerpt", is_truthy = true },
     }
-end
+end)
 ```
 
 ## How It Works

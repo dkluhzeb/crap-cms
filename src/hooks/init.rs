@@ -49,6 +49,14 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
     let n_globals = load_def_dir(&lua, config_dir, "global")?;
     let n_jobs = load_def_dir(&lua, config_dir, "job")?;
 
+    // Per-slug typing-helper factories — `crap.collections.<slug>.field_hook(...)`
+    // etc. need to exist before init.lua / the hook-ref validation pass
+    // tries to `require` any hook file that wraps in a factory. The init
+    // VM gets only the typing helpers (no CRUD wrappers — those are
+    // pool-VM only).
+    lua_api::register::register_per_slug_typing_helpers(&lua, &registry)
+        .context("Failed to register per-slug typing helpers")?;
+
     let has_init = execute_init_lua(&lua, config_dir)?;
 
     lua.remove_app_data::<InitPhase>();

@@ -1,15 +1,15 @@
---- Field after_read hook: compute reading time from richtext content.
---- Returns a virtual "X min read" string.
----@param value any
----@param _context crap.field_hook.Posts
----@return string
-return function(value, _context)
+--- Field after_read hook for posts.content (richtext): compute
+--- reading time from the rendered HTML.
+---
+--- Using the per-field overload narrows `value` to `string` (the
+--- richtext field's stored type).
+return crap.collections.posts.field_hook("content", function(value, _context)
   if not value or value == "" then
     return "1 min read"
   end
 
   -- Strip HTML tags and count words
-  local text = tostring(value):gsub("<[^>]+>", " ")
+  local text = value:gsub("<[^>]+>", " ")
   local word_count = 0
   for _ in text:gmatch("%S+") do
     word_count = word_count + 1
@@ -17,4 +17,4 @@ return function(value, _context)
 
   local minutes = math.max(1, math.ceil(word_count / 200))
   return minutes .. " min read"
-end
+end)

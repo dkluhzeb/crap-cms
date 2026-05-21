@@ -98,6 +98,7 @@
 - [Overview](lua-api/overview.md)
 - [crap.collections](lua-api/collections.md)
 - [crap.globals](lua-api/globals.md)
+- [crap.any (typing factories)](lua-api/typing-factories.md)
 - [crap.hooks](lua-api/hooks.md)
 - [crap.log](lua-api/log.md)
 - [crap.json](lua-api/json.md)

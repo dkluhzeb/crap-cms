@@ -2,9 +2,12 @@
 --- Verifies HMAC-signed keys against the secret from env.
 ---
 --- Key format on the wire: `<user_id>:<hex_hmac_sha256(user_id, secret)>`
----@param context crap.AuthStrategyContext
----@return crap.Document?
-return function(context)
+---
+--- Registered on the `users` collection via the per-collection
+--- `auth_strategy` factory — gives discoverable autocomplete from
+--- `crap.collections.users.<TAB>` without changing the typed shape
+--- (auth context is uniform across collections).
+return crap.collections.users.auth_strategy(function(context)
 	local api_key = context.headers["x-api-key"]
 	if not api_key then
 		return nil
@@ -35,4 +38,4 @@ return function(context)
 	end
 
 	return user
-end
+end)

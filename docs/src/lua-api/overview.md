@@ -6,8 +6,9 @@ The `crap` global table is the entry point for all CMS operations in Lua. It's a
 
 | Namespace | Description |
 |-----------|-------------|
-| `crap.collections` | Collection definition and CRUD operations |
-| `crap.globals` | Global definition and get/update operations |
+| `crap.collections` | Collection definition, CRUD operations, and per-collection typing factories (`crap.collections.<slug>.{hook,field_hook,condition,access,auth_strategy,row_label}`) |
+| `crap.globals` | Global definition, get/update, and per-global typing factories |
+| `crap.any` | Cross-collection typing factories — `crap.any.{collection_hook,field_hook,access,auth_strategy,job_handler,row_label,display_condition}` |
 | `crap.fields` | Field factory functions (`crap.fields.text()`, etc.) |
 | `crap.hooks` | Global hook registration |
 | `crap.jobs` | Job definition |
@@ -22,6 +23,47 @@ The `crap` global table is the entry point for all CMS operations in Lua. It's a
 | `crap.crypto` | Cryptographic utilities (HMAC, random bytes, hashing) |
 | `crap.schema` | Runtime schema introspection |
 | `crap.richtext` | Custom rich text node registration |
+
+## Typed hook factories
+
+Every callable a Lua user writes — collection hooks, field hooks,
+access functions, auth strategies, job handlers, row labels, display
+conditions — should be wrapped in a **typing factory** so the editor
+can infer the parameter types of the function body.
+
+```lua
+-- Per-collection: ctx narrows to crap.hook.Posts
+return crap.collections.posts.hook(function(context)
+    -- context.data.title, context.operation, etc. all typed
+    return context
+end)
+
+-- Per-collection per-field: value narrows to the field's type
+return crap.collections.posts.field_hook("title", function(value, context)
+    -- value: string (from posts.title's text field)
+    return value:lower()
+end)
+
+-- Cross-collection generic (hook that runs on multiple collections)
+return crap.any.field_hook(function(value, context)
+    -- value: any, context: crap.FieldHookContext
+    return value
+end)
+
+-- Access function (uniform context across all collections)
+return crap.any.access(function(context)
+    return context.user ~= nil
+end)
+```
+
+The factories are pure pass-throughs at runtime (`f(fn) = fn`); they
+exist solely so LuaLS can propagate the typed parameter slot into
+your function body's locals. Requires `"type.inferParamType": true`
+in your `.luarc.json` — included in the `init` scaffold by default.
+
+See [`crap.collections`](collections.md) and [`crap.globals`](globals.md)
+for the full per-slug factory surface; [`crap.any`](typing-factories.md)
+for the cross-collection helpers.
 
 ## Two ways to address a collection
 

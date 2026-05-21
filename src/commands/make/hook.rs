@@ -178,7 +178,16 @@ fn resolve_hook_position(position: Option<String>, hook_type: HookType) -> Resul
     }
 }
 
-/// Resolve field name for field hooks from CLI arg or interactive selection.
+/// Resolve field name for field hooks from CLI arg or interactive
+/// selection. Returns `None` for the "any field" case, where the hook
+/// fires for every field of the collection — the generator emits the
+/// single-arg `crap.collections.<slug>.field_hook(fn)` form, which
+/// types `value` as `any` but still narrows `ctx` per collection.
+///
+/// CLI users can pass `--field '*'` (or omit `--field` with the
+/// `--any-field` flag, if the caller wires that up) to request the
+/// any-field form non-interactively. The interactive selector
+/// surfaces it as the first entry in the field list.
 #[cfg(not(tarpaulin_include))]
 fn resolve_hook_field(
     field: Option<String>,
@@ -186,11 +195,17 @@ fn resolve_hook_field(
     registry: Option<&Arc<Registry>>,
     collection: &str,
 ) -> Result<Option<String>> {
+    const ANY_FIELD_LABEL: &str = "<any field — applies to every field>";
+
     if hook_type != HookType::Field {
         return Ok(field);
     }
 
+    // CLI escape: explicit "*" or empty string means "any field".
     if let Some(f) = field {
+        if f == "*" || f.is_empty() {
+            return Ok(None);
+        }
         return Ok(Some(f));
     }
 
@@ -200,21 +215,32 @@ fn resolve_hook_field(
     });
 
     if let Some(names) = field_names.filter(|n| !n.is_empty()) {
+        let mut items: Vec<String> = Vec::with_capacity(names.len() + 1);
+        items.push(ANY_FIELD_LABEL.to_string());
+        items.extend(names.iter().cloned());
+
         let selection = Select::with_theme(&crap_theme())
             .with_prompt("Field")
-            .items(&names)
+            .items(&items)
             .default(0)
             .interact()
             .context("Failed to read field selection")?;
 
-        Ok(Some(names[selection].clone()))
+        if selection == 0 {
+            return Ok(None);
+        }
+        Ok(Some(names[selection - 1].clone()))
     } else {
-        Ok(Some(
-            Input::with_theme(&crap_theme())
-                .with_prompt("Field name")
-                .interact_text()
-                .context("Failed to read field name")?,
-        ))
+        let input: String = Input::with_theme(&crap_theme())
+            .with_prompt("Field name (leave empty for any field)")
+            .allow_empty(true)
+            .interact_text()
+            .context("Failed to read field name")?;
+        if input.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(input))
+        }
     }
 }
 

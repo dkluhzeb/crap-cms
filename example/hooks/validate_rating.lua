@@ -1,12 +1,9 @@
 --- before_validate hook for rating fields: enforce 1..5 whole numbers.
 ---
---- Wired up automatically by `plugins/rating.lua`. Field-level
---- `before_validate` hooks receive `(value, context)` and can either
---- return the value unchanged (or transformed) or `error()` to fail
---- validation with a message surfaced on the field.
----@param value any
----@return number|nil
-return function(value)
+--- Wired up automatically by `plugins/rating.lua`. The runtime calls
+--- the function as `(value, context)`; this hook ignores the
+--- context entirely.
+return crap.any.field_hook(function(value, _context)
   if value == nil or value == "" then
     return value
   end
@@ -25,4 +22,4 @@ return function(value)
   end
 
   return n
-end
+end)

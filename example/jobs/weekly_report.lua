@@ -1,10 +1,7 @@
 --- Cron job: weekly content report logged to stdout.
 local M = {}
 
---- The runtime passes a `crap.JobHandlerContext` but this job doesn't
---- need it, so the param is omitted. Lua silently drops the extra
---- argument; no annotation needed.
-function M.run()
+M.run = crap.any.job_handler(function(_context)
   -- Per-collection accessors give full return-type narrowing and
   -- per-column `where` autocomplete without any `---@type` ceremony.
   local posts = crap.collections.posts.find({ limit = 0, overrideAccess = true })
@@ -23,7 +20,7 @@ function M.run()
       inquiries and inquiries.pagination.totalDocs or 0
     )
   )
-end
+end)
 
 crap.jobs.define("weekly_report", {
   handler = "jobs.weekly_report.run",

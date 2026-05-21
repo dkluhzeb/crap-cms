@@ -1,10 +1,7 @@
 --- Cron job: daily cleanup of archived inquiries older than 90 days.
 local M = {}
 
---- The runtime passes a `crap.JobHandlerContext` but this job doesn't
---- need it, so the param is omitted. Lua silently drops the extra
---- argument; no annotation needed.
-function M.run()
+M.run = crap.any.job_handler(function(_context)
   -- `os.date(fmt, time)` is typed as `string|osdate`. The bang prefix
   -- in the format string guarantees a string return, but LuaLS can't
   -- infer that — cast explicitly so the value type-checks downstream
@@ -33,7 +30,7 @@ function M.run()
   if count > 0 then
     crap.log.info(string.format("Cleaned up %d archived inquiries", count))
   end
-end
+end)
 
 crap.jobs.define("cleanup_archived", {
   handler = "jobs.cleanup_archived.run",

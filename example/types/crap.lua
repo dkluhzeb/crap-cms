@@ -731,13 +731,103 @@ function crap.fields.join(config) end
 --- @field ui_locale? string Admin UI locale code (e.g., `"en"`, `"de"`). Nil if not set or called from gRPC without locale context.
 --- @field hook_depth integer  Current recursion depth. `0` = top-level API/admin call, `1+` = from Lua CRUD inside hooks. Hooks are skipped when this reaches `hooks.max_depth` (default: `3`).
 
+--- The authenticated user attached to `crap.AccessContext.user`.
+--- Carries the base `crap.Document` shape (id + timestamps) plus an
+--- index signature for arbitrary field access — the static type
+--- can't narrow further because a project can have multiple auth
+--- collections. Cast explicitly when you know the collection:
+--- `local u = context.user --[[@as crap.doc.Users]]`.
+--- @class crap.AuthUser : crap.Document
+--- @field [string] any
+
 --- Context passed to collection- and field-level access functions.
 --- Return `true` to allow, `false` / `nil` to deny, or a filter table
 --- (read only) to allow with query constraints.
 --- @class crap.AccessContext
---- @field user? crap.Document Full user document from the auth collection (nil if anonymous).
+--- @field user? crap.AuthUser Full user document from the auth collection (nil if anonymous). Typed as `crap.AuthUser` (a `crap.Document` variant with an `[string] any` index signature) so access functions can read `context.user.role` / `context.user.email` etc. without per-call casts — the static type can't narrow to a specific auth-collection doc since projects may have multiple auth collections. Users who know their auth collection can still cast: `local u = context.user --[[@as crap.doc.Users]]`.
 --- @field id? string Document ID (for `update` / `delete` / `find_by_id`).
 --- @field data? table<string, any> Incoming data (for `create` / `update`).
+
+-- ── Function-type aliases (one-liner `---@type` for callables) ─────
+
+--- Generic collection hook. Use for hooks that take `crap.HookContext`
+--- (no per-collection narrowing); for typed contexts use
+--- `crap.hook_fn.<Pascal>` from `generated.lua`.
+--- @alias crap.hook_fn fun(ctx: crap.HookContext): crap.HookContext
+
+--- Generic field hook. Use for hooks that take the generic
+--- `crap.FieldHookContext`; for typed contexts use
+--- `crap.field_hook_fn.<Pascal>` from `generated.lua`. Same shape
+--- as the older `crap.FieldHookFn` alias — both are kept; new code
+--- should prefer this lowercase name for naming consistency with
+--- the per-collection variants.
+--- @alias crap.field_hook_fn fun(value: any, context: crap.FieldHookContext): any
+
+--- Access control function. Returns `true`/`false` for global allow /
+--- deny, or a filter table to constrain results.
+--- @alias crap.access_fn fun(ctx: crap.AccessContext): boolean | table
+
+--- Custom auth strategy `authenticate` callback. Receives request
+--- headers + the collection slug; returns a user document on success
+--- or `nil` to fall through to the next method.
+--- @alias crap.auth_strategy_fn fun(ctx: crap.AuthStrategyContext): crap.Document?
+
+--- Job handler entry point. The runtime ignores the return value.
+--- @alias crap.job_handler_fn fun(ctx: crap.JobHandlerContext)
+
+--- Computed row label for arrays/blocks. Receives the row table and
+--- returns the display string (or `nil` to fall back to `label_field`).
+--- @alias crap.row_label_fn fun(row: table<string, any>): string?
+
+-- ── crap.any — cross-collection typing helpers ─────────────────────
+
+--- Typing helpers for callables that don't belong to a specific
+--- collection (generic-context collection/field hooks, access
+--- functions, auth strategies, job handlers, row labels). Each
+--- function is a no-op pass-through at runtime; its only purpose is
+--- to give LuaLS a typed parameter slot so the body's `value` / `ctx`
+--- params get inferred via `Lua.type.inferParamType`.
+---
+--- For per-collection narrowing use the slug accessors instead:
+--- `crap.collections.<slug>.{hook,field_hook,condition}` /
+--- `crap.globals.<slug>.{hook,field_hook,condition}`.
+--- @class crap.any
+crap.any = {}
+
+--- Wrap a collection hook that takes a generic `crap.HookContext`.
+--- @param fn crap.hook_fn
+--- @return crap.hook_fn
+function crap.any.collection_hook(fn) end
+
+--- Wrap a field hook that takes a generic `crap.FieldHookContext`.
+--- @param fn crap.field_hook_fn
+--- @return crap.field_hook_fn
+function crap.any.field_hook(fn) end
+
+--- Wrap an access control function.
+--- @param fn crap.access_fn
+--- @return crap.access_fn
+function crap.any.access(fn) end
+
+--- Wrap an auth strategy `authenticate` callback.
+--- @param fn crap.auth_strategy_fn
+--- @return crap.auth_strategy_fn
+function crap.any.auth_strategy(fn) end
+
+--- Wrap a job handler.
+--- @param fn crap.job_handler_fn
+--- @return crap.job_handler_fn
+function crap.any.job_handler(fn) end
+
+--- Wrap a row-label function for arrays/blocks.
+--- @param fn crap.row_label_fn
+--- @return crap.row_label_fn
+function crap.any.row_label(fn) end
+
+--- Wrap a generic display condition (no per-collection data narrowing).
+--- @param fn fun(data: table<string, any>): boolean | table
+--- @return fun(data: table<string, any>): boolean | table
+function crap.any.display_condition(fn) end
 
 -- ── crap.collections ─────────────────────────────────────────
 

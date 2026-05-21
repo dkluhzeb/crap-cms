@@ -51,6 +51,8 @@
 ---@field documents crap.doc.Categories[]
 
 ---@alias crap.hook_fn.Categories fun(ctx: crap.hook.Categories): crap.hook.Categories
+---@alias crap.field_hook_fn.Categories fun(value: any, context: crap.field_hook.Categories): any
+---@alias crap.display_condition_fn.Categories fun(data: crap.data.Categories): boolean | table
 
 ---@class crap.field_hook.Categories
 ---@field field_name string
@@ -160,6 +162,35 @@ function _coll_categories.ref_count(id) end
 
 crap.collections.categories = _coll_categories
 
+---@param fn crap.hook_fn.Categories
+---@return crap.hook_fn.Categories
+function crap.collections.categories.hook(fn) end
+
+---@overload fun(field: "title", fn: fun(value: string, ctx: crap.field_hook.Categories): string?)
+---@overload fun(field: "slug", fn: fun(value: string, ctx: crap.field_hook.Categories): string?)
+---@overload fun(field: "description", fn: fun(value: string, ctx: crap.field_hook.Categories): string?)
+---@overload fun(field: "parent", fn: fun(value: string, ctx: crap.field_hook.Categories): string?)
+---@overload fun(field: "color", fn: fun(value: string, ctx: crap.field_hook.Categories): string?)
+---@overload fun(field: string, fn: crap.field_hook_fn.Categories)
+---@overload fun(fn: crap.field_hook_fn.Categories)
+function crap.collections.categories.field_hook(field, fn) end
+
+---@param fn crap.display_condition_fn.Categories
+---@return crap.display_condition_fn.Categories
+function crap.collections.categories.condition(fn) end
+
+---@param fn crap.access_fn
+---@return crap.access_fn
+function crap.collections.categories.access(fn) end
+
+---@param fn crap.auth_strategy_fn
+---@return crap.auth_strategy_fn
+function crap.collections.categories.auth_strategy(fn) end
+
+---@param fn crap.row_label_fn
+---@return crap.row_label_fn
+function crap.collections.categories.row_label(fn) end
+
 ---@class crap.group.ClientsSeo
 ---@field meta_title? string
 ---@field meta_description? string
@@ -225,6 +256,8 @@ crap.collections.categories = _coll_categories
 ---@field documents crap.doc.Clients[]
 
 ---@alias crap.hook_fn.Clients fun(ctx: crap.hook.Clients): crap.hook.Clients
+---@alias crap.field_hook_fn.Clients fun(value: any, context: crap.field_hook.Clients): any
+---@alias crap.display_condition_fn.Clients fun(data: crap.data.Clients): boolean | table
 
 ---@class crap.field_hook.Clients
 ---@field field_name string
@@ -338,6 +371,37 @@ function _coll_clients.ref_count(id) end
 
 crap.collections.clients = _coll_clients
 
+---@param fn crap.hook_fn.Clients
+---@return crap.hook_fn.Clients
+function crap.collections.clients.hook(fn) end
+
+---@overload fun(field: "company_name", fn: fun(value: string, ctx: crap.field_hook.Clients): string?)
+---@overload fun(field: "logo", fn: fun(value: string, ctx: crap.field_hook.Clients): string?)
+---@overload fun(field: "website", fn: fun(value: string, ctx: crap.field_hook.Clients): string?)
+---@overload fun(field: "since", fn: fun(value: string, ctx: crap.field_hook.Clients): string?)
+---@overload fun(field: "contact_phone", fn: fun(value: string, ctx: crap.field_hook.Clients): string?)
+---@overload fun(field: "industry", fn: fun(value: "technology" | "finance" | "healthcare" | "education" | "retail" | "media" | "nonprofit" | "government", ctx: crap.field_hook.Clients): "technology" | "finance" | "healthcare" | "education" | "retail" | "media" | "nonprofit" | "government"?)
+---@overload fun(field: "notes", fn: fun(value: string, ctx: crap.field_hook.Clients): string?)
+---@overload fun(field: string, fn: crap.field_hook_fn.Clients)
+---@overload fun(fn: crap.field_hook_fn.Clients)
+function crap.collections.clients.field_hook(field, fn) end
+
+---@param fn crap.display_condition_fn.Clients
+---@return crap.display_condition_fn.Clients
+function crap.collections.clients.condition(fn) end
+
+---@param fn crap.access_fn
+---@return crap.access_fn
+function crap.collections.clients.access(fn) end
+
+---@param fn crap.auth_strategy_fn
+---@return crap.auth_strategy_fn
+function crap.collections.clients.auth_strategy(fn) end
+
+---@param fn crap.row_label_fn
+---@return crap.row_label_fn
+function crap.collections.clients.row_label(fn) end
+
 ---@class crap.group.EventsLocation
 ---@field venue_name? string
 ---@field address? string
@@ -421,6 +485,8 @@ crap.collections.clients = _coll_clients
 ---@field documents crap.doc.Events[]
 
 ---@alias crap.hook_fn.Events fun(ctx: crap.hook.Events): crap.hook.Events
+---@alias crap.field_hook_fn.Events fun(value: any, context: crap.field_hook.Events): any
+---@alias crap.display_condition_fn.Events fun(data: crap.data.Events): boolean | table
 
 ---@class crap.field_hook.Events
 ---@field field_name string
@@ -542,6 +608,38 @@ function _coll_events.ref_count(id) end
 
 crap.collections.events = _coll_events
 
+---@param fn crap.hook_fn.Events
+---@return crap.hook_fn.Events
+function crap.collections.events.hook(fn) end
+
+---@overload fun(field: "title", fn: fun(value: string, ctx: crap.field_hook.Events): string?)
+---@overload fun(field: "slug", fn: fun(value: string, ctx: crap.field_hook.Events): string?)
+---@overload fun(field: "description", fn: fun(value: string, ctx: crap.field_hook.Events): string?)
+---@overload fun(field: "hero_image", fn: fun(value: string, ctx: crap.field_hook.Events): string?)
+---@overload fun(field: "online", fn: fun(value: boolean, ctx: crap.field_hook.Events): boolean?)
+---@overload fun(field: "event_url", fn: fun(value: string, ctx: crap.field_hook.Events): string?)
+---@overload fun(field: "speakers", fn: fun(value: string[], ctx: crap.field_hook.Events): string[]?)
+---@overload fun(field: "categories", fn: fun(value: string[], ctx: crap.field_hook.Events): string[]?)
+---@overload fun(field: string, fn: crap.field_hook_fn.Events)
+---@overload fun(fn: crap.field_hook_fn.Events)
+function crap.collections.events.field_hook(field, fn) end
+
+---@param fn crap.display_condition_fn.Events
+---@return crap.display_condition_fn.Events
+function crap.collections.events.condition(fn) end
+
+---@param fn crap.access_fn
+---@return crap.access_fn
+function crap.collections.events.access(fn) end
+
+---@param fn crap.auth_strategy_fn
+---@return crap.auth_strategy_fn
+function crap.collections.events.auth_strategy(fn) end
+
+---@param fn crap.row_label_fn
+---@return crap.row_label_fn
+function crap.collections.events.row_label(fn) end
+
 ---@class crap.data.Inquiries
 ---@field id? string
 ---@field name string
@@ -602,6 +700,8 @@ crap.collections.events = _coll_events
 ---@field documents crap.doc.Inquiries[]
 
 ---@alias crap.hook_fn.Inquiries fun(ctx: crap.hook.Inquiries): crap.hook.Inquiries
+---@alias crap.field_hook_fn.Inquiries fun(value: any, context: crap.field_hook.Inquiries): any
+---@alias crap.display_condition_fn.Inquiries fun(data: crap.data.Inquiries): boolean | table
 
 ---@class crap.field_hook.Inquiries
 ---@field field_name string
@@ -713,6 +813,41 @@ function _coll_inquiries.restore_version(id, version_id, opts) end
 function _coll_inquiries.ref_count(id) end
 
 crap.collections.inquiries = _coll_inquiries
+
+---@param fn crap.hook_fn.Inquiries
+---@return crap.hook_fn.Inquiries
+function crap.collections.inquiries.hook(fn) end
+
+---@overload fun(field: "name", fn: fun(value: string, ctx: crap.field_hook.Inquiries): string?)
+---@overload fun(field: "email", fn: fun(value: string, ctx: crap.field_hook.Inquiries): string?)
+---@overload fun(field: "company", fn: fun(value: string, ctx: crap.field_hook.Inquiries): string?)
+---@overload fun(field: "phone", fn: fun(value: string, ctx: crap.field_hook.Inquiries): string?)
+---@overload fun(field: "service", fn: fun(value: string, ctx: crap.field_hook.Inquiries): string?)
+---@overload fun(field: "budget_range", fn: fun(value: "under_5k" | "5k_15k" | "15k_50k" | "50k_100k" | "over_100k", ctx: crap.field_hook.Inquiries): "under_5k" | "5k_15k" | "15k_50k" | "50k_100k" | "over_100k"?)
+---@overload fun(field: "message", fn: fun(value: string, ctx: crap.field_hook.Inquiries): string?)
+---@overload fun(field: "status", fn: fun(value: "new" | "contacted" | "qualified" | "proposal" | "won" | "lost" | "archived", ctx: crap.field_hook.Inquiries): "new" | "contacted" | "qualified" | "proposal" | "won" | "lost" | "archived"?)
+---@overload fun(field: "assigned_to", fn: fun(value: string, ctx: crap.field_hook.Inquiries): string?)
+---@overload fun(field: "internal_notes", fn: fun(value: string, ctx: crap.field_hook.Inquiries): string?)
+---@overload fun(field: "metadata", fn: fun(value: any, ctx: crap.field_hook.Inquiries): any?)
+---@overload fun(field: string, fn: crap.field_hook_fn.Inquiries)
+---@overload fun(fn: crap.field_hook_fn.Inquiries)
+function crap.collections.inquiries.field_hook(field, fn) end
+
+---@param fn crap.display_condition_fn.Inquiries
+---@return crap.display_condition_fn.Inquiries
+function crap.collections.inquiries.condition(fn) end
+
+---@param fn crap.access_fn
+---@return crap.access_fn
+function crap.collections.inquiries.access(fn) end
+
+---@param fn crap.auth_strategy_fn
+---@return crap.auth_strategy_fn
+function crap.collections.inquiries.auth_strategy(fn) end
+
+---@param fn crap.row_label_fn
+---@return crap.row_label_fn
+function crap.collections.inquiries.row_label(fn) end
 
 ---@class crap.data.Media
 ---@field id? string
@@ -834,6 +969,8 @@ crap.collections.inquiries = _coll_inquiries
 ---@field documents crap.doc.Media[]
 
 ---@alias crap.hook_fn.Media fun(ctx: crap.hook.Media): crap.hook.Media
+---@alias crap.field_hook_fn.Media fun(value: any, context: crap.field_hook.Media): any
+---@alias crap.display_condition_fn.Media fun(data: crap.data.Media): boolean | table
 
 ---@class crap.field_hook.Media
 ---@field field_name string
@@ -966,6 +1103,61 @@ function _coll_media.ref_count(id) end
 
 crap.collections.media = _coll_media
 
+---@param fn crap.hook_fn.Media
+---@return crap.hook_fn.Media
+function crap.collections.media.hook(fn) end
+
+---@overload fun(field: "filename", fn: fun(value: string, ctx: crap.field_hook.Media): string?)
+---@overload fun(field: "mime_type", fn: fun(value: string, ctx: crap.field_hook.Media): string?)
+---@overload fun(field: "filesize", fn: fun(value: number, ctx: crap.field_hook.Media): number?)
+---@overload fun(field: "width", fn: fun(value: number, ctx: crap.field_hook.Media): number?)
+---@overload fun(field: "height", fn: fun(value: number, ctx: crap.field_hook.Media): number?)
+---@overload fun(field: "url", fn: fun(value: string, ctx: crap.field_hook.Media): string?)
+---@overload fun(field: "focal_x", fn: fun(value: number, ctx: crap.field_hook.Media): number?)
+---@overload fun(field: "focal_y", fn: fun(value: number, ctx: crap.field_hook.Media): number?)
+---@overload fun(field: "thumbnail_url", fn: fun(value: string, ctx: crap.field_hook.Media): string?)
+---@overload fun(field: "thumbnail_width", fn: fun(value: number, ctx: crap.field_hook.Media): number?)
+---@overload fun(field: "thumbnail_height", fn: fun(value: number, ctx: crap.field_hook.Media): number?)
+---@overload fun(field: "thumbnail_webp_url", fn: fun(value: string, ctx: crap.field_hook.Media): string?)
+---@overload fun(field: "thumbnail_avif_url", fn: fun(value: string, ctx: crap.field_hook.Media): string?)
+---@overload fun(field: "card_url", fn: fun(value: string, ctx: crap.field_hook.Media): string?)
+---@overload fun(field: "card_width", fn: fun(value: number, ctx: crap.field_hook.Media): number?)
+---@overload fun(field: "card_height", fn: fun(value: number, ctx: crap.field_hook.Media): number?)
+---@overload fun(field: "card_webp_url", fn: fun(value: string, ctx: crap.field_hook.Media): string?)
+---@overload fun(field: "card_avif_url", fn: fun(value: string, ctx: crap.field_hook.Media): string?)
+---@overload fun(field: "hero_url", fn: fun(value: string, ctx: crap.field_hook.Media): string?)
+---@overload fun(field: "hero_width", fn: fun(value: number, ctx: crap.field_hook.Media): number?)
+---@overload fun(field: "hero_height", fn: fun(value: number, ctx: crap.field_hook.Media): number?)
+---@overload fun(field: "hero_webp_url", fn: fun(value: string, ctx: crap.field_hook.Media): string?)
+---@overload fun(field: "hero_avif_url", fn: fun(value: string, ctx: crap.field_hook.Media): string?)
+---@overload fun(field: "og_url", fn: fun(value: string, ctx: crap.field_hook.Media): string?)
+---@overload fun(field: "og_width", fn: fun(value: number, ctx: crap.field_hook.Media): number?)
+---@overload fun(field: "og_height", fn: fun(value: number, ctx: crap.field_hook.Media): number?)
+---@overload fun(field: "og_webp_url", fn: fun(value: string, ctx: crap.field_hook.Media): string?)
+---@overload fun(field: "og_avif_url", fn: fun(value: string, ctx: crap.field_hook.Media): string?)
+---@overload fun(field: "alt", fn: fun(value: string, ctx: crap.field_hook.Media): string?)
+---@overload fun(field: "caption", fn: fun(value: string, ctx: crap.field_hook.Media): string?)
+---@overload fun(field: "credit", fn: fun(value: string, ctx: crap.field_hook.Media): string?)
+---@overload fun(field: string, fn: crap.field_hook_fn.Media)
+---@overload fun(fn: crap.field_hook_fn.Media)
+function crap.collections.media.field_hook(field, fn) end
+
+---@param fn crap.display_condition_fn.Media
+---@return crap.display_condition_fn.Media
+function crap.collections.media.condition(fn) end
+
+---@param fn crap.access_fn
+---@return crap.access_fn
+function crap.collections.media.access(fn) end
+
+---@param fn crap.auth_strategy_fn
+---@return crap.auth_strategy_fn
+function crap.collections.media.auth_strategy(fn) end
+
+---@param fn crap.row_label_fn
+---@return crap.row_label_fn
+function crap.collections.media.row_label(fn) end
+
 ---@class crap.data.Pages
 ---@field id? string
 ---@field title string
@@ -1014,6 +1206,8 @@ crap.collections.media = _coll_media
 ---@field documents crap.doc.Pages[]
 
 ---@alias crap.hook_fn.Pages fun(ctx: crap.hook.Pages): crap.hook.Pages
+---@alias crap.field_hook_fn.Pages fun(value: any, context: crap.field_hook.Pages): any
+---@alias crap.display_condition_fn.Pages fun(data: crap.data.Pages): boolean | table
 
 ---@class crap.field_hook.Pages
 ---@field field_name string
@@ -1123,6 +1317,32 @@ function _coll_pages.ref_count(id) end
 
 crap.collections.pages = _coll_pages
 
+---@param fn crap.hook_fn.Pages
+---@return crap.hook_fn.Pages
+function crap.collections.pages.hook(fn) end
+
+---@overload fun(field: "title", fn: fun(value: string, ctx: crap.field_hook.Pages): string?)
+---@overload fun(field: "slug", fn: fun(value: string, ctx: crap.field_hook.Pages): string?)
+---@overload fun(field: string, fn: crap.field_hook_fn.Pages)
+---@overload fun(fn: crap.field_hook_fn.Pages)
+function crap.collections.pages.field_hook(field, fn) end
+
+---@param fn crap.display_condition_fn.Pages
+---@return crap.display_condition_fn.Pages
+function crap.collections.pages.condition(fn) end
+
+---@param fn crap.access_fn
+---@return crap.access_fn
+function crap.collections.pages.access(fn) end
+
+---@param fn crap.auth_strategy_fn
+---@return crap.auth_strategy_fn
+function crap.collections.pages.auth_strategy(fn) end
+
+---@param fn crap.row_label_fn
+---@return crap.row_label_fn
+function crap.collections.pages.row_label(fn) end
+
 ---@class crap.group.PostsSeo
 ---@field meta_title? string
 ---@field meta_description? string
@@ -1203,6 +1423,8 @@ crap.collections.pages = _coll_pages
 ---@field documents crap.doc.Posts[]
 
 ---@alias crap.hook_fn.Posts fun(ctx: crap.hook.Posts): crap.hook.Posts
+---@alias crap.field_hook_fn.Posts fun(value: any, context: crap.field_hook.Posts): any
+---@alias crap.display_condition_fn.Posts fun(data: crap.data.Posts): boolean | table
 
 ---@class crap.field_hook.Posts
 ---@field field_name string
@@ -1321,6 +1543,43 @@ function _coll_posts.ref_count(id) end
 
 crap.collections.posts = _coll_posts
 
+---@param fn crap.hook_fn.Posts
+---@return crap.hook_fn.Posts
+function crap.collections.posts.hook(fn) end
+
+---@overload fun(field: "title", fn: fun(value: string, ctx: crap.field_hook.Posts): string?)
+---@overload fun(field: "slug", fn: fun(value: string, ctx: crap.field_hook.Posts): string?)
+---@overload fun(field: "excerpt", fn: fun(value: string, ctx: crap.field_hook.Posts): string?)
+---@overload fun(field: "post_type", fn: fun(value: "article" | "case_study" | "link" | "video", ctx: crap.field_hook.Posts): "article" | "case_study" | "link" | "video"?)
+---@overload fun(field: "published_at", fn: fun(value: string, ctx: crap.field_hook.Posts): string?)
+---@overload fun(field: "external_url", fn: fun(value: string, ctx: crap.field_hook.Posts): string?)
+---@overload fun(field: "author", fn: fun(value: string, ctx: crap.field_hook.Posts): string?)
+---@overload fun(field: "hero_image", fn: fun(value: string, ctx: crap.field_hook.Posts): string?)
+---@overload fun(field: "categories", fn: fun(value: string[], ctx: crap.field_hook.Posts): string[]?)
+---@overload fun(field: "tags", fn: fun(value: string[], ctx: crap.field_hook.Posts): string[]?)
+---@overload fun(field: "content", fn: fun(value: string, ctx: crap.field_hook.Posts): string?)
+---@overload fun(field: "reading_time", fn: fun(value: string, ctx: crap.field_hook.Posts): string?)
+---@overload fun(field: "related_content", fn: fun(value: string[], ctx: crap.field_hook.Posts): string[]?)
+---@overload fun(field: string, fn: crap.field_hook_fn.Posts)
+---@overload fun(fn: crap.field_hook_fn.Posts)
+function crap.collections.posts.field_hook(field, fn) end
+
+---@param fn crap.display_condition_fn.Posts
+---@return crap.display_condition_fn.Posts
+function crap.collections.posts.condition(fn) end
+
+---@param fn crap.access_fn
+---@return crap.access_fn
+function crap.collections.posts.access(fn) end
+
+---@param fn crap.auth_strategy_fn
+---@return crap.auth_strategy_fn
+function crap.collections.posts.auth_strategy(fn) end
+
+---@param fn crap.row_label_fn
+---@return crap.row_label_fn
+function crap.collections.posts.row_label(fn) end
+
 ---@class crap.array_row.ProjectsDeliverables
 ---@field title string
 ---@field completed? boolean
@@ -1414,6 +1673,8 @@ crap.collections.posts = _coll_posts
 ---@field documents crap.doc.Projects[]
 
 ---@alias crap.hook_fn.Projects fun(ctx: crap.hook.Projects): crap.hook.Projects
+---@alias crap.field_hook_fn.Projects fun(value: any, context: crap.field_hook.Projects): any
+---@alias crap.display_condition_fn.Projects fun(data: crap.data.Projects): boolean | table
 
 ---@class crap.field_hook.Projects
 ---@field field_name string
@@ -1532,6 +1793,42 @@ function _coll_projects.ref_count(id) end
 
 crap.collections.projects = _coll_projects
 
+---@param fn crap.hook_fn.Projects
+---@return crap.hook_fn.Projects
+function crap.collections.projects.hook(fn) end
+
+---@overload fun(field: "title", fn: fun(value: string, ctx: crap.field_hook.Projects): string?)
+---@overload fun(field: "slug", fn: fun(value: string, ctx: crap.field_hook.Projects): string?)
+---@overload fun(field: "excerpt", fn: fun(value: string, ctx: crap.field_hook.Projects): string?)
+---@overload fun(field: "status", fn: fun(value: "planning" | "in_progress" | "review" | "completed" | "archived", ctx: crap.field_hook.Projects): "planning" | "in_progress" | "review" | "completed" | "archived"?)
+---@overload fun(field: "priority", fn: fun(value: "low" | "normal" | "high" | "urgent", ctx: crap.field_hook.Projects): "low" | "normal" | "high" | "urgent"?)
+---@overload fun(field: "featured", fn: fun(value: boolean, ctx: crap.field_hook.Projects): boolean?)
+---@overload fun(field: "hero_image", fn: fun(value: string, ctx: crap.field_hook.Projects): string?)
+---@overload fun(field: "client", fn: fun(value: string, ctx: crap.field_hook.Projects): string?)
+---@overload fun(field: "team", fn: fun(value: string[], ctx: crap.field_hook.Projects): string[]?)
+---@overload fun(field: "categories", fn: fun(value: string[], ctx: crap.field_hook.Projects): string[]?)
+---@overload fun(field: "tags", fn: fun(value: string[], ctx: crap.field_hook.Projects): string[]?)
+---@overload fun(field: "budget", fn: fun(value: number, ctx: crap.field_hook.Projects): number?)
+---@overload fun(field: string, fn: crap.field_hook_fn.Projects)
+---@overload fun(fn: crap.field_hook_fn.Projects)
+function crap.collections.projects.field_hook(field, fn) end
+
+---@param fn crap.display_condition_fn.Projects
+---@return crap.display_condition_fn.Projects
+function crap.collections.projects.condition(fn) end
+
+---@param fn crap.access_fn
+---@return crap.access_fn
+function crap.collections.projects.access(fn) end
+
+---@param fn crap.auth_strategy_fn
+---@return crap.auth_strategy_fn
+function crap.collections.projects.auth_strategy(fn) end
+
+---@param fn crap.row_label_fn
+---@return crap.row_label_fn
+function crap.collections.projects.row_label(fn) end
+
 ---@class crap.group.ServicesPriceRange
 ---@field min_price? number
 ---@field max_price? number
@@ -1606,6 +1903,8 @@ crap.collections.projects = _coll_projects
 ---@field documents crap.doc.Services[]
 
 ---@alias crap.hook_fn.Services fun(ctx: crap.hook.Services): crap.hook.Services
+---@alias crap.field_hook_fn.Services fun(value: any, context: crap.field_hook.Services): any
+---@alias crap.display_condition_fn.Services fun(data: crap.data.Services): boolean | table
 
 ---@class crap.field_hook.Services
 ---@field field_name string
@@ -1721,6 +2020,38 @@ function _coll_services.ref_count(id) end
 
 crap.collections.services = _coll_services
 
+---@param fn crap.hook_fn.Services
+---@return crap.hook_fn.Services
+function crap.collections.services.hook(fn) end
+
+---@overload fun(field: "title", fn: fun(value: string, ctx: crap.field_hook.Services): string?)
+---@overload fun(field: "slug", fn: fun(value: string, ctx: crap.field_hook.Services): string?)
+---@overload fun(field: "description", fn: fun(value: string, ctx: crap.field_hook.Services): string?)
+---@overload fun(field: "icon", fn: fun(value: string, ctx: crap.field_hook.Services): string?)
+---@overload fun(field: "active", fn: fun(value: boolean, ctx: crap.field_hook.Services): boolean?)
+---@overload fun(field: "sort_order", fn: fun(value: number, ctx: crap.field_hook.Services): number?)
+---@overload fun(field: "pricing_type", fn: fun(value: "fixed" | "hourly" | "custom", ctx: crap.field_hook.Services): "fixed" | "hourly" | "custom"?)
+---@overload fun(field: "hero_image", fn: fun(value: string, ctx: crap.field_hook.Services): string?)
+---@overload fun(field: string, fn: crap.field_hook_fn.Services)
+---@overload fun(fn: crap.field_hook_fn.Services)
+function crap.collections.services.field_hook(field, fn) end
+
+---@param fn crap.display_condition_fn.Services
+---@return crap.display_condition_fn.Services
+function crap.collections.services.condition(fn) end
+
+---@param fn crap.access_fn
+---@return crap.access_fn
+function crap.collections.services.access(fn) end
+
+---@param fn crap.auth_strategy_fn
+---@return crap.auth_strategy_fn
+function crap.collections.services.auth_strategy(fn) end
+
+---@param fn crap.row_label_fn
+---@return crap.row_label_fn
+function crap.collections.services.row_label(fn) end
+
 ---@class crap.group.TagsSeo
 ---@field meta_title? string
 ---@field meta_description? string
@@ -1765,6 +2096,8 @@ crap.collections.services = _coll_services
 ---@field documents crap.doc.Tags[]
 
 ---@alias crap.hook_fn.Tags fun(ctx: crap.hook.Tags): crap.hook.Tags
+---@alias crap.field_hook_fn.Tags fun(value: any, context: crap.field_hook.Tags): any
+---@alias crap.display_condition_fn.Tags fun(data: crap.data.Tags): boolean | table
 
 ---@class crap.field_hook.Tags
 ---@field field_name string
@@ -1872,6 +2205,33 @@ function _coll_tags.ref_count(id) end
 
 crap.collections.tags = _coll_tags
 
+---@param fn crap.hook_fn.Tags
+---@return crap.hook_fn.Tags
+function crap.collections.tags.hook(fn) end
+
+---@overload fun(field: "name", fn: fun(value: string, ctx: crap.field_hook.Tags): string?)
+---@overload fun(field: "slug", fn: fun(value: string, ctx: crap.field_hook.Tags): string?)
+---@overload fun(field: "tag_type", fn: fun(value: "topic" | "technology" | "industry" | "skill", ctx: crap.field_hook.Tags): "topic" | "technology" | "industry" | "skill"?)
+---@overload fun(field: string, fn: crap.field_hook_fn.Tags)
+---@overload fun(fn: crap.field_hook_fn.Tags)
+function crap.collections.tags.field_hook(field, fn) end
+
+---@param fn crap.display_condition_fn.Tags
+---@return crap.display_condition_fn.Tags
+function crap.collections.tags.condition(fn) end
+
+---@param fn crap.access_fn
+---@return crap.access_fn
+function crap.collections.tags.access(fn) end
+
+---@param fn crap.auth_strategy_fn
+---@return crap.auth_strategy_fn
+function crap.collections.tags.auth_strategy(fn) end
+
+---@param fn crap.row_label_fn
+---@return crap.row_label_fn
+function crap.collections.tags.row_label(fn) end
+
 ---@class crap.array_row.TestNestingTabbedItems
 ---@field title string
 ---@field description? string
@@ -1962,6 +2322,8 @@ crap.collections.tags = _coll_tags
 ---@field documents crap.doc.TestNesting[]
 
 ---@alias crap.hook_fn.TestNesting fun(ctx: crap.hook.TestNesting): crap.hook.TestNesting
+---@alias crap.field_hook_fn.TestNesting fun(value: any, context: crap.field_hook.TestNesting): any
+---@alias crap.display_condition_fn.TestNesting fun(data: crap.data.TestNesting): boolean | table
 
 ---@class crap.field_hook.TestNesting
 ---@field field_name string
@@ -2071,6 +2433,31 @@ function _coll_test_nesting.ref_count(id) end
 
 crap.collections.test_nesting = _coll_test_nesting
 
+---@param fn crap.hook_fn.TestNesting
+---@return crap.hook_fn.TestNesting
+function crap.collections.test_nesting.hook(fn) end
+
+---@overload fun(field: "name", fn: fun(value: string, ctx: crap.field_hook.TestNesting): string?)
+---@overload fun(field: string, fn: crap.field_hook_fn.TestNesting)
+---@overload fun(fn: crap.field_hook_fn.TestNesting)
+function crap.collections.test_nesting.field_hook(field, fn) end
+
+---@param fn crap.display_condition_fn.TestNesting
+---@return crap.display_condition_fn.TestNesting
+function crap.collections.test_nesting.condition(fn) end
+
+---@param fn crap.access_fn
+---@return crap.access_fn
+function crap.collections.test_nesting.access(fn) end
+
+---@param fn crap.auth_strategy_fn
+---@return crap.auth_strategy_fn
+function crap.collections.test_nesting.auth_strategy(fn) end
+
+---@param fn crap.row_label_fn
+---@return crap.row_label_fn
+function crap.collections.test_nesting.row_label(fn) end
+
 ---@class crap.group.TestimonialsSeo
 ---@field meta_title? string
 ---@field meta_description? string
@@ -2130,6 +2517,8 @@ crap.collections.test_nesting = _coll_test_nesting
 ---@field documents crap.doc.Testimonials[]
 
 ---@alias crap.hook_fn.Testimonials fun(ctx: crap.hook.Testimonials): crap.hook.Testimonials
+---@alias crap.field_hook_fn.Testimonials fun(value: any, context: crap.field_hook.Testimonials): any
+---@alias crap.display_condition_fn.Testimonials fun(data: crap.data.Testimonials): boolean | table
 
 ---@class crap.field_hook.Testimonials
 ---@field field_name string
@@ -2242,6 +2631,38 @@ function _coll_testimonials.ref_count(id) end
 
 crap.collections.testimonials = _coll_testimonials
 
+---@param fn crap.hook_fn.Testimonials
+---@return crap.hook_fn.Testimonials
+function crap.collections.testimonials.hook(fn) end
+
+---@overload fun(field: "author_name", fn: fun(value: string, ctx: crap.field_hook.Testimonials): string?)
+---@overload fun(field: "author_title", fn: fun(value: string, ctx: crap.field_hook.Testimonials): string?)
+---@overload fun(field: "company", fn: fun(value: string, ctx: crap.field_hook.Testimonials): string?)
+---@overload fun(field: "author_photo", fn: fun(value: string, ctx: crap.field_hook.Testimonials): string?)
+---@overload fun(field: "quote", fn: fun(value: string, ctx: crap.field_hook.Testimonials): string?)
+---@overload fun(field: "rating", fn: fun(value: number, ctx: crap.field_hook.Testimonials): number?)
+---@overload fun(field: "project", fn: fun(value: string, ctx: crap.field_hook.Testimonials): string?)
+---@overload fun(field: "featured", fn: fun(value: boolean, ctx: crap.field_hook.Testimonials): boolean?)
+---@overload fun(field: string, fn: crap.field_hook_fn.Testimonials)
+---@overload fun(fn: crap.field_hook_fn.Testimonials)
+function crap.collections.testimonials.field_hook(field, fn) end
+
+---@param fn crap.display_condition_fn.Testimonials
+---@return crap.display_condition_fn.Testimonials
+function crap.collections.testimonials.condition(fn) end
+
+---@param fn crap.access_fn
+---@return crap.access_fn
+function crap.collections.testimonials.access(fn) end
+
+---@param fn crap.auth_strategy_fn
+---@return crap.auth_strategy_fn
+function crap.collections.testimonials.auth_strategy(fn) end
+
+---@param fn crap.row_label_fn
+---@return crap.row_label_fn
+function crap.collections.testimonials.row_label(fn) end
+
 ---@class crap.data.Users
 ---@field id? string
 ---@field email string
@@ -2290,6 +2711,8 @@ crap.collections.testimonials = _coll_testimonials
 ---@field documents crap.doc.Users[]
 
 ---@alias crap.hook_fn.Users fun(ctx: crap.hook.Users): crap.hook.Users
+---@alias crap.field_hook_fn.Users fun(value: any, context: crap.field_hook.Users): any
+---@alias crap.display_condition_fn.Users fun(data: crap.data.Users): boolean | table
 
 ---@class crap.field_hook.Users
 ---@field field_name string
@@ -2397,6 +2820,36 @@ function _coll_users.ref_count(id) end
 
 crap.collections.users = _coll_users
 
+---@param fn crap.hook_fn.Users
+---@return crap.hook_fn.Users
+function crap.collections.users.hook(fn) end
+
+---@overload fun(field: "email", fn: fun(value: string, ctx: crap.field_hook.Users): string?)
+---@overload fun(field: "name", fn: fun(value: string, ctx: crap.field_hook.Users): string?)
+---@overload fun(field: "role", fn: fun(value: "admin" | "director" | "editor" | "author", ctx: crap.field_hook.Users): "admin" | "director" | "editor" | "author"?)
+---@overload fun(field: "skills", fn: fun(value: ("design" | "development" | "strategy" | "motion" | "photography" | "copywriting" | "3d"|string)[], ctx: crap.field_hook.Users): ("design" | "development" | "strategy" | "motion" | "photography" | "copywriting" | "3d"|string)[]?)
+---@overload fun(field: "avatar", fn: fun(value: string, ctx: crap.field_hook.Users): string?)
+---@overload fun(field: "bio", fn: fun(value: string, ctx: crap.field_hook.Users): string?)
+---@overload fun(field: string, fn: crap.field_hook_fn.Users)
+---@overload fun(fn: crap.field_hook_fn.Users)
+function crap.collections.users.field_hook(field, fn) end
+
+---@param fn crap.display_condition_fn.Users
+---@return crap.display_condition_fn.Users
+function crap.collections.users.condition(fn) end
+
+---@param fn crap.access_fn
+---@return crap.access_fn
+function crap.collections.users.access(fn) end
+
+---@param fn crap.auth_strategy_fn
+---@return crap.auth_strategy_fn
+function crap.collections.users.auth_strategy(fn) end
+
+---@param fn crap.row_label_fn
+---@return crap.row_label_fn
+function crap.collections.users.row_label(fn) end
+
 ---@class crap.array_row.FooterPartnerLogos
 ---@field name string
 ---@field logo? string
@@ -2442,6 +2895,10 @@ crap.collections.users = _coll_users
 ---@field user? table
 ---@field ui_locale? string
 
+---@alias crap.hook_fn.global_footer fun(ctx: crap.hook.global_footer): crap.hook.global_footer
+---@alias crap.field_hook_fn.global_footer fun(value: any, context: crap.field_hook.global_footer): any
+---@alias crap.display_condition_fn.global_footer fun(data: crap.global_data.Footer): boolean | table
+
 ---@class crap.globals.Footer
 local _glob_footer = {}
 
@@ -2455,6 +2912,28 @@ function _glob_footer.get(opts) end
 function _glob_footer.update(data, opts) end
 
 crap.globals.footer = _glob_footer
+
+---@param fn crap.hook_fn.global_footer
+---@return crap.hook_fn.global_footer
+function crap.globals.footer.hook(fn) end
+
+---@overload fun(field: "copyright_text", fn: fun(value: string, ctx: crap.field_hook.global_footer): string?)
+---@overload fun(field: "show_social_links", fn: fun(value: boolean, ctx: crap.field_hook.global_footer): boolean?)
+---@overload fun(field: string, fn: crap.field_hook_fn.global_footer)
+---@overload fun(fn: crap.field_hook_fn.global_footer)
+function crap.globals.footer.field_hook(field, fn) end
+
+---@param fn crap.display_condition_fn.global_footer
+---@return crap.display_condition_fn.global_footer
+function crap.globals.footer.condition(fn) end
+
+---@param fn crap.access_fn
+---@return crap.access_fn
+function crap.globals.footer.access(fn) end
+
+---@param fn crap.row_label_fn
+---@return crap.row_label_fn
+function crap.globals.footer.row_label(fn) end
 
 ---@class crap.array_row.NavigationMainNav
 ---@field label string
@@ -2500,6 +2979,10 @@ crap.globals.footer = _glob_footer
 ---@field user? table
 ---@field ui_locale? string
 
+---@alias crap.hook_fn.global_navigation fun(ctx: crap.hook.global_navigation): crap.hook.global_navigation
+---@alias crap.field_hook_fn.global_navigation fun(value: any, context: crap.field_hook.global_navigation): any
+---@alias crap.display_condition_fn.global_navigation fun(data: crap.global_data.Navigation): boolean | table
+
 ---@class crap.globals.Navigation
 local _glob_navigation = {}
 
@@ -2513,6 +2996,26 @@ function _glob_navigation.get(opts) end
 function _glob_navigation.update(data, opts) end
 
 crap.globals.navigation = _glob_navigation
+
+---@param fn crap.hook_fn.global_navigation
+---@return crap.hook_fn.global_navigation
+function crap.globals.navigation.hook(fn) end
+
+---@overload fun(field: string, fn: crap.field_hook_fn.global_navigation)
+---@overload fun(fn: crap.field_hook_fn.global_navigation)
+function crap.globals.navigation.field_hook(field, fn) end
+
+---@param fn crap.display_condition_fn.global_navigation
+---@return crap.display_condition_fn.global_navigation
+function crap.globals.navigation.condition(fn) end
+
+---@param fn crap.access_fn
+---@return crap.access_fn
+function crap.globals.navigation.access(fn) end
+
+---@param fn crap.row_label_fn
+---@return crap.row_label_fn
+function crap.globals.navigation.row_label(fn) end
 
 ---@class crap.group.SiteSettingsSocial
 ---@field github? string
@@ -2582,6 +3085,10 @@ crap.globals.navigation = _glob_navigation
 ---@field user? table
 ---@field ui_locale? string
 
+---@alias crap.hook_fn.global_site_settings fun(ctx: crap.hook.global_site_settings): crap.hook.global_site_settings
+---@alias crap.field_hook_fn.global_site_settings fun(value: any, context: crap.field_hook.global_site_settings): any
+---@alias crap.display_condition_fn.global_site_settings fun(data: crap.global_data.SiteSettings): boolean | table
+
 ---@class crap.globals.SiteSettings
 local _glob_site_settings = {}
 
@@ -2595,6 +3102,26 @@ function _glob_site_settings.get(opts) end
 function _glob_site_settings.update(data, opts) end
 
 crap.globals.site_settings = _glob_site_settings
+
+---@param fn crap.hook_fn.global_site_settings
+---@return crap.hook_fn.global_site_settings
+function crap.globals.site_settings.hook(fn) end
+
+---@overload fun(field: string, fn: crap.field_hook_fn.global_site_settings)
+---@overload fun(fn: crap.field_hook_fn.global_site_settings)
+function crap.globals.site_settings.field_hook(field, fn) end
+
+---@param fn crap.display_condition_fn.global_site_settings
+---@return crap.display_condition_fn.global_site_settings
+function crap.globals.site_settings.condition(fn) end
+
+---@param fn crap.access_fn
+---@return crap.access_fn
+function crap.globals.site_settings.access(fn) end
+
+---@param fn crap.row_label_fn
+---@return crap.row_label_fn
+function crap.globals.site_settings.row_label(fn) end
 
 ---@overload fun(collection: "categories", query?: crap.FindQuery): crap.find_result.Categories
 ---@overload fun(collection: "clients", query?: crap.FindQuery): crap.find_result.Clients

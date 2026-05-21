@@ -239,7 +239,128 @@ crap.collections.posts.delete("abc123", { overrideAccess = true })
 | `hooks` | boolean | `true` | Run `before_delete` / `after_delete` hooks. |
 | `forceHardDelete` | boolean | `false` | Skip `soft_delete` and remove the row permanently. Still requires `access.delete` when `overrideAccess = false`. |
 
-### `crap.collections.<slug>.undelete(id)`
+### `crap.collections.<slug>.undelete(id)` (and others)
+
+The accessor also covers `unpublish(id, opts?)`, `validate(data, opts?)`,
+`count(query?)`, `create_many(items, opts?)`, `update_many(query, data,
+opts?)`, `delete_many(query, opts?)`, `list_versions(id, opts?)`,
+`restore_version(id, version_id, opts?)`, and `ref_count(id)` —
+same shape as the slug-keyed equivalents, slug bound.
+
+## Typing factories — `crap.collections.<slug>.{hook,field_hook,condition,access,...}`
+
+Per-collection **typing helpers** that wrap your function literal
+and let LuaLS infer the parameter types of the body. Pure
+pass-throughs at runtime (`f(fn) = fn`); the typing comes from the
+factory's signature. See [`crap.any`](typing-factories.md) for the
+cross-collection equivalents.
+
+Prerequisite: `"type.inferParamType": true` in `.luarc.json` (set
+by default in the `init` scaffold).
+
+### `crap.collections.<slug>.hook(fn)`
+
+Collection lifecycle hook with `context` narrowed to
+`crap.hook.<Pascal>`. Use for `before_validate`, `before_change`,
+`after_change`, `before_read`, `after_read` — events where the
+runtime ships a typed context.
+
+```lua
+-- hooks/inquiries/notify.lua
+return crap.collections.inquiries.hook(function(context)
+    -- context.data is typed crap.data.Inquiries
+    if context.operation == "create" then
+        crap.jobs.queue("notify", { email = context.data.email })
+    end
+    return context
+end)
+```
+
+For `before_delete` / `after_delete` / `before_broadcast` the
+runtime always sends a generic `crap.HookContext` — use
+`crap.any.collection_hook(fn)` instead.
+
+### `crap.collections.<slug>.field_hook(field, fn)` and `field_hook(fn)`
+
+Field-level hook. Two forms:
+
+```lua
+-- Per-field: value narrows to the field's declared type
+return crap.collections.posts.field_hook("title", function(value, context)
+    -- value: string (posts.title is a text field)
+    return value:lower()
+end)
+
+-- Any field: value is `any`, context still narrowed per-collection
+return crap.collections.posts.field_hook(function(value, context)
+    -- context: crap.field_hook.Posts
+    return value
+end)
+```
+
+The per-field form uses an `---@overload` per field declared on the
+collection plus a `string` fallback for dynamic names. `value`'s
+type matches the field type the typegen emits — string for text /
+textarea / email / date / richtext / code, number for number,
+boolean for checkbox, the literal-string union for select / radio,
+`string` or `string[]` for relationship / upload, etc.
+
+### `crap.collections.<slug>.condition(fn)`
+
+Display condition with `data` narrowed to `crap.data.<Pascal>`.
+
+```lua
+-- hooks/posts/show_external_url.lua
+return crap.collections.posts.condition(function(data)
+    -- data.post_type narrowed to its select union
+    return { field = "post_type", ["in"] = { "link", "video" } }
+end)
+```
+
+### `crap.collections.<slug>.access(fn)`
+
+Access control function. Same signature as
+[`crap.any.access(fn)`](typing-factories.md) — included on the
+per-collection accessor for discoverability via
+`crap.collections.<slug>.<TAB>`. No per-collection narrowing
+(access context is uniform across collections).
+
+```lua
+return crap.collections.users.access(function(context)
+    return context.user ~= nil
+end)
+```
+
+### `crap.collections.<slug>.auth_strategy(fn)`
+
+Custom auth strategy `authenticate` callback. Same shape as
+`crap.any.auth_strategy(fn)`; lives on the per-collection accessor
+for discoverability when scaffolding a strategy specifically for
+that collection.
+
+### `crap.collections.<slug>.row_label(fn)`
+
+Computed row label for array/blocks fields. Receives the row table
+and returns the display string (or `nil` to fall back to
+`label_field`). Per-field narrowing of the row type is a future
+enhancement — today the row is typed as `table<string, any>`.
+
+## Slug-keyed dispatch (dynamic case)
+
+For the rare case where the slug isn't known until runtime — auth
+strategies handed `context.collection`, plugins iterating
+`crap.collections.config.list()`, migration cleanup loops — use the
+slug-keyed equivalents:
+
+```lua
+crap.collections.find(collection, query)
+crap.collections.find_by_id(collection, id, opts)
+crap.collections.create(collection, data, opts)
+-- ... etc
+```
+
+Same semantics, slug as the first arg. Reach for these only when
+you genuinely don't have a string literal — they don't narrow.
 
 Restore a soft-deleted document from trash. Returns `true` on
 success. Only available on collections with `soft_delete = true`.

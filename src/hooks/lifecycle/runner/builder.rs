@@ -18,7 +18,9 @@ use crate::{
             types::{DefaultDeny, HookDepth, LuaLocaleConfig, MaxHookDepth, MaxInstructions},
         },
         lua_api::{
-            self, VmLabel, crud::register_crud_functions, register::register_per_slug_accessors,
+            self, VmLabel,
+            crud::register_crud_functions,
+            register::{register_any_factories, register_per_slug_accessors},
         },
     },
 };
@@ -232,6 +234,10 @@ fn register_apis(lua: &Lua, registry: &Arc<Registry>, config: &CrapConfig) -> Re
     // dispatch to the slug-keyed CRUD API. Runs LAST so every method
     // they wrap exists on `crap.collections` / `crap.globals`.
     register_per_slug_accessors(lua, registry)?;
+    // `crap.any.*` — pass-through typing helpers for cross-collection
+    // callables. Pure no-ops at runtime; their value is letting LuaLS
+    // propagate callback param types via `Lua.type.inferParamType`.
+    register_any_factories(lua)?;
 
     Ok(())
 }

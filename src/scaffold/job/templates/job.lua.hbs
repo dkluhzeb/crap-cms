@@ -5,22 +5,18 @@ local M = {}
 -- ---@class {{pascal}}Data
 -- ---@field my_field string
 
----@param context crap.JobHandlerContext
----@return table?
-function M.run(context)
+M.run = crap.any.job_handler(function(context)
     -- context.data = input data from queue() or {} for cron
     -- context.job  = { slug, attempt, max_attempts }
-    -- Full CRUD access: crap.collections.find(), .create(), etc.
+    -- Full CRUD access: crap.collections.<slug>.find(), .create(), etc.
 
     -- ---@type {{pascal}}Data
     -- local data = context.data
 
     -- Example:
-    -- local docs = crap.collections.find("posts", { limit = 10 })
+    -- local docs = crap.collections.posts.find({ limit = 10 })
     -- crap.log.info("Processing " .. #docs .. " documents")
-
-    return nil
-end
+end)
 
 crap.jobs.define("{{slug}}", {
     handler = "jobs.{{slug}}.run",
