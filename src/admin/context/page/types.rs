@@ -121,7 +121,8 @@ impl PageType {
 }
 
 /// A breadcrumb entry with a label and optional URL.
-#[derive(Serialize, Clone, JsonSchema)]
+#[derive(Serialize, Clone, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.breadcrumb")]
 pub struct Breadcrumb {
     /// The text label to display for the breadcrumb.
     pub label: String,
@@ -131,16 +132,6 @@ pub struct Breadcrumb {
     /// Optional interpolation param for `{{t label name=label_name}}`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label_name: Option<String>,
-}
-
-impl LuaAnnotation for Breadcrumb {
-    fn render_lua_annotation(out: &mut String) {
-        out.push_str("---@class crap.template.breadcrumb\n");
-        out.push_str("---@field label string\n");
-        out.push_str("---@field url? string\n");
-        out.push_str("---@field label_name? string\n");
-        out.push('\n');
-    }
 }
 
 impl Breadcrumb {

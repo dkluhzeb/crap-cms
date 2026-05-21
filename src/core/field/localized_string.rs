@@ -1,12 +1,15 @@
 //! A string that can be plain or per-locale.
 
+use crate::typegen::lua::LuaAlias;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Plain: `"Title"` — works like before.
-/// Localized: `{ en = "Title", de = "Titel" }` — resolved at render time.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// A string that can be plain or per-locale.
+/// Plain: `"Title"` — used as-is.
+/// Localized: `{ en = "Title", de = "Titel" }` — resolved based on admin locale.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, LuaAlias)]
 #[serde(untagged)]
+#[lua(alias = "crap.LocalizedString")]
 pub enum LocalizedString {
     /// A simple, non-localized string.
     Plain(String),

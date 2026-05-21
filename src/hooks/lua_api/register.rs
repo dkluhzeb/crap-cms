@@ -11,7 +11,7 @@ use crate::{
 };
 
 use super::{
-    access::register_access,
+    access::{register_access_init, register_access_pool},
     auth::register_auth,
     collections::{register_collections_init, register_collections_pool_init},
     config::{register_config, register_locale},
@@ -26,7 +26,7 @@ use super::{
     log::register_log,
     pages::register_pages,
     richtext::{register_richtext_init, register_richtext_pool_init},
-    schema::register_schema,
+    schema::{register_schema_init, register_schema_pool},
     template_data::register_template_data,
     utils::{load_lua_helpers, register_util},
 };
@@ -44,17 +44,22 @@ use super::{
 pub fn register_api(lua: &Lua, registry: &SharedRegistry, config: &CrapConfig) -> Result<()> {
     let crap = lua.create_table().context("Failed to create crap table")?;
 
-    register_collections_init(lua, &crap, Arc::clone(registry))?;
-    register_globals_init(lua, &crap, Arc::clone(registry))?;
-    register_common(lua, &crap, registry, config)?;
-    register_jobs_init(lua, &crap, Arc::clone(registry))?;
-    register_email(lua, &crap, config)?;
-    register_richtext_init(lua, &crap, Arc::clone(registry))?;
-    register_fields(lua, &crap)?;
-    register_template_data(lua, &crap)?;
-    register_pages(lua, &crap)?;
+    // Set `crap` in globals up-front so macro-generated registrations
+    // (via `ensure_table` walking from globals) can find/extend it.
+    // Existing `register_X(lua, &crap, ...)` calls still mutate the same
+    // Lua table — `crap` is reference-counted, both handles point to the
+    // same value.
+    lua.globals().set("crap", crap.clone())?;
 
-    lua.globals().set("crap", crap)?;
+    register_collections_init(lua, Arc::clone(registry))?;
+    register_globals_init(lua, Arc::clone(registry))?;
+    register_common(lua, registry, config)?;
+    register_jobs_init(lua, Arc::clone(registry))?;
+    register_email(lua, config)?;
+    register_richtext_init(lua, Arc::clone(registry))?;
+    register_fields(lua)?;
+    register_template_data(lua)?;
+    register_pages(lua)?;
 
     // Load pure Lua helpers onto crap.util (after crap global is set)
     load_lua_helpers(lua)?;
@@ -80,20 +85,22 @@ pub fn register_api_pool_init(
 ) -> Result<()> {
     let crap = lua.create_table().context("Failed to create crap table")?;
 
-    register_collections_pool_init(lua, &crap, Arc::clone(&registry))?;
-    register_globals_pool_init(lua, &crap, Arc::clone(&registry))?;
+    // Set `crap` in globals up-front — see [`register_api`] for the
+    // rationale (macro-generated registrations walk from globals).
+    lua.globals().set("crap", crap.clone())?;
+
+    register_collections_pool_init(lua, Arc::clone(&registry))?;
+    register_globals_pool_init(lua, Arc::clone(&registry))?;
     // register_access and register_schema are generic over
     // RegistryRead — pass the Arc<Registry> directly. No lock per
     // read.
-    register_common_with_arc(lua, &crap, &registry, config)?;
-    register_jobs_pool_init(lua, &crap, Arc::clone(&registry))?;
-    register_email(lua, &crap, config)?;
-    register_richtext_pool_init(lua, &crap, registry)?;
-    register_fields(lua, &crap)?;
-    register_template_data(lua, &crap)?;
-    register_pages(lua, &crap)?;
-
-    lua.globals().set("crap", crap)?;
+    register_common_with_arc(lua, &registry, config)?;
+    register_jobs_pool_init(lua, Arc::clone(&registry))?;
+    register_email(lua, config)?;
+    register_richtext_pool_init(lua, registry)?;
+    register_fields(lua)?;
+    register_template_data(lua)?;
+    register_pages(lua)?;
 
     load_lua_helpers(lua)?;
 
@@ -102,57 +109,53 @@ pub fn register_api_pool_init(
 
 /// Common register calls for the `init_lua` VM — passes `SharedRegistry`
 /// to access/schema (locks per read; fine since `init_lua` is single-VM
-/// and the writes happen on the same thread).
-fn register_common(
-    lua: &Lua,
-    crap: &mlua::Table,
-    registry: &SharedRegistry,
-    config: &CrapConfig,
-) -> Result<()> {
-    register_log(lua, crap)?;
-    register_util(lua, crap)?;
-    register_crypto(lua, crap, config.auth.secret.as_ref())?;
-    register_schema(lua, crap, Arc::clone(registry))?;
-    register_hooks(lua, crap)?;
-    register_auth(lua, crap)?;
-    register_access(lua, crap, Arc::clone(registry))?;
-    register_env(lua, crap)?;
+/// and the writes happen on the same thread). Every sub-module now
+/// walks `crap` from globals via `ensure_table`, so this fn no longer
+/// needs the parent table reference.
+fn register_common(lua: &Lua, registry: &SharedRegistry, config: &CrapConfig) -> Result<()> {
+    register_log(lua)?;
+    register_util(lua)?;
+    register_crypto(lua, config.auth.secret.as_ref())?;
+    register_schema_init(lua, Arc::clone(registry))?;
+    register_hooks(lua)?;
+    register_auth(lua)?;
+    register_access_init(lua, Arc::clone(registry))?;
+    register_env(lua)?;
     register_http(
         lua,
-        crap,
         config.hooks.allow_private_networks,
         config.hooks.http_max_response_bytes,
     )?;
-    register_config(lua, crap, config)?;
-    register_locale(lua, crap, config)?;
+    register_config(lua, config)?;
+    register_locale(lua, config)?;
     Ok(())
 }
 
 /// Common register calls for pool VMs — passes `Arc<Registry>` to
-/// access/schema for lock-free reads. Same generic `register_access` /
-/// `register_schema` fns as `register_common` — just different
-/// `RegistryRead` impl monomorphized in.
+/// access/schema for lock-free reads. `register_schema_pool` and
+/// `register_access_pool` are the concrete-state pool variants of
+/// the respective registrations. As in `register_common`, every
+/// sub-module walks `crap` from globals so the parent table
+/// reference is no longer needed here.
 fn register_common_with_arc(
     lua: &Lua,
-    crap: &mlua::Table,
     registry: &Arc<Registry>,
     config: &CrapConfig,
 ) -> Result<()> {
-    register_log(lua, crap)?;
-    register_util(lua, crap)?;
-    register_crypto(lua, crap, config.auth.secret.as_ref())?;
-    register_schema(lua, crap, Arc::clone(registry))?;
-    register_hooks(lua, crap)?;
-    register_auth(lua, crap)?;
-    register_access(lua, crap, Arc::clone(registry))?;
-    register_env(lua, crap)?;
+    register_log(lua)?;
+    register_util(lua)?;
+    register_crypto(lua, config.auth.secret.as_ref())?;
+    register_schema_pool(lua, Arc::clone(registry))?;
+    register_hooks(lua)?;
+    register_auth(lua)?;
+    register_access_pool(lua, Arc::clone(registry))?;
+    register_env(lua)?;
     register_http(
         lua,
-        crap,
         config.hooks.allow_private_networks,
         config.hooks.http_max_response_bytes,
     )?;
-    register_config(lua, crap, config)?;
-    register_locale(lua, crap, config)?;
+    register_config(lua, config)?;
+    register_locale(lua, config)?;
     Ok(())
 }

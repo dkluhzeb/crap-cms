@@ -2,7 +2,10 @@
 
 use std::sync::Arc;
 
-use mlua::{Error::RuntimeError, Lua, Table};
+use mlua::{
+    Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value as LuaValue,
+};
+use serde::Deserialize;
 use serde_json::Value;
 
 use anyhow::Result;
@@ -16,13 +19,106 @@ use crate::{
         lua_api::crud::{
             get_tx_conn,
             helpers::{
-                check_hook_depth, get_opt_bool, hook_locale_config, hook_lua_infra, hook_ui_locale,
-                hook_user, resolve_collection,
+                check_hook_depth, hook_locale_config, hook_lua_infra, hook_ui_locale, hook_user,
+                resolve_collection,
             },
         },
     },
     service::{LuaWriteHooks, ServiceContext, persist_unpublish, unpublish_document},
+    typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
+
+/// Optional options for `crap.collections.unpublish`.
+#[derive(Deserialize, LuaAnnotation)]
+#[serde(default)]
+#[lua(class = "crap.UnpublishOptions")]
+pub(crate) struct UnpublishOptions {
+    /// Skip access control checks (default: `false`).
+    #[serde(rename = "overrideAccess")]
+    #[lua(rename = "overrideAccess", optional)]
+    pub(crate) override_access: bool,
+    /// Run lifecycle hooks (default: `true`).
+    #[lua(optional)]
+    pub(crate) hooks: bool,
+}
+
+impl Default for UnpublishOptions {
+    fn default() -> Self {
+        Self {
+            override_access: false,
+            hooks: true,
+        }
+    }
+}
+
+impl FromLua for UnpublishOptions {
+    fn from_lua(value: LuaValue, lua: &Lua) -> LuaResult<Self> {
+        match value {
+            LuaValue::Nil => Ok(Self::default()),
+            other => lua.from_value(other),
+        }
+    }
+}
+
+/// Unpublish a document — sets `_status` to `"draft"` without modifying
+/// the underlying field data. Only available on collections with
+/// `versions` enabled.
+/// Inside hooks, runs within the parent operation's transaction.
+#[lua_fn(path = "crap.collections.unpublish", returns = "crap.Document")]
+fn collections_unpublish(
+    state: &Arc<Registry>,
+    lua: &Lua,
+    #[lua(doc = "Collection slug.")] collection: String,
+    #[lua(doc = "Document ID.")] id: String,
+    #[lua(ty = "crap.UnpublishOptions", doc = "Optional options.")] opts: Option<UnpublishOptions>,
+) -> LuaResult<Table> {
+    let opts = opts.unwrap_or_default();
+    let conn = get_tx_conn(lua)?;
+
+    let user = hook_user(lua);
+    let ui_locale = hook_ui_locale(lua);
+    let lua_infra = hook_lua_infra(lua);
+    let def = resolve_collection(state, &collection)?;
+
+    if !def.has_versions() {
+        return Err(RuntimeError(format!(
+            "Collection '{collection}' does not have versioning enabled"
+        )));
+    }
+
+    let (hooks_enabled, _guard) = check_hook_depth(lua, opts.hooks, &collection, "update");
+
+    let write_hooks = LuaWriteHooks::builder(lua)
+        .user(user.as_ref())
+        .ui_locale(ui_locale.as_deref())
+        .override_access(opts.override_access)
+        .registry(Some(state.as_ref()))
+        .hooks_enabled(hooks_enabled)
+        .build();
+
+    let locale_config = hook_locale_config(lua);
+
+    let ctx = ServiceContext::collection(&collection, &def)
+        .conn(conn)
+        .write_hooks(&write_hooks)
+        .user(user.as_ref())
+        .override_access(opts.override_access)
+        .locale_config(locale_config.as_ref())
+        .lua_infra(lua_infra.as_ref())
+        .build();
+
+    let doc = unpublish_document(&ctx, &id)
+        .map_err(|e| RuntimeError(format!("unpublish error: {e:#}")))?;
+
+    document_to_lua_table(lua, &doc)
+}
+
+lua_table! {
+    name: crap_collections_unpublish,
+    path: "crap.collections",
+    state: Arc<Registry>,
+    fns: [collections_unpublish],
+}
 
 /// Parameters for the unpublish operation.
 pub(super) struct UnpublishCtx<'a> {
@@ -186,65 +282,10 @@ impl<'a> UnpublishCtxBuilder<'a> {
     }
 }
 
-/// Standalone `crap.collections.unpublish(collection, id, opts?)`.
-fn unpublish_document_lua(
-    lua: &Lua,
-    reg: &Registry,
-    collection: &str,
-    id: &str,
-    opts: Option<&Table>,
-) -> mlua::Result<Table> {
-    let conn = get_tx_conn(lua)?;
-
-    let user = hook_user(lua);
-    let ui_locale = hook_ui_locale(lua);
-    let lua_infra = hook_lua_infra(lua);
-    let override_access = get_opt_bool(opts, "overrideAccess", false);
-    let run_hooks = get_opt_bool(opts, "hooks", true);
-    let def = resolve_collection(reg, collection)?;
-
-    if !def.has_versions() {
-        return Err(RuntimeError(format!(
-            "Collection '{collection}' does not have versioning enabled"
-        )));
-    }
-
-    let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, collection, "update");
-
-    let write_hooks = LuaWriteHooks::builder(lua)
-        .user(user.as_ref())
-        .ui_locale(ui_locale.as_deref())
-        .override_access(override_access)
-        .registry(Some(reg))
-        .hooks_enabled(hooks_enabled)
-        .build();
-
-    let locale_config = hook_locale_config(lua);
-
-    let ctx = ServiceContext::collection(collection, &def)
-        .conn(conn)
-        .write_hooks(&write_hooks)
-        .user(user.as_ref())
-        .override_access(override_access)
-        .locale_config(locale_config.as_ref())
-        .lua_infra(lua_infra.as_ref())
-        .build();
-
-    let doc = unpublish_document(&ctx, id)
-        .map_err(|e| RuntimeError(format!("unpublish error: {e:#}")))?;
-
-    document_to_lua_table(lua, &doc)
-}
-
-/// Register `crap.collections.unpublish(collection, id, opts?)`.
+/// Register `crap.collections.unpublish(collection, id, opts?)`. Parent
+/// `crap.collections` must already exist.
 #[cfg(not(tarpaulin_include))]
-pub(crate) fn register_unpublish(lua: &Lua, table: &Table, registry: Arc<Registry>) -> Result<()> {
-    let unpublish_fn = lua.create_function(
-        move |lua, (collection, id, opts): (String, String, Option<Table>)| {
-            unpublish_document_lua(lua, &registry, &collection, &id, opts.as_ref())
-        },
-    )?;
-    table.set("unpublish", unpublish_fn)?;
-
+pub(crate) fn register_unpublish(lua: &Lua, _table: &Table, registry: Arc<Registry>) -> Result<()> {
+    register_crap_collections_unpublish(lua, registry)?;
     Ok(())
 }

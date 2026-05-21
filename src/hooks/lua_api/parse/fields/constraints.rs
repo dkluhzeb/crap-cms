@@ -5,7 +5,7 @@ use anyhow::{Result, bail};
 use mlua::{Table, Value};
 use serde_json::{Number as JsonNumber, Value as JsonValue};
 
-use crate::core::FieldType;
+use crate::core::{FieldType, PickerAppearance};
 
 use super::super::helpers::{get_bool, get_string};
 
@@ -58,18 +58,30 @@ pub(super) fn parse_date_config(
     field_tbl: &Table,
     name: &str,
     field_type: &FieldType,
-) -> Result<(Option<String>, bool, Option<String>)> {
+) -> Result<(Option<PickerAppearance>, bool, Option<String>)> {
     if *field_type != FieldType::Date {
         return Ok((None, false, None));
     }
 
-    let picker_appearance = get_string(field_tbl, "picker_appearance");
+    let picker_appearance = match get_string(field_tbl, "picker_appearance") {
+        Some(raw) => match raw.parse::<PickerAppearance>() {
+            Ok(p) => Some(p),
+            Err(e) => {
+                tracing::warn!("Field '{}': {}; ignoring", name, e);
+                None
+            }
+        },
+        None => None,
+    };
 
     let timezone = {
         let tz = get_bool(field_tbl, "timezone", false)?;
-        let appearance = picker_appearance.as_deref().unwrap_or("dayOnly");
+        let supports_tz = matches!(picker_appearance, Some(PickerAppearance::DayAndTime));
 
-        if tz && matches!(appearance, "dayOnly" | "timeOnly" | "monthOnly") {
+        if tz && !supports_tz {
+            let appearance = picker_appearance
+                .as_ref()
+                .map_or("dayOnly", PickerAppearance::as_str);
             tracing::warn!(
                 "Field '{}': timezone is not supported for '{}' picker; ignoring",
                 name,

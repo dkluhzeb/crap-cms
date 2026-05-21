@@ -8,7 +8,8 @@ use serde::Serialize;
 use crate::{core::FieldDefinition, typegen::LuaAnnotation};
 
 /// Metadata about a single field as it appears to templates.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.field_meta")]
 pub struct FieldMeta {
     pub name: String,
     pub field_type: String,
@@ -19,7 +20,8 @@ pub struct FieldMeta {
 }
 
 /// Admin-presentation metadata for a field (label, description, layout hints).
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.field_admin_meta")]
 pub struct FieldAdminMeta {
     pub label: Option<String>,
     pub hidden: bool,
@@ -27,32 +29,6 @@ pub struct FieldAdminMeta {
     pub width: Option<String>,
     pub description: Option<String>,
     pub placeholder: Option<String>,
-}
-
-impl LuaAnnotation for FieldAdminMeta {
-    fn render_lua_annotation(out: &mut String) {
-        out.push_str("---@class crap.template.field_admin_meta\n");
-        out.push_str("---@field label? string\n");
-        out.push_str("---@field hidden boolean\n");
-        out.push_str("---@field readonly boolean\n");
-        out.push_str("---@field width? string\n");
-        out.push_str("---@field description? string\n");
-        out.push_str("---@field placeholder? string\n");
-        out.push('\n');
-    }
-}
-
-impl LuaAnnotation for FieldMeta {
-    fn render_lua_annotation(out: &mut String) {
-        out.push_str("---@class crap.template.field_meta\n");
-        out.push_str("---@field name string\n");
-        out.push_str("---@field field_type string\n");
-        out.push_str("---@field required boolean\n");
-        out.push_str("---@field unique boolean\n");
-        out.push_str("---@field localized boolean\n");
-        out.push_str("---@field admin crap.template.field_admin_meta\n");
-        out.push('\n');
-    }
 }
 
 impl FieldMeta {
@@ -72,7 +48,7 @@ impl FieldMeta {
                     .map(|ls| ls.resolve_default().to_string()),
                 hidden: field.admin.hidden,
                 readonly: field.admin.readonly,
-                width: field.admin.width.clone(),
+                width: field.admin.width.as_ref().map(|w| w.as_str().to_owned()),
                 description: field
                     .admin
                     .description

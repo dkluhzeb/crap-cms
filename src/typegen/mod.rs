@@ -29,7 +29,11 @@ mod dispatch;
 mod go;
 mod helpers;
 mod language;
-mod lua;
+// `lua` is `pub` (not `mod`) so xtask + proc-macro-emitted paths can
+// reach `crap_cms::typegen::lua::{ensure_table, format_lua_fn_spec,
+// render_static_file, …}`. The submodule's internal items remain
+// gated; only what's `pub use`'d at its mod root is reachable.
+pub mod lua;
 mod python;
 mod rust_proto;
 mod rust_types;

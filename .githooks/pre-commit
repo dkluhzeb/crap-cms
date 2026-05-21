@@ -24,6 +24,9 @@ cargo clippy --all-targets --all-features -- -D warnings
 echo "[pre-commit] crap-cms fmt --check (Handlebars templates)"
 cargo run --quiet --bin crap-cms -- fmt --check
 
+echo "[pre-commit] cargo xtask gen-lua-types --check (Lua type definitions)"
+cargo xtask gen-lua-types --check
+
 # Biome lints JS + CSS only. Most Rust-only commits don't need it, but
 # any commit that touches static/components/**/*.js or static/styles/**/*.css
 # must pass biome ci. Skip with a warning if biome isn't installed —

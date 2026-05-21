@@ -72,7 +72,14 @@ impl LuaAnnotation for BasePageContext {
     /// (e.g. `collection_cards`, `versions`) aren't enumerated here; the
     /// generated file points readers at the per-page reference docs.
     ///
+    /// Hand-written: the annotation injects fields (`collection`, `global`,
+    /// `document`) that don't live on the struct, plus a trailing comment
+    /// block. The derive can't reproduce that shape, so this impl stays
+    /// manual.
+    ///
     /// [`render_template_data_types`]: crate::typegen::lua::render
+    const CLASS_NAME: &'static str = "crap.template_ctx";
+
     fn render_lua_annotation(out: &mut String) {
         out.push_str("---@class crap.template_ctx\n");
         out.push_str("---@field crap crap.template.crap_meta\n");

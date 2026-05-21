@@ -82,6 +82,14 @@ jobs:
       - name: Handlebars template formatting (crap-cms fmt)
         run: cargo run --quiet --bin crap-cms -- fmt --check
 
+      - name: Lua type definitions in sync (cargo xtask gen-lua-types --check)
+        # Static `types/crap.lua` is generated from Rust source — derives
+        # on the structs/enums it mirrors plus `#[lua_fn]` on the functions
+        # it documents. CI gates on regeneration: if Rust source changed
+        # the shape of any Lua-exposed type or fn, the on-disk file must
+        # be regenerated (`cargo xtask gen-lua-types`) and committed.
+        run: cargo xtask gen-lua-types --check
+
       - name: Security audit (cargo audit)
         run: |
           # Pin to exact version — caret ranges let crates.io serve

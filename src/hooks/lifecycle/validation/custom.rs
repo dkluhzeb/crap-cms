@@ -1,14 +1,11 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use mlua::{Lua, Value};
+use mlua::{Lua, LuaSerdeExt as _, Value};
 use serde_json::Value as JsonValue;
 
 use crate::hooks::{
-    lifecycle::{
-        UiLocaleContext, UserContext, converters::document_to_lua_table,
-        execution::resolve_hook_function,
-    },
+    lifecycle::{UiLocaleContext, UserContext, execution::resolve_hook_function},
     lua_api,
 };
 
@@ -30,29 +27,17 @@ pub(super) fn run_validate_function_inner(
 ) -> Result<Option<String>> {
     let func = resolve_hook_function(lua, func_ref)?;
     let lua_value = lua_api::json_to_lua(lua, value)?;
-    let ctx_table = lua.create_table()?;
-    ctx_table.set("collection", collection)?;
-    ctx_table.set("field_name", field_name)?;
-    let data_table = lua.create_table()?;
-    for (k, v) in data {
-        data_table.set(k.as_str(), lua_api::json_to_lua(lua, v)?)?;
-    }
-    ctx_table.set("data", data_table)?;
 
-    // Add user document and UI locale to validation context
-    if let Some(user_doc) = lua
-        .app_data_ref::<UserContext>()
-        .and_then(|uc| uc.0.clone())
-        && let Ok(user_tbl) = document_to_lua_table(lua, &user_doc)
-    {
-        let _ = ctx_table.set("user", user_tbl);
-    }
-    if let Some(ui_locale) = lua
-        .app_data_ref::<UiLocaleContext>()
-        .and_then(|uc| uc.0.clone())
-    {
-        let _ = ctx_table.set("ui_locale", ui_locale.as_str());
-    }
+    let user_ctx_ref = lua.app_data_ref::<UserContext>();
+    let locale_ctx_ref = lua.app_data_ref::<UiLocaleContext>();
+    let ctx = crate::hooks::lifecycle::ValidateContext {
+        collection,
+        field_name,
+        data,
+        user: user_ctx_ref.as_ref().and_then(|c| c.0.as_ref()),
+        ui_locale: locale_ctx_ref.as_ref().and_then(|c| c.0.as_deref()),
+    };
+    let ctx_table = lua.to_value(&ctx)?;
 
     let result: Value = func.call((lua_value, ctx_table))?;
     match result {

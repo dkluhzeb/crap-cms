@@ -32,6 +32,9 @@ pub(super) fn field_admin_to_lua(lua: &Lua, admin: &FieldAdmin) -> LuaResult<Opt
     if let Some(ref v) = admin.width {
         tbl.set("width", v.as_str())?;
     }
+    // FieldWidth::as_str above produces the canonical string for either
+    // a named variant or a `Custom` CSS value — same shape the Lua user
+    // sets.
     if !admin.collapsed {
         tbl.set("collapsed", false)?;
     }
@@ -64,12 +67,12 @@ pub(super) fn field_admin_to_lua(lua: &Lua, admin: &FieldAdmin) -> LuaResult<Opt
     }
 
     // Labels subtable
-    if admin.labels_singular.is_some() || admin.labels_plural.is_some() {
+    if !admin.labels.is_empty() {
         let labels = lua.create_table()?;
-        if let Some(ref v) = admin.labels_singular {
+        if let Some(ref v) = admin.labels.singular {
             labels.set("singular", localized_string_to_lua(lua, v)?)?;
         }
-        if let Some(ref v) = admin.labels_plural {
+        if let Some(ref v) = admin.labels.plural {
             labels.set("plural", localized_string_to_lua(lua, v)?)?;
         }
         tbl.set("labels", labels)?;

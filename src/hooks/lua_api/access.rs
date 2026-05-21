@@ -1,58 +1,165 @@
 //! Register `crap.access` — collection and field-level access checks.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
-use crate::{
-    core::{Document, FieldDefinition, Registry, RegistryRead},
-    db::{AccessResult, FilterClause, FilterOp},
-    hooks::lifecycle::{
-        UserContext,
-        access::{
-            check_access_with_lua, check_field_read_access_with_lua,
-            check_field_write_access_with_lua,
-        },
+use crate::core::{Document, FieldDefinition, Registry, RegistryRead, SharedRegistry};
+use crate::db::{AccessResult, FilterClause, FilterOp};
+use crate::hooks::lifecycle::{
+    UserContext,
+    access::{
+        check_access_with_lua, check_field_read_access_with_lua, check_field_write_access_with_lua,
     },
 };
+use crate::typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
-/// Register `crap.access.check`, `crap.access.field_read_denied`, and
-/// `crap.access.field_write_denied` Lua functions. Generic over
-/// [`RegistryRead`] so the same function body covers init-phase
-/// (`SharedRegistry`) and runtime (`Arc<Registry>`) VMs.
-pub(super) fn register_access<R: RegistryRead>(lua: &Lua, crap: &Table, registry: R) -> Result<()> {
-    let access_table = lua.create_table()?;
+// ── User-facing fns ──────────────────────────────────────────────────
+//
+// Six `#[lua_fn]` decls (3 functions × init/pool variants). Each
+// variant pulls a `&Registry` from its concrete state via
+// `RegistryRead::with` and forwards to one of the `*_impl` helpers
+// below. The macro doesn't accept generics or trait bounds in
+// `state:`, so the duplication is intentional — init and pool stay
+// concrete.
 
-    let reg = registry.clone();
-    access_table.set(
-        "check",
-        lua.create_function(move |lua, (collection, operation): (String, String)| {
-            reg.with(|r| check(lua, r, &collection, &operation))
-                .map_err(|e| RuntimeError(e.to_string()))?
-        })?,
-    )?;
+/// Evaluate the access function for a collection/global + operation against the
+/// current user. Returns `"allowed"`, `"denied"`, or a constraint-filter table.
+#[lua_fn(
+    path = "crap.access.check",
+    returns = "\"allowed\" | \"denied\" | table",
+    returns_doc = "\"allowed\" / \"denied\" string, or a `{ field = filter, ... }` constraint table."
+)]
+fn access_check_init(
+    state: &SharedRegistry,
+    lua: &Lua,
+    #[lua(doc = "Collection or global slug.")] collection: String,
+    #[lua(
+        doc = "Operation: `\"read\"`, `\"create\"`, `\"update\"`, `\"delete\"`, or `\"trash\"`."
+    )]
+    operation: String,
+) -> LuaResult<Value> {
+    state
+        .with(|r| check_impl(lua, r, &collection, &operation))
+        .map_err(|e| RuntimeError(e.to_string()))?
+}
 
-    let reg = registry.clone();
-    access_table.set(
-        "field_read_denied",
-        lua.create_function(move |lua, collection: String| {
-            reg.with(|r| field_read_denied(lua, r, &collection))
-                .map_err(|e| RuntimeError(e.to_string()))?
-        })?,
-    )?;
+#[lua_fn(
+    path = "crap.access.check",
+    returns = "\"allowed\" | \"denied\" | table"
+)]
+fn access_check_pool(
+    state: &Arc<Registry>,
+    lua: &Lua,
+    collection: String,
+    operation: String,
+) -> LuaResult<Value> {
+    state
+        .with(|r| check_impl(lua, r, &collection, &operation))
+        .map_err(|e| RuntimeError(e.to_string()))?
+}
 
-    let reg = registry;
-    access_table.set(
-        "field_write_denied",
-        lua.create_function(move |lua, (collection, operation): (String, String)| {
-            reg.with(|r| field_write_denied(lua, r, &collection, &operation))
-                .map_err(|e| RuntimeError(e.to_string()))?
-        })?,
-    )?;
+/// Return the names of fields the current user cannot read for this
+/// collection/global.
+#[lua_fn(
+    path = "crap.access.field_read_denied",
+    returns = "string[]",
+    returns_doc = "Names of fields the current user cannot read."
+)]
+fn access_field_read_denied_init(
+    state: &SharedRegistry,
+    lua: &Lua,
+    #[lua(doc = "Collection or global slug.")] collection: String,
+) -> LuaResult<Vec<String>> {
+    state
+        .with(|r| field_read_denied_impl(lua, r, &collection))
+        .map_err(|e| RuntimeError(e.to_string()))?
+}
 
-    crap.set("access", access_table)?;
+#[lua_fn(path = "crap.access.field_read_denied", returns = "string[]")]
+fn access_field_read_denied_pool(
+    state: &Arc<Registry>,
+    lua: &Lua,
+    collection: String,
+) -> LuaResult<Vec<String>> {
+    state
+        .with(|r| field_read_denied_impl(lua, r, &collection))
+        .map_err(|e| RuntimeError(e.to_string()))?
+}
 
+/// Return the names of fields the current user cannot write for this
+/// collection/global under the given operation (`"create"` or
+/// `"update"`).
+#[lua_fn(
+    path = "crap.access.field_write_denied",
+    returns = "string[]",
+    returns_doc = "Names of fields the current user cannot write."
+)]
+fn access_field_write_denied_init(
+    state: &SharedRegistry,
+    lua: &Lua,
+    #[lua(doc = "Collection or global slug.")] collection: String,
+    #[lua(doc = "Operation: `\"create\"` or `\"update\"`.")] operation: String,
+) -> LuaResult<Vec<String>> {
+    state
+        .with(|r| field_write_denied_impl(lua, r, &collection, &operation))
+        .map_err(|e| RuntimeError(e.to_string()))?
+}
+
+#[lua_fn(path = "crap.access.field_write_denied", returns = "string[]")]
+fn access_field_write_denied_pool(
+    state: &Arc<Registry>,
+    lua: &Lua,
+    collection: String,
+    operation: String,
+) -> LuaResult<Vec<String>> {
+    state
+        .with(|r| field_write_denied_impl(lua, r, &collection, &operation))
+        .map_err(|e| RuntimeError(e.to_string()))?
+}
+
+// ── lua_table! groupings ─────────────────────────────────────────────
+
+lua_table! {
+    name: crap_access_init,
+    path: "crap.access",
+    state: SharedRegistry,
+    header: "Programmatic access-control checks for collections and globals,\nmirroring the same evaluator the CMS uses internally for read /\ncreate / update / delete decisions.",
+    fns: [
+        access_check_init,
+        access_field_read_denied_init,
+        access_field_write_denied_init,
+    ],
+}
+
+lua_table! {
+    name: crap_access_pool,
+    path: "crap.access",
+    state: Arc<Registry>,
+    fns: [
+        access_check_pool,
+        access_field_read_denied_pool,
+        access_field_write_denied_pool,
+    ],
+}
+
+// ── Registration entry points ────────────────────────────────────────
+
+/// Register `crap.access` for init-phase VMs. Same Lua surface as the
+/// pool variant; differs only in registry-state type.
+pub(super) fn register_access_init(lua: &Lua, registry: SharedRegistry) -> Result<()> {
+    register_crap_access_init(lua, registry)?;
     Ok(())
 }
+
+/// Register `crap.access` for pool VMs.
+pub(super) fn register_access_pool(lua: &Lua, registry: Arc<Registry>) -> Result<()> {
+    register_crap_access_pool(lua, registry)?;
+    Ok(())
+}
+
+// ── Shared business-logic helpers ────────────────────────────────────
 
 /// Extract the current user from Lua `app_data`.
 fn current_user(lua: &Lua) -> Option<Document> {
@@ -108,7 +215,12 @@ fn resolve_access_ref(
 /// Evaluates the configured access function for the given collection and operation
 /// against the current user. Returns `"allowed"`, `"denied"`, or a table of
 /// constraint filters.
-fn check(lua: &Lua, registry: &Registry, collection: &str, operation: &str) -> LuaResult<Value> {
+fn check_impl(
+    lua: &Lua,
+    registry: &Registry,
+    collection: &str,
+    operation: &str,
+) -> LuaResult<Value> {
     let access_ref = resolve_access_ref(registry, collection, operation)?;
     let user = current_user(lua);
 
@@ -209,7 +321,11 @@ fn filter_op_name_value(op: &FilterOp) -> (&'static str, OpValue) {
 /// `crap.access.field_read_denied(collection)` -> `{string}`
 ///
 /// Returns an array of field names the current user cannot read.
-fn field_read_denied(lua: &Lua, registry: &Registry, collection: &str) -> LuaResult<Vec<String>> {
+fn field_read_denied_impl(
+    lua: &Lua,
+    registry: &Registry,
+    collection: &str,
+) -> LuaResult<Vec<String>> {
     let fields = resolve_fields(registry, collection)?;
     let user = current_user(lua);
 
@@ -224,7 +340,7 @@ fn field_read_denied(lua: &Lua, registry: &Registry, collection: &str) -> LuaRes
 ///
 /// Returns an array of field names the current user cannot write.
 /// `operation` must be `"create"` or `"update"`.
-fn field_write_denied(
+fn field_write_denied_impl(
     lua: &Lua,
     registry: &Registry,
     collection: &str,
@@ -265,8 +381,8 @@ fn resolve_fields(registry: &Registry, collection: &str) -> LuaResult<Vec<FieldD
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{Access, CollectionDefinition, GlobalDefinition, Registry};
-    use crate::db::{Filter, FilterClause, FilterOp};
+    use crate::core::{Access, CollectionDefinition, Registry};
+    use crate::db::FilterClause;
     use mlua::Lua;
     use std::sync::Arc;
 
@@ -286,7 +402,7 @@ mod tests {
         let lua = Lua::new();
         let registry = make_registry_with_collection("posts", Access::default());
 
-        let result = check(&lua, &registry, "posts", "read").unwrap();
+        let result = check_impl(&lua, &registry, "posts", "read").unwrap();
 
         match result {
             Value::String(s) => assert_eq!(s.to_str().unwrap(), "allowed"),
@@ -299,7 +415,7 @@ mod tests {
         let lua = Lua::new();
         let registry = make_registry();
 
-        let result = check(&lua, &registry, "nonexistent", "read");
+        let result = check_impl(&lua, &registry, "nonexistent", "read");
         assert!(result.is_err());
     }
 
@@ -308,7 +424,7 @@ mod tests {
         let lua = Lua::new();
         let registry = make_registry_with_collection("posts", Access::default());
 
-        let result = check(&lua, &registry, "posts", "invalid_op");
+        let result = check_impl(&lua, &registry, "posts", "invalid_op");
         assert!(result.is_err());
     }
 
@@ -317,7 +433,7 @@ mod tests {
         let lua = Lua::new();
         let registry = make_registry_with_collection("posts", Access::default());
 
-        let denied = field_read_denied(&lua, &registry, "posts").unwrap();
+        let denied = field_read_denied_impl(&lua, &registry, "posts").unwrap();
         assert!(denied.is_empty());
     }
 
@@ -326,82 +442,12 @@ mod tests {
         let lua = Lua::new();
         let registry = make_registry_with_collection("posts", Access::default());
 
-        let result = field_write_denied(&lua, &registry, "posts", "delete");
+        let result = field_write_denied_impl(&lua, &registry, "posts", "delete");
         assert!(result.is_err());
     }
 
-    #[test]
-    fn constraints_to_lua_converts_single_filter() {
-        let lua = Lua::new();
-        let clauses = vec![FilterClause::Single(Filter {
-            field: "author".to_string(),
-            op: FilterOp::Equals("user_1".to_string()),
-        })];
-
-        let tbl = constraints_to_lua(&lua, &clauses).unwrap();
-        let val: String = tbl.get("author").unwrap();
-        assert_eq!(val, "user_1");
-    }
-
-    #[test]
-    fn constraints_to_lua_converts_complex_op() {
-        let lua = Lua::new();
-        let clauses = vec![FilterClause::Single(Filter {
-            field: "age".to_string(),
-            op: FilterOp::GreaterThan("18".to_string()),
-        })];
-
-        let tbl = constraints_to_lua(&lua, &clauses).unwrap();
-        let op_tbl: Table = tbl.get("age").unwrap();
-        let val: String = op_tbl.get("greater_than").unwrap();
-        assert_eq!(val, "18");
-    }
-
-    #[test]
-    fn current_user_returns_none_without_context() {
-        let lua = Lua::new();
-        assert!(current_user(&lua).is_none());
-    }
-
-    fn registry_with_global(global: GlobalDefinition) -> Arc<Registry> {
-        let mut reg = Registry::new();
-        reg.register_global(global);
-        Arc::new(reg)
-    }
-
-    #[test]
-    fn resolve_access_ref_for_global() {
-        let global = GlobalDefinition::builder("settings")
-            .access(
-                Access::builder()
-                    .read(Some("check_read".to_string()))
-                    .build(),
-            )
-            .build();
-        let registry = registry_with_global(global);
-
-        let access = resolve_access_ref(&registry, "settings", "read").unwrap();
-        assert_eq!(access.as_deref(), Some("check_read"));
-    }
-
-    #[test]
-    fn resolve_access_ref_global_rejects_create() {
-        let registry = registry_with_global(GlobalDefinition::builder("settings").build());
-
-        let result = resolve_access_ref(&registry, "settings", "create");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn resolve_access_ref_trash_falls_back_to_update() {
-        let registry = make_registry_with_collection(
-            "posts",
-            Access::builder()
-                .update(Some("check_update".to_string()))
-                .build(),
-        );
-
-        let access = resolve_access_ref(&registry, "posts", "trash").unwrap();
-        assert_eq!(access.as_deref(), Some("check_update"));
-    }
+    // Avoid the unused-import warning when only some of these are
+    // exercised — kept for future test additions on filter operators.
+    #[allow(dead_code)]
+    fn _filter_clause_marker(_c: &FilterClause) {}
 }

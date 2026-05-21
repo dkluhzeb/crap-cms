@@ -698,8 +698,8 @@ fn lua_json_encode_decode_roundtrip() {
             tags = { "alpha", "beta", "gamma" },
             nested = { x = 1, y = 2 },
         }
-        local encoded = crap.util.json_encode(original)
-        local decoded = crap.util.json_decode(encoded)
+        local encoded = crap.json.encode(original)
+        local decoded = crap.json.decode(encoded)
 
         -- Verify scalar fields
         if decoded.name ~= "test" then return "NAME:" .. tostring(decoded.name) end

@@ -50,6 +50,8 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::typegen::lua::{LuaAlias, LuaAnnotation, LuaTaggedClass};
+
 /// MFA (Multi-Factor Authentication) mode. Lives inside the
 /// `password_login` method since it only applies to the
 /// email+password flow.
@@ -62,19 +64,21 @@ pub enum MfaMode {
     Email,
 }
 
-/// The host surfaces a method can fire on. Methods with `Surface`
-/// values that don't include the current request's surface are
-/// skipped by the evaluator.
-///
-/// Extending: this enum is intentionally a closed set. New
-/// host transports (MCP-acting-as-user, webhooks, etc.) would add
-/// a variant here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+/// Which host surfaces a method can fire on. Surface filtering is
+/// per-method: a method whose `surfaces` list omits the current
+/// request's surface is skipped by the evaluator.
+//
+// Closed set — new host transports (MCP-acting-as-user, webhooks, etc.)
+// would add a variant here. Per-variant Rust docs are kept internal
+// (no `///`); the user-facing alias above is what the derive emits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize, LuaAlias)]
 #[serde(rename_all = "lowercase")]
+#[lua(alias = "crap.Surface", rename_all = "lowercase")]
 pub enum Surface {
-    /// Admin HTTP — `/admin/**` routes, middleware-driven.
+    // Admin HTTP — `/admin/**` routes, middleware-driven.
     Admin,
-    /// gRPC `ContentAPI` — unary RPCs and `Subscribe` (evaluated at stream open).
+    // gRPC `ContentAPI` — unary RPCs and `Subscribe`
+    // (evaluated at stream open).
     Grpc,
 }
 
@@ -147,24 +151,30 @@ impl<'a> IntoIterator for &'a SurfaceSet {
 /// `Always` is the explicit catch-all escape hatch (`mTLS`, multi-
 /// signal strategies, `IdP` introspection). Required by the
 /// validator to be the literal `{ always = true }` table —
-/// `{ always = false }` is rejected at deserialize-time and
-/// unrepresentable in Rust code (the variant's inner [`AlwaysMarker`]
-/// has a private field constrained to the literal `true`). Use a
-/// `Header` discriminator when the strategy fires on a specific
-/// request header, which is the common case for API-key / SSO
-/// patterns.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// `{ always = false }` is rejected at deserialize-time via the
+/// custom `deserialize_true_only` helper. Use a `Header`
+/// discriminator when the strategy fires on a specific request
+/// header, which is the common case for API-key / SSO patterns.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, LuaTaggedClass)]
 #[serde(untagged)]
+#[lua(class = "crap.Activation")]
 pub enum Activation {
-    /// `{ always = true }` — strategy is invoked on every request
-    /// that passes the surface filter. The strategy itself decides
-    /// per-request whether to authenticate. Emits a startup
-    /// warning to make accidental always-active strategies loud.
-    Always(AlwaysMarker),
-    /// `{ header = "x-api-key" }` — strategy fires only when the
-    /// named header (lowercase, gRPC metadata or HTTP header) is
-    /// present on the request.
-    Header { header: String },
+    /// Strategy is invoked on every request that passes the surface
+    /// filter. The strategy itself decides per-request whether to
+    /// authenticate. Emits a startup warning to make accidental
+    /// always-active strategies loud.
+    Always {
+        /// Must be `true`. `false` is rejected at deserialize time.
+        #[serde(deserialize_with = "deserialize_true_only")]
+        #[lua(ty = "true")]
+        always: bool,
+    },
+    /// Strategy fires only when the named header (lowercase, gRPC
+    /// metadata or HTTP header) is present on the request.
+    Header {
+        /// Header name (lowercase) — e.g. `"x-api-key"`.
+        header: String,
+    },
 }
 
 impl Activation {
@@ -173,7 +183,7 @@ impl Activation {
     /// bound to its own request signal.
     #[must_use]
     pub fn always() -> Self {
-        Activation::Always(AlwaysMarker::default())
+        Activation::Always { always: true }
     }
 
     /// Construct a header-discriminated activation.
@@ -187,26 +197,7 @@ impl Activation {
     /// True iff this activation is the `Always` variant.
     #[must_use]
     pub fn is_always(&self) -> bool {
-        matches!(self, Activation::Always(_))
-    }
-}
-
-/// Marker payload for [`Activation::Always`]. The inner `always`
-/// field is private and constrained to the literal `true` — both
-/// at deserialize-time (via the custom `deserialize_true_only`
-/// helper) and at construction-time (the only public way to make
-/// one is [`AlwaysMarker::default`] / [`Activation::always`]).
-/// Eliminates the `Activation::Always { always: false }` footgun
-/// that the older struct-variant form allowed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AlwaysMarker {
-    #[serde(deserialize_with = "deserialize_true_only")]
-    always: bool,
-}
-
-impl Default for AlwaysMarker {
-    fn default() -> Self {
-        Self { always: true }
+        matches!(self, Activation::Always { .. })
     }
 }
 
@@ -234,8 +225,9 @@ fn deserialize_true_only<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Err
 /// { "type": "strategy", "name": "api-key", "authenticate": "hooks.auth.api_key",
 ///   "activates_on": { "header": "x-api-key" }, "surfaces": ["grpc"] }
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, LuaTaggedClass)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[lua(class = "crap.AuthMethod")]
 pub enum AuthMethod {
     /// Email + password login via the `Login` RPC. Issues a JWT
     /// the `Bearer` method later validates. Owns the
@@ -243,22 +235,32 @@ pub enum AuthMethod {
     /// `forgot_password`) so the password-only concerns aren't
     /// scattered across the collection.
     PasswordLogin {
+        /// Email-MFA mode. `"email"` enables; `false` (or omit) disables.
         #[serde(default)]
+        #[lua(ty = "\"email\"|false", optional)]
         mfa: MfaMode,
+        /// Require email verification before login (default `false`).
         #[serde(default)]
+        #[lua(optional)]
         verify_email: bool,
+        /// Enable the forgot-password flow (default `true`).
         #[serde(default = "default_true")]
+        #[lua(optional)]
         forgot_password: bool,
     },
     /// Accept JWTs in the standard `Authorization: Bearer …`
     /// header / gRPC metadata. Default surfaces: all.
     Bearer {
+        /// Surfaces this method fires on (default: `{"admin", "grpc"}`).
         #[serde(default = "SurfaceSet::all")]
+        #[lua(ty = "crap.Surface[]", optional)]
         surfaces: SurfaceSet,
     },
     /// Accept the `crap_session` cookie. Default surfaces: admin.
     SessionCookie {
+        /// Surfaces this method fires on (default: `{"admin"}`).
         #[serde(default = "SurfaceSet::admin_only")]
+        #[lua(ty = "crap.Surface[]", optional)]
         surfaces: SurfaceSet,
     },
     /// Custom Lua-driven authentication. `authenticate` is a
@@ -269,13 +271,16 @@ pub enum AuthMethod {
         /// Identifier used in logging + error messages. Doesn't
         /// have to be unique across collections, but should be.
         name: String,
-        /// Lua function ref, e.g. `"hooks.auth.api_key"`.
+        /// Lua function ref, e.g. `"hooks.auth.api_key"`. Receives
+        /// `crap.AuthStrategyContext`; returns user doc or nil.
         authenticate: String,
-        /// When this strategy fires. See [`Activation`].
+        /// Discriminator for when the strategy fires. See
+        /// [`Activation`].
+        #[lua(ty = "crap.Activation")]
         activates_on: Activation,
-        /// Default surfaces: admin (matches today's
-        /// `auth.strategies` behavior).
+        /// Surfaces this method fires on (default: `{"admin"}`).
         #[serde(default = "SurfaceSet::admin_only")]
+        #[lua(ty = "crap.Surface[]", optional)]
         surfaces: SurfaceSet,
     },
 }
@@ -429,18 +434,19 @@ impl PasswordLoginBuilder {
 /// `methods` is required (no implicit defaults). Use
 /// `crap.auth.default_methods()` from Lua for the common
 /// password+bearer+cookie set.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, LuaAnnotation)]
+#[lua(class = "crap.Auth")]
 pub struct Auth {
-    /// Whether authentication is enabled for this collection.
-    /// Gates schema provisioning (auth columns) and registry
-    /// classification (`is_auth_collection`).
+    /// Enable auth for this collection. Required true when `methods` is non-empty.
+    #[lua(optional)]
     pub enabled: bool,
-    /// JWT lifetime in seconds. Default: 7200 (2 hours).
+    /// JWT lifetime in seconds (default: 7200).
     #[serde(default = "default_token_expiry")]
+    #[lua(optional)]
     pub token_expiry: u64,
-    /// Ordered list of methods. Required when `enabled = true`.
-    /// Validated at config-load time.
+    /// Ordered list of auth methods. Use `crap.auth.default_methods()` for the standard set or `crap.auth.with_defaults({...})` to extend it.
     #[serde(default)]
+    #[lua(optional, ty = "crap.AuthMethod[]")]
     pub methods: Vec<AuthMethod>,
 }
 
@@ -847,7 +853,7 @@ mod tests {
             ..
         } = m
         {
-            assert!(matches!(activates_on, Activation::Always(_)));
+            assert!(matches!(activates_on, Activation::Always { .. }));
             // No surfaces in JSON → defaults to admin_only.
             assert_eq!(surfaces, SurfaceSet::admin_only());
         } else {

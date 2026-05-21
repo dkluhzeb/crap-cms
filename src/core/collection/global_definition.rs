@@ -7,36 +7,52 @@ use crate::core::{
         labels::resolve_label,
     },
 };
+use crate::typegen::lua::LuaAnnotation;
 use serde::{Deserialize, Serialize};
 
 /// Global definitions are simpler — single-document collections.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, LuaAnnotation)]
+#[lua(class = "crap.GlobalConfig")]
 pub struct GlobalDefinition {
     /// Unique identifier for the global.
+    //
+    // Not part of the Lua config table — passed as the first arg to
+    // `crap.globals.define(slug, config)`.
+    #[lua(skip)]
     pub slug: Slug,
-    /// Human-readable labels for the global.
+    /// Display names.
     #[serde(default)]
+    #[lua(optional)]
     pub labels: Labels,
-    /// List of fields that make up the global's schema.
+    /// Field definitions.
     #[serde(default)]
+    #[lua(ty = "crap.FieldDefinition[]", optional)]
     pub fields: Vec<FieldDefinition>,
-    /// Lua hook functions triggered during various lifecycle events.
+    /// Hook references.
     #[serde(default)]
+    #[lua(optional)]
     pub hooks: Hooks,
-    /// Access control rules for reading and updating the global.
+    /// Access control function refs.
     #[serde(default)]
+    #[lua(optional)]
     pub access: Access,
-    /// Model Context Protocol (MCP) configuration for AI integration.
+    /// MCP tool description and options.
     #[serde(default)]
+    #[lua(optional)]
     pub mcp: McpConfig,
-    /// Real-time update settings for this global.
+    /// Live event broadcasting. Same as collection `live`.
     #[serde(default)]
+    #[lua(ty = "boolean | string", optional)]
     pub live: Option<LiveSetting>,
     /// Controls what data events carry (metadata-only or full with `after_read` hooks).
+    //
+    // Internal-only — see the parallel field on `CollectionDefinition`.
     #[serde(default)]
+    #[lua(skip)]
     pub live_mode: LiveMode,
-    /// Versioning and draft configuration.
+    /// Enable versioning. Same as collection `versions`.
     #[serde(default)]
+    #[lua(ty = "boolean | crap.VersionsConfig", optional)]
     pub versions: Option<VersionsConfig>,
 }
 

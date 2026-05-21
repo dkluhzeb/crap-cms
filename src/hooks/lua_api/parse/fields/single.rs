@@ -62,7 +62,7 @@ struct ParsedFieldParts {
     field_type: FieldType,
     default_value: Option<serde_json::Value>,
     relationship: Option<crate::core::RelationshipConfig>,
-    picker_appearance: Option<String>,
+    picker_appearance: Option<crate::core::PickerAppearance>,
     timezone: bool,
     default_timezone: Option<String>,
     constraints: super::constraints::Constraints,
@@ -448,10 +448,27 @@ mod tests {
         let field = lua.create_table().unwrap();
         field.set("name", "published_at").unwrap();
         field.set("type", "date").unwrap();
+        field.set("picker_appearance", "dayAndTime").unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
+        assert_eq!(
+            fields[0].picker_appearance,
+            Some(crate::core::PickerAppearance::DayAndTime)
+        );
+    }
+
+    #[test]
+    fn test_parse_fields_date_picker_appearance_invalid_is_dropped() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "published_at").unwrap();
+        field.set("type", "date").unwrap();
         field.set("picker_appearance", "datetime").unwrap();
         fields_tbl.set(1, field).unwrap();
         let fields = parse_fields(&lua, &fields_tbl).unwrap();
-        assert_eq!(fields[0].picker_appearance.as_deref(), Some("datetime"));
+        // Unknown value gets warned + dropped — see `parse_date_config`.
+        assert!(fields[0].picker_appearance.is_none());
     }
 
     #[test]
@@ -461,7 +478,7 @@ mod tests {
         let field = lua.create_table().unwrap();
         field.set("name", "title").unwrap();
         field.set("type", "text").unwrap();
-        field.set("picker_appearance", "datetime").unwrap();
+        field.set("picker_appearance", "dayAndTime").unwrap();
         fields_tbl.set(1, field).unwrap();
         let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert!(fields[0].picker_appearance.is_none());

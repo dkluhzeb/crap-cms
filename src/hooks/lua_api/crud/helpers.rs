@@ -23,23 +23,6 @@ use crate::{
     service::validate_access_constraints,
 };
 
-/// Extract a bool from an optional Lua options table, returning `default` when absent.
-///
-/// Read errors (wrong-type values, etc.) are swallowed and treated the same
-/// as "absent" — Lua-side typos shouldn't be load-bearing for these
-/// boolean flags. Returns the resolved bool directly.
-pub(crate) fn get_opt_bool(opts: Option<&Table>, key: &str, default: bool) -> bool {
-    opts.and_then(|o| o.get::<Option<bool>>(key).ok().flatten())
-        .unwrap_or(default)
-}
-
-/// Extract an optional string from a Lua options table.
-///
-/// Read errors are swallowed (same reasoning as `get_opt_bool`).
-pub(crate) fn get_opt_string(opts: Option<&Table>, key: &str) -> Option<String> {
-    opts.and_then(|o| o.get::<Option<String>>(key).ok().flatten())
-}
-
 /// Extract the authenticated user document from Lua `app_data` (if present).
 pub(crate) fn hook_user(lua: &Lua) -> Option<Document> {
     lua.app_data_ref::<UserContext>()
@@ -227,57 +210,6 @@ pub(crate) fn extract_data(
 mod tests {
     use super::*;
     use mlua::Lua;
-
-    #[test]
-    fn get_opt_bool_returns_default_when_no_opts() {
-        assert!(!get_opt_bool(None, "overrideAccess", false));
-        assert!(get_opt_bool(None, "hooks", true));
-    }
-
-    #[test]
-    fn get_opt_bool_reads_value_from_table() {
-        let lua = Lua::new();
-        let table = lua.create_table().unwrap();
-        table.set("overrideAccess", true).unwrap();
-        table.set("hooks", false).unwrap();
-
-        assert!(get_opt_bool(Some(&table), "overrideAccess", false));
-        assert!(!get_opt_bool(Some(&table), "hooks", true));
-    }
-
-    #[test]
-    fn get_opt_bool_returns_default_when_key_missing() {
-        let lua = Lua::new();
-        let table = lua.create_table().unwrap();
-
-        assert!(!get_opt_bool(Some(&table), "overrideAccess", false));
-        assert!(get_opt_bool(Some(&table), "hooks", true));
-    }
-
-    #[test]
-    fn get_opt_string_returns_none_when_no_opts() {
-        assert!(get_opt_string(None, "locale").is_none());
-    }
-
-    #[test]
-    fn get_opt_string_reads_value_from_table() {
-        let lua = Lua::new();
-        let table = lua.create_table().unwrap();
-        table.set("locale", "en").unwrap();
-
-        assert_eq!(
-            get_opt_string(Some(&table), "locale").as_deref(),
-            Some("en")
-        );
-    }
-
-    #[test]
-    fn get_opt_string_returns_none_when_key_missing() {
-        let lua = Lua::new();
-        let table = lua.create_table().unwrap();
-
-        assert!(get_opt_string(Some(&table), "locale").is_none());
-    }
 
     #[test]
     fn hook_user_returns_none_without_context() {

@@ -18,21 +18,12 @@ pub struct EditorLocaleContext {
 }
 
 /// One row in the editor-locale picker dropdown.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.editor_locale_option")]
 pub struct EditorLocaleOption {
     pub value: String,
     pub label: String,
     pub selected: bool,
-}
-
-impl LuaAnnotation for EditorLocaleOption {
-    fn render_lua_annotation(out: &mut String) {
-        out.push_str("---@class crap.template.editor_locale_option\n");
-        out.push_str("---@field value string\n");
-        out.push_str("---@field label string\n");
-        out.push_str("---@field selected boolean\n");
-        out.push('\n');
-    }
 }
 
 impl EditorLocaleContext {

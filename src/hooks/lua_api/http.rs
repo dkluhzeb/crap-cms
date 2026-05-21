@@ -7,52 +7,80 @@ use std::{
     time::Duration,
 };
 
+use std::collections::HashMap;
+
 use anyhow::Result;
-use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
+use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use reqwest::{Method, blocking::Client, redirect};
+use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 use url::Url;
+
+use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
 const MAX_REDIRECTS: u8 = 10;
 const ALLOWED_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"];
 
-/// Register `crap.http` — outbound HTTP via reqwest (blocking, safe in `spawn_blocking` context).
-pub(super) fn register_http(
-    lua: &Lua,
-    crap: &Table,
-    allow_private_networks: bool,
-    max_response_bytes: u64,
-) -> Result<()> {
-    if !allow_private_networks {
-        debug!("crap.http: private network blocking enabled with DNS pinning");
-    }
-
-    let t = lua.create_table()?;
-
-    t.set(
-        "request",
-        lua.create_function(move |lua, opts: Table| {
-            http_request(lua, &opts, allow_private_networks, max_response_bytes)
-        })?,
-    )?;
-
-    crap.set("http", t)?;
-
-    Ok(())
+/// Options table for `crap.http.request`.
+#[derive(Deserialize, LuaAnnotation)]
+#[lua(class = "crap.HttpRequest")]
+pub(crate) struct HttpRequest {
+    /// Request URL.
+    pub(crate) url: String,
+    /// HTTP method (default: `"GET"`).
+    pub(crate) method: Option<String>,
+    /// Request headers.
+    #[lua(ty = "table<string, string>", optional)]
+    pub(crate) headers: Option<HashMap<String, String>>,
+    /// Request body.
+    pub(crate) body: Option<String>,
+    /// Request timeout in seconds (default: `30`).
+    pub(crate) timeout: Option<u64>,
 }
 
-/// Execute an HTTP request with SSRF protection and redirect following.
-fn http_request(
-    lua: &Lua,
-    opts: &Table,
+impl FromLua for HttpRequest {
+    fn from_lua(value: Value, lua: &Lua) -> LuaResult<Self> {
+        lua.from_value(value)
+    }
+}
+
+/// Response returned by `crap.http.request(opts)`. Both `LuaAnnotation`
+/// (for `types/crap.lua`) and `Serialize` (for the runtime
+/// `lua.to_value(&self)` conversion); the same Rust struct is the
+/// single source of truth.
+#[derive(Serialize, LuaAnnotation)]
+#[lua(class = "crap.HttpResponse")]
+pub(crate) struct HttpResponse {
+    /// HTTP status code.
+    pub(crate) status: i64,
+    /// Response headers.
+    #[lua(ty = "table<string, string>")]
+    pub(crate) headers: HashMap<String, String>,
+    /// Response body.
+    pub(crate) body: String,
+}
+
+/// Closure state for the `crap.http.*` namespace — captured once at
+/// registration time, threaded into every call.
+pub(super) struct HttpState {
     allow_private_networks: bool,
     max_response_bytes: u64,
+}
+
+/// Make an outbound HTTP request. Blocking — safe inside `spawn_blocking`
+/// contexts (which is where Lua hooks run). DNS-pinned when private
+/// networks are disabled in `crap.toml`.
+#[lua_fn(path = "crap.http.request", returns = "crap.HttpResponse")]
+fn http_request(
+    state: &HttpState,
+    lua: &Lua,
+    #[lua(ty = "crap.HttpRequest", doc = "Request options.")] opts: HttpRequest,
 ) -> LuaResult<Table> {
     let r = parse_request_opts(opts)?;
 
     let mut current_url = r.url;
     let mut current_client =
-        resolve_and_build_client(&current_url, allow_private_networks, r.timeout)?;
+        resolve_and_build_client(&current_url, state.allow_private_networks, r.timeout)?;
     let mut redirects: u8 = 0;
 
     loop {
@@ -77,7 +105,7 @@ fn http_request(
                 &current_url,
                 &resp,
                 &mut redirects,
-                allow_private_networks,
+                state.allow_private_networks,
                 r.timeout,
             )?;
             current_url = next.0;
@@ -86,8 +114,43 @@ fn http_request(
             continue;
         }
 
-        return build_response_table(lua, resp, max_response_bytes);
+        let response = build_response_struct(resp, state.max_response_bytes)?;
+        let value = lua.to_value(&response)?;
+        let Value::Table(tbl) = value else {
+            return Err(RuntimeError(
+                "lua.to_value did not produce a table for HttpResponse".into(),
+            ));
+        };
+        return Ok(tbl);
     }
+}
+
+lua_table! {
+    name: crap_http,
+    path: "crap.http",
+    state: HttpState,
+    header: "Outbound HTTP client (blocking, runs inside spawn_blocking context).",
+    fns: [http_request],
+}
+
+/// Register `crap.http` — outbound HTTP via reqwest. Parent `crap` table
+/// must already be in globals (`register_api` sets it up-front).
+pub(super) fn register_http(
+    lua: &Lua,
+    allow_private_networks: bool,
+    max_response_bytes: u64,
+) -> Result<()> {
+    if !allow_private_networks {
+        debug!("crap.http: private network blocking enabled with DNS pinning");
+    }
+    register_crap_http(
+        lua,
+        HttpState {
+            allow_private_networks,
+            max_response_bytes,
+        },
+    )?;
+    Ok(())
 }
 
 /// Parsed HTTP request options from Lua.
@@ -99,11 +162,10 @@ struct RequestOpts {
     headers: Vec<(String, String)>,
 }
 
-/// Parse request options from the Lua table.
-fn parse_request_opts(opts: &Table) -> LuaResult<RequestOpts> {
-    let url: String = opts.get("url")?;
-    let method_str: String = opts
-        .get::<Option<String>>("method")?
+/// Parse request options from the typed `HttpRequest`.
+fn parse_request_opts(opts: HttpRequest) -> LuaResult<RequestOpts> {
+    let method_str = opts
+        .method
         .unwrap_or_else(|| "GET".to_string())
         .to_uppercase();
 
@@ -117,18 +179,17 @@ fn parse_request_opts(opts: &Table) -> LuaResult<RequestOpts> {
         .parse()
         .map_err(|e| RuntimeError(format!("invalid HTTP method: {e}")))?;
 
-    let timeout = Duration::from_secs(opts.get::<Option<u64>>("timeout")?.unwrap_or(30));
-    let body: Option<String> = opts.get("body")?;
-
-    let headers = opts.get::<Table>("headers").map_or(Ok(Vec::new()), |h| {
-        h.pairs::<String, String>().collect::<LuaResult<Vec<_>>>()
-    })?;
+    let timeout = Duration::from_secs(opts.timeout.unwrap_or(30));
+    let headers = opts
+        .headers
+        .map(|h| h.into_iter().collect())
+        .unwrap_or_default();
 
     Ok(RequestOpts {
         method,
-        url,
+        url: opts.url,
         timeout,
-        body,
+        body: opts.body,
         headers,
     })
 }
@@ -178,34 +239,33 @@ fn follow_redirect(
     Ok((next_url, client))
 }
 
-/// Build a Lua response table from an HTTP response.
-fn build_response_table(
-    lua: &Lua,
+/// Build a `HttpResponse` from a `reqwest` response.
+fn build_response_struct(
     resp: reqwest::blocking::Response,
     max_bytes: u64,
-) -> LuaResult<Table> {
-    let result = lua.create_table()?;
-    result.set("status", i64::from(resp.status().as_u16()))?;
+) -> LuaResult<HttpResponse> {
+    let status = i64::from(resp.status().as_u16());
 
-    let headers_out = lua.create_table()?;
+    let headers = resp
+        .headers()
+        .iter()
+        .filter_map(|(name, val)| {
+            val.to_str()
+                .ok()
+                .map(|v| (name.as_str().to_string(), v.to_string()))
+        })
+        .collect();
 
-    for (name, val) in resp.headers() {
-        if let Ok(v) = val.to_str() {
-            headers_out.set(name.as_str(), v)?;
-        }
-    }
-
-    result.set("headers", headers_out)?;
-
-    let mut body_buf = String::new();
-
+    let mut body = String::new();
     resp.take(max_bytes)
-        .read_to_string(&mut body_buf)
+        .read_to_string(&mut body)
         .map_err(|e| RuntimeError(format!("failed to read response body: {e}")))?;
 
-    result.set("body", body_buf)?;
-
-    Ok(result)
+    Ok(HttpResponse {
+        status,
+        headers,
+        body,
+    })
 }
 
 /// Resolve and validate a URL against SSRF policy.

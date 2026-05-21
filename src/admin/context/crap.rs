@@ -13,7 +13,8 @@ use crate::{
 };
 
 /// Metadata about the running crap-cms process and current request.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.crap_meta")]
 pub struct CrapMeta {
     /// Crate version (Cargo.toml `version`).
     pub version: &'static str,
@@ -29,19 +30,6 @@ pub struct CrapMeta {
     /// tags. Defaults to `"Crap CMS"`; configurable via
     /// `[admin] site_name = "..."` in `crap.toml`.
     pub site_name: String,
-}
-
-impl LuaAnnotation for CrapMeta {
-    fn render_lua_annotation(out: &mut String) {
-        out.push_str("---@class crap.template.crap_meta\n");
-        out.push_str("---@field version string\n");
-        out.push_str("---@field build_hash string\n");
-        out.push_str("---@field dev_mode boolean\n");
-        out.push_str("---@field auth_enabled boolean\n");
-        out.push_str("---@field csp_nonce string\n");
-        out.push_str("---@field site_name string\n");
-        out.push('\n');
-    }
 }
 
 impl CrapMeta {

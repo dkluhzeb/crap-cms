@@ -2,13 +2,17 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::typegen::lua::LuaAnnotation;
+
 /// A compound index definition (multi-column, optionally unique).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, LuaAnnotation)]
+#[lua(class = "crap.IndexDefinition")]
 pub struct IndexDefinition {
-    /// List of field names that make up the index.
+    /// Column names to include in the index (required).
     pub fields: Vec<String>,
-    /// Whether this index should enforce uniqueness.
+    /// Create a UNIQUE index (default: false).
     #[serde(default)]
+    #[lua(optional)]
     pub unique: bool,
 }
 

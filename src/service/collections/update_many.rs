@@ -13,6 +13,7 @@ use crate::{
         RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, flush_queue,
         update_many_single_in_conn,
     },
+    typegen::lua::LuaAnnotation,
 };
 
 const CHUNK_SIZE: usize = 500;
@@ -20,8 +21,14 @@ const CHUNK_SIZE: usize = 500;
 type Result<T> = std::result::Result<T, ServiceError>;
 
 /// Result of a bulk update operation.
+#[derive(crate::typegen::lua::LuaAnnotation)]
+#[lua(class = "crap.UpdateManyResult")]
 pub struct UpdateManyResult {
+    /// Number of documents updated.
     pub modified: i64,
+    /// Internal: IDs of the documents that were updated. Not surfaced
+    /// to the Lua API.
+    #[lua(skip)]
     pub updated_ids: Vec<String>,
 }
 

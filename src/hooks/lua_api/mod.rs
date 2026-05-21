@@ -21,28 +21,28 @@
 //!   `init_lua` and `HookRunner`; it walks the per-module register
 //!   functions in fixed order.
 
-mod access;
-mod auth;
-mod collections;
-mod config;
+pub(crate) mod access;
+pub(crate) mod auth;
+pub(crate) mod collections;
+pub(crate) mod config;
 pub(crate) mod crud;
-mod crypto;
-mod email;
-mod env;
-mod fields;
-mod globals;
-mod hooks;
-mod http;
-mod jobs;
-mod log;
-pub(crate) mod pages;
+pub(crate) mod crypto;
+pub(crate) mod email;
+pub(crate) mod env;
+pub(crate) mod fields;
+pub(crate) mod globals;
+pub(crate) mod hooks;
+pub(crate) mod http;
+pub(crate) mod jobs;
+pub(crate) mod log;
+pub mod pages;
 pub mod parse;
 mod register;
 pub(crate) mod richtext;
-mod schema;
+pub(crate) mod schema;
 mod serializers;
 pub(crate) mod template_data;
-mod utils;
+pub(crate) mod utils;
 mod vm_label;
 
 pub use register::{register_api, register_api_pool_init};

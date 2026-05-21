@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use mlua::{Error::RuntimeError, Lua, Table, Value};
+use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 use serde_json::Value as JsonValue;
 
 use crate::{
@@ -13,68 +13,52 @@ use crate::{
             document_to_lua_table, lua_table_to_hashmap, lua_table_to_json_map,
         },
         lua_api::crud::{
+            collection::write::create::CreateOptions,
             get_tx_conn,
             helpers::{
-                check_hook_depth, get_opt_bool, hook_lua_infra, hook_ui_locale, hook_user,
-                resolve_collection,
+                check_hook_depth, hook_lua_infra, hook_ui_locale, hook_user, resolve_collection,
             },
         },
     },
     service::{self, CreateManyItem, CreateManyOptions, LuaWriteHooks, ServiceContext},
+    typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
 
-/// Parse a single Lua table item into a `CreateManyItem`.
-///
-/// Lua tables yield two views of the same fields: `lua_table_to_hashmap`
-/// stringifies every leaf (form-input style), `lua_table_to_json_map`
-/// preserves typed shapes (arrays/objects). We start with the stringified
-/// view, replace any composite leaves with their typed counterparts, and
-/// peel off `password` so the WriteInput.password channel can carry it.
-fn parse_item(item_table: &Table) -> mlua::Result<CreateManyItem> {
-    let mut data = service::values_from_strings(lua_table_to_hashmap(item_table)?);
-
-    let composite_data: DocumentFields = lua_table_to_json_map(item_table)?
-        .into_iter()
-        .filter(|(_, v)| !matches!(v, JsonValue::String(_)))
-        .collect();
-    data.extend(composite_data);
-
-    let password = data
-        .remove("password")
-        .and_then(|v| v.as_str().map(std::string::ToString::to_string));
-
-    Ok(CreateManyItem { data, password })
-}
-
 /// Bulk create multiple documents from an array of data tables.
-///
-/// Delegates to `service::create_many` which handles the full per-document
-/// lifecycle: field hooks, validation, before/after change hooks, DB write,
-/// ref count updates, FTS sync, and version snapshots.
-fn create_many_documents(
+/// All-or-nothing: a single transaction wraps every insert.
+/// Inside hooks, runs within the parent operation's transaction.
+#[lua_fn(
+    path = "crap.collections.create_many",
+    returns = "crap.CreateManyResult"
+)]
+fn collections_create_many(
+    state: &Arc<Registry>,
     lua: &Lua,
-    reg: &Registry,
-    collection: &str,
-    items_table: &Table,
-    opts: Option<&Table>,
-) -> mlua::Result<Table> {
+    #[lua(doc = "Collection slug.")] collection: String,
+    #[lua(
+        ty = "table<string, any>[]",
+        doc = "Array of field-value tables — one per document."
+    )]
+    items: Table,
+    #[lua(
+        ty = "crap.CreateOptions",
+        doc = "Optional options applied to every document."
+    )]
+    opts: Option<CreateOptions>,
+) -> LuaResult<Table> {
+    let opts = opts.unwrap_or_default();
     let conn = get_tx_conn(lua)?;
-
-    let override_access = get_opt_bool(opts, "overrideAccess", false);
-    let run_hooks = get_opt_bool(opts, "hooks", true);
-    let draft = get_opt_bool(opts, "draft", false);
 
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
     let lua_infra = hook_lua_infra(lua);
-    let def = resolve_collection(reg, collection)?;
+    let def = resolve_collection(state, &collection)?;
 
-    let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, collection, "create_many");
+    let (hooks_enabled, _guard) = check_hook_depth(lua, opts.hooks, &collection, "create_many");
 
-    // Parse items from the Lua array table
-    let mut items = Vec::new();
-    for i in 1..=items_table.raw_len() {
-        let item_val: Value = items_table.raw_get(i)?;
+    let mut parsed_items = Vec::new();
+    for i in 1..=items.raw_len() {
+        let item_val: Value = items.raw_get(i)?;
 
         let Value::Table(item_table) = item_val else {
             return Err(RuntimeError(format!(
@@ -82,32 +66,32 @@ fn create_many_documents(
             )));
         };
 
-        items.push(parse_item(&item_table)?);
+        parsed_items.push(parse_item(&item_table)?);
     }
 
     let write_hooks = LuaWriteHooks::builder(lua)
         .user(user.as_ref())
         .ui_locale(ui_locale.as_deref())
-        .override_access(override_access)
-        .registry(Some(reg))
+        .override_access(opts.override_access)
+        .registry(Some(state.as_ref()))
         .hooks_enabled(hooks_enabled)
-        .run_validation(run_hooks)
+        .run_validation(opts.hooks)
         .build();
 
-    let ctx = ServiceContext::collection(collection, &def)
+    let ctx = ServiceContext::collection(&collection, &def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
-        .override_access(override_access)
+        .override_access(opts.override_access)
         .lua_infra(lua_infra.as_ref())
         .build();
 
     let create_opts = CreateManyOptions {
         run_hooks: hooks_enabled,
-        draft,
+        draft: opts.draft,
     };
 
-    let svc_result = service::create_many(&ctx, &items, &create_opts)
+    let svc_result = service::create_many(&ctx, &parsed_items, &create_opts)
         .map_err(|e| RuntimeError(format!("{e:#}")))?;
 
     let result = lua.create_table()?;
@@ -123,20 +107,38 @@ fn create_many_documents(
     Ok(result)
 }
 
-/// Register `crap.collections.create_many(collection, items, opts?)`.
+lua_table! {
+    name: crap_collections_create_many,
+    path: "crap.collections",
+    state: Arc<Registry>,
+    fns: [collections_create_many],
+}
+
+/// Register `crap.collections.create_many(collection, items, opts?)`. Parent
+/// `crap.collections` must already exist.
 #[cfg(not(tarpaulin_include))]
 pub(crate) fn register_create_many(
     lua: &Lua,
-    table: &Table,
+    _table: &Table,
     registry: Arc<Registry>,
 ) -> Result<()> {
-    let create_many_fn = lua.create_function(
-        move |lua, (collection, items_table, opts): (String, Table, Option<Table>)| {
-            create_many_documents(lua, &registry, &collection, &items_table, opts.as_ref())
-        },
-    )?;
-
-    table.set("create_many", create_many_fn)?;
-
+    register_crap_collections_create_many(lua, registry)?;
     Ok(())
+}
+
+/// Parse a single Lua table item into a `CreateManyItem`.
+fn parse_item(item_table: &Table) -> LuaResult<CreateManyItem> {
+    let mut data = service::values_from_strings(lua_table_to_hashmap(item_table)?);
+
+    let composite_data: DocumentFields = lua_table_to_json_map(item_table)?
+        .into_iter()
+        .filter(|(_, v)| !matches!(v, JsonValue::String(_)))
+        .collect();
+    data.extend(composite_data);
+
+    let password = data
+        .remove("password")
+        .and_then(|v| v.as_str().map(std::string::ToString::to_string));
+
+    Ok(CreateManyItem { data, password })
 }

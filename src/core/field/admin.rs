@@ -1,96 +1,199 @@
 //! Admin UI display hints for fields.
 
 use crate::core::LocalizedString;
-use serde::{Deserialize, Serialize};
+use crate::typegen::lua::{LuaAlias, LuaAnnotation};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
 fn default_true() -> bool {
     true
 }
 
-/// Admin UI display hints for a field (placeholder, description, visibility, width).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FieldAdmin {
-    /// Localized display label for the field.
-    #[serde(default)]
-    pub label: Option<LocalizedString>,
-    /// Localized placeholder text for inputs.
-    #[serde(default)]
-    pub placeholder: Option<LocalizedString>,
-    /// Localized help text/description displayed below the field.
-    #[serde(default)]
-    pub description: Option<LocalizedString>,
-    /// Whether the field is hidden from the admin UI.
-    #[serde(default)]
-    pub hidden: bool,
-    /// Whether the field is read-only in the admin UI.
-    #[serde(default)]
-    pub readonly: bool,
-    /// CSS width for the field container (e.g., "50%", "33%").
-    #[serde(default)]
-    pub width: Option<String>,
-    /// Start collapsed in the admin UI (groups, collapsibles, array/block rows).
-    #[serde(default = "default_true")]
-    pub collapsed: bool,
-    /// Sub-field name to use as row label (arrays/blocks).
-    #[serde(default)]
-    pub label_field: Option<String>,
-    /// Lua function ref for computed row labels (arrays/blocks).
-    #[serde(default)]
-    pub row_label: Option<String>,
-    /// Custom singular label for row items (e.g., "Slide" -> "Add Slide").
-    #[serde(default)]
-    pub labels_singular: Option<LocalizedString>,
+/// Field width on the admin form. The three named variants line up
+/// with the `form__field--*` CSS classes; `Custom` accepts any CSS
+/// width value (e.g. `"50%"`, `"200px"`) for cases the presets don't
+/// cover — passed through unchanged to the rendered field's
+/// `style.width`.
+#[derive(Debug, Clone, PartialEq, Eq, LuaAlias)]
+#[lua(alias = "crap.FieldWidth", rename_all = "lowercase")]
+pub enum FieldWidth {
+    /// Full row width (default).
+    Full,
+    /// Half row width.
+    Half,
+    /// One-third row width.
+    Third,
+    /// Arbitrary CSS width string (`"50%"`, `"200px"`, etc.).
+    Custom(String),
+}
+
+impl FieldWidth {
+    /// Return the canonical Lua-side string for this width.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Full => "full",
+            Self::Half => "half",
+            Self::Third => "third",
+            Self::Custom(s) => s,
+        }
+    }
+}
+
+impl From<String> for FieldWidth {
+    fn from(s: String) -> Self {
+        match s.as_str() {
+            "full" => Self::Full,
+            "half" => Self::Half,
+            "third" => Self::Third,
+            _ => Self::Custom(s),
+        }
+    }
+}
+
+impl From<&str> for FieldWidth {
+    fn from(s: &str) -> Self {
+        Self::from(s.to_string())
+    }
+}
+
+impl Serialize for FieldWidth {
+    fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        ser.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for FieldWidth {
+    fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(de)?;
+        Ok(Self::from(s))
+    }
+}
+
+/// Custom singular/plural labels for row items (arrays/blocks).
+//
+// Surfaced in Lua as `admin.labels = { singular = ..., plural = ... }`.
+// Either side may be `None`; an empty struct serializes to `{}` and is
+// skipped at the `admin` level via `FieldAdminLabels::is_empty`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, LuaAnnotation)]
+#[serde(default)]
+#[lua(class = "crap.FieldAdminLabels")]
+pub struct FieldAdminLabels {
+    /// Custom singular label for row items (e.g., "Slide" → "Add Slide" button).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(ty = "crap.LocalizedString", optional)]
+    pub singular: Option<LocalizedString>,
     /// Custom plural label for the field header.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(ty = "crap.LocalizedString", optional)]
+    pub plural: Option<LocalizedString>,
+}
+
+impl FieldAdminLabels {
+    /// True iff both `singular` and `plural` are `None` — the default,
+    /// "no overrides" state. Used by `FieldAdmin` to skip serialization
+    /// when nothing is set.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.singular.is_none() && self.plural.is_none()
+    }
+}
+
+/// Admin UI display hints for a field (placeholder, description, visibility, width).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, LuaAnnotation)]
+#[lua(class = "crap.FieldAdmin")]
+pub struct FieldAdmin {
+    /// UI label (defaults to field name).
     #[serde(default)]
-    pub labels_plural: Option<LocalizedString>,
-    /// Field position in the admin form layout ("main" or "sidebar").
-    /// Defaults to "main" when not set.
+    #[lua(ty = "crap.LocalizedString", optional)]
+    pub label: Option<LocalizedString>,
+    /// Input placeholder text.
     #[serde(default)]
+    #[lua(ty = "crap.LocalizedString", optional)]
+    pub placeholder: Option<LocalizedString>,
+    /// Help text shown below the input.
+    #[serde(default)]
+    #[lua(ty = "crap.LocalizedString", optional)]
+    pub description: Option<LocalizedString>,
+    /// Hide from the admin edit form only (default: false). The field's value is still returned in API responses (gRPC, Lua, MCP, REST). For full API stripping, use top-level `hidden` on `crap.FieldDefinition` instead.
+    #[serde(default)]
+    #[lua(optional)]
+    pub hidden: bool,
+    /// Non-editable in admin (default: false).
+    #[serde(default)]
+    #[lua(optional)]
+    pub readonly: bool,
+    /// Field width: `"full"`, `"half"`, `"third"`, or an arbitrary CSS
+    /// value (e.g. `"50%"`, `"200px"`).
+    #[serde(default)]
+    #[lua(ty = "crap.FieldWidth", optional)]
+    pub width: Option<FieldWidth>,
+    /// Start collapsed in admin UI — groups, collapsibles, array/block rows (default: true). Set `false` to start expanded.
+    #[serde(default = "default_true")]
+    #[lua(optional)]
+    pub collapsed: bool,
+    /// Sub-field name to use as row label in admin (arrays/blocks). The value of this sub-field is shown as the row title. For blocks, per-block `label_field` on `BlockDefinition` takes priority.
+    #[serde(default)]
+    #[lua(optional)]
+    pub label_field: Option<String>,
+    /// Lua function ref for computed row labels (arrays/blocks). Receives the row data table, returns a display string or nil. Takes priority over `label_field`. Signature: `fun(row: table): string?`.
+    #[serde(default)]
+    #[lua(optional)]
+    pub row_label: Option<String>,
+    /// Custom singular/plural labels for row items (e.g., `{ singular = "Slide", plural = "Slides" }` → "Add Slide" button).
+    #[serde(default, skip_serializing_if = "FieldAdminLabels::is_empty")]
+    #[lua(optional)]
+    pub labels: FieldAdminLabels,
+    /// "main" or "sidebar".
+    #[serde(default)]
+    #[lua(optional)]
     pub position: Option<String>,
-    /// Lua function ref for conditional field visibility.
+    /// Lua function ref for conditional show/hide.
+    ///
     /// The function receives form data and returns either:
     /// - a boolean (server-evaluated on each change via HTMX)
     /// - a condition table (serialized to JSON, client-evaluated instantly)
     #[serde(default)]
+    #[lua(optional)]
     pub condition: Option<String>,
-    /// For number fields: the step attribute on the input (e.g., "1", "0.01", "any").
+    /// Step value for number inputs (default: "any"). Use "1" for integers, "0.01" for cents, etc.
     #[serde(default)]
+    #[lua(optional)]
     pub step: Option<String>,
-    /// For textarea fields: number of visible rows (default 8).
+    /// Number of rows for textarea fields (default: 8).
     #[serde(default)]
+    #[lua(optional)]
     pub rows: Option<u32>,
-    /// For code fields: the default language mode (e.g., "json", "javascript", "html", "css", "python").
+    /// Default language mode for code fields (default: "json"). Options: "json", "javascript", "html", "css", "python", "plain".
+    ///
     /// When `languages` is non-empty, this is the initial value; the editor
     /// can switch to any other language in the allow-list at edit time.
     #[serde(default)]
+    #[lua(optional)]
     pub language: Option<String>,
-    /// For code fields: an allow-list of languages the editor can pick from
-    /// at edit time. When set, the form renders a `<select>` next to the
-    /// editor and the editor's choice persists in a `<name>_lang` companion
-    /// column. When empty, the language is fixed to `language` (or `"json"`
-    /// if neither is set).
+    /// Allow-list of languages the editor can pick from at edit time for code fields. When set, the form renders a `<select>` next to the editor and persists the choice in a `<name>_lang` companion column. When empty/absent, the language is fixed to `language`.
     #[serde(default)]
+    #[lua(optional)]
     pub languages: Vec<String>,
-    /// For richtext fields: enabled toolbar features.
-    /// When empty, all features are enabled. Possible values:
-    /// "bold", "italic", "code", "link", "heading", "blockquote",
-    /// "orderedList", "bulletList", "codeBlock", "horizontalRule".
+    /// Enabled toolbar features for richtext fields. When absent, all features are enabled. Options: "bold", "italic", "code", "link", "heading", "blockquote", "orderedList", "bulletList", "codeBlock", "horizontalRule".
     #[serde(default)]
+    #[lua(optional)]
     pub features: Vec<String>,
-    /// For blocks fields: picker style. "select" (default) uses a dropdown,
-    /// "card" uses a visual card grid (shows images when `image_url` is set on blocks).
+    /// Picker UI style. For blocks fields: "select" (default) uses a dropdown, "card" uses a visual card grid. For upload fields: "drawer" (default) adds a browse button with thumbnail grid, "none" disables it. For relationship fields: "drawer" adds a browse button with searchable list.
     #[serde(default)]
+    #[lua(optional)]
     pub picker: Option<String>,
-    /// For richtext fields: storage format. "html" (default) or "json" (`ProseMirror` JSON).
+    /// Storage format for richtext fields: "html" (default) or "json" (`ProseMirror` JSON). FTS extracts plain text from JSON automatically.
     #[serde(default)]
+    #[lua(rename = "format", optional)]
     pub richtext_format: Option<String>,
-    /// For richtext fields: which custom node types are available.
-    /// Node names must be registered via `crap.richtext.register_node()`.
+    /// Custom `ProseMirror` node types for richtext fields. Names must match nodes registered via `crap.richtext.register_node()`.
     #[serde(default)]
+    #[lua(optional)]
     pub nodes: Vec<String>,
     /// Allow vertical resize on textarea/richtext fields (default: true).
     #[serde(default = "default_true")]
+    #[lua(optional)]
     pub resizable: bool,
     /// Custom template name to render this field instead of the default
     /// `fields/<field_type>` lookup. The path is relative to `templates/`
@@ -103,6 +206,7 @@ pub struct FieldAdmin {
     /// template at that path. Restricted to safe characters
     /// (`a-zA-Z0-9/_-`); `..` and absolute paths are rejected.
     #[serde(default)]
+    #[lua(skip)]
     pub template: Option<String>,
     /// Freeform per-field configuration map, available to the field's
     /// admin template at `{{admin.extra.<key>}}`. Pairs naturally with
@@ -121,6 +225,7 @@ pub struct FieldAdmin {
     /// Empty by default. Empty maps don't serialize (`skip_serializing_if`),
     /// keeping schema dumps and roundtrips clean.
     #[serde(default, skip_serializing_if = "Map::is_empty")]
+    #[lua(skip)]
     pub extra: Map<String, Value>,
 }
 
@@ -144,8 +249,7 @@ impl Default for FieldAdmin {
             collapsed: true,
             label_field: None,
             row_label: None,
-            labels_singular: None,
-            labels_plural: None,
+            labels: FieldAdminLabels::default(),
             position: None,
             condition: None,
             step: None,
@@ -269,9 +373,10 @@ impl FieldAdminBuilder {
         self
     }
 
-    /// Set the CSS width for the field container (e.g., "50%").
+    /// Set the field width — `"full"`, `"half"`, `"third"`, or any CSS
+    /// value (e.g. `"50%"`).
     #[must_use]
-    pub fn width(mut self, v: impl Into<String>) -> Self {
+    pub fn width(mut self, v: impl Into<FieldWidth>) -> Self {
         self.inner.width = Some(v.into());
         self
     }
@@ -300,14 +405,23 @@ impl FieldAdminBuilder {
     /// Set custom singular label for row items.
     #[must_use]
     pub fn labels_singular(mut self, v: LocalizedString) -> Self {
-        self.inner.labels_singular = Some(v);
+        self.inner.labels.singular = Some(v);
         self
     }
 
     /// Set custom plural label for the field.
     #[must_use]
     pub fn labels_plural(mut self, v: LocalizedString) -> Self {
-        self.inner.labels_plural = Some(v);
+        self.inner.labels.plural = Some(v);
+        self
+    }
+
+    /// Set both singular and plural row-label overrides from a built
+    /// [`FieldAdminLabels`]. Use [`Self::labels_singular`] /
+    /// [`Self::labels_plural`] for one-off setters.
+    #[must_use]
+    pub fn labels(mut self, v: FieldAdminLabels) -> Self {
+        self.inner.labels = v;
         self
     }
 
@@ -513,6 +627,47 @@ mod tests {
         assert!(admin.resizable);
     }
 
+    // ── FieldWidth round-trip ───────────────────────────────────────
+
+    #[test]
+    fn field_width_named_strings_map_to_named_variants() {
+        assert!(matches!(
+            FieldWidth::from("full".to_string()),
+            FieldWidth::Full
+        ));
+        assert!(matches!(FieldWidth::from("half"), FieldWidth::Half));
+        assert!(matches!(FieldWidth::from("third"), FieldWidth::Third));
+    }
+
+    #[test]
+    fn field_width_unknown_string_becomes_custom() {
+        let w = FieldWidth::from("50%");
+        assert!(matches!(w, FieldWidth::Custom(ref s) if s == "50%"));
+        assert_eq!(w.as_str(), "50%");
+    }
+
+    #[test]
+    fn field_width_named_as_str_is_canonical() {
+        assert_eq!(FieldWidth::Full.as_str(), "full");
+        assert_eq!(FieldWidth::Half.as_str(), "half");
+        assert_eq!(FieldWidth::Third.as_str(), "third");
+    }
+
+    #[test]
+    fn field_width_serde_round_trips_named_and_custom() {
+        // Named variant serializes to the lowercase string.
+        let json = serde_json::to_string(&FieldWidth::Half).unwrap();
+        assert_eq!(json, "\"half\"");
+        let back: FieldWidth = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, FieldWidth::Half));
+
+        // Custom variant serializes to the CSS string verbatim.
+        let json = serde_json::to_string(&FieldWidth::Custom("200px".into())).unwrap();
+        assert_eq!(json, "\"200px\"");
+        let back: FieldWidth = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, FieldWidth::Custom(ref s) if s == "200px"));
+    }
+
     #[test]
     fn builds_field_admin_with_overrides() {
         let admin = FieldAdminBuilder::new()
@@ -528,7 +683,8 @@ mod tests {
         assert!(admin.label.is_some());
         assert!(admin.hidden);
         assert!(admin.readonly);
-        assert_eq!(admin.width.as_deref(), Some("50%"));
+        assert_eq!(admin.width.as_ref().map(FieldWidth::as_str), Some("50%"));
+        assert!(matches!(admin.width, Some(FieldWidth::Custom(ref s)) if s == "50%"));
         assert!(!admin.collapsed);
         assert_eq!(admin.position.as_deref(), Some("sidebar"));
         assert_eq!(admin.rows, Some(12));

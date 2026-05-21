@@ -67,9 +67,10 @@ pub use document::Document;
 pub use document_fields::DocumentFields;
 pub use document_id::DocumentId;
 pub use field::{
-    BlockDefinition, FieldAccess, FieldAdmin, FieldAdminBuilder, FieldDefinition,
-    FieldDefinitionBuilder, FieldHooks, FieldTab, FieldType, JoinConfig, LocalizedString,
-    McpFieldConfig, RelationshipConfig, SelectOption, to_title_case, validate_template_name,
+    BlockDefinition, FieldAccess, FieldAdmin, FieldAdminBuilder, FieldAdminLabels, FieldDefinition,
+    FieldDefinitionBuilder, FieldHookFn, FieldHooks, FieldTab, FieldType, FieldWidth, JoinConfig,
+    LocalizedString, McpFieldConfig, PickerAppearance, RelationshipConfig, SelectOption,
+    ValidateFunction, to_title_case, validate_template_name,
 };
 pub use job::{JobDefinition, JobLabels, JobRun, JobStatus};
 pub(crate) use registry::RegistryRead;

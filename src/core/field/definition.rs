@@ -4,139 +4,266 @@ use crate::core::{
     BlockDefinition, FieldAdmin, FieldTab, FieldType, RelationshipConfig, SelectOption,
     field::JoinConfig,
 };
+use crate::typegen::lua::{LuaAlias, LuaAnnotation, LuaFieldTypeViews, LuaTypeAlias};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// `date` field appearance + storage format.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, LuaAlias)]
+#[serde(rename_all = "camelCase")]
+#[lua(alias = "crap.PickerAppearance", rename_all = "camelCase")]
+pub enum PickerAppearance {
+    /// Date picker, stored as `YYYY-MM-DDT12:00:00.000Z`.
+    DayOnly,
+    /// Datetime-local picker, stored as full ISO 8601 UTC.
+    DayAndTime,
+    /// Time picker, stored as `HH:MM`.
+    TimeOnly,
+    /// Month picker, stored as `YYYY-MM`.
+    MonthOnly,
+}
+
+impl PickerAppearance {
+    /// Return the canonical camelCase Lua-side string for this variant.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::DayOnly => "dayOnly",
+            Self::DayAndTime => "dayAndTime",
+            Self::TimeOnly => "timeOnly",
+            Self::MonthOnly => "monthOnly",
+        }
+    }
+}
+
+/// Unrecognized `picker_appearance` string. Callers (the parser) typically
+/// log a warning and treat the field as if no value was set, falling back
+/// to the default (`DayOnly`).
+#[derive(Debug)]
+pub struct UnknownPickerAppearance(pub String);
+
+impl std::fmt::Display for UnknownPickerAppearance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "unknown picker_appearance '{}' (valid: dayOnly, dayAndTime, timeOnly, monthOnly)",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for UnknownPickerAppearance {}
+
+impl std::str::FromStr for PickerAppearance {
+    type Err = UnknownPickerAppearance;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "dayOnly" => Ok(Self::DayOnly),
+            "dayAndTime" => Ok(Self::DayAndTime),
+            "timeOnly" => Ok(Self::TimeOnly),
+            "monthOnly" => Ok(Self::MonthOnly),
+            _ => Err(UnknownPickerAppearance(s.to_string())),
+        }
+    }
+}
+
+/// Custom validation function type.
+/// Return `nil` (or `true`) if valid; return a string error message if invalid.
+/// Used by `crap.FieldDefinition.validate` (a Lua function ref like
+/// `"validators.foo"` that resolves to a function of this shape).
+#[derive(LuaTypeAlias)]
+#[lua(
+    alias = "crap.ValidateFunction",
+    target = "fun(value: any, context: crap.ValidateContext): string?"
+)]
+pub struct ValidateFunction;
+
+/// Field hook function type.
+/// Receives the field value and a context table; returns the (possibly
+/// modified) value. Used by every `crap.FieldHooks` slot — the Lua
+/// function ref stored there must resolve to a function of this shape.
+#[derive(LuaTypeAlias)]
+#[lua(
+    alias = "crap.FieldHookFn",
+    target = "fun(value: any, context: crap.FieldHookContext): any"
+)]
+pub struct FieldHookFn;
+
 /// Lua function references for field-level access control (read/create/update).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, LuaAnnotation)]
+#[lua(class = "crap.FieldAccess")]
 pub struct FieldAccess {
-    /// Lua function name for read access control.
+    /// Hook ref for field read access control.
     #[serde(default)]
     pub read: Option<String>,
-    /// Lua function name for create access control.
+    /// Hook ref for field create access control.
     #[serde(default)]
     pub create: Option<String>,
-    /// Lua function name for update access control.
+    /// Hook ref for field update access control.
     #[serde(default)]
     pub update: Option<String>,
 }
 
 /// Lua function references for field-level lifecycle hooks.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, LuaAnnotation)]
+#[lua(class = "crap.FieldHooks")]
 pub struct FieldHooks {
-    /// Lua function names for before-validate hooks.
+    /// Hook refs to run before field validation (value normalizers).
     #[serde(default)]
+    #[lua(optional)]
     pub before_validate: Vec<String>,
-    /// Lua function names for before-change hooks.
+    /// Hook refs to run after validation, before write.
     #[serde(default)]
+    #[lua(optional)]
     pub before_change: Vec<String>,
-    /// Lua function names for after-change hooks.
+    /// Hook refs to run after create/update write.
     #[serde(default)]
+    #[lua(optional)]
     pub after_change: Vec<String>,
-    /// Lua function names for after-read hooks.
+    /// Hook refs to run after read, before response.
     #[serde(default)]
+    #[lua(optional)]
     pub after_read: Vec<String>,
 }
 
 /// Complete definition of a single field within a collection.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Use the per-type factory classes (`crap.fields.text(...)`,
+/// `crap.fields.select(...)`, etc.) for precise per-type
+/// autocompletion; this catch-all class lists every option the system
+/// understands.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, LuaFieldTypeViews, LuaAnnotation)]
+#[lua(base = "crap.BaseField", discriminator = FieldType, class = "crap.FieldDefinition")]
 pub struct FieldDefinition {
-    /// Unique identifier for the field within the collection. Used as column name.
+    /// Column name (required).
     pub name: String,
-    /// The data type of the field.
+    /// Field type (required).
     #[serde(rename = "type")]
+    #[lua(skip)]
     pub field_type: FieldType,
-    /// Whether the field is required to have a value.
+    /// Validation: must have a value (default: false).
     #[serde(default)]
+    #[lua(optional)]
     pub required: bool,
-    /// Whether the field must have a unique value across the collection.
+    /// Unique constraint (default: false).
     #[serde(default)]
+    #[lua(optional)]
     pub unique: bool,
-    /// Whether to create a database index for this field.
+    /// Create a B-tree index on this column (default: false). Skipped when unique=true.
     #[serde(default)]
+    #[lua(optional)]
     pub index: bool,
-    /// Optional Lua validation function name.
+    /// Lua function ref called as `crap.ValidateFunction`.
     #[serde(default)]
+    #[lua(optional)]
     pub validate: Option<String>,
-    /// Default value for the field when creating new items.
+    /// Default value on create.
     #[serde(default)]
+    #[lua(ty = "any", optional)]
     pub default_value: Option<Value>,
-    /// List of options for Select and Radio fields.
+    /// Option list (required).
     #[serde(default)]
+    #[lua(applies_to = "select, radio")]
     pub options: Vec<SelectOption>,
-    /// Configuration for the admin UI representation of this field.
+    /// Admin UI display options.
     #[serde(default)]
+    #[lua(optional)]
     pub admin: FieldAdmin,
-    /// Lifecycle hooks specific to this field.
+    /// Per-field lifecycle hooks.
     #[serde(default)]
+    #[lua(optional)]
     pub hooks: FieldHooks,
-    /// Access control rules for this field.
+    /// Field-level access control (read/create/update).
     #[serde(default)]
+    #[lua(optional)]
     pub access: FieldAccess,
-    /// MCP-specific configuration for this field.
+    /// MCP tool schema options.
     #[serde(default)]
+    #[lua(optional)]
     pub mcp: McpFieldConfig,
-    /// Configuration for Relationship and Upload fields.
+    /// Target collection and cardinality.
     #[serde(default)]
+    #[lua(applies_to = "relationship, upload", optional)]
     pub relationship: Option<RelationshipConfig>,
-    /// Sub-fields for Group and Array types.
+    /// Sub-field definitions (required). For row/collapsible: promoted to parent level (no prefix).
     #[serde(default)]
+    #[lua(
+        applies_to = "array, group, row, collapsible",
+        ty = "crap.FieldDefinition[]"
+    )]
     pub fields: Vec<FieldDefinition>,
-    /// Block definitions for Blocks type.
+    /// Block type definitions (required).
     #[serde(default)]
+    #[lua(applies_to = "blocks")]
     pub blocks: Vec<BlockDefinition>,
-    /// Tab definitions for Tabs layout type.
+    /// Tab definitions (required). Each tab has a label and fields.
     #[serde(default)]
+    #[lua(applies_to = "tabs")]
     pub tabs: Vec<FieldTab>,
-    /// Whether the field's value is localized.
+    /// Per-locale values (default: false).
     #[serde(default)]
+    #[lua(optional)]
     pub localized: bool,
-    /// For date fields: controls the HTML input type and storage format.
-    /// Valid values: "dayOnly" (default), "dayAndTime", "timeOnly", "monthOnly".
+    /// Input type: "dayOnly" (default), "dayAndTime", "timeOnly", "monthOnly".
     #[serde(default)]
-    pub picker_appearance: Option<String>,
-    /// Minimum number of rows (array/blocks). Validated on create/update.
+    #[lua(applies_to = "date", ty = "crap.PickerAppearance", optional)]
+    pub picker_appearance: Option<PickerAppearance>,
+    /// Minimum rows. Validated on create/update.
     #[serde(default)]
+    #[lua(applies_to = "array, blocks", optional)]
     pub min_rows: Option<usize>,
-    /// Maximum number of rows (array/blocks). Validated on create/update.
+    /// Maximum rows. Admin disables "Add" at max.
     #[serde(default)]
+    #[lua(applies_to = "array, blocks", optional)]
     pub max_rows: Option<usize>,
-    /// Minimum string length (text/textarea). Validated server-side.
+    /// Minimum string length. Validated server-side + HTML minlength.
     #[serde(default)]
+    #[lua(applies_to = "text, textarea", optional)]
     pub min_length: Option<usize>,
-    /// Maximum string length (text/textarea). Validated server-side + HTML attr.
+    /// Maximum string length. Validated server-side + HTML maxlength.
     #[serde(default)]
+    #[lua(applies_to = "text, textarea", optional)]
     pub max_length: Option<usize>,
-    /// Minimum numeric value (number fields). Validated server-side + HTML attr.
+    /// Minimum value. Validated server-side + HTML min attr.
     #[serde(default)]
+    #[lua(applies_to = "number", optional)]
     pub min: Option<f64>,
-    /// Maximum numeric value (number fields). Validated server-side + HTML attr.
+    /// Maximum value. Validated server-side + HTML max attr.
     #[serde(default)]
+    #[lua(applies_to = "number", optional)]
     pub max: Option<f64>,
-    /// Allow multiple values (select). Stored as JSON array in TEXT column.
+    /// Multi-value tag input. Stored as JSON array in TEXT column (text/number) or multi-select dropdown (select).
     #[serde(default)]
+    #[lua(applies_to = "text, number, select", optional)]
     pub has_many: bool,
-    /// Minimum date value (date fields). ISO format: "2024-01-01". Validated server-side + HTML min attr.
+    /// Minimum date (ISO "YYYY-MM-DD").
     #[serde(default)]
+    #[lua(applies_to = "date", optional)]
     pub min_date: Option<String>,
-    /// Maximum date value (date fields). ISO format: "2025-12-31". Validated server-side + HTML max attr.
+    /// Maximum date (ISO "YYYY-MM-DD").
     #[serde(default)]
+    #[lua(applies_to = "date", optional)]
     pub max_date: Option<String>,
-    /// Whether to store an IANA timezone alongside the date value.
-    /// Only meaningful for dayOnly and dayAndTime picker appearances.
+    /// Store an IANA timezone alongside the value. Requires `picker_appearance = "dayAndTime"` (ignored with a warning otherwise). Creates a companion `{field}_tz` column.
     #[serde(default)]
+    #[lua(applies_to = "date", optional)]
     pub timezone: bool,
-    /// Default IANA timezone for the admin UI dropdown (e.g., "`America/New_York`").
+    /// IANA zone used as the admin form default (e.g. "`America/New_York`"). Only applies when `timezone = true`.
     #[serde(default)]
+    #[lua(applies_to = "date", optional)]
     pub default_timezone: Option<String>,
-    /// Configuration for join (virtual reverse-relationship) fields.
+    /// Target collection slug (required). Field on target collection that references this document (required).
+    //
+    // `flatten` inlines `JoinConfig`'s fields (`collection`, `on`)
+    // directly onto `crap.JoinField` instead of emitting a single
+    // `--- @field join? crap.JoinConfig` line — matches the Lua surface
+    // where they're top-level on the join field config.
     #[serde(default)]
+    #[lua(applies_to = "join", flatten)]
     pub join: Option<JoinConfig>,
-    /// Strip this field from all read responses (gRPC, Lua, MCP, admin JSON, REST).
-    /// Writes are not stripped — internal hooks/Lua can still write the column.
-    /// Implies the field is also skipped in the admin form (no data to render).
-    /// See `admin.hidden` for the admin-form-only equivalent (still returned in API).
+    /// Strip from all read responses (gRPC/Lua/MCP/admin/REST) and skip in the admin form. For admin-form-only hiding (value still returned in API), use `admin.hidden` instead. Default: false.
     #[serde(default)]
+    #[lua(optional)]
     pub hidden: bool,
 }
 
@@ -214,10 +341,11 @@ pub fn flatten_array_sub_fields(fields: &[FieldDefinition]) -> Vec<&FieldDefinit
 }
 
 /// MCP-specific configuration for a field.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, LuaAnnotation)]
 #[serde(default)]
+#[lua(class = "crap.McpFieldConfig")]
 pub struct McpFieldConfig {
-    /// Description used in MCP tool JSON Schema for this field.
+    /// Description shown in MCP tool JSON Schema for this field.
     pub description: Option<String>,
 }
 
@@ -348,8 +476,8 @@ impl FieldDefinitionBuilder {
 
     /// Set the picker appearance for date fields.
     #[must_use]
-    pub fn picker_appearance(mut self, v: impl Into<String>) -> Self {
-        self.inner.picker_appearance = Some(v.into());
+    pub fn picker_appearance(mut self, v: PickerAppearance) -> Self {
+        self.inner.picker_appearance = Some(v);
         self
     }
 
@@ -456,6 +584,53 @@ impl FieldDefinitionBuilder {
 mod tests {
     use super::*;
     use crate::core::LocalizedString;
+    use std::str::FromStr;
+
+    // ── PickerAppearance FromStr + as_str ───────────────────────────
+
+    #[test]
+    fn picker_appearance_from_str_each_variant() {
+        assert!(matches!(
+            PickerAppearance::from_str("dayOnly"),
+            Ok(PickerAppearance::DayOnly)
+        ));
+        assert!(matches!(
+            PickerAppearance::from_str("dayAndTime"),
+            Ok(PickerAppearance::DayAndTime)
+        ));
+        assert!(matches!(
+            PickerAppearance::from_str("timeOnly"),
+            Ok(PickerAppearance::TimeOnly)
+        ));
+        assert!(matches!(
+            PickerAppearance::from_str("monthOnly"),
+            Ok(PickerAppearance::MonthOnly)
+        ));
+    }
+
+    #[test]
+    fn picker_appearance_from_str_rejects_unknown_with_named_error() {
+        let err = PickerAppearance::from_str("datetime").unwrap_err();
+        assert!(err.to_string().contains("datetime"));
+        assert!(err.to_string().contains("dayOnly"));
+    }
+
+    #[test]
+    fn picker_appearance_as_str_is_canonical_camel_case() {
+        assert_eq!(PickerAppearance::DayOnly.as_str(), "dayOnly");
+        assert_eq!(PickerAppearance::DayAndTime.as_str(), "dayAndTime");
+        assert_eq!(PickerAppearance::TimeOnly.as_str(), "timeOnly");
+        assert_eq!(PickerAppearance::MonthOnly.as_str(), "monthOnly");
+    }
+
+    #[test]
+    fn picker_appearance_serde_round_trip() {
+        let pa = PickerAppearance::DayAndTime;
+        let json = serde_json::to_string(&pa).unwrap();
+        assert_eq!(json, "\"dayAndTime\"");
+        let back: PickerAppearance = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, PickerAppearance::DayAndTime));
+    }
 
     #[test]
     fn has_parent_column_scalar_types() {

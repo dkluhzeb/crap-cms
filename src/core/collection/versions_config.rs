@@ -2,14 +2,19 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::typegen::lua::LuaAnnotation;
+
 /// Configuration for document versioning and drafts on a collection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, LuaAnnotation)]
+#[lua(class = "crap.VersionsConfig")]
 pub struct VersionsConfig {
-    /// Enable draft/publish workflow with `_status` field.
+    /// Enable draft/publish workflow (default: false). Adds `_status` column.
     #[serde(default)]
+    #[lua(optional)]
     pub drafts: bool,
-    /// Maximum versions to keep per document (0 = unlimited).
+    /// Maximum version snapshots to keep per document (default: unlimited).
     #[serde(default)]
+    #[lua(optional)]
     pub max_versions: u32,
 }
 

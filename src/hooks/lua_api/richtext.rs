@@ -1,17 +1,81 @@
 //! Registers `crap.richtext` — custom `ProseMirror` node registration and rendering.
 
-use mlua::{Error::RuntimeError, Function, Lua, Result as LuaResult, Table, Value};
+use mlua::{Error::RuntimeError, FromLua, Function, Lua, Result as LuaResult, Table, Value};
 use serde_json::Value as JsonValue;
 use tracing::warn;
 
 use super::parse::fields::parse_fields;
-use crate::{
-    core::{
-        FieldDefinition, RichtextNodeDef, SharedRegistry,
-        richtext::{render_html_custom_nodes, render_prosemirror_to_html},
-    },
-    hooks::lifecycle::InitPhase,
+use crate::core::{
+    FieldDefinition, RichtextNodeDef, SharedRegistry,
+    richtext::{render_html_custom_nodes, render_prosemirror_to_html},
 };
+use crate::hooks::lifecycle::InitPhase;
+use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
+
+/// Spec for registering a custom richtext node. Parsed from the Lua
+/// table the user passes to `crap.richtext.register_node(name, spec)`.
+///
+/// `attrs` is the only Lua-typed field that's converted to a Rust
+/// representation eagerly (via `parse_fields`) so the call site can
+/// run the type-allow-list validation against typed
+/// `FieldDefinition`s rather than re-walking a Lua table. `render`
+/// stays as `mlua::Function` because it's invoked from Rust later, and
+/// `mlua::Function` is the natural type for that.
+#[derive(LuaAnnotation)]
+#[lua(class = "crap.RichtextNodeSpec")]
+pub(crate) struct RichtextNodeSpec {
+    /// Display label (defaults to `name`).
+    #[lua(optional)]
+    pub(crate) label: Option<String>,
+    /// Whether the node is inline (default: `false` = block).
+    #[lua(optional)]
+    pub(crate) inline: bool,
+    /// Attribute definitions (scalar types only: text, number, textarea,
+    /// select, radio, checkbox, date, email, json, code). Use
+    /// `crap.fields.*` factory functions.
+    #[lua(ty = "crap.FieldDefinition[]", optional)]
+    pub(crate) attrs: Vec<FieldDefinition>,
+    /// Attr names to include in FTS search index.
+    #[lua(optional)]
+    pub(crate) searchable_attrs: Vec<String>,
+    /// Server-side render function. Receives the node attrs as a Lua
+    /// table; returns the rendered HTML string.
+    #[lua(ty = "fun(attrs: table): string", optional)]
+    pub(crate) render: Option<Function>,
+}
+
+impl FromLua for RichtextNodeSpec {
+    fn from_lua(value: Value, lua: &Lua) -> LuaResult<Self> {
+        let Value::Table(tbl) = value else {
+            return Err(RuntimeError(format!(
+                "crap.richtext.register_node spec must be a table, got {}",
+                value.type_name()
+            )));
+        };
+
+        let attrs = match tbl.get::<Option<Table>>("attrs")? {
+            Some(attrs_tbl) => parse_fields(lua, &attrs_tbl)
+                .map_err(|e| RuntimeError(format!("Invalid node attrs: {e:#}")))?,
+            None => Vec::new(),
+        };
+
+        let searchable_attrs = match tbl.get::<Option<Table>>("searchable_attrs")? {
+            Some(sa_tbl) => sa_tbl
+                .sequence_values::<String>()
+                .filter_map(Result::ok)
+                .collect(),
+            None => Vec::new(),
+        };
+
+        Ok(Self {
+            label: tbl.get::<Option<String>>("label")?,
+            inline: tbl.get::<Option<bool>>("inline")?.unwrap_or(false),
+            attrs,
+            searchable_attrs,
+            render: tbl.get::<Option<Function>>("render")?,
+        })
+    }
+}
 
 /// Built-in `ProseMirror` node types. Registering a custom node with one
 /// of these names would silently fail at render time — the built-in
@@ -53,17 +117,10 @@ fn validate_node_name(name: &str) -> LuaResult<()> {
     Ok(())
 }
 
-/// Parses the `attrs` table from a node spec, validates that all types are scalar,
-/// and warns on irrelevant features.
-fn parse_node_attrs(lua: &Lua, name: &str, spec: &Table) -> LuaResult<Vec<FieldDefinition>> {
-    let Ok(attrs_tbl) = spec.get::<Table>("attrs") else {
-        return Ok(Vec::new());
-    };
-
-    let fields = parse_fields(lua, &attrs_tbl)
-        .map_err(|e| RuntimeError(format!("Invalid node attrs: {e:#}")))?;
-
-    for f in &fields {
+/// Validate that every parsed attr uses a scalar type and warn about
+/// features (validate, hooks, …) that don't fire for node attrs.
+fn validate_node_attrs(name: &str, attrs: &[FieldDefinition]) -> LuaResult<()> {
+    for f in attrs {
         if !f.field_type.is_node_attr_type() {
             return Err(RuntimeError(format!(
                 "Node attr '{}' has type '{}' which is not allowed as a node attribute. \
@@ -75,28 +132,18 @@ fn parse_node_attrs(lua: &Lua, name: &str, spec: &Table) -> LuaResult<Vec<FieldD
 
         warn_irrelevant_node_attr_features(name, f);
     }
-
-    Ok(fields)
+    Ok(())
 }
 
-/// Parses and validates `searchable_attrs` from a node spec, ensuring all referenced
-/// attr names exist.
-fn parse_searchable_attrs(
+/// Validate every entry in `searchable_attrs` references a real attr.
+fn validate_searchable_attrs(
     name: &str,
     attrs: &[FieldDefinition],
-    spec: &Table,
-) -> LuaResult<Vec<String>> {
-    let searchable_attrs: Vec<String> = match spec.get::<Table>("searchable_attrs") {
-        Ok(sa_tbl) => sa_tbl
-            .sequence_values::<String>()
-            .filter_map(std::result::Result::ok)
-            .collect(),
-        Err(_) => return Ok(Vec::new()),
-    };
-
+    searchable_attrs: &[String],
+) -> LuaResult<()> {
     let attr_names: Vec<&str> = attrs.iter().map(|a| a.name.as_str()).collect();
 
-    for sa in &searchable_attrs {
+    for sa in searchable_attrs {
         if !attr_names.contains(&sa.as_str()) {
             return Err(RuntimeError(format!(
                 "Node '{}': searchable_attrs references unknown attr '{}'.\n\
@@ -108,7 +155,7 @@ fn parse_searchable_attrs(
         }
     }
 
-    Ok(searchable_attrs)
+    Ok(())
 }
 
 /// Stores a node entry (label, inline flag, optional render function) in the Lua registry.
@@ -117,8 +164,7 @@ fn store_node_in_lua(
     name: &str,
     label: &str,
     inline: bool,
-    has_render: bool,
-    spec: &Table,
+    render: Option<&Function>,
 ) -> LuaResult<()> {
     let storage: Table = lua.named_registry_value("_crap_richtext_nodes")?;
 
@@ -126,9 +172,8 @@ fn store_node_in_lua(
     node_entry.set("label", label)?;
     node_entry.set("inline", inline)?;
 
-    if has_render {
-        let render_fn: Function = spec.get("render")?;
-        node_entry.set("render", render_fn)?;
+    if let Some(render_fn) = render {
+        node_entry.set("render", render_fn.clone())?;
     }
 
     storage.set(name, node_entry)?;
@@ -137,8 +182,14 @@ fn store_node_in_lua(
 }
 
 /// Handles the `crap.richtext.register_node(name, spec)` call — validates input,
-/// parses attrs, and stores the node definition in both Lua and Rust registries.
-fn register_node(lua: &Lua, registry: &SharedRegistry, name: &str, spec: &Table) -> LuaResult<()> {
+/// and stores the node definition in both Lua and Rust registries. Attr
+/// parsing already happened in `RichtextNodeSpec::from_lua`.
+fn register_node(
+    lua: &Lua,
+    registry: &SharedRegistry,
+    name: &str,
+    spec: RichtextNodeSpec,
+) -> LuaResult<()> {
     // Custom nodes must be registered at init time so all VMs in the
     // pool share the same node set and the per-collection field-context
     // builder sees them consistently. A runtime call from a hook would
@@ -148,24 +199,18 @@ fn register_node(lua: &Lua, registry: &SharedRegistry, name: &str, spec: &Table)
     }
 
     validate_node_name(name)?;
+    validate_node_attrs(name, &spec.attrs)?;
+    validate_searchable_attrs(name, &spec.attrs, &spec.searchable_attrs)?;
 
-    let label: String = spec
-        .get::<String>("label")
-        .unwrap_or_else(|_| name.to_string());
-    let inline: bool = spec.get::<bool>("inline").unwrap_or(false);
-    let attrs = parse_node_attrs(lua, name, spec)?;
-    let searchable_attrs = parse_searchable_attrs(name, &attrs, spec)?;
+    let label = spec.label.unwrap_or_else(|| name.to_string());
+    let has_render = spec.render.is_some();
 
-    let has_render = spec
-        .get::<Value>("render")
-        .is_ok_and(|v| matches!(v, Value::Function(_)));
-
-    store_node_in_lua(lua, name, &label, inline, has_render, spec)?;
+    store_node_in_lua(lua, name, &label, spec.inline, spec.render.as_ref())?;
 
     let def = RichtextNodeDef::builder(name, &label)
-        .inline(inline)
-        .attrs(attrs)
-        .searchable_attrs(searchable_attrs)
+        .inline(spec.inline)
+        .attrs(spec.attrs)
+        .searchable_attrs(spec.searchable_attrs)
         .has_render(has_render)
         .build();
 
@@ -213,29 +258,75 @@ fn render(lua: &Lua, content: &str) -> LuaResult<String> {
 const REGISTER_NODE_INIT_ONLY_ERROR: &str = "crap.richtext.register_node must be called from \
      init.lua or a definition file — runtime registration only lands in one VM of the pool";
 
+// ── User-facing fns ──────────────────────────────────────────────────
+
+/// Register a custom `ProseMirror` node type.
+#[lua_fn(path = "crap.richtext.register_node")]
+fn richtext_register_node_init(
+    state: &SharedRegistry,
+    lua: &Lua,
+    #[lua(doc = "Node name (alphanumeric + underscores only).")] name: String,
+    #[lua(ty = "crap.RichtextNodeSpec", doc = "Node specification.")] spec: RichtextNodeSpec,
+) -> LuaResult<()> {
+    register_node(lua, state, &name, spec)
+}
+
+/// Pool-VM variant of `register_node`. Same `InitPhase` guard, does the
+/// per-VM Lua-side storage so `render` can find the node's render
+/// function, but skips the shared-registry write — the `init_lua` VM
+/// already populated the registry.
+#[lua_fn(path = "crap.richtext.register_node")]
+fn richtext_register_node_pool(
+    _state: &(),
+    lua: &Lua,
+    name: String,
+    #[lua(ty = "crap.RichtextNodeSpec")] spec: RichtextNodeSpec,
+) -> LuaResult<()> {
+    register_node_pool(lua, &name, spec)
+}
+
+/// Render richtext content, replacing custom nodes with their rendered HTML.
+/// Detects format automatically: starts with '{' = JSON, otherwise HTML.
+#[lua_fn(path = "crap.richtext.render", returns_doc = "Rendered HTML output.")]
+fn richtext_render(
+    lua: &Lua,
+    #[lua(doc = "Richtext content (HTML or `ProseMirror` JSON).")] content: String,
+) -> LuaResult<String> {
+    render(lua, &content)
+}
+
+lua_table! {
+    name: crap_richtext_init,
+    path: "crap.richtext",
+    state: SharedRegistry,
+    header: "Custom ProseMirror node registration and rendering.",
+    fns: [richtext_register_node_init],
+}
+
+lua_table! {
+    name: crap_richtext_pool,
+    path: "crap.richtext",
+    state: (),
+    fns: [richtext_register_node_pool],
+}
+
+// `render` is stateless and shared by both init and pool entry points.
+lua_table! {
+    name: crap_richtext_render,
+    path: "crap.richtext",
+    state: (),
+    fns: [richtext_render],
+}
+
+// ── Registration entry points ────────────────────────────────────────
+
 /// Init-time registration of `crap.richtext`: write-capable
 /// `register_node` + `render`. Used by the init-phase Lua VM.
-pub fn register_richtext_init(
-    lua: &Lua,
-    crap: &Table,
-    registry: SharedRegistry,
-) -> anyhow::Result<()> {
+pub fn register_richtext_init(lua: &Lua, registry: SharedRegistry) -> anyhow::Result<()> {
     let nodes_storage = lua.create_table()?;
     lua.set_named_registry_value("_crap_richtext_nodes", nodes_storage)?;
-
-    let richtext_table = lua.create_table()?;
-
-    let reg_clone = registry;
-    let register_node_fn = lua.create_function(move |lua, (name, spec): (String, Table)| {
-        register_node(lua, &reg_clone, &name, &spec)
-    })?;
-    richtext_table.set("register_node", register_node_fn)?;
-
-    let render_fn = lua.create_function(|lua, content: String| render(lua, &content))?;
-    richtext_table.set("render", render_fn)?;
-
-    crap.set("richtext", richtext_table)?;
-
+    register_crap_richtext_init(lua, registry)?;
+    register_crap_richtext_render(lua, ())?;
     Ok(())
 }
 
@@ -248,24 +339,12 @@ pub fn register_richtext_init(
 /// `InitPhase` set, populating the per-VM Lua-side table.
 pub fn register_richtext_pool_init(
     lua: &Lua,
-    crap: &Table,
     _registry: std::sync::Arc<crate::core::Registry>,
 ) -> anyhow::Result<()> {
     let nodes_storage = lua.create_table()?;
     lua.set_named_registry_value("_crap_richtext_nodes", nodes_storage)?;
-
-    let richtext_table = lua.create_table()?;
-
-    let register_node_fn = lua.create_function(|lua, (name, spec): (String, Table)| {
-        register_node_pool(lua, &name, &spec)
-    })?;
-    richtext_table.set("register_node", register_node_fn)?;
-
-    let render_fn = lua.create_function(|lua, content: String| render(lua, &content))?;
-    richtext_table.set("render", render_fn)?;
-
-    crap.set("richtext", richtext_table)?;
-
+    register_crap_richtext_pool(lua, ())?;
+    register_crap_richtext_render(lua, ())?;
     Ok(())
 }
 
@@ -273,27 +352,19 @@ pub fn register_richtext_pool_init(
 /// VM's named-registry table (so `render` can find it), skips the
 /// shared-registry write. The shared registry was already populated
 /// by the `init_lua` VM.
-fn register_node_pool(lua: &Lua, name: &str, spec: &Table) -> LuaResult<()> {
+fn register_node_pool(lua: &Lua, name: &str, spec: RichtextNodeSpec) -> LuaResult<()> {
     if lua.app_data_ref::<InitPhase>().is_none() {
         return Err(RuntimeError(REGISTER_NODE_INIT_ONLY_ERROR.into()));
     }
 
     validate_node_name(name)?;
+    // Validate attrs here too — errors surface to the user even though
+    // the shared registry already has the canonical `RichtextNodeDef`.
+    validate_node_attrs(name, &spec.attrs)?;
 
-    let label: String = spec
-        .get::<String>("label")
-        .unwrap_or_else(|_| name.to_string());
-    let inline: bool = spec.get::<bool>("inline").unwrap_or(false);
-    // Parse attrs to validate the spec (errors surface here), but
-    // discard the result — the shared registry already has the
-    // canonical `RichtextNodeDef`.
-    let _ = parse_node_attrs(lua, name, spec)?;
+    let label = spec.label.unwrap_or_else(|| name.to_string());
 
-    let has_render = spec
-        .get::<Value>("render")
-        .is_ok_and(|v| matches!(v, Value::Function(_)));
-
-    store_node_in_lua(lua, name, &label, inline, has_render, spec)?;
+    store_node_in_lua(lua, name, &label, spec.inline, spec.render.as_ref())?;
 
     Ok(())
 }
@@ -375,9 +446,9 @@ mod tests {
         let lua = Lua::new();
         let registry = Registry::shared();
         let crap = lua.create_table().unwrap();
-        register_fields(&lua, &crap).unwrap();
-        register_richtext_init(&lua, &crap, Arc::clone(&registry)).unwrap();
-        lua.globals().set("crap", crap).unwrap();
+        lua.globals().set("crap", crap.clone()).unwrap();
+        register_fields(&lua).unwrap();
+        register_richtext_init(&lua, Arc::clone(&registry)).unwrap();
         // Mimic init-time loading so register_node accepts the call.
         lua.set_app_data(InitPhase);
         (lua, registry)
@@ -801,9 +872,9 @@ mod tests {
         let lua = Lua::new();
         let registry = Registry::shared();
         let crap = lua.create_table().unwrap();
-        register_fields(&lua, &crap).unwrap();
-        register_richtext_init(&lua, &crap, Arc::clone(&registry)).unwrap();
-        lua.globals().set("crap", crap).unwrap();
+        lua.globals().set("crap", crap.clone()).unwrap();
+        register_fields(&lua).unwrap();
+        register_richtext_init(&lua, Arc::clone(&registry)).unwrap();
         // No `set_app_data(InitPhase)` — simulating a runtime hook.
 
         let err = lua

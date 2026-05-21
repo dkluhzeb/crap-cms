@@ -1,82 +1,95 @@
 //! `crap.jobs` namespace — job definition (init only at runtime).
 
-use std::sync::Arc;
-
 use anyhow::Result;
-use mlua::{Error::RuntimeError, Lua, Table};
+use mlua::{Error::RuntimeError, Lua, Result as LuaResult};
 
-use crate::{
-    core::{Registry, SharedRegistry},
-    hooks::{lifecycle::InitPhase, lua_api::parse},
+use crate::core::{Registry, SharedRegistry};
+use crate::hooks::{
+    lifecycle::InitPhase,
+    lua_api::parse::{self, JobDefinitionConfig},
 };
+use crate::typegen::lua::{LuaFnSpec, LuaParam, lua_fn, lua_table};
+use std::sync::Arc;
 
 const DEFINE_INIT_ONLY_ERROR: &str = "crap.jobs.define must be called from a definition file or \
      init.lua. To change a registered job, edit the file and restart the process.";
 
-/// Init-time registration: registers `crap.jobs.define` (write-capable).
+/// Define a background job. Call in init.lua or jobs/*.lua files.
+/// The handler function receives a context table with `data` and `job` fields,
+/// and has full CRUD access (crap.collections.find/create/update/delete).
+#[lua_fn(path = "crap.jobs.define")]
+fn jobs_define_init(
+    state: &SharedRegistry,
+    lua: &Lua,
+    #[lua(doc = "Unique job identifier.")] slug: String,
+    #[lua(ty = "crap.JobDefinitionConfig", doc = "Job configuration.")] config: JobDefinitionConfig,
+) -> LuaResult<()> {
+    if lua.app_data_ref::<InitPhase>().is_none() {
+        return Err(RuntimeError(DEFINE_INIT_ONLY_ERROR.into()));
+    }
+
+    let def = parse::parse_job_definition(&slug, config)
+        .map_err(|e| RuntimeError(format!("Failed to parse job '{slug}': {e}")))?;
+
+    state
+        .write()
+        .map_err(|e| RuntimeError(format!("Registry lock poisoned: {e:#}")))?
+        .register_job(def);
+
+    Ok(())
+}
+
+/// Pool-VM stub of `crap.jobs.define`. Same `InitPhase` guard as the init
+/// variant — pool VMs re-run `jobs/*.lua` (to populate per-VM handler
+/// closures) but the `define` call lands here as a no-op since the
+/// `init_lua` VM already wrote the job to the shared registry.
+#[lua_fn(path = "crap.jobs.define")]
+fn jobs_define_pool(
+    _state: &(),
+    lua: &Lua,
+    _slug: String,
+    #[lua(ty = "crap.JobDefinitionConfig")] _config: JobDefinitionConfig,
+) -> LuaResult<()> {
+    if lua.app_data_ref::<InitPhase>().is_none() {
+        return Err(RuntimeError(DEFINE_INIT_ONLY_ERROR.into()));
+    }
+    Ok(())
+}
+
+lua_table! {
+    name: crap_jobs_init,
+    path: "crap.jobs",
+    state: SharedRegistry,
+    header: "Background job definition and queuing API.",
+    fns: [jobs_define_init],
+}
+
+lua_table! {
+    name: crap_jobs_pool,
+    path: "crap.jobs",
+    state: (),
+    fns: [jobs_define_pool],
+}
+
+/// Init-time registration: registers write-capable `crap.jobs.define`.
 /// The common Lua plugin layout that mixes `crap.jobs.define(...)` and
 /// handler functions in a single `jobs/foo.lua` file is supported via
 /// `package.loaded` caching in `init::load_lua_dir`: the file's
 /// top-level runs exactly once at boot, and the dispatcher's later
 /// `require("jobs.foo")` hits the cache instead of re-evaluating.
-pub(super) fn register_jobs_init(lua: &Lua, crap: &Table, registry: SharedRegistry) -> Result<()> {
-    let t = lua.create_table()?;
-
-    let reg = registry;
-    t.set(
-        "define",
-        lua.create_function(move |lua, (slug, config): (String, Table)| {
-            define_init(lua, &reg, &slug, &config)
-        })?,
-    )?;
-
-    crap.set("jobs", t)?;
-
+pub(super) fn register_jobs_init(lua: &Lua, registry: SharedRegistry) -> Result<()> {
+    register_crap_jobs_init(lua, registry)?;
     Ok(())
 }
 
-/// Pool-VM registration: `define` is a no-op stub. Pool VMs DO
-/// re-run `jobs/*.lua` (handler functions live there as Lua module
-/// returns), but the top-level `crap.jobs.define` call lands here as
-/// a no-op since the `init_lua` VM already wrote the job to the
-/// registry. The handler module return (`return M`) still produces
-/// per-VM function handles via `require`.
-pub(super) fn register_jobs_pool_init(
-    lua: &Lua,
-    crap: &Table,
-    _registry: Arc<Registry>,
-) -> Result<()> {
-    let t = lua.create_table()?;
-
-    t.set(
-        "define",
-        lua.create_function(|lua, _: (String, Table)| -> mlua::Result<()> {
-            if lua.app_data_ref::<InitPhase>().is_none() {
-                return Err(RuntimeError(DEFINE_INIT_ONLY_ERROR.into()));
-            }
-            Ok(())
-        })?,
-    )?;
-
-    crap.set("jobs", t)?;
-
-    Ok(())
-}
-
-/// Init-time define: parses + registers the job. The strict `InitPhase`
-/// guard rejects any caller that landed here outside init.
-fn define_init(lua: &Lua, reg: &SharedRegistry, slug: &str, config: &Table) -> mlua::Result<()> {
-    if lua.app_data_ref::<InitPhase>().is_none() {
-        return Err(RuntimeError(DEFINE_INIT_ONLY_ERROR.into()));
-    }
-
-    let def = parse::parse_job_definition(slug, config)
-        .map_err(|e| RuntimeError(format!("Failed to parse job '{slug}': {e}")))?;
-
-    reg.write()
-        .map_err(|e| RuntimeError(format!("Registry lock poisoned: {e:#}")))?
-        .register_job(def);
-
+/// Pool-VM registration: `define` is a no-op stub. Pool VMs DO re-run
+/// `jobs/*.lua` (handler functions live there as Lua module returns),
+/// but the top-level `crap.jobs.define` call lands here as a no-op
+/// since the `init_lua` VM already wrote the job to the registry. The
+/// handler module return (`return M`) still produces per-VM function
+/// handles via `require`.
+pub(super) fn register_jobs_pool_init(lua: &Lua, _registry: Arc<Registry>) -> Result<()> {
+    register_crap_jobs_pool(lua, ())?;
     Ok(())
 }
 
@@ -90,10 +103,11 @@ mod tests {
     /// `SharedRegistry`. Common helper for the two test cases below.
     fn lua_with_jobs() -> (Lua, SharedRegistry) {
         let lua = Lua::new();
-        let crap = lua.create_table().unwrap();
+        lua.globals()
+            .set("crap", lua.create_table().unwrap())
+            .unwrap();
         let registry: SharedRegistry = Arc::new(RwLock::new(Registry::new()));
-        register_jobs_init(&lua, &crap, Arc::clone(&registry)).unwrap();
-        lua.globals().set("crap", crap).unwrap();
+        register_jobs_init(&lua, Arc::clone(&registry)).unwrap();
         (lua, registry)
     }
 
@@ -105,7 +119,6 @@ mod tests {
     #[test]
     fn define_outside_init_phase_is_rejected() {
         let (lua, registry) = lua_with_jobs();
-        // Note: NO `set_app_data(InitPhase)` — simulating a runtime hook.
 
         let err = lua
             .load(r#"crap.jobs.define("send_email", {})"#)
@@ -134,7 +147,6 @@ mod tests {
     fn runtime_define_rejected_for_existing_slug() {
         let (lua, registry) = lua_with_jobs();
 
-        // Phase 1: register a job under InitPhase (the canonical path).
         lua.set_app_data(InitPhase);
         lua.load(
             r#"
@@ -149,7 +161,6 @@ mod tests {
         .expect("init-time define should succeed");
         lua.remove_app_data::<InitPhase>();
 
-        // Phase 2: a runtime redefine must be rejected.
         let err = lua
             .load(
                 r#"
@@ -167,7 +178,6 @@ mod tests {
             "error should mention init.lua: {err}"
         );
 
-        // The original registration is preserved.
         let reg = registry.read().unwrap();
         let def = reg.get_job("send_email").expect("still registered");
         assert_eq!(def.retries, 1, "registry entry untouched by rejected call");

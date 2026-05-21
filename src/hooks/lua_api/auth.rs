@@ -1,62 +1,115 @@
 //! Register `crap.auth` — `hash_password`, `verify_password`, user.
 
 use anyhow::Result;
-use mlua::{Error::RuntimeError, Lua, Table, Value};
+use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
-use crate::{
-    core::auth::{hash_password, verify_password},
-    hooks::lifecycle::{UserContext, converters::document_to_lua_table},
-};
+use crate::core::auth::{hash_password, verify_password};
+use crate::hooks::lifecycle::{UserContext, converters::document_to_lua_table};
+use crate::typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
-/// Register `crap.auth.hash_password` and `crap.auth.verify_password` Lua functions.
-pub(super) fn register_auth(lua: &Lua, crap: &Table) -> Result<()> {
-    let auth_table = lua.create_table()?;
+/// Hash a plaintext password (Argon2id).
+#[lua_fn(path = "crap.auth.hash_password", returns_doc = "Hashed password.")]
+fn hash_password_fn(
+    _: &Lua,
+    #[lua(doc = "Plaintext password.")] password: String,
+) -> LuaResult<String> {
+    hash_password(&password)
+        .map(|h| h.as_ref().to_string())
+        .map_err(|e| RuntimeError(format!("hash_password error: {e:#}")))
+}
 
-    auth_table.set(
-        "hash_password",
-        lua.create_function(|_, password: String| hash(&password))?,
-    )?;
+/// Verify a password against a hash.
+#[lua_fn(path = "crap.auth.verify_password")]
+fn verify_password_fn(
+    _: &Lua,
+    #[lua(doc = "Plaintext password.")] password: String,
+    #[lua(doc = "Stored hash.")] hash: String,
+) -> LuaResult<bool> {
+    verify_password(&password, &hash)
+        .map_err(|e| RuntimeError(format!("verify_password error: {e:#}")))
+}
 
-    auth_table.set(
-        "verify_password",
-        lua.create_function(|_, (password, h): (String, String)| verify(&password, &h))?,
-    )?;
+/// Return the currently authenticated user document for the in-flight request, or nil.
+/// Returns nil from init.lua, on unauthenticated requests, or outside a hook context.
+#[lua_fn(path = "crap.auth.user", returns = "crap.Document?")]
+fn user_fn(lua: &Lua) -> LuaResult<Value> {
+    let user = lua
+        .app_data_ref::<UserContext>()
+        .and_then(|ctx| ctx.0.clone());
 
-    auth_table.set("user", lua.create_function(user)?)?;
+    match user {
+        Some(doc) => Ok(Value::Table(document_to_lua_table(lua, &doc)?)),
+        None => Ok(Value::Nil),
+    }
+}
 
-    // crap.auth.default_methods() — returns the standard 3-entry
-    // method list (password_login + bearer + session_cookie) for use
-    // in `auth = { enabled = true, methods = crap.auth.default_methods() }`.
-    auth_table.set(
-        "default_methods",
-        lua.create_function(|lua, ()| default_methods_table(lua))?,
-    )?;
+/// The standard 3-method auth set: `password_login` + `bearer` (all
+/// surfaces) + `session_cookie` (admin only). Use in collection
+/// definitions:
+///
+/// ```lua
+/// auth = {
+///   enabled = true,
+///   methods = crap.auth.default_methods(),
+/// }
+/// ```
+#[lua_fn(path = "crap.auth.default_methods", returns = "crap.AuthMethod[]")]
+fn default_methods_fn(lua: &Lua) -> LuaResult<Table> {
+    default_methods_table(lua)
+}
 
-    // crap.auth.with_defaults(extras) — returns `default_methods() ++ extras`.
-    // `extras` is a sequence of method tables; appended after the defaults.
-    auth_table.set(
-        "with_defaults",
-        lua.create_function(|lua, extras: Option<Table>| {
-            let out = default_methods_table(lua)?;
-            if let Some(extras) = extras {
-                let start = out.len()?;
-                for (i, m) in extras.sequence_values::<Table>().flatten().enumerate() {
-                    out.set(start + i64::try_from(i).unwrap_or(i64::MAX) + 1, m)?;
-                }
-            }
-            Ok(out)
-        })?,
-    )?;
+/// Returns `default_methods()` with `extras` appended. The most
+/// common shape for "I want the standard auth plus my own strategy":
+///
+/// ```lua
+/// auth = {
+///   enabled = true,
+///   methods = crap.auth.with_defaults({
+///     { type = "strategy", name = "api-key",
+///       authenticate = "hooks.auth.api_key",
+///       activates_on = { header = "x-api-key" },
+///       surfaces = { "grpc" } },
+///   }),
+/// }
+/// ```
+#[lua_fn(path = "crap.auth.with_defaults", returns = "crap.AuthMethod[]")]
+fn with_defaults_fn(
+    lua: &Lua,
+    #[lua(
+        ty = "crap.AuthMethod[]",
+        doc = "Methods to append after the defaults."
+    )]
+    extras: Option<Table>,
+) -> LuaResult<Table> {
+    let out = default_methods_table(lua)?;
+    if let Some(extras) = extras {
+        let start = out.len()?;
+        for (i, m) in extras.sequence_values::<Table>().flatten().enumerate() {
+            out.set(start + i64::try_from(i).unwrap_or(i64::MAX) + 1, m)?;
+        }
+    }
+    Ok(out)
+}
 
-    crap.set("auth", auth_table)?;
+lua_table! {
+    name: crap_auth,
+    path: "crap.auth",
+    state: (),
+    header: "Password hashing and verification helpers.",
+    fns: [hash_password_fn, verify_password_fn, user_fn, default_methods_fn, with_defaults_fn],
+}
 
+/// Register `crap.auth` on the parent table. Parent must already be in
+/// globals (`register_api` sets it up-front).
+pub(super) fn register_auth(lua: &Lua) -> Result<()> {
+    register_crap_auth(lua, ())?;
     Ok(())
 }
 
 /// Build a Lua sequence table containing the three default methods.
 /// Kept literal (not synthesized from Rust types) so the Lua side
 /// owns the shape — user-facing API is "what you'd write yourself."
-fn default_methods_table(lua: &Lua) -> mlua::Result<Table> {
+fn default_methods_table(lua: &Lua) -> LuaResult<Table> {
     let methods = lua.create_table()?;
 
     let password = lua.create_table()?;
@@ -79,29 +132,4 @@ fn default_methods_table(lua: &Lua) -> mlua::Result<Table> {
     methods.set(3, cookie)?;
 
     Ok(methods)
-}
-
-/// Return the current hook user document, or nil if no user is set.
-fn user(lua: &Lua, _: ()) -> mlua::Result<Value> {
-    let user = lua
-        .app_data_ref::<UserContext>()
-        .and_then(|ctx| ctx.0.clone());
-
-    match user {
-        Some(doc) => Ok(Value::Table(document_to_lua_table(lua, &doc)?)),
-        None => Ok(Value::Nil),
-    }
-}
-
-/// Hash a plaintext password, returning the Argon2 hash string.
-fn hash(password: &str) -> mlua::Result<String> {
-    hash_password(password)
-        .map(|h| h.as_ref().to_string())
-        .map_err(|e| RuntimeError(format!("hash_password error: {e:#}")))
-}
-
-/// Verify a password against a hash.
-fn verify(password: &str, hash: &str) -> mlua::Result<bool> {
-    verify_password(password, hash)
-        .map_err(|e| RuntimeError(format!("verify_password error: {e:#}")))
 }

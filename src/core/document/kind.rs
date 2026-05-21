@@ -2,20 +2,27 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::core::{DocumentFields, DocumentId};
+use crate::typegen::lua::LuaAnnotation;
 
 /// A single content document with an ID, user-defined fields, and optional timestamps.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, LuaAnnotation)]
+#[lua(class = "crap.Document", extra_field = "[string] any")]
 pub struct Document {
-    /// The unique identifier for this document.
+    /// Unique document ID (nanoid).
+    #[lua(ty = "string")]
     pub id: DocumentId,
-    /// A map of field names to their JSON-serialized values.
+    /// User-defined field values, keyed by field name. Emitted as the
+    /// flat top-level keys on the document table (see `extra_field`).
     #[serde(flatten)]
+    #[lua(skip)]
     pub fields: DocumentFields,
-    /// The timestamp when this document was originally created.
+    /// ISO 8601 timestamp (if `timestamps` enabled on the collection).
     #[serde(default)]
+    #[lua(optional)]
     pub created_at: Option<String>,
-    /// The timestamp when this document was last updated.
+    /// ISO 8601 timestamp (if `timestamps` enabled on the collection).
     #[serde(default)]
+    #[lua(optional)]
     pub updated_at: Option<String>,
 }
 

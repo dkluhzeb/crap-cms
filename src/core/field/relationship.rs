@@ -3,22 +3,27 @@
 use serde::{Deserialize, Serialize};
 
 use crate::core::Slug;
+use crate::typegen::lua::LuaAnnotation;
 
 /// Configuration for relationship fields (target collection, cardinality, depth cap).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, LuaAnnotation)]
+#[lua(class = "crap.RelationshipConfig")]
 pub struct RelationshipConfig {
-    /// The slug of the target collection this field relates to.
+    /// Target collection slug, or an array of slugs for polymorphic relationships (required). Example: `"posts"` or `{ "posts", "pages" }`.
+    #[lua(ty = "string|string[]")]
     pub collection: Slug,
-    /// Whether this relationship allows multiple linked documents (many-to-one or many-to-many).
+    /// Many-to-many relationship via junction table (default: false).
+    #[lua(optional)]
     pub has_many: bool,
-    /// Per-field max depth. If set, limits population depth for this field
-    /// regardless of the request-level depth.
+    /// Per-field max population depth. Limits depth regardless of request-level depth.
     #[serde(default)]
     pub max_depth: Option<i32>,
-    /// Polymorphic relationship: additional target collections beyond `collection`.
-    /// Empty = single-collection relationship (default, backward compat).
-    /// Non-empty = polymorphic (all targets listed here, `collection` = first).
+    // Polymorphic targets — folded into `collection` on the Lua side
+    // (union `string|string[]`). Internal field; the array form of
+    // `collection` is split into `polymorphic` + `collection` (first)
+    // by the parser.
     #[serde(default)]
+    #[lua(skip)]
     pub polymorphic: Vec<Slug>,
 }
 
@@ -54,11 +59,18 @@ impl RelationshipConfig {
 }
 
 /// Configuration for join (virtual reverse-relationship) fields.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+//
+// Surfaced on Lua's `crap.JoinField` via `flatten_from = JoinConfig`
+// on `FieldType::Join`. The `crap.JoinConfig` class block itself is
+// never emitted — only its fields, inlined into `crap.JoinField` after
+// the BaseField inheritance line.
+#[derive(Debug, Clone, Serialize, Deserialize, LuaAnnotation)]
+#[lua(class = "crap.JoinConfig")]
 pub struct JoinConfig {
-    /// Target collection slug (the collection whose documents reference this one).
+    /// Target collection slug (required).
+    #[lua(ty = "string")]
     pub collection: Slug,
-    /// Field name on the target collection that holds this document's ID.
+    /// Field on target collection that references this document (required).
     pub on: String,
 }
 

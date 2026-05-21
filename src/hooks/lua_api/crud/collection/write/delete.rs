@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use mlua::{Error::RuntimeError, Lua, Table};
+use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
+use serde::Deserialize;
 
 use crate::{
     config::LocaleConfig,
@@ -13,84 +14,137 @@ use crate::{
         lua_api::crud::{
             get_tx_conn,
             helpers::{
-                check_hook_depth, get_opt_bool, hook_invalidation_transport, hook_lua_infra,
-                hook_user, resolve_collection,
+                check_hook_depth, hook_invalidation_transport, hook_lua_infra, hook_user,
+                resolve_collection,
             },
         },
     },
     service::{LuaWriteHooks, ServiceContext, delete_document},
+    typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
 
-/// Execute the delete operation.
-fn delete_document_lua(
+/// Optional options for `crap.collections.delete`.
+#[derive(Deserialize, LuaAnnotation)]
+#[serde(default)]
+#[lua(class = "crap.DeleteOptions")]
+pub(crate) struct DeleteOptions {
+    /// Skip access control checks (default: `false`). Set to `true` in
+    /// trusted internal code to bypass collection-level access for the
+    /// current user.
+    #[serde(rename = "overrideAccess")]
+    #[lua(rename = "overrideAccess", optional)]
+    pub(crate) override_access: bool,
+    /// Run lifecycle hooks (default: `true`). Set `false` to bypass hooks.
+    #[lua(optional)]
+    pub(crate) hooks: bool,
+    /// Bypass `soft_delete` and remove the row permanently. Mirrors the
+    /// same flag on the gRPC/HTTP delete handlers.
+    #[serde(rename = "forceHardDelete")]
+    #[lua(rename = "forceHardDelete", optional)]
+    pub(crate) force_hard_delete: bool,
+}
+
+impl Default for DeleteOptions {
+    fn default() -> Self {
+        Self {
+            override_access: false,
+            hooks: true,
+            force_hard_delete: false,
+        }
+    }
+}
+
+impl FromLua for DeleteOptions {
+    fn from_lua(value: Value, lua: &Lua) -> LuaResult<Self> {
+        match value {
+            Value::Nil => Ok(Self::default()),
+            other => lua.from_value(other),
+        }
+    }
+}
+
+/// State threaded into `crap.collections.delete`.
+pub(crate) struct CollectionsDeleteState {
+    pub(crate) registry: Arc<Registry>,
+    pub(crate) locale_config: LocaleConfig,
+}
+
+/// Delete a document.
+/// Inside hooks, runs within the parent operation's transaction.
+#[lua_fn(
+    path = "crap.collections.delete",
+    returns_doc = "True on successful delete."
+)]
+fn collections_delete(
+    state: &CollectionsDeleteState,
     lua: &Lua,
-    reg: &Registry,
-    lc: &LocaleConfig,
-    collection: &str,
-    id: &str,
-    opts: Option<&Table>,
-) -> mlua::Result<bool> {
+    #[lua(doc = "Collection slug.")] collection: String,
+    #[lua(doc = "Document ID.")] id: String,
+    #[lua(ty = "crap.DeleteOptions", doc = "Optional options.")] opts: Option<DeleteOptions>,
+) -> LuaResult<bool> {
+    let opts = opts.unwrap_or_default();
+    let reg = &state.registry;
+    let lc = &state.locale_config;
+
     let conn = get_tx_conn(lua)?;
 
     let user = hook_user(lua);
     let lua_infra = hook_lua_infra(lua);
-    let override_access = get_opt_bool(opts, "overrideAccess", false);
-    let run_hooks = get_opt_bool(opts, "hooks", true);
-    let force_hard_delete = get_opt_bool(opts, "forceHardDelete", false);
-    let mut def = resolve_collection(reg, collection)?;
+    let mut def = resolve_collection(reg, &collection)?;
 
-    // `force_hard_delete` on a soft-delete collection must flip the def so
-    // `delete_document_in_conn` treats it as a hard delete. Mirrors the pattern
-    // in gRPC handlers and Lua bulk `delete_many`. Without this, the option
-    // was silently ignored and rows were soft-deleted regardless.
-    if force_hard_delete && def.soft_delete {
+    if opts.force_hard_delete && def.soft_delete {
         def.soft_delete = false;
     }
 
-    // Collection-level access check is handled inside service::delete_document
-    // via WriteHooks::check_access (respects override_access on LuaWriteHooks).
-
-    let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, collection, "delete");
+    let (hooks_enabled, _guard) = check_hook_depth(lua, opts.hooks, &collection, "delete");
 
     let write_hooks = LuaWriteHooks::builder(lua)
         .user(user.as_ref())
-        .override_access(override_access)
-        .registry(Some(reg))
+        .override_access(opts.override_access)
+        .registry(Some(reg.as_ref()))
         .hooks_enabled(hooks_enabled)
         .build();
 
     let storage = lua.app_data_ref::<LuaStorage>().map(|s| s.0.clone());
     let invalidation_transport = hook_invalidation_transport(lua);
 
-    let ctx = ServiceContext::collection(collection, &def)
+    let ctx = ServiceContext::collection(&collection, &def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
-        .override_access(override_access)
+        .override_access(opts.override_access)
         .invalidation_transport(invalidation_transport)
         .lua_infra(lua_infra.as_ref())
         .build();
 
-    delete_document(&ctx, id, storage.as_deref(), Some(lc))
+    delete_document(&ctx, &id, storage.as_deref(), Some(lc))
         .map_err(|e| RuntimeError(format!("delete error: {e:#}")))?;
 
     Ok(true)
 }
 
-/// Register `crap.collections.delete(collection, id, opts?)`.
+lua_table! {
+    name: crap_collections_delete,
+    path: "crap.collections",
+    state: CollectionsDeleteState,
+    fns: [collections_delete],
+}
+
+/// Register `crap.collections.delete(collection, id, opts?)`. Parent
+/// `crap.collections` must already exist.
 #[cfg(not(tarpaulin_include))]
 pub(crate) fn register_delete(
     lua: &Lua,
-    table: &Table,
+    _table: &Table,
     registry: Arc<Registry>,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
-    let lc = locale_config.clone();
-    let delete_fn = lua.create_function(
-        move |lua, (collection, id, opts): (String, String, Option<Table>)| {
-            delete_document_lua(lua, &registry, &lc, &collection, &id, opts.as_ref())
+    register_crap_collections_delete(
+        lua,
+        CollectionsDeleteState {
+            registry,
+            locale_config: locale_config.clone(),
         },
     )?;
-    table.set("delete", delete_fn)?;
     Ok(())
 }

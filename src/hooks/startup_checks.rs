@@ -228,7 +228,7 @@ fn check_strategy_shape(
              name, so the strategy could never fire."
         ));
     }
-    if matches!(activates_on, Activation::Always(_)) {
+    if matches!(activates_on, Activation::Always { .. }) {
         warn!(
             "collection '{slug}': strategy '{name}' is always-active on every request. \
              Consider a header discriminator for safer scoping."

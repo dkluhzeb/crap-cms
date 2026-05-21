@@ -1,5 +1,5 @@
 [workspace]
-members = ["e2e", "macros"]
+members = ["e2e", "macros", "xtask"]
 default-members = [".", "macros"]
 resolver = "3"
 
@@ -290,8 +290,7 @@ similar.workspace = true
 rust-s3 = { workspace = true, optional = true }
 redis = { workspace = true, optional = true }
 
-# Workspace member — proc-macro crate. Currently a stub; will host
-# `#[derive(LuaAnnotation)]` and `#[derive(ProtoMessage)]` derives.
+# Workspace member — proc-macro crate. Hosts `#[derive(LuaAnnotation)]`.
 crap-cms-macros = { path = "macros" }
 
 [features]

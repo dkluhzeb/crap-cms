@@ -1,327 +1,507 @@
 //! `crap.schema` namespace — read-only schema introspection.
 
+use std::sync::Arc;
+
 use anyhow::Result;
-use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
+use mlua::{Error::RuntimeError, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
+use serde::Serialize;
 
 use crate::core::{
-    CollectionDefinition, FieldDefinition, GlobalDefinition, Labels, Registry, RegistryRead,
+    CollectionDefinition, FieldDefinition, GlobalDefinition, Labels, PickerAppearance, Registry,
+    RegistryRead, SharedRegistry,
 };
+use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
-/// Convert `Labels` to a Lua table with optional `singular` and `plural` keys.
-fn labels_to_lua_table(lua: &Lua, labels: &Labels) -> LuaResult<Table> {
-    let tbl = lua.create_table()?;
+// ── Projection structs ───────────────────────────────────────────────
+//
+// The introspection API returns a denormalized, user-friendly shape
+// that doesn't map 1:1 to `CollectionDefinition` / `FieldDefinition`.
+// Rather than building Lua tables ad-hoc, we project the registry types
+// into these `Serialize` structs and let `lua.to_value()` produce the
+// table — single source of truth for both Rust and the generated
+// `crap.SchemaCollection` / `crap.SchemaField` Lua classes.
 
-    if let Some(ref s) = labels.singular {
-        tbl.set("singular", s.resolve_default())?;
+/// Labels block emitted on collections, globals, and list entries.
+#[derive(Serialize)]
+pub(crate) struct SchemaLabels {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) singular: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) plural: Option<String>,
+}
+
+/// `{ slug, labels }` summary returned by `list_collections` / `list_globals`.
+#[derive(Serialize)]
+struct SchemaSummary {
+    slug: String,
+    labels: SchemaLabels,
+}
+
+/// Result of `crap.schema.get_collection` / `crap.schema.get_global`.
+/// Globals reuse the same shape with `has_*` flags set to false.
+#[derive(Serialize, LuaAnnotation)]
+#[lua(class = "crap.SchemaCollection")]
+pub(crate) struct SchemaCollection {
+    /// Collection or global slug.
+    pub(crate) slug: String,
+    /// Localized labels (singular/plural, resolved to the default locale).
+    #[lua(ty = "{ singular?: string, plural?: string }")]
+    pub(crate) labels: SchemaLabels,
+    /// Whether the collection auto-manages `created_at` / `updated_at`.
+    pub(crate) timestamps: bool,
+    /// Whether the collection is an auth collection.
+    pub(crate) has_auth: bool,
+    /// Whether the collection is an upload collection.
+    pub(crate) has_upload: bool,
+    /// Whether the collection has versioning enabled.
+    pub(crate) has_versions: bool,
+    /// Whether the collection has draft support.
+    pub(crate) has_drafts: bool,
+    /// Field definitions, in declaration order.
+    #[lua(ty = "crap.SchemaField[]")]
+    pub(crate) fields: Vec<SchemaField>,
+}
+
+/// `relationship` sub-table on a `SchemaField`. `collection` is a
+/// `string` (non-polymorphic) or `string[]` (polymorphic) — modeled as
+/// an untagged enum so serde picks the right serialization.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum SchemaRelationshipCollection {
+    Single(String),
+    Multi(Vec<String>),
+}
+
+#[derive(Serialize)]
+struct SchemaRelationship {
+    collection: SchemaRelationshipCollection,
+    has_many: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_depth: Option<i32>,
+}
+
+/// One option in a `Select` / `Radio` field's `options` array.
+#[derive(Serialize)]
+struct SchemaOption {
+    label: String,
+    value: String,
+}
+
+/// One block definition under a `Blocks` field. Note: emitted key is
+/// `type`, hence the `#[serde(rename)]`.
+#[derive(Serialize)]
+struct SchemaBlock {
+    #[serde(rename = "type")]
+    block_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    group: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image_url: Option<String>,
+    fields: Vec<SchemaField>,
+}
+
+/// Admin-UI hints exposed by `SchemaField.admin`. Mirrors the subset
+/// of `FieldAdmin` that the schema-read surface exposes (language,
+/// features list, picker UI). Skipped entirely from the emitted Lua
+/// table when every field is absent — see `is_empty()`.
+#[derive(Serialize, Default)]
+struct SchemaAdmin {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    language: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    features: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    picker: Option<String>,
+}
+
+impl SchemaAdmin {
+    fn is_empty(&self) -> bool {
+        self.language.is_none() && self.features.is_empty() && self.picker.is_none()
     }
-
-    if let Some(ref s) = labels.plural {
-        tbl.set("plural", s.resolve_default())?;
-    }
-
-    Ok(tbl)
 }
 
-/// Look up a single collection by slug and return its Lua table (or Nil).
-fn get_collection(lua: &Lua, registry: &Registry, slug: &str) -> LuaResult<Value> {
-    match registry.get_collection(slug) {
-        Some(def) => Ok(Value::Table(collection_def_to_lua_table(lua, def)?)),
-        None => Ok(Value::Nil),
-    }
+/// `Join` field configuration (`{ collection, on }`). `None` for every
+/// non-`Join` field; always populated for `Join` fields.
+#[derive(Serialize)]
+struct SchemaJoin {
+    collection: String,
+    on: String,
 }
 
-/// Look up a single global by slug and return its Lua table (or Nil).
-fn get_global(lua: &Lua, registry: &Registry, slug: &str) -> LuaResult<Value> {
-    match registry.get_global(slug) {
-        Some(def) => Ok(Value::Table(global_def_to_lua_table(lua, def)?)),
-        None => Ok(Value::Nil),
-    }
-}
-
-/// Convert a `GlobalDefinition` to a Lua table for `crap.schema.get_global()`.
-fn global_def_to_lua_table(lua: &Lua, def: &GlobalDefinition) -> LuaResult<Table> {
-    let tbl = lua.create_table()?;
-
-    tbl.set("slug", &*def.slug)?;
-    tbl.set("labels", labels_to_lua_table(lua, &def.labels)?)?;
-
-    let fields_arr = lua.create_table()?;
-
-    for (i, f) in def.fields.iter().enumerate() {
-        fields_arr.set(i + 1, field_def_to_lua_table(lua, f)?)?;
-    }
-
-    tbl.set("fields", fields_arr)?;
-
-    Ok(tbl)
-}
-
-/// Build a slug+labels summary table for a single definition.
-fn slug_labels_table(lua: &Lua, slug: &str, labels: &Labels) -> LuaResult<Table> {
-    let item = lua.create_table()?;
-
-    item.set("slug", slug)?;
-    item.set("labels", labels_to_lua_table(lua, labels)?)?;
-
-    Ok(item)
-}
-
-/// List all collections as an array of `{ slug, labels }` tables.
-fn list_collections_fn(lua: &Lua, registry: &Registry) -> LuaResult<Table> {
-    let tbl = lua.create_table()?;
-
-    for (i, def) in registry.collections.values().enumerate() {
-        tbl.set(i + 1, slug_labels_table(lua, &def.slug, &def.labels)?)?;
-    }
-
-    Ok(tbl)
-}
-
-/// List all globals as an array of `{ slug, labels }` tables.
-fn list_globals_fn(lua: &Lua, registry: &Registry) -> LuaResult<Table> {
-    let tbl = lua.create_table()?;
-
-    for (i, def) in registry.globals.values().enumerate() {
-        tbl.set(i + 1, slug_labels_table(lua, &def.slug, &def.labels)?)?;
-    }
-
-    Ok(tbl)
-}
-
-/// Register `crap.schema` — read-only collection/global introspection.
-/// Generic over [`RegistryRead`] so init (`SharedRegistry`) and runtime
-/// (`Arc<Registry>`) share one body.
-pub(super) fn register_schema<R: RegistryRead>(lua: &Lua, crap: &Table, registry: R) -> Result<()> {
-    let schema_table = lua.create_table()?;
-
-    let reg = registry.clone();
-    schema_table.set(
-        "get_collection",
-        lua.create_function(move |lua, slug: String| {
-            reg.with(|r| get_collection(lua, r, &slug))
-                .map_err(|e| RuntimeError(e.to_string()))?
-        })?,
-    )?;
-
-    let reg = registry.clone();
-    schema_table.set(
-        "get_global",
-        lua.create_function(move |lua, slug: String| {
-            reg.with(|r| get_global(lua, r, &slug))
-                .map_err(|e| RuntimeError(e.to_string()))?
-        })?,
-    )?;
-
-    let reg = registry.clone();
-    schema_table.set(
-        "list_collections",
-        lua.create_function(move |lua, ()| {
-            reg.with(|r| list_collections_fn(lua, r))
-                .map_err(|e| RuntimeError(e.to_string()))?
-        })?,
-    )?;
-
-    let reg = registry;
-    schema_table.set(
-        "list_globals",
-        lua.create_function(move |lua, ()| {
-            reg.with(|r| list_globals_fn(lua, r))
-                .map_err(|e| RuntimeError(e.to_string()))?
-        })?,
-    )?;
-
-    crap.set("schema", schema_table)?;
-
-    Ok(())
-}
-
-/// Convert a `CollectionDefinition` to a Lua table for `crap.schema.get_collection()`.
-fn collection_def_to_lua_table(lua: &Lua, def: &CollectionDefinition) -> LuaResult<Table> {
-    let tbl = lua.create_table()?;
-
-    tbl.set("slug", &*def.slug)?;
-    tbl.set("labels", labels_to_lua_table(lua, &def.labels)?)?;
-    tbl.set("timestamps", def.timestamps)?;
-    tbl.set("has_auth", def.is_auth_collection())?;
-    tbl.set("has_upload", def.is_upload_collection())?;
-    tbl.set("has_versions", def.has_versions())?;
-    tbl.set("has_drafts", def.has_drafts())?;
-
-    let fields_arr = lua.create_table()?;
-
-    for (i, f) in def.fields.iter().enumerate() {
-        fields_arr.set(i + 1, field_def_to_lua_table(lua, f)?)?;
-    }
-
-    tbl.set("fields", fields_arr)?;
-
-    Ok(tbl)
-}
-
-/// Convert a `FieldDefinition` to a Lua table for schema introspection.
+/// One field in a `SchemaCollection`. The same shape covers all field
+/// types — keys not relevant to a given type are simply omitted.
 ///
-/// Sections (basics, relationship, validation bounds, admin, join, options,
-/// sub-fields, blocks) are populated by per-section helpers — the top-level
-/// dispatcher reads top-to-bottom in the same order the introspection format
-/// documents the fields.
-fn field_def_to_lua_table(lua: &Lua, f: &FieldDefinition) -> LuaResult<Table> {
-    let tbl = lua.create_table()?;
+/// Nesting mirrors the *write* shape on `crap.FieldDefinition` so the
+/// schema-read surface reads back the way the user wrote it:
+/// admin-UI hints live under `admin`, join config lives under `join`,
+/// relationship config under `relationship`.
+#[derive(Serialize, LuaAnnotation)]
+#[lua(class = "crap.SchemaField")]
+pub(crate) struct SchemaField {
+    pub(crate) name: String,
+    #[serde(rename = "type")]
+    #[lua(rename = "type")]
+    pub(crate) field_type: String,
+    pub(crate) required: bool,
+    pub(crate) localized: bool,
+    pub(crate) unique: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(
+        ty = "{ collection: string | string[], has_many: boolean, max_depth?: integer }",
+        optional
+    )]
+    relationship: Option<SchemaRelationship>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(optional)]
+    min_length: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(optional)]
+    max_length: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(optional)]
+    min: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(optional)]
+    max: Option<f64>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[lua(optional)]
+    has_many: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(optional)]
+    min_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(optional)]
+    max_date: Option<String>,
+    /// `Date`-field input type. Matches the user's
+    /// `crap.FieldDefinition.picker_appearance` value (`"dayOnly"`,
+    /// `"dayAndTime"`, …); absent for non-date fields.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(ty = "crap.PickerAppearance", optional)]
+    picker_appearance: Option<PickerAppearance>,
+    /// Admin-UI hints: `language` / `features` / `picker`. Nested to
+    /// mirror the write-side `crap.FieldAdmin` shape — the user writes
+    /// `admin = { picker = "card" }` and reads back `field.admin.picker`.
+    #[serde(skip_serializing_if = "SchemaAdmin::is_empty")]
+    #[lua(
+        ty = "{ language?: string, features?: string[], picker?: string }",
+        optional
+    )]
+    admin: SchemaAdmin,
+    /// `Join` field config. Absent for every non-`Join` field; for
+    /// `Join` fields, mirrors the user's `crap.FieldDefinition.join`
+    /// value (`{ collection, on }`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(ty = "{ collection: string, on: string }", optional)]
+    join: Option<SchemaJoin>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[lua(ty = "{ label: string, value: string }[]", optional)]
+    options: Vec<SchemaOption>,
+    /// Sub-fields for `Group` / `Array` field types (recursive).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[lua(ty = "crap.SchemaField[]", optional)]
+    fields: Vec<SchemaField>,
+    /// Block definitions for `Blocks` field types.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[lua(
+        ty = "{ type: string, label?: string, group?: string, image_url?: string, fields: crap.SchemaField[] }[]",
+        optional
+    )]
+    blocks: Vec<SchemaBlock>,
+}
 
-    set_schema_basics(&tbl, f)?;
-    set_schema_relationship(lua, &tbl, f)?;
-    set_schema_validation_bounds(&tbl, f)?;
-    set_schema_admin(lua, &tbl, f)?;
-    set_schema_join(&tbl, f)?;
-    set_schema_options(lua, &tbl, f)?;
-    set_schema_sub_fields(lua, &tbl, f)?;
-    set_schema_blocks(lua, &tbl, f)?;
+// ── Builders (CollectionDefinition / FieldDefinition → projection) ───
 
+fn build_labels(labels: &Labels) -> SchemaLabels {
+    SchemaLabels {
+        singular: labels
+            .singular
+            .as_ref()
+            .map(|s| s.resolve_default().to_string()),
+        plural: labels
+            .plural
+            .as_ref()
+            .map(|s| s.resolve_default().to_string()),
+    }
+}
+
+fn build_summary(slug: &str, labels: &Labels) -> SchemaSummary {
+    SchemaSummary {
+        slug: slug.to_string(),
+        labels: build_labels(labels),
+    }
+}
+
+fn build_collection(def: &CollectionDefinition) -> SchemaCollection {
+    SchemaCollection {
+        slug: def.slug.to_string(),
+        labels: build_labels(&def.labels),
+        timestamps: def.timestamps,
+        has_auth: def.is_auth_collection(),
+        has_upload: def.is_upload_collection(),
+        has_versions: def.has_versions(),
+        has_drafts: def.has_drafts(),
+        fields: def.fields.iter().map(build_field).collect(),
+    }
+}
+
+fn build_global(def: &GlobalDefinition) -> SchemaCollection {
+    SchemaCollection {
+        slug: def.slug.to_string(),
+        labels: build_labels(&def.labels),
+        timestamps: false,
+        has_auth: false,
+        has_upload: false,
+        has_versions: false,
+        has_drafts: false,
+        fields: def.fields.iter().map(build_field).collect(),
+    }
+}
+
+fn build_relationship(f: &FieldDefinition) -> Option<SchemaRelationship> {
+    let rc = f.relationship.as_ref()?;
+
+    let collection = if rc.is_polymorphic() {
+        SchemaRelationshipCollection::Multi(
+            rc.polymorphic
+                .iter()
+                .map(|s| AsRef::<str>::as_ref(s).to_owned())
+                .collect(),
+        )
+    } else {
+        SchemaRelationshipCollection::Single(AsRef::<str>::as_ref(&rc.collection).to_owned())
+    };
+
+    Some(SchemaRelationship {
+        collection,
+        has_many: rc.has_many,
+        max_depth: rc.max_depth,
+    })
+}
+
+fn build_field(f: &FieldDefinition) -> SchemaField {
+    SchemaField {
+        name: f.name.clone(),
+        field_type: f.field_type.as_str().to_owned(),
+        required: f.required,
+        localized: f.localized,
+        unique: f.unique,
+        relationship: build_relationship(f),
+        min_length: f.min_length,
+        max_length: f.max_length,
+        min: f.min,
+        max: f.max,
+        has_many: f.has_many,
+        min_date: f.min_date.clone(),
+        max_date: f.max_date.clone(),
+        picker_appearance: f.picker_appearance.clone(),
+        admin: SchemaAdmin {
+            language: f.admin.language.clone(),
+            features: f.admin.features.clone(),
+            picker: f.admin.picker.clone(),
+        },
+        join: f.join.as_ref().map(|j| SchemaJoin {
+            collection: AsRef::<str>::as_ref(&j.collection).to_owned(),
+            on: j.on.clone(),
+        }),
+        options: f
+            .options
+            .iter()
+            .map(|o| SchemaOption {
+                label: o.label.resolve_default().to_owned(),
+                value: o.value.clone(),
+            })
+            .collect(),
+        fields: f.fields.iter().map(build_field).collect(),
+        blocks: f
+            .blocks
+            .iter()
+            .map(|b| SchemaBlock {
+                block_type: b.block_type.clone(),
+                label: b.label.as_ref().map(|s| s.resolve_default().to_owned()),
+                group: b.group.clone(),
+                image_url: b.image_url.clone(),
+                fields: b.fields.iter().map(build_field).collect(),
+            })
+            .collect(),
+    }
+}
+
+// ── Lua-side getters ─────────────────────────────────────────────────
+
+fn get_collection(lua: &Lua, registry: &Registry, slug: &str) -> LuaResult<Value> {
+    let Some(def) = registry.get_collection(slug) else {
+        return Ok(Value::Nil);
+    };
+    lua.to_value(&build_collection(def))
+}
+
+fn get_global(lua: &Lua, registry: &Registry, slug: &str) -> LuaResult<Value> {
+    let Some(def) = registry.get_global(slug) else {
+        return Ok(Value::Nil);
+    };
+    lua.to_value(&build_global(def))
+}
+
+fn list_collections_fn(lua: &Lua, registry: &Registry) -> LuaResult<Table> {
+    let summaries: Vec<SchemaSummary> = registry
+        .collections
+        .values()
+        .map(|d| build_summary(&d.slug, &d.labels))
+        .collect();
+
+    let Value::Table(tbl) = lua.to_value(&summaries)? else {
+        return Err(RuntimeError(
+            "list_collections did not serialize to a table".into(),
+        ));
+    };
     Ok(tbl)
 }
 
-/// Set always-present basics: `name`, `type`, `required`, `localized`,
-/// `unique`.
-fn set_schema_basics(tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
-    tbl.set("name", f.name.as_str())?;
-    tbl.set("type", f.field_type.as_str())?;
-    tbl.set("required", f.required)?;
-    tbl.set("localized", f.localized)?;
-    tbl.set("unique", f.unique)
-}
+fn list_globals_fn(lua: &Lua, registry: &Registry) -> LuaResult<Table> {
+    let summaries: Vec<SchemaSummary> = registry
+        .globals
+        .values()
+        .map(|d| build_summary(&d.slug, &d.labels))
+        .collect();
 
-/// Set the `relationship` sub-table when the field carries a
-/// [`RelationshipConfig`]. Polymorphic configs render `collection` as an
-/// array of target slugs; non-polymorphic as a single string.
-fn set_schema_relationship(lua: &Lua, tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
-    let Some(ref rc) = f.relationship else {
-        return Ok(());
+    let Value::Table(tbl) = lua.to_value(&summaries)? else {
+        return Err(RuntimeError(
+            "list_globals did not serialize to a table".into(),
+        ));
     };
-    let rel = lua.create_table()?;
-    if rc.is_polymorphic() {
-        let arr = lua.create_table()?;
-        for (i, slug) in rc.polymorphic.iter().enumerate() {
-            arr.set(i + 1, &**slug)?;
-        }
-        rel.set("collection", arr)?;
-    } else {
-        rel.set("collection", &*rc.collection)?;
-    }
-    rel.set("has_many", rc.has_many)?;
-    if let Some(md) = rc.max_depth {
-        rel.set("max_depth", md)?;
-    }
-    tbl.set("relationship", rel)
+    Ok(tbl)
 }
 
-/// Set the optional validation-bound keys: `min_length`, `max_length`,
-/// `min`, `max`, `has_many`, `min_date`, `max_date`.
-fn set_schema_validation_bounds(tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
-    if let Some(ml) = f.min_length {
-        tbl.set("min_length", ml)?;
-    }
-    if let Some(ml) = f.max_length {
-        tbl.set("max_length", ml)?;
-    }
-    if let Some(v) = f.min {
-        tbl.set("min", v)?;
-    }
-    if let Some(v) = f.max {
-        tbl.set("max", v)?;
-    }
-    if f.has_many {
-        tbl.set("has_many", true)?;
-    }
-    if let Some(ref md) = f.min_date {
-        tbl.set("min_date", md.as_str())?;
-    }
-    if let Some(ref md) = f.max_date {
-        tbl.set("max_date", md.as_str())?;
-    }
+// ── User-facing fns (init/pool variants) ─────────────────────────────
+//
+// Four fns × init/pool = 8 `#[lua_fn]` decls. Like `access.rs`, the
+// `lua_table!` macro takes a concrete state type, so the generic
+// `RegistryRead` impl is split into two concrete-state variants
+// (`SharedRegistry` for init VMs, `Arc<Registry>` for pool VMs).
+
+/// Get a collection's schema definition.
+#[lua_fn(
+    path = "crap.schema.get_collection",
+    returns = "crap.SchemaCollection?"
+)]
+fn schema_get_collection_init(
+    state: &SharedRegistry,
+    lua: &Lua,
+    #[lua(doc = "Collection slug.")] slug: String,
+) -> LuaResult<Value> {
+    state
+        .with(|r| get_collection(lua, r, &slug))
+        .map_err(|e| RuntimeError(e.to_string()))?
+}
+
+#[lua_fn(
+    path = "crap.schema.get_collection",
+    returns = "crap.SchemaCollection?"
+)]
+fn schema_get_collection_pool(state: &Arc<Registry>, lua: &Lua, slug: String) -> LuaResult<Value> {
+    state
+        .with(|r| get_collection(lua, r, &slug))
+        .map_err(|e| RuntimeError(e.to_string()))?
+}
+
+/// Get a global's schema definition.
+#[lua_fn(path = "crap.schema.get_global", returns = "crap.SchemaCollection?")]
+fn schema_get_global_init(
+    state: &SharedRegistry,
+    lua: &Lua,
+    #[lua(doc = "Global slug.")] slug: String,
+) -> LuaResult<Value> {
+    state
+        .with(|r| get_global(lua, r, &slug))
+        .map_err(|e| RuntimeError(e.to_string()))?
+}
+
+#[lua_fn(path = "crap.schema.get_global", returns = "crap.SchemaCollection?")]
+fn schema_get_global_pool(state: &Arc<Registry>, lua: &Lua, slug: String) -> LuaResult<Value> {
+    state
+        .with(|r| get_global(lua, r, &slug))
+        .map_err(|e| RuntimeError(e.to_string()))?
+}
+
+/// List all collection slugs and labels.
+#[lua_fn(
+    path = "crap.schema.list_collections",
+    returns = "{ slug: string, labels: { singular?: string, plural?: string } }[]"
+)]
+fn schema_list_collections_init(state: &SharedRegistry, lua: &Lua) -> LuaResult<Table> {
+    state
+        .with(|r| list_collections_fn(lua, r))
+        .map_err(|e| RuntimeError(e.to_string()))?
+}
+
+#[lua_fn(
+    path = "crap.schema.list_collections",
+    returns = "{ slug: string, labels: { singular?: string, plural?: string } }[]"
+)]
+fn schema_list_collections_pool(state: &Arc<Registry>, lua: &Lua) -> LuaResult<Table> {
+    state
+        .with(|r| list_collections_fn(lua, r))
+        .map_err(|e| RuntimeError(e.to_string()))?
+}
+
+/// List all global slugs and labels.
+#[lua_fn(
+    path = "crap.schema.list_globals",
+    returns = "{ slug: string, labels: { singular?: string, plural?: string } }[]"
+)]
+fn schema_list_globals_init(state: &SharedRegistry, lua: &Lua) -> LuaResult<Table> {
+    state
+        .with(|r| list_globals_fn(lua, r))
+        .map_err(|e| RuntimeError(e.to_string()))?
+}
+
+#[lua_fn(
+    path = "crap.schema.list_globals",
+    returns = "{ slug: string, labels: { singular?: string, plural?: string } }[]"
+)]
+fn schema_list_globals_pool(state: &Arc<Registry>, lua: &Lua) -> LuaResult<Table> {
+    state
+        .with(|r| list_globals_fn(lua, r))
+        .map_err(|e| RuntimeError(e.to_string()))?
+}
+
+lua_table! {
+    name: crap_schema_init,
+    path: "crap.schema",
+    state: SharedRegistry,
+    header: "Schema introspection API (read-only). Reads from the loaded registry.",
+    fns: [
+        schema_get_collection_init,
+        schema_get_global_init,
+        schema_list_collections_init,
+        schema_list_globals_init,
+    ],
+}
+
+lua_table! {
+    name: crap_schema_pool,
+    path: "crap.schema",
+    state: Arc<Registry>,
+    fns: [
+        schema_get_collection_pool,
+        schema_get_global_pool,
+        schema_list_collections_pool,
+        schema_list_globals_pool,
+    ],
+}
+
+/// Register `crap.schema` for init-phase VMs.
+pub(super) fn register_schema_init(lua: &Lua, registry: SharedRegistry) -> Result<()> {
+    register_crap_schema_init(lua, registry)?;
     Ok(())
 }
 
-/// Set the admin-config keys that the introspection format exposes:
-/// `language`, `features` (Richtext toolbar), `picker`.
-fn set_schema_admin(lua: &Lua, tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
-    if let Some(ref lang) = f.admin.language {
-        tbl.set("language", lang.as_str())?;
-    }
-    if !f.admin.features.is_empty() {
-        let features = lua.create_table()?;
-        for (i, feat) in f.admin.features.iter().enumerate() {
-            features.set(i + 1, feat.as_str())?;
-        }
-        tbl.set("features", features)?;
-    }
-    if let Some(ref p) = f.admin.picker {
-        tbl.set("picker", p.as_str())?;
-    }
+/// Register `crap.schema` for pool VMs.
+pub(super) fn register_schema_pool(lua: &Lua, registry: Arc<Registry>) -> Result<()> {
+    register_crap_schema_pool(lua, registry)?;
     Ok(())
-}
-
-/// Set `collection` and `on` for Join fields.
-fn set_schema_join(tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
-    let Some(ref jc) = f.join else {
-        return Ok(());
-    };
-    tbl.set("collection", &*jc.collection)?;
-    tbl.set("on", jc.on.as_str())
-}
-
-/// Set the `options` array for Select/Radio fields.
-fn set_schema_options(lua: &Lua, tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
-    if f.options.is_empty() {
-        return Ok(());
-    }
-    let opts = lua.create_table()?;
-    for (i, opt) in f.options.iter().enumerate() {
-        let o = lua.create_table()?;
-        o.set("label", opt.label.resolve_default())?;
-        o.set("value", opt.value.as_str())?;
-        opts.set(i + 1, o)?;
-    }
-    tbl.set("options", opts)
-}
-
-/// Set the `fields` array for Group/Array sub-fields (recursive).
-fn set_schema_sub_fields(lua: &Lua, tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
-    if f.fields.is_empty() {
-        return Ok(());
-    }
-    let sub = lua.create_table()?;
-    for (i, sf) in f.fields.iter().enumerate() {
-        sub.set(i + 1, field_def_to_lua_table(lua, sf)?)?;
-    }
-    tbl.set("fields", sub)
-}
-
-/// Set the `blocks` array for Blocks fields. Each block carries its own
-/// label / group / `image_url` metadata plus a recursive `fields` array.
-fn set_schema_blocks(lua: &Lua, tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
-    if f.blocks.is_empty() {
-        return Ok(());
-    }
-    let blocks = lua.create_table()?;
-    for (i, b) in f.blocks.iter().enumerate() {
-        let bt = lua.create_table()?;
-        bt.set("type", b.block_type.as_str())?;
-        if let Some(ref lbl) = b.label {
-            bt.set("label", lbl.resolve_default())?;
-        }
-        if let Some(ref g) = b.group {
-            bt.set("group", g.as_str())?;
-        }
-        if let Some(ref url) = b.image_url {
-            bt.set("image_url", url.as_str())?;
-        }
-        let bf = lua.create_table()?;
-        for (j, sf) in b.fields.iter().enumerate() {
-            bf.set(j + 1, field_def_to_lua_table(lua, sf)?)?;
-        }
-        bt.set("fields", bf)?;
-        blocks.set(i + 1, bt)?;
-    }
-    tbl.set("blocks", blocks)
 }
 
 #[cfg(test)]
@@ -362,59 +542,54 @@ mod tests {
         Arc::new(reg)
     }
 
-    #[test]
-    fn collection_def_to_lua_table_basic() {
-        let lua = Lua::new();
-        let reg = make_registry_with_collection();
-        let def = reg.get_collection("posts").unwrap();
-        let tbl = collection_def_to_lua_table(&lua, def).unwrap();
-
-        let slug: String = tbl.get("slug").unwrap();
-        assert_eq!(slug, "posts");
-        let timestamps: bool = tbl.get("timestamps").unwrap();
-        assert!(timestamps);
-        let has_auth: bool = tbl.get("has_auth").unwrap();
-        assert!(!has_auth);
-
-        let labels: Table = tbl.get("labels").unwrap();
-        let singular: String = labels.get("singular").unwrap();
-        assert_eq!(singular, "Post");
-
-        let fields: Table = tbl.get("fields").unwrap();
-        let f1: Table = fields.get(1).unwrap();
-        let name: String = f1.get("name").unwrap();
-        assert_eq!(name, "title");
-        let required: bool = f1.get("required").unwrap();
-        assert!(required);
+    fn to_table(_lua: &Lua, value: Value) -> Table {
+        match value {
+            Value::Table(t) => t,
+            other => panic!("expected Table, got {other:?}"),
+        }
     }
 
     #[test]
-    fn field_def_to_lua_table_with_relationship() {
-        let lua = Lua::new();
+    fn build_collection_basic() {
+        let reg = make_registry_with_collection();
+        let def = reg.get_collection("posts").unwrap();
+        let sc = build_collection(def);
+
+        assert_eq!(sc.slug, "posts");
+        assert!(sc.timestamps);
+        assert!(!sc.has_auth);
+        assert_eq!(sc.labels.singular.as_deref(), Some("Post"));
+        assert_eq!(sc.labels.plural.as_deref(), Some("Posts"));
+        assert_eq!(sc.fields.len(), 2);
+        assert_eq!(sc.fields[0].name, "title");
+        assert!(sc.fields[0].required);
+    }
+
+    #[test]
+    fn build_field_with_relationship() {
         let reg = make_registry_with_collection();
         let def = reg.get_collection("posts").unwrap();
         let tags_field = &def.fields[1];
-        let tbl = field_def_to_lua_table(&lua, tags_field).unwrap();
+        let sf = build_field(tags_field);
 
-        let name: String = tbl.get("name").unwrap();
-        assert_eq!(name, "tags");
-        let ft: String = tbl.get("type").unwrap();
-        assert_eq!(ft, "relationship");
-        let rel: Table = tbl.get("relationship").unwrap();
-        let col: String = rel.get("collection").unwrap();
-        assert_eq!(col, "tags");
-        let hm: bool = rel.get("has_many").unwrap();
-        assert!(hm);
-        let md: i32 = rel.get("max_depth").unwrap();
-        assert_eq!(md, 1);
+        assert_eq!(sf.name, "tags");
+        assert_eq!(sf.field_type, "relationship");
+        let rel = sf.relationship.unwrap();
+        match rel.collection {
+            SchemaRelationshipCollection::Single(s) => assert_eq!(s, "tags"),
+            SchemaRelationshipCollection::Multi(_) => panic!("expected non-polymorphic"),
+        }
+        assert!(rel.has_many);
+        assert_eq!(rel.max_depth, Some(1));
     }
 
     #[test]
     fn register_schema_get_collection() {
         let lua = Lua::new();
         let crap = lua.create_table().unwrap();
+        lua.globals().set("crap", crap.clone()).unwrap();
         let reg = make_registry_with_collection();
-        register_schema(&lua, &crap, reg).unwrap();
+        register_schema_pool(&lua, reg).unwrap();
 
         let schema: Table = crap.get("schema").unwrap();
         let get_coll: mlua::Function = schema.get("get_collection").unwrap();
@@ -429,19 +604,16 @@ mod tests {
     fn register_schema_get_global() {
         let lua = Lua::new();
         let crap = lua.create_table().unwrap();
+        lua.globals().set("crap", crap.clone()).unwrap();
         let reg = make_registry_with_collection();
-        register_schema(&lua, &crap, reg).unwrap();
+        register_schema_pool(&lua, reg).unwrap();
 
         let schema: Table = crap.get("schema").unwrap();
         let get_global: mlua::Function = schema.get("get_global").unwrap();
         let result: Value = get_global.call("settings".to_string()).unwrap();
-
-        if let Value::Table(tbl) = result {
-            let slug: String = tbl.get("slug").unwrap();
-            assert_eq!(slug, "settings");
-        } else {
-            panic!("Expected Table for global");
-        }
+        let tbl = to_table(&lua, result);
+        let slug: String = tbl.get("slug").unwrap();
+        assert_eq!(slug, "settings");
 
         let not_found: Value = get_global.call("nonexistent".to_string()).unwrap();
         assert!(matches!(not_found, Value::Nil));
@@ -451,8 +623,9 @@ mod tests {
     fn register_schema_list_collections() {
         let lua = Lua::new();
         let crap = lua.create_table().unwrap();
+        lua.globals().set("crap", crap.clone()).unwrap();
         let reg = make_registry_with_collection();
-        register_schema(&lua, &crap, reg).unwrap();
+        register_schema_pool(&lua, reg).unwrap();
 
         let schema: Table = crap.get("schema").unwrap();
         let list: mlua::Function = schema.get("list_collections").unwrap();
@@ -466,8 +639,9 @@ mod tests {
     fn register_schema_list_globals() {
         let lua = Lua::new();
         let crap = lua.create_table().unwrap();
+        lua.globals().set("crap", crap.clone()).unwrap();
         let reg = make_registry_with_collection();
-        register_schema(&lua, &crap, reg).unwrap();
+        register_schema_pool(&lua, reg).unwrap();
 
         let schema: Table = crap.get("schema").unwrap();
         let list: mlua::Function = schema.get("list_globals").unwrap();
@@ -478,165 +652,154 @@ mod tests {
     }
 
     #[test]
-    fn field_def_to_lua_table_polymorphic_relationship() {
-        let lua = Lua::new();
+    fn polymorphic_relationship_emits_array() {
         let mut rel_cfg = RelationshipConfig::new("articles", true);
         rel_cfg.polymorphic = vec!["articles".into(), "pages".into()];
         let field = FieldDefinition::builder("refs", FieldType::Relationship)
             .relationship(rel_cfg)
             .build();
-        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
-
-        let rel: Table = tbl.get("relationship").unwrap();
-        // Polymorphic: collection should be a table (array), not a string
-        let col: Table = rel.get("collection").unwrap();
-        let first: String = col.get(1).unwrap();
-        assert_eq!(first, "articles");
-        let second: String = col.get(2).unwrap();
-        assert_eq!(second, "pages");
-        let hm: bool = rel.get("has_many").unwrap();
-        assert!(hm);
+        let sf = build_field(&field);
+        let rel = sf.relationship.unwrap();
+        match rel.collection {
+            SchemaRelationshipCollection::Multi(slugs) => {
+                assert_eq!(slugs, vec!["articles".to_string(), "pages".to_string()]);
+            }
+            SchemaRelationshipCollection::Single(_) => panic!("expected polymorphic"),
+        }
+        assert!(rel.has_many);
     }
 
     #[test]
-    fn field_def_to_lua_table_non_polymorphic_relationship() {
-        let lua = Lua::new();
+    fn non_polymorphic_relationship_emits_string() {
         let field = FieldDefinition::builder("author", FieldType::Relationship)
             .relationship(RelationshipConfig::new("users", false))
             .build();
-        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
-
-        let rel: Table = tbl.get("relationship").unwrap();
-        // Non-polymorphic: collection should be a string
-        let col: String = rel.get("collection").unwrap();
-        assert_eq!(col, "users");
+        let sf = build_field(&field);
+        match sf.relationship.unwrap().collection {
+            SchemaRelationshipCollection::Single(s) => assert_eq!(s, "users"),
+            SchemaRelationshipCollection::Multi(_) => panic!("expected single"),
+        }
     }
 
     #[test]
-    fn field_def_to_lua_table_richtext_features() {
-        let lua = Lua::new();
+    fn richtext_features_emit_array_under_admin() {
         let mut field = FieldDefinition::builder("body", FieldType::Richtext).build();
         field.admin.features = vec![
             "bold".to_string(),
             "italic".to_string(),
             "heading".to_string(),
         ];
-        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
-
-        let features: Table = tbl.get("features").unwrap();
-        let f1: String = features.get(1).unwrap();
-        assert_eq!(f1, "bold");
-        let f2: String = features.get(2).unwrap();
-        assert_eq!(f2, "italic");
-        let f3: String = features.get(3).unwrap();
-        assert_eq!(f3, "heading");
+        let sf = build_field(&field);
+        assert_eq!(sf.admin.features, vec!["bold", "italic", "heading"]);
     }
 
     #[test]
-    fn field_def_to_lua_table_richtext_no_features() {
-        let lua = Lua::new();
+    fn richtext_no_features_omits_admin_key() {
         let field = FieldDefinition::builder("body", FieldType::Richtext).build();
-        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
-
-        // No features key when empty
-        let features: mlua::Result<Table> = tbl.get("features");
-        assert!(features.is_err() || matches!(tbl.get::<Value>("features"), Ok(Value::Nil)));
+        let sf = build_field(&field);
+        assert!(sf.admin.features.is_empty());
+        // Empty admin block doesn't serialize at all — see
+        // `SchemaAdmin::is_empty`.
+        let lua = Lua::new();
+        let v = lua.to_value(&sf).unwrap();
+        let tbl = to_table(&lua, v);
+        assert!(matches!(tbl.get::<Value>("admin"), Ok(Value::Nil)));
     }
 
-    // Covers min_length, max_length, min, max in field_def_to_lua_table
     #[test]
-    fn field_def_to_lua_table_min_max_length_and_value() {
-        let lua = Lua::new();
+    fn min_max_length_and_value() {
         let field = FieldDefinition::builder("score", FieldType::Number)
             .min_length(2)
             .max_length(100)
             .min(0.5)
             .max(99.9)
             .build();
-        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
-
-        let min_length: usize = tbl.get("min_length").unwrap();
-        assert_eq!(min_length, 2);
-        let max_length: usize = tbl.get("max_length").unwrap();
-        assert_eq!(max_length, 100);
-        let min: f64 = tbl.get("min").unwrap();
-        assert!((min - 0.5).abs() < f64::EPSILON);
-        let max: f64 = tbl.get("max").unwrap();
-        assert!((max - 99.9).abs() < 1e-9);
+        let sf = build_field(&field);
+        assert_eq!(sf.min_length, Some(2));
+        assert_eq!(sf.max_length, Some(100));
+        assert!((sf.min.unwrap() - 0.5).abs() < f64::EPSILON);
+        assert!((sf.max.unwrap() - 99.9).abs() < 1e-9);
     }
 
-    // Covers has_many = true in field_def_to_lua_table (lines 174-176)
     #[test]
-    fn field_def_to_lua_table_has_many() {
-        let lua = Lua::new();
+    fn has_many_true_emitted() {
         let field = FieldDefinition::builder("tags", FieldType::Select)
             .has_many(true)
             .build();
-        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
-
-        let has_many: bool = tbl.get("has_many").unwrap();
-        assert!(has_many);
+        let sf = build_field(&field);
+        assert!(sf.has_many);
     }
 
-    // Covers min_date and max_date in field_def_to_lua_table (lines 178-183)
     #[test]
-    fn field_def_to_lua_table_min_max_date() {
-        let lua = Lua::new();
+    fn min_max_date_emitted() {
         let field = FieldDefinition::builder("published_at", FieldType::Date)
             .min_date("2020-01-01")
             .max_date("2030-12-31")
             .build();
-        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
-
-        let min_date: String = tbl.get("min_date").unwrap();
-        assert_eq!(min_date, "2020-01-01");
-        let max_date: String = tbl.get("max_date").unwrap();
-        assert_eq!(max_date, "2030-12-31");
+        let sf = build_field(&field);
+        assert_eq!(sf.min_date.as_deref(), Some("2020-01-01"));
+        assert_eq!(sf.max_date.as_deref(), Some("2030-12-31"));
     }
 
-    // Covers admin.language in field_def_to_lua_table (lines 185-187)
     #[test]
-    fn field_def_to_lua_table_language() {
-        let lua = Lua::new();
+    fn admin_language_emitted() {
         let mut field = FieldDefinition::builder("snippet", FieldType::Code).build();
         field.admin.language = Some("javascript".to_string());
-        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
-
-        let lang: String = tbl.get("language").unwrap();
-        assert_eq!(lang, "javascript");
+        let sf = build_field(&field);
+        assert_eq!(sf.admin.language.as_deref(), Some("javascript"));
     }
 
-    // Covers admin.picker in field_def_to_lua_table (lines 197-199)
     #[test]
-    fn field_def_to_lua_table_picker() {
-        let lua = Lua::new();
+    fn admin_picker_emitted() {
         let mut field = FieldDefinition::builder("layout", FieldType::Blocks).build();
         field.admin.picker = Some("card".to_string());
-        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
-
-        let picker: String = tbl.get("picker").unwrap();
-        assert_eq!(picker, "card");
+        let sf = build_field(&field);
+        assert_eq!(sf.admin.picker.as_deref(), Some("card"));
     }
 
-    // Covers join config in field_def_to_lua_table (lines 201-204)
     #[test]
-    fn field_def_to_lua_table_join_config() {
+    fn picker_appearance_emitted_for_date_field() {
+        let field = FieldDefinition::builder("published_at", FieldType::Date)
+            .picker_appearance(PickerAppearance::DayAndTime)
+            .build();
+        let sf = build_field(&field);
+        assert_eq!(sf.picker_appearance, Some(PickerAppearance::DayAndTime));
+
+        // Round-trip through lua: emits as the camelCase string.
         let lua = Lua::new();
+        let v = lua.to_value(&sf).unwrap();
+        let tbl = to_table(&lua, v);
+        assert_eq!(
+            tbl.get::<String>("picker_appearance").unwrap(),
+            "dayAndTime"
+        );
+    }
+
+    #[test]
+    fn join_config_emitted_nested() {
         let field = FieldDefinition::builder("comments", FieldType::Join)
             .join(JoinConfig::new("comments", "post_id"))
             .build();
-        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
-
-        let collection: String = tbl.get("collection").unwrap();
-        assert_eq!(collection, "comments");
-        let on: String = tbl.get("on").unwrap();
-        assert_eq!(on, "post_id");
+        let sf = build_field(&field);
+        let join = sf.join.as_ref().expect("join should be present");
+        assert_eq!(join.collection, "comments");
+        assert_eq!(join.on, "post_id");
     }
 
-    // Covers sub-fields in field_def_to_lua_table (lines 218-224) — array/group type
     #[test]
-    fn field_def_to_lua_table_sub_fields() {
+    fn non_join_field_omits_join_key() {
+        let field = FieldDefinition::builder("title", FieldType::Text).build();
+        let sf = build_field(&field);
+        assert!(sf.join.is_none());
+
         let lua = Lua::new();
+        let v = lua.to_value(&sf).unwrap();
+        let tbl = to_table(&lua, v);
+        assert!(matches!(tbl.get::<Value>("join"), Ok(Value::Nil)));
+    }
+
+    #[test]
+    fn sub_fields_emitted() {
         let field = FieldDefinition::builder("address", FieldType::Group)
             .fields(vec![
                 FieldDefinition::builder("street", FieldType::Text).build(),
@@ -645,23 +808,15 @@ mod tests {
                     .build(),
             ])
             .build();
-        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
-
-        let sub: Table = tbl.get("fields").unwrap();
-        let sf1: Table = sub.get(1).unwrap();
-        let name1: String = sf1.get("name").unwrap();
-        assert_eq!(name1, "street");
-        let sf2: Table = sub.get(2).unwrap();
-        let name2: String = sf2.get("name").unwrap();
-        assert_eq!(name2, "city");
-        let req2: bool = sf2.get("required").unwrap();
-        assert!(req2);
+        let sf = build_field(&field);
+        assert_eq!(sf.fields.len(), 2);
+        assert_eq!(sf.fields[0].name, "street");
+        assert_eq!(sf.fields[1].name, "city");
+        assert!(sf.fields[1].required);
     }
 
-    // Covers get_global when plural label is absent (the `if let Some` branch for plural
-    // evaluates to None and skips — exercises the None path rather than Some).
     #[test]
-    fn get_global_with_no_plural_label() {
+    fn global_with_no_plural_label() {
         let mut reg = Registry::new();
         let mut branding = GlobalDefinition::new("branding");
         branding.labels.singular = Some(LocalizedString::Plain("Brand".to_string()));
@@ -671,29 +826,24 @@ mod tests {
 
         let lua = Lua::new();
         let crap = lua.create_table().unwrap();
-        register_schema(&lua, &crap, registry).unwrap();
+        lua.globals().set("crap", crap.clone()).unwrap();
+        register_schema_pool(&lua, registry).unwrap();
 
         let schema: Table = crap.get("schema").unwrap();
         let get_global: mlua::Function = schema.get("get_global").unwrap();
         let result: Value = get_global.call("branding".to_string()).unwrap();
-
-        if let Value::Table(tbl) = result {
-            let slug: String = tbl.get("slug").unwrap();
-            assert_eq!(slug, "branding");
-            let labels: Table = tbl.get("labels").unwrap();
-            let singular: String = labels.get("singular").unwrap();
-            assert_eq!(singular, "Brand");
-            // plural should be nil since we didn't set it
-            let plural: Value = labels.get("plural").unwrap();
-            assert!(matches!(plural, Value::Nil));
-        } else {
-            panic!("Expected Table for global");
-        }
+        let tbl = to_table(&lua, result);
+        let slug: String = tbl.get("slug").unwrap();
+        assert_eq!(slug, "branding");
+        let labels: Table = tbl.get("labels").unwrap();
+        let singular: String = labels.get("singular").unwrap();
+        assert_eq!(singular, "Brand");
+        let plural: Value = labels.get("plural").unwrap();
+        assert!(matches!(plural, Value::Nil));
     }
 
     #[test]
-    fn field_def_to_lua_table_blocks_with_group_and_image() {
-        let lua = Lua::new();
+    fn blocks_with_group_and_image() {
         let field = FieldDefinition::builder("content", FieldType::Blocks)
             .blocks({
                 let mut hero = BlockDefinition::new("hero", vec![]);
@@ -708,23 +858,17 @@ mod tests {
                 vec![hero, text_block, divider]
             })
             .build();
-        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
-        let blocks: Table = tbl.get("blocks").unwrap();
-
-        let b1: Table = blocks.get(1).unwrap();
-        assert_eq!(b1.get::<String>("type").unwrap(), "hero");
-        assert_eq!(b1.get::<String>("group").unwrap(), "Layout");
+        let sf = build_field(&field);
+        assert_eq!(sf.blocks.len(), 3);
+        assert_eq!(sf.blocks[0].block_type, "hero");
+        assert_eq!(sf.blocks[0].group.as_deref(), Some("Layout"));
         assert_eq!(
-            b1.get::<String>("image_url").unwrap(),
-            "/static/blocks/hero.svg"
+            sf.blocks[0].image_url.as_deref(),
+            Some("/static/blocks/hero.svg")
         );
-
-        let b2: Table = blocks.get(2).unwrap();
-        assert_eq!(b2.get::<String>("group").unwrap(), "Content");
-        assert!(matches!(b2.get::<Value>("image_url"), Ok(Value::Nil)));
-
-        let b3: Table = blocks.get(3).unwrap();
-        assert!(matches!(b3.get::<Value>("group"), Ok(Value::Nil)));
-        assert!(matches!(b3.get::<Value>("image_url"), Ok(Value::Nil)));
+        assert_eq!(sf.blocks[1].group.as_deref(), Some("Content"));
+        assert!(sf.blocks[1].image_url.is_none());
+        assert!(sf.blocks[2].group.is_none());
+        assert!(sf.blocks[2].image_url.is_none());
     }
 }

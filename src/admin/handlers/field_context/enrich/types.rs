@@ -689,7 +689,7 @@ fn build_node_attr(f: &FieldDefinition) -> RichtextNodeAttrCtx {
             .map(|ls| ls.resolve_default().to_string()),
         hidden: if f.admin.hidden { Some(true) } else { None },
         readonly: if f.admin.readonly { Some(true) } else { None },
-        width: f.admin.width.clone(),
+        width: f.admin.width.as_ref().map(|w| w.as_str().to_owned()),
         step: f.admin.step.clone(),
         rows: f.admin.rows,
         language: f.admin.language.clone(),
@@ -699,7 +699,7 @@ fn build_node_attr(f: &FieldDefinition) -> RichtextNodeAttrCtx {
         max_length: f.max_length,
         min_date: f.min_date.clone(),
         max_date: f.max_date.clone(),
-        picker_appearance: f.picker_appearance.clone(),
+        picker_appearance: f.picker_appearance.as_ref().map(|p| p.as_str().to_owned()),
     }
 }
 
@@ -878,7 +878,7 @@ mod tests {
                     FieldDefinition::builder("start", FieldType::Date)
                         .min_date("2020-01-01")
                         .max_date("2030-12-31")
-                        .picker_appearance("dayAndTime")
+                        .picker_appearance(crate::core::PickerAppearance::DayAndTime)
                         .build(),
                 ])
                 .build(),

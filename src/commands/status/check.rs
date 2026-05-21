@@ -279,7 +279,7 @@ fn check_auth_methods(reg: &Registry, findings: &mut Vec<Finding>) {
             {
                 let owner = format!("{slug}.{name}");
                 match activates_on {
-                    Activation::Always(_) => {
+                    Activation::Always { .. } => {
                         for surface in surfaces {
                             always_strategies_by_surface
                                 .entry(*surface)

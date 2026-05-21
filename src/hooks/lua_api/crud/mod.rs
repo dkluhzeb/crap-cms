@@ -1,9 +1,10 @@
 //! Lua CRUD function registration — split into per-operation modules.
 
-mod collection;
-mod globals;
+pub(crate) mod collection;
+pub(crate) mod filter;
+pub(crate) mod globals;
 pub(crate) mod helpers;
-mod jobs;
+pub(crate) mod jobs;
 mod register;
 mod tx_conn;
 

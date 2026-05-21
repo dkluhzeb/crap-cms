@@ -197,8 +197,8 @@ mod tests {
         admin_tbl.set("language", "en").unwrap();
         admin_tbl.set("rows", 5u32).unwrap();
         let admin = parse_field_admin(&admin_tbl).unwrap();
-        assert!(admin.labels_singular.is_some());
-        assert!(admin.labels_plural.is_some());
+        assert!(admin.labels.singular.is_some());
+        assert!(admin.labels.plural.is_some());
         assert_eq!(admin.features, vec!["bold", "italic"]);
         assert_eq!(admin.nodes, vec!["paragraph"]);
         assert_eq!(admin.richtext_format.as_deref(), Some("lexical"));

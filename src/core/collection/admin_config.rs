@@ -2,20 +2,25 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::typegen::lua::LuaAnnotation;
+
 /// Admin UI display options (title field, default sort, visibility, searchable fields).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, LuaAnnotation)]
+#[lua(class = "crap.AdminConfig")]
 pub struct AdminConfig {
-    /// The field name to use as the title for documents in the admin UI.
+    /// Field name to use as row label in lists.
     #[serde(default)]
     pub use_as_title: Option<String>,
-    /// The default sort order for document lists (e.g., "-createdAt").
+    /// Default sort field (prefix with "-" for desc).
     #[serde(default)]
     pub default_sort: Option<String>,
-    /// Whether to hide this collection from the admin sidebar.
+    /// Hide from admin sidebar (default: false).
     #[serde(default)]
+    #[lua(optional)]
     pub hidden: bool,
-    /// List of fields that should be searchable in the admin list view.
+    /// Fields searchable in the list view.
     #[serde(default)]
+    #[lua(optional)]
     pub list_searchable_fields: Vec<String>,
 }
 

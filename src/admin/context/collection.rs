@@ -17,7 +17,8 @@ use crate::{
 /// `drafts` flag inside `versions`). Single source of truth: if `auth`
 /// is `None`, the collection isn't auth-enabled; if `versions.drafts` is
 /// false, drafts aren't on.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.collection")]
 pub struct CollectionContext {
     pub slug: String,
     pub display_name: String,
@@ -33,7 +34,8 @@ pub struct CollectionContext {
 }
 
 /// Admin-presentation metadata pulled from `def.admin`.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.admin_meta")]
 pub struct AdminMeta {
     pub use_as_title: Option<String>,
     pub default_sort: Option<String>,
@@ -42,7 +44,8 @@ pub struct AdminMeta {
 }
 
 /// Upload-collection metadata. Only present when `def.upload` is set.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.upload_meta")]
 pub struct UploadMeta {
     pub enabled: bool,
     pub mime_types: Vec<String>,
@@ -51,77 +54,20 @@ pub struct UploadMeta {
 }
 
 /// Versioning metadata. Only present when `def.versions` is set.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.versions_meta")]
 pub struct VersionsMeta {
     pub drafts: bool,
     pub max_versions: u32,
 }
 
 /// Auth-collection metadata. Only present when `def.auth` is set.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.auth_meta")]
 pub struct AuthMeta {
     pub enabled: bool,
     pub disable_local: bool,
     pub verify_email: bool,
-}
-
-impl LuaAnnotation for AdminMeta {
-    fn render_lua_annotation(out: &mut String) {
-        out.push_str("---@class crap.template.admin_meta\n");
-        out.push_str("---@field use_as_title? string\n");
-        out.push_str("---@field default_sort? string\n");
-        out.push_str("---@field hidden boolean\n");
-        out.push_str("---@field list_searchable_fields string[]\n");
-        out.push('\n');
-    }
-}
-
-impl LuaAnnotation for UploadMeta {
-    fn render_lua_annotation(out: &mut String) {
-        out.push_str("---@class crap.template.upload_meta\n");
-        out.push_str("---@field enabled boolean\n");
-        out.push_str("---@field mime_types string[]\n");
-        out.push_str("---@field max_file_size? integer\n");
-        out.push_str("---@field admin_thumbnail? string\n");
-        out.push('\n');
-    }
-}
-
-impl LuaAnnotation for VersionsMeta {
-    fn render_lua_annotation(out: &mut String) {
-        out.push_str("---@class crap.template.versions_meta\n");
-        out.push_str("---@field drafts boolean\n");
-        out.push_str("---@field max_versions integer\n");
-        out.push('\n');
-    }
-}
-
-impl LuaAnnotation for AuthMeta {
-    fn render_lua_annotation(out: &mut String) {
-        out.push_str("---@class crap.template.auth_meta\n");
-        out.push_str("---@field enabled boolean\n");
-        out.push_str("---@field disable_local boolean\n");
-        out.push_str("---@field verify_email boolean\n");
-        out.push('\n');
-    }
-}
-
-impl LuaAnnotation for CollectionContext {
-    fn render_lua_annotation(out: &mut String) {
-        out.push_str("---@class crap.template.collection\n");
-        out.push_str("---@field slug string\n");
-        out.push_str("---@field display_name string\n");
-        out.push_str("---@field singular_name string\n");
-        out.push_str("---@field title_field? string\n");
-        out.push_str("---@field timestamps boolean\n");
-        out.push_str("---@field soft_delete boolean\n");
-        out.push_str("---@field admin crap.template.admin_meta\n");
-        out.push_str("---@field upload? crap.template.upload_meta\n");
-        out.push_str("---@field versions? crap.template.versions_meta\n");
-        out.push_str("---@field auth? crap.template.auth_meta\n");
-        out.push_str("---@field fields_meta crap.template.field_meta[]\n");
-        out.push('\n');
-    }
 }
 
 impl CollectionContext {

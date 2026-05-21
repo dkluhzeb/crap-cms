@@ -10,26 +10,56 @@ use crate::{
         lifecycle::{HookDepth, converters::document_to_lua_table},
         lua_api,
     },
+    typegen::lua::LuaAnnotation,
 };
 
 use super::HookContextBuilder;
 
 /// Context passed to hook functions.
-#[derive(Debug, Clone)]
+///
+/// `data` is mutable in `before_*` hooks; read-only in `after_*` hooks.
+/// `hook_depth` (not on the Rust struct, added at `to_lua_table` time
+/// from `HookDepth` app-data) tracks recursion depth — `0` for a
+/// top-level API call, `1+` from Lua CRUD invoked inside another hook.
+//
+// `LuaAnnotation` derive emits the Lua-facing `crap.HookContext` class
+// in `types/crap.lua`. Field types are overridden where the Rust shape
+// (`DocumentFields` / `ReqContext` / `Option<Document>`) differs from
+// what the Lua user sees on the hook context table.
+#[derive(Debug, Clone, LuaAnnotation)]
+#[lua(
+    class = "crap.HookContext",
+    extra_field = "hook_depth integer  Current recursion depth. `0` = top-level API/admin call, `1+` = from Lua CRUD inside hooks. Hooks are skipped when this reaches `hooks.max_depth` (default: `3`)."
+)]
 pub struct HookContext {
+    /// Collection slug.
     pub collection: String,
+    /// The operation being performed.
+    #[lua(ty = "\"create\"|\"update\"|\"delete\"|\"find\"|\"find_by_id\"|\"get_global\"|\"init\"")]
     pub operation: String,
+    /// Document data. For read hooks, contains document fields including
+    /// `id` / timestamps. For delete hooks, contains only
+    /// `{ id = "..." }`. In `after_change` hooks, `data.id` carries the
+    /// new document ID.
+    #[lua(ty = "table<string, any>")]
     pub data: DocumentFields,
+    /// Current locale code (nil if localization disabled or default
+    /// locale).
     pub locale: Option<String>,
-    /// Whether this operation is a draft save (`true` = draft, `false`/`None` = publish).
+    /// `true` when this is a draft save (only set for collections with
+    /// `versions.drafts` enabled).
     pub draft: Option<bool>,
-    /// Request-scoped shared table that flows from `before_validate` through `after_change`.
-    /// Hooks can read/write this to share state within one request lifecycle.
-    /// Only JSON-compatible values survive (no functions, userdata, etc.).
+    /// Request-scoped shared table that persists from `before_validate`
+    /// through `after_change` within one request. Only JSON-compatible
+    /// values survive (no functions / userdata).
+    #[lua(ty = "table<string, any>")]
     pub context: ReqContext,
-    /// Authenticated user document, if any. Exposed as `ctx.user` in Lua hooks.
+    /// Authenticated user document (nil if unauthenticated or no auth
+    /// collection).
+    #[lua(ty = "table", optional)]
     pub user: Option<Document>,
-    /// Admin UI locale (e.g. "en", "de"). Exposed as `ctx.ui_locale` in Lua hooks.
+    /// Admin UI locale code (e.g., `"en"`, `"de"`). Nil if not set or
+    /// called from gRPC without locale context.
     pub ui_locale: Option<String>,
 }
 

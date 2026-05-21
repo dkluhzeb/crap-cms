@@ -10,61 +10,89 @@ use crate::core::{
     },
     upload::CollectionUpload,
 };
+use crate::typegen::lua::LuaAnnotation;
 
 fn default_true() -> bool {
     true
 }
 
 /// Full definition of a collection, parsed from a Lua file. Maps to one `SQLite` table.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, LuaAnnotation)]
+#[lua(class = "crap.CollectionConfig")]
 pub struct CollectionDefinition {
     /// Unique identifier for the collection, used in URLs and database table names.
+    //
+    // Not part of the Lua config table — passed as the first arg to
+    // `crap.collections.define(slug, config)`.
+    #[lua(skip)]
     pub slug: Slug,
-    /// Human-readable labels for the collection (singular and plural).
+    /// Display names.
     #[serde(default)]
+    #[lua(optional)]
     pub labels: Labels,
-    /// Whether to automatically manage `created_at` and `updated_at` timestamps.
+    /// Auto `created_at`/`updated_at` (default: true).
     #[serde(default = "default_true")]
+    #[lua(optional)]
     pub timestamps: bool,
-    /// List of fields that make up the collection's schema.
+    /// Field definitions.
     #[serde(default)]
+    #[lua(ty = "crap.FieldDefinition[]", optional)]
     pub fields: Vec<FieldDefinition>,
-    /// Configuration for how this collection appears and behaves in the admin UI.
+    /// Admin UI options.
     #[serde(default)]
+    #[lua(optional)]
     pub admin: AdminConfig,
-    /// Lua hook functions triggered during various lifecycle events.
+    /// Hook references.
     #[serde(default)]
+    #[lua(optional)]
     pub hooks: Hooks,
-    /// Authentication settings, if this collection is used for user management.
+    /// Enable authentication on this collection. `true` for defaults, or a config table with `strategies`/`token_expiry`/`disable_local`.
     #[serde(default)]
+    #[lua(ty = "boolean | crap.Auth", optional)]
     pub auth: Option<Auth>,
-    /// File upload configuration, if this collection supports media/attachments.
+    /// Enable file uploads. `true` for defaults, or a config table with `mime_types`/`max_file_size`/`image_sizes`.
     #[serde(default)]
+    #[lua(ty = "boolean | crap.CollectionUpload", optional)]
     pub upload: Option<CollectionUpload>,
-    /// Access control rules for reading, creating, updating, and deleting items.
+    /// Access control function refs.
     #[serde(default)]
+    #[lua(optional)]
     pub access: Access,
-    /// Model Context Protocol (MCP) configuration for AI integration.
+    /// MCP tool description and options.
     #[serde(default)]
+    #[lua(optional)]
     pub mcp: McpConfig,
-    /// Real-time update settings for this collection.
+    /// Live event broadcasting. `false` to disable, string for Lua function ref that receives `{ collection, operation, data }` and returns boolean. Absent = enabled (broadcast all).
     #[serde(default)]
+    #[lua(ty = "boolean | string", optional)]
     pub live: Option<LiveSetting>,
     /// Controls what data events carry (metadata-only or full with `after_read` hooks).
+    //
+    // Internal-only: Lua's `live` field controls both surfaces via the
+    // union shape above — `live_mode` is set independently from Rust.
     #[serde(default)]
+    #[lua(skip)]
     pub live_mode: LiveMode,
-    /// Versioning and draft configuration.
+    /// Enable versioning. `true` for defaults, or a config table with `drafts`/`max_versions`.
     #[serde(default)]
+    #[lua(ty = "boolean | crap.VersionsConfig", optional)]
     pub versions: Option<VersionsConfig>,
-    /// Custom database indexes to optimize query performance.
+    /// Compound indexes (multi-column). Created on startup, stale indexes dropped.
     #[serde(default)]
+    #[lua(optional)]
     pub indexes: Vec<IndexDefinition>,
     /// Enable soft deletes (move to trash instead of permanent deletion).
+    //
+    // Not surfaced on Lua's `CollectionConfig` today — soft-delete is an
+    // internal-rollout flag set elsewhere. Re-add to Lua docs if/when
+    // it becomes a user-facing config knob.
     #[serde(default)]
+    #[lua(skip)]
     pub soft_delete: bool,
     /// Retention period for soft-deleted documents before auto-purge.
     /// Human-readable duration: "30d", "7d", "90d". None = manual purge only.
     #[serde(default)]
+    #[lua(skip)]
     pub soft_delete_retention: Option<String>,
 }
 

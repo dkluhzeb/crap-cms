@@ -302,8 +302,8 @@ fn construct_date(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
     let appearance = fc
         .field
         .picker_appearance
-        .as_deref()
-        .unwrap_or("dayOnly")
+        .as_ref()
+        .map_or("dayOnly", crate::core::PickerAppearance::as_str)
         .to_string();
 
     let tz_key = format!("{}_tz", fc.full_name);
@@ -659,7 +659,8 @@ fn construct_array(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
         add_label: fc
             .field
             .admin
-            .labels_singular
+            .labels
+            .singular
             .as_ref()
             .map(|ls| ls.resolve_default().to_string()),
         label_field: fc.field.admin.label_field.clone(),
@@ -720,7 +721,8 @@ fn construct_blocks(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
         add_label: fc
             .field
             .admin
-            .labels_singular
+            .labels
+            .singular
             .as_ref()
             .map(|ls| ls.resolve_default().to_string()),
         picker: fc.field.admin.picker.clone(),

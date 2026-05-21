@@ -3,92 +3,114 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use mlua::{Error::RuntimeError, Lua, Table};
-use serde_json::Value;
+use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
+use serde::Deserialize;
+use serde_json::Value as JsonValue;
 
-use crate::service::values_from_strings;
-
-use crate::{
-    config::LocaleConfig,
-    core::{DocumentFields, Registry},
-    db::LocaleContext,
-    hooks::{
-        lifecycle::converters::{
-            document_to_lua_table, lua_table_to_hashmap, lua_table_to_json_map,
-        },
-        lua_api::crud::{
-            get_tx_conn,
-            helpers::{
-                check_hook_depth, get_opt_bool, get_opt_string, hook_lua_infra, hook_ui_locale,
-                hook_user, resolve_global,
-            },
-        },
-    },
-    service::{LuaWriteHooks, ServiceContext, WriteInput, update_global_document},
+use crate::config::LocaleConfig;
+use crate::core::{DocumentFields, Registry};
+use crate::db::LocaleContext;
+use crate::hooks::lifecycle::converters::{
+    document_to_lua_table, lua_table_to_hashmap, lua_table_to_json_map,
 };
+use crate::hooks::lua_api::crud::{
+    get_tx_conn,
+    helpers::{check_hook_depth, hook_lua_infra, hook_ui_locale, hook_user, resolve_global},
+};
+use crate::service::{
+    LuaWriteHooks, ServiceContext, WriteInput, update_global_document, values_from_strings,
+};
+use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
-/// Decoded `crap.globals.update(slug, data, opts?)` Lua arguments.
-struct GlobalsUpdateInput<'a> {
-    slug: String,
-    data_table: Table,
-    opts: Option<&'a Table>,
+/// Optional options for `crap.globals.update`.
+#[derive(Deserialize, LuaAnnotation)]
+#[serde(default)]
+#[lua(class = "crap.GlobalUpdateOptions")]
+pub(crate) struct GlobalUpdateOptions {
+    /// Locale code for localized fields. Nil = default locale.
+    pub(crate) locale: Option<String>,
+    /// Skip access control checks (default: `false`). Set to `true` in
+    /// trusted internal code to bypass the global's update access function.
+    #[serde(rename = "overrideAccess")]
+    #[lua(rename = "overrideAccess", optional)]
+    pub(crate) override_access: bool,
+    /// Run lifecycle hooks (default: `true`). Set false to bypass hooks
+    /// (e.g., for seeding/migrations).
+    #[lua(optional)]
+    pub(crate) hooks: bool,
 }
 
-/// Core logic for `crap.globals.update`.
-fn globals_update_inner(
+impl Default for GlobalUpdateOptions {
+    fn default() -> Self {
+        Self {
+            locale: None,
+            override_access: false,
+            hooks: true,
+        }
+    }
+}
+
+impl FromLua for GlobalUpdateOptions {
+    fn from_lua(value: Value, lua: &Lua) -> LuaResult<Self> {
+        match value {
+            Value::Nil => Ok(Self::default()),
+            other => lua.from_value(other),
+        }
+    }
+}
+
+/// State threaded into `crap.globals.update`.
+pub(crate) struct GlobalsUpdateState {
+    pub(crate) registry: Arc<Registry>,
+    pub(crate) locale_config: LocaleConfig,
+}
+
+/// Update a global's value.
+#[lua_fn(path = "crap.globals.update", returns = "crap.Document")]
+fn globals_update(
+    state: &GlobalsUpdateState,
     lua: &Lua,
-    reg: &Registry,
-    lc: &LocaleConfig,
-    input: GlobalsUpdateInput<'_>,
-) -> mlua::Result<Table> {
-    let GlobalsUpdateInput {
-        slug,
-        data_table,
-        opts,
-    } = input;
+    #[lua(doc = "Global slug.")] slug: String,
+    #[lua(ty = "table<string, any>", doc = "Fields to update.")] data_table: Table,
+    #[lua(
+        ty = "crap.GlobalUpdateOptions",
+        doc = "Optional options (e.g., `{ locale = \"de\" }`)."
+    )]
+    opts: Option<GlobalUpdateOptions>,
+) -> LuaResult<Table> {
+    let opts = opts.unwrap_or_default();
+    let reg = &state.registry;
+    let lc = &state.locale_config;
 
     let conn = get_tx_conn(lua)?;
 
     let lua_infra = hook_lua_infra(lua);
-    let locale_str = get_opt_string(opts, "locale");
-    let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), lc)
+    let locale_ctx = LocaleContext::from_locale_string(opts.locale.as_deref(), lc)
         .map_err(|e| RuntimeError(e.to_string()))?;
-    let override_access = get_opt_bool(opts, "overrideAccess", false);
-    let run_hooks = get_opt_bool(opts, "hooks", true);
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
     let def = resolve_global(reg, &slug)?;
 
-    // Collection-level access check is handled inside service::update_global_in_conn
-    // via WriteHooks::check_access (respects override_access on LuaWriteHooks).
-
-    // The Lua table yields two views of the same fields. The stringified view
-    // (`lua_table_to_hashmap`) supplies scalar columns; the typed view
-    // (`lua_table_to_json_map`) supplies composite values that need to land
-    // intact in arrays/blocks join tables.
     let mut data = values_from_strings(lua_table_to_hashmap(&data_table)?);
     let composite_data: DocumentFields = lua_table_to_json_map(&data_table)?
         .into_iter()
-        .filter(|(_, v)| !matches!(v, Value::String(_)))
+        .filter(|(_, v)| !matches!(v, JsonValue::String(_)))
         .collect();
     data.extend(composite_data);
 
-    // Field write access is now checked inside service::update_global_in_conn
-    // via WriteHooks::field_write_denied.
-
-    let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, &slug, "update");
+    let (hooks_enabled, _guard) = check_hook_depth(lua, opts.hooks, &slug, "update");
 
     let write_hooks = LuaWriteHooks::builder(lua)
         .user(user.as_ref())
         .ui_locale(ui_locale.as_deref())
-        .override_access(override_access)
-        .registry(Some(reg))
+        .override_access(opts.override_access)
+        .registry(Some(reg.as_ref()))
         .hooks_enabled(hooks_enabled)
         .build();
 
     let write_input = WriteInput::builder(data)
         .locale_ctx(locale_ctx.as_ref())
-        .locale(locale_str)
+        .locale(opts.locale)
         .ui_locale(ui_locale.clone())
         .build();
 
@@ -96,42 +118,38 @@ fn globals_update_inner(
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
-        .override_access(override_access)
+        .override_access(opts.override_access)
         .lua_infra(lua_infra.as_ref())
         .build();
 
     let (doc, _) = update_global_document(&ctx, write_input)
         .map_err(|e| RuntimeError(format!("update_global error: {e:#}")))?;
 
-    // Hydration and read-denied field stripping are handled inside
-    // update_global_document via WriteHooks.
-
     document_to_lua_table(lua, &doc)
 }
 
-/// Register `crap.globals.update(slug, data, opts?)`.
+lua_table! {
+    name: crap_globals_update,
+    path: "crap.globals",
+    state: GlobalsUpdateState,
+    fns: [globals_update],
+}
+
+/// Register `crap.globals.update(slug, data, opts?)`. Parent `crap.globals`
+/// must already exist.
 #[cfg(not(tarpaulin_include))]
 pub(crate) fn register_globals_update(
     lua: &Lua,
-    table: &Table,
+    _table: &Table,
     registry: Arc<Registry>,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
-    let lc = locale_config.clone();
-    let update_fn = lua.create_function(
-        move |lua, (slug, data_table, opts): (String, Table, Option<Table>)| {
-            globals_update_inner(
-                lua,
-                &registry,
-                &lc,
-                GlobalsUpdateInput {
-                    slug,
-                    data_table,
-                    opts: opts.as_ref(),
-                },
-            )
+    register_crap_globals_update(
+        lua,
+        GlobalsUpdateState {
+            registry,
+            locale_config: locale_config.clone(),
         },
     )?;
-    table.set("update", update_fn)?;
     Ok(())
 }

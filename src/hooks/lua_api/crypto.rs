@@ -5,54 +5,135 @@ use std::fmt::Write as _;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use anyhow::Result;
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
-use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
+use mlua::{Error::RuntimeError, Lua, Result as LuaResult};
 use rand::RngCore;
 use ring::{digest, hmac};
 use subtle::ConstantTimeEq;
 
+use crate::typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
+
+/// Auth-secret-derived state for the `crap.crypto.encrypt` /
+/// `crap.crypto.decrypt` helpers. The 6 other `crap.crypto.*` fns are
+/// stateless and use the `()` table below.
+pub(super) struct CryptoState {
+    secret: String,
+}
+
+// ── Stateless crypto helpers ─────────────────────────────────────────
+
+/// SHA-256 hash of a string, returned as hex.
+#[lua_fn(path = "crap.crypto.sha256", returns_doc = "64-character hex string.")]
+fn crypto_sha256(_: &Lua, #[lua(doc = "Data to hash.")] data: String) -> LuaResult<String> {
+    Ok(sha256(&data))
+}
+
+/// HMAC-SHA256 of data with a key, returned as hex.
+/// Always compare HMACs with `crap.crypto.constant_time_eq(...)`, never with
+/// `==`, to avoid timing attacks.
+#[lua_fn(
+    path = "crap.crypto.hmac_sha256",
+    returns_doc = "64-character hex string."
+)]
+fn crypto_hmac_sha256(
+    _: &Lua,
+    #[lua(doc = "Data to authenticate.")] data: String,
+    #[lua(doc = "HMAC key.")] key: String,
+) -> LuaResult<String> {
+    Ok(hmac_sha256(&data, &key))
+}
+
+/// Constant-time byte-string equality. Use this — never `==` — to compare
+/// HMAC tags, tokens, or any secret value. Length mismatch and content
+/// mismatch are indistinguishable from the return value.
+#[lua_fn(
+    path = "crap.crypto.constant_time_eq",
+    returns_doc = "True iff `a` equals `b`."
+)]
+fn crypto_constant_time_eq(_: &Lua, a: String, b: String) -> LuaResult<bool> {
+    Ok(constant_time_eq(&a, &b))
+}
+
+/// Base64-encode a string.
+#[lua_fn(path = "crap.crypto.base64_encode")]
+fn crypto_base64_encode(_: &Lua, str: String) -> LuaResult<String> {
+    Ok(b64_encode(&str))
+}
+
+/// Base64-decode a string.
+#[lua_fn(path = "crap.crypto.base64_decode")]
+fn crypto_base64_decode(_: &Lua, str: String) -> LuaResult<String> {
+    b64_decode(&str)
+}
+
+/// Generate `n` random bytes, returned as hex.
+#[lua_fn(
+    path = "crap.crypto.random_bytes",
+    returns_doc = "Hex string of length 2*n."
+)]
+fn crypto_random_bytes(
+    _: &Lua,
+    #[lua(doc = "Number of random bytes.")] n: usize,
+) -> LuaResult<String> {
+    random_bytes(n)
+}
+
+// ── Stateful crypto helpers (use the auth secret) ────────────────────
+
+/// Encrypt plaintext using AES-256-GCM. Key derived from auth secret.
+/// Returns base64-encoded ciphertext (nonce prepended).
+#[lua_fn(
+    path = "crap.crypto.encrypt",
+    returns_doc = "Base64-encoded ciphertext."
+)]
+fn crypto_encrypt(state: &CryptoState, _: &Lua, plaintext: String) -> LuaResult<String> {
+    encrypt(&state.secret, &plaintext)
+}
+
+/// Decrypt ciphertext produced by `encrypt`.
+#[lua_fn(
+    path = "crap.crypto.decrypt",
+    returns_doc = "Decoded plaintext string."
+)]
+fn crypto_decrypt(
+    state: &CryptoState,
+    _: &Lua,
+    #[lua(doc = "Base64-encoded ciphertext from `encrypt`.")] ciphertext: String,
+) -> LuaResult<String> {
+    decrypt(&state.secret, &ciphertext)
+}
+
+lua_table! {
+    name: crap_crypto_stateless,
+    path: "crap.crypto",
+    state: (),
+    header: "Cryptographic helpers. Keys derived from the auth secret in crap.toml.",
+    fns: [
+        crypto_sha256,
+        crypto_hmac_sha256,
+        crypto_constant_time_eq,
+        crypto_base64_encode,
+        crypto_base64_decode,
+        crypto_random_bytes,
+    ],
+}
+
+lua_table! {
+    name: crap_crypto_stateful,
+    path: "crap.crypto",
+    state: CryptoState,
+    fns: [crypto_encrypt, crypto_decrypt],
+}
+
 /// Register `crap.crypto` — sha256, hmac, base64, AES-GCM encrypt/decrypt, `random_bytes`.
-pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Result<()> {
-    let t = lua.create_table()?;
-
-    t.set(
-        "sha256",
-        lua.create_function(|_, data: String| Ok(sha256(&data)))?,
+/// Parent `crap` table must already be in globals.
+pub(super) fn register_crypto(lua: &Lua, auth_secret: &str) -> Result<()> {
+    register_crap_crypto_stateless(lua, ())?;
+    register_crap_crypto_stateful(
+        lua,
+        CryptoState {
+            secret: auth_secret.to_string(),
+        },
     )?;
-    t.set(
-        "hmac_sha256",
-        lua.create_function(|_, (data, key): (String, String)| Ok(hmac_sha256(&data, &key)))?,
-    )?;
-    t.set(
-        "constant_time_eq",
-        lua.create_function(|_, (a, b): (String, String)| Ok(constant_time_eq(&a, &b)))?,
-    )?;
-    t.set(
-        "base64_encode",
-        lua.create_function(|_, data: String| Ok(b64_encode(&data)))?,
-    )?;
-    t.set(
-        "base64_decode",
-        lua.create_function(|_, data: String| b64_decode(&data))?,
-    )?;
-    t.set(
-        "random_bytes",
-        lua.create_function(|_, n: usize| random_bytes(n))?,
-    )?;
-
-    let secret = auth_secret.to_string();
-    t.set(
-        "encrypt",
-        lua.create_function(move |_, plaintext: String| encrypt(&secret, &plaintext))?,
-    )?;
-
-    let secret = auth_secret.to_string();
-    t.set(
-        "decrypt",
-        lua.create_function(move |_, encoded: String| decrypt(&secret, &encoded))?,
-    )?;
-
-    crap.set("crypto", t)?;
-
     Ok(())
 }
 
@@ -193,9 +274,10 @@ mod tests {
 
     fn setup_lua(secret: &str) -> Lua {
         let lua = Lua::new();
-        let crap = lua.create_table().unwrap();
-        register_crypto(&lua, &crap, secret).unwrap();
-        lua.globals().set("crap", crap).unwrap();
+        lua.globals()
+            .set("crap", lua.create_table().unwrap())
+            .unwrap();
+        register_crypto(&lua, secret).unwrap();
         lua
     }
 

@@ -2,25 +2,29 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::typegen::lua::LuaAnnotation;
+
 /// Lua function references for access control (read/create/update/delete).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, LuaAnnotation)]
+#[lua(class = "crap.Access")]
 pub struct Access {
-    /// Lua function for read access control.
+    /// Hook ref for read access control.
     #[serde(default)]
     pub read: Option<String>,
-    /// Lua function for create access control.
+    /// Hook ref for create access control.
     #[serde(default)]
     pub create: Option<String>,
-    /// Lua function for update access control.
+    /// Hook ref for update access control.
     #[serde(default)]
     pub update: Option<String>,
-    /// Lua function for delete access control.
+    /// Hook ref for delete access control.
     #[serde(default)]
     pub delete: Option<String>,
-    /// Lua function for trash access control (soft delete + restore).
-    /// Only relevant for collections with `soft_delete = true`.
-    /// When not set, falls back to `access.update`.
+    // Soft-delete trash access — Rust-internal, falls back to `update` when
+    // unset. Not part of the user-facing Lua API; the trash behavior is
+    // configured via `soft_delete` on the collection itself.
     #[serde(default)]
+    #[lua(skip)]
     pub trash: Option<String>,
 }
 

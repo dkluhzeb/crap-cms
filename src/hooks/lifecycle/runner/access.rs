@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use mlua::Value;
+use mlua::{LuaSerdeExt, Value};
 use tracing::error;
 
 use crate::{
@@ -71,18 +71,16 @@ impl HookRunner {
 
         let func = resolve_hook_function(&lua, authenticate_ref)?;
 
-        // Build context table: { headers = {...}, collection = "..." }
-        let ctx_table = lua.create_table()?;
-        let headers_table = lua.create_table()?;
+        // Build context table from a typed Rust struct so the Lua-side
+        // shape is the single source of truth (see
+        // `hooks::lifecycle::AuthStrategyContext`).
+        let ctx = crate::hooks::lifecycle::AuthStrategyContext {
+            headers,
+            collection,
+        };
+        let ctx_value = lua.to_value(&ctx)?;
 
-        for (k, v) in headers {
-            headers_table.set(k.as_str(), v.as_str())?;
-        }
-
-        ctx_table.set("headers", headers_table)?;
-        ctx_table.set("collection", collection)?;
-
-        let result: Value = func.call(ctx_table)?;
+        let result: Value = func.call(ctx_value)?;
 
         match result {
             Value::Table(tbl) => Ok(Some(lua_table_to_auth_user(&tbl)?)),

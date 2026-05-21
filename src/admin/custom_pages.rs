@@ -22,7 +22,8 @@ use serde::Serialize;
 use crate::typegen::LuaAnnotation;
 
 /// Sidebar metadata declared from Lua via `crap.pages.register`.
-#[derive(Clone, Debug, Default, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Default, Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.custom_page")]
 pub struct CustomPage {
     /// Slug — the URL segment and the filename stem.
     pub slug: String,
@@ -49,18 +50,6 @@ pub struct CustomPage {
     /// to it by name here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub access: Option<String>,
-}
-
-impl LuaAnnotation for CustomPage {
-    fn render_lua_annotation(out: &mut String) {
-        out.push_str("---@class crap.template.custom_page\n");
-        out.push_str("---@field slug string\n");
-        out.push_str("---@field section? string\n");
-        out.push_str("---@field label? string\n");
-        out.push_str("---@field icon? string\n");
-        out.push_str("---@field access? string\n");
-        out.push('\n');
-    }
 }
 
 /// Registered custom pages, keyed by slug. Populated once during

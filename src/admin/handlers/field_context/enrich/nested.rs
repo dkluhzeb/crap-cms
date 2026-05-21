@@ -855,7 +855,7 @@ mod tests {
     #[test]
     fn enriched_sub_field_date_day_and_time() {
         let mut sf = make_field("d", FieldType::Date);
-        sf.picker_appearance = Some("dayAndTime".to_string());
+        sf.picker_appearance = Some(crate::core::PickerAppearance::DayAndTime);
         let raw = json!("2026-03-15T10:30:00Z");
         let ctx = build_enriched_sub_field_value(
             &sf,
@@ -960,7 +960,7 @@ mod tests {
         arr.min_rows = Some(1);
         arr.max_rows = Some(5);
         arr.admin.collapsed = true;
-        arr.admin.labels_singular = Some(LocalizedString::Plain("Tag".to_string()));
+        arr.admin.labels.singular = Some(LocalizedString::Plain("Tag".to_string()));
         let ctx = build_enriched_sub_field_value(
             &arr,
             Some(&json!([])),
@@ -984,7 +984,7 @@ mod tests {
         blk.min_rows = Some(0);
         blk.max_rows = Some(10);
         blk.admin.collapsed = true;
-        blk.admin.labels_singular = Some(LocalizedString::Plain("Section".to_string()));
+        blk.admin.labels.singular = Some(LocalizedString::Plain("Section".to_string()));
         blk.admin.label_field = Some("body".to_string());
         let ctx = build_enriched_sub_field_value(
             &blk,

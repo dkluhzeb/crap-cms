@@ -10,11 +10,13 @@ use crate::typegen::LuaAnnotation;
 /// The `page` object every admin template receives. Carries the page-type
 /// discriminant, the page title (already-translated label or translation key),
 /// optional title interpolation parameter, and breadcrumb trail.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.page")]
 pub struct PageMeta {
     /// Page-type discriminant. Serialized as a `snake_case` string literal so
     /// templates can branch with `{{#if (eq page.type "collection_edit")}}`.
     #[serde(rename = "type")]
+    #[lua(ty_expr = "PageType::lua_type_union()")]
     pub page_type: &'static str,
 
     /// Page title or translation key.
@@ -26,6 +28,7 @@ pub struct PageMeta {
 
     /// Breadcrumb trail rendered by `partials/breadcrumb.hbs`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[lua(optional)]
     pub breadcrumbs: Vec<Breadcrumb>,
 }
 
@@ -45,19 +48,6 @@ impl PageMeta {
     pub fn with_title_name(mut self, name: impl Into<String>) -> Self {
         self.title_name = Some(name.into());
         self
-    }
-}
-
-impl LuaAnnotation for PageMeta {
-    fn render_lua_annotation(out: &mut String) {
-        out.push_str("---@class crap.template.page\n");
-        out.push_str("---@field type ");
-        out.push_str(&PageType::lua_type_union());
-        out.push('\n');
-        out.push_str("---@field title string\n");
-        out.push_str("---@field title_name? string\n");
-        out.push_str("---@field breadcrumbs? crap.template.breadcrumb[]\n");
-        out.push('\n');
     }
 }
 

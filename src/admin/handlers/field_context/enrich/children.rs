@@ -165,7 +165,8 @@ fn apply_array_template(
     af.init_collapsed = child.admin.collapsed;
     af.add_label = child
         .admin
-        .labels_singular
+        .labels
+        .singular
         .as_ref()
         .map(|ls| ls.resolve_default().to_string());
     af.label_field.clone_from(&child.admin.label_field);
@@ -224,7 +225,8 @@ fn apply_blocks_template(
     bf.init_collapsed = child.admin.collapsed;
     bf.add_label = child
         .admin
-        .labels_singular
+        .labels
+        .singular
         .as_ref()
         .map(|ls| ls.resolve_default().to_string());
     bf.picker.clone_from(&child.admin.picker);

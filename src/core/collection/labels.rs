@@ -3,15 +3,19 @@
 use serde::{Deserialize, Serialize};
 
 use crate::core::LocalizedString;
+use crate::typegen::lua::LuaAnnotation;
 
 /// Human-readable singular/plural labels for the admin UI.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, LuaAnnotation)]
+#[lua(class = "crap.Labels")]
 pub struct Labels {
-    /// Singular label for the collection (e.g., "Post").
+    /// Singular display name (e.g., "Post" or `{ en = "Post", de = "Beitrag" }`).
     #[serde(default)]
+    #[lua(ty = "crap.LocalizedString")]
     pub singular: Option<LocalizedString>,
-    /// Plural label for the collection (e.g., "Posts").
+    /// Plural display name (e.g., "Posts" or `{ en = "Posts", de = "Beiträge" }`).
     #[serde(default)]
+    #[lua(ty = "crap.LocalizedString")]
     pub plural: Option<LocalizedString>,
 }
 

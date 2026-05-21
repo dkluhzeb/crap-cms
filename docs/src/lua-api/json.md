@@ -1,6 +1,6 @@
 # crap.json
 
-JSON encode/decode functions. These are the same functions available as `crap.util.json_encode` / `crap.util.json_decode`, exposed under a dedicated namespace for convenience.
+JSON encode/decode functions.
 
 ## crap.json.encode(value)
 

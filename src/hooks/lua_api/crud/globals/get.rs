@@ -3,51 +3,83 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use mlua::{Error::RuntimeError, Lua, Table};
+use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
+use serde::Deserialize;
 
-use crate::{
-    config::LocaleConfig,
-    core::Registry,
-    db::LocaleContext,
-    hooks::{
-        lifecycle::converters::document_to_lua_table,
-        lua_api::crud::{
-            get_tx_conn,
-            helpers::{get_opt_bool, get_opt_string, hook_ui_locale, hook_user, resolve_global},
-        },
-    },
-    service::{GetGlobalInput, LuaReadHooks, ServiceContext, get_global_document},
+use crate::config::LocaleConfig;
+use crate::core::Registry;
+use crate::db::LocaleContext;
+use crate::hooks::lifecycle::converters::document_to_lua_table;
+use crate::hooks::lua_api::crud::{
+    get_tx_conn,
+    helpers::{hook_ui_locale, hook_user, resolve_global},
 };
+use crate::service::{GetGlobalInput, LuaReadHooks, ServiceContext, get_global_document};
+use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
-/// Core logic for `crap.globals.get`.
-fn globals_get_inner(
+/// Optional options for `crap.globals.get`.
+#[derive(Default, Deserialize, LuaAnnotation)]
+#[serde(default)]
+#[lua(class = "crap.GlobalGetOptions")]
+pub(crate) struct GlobalGetOptions {
+    /// Locale code for localized fields. Nil = default locale.
+    pub(crate) locale: Option<String>,
+    /// Skip access control checks (default: `false`). Set to `true` in
+    /// trusted internal code to bypass the global's read access function.
+    #[serde(rename = "overrideAccess")]
+    #[lua(rename = "overrideAccess", optional)]
+    pub(crate) override_access: bool,
+}
+
+impl FromLua for GlobalGetOptions {
+    fn from_lua(value: Value, lua: &Lua) -> LuaResult<Self> {
+        match value {
+            Value::Nil => Ok(Self::default()),
+            other => lua.from_value(other),
+        }
+    }
+}
+
+/// State threaded into `crap.globals.get` — the snapshot registry plus
+/// the locale config (cloned once at registration time).
+pub(crate) struct GlobalsGetState {
+    pub(crate) registry: Arc<Registry>,
+    pub(crate) locale_config: LocaleConfig,
+}
+
+/// Get a global's current value.
+#[lua_fn(path = "crap.globals.get", returns = "crap.Document")]
+fn globals_get(
+    state: &GlobalsGetState,
     lua: &Lua,
-    reg: &Registry,
-    lc: &LocaleConfig,
-    slug: &str,
-    opts: Option<&Table>,
-) -> mlua::Result<Table> {
+    #[lua(doc = "Global slug.")] slug: String,
+    #[lua(
+        ty = "crap.GlobalGetOptions",
+        doc = "Optional options (e.g., `{ locale = \"de\" }`)."
+    )]
+    opts: Option<GlobalGetOptions>,
+) -> LuaResult<Table> {
+    let opts = opts.unwrap_or_default();
     let conn = get_tx_conn(lua)?;
 
-    let locale_str = get_opt_string(opts, "locale");
-    let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), lc)
-        .map_err(|e| RuntimeError(e.to_string()))?;
-    let override_access = get_opt_bool(opts, "overrideAccess", false);
+    let locale_ctx =
+        LocaleContext::from_locale_string(opts.locale.as_deref(), &state.locale_config)
+            .map_err(|e| RuntimeError(e.to_string()))?;
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
-    let def = resolve_global(reg, slug)?;
+    let def = resolve_global(&state.registry, &slug)?;
 
     let hooks = LuaReadHooks::builder(lua)
         .user(user.as_ref())
         .ui_locale(ui_locale.as_deref())
-        .override_access(override_access)
+        .override_access(opts.override_access)
         .build();
 
-    let ctx = ServiceContext::global(slug, &def)
+    let ctx = ServiceContext::global(&slug, &def)
         .conn(conn)
         .read_hooks(&hooks)
         .user(user.as_ref())
-        .override_access(override_access)
+        .override_access(opts.override_access)
         .build();
 
     let input = GetGlobalInput::new(locale_ctx.as_ref(), ui_locale.as_deref());
@@ -57,18 +89,29 @@ fn globals_get_inner(
     document_to_lua_table(lua, &doc)
 }
 
-/// Register `crap.globals.get(slug, opts?)`.
+lua_table! {
+    name: crap_globals_get,
+    path: "crap.globals",
+    state: GlobalsGetState,
+    fns: [globals_get],
+}
+
+/// Register `crap.globals.get(slug, opts?)`. Parent `crap.globals` must
+/// already exist (populated by `register_globals_init` or
+/// `register_globals_pool_init`).
 #[cfg(not(tarpaulin_include))]
 pub(crate) fn register_globals_get(
     lua: &Lua,
-    table: &Table,
+    _table: &Table,
     registry: Arc<Registry>,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
-    let lc = locale_config.clone();
-    let get_fn = lua.create_function(move |lua, (slug, opts): (String, Option<Table>)| {
-        globals_get_inner(lua, &registry, &lc, &slug, opts.as_ref())
-    })?;
-    table.set("get", get_fn)?;
+    register_crap_globals_get(
+        lua,
+        GlobalsGetState {
+            registry,
+            locale_config: locale_config.clone(),
+        },
+    )?;
     Ok(())
 }

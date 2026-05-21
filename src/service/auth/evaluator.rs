@@ -363,7 +363,7 @@ pub fn evaluate(request: &AuthRequest<'_>, deps: &EvaluateDeps<'_>) -> Resolutio
 /// activation check itself is case-insensitive.
 fn activation_matches(activation: &Activation, headers: &HashMap<String, String>) -> bool {
     match activation {
-        Activation::Always(_) => true,
+        Activation::Always { .. } => true,
         Activation::Header { header } => {
             let want = header.as_str();
             headers.keys().any(|k| k.eq_ignore_ascii_case(want))

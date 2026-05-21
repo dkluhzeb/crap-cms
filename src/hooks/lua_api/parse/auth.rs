@@ -237,7 +237,7 @@ mod tests {
         let auth = parse_collection_auth(&tbl).unwrap();
         match &auth.methods[0] {
             AuthMethod::Strategy { activates_on, .. } => {
-                assert!(matches!(activates_on, Activation::Always(_)));
+                assert!(matches!(activates_on, Activation::Always { .. }));
             }
             _ => panic!("expected Strategy"),
         }

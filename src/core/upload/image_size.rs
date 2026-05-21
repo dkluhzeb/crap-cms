@@ -3,14 +3,21 @@
 use serde::{Deserialize, Serialize};
 
 use crate::core::upload::ImageFit;
+use crate::typegen::lua::LuaAnnotation;
 
 /// A named image resize target (e.g. "thumbnail" at 200x200).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, LuaAnnotation)]
+#[lua(class = "crap.ImageSize")]
 pub struct ImageSize {
+    /// Size name (e.g., "thumbnail", "card").
     pub name: String,
+    /// Target width in pixels.
     pub width: u32,
+    /// Target height in pixels.
     pub height: u32,
+    /// Resize fit mode (default: "cover").
     #[serde(default)]
+    #[lua(ty = "crap.ImageFit", optional)]
     pub fit: ImageFit,
 }
 

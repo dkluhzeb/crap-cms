@@ -2,55 +2,84 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Supported field types. Each variant maps to a database column type (or join table for Array/Blocks/has-many).
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+use crate::typegen::lua::LuaAlias;
+
+/// Supported field types for collection and global definitions.
+//
+// Variant order mirrors the Lua-side autocomplete UX (scalars first,
+// then choice types, then date/email/json/code, then relationships,
+// then composites, then layout-only). The `LuaAlias` derive forwards
+// the `///` doc-comment above into the user-facing Lua type file —
+// keep it user-focused, no implementation chatter.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, LuaAlias)]
 #[serde(rename_all = "lowercase")]
+#[lua(alias = "crap.FieldType", rename_all = "lowercase")]
 pub enum FieldType {
-    /// Single-line plain text.
+    /// Single-line string
     #[default]
+    #[lua(view_class = "crap.TextField")]
     Text,
-    /// Floating-point or integer number.
+    /// Integer or float
+    #[lua(view_class = "crap.NumberField")]
     Number,
-    /// Multi-line plain text area.
+    /// Multi-line text
+    #[lua(view_class = "crap.TextareaField")]
     Textarea,
-    /// Dropdown selection from predefined options.
-    Select,
-    /// Single checkbox for boolean values.
-    Checkbox,
-    /// Date or date-time string.
-    Date,
-    /// Email address with basic validation.
-    Email,
-    /// Structured JSON data stored as text.
-    Json,
-    /// Rich text content (e.g. HTML from a WYSIWYG editor).
+    /// Rich text (stored as HTML by default, or JSON with admin.format = "json")
+    #[lua(view_class = "crap.RichtextField")]
     Richtext,
-    /// Relationship to another document (many-to-one).
-    Relationship,
-    /// Array of sub-fields (many-to-many relationship).
-    Array,
-    /// Group of sub-fields (prefixed columns in the same table).
-    Group,
-    /// Reference to a file in an upload collection.
-    Upload,
-    /// Dynamic blocks of different field sets.
-    Blocks,
-    /// Radio buttons. Same as Select in storage (TEXT column) but renders as radio group.
+    /// Single or multi select from options (`has_many` for multi)
+    #[lua(view_class = "crap.SelectField")]
+    Select,
+    /// Radio button group (same as select, renders as radio buttons)
+    #[lua(view_class = "crap.RadioField")]
     Radio,
-    /// Layout-only row container. Sub-fields are promoted to parent-level columns
-    /// (no prefix, unlike Group). Used only for horizontal layout in the admin UI.
+    /// Boolean (true/false)
+    #[lua(view_class = "crap.CheckboxField")]
+    Checkbox,
+    /// ISO 8601 date/datetime
+    #[lua(view_class = "crap.DateField")]
+    Date,
+    /// Validated email address
+    #[lua(view_class = "crap.EmailField")]
+    Email,
+    /// Arbitrary JSON blob
+    #[lua(view_class = "crap.JsonField")]
+    Json,
+    /// File upload (references media collection; `has_many` for multi-file)
+    #[lua(view_class = "crap.UploadField")]
+    Upload,
+    /// Reference to another collection
+    #[lua(view_class = "crap.RelationshipField")]
+    Relationship,
+    /// Repeatable sub-fields
+    #[lua(view_class = "crap.ArrayField")]
+    Array,
+    /// Visual grouping (no extra table)
+    #[lua(view_class = "crap.GroupField")]
+    Group,
+    /// Flexible content blocks
+    #[lua(view_class = "crap.BlocksField")]
+    Blocks,
+    /// Layout-only horizontal grouping (no prefix)
+    #[lua(view_class = "crap.RowField")]
     Row,
-    /// Layout-only collapsible container. Sub-fields are promoted to parent-level columns
-    /// (no prefix, like Row). Used for a collapsible section in the admin UI.
+    /// Layout-only collapsible section (no prefix)
+    #[lua(view_class = "crap.CollapsibleField")]
     Collapsible,
-    /// Layout-only tabbed container. Sub-fields (across all tabs) are promoted to
-    /// parent-level columns (no prefix, like Row). Used for tabbed sections in the admin UI.
+    /// Layout-only tabbed container (no prefix)
+    #[lua(view_class = "crap.TabsField")]
     Tabs,
-    /// Code editor field. Renders a `CodeMirror` editor in the admin UI.
-    /// Stored as plain TEXT in `SQLite`.
+    /// Code editor (`CodeMirror`, `admin.language` for mode)
+    #[lua(view_class = "crap.CodeField")]
     Code,
-    /// Virtual reverse-relationship field. Shows documents from another collection
-    /// that reference this document. No stored data — computed at read time.
+    /// Virtual reverse relationship (read-only, no column)
+    //
+    // The `crap.JoinField` view is populated by `FieldDefinition.join`'s
+    // `#[lua(applies_to = "join", flatten)]` — `JoinConfig`'s fields
+    // are inlined directly onto the subclass since the Lua surface
+    // flattens them to the top level.
+    #[lua(view_class = "crap.JoinField")]
     Join,
 }
 

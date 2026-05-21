@@ -10,7 +10,8 @@ use crate::{
 };
 
 /// Top-level global metadata exposed to templates.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.global")]
 pub struct GlobalContext {
     pub slug: String,
     pub display_name: String,
@@ -18,19 +19,6 @@ pub struct GlobalContext {
     pub has_versions: bool,
     pub versions: Option<VersionsMeta>,
     pub fields_meta: Vec<FieldMeta>,
-}
-
-impl LuaAnnotation for GlobalContext {
-    fn render_lua_annotation(out: &mut String) {
-        out.push_str("---@class crap.template.global\n");
-        out.push_str("---@field slug string\n");
-        out.push_str("---@field display_name string\n");
-        out.push_str("---@field has_drafts boolean\n");
-        out.push_str("---@field has_versions boolean\n");
-        out.push_str("---@field versions? crap.template.versions_meta\n");
-        out.push_str("---@field fields_meta crap.template.field_meta[]\n");
-        out.push('\n');
-    }
 }
 
 impl GlobalContext {

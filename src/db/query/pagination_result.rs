@@ -7,29 +7,45 @@
 use serde::Serialize;
 
 use crate::core::Document;
+use crate::typegen::lua::LuaAnnotation;
 
 use super::cursor::{self, SortDirection};
 
-/// Unified pagination result — returned by the builder, consumed by entry-point converters.
-#[derive(Debug, Clone, Serialize)]
+/// Pagination metadata for a find result.
+//
+// Surfaced as `crap.PaginationInfo` on the Lua side. Rust internals
+// use snake_case; Lua emits camelCase via the `rename_all` strategy.
+#[derive(Debug, Clone, Serialize, LuaAnnotation)]
 #[serde(rename_all = "camelCase")]
+#[lua(class = "crap.PaginationInfo", rename_all = "camelCase")]
 pub struct PaginationResult {
+    /// Total matching documents (before limit/page).
     pub total_docs: i64,
+    /// Applied limit for this query.
     pub limit: i64,
+    /// Whether a next page exists.
     pub has_next_page: bool,
+    /// Whether a previous page exists.
     pub has_prev_page: bool,
+    /// Total number of pages (offset mode only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_pages: Option<i64>,
+    /// Current page number (offset mode only, 1-based).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page: Option<i64>,
+    /// 1-based index of the first document on the current page (offset mode only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page_start: Option<i64>,
+    /// Previous page number (offset mode only, nil if on first page).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prev_page: Option<i64>,
+    /// Next page number (offset mode only, nil if on last page).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_page: Option<i64>,
+    /// Opaque cursor of the first document in results (cursor mode only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub start_cursor: Option<String>,
+    /// Opaque cursor of the last document in results (cursor mode only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end_cursor: Option<String>,
 }

@@ -17,6 +17,7 @@ use crate::{
         RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, create_document_in_conn,
         flush_queue, flush_verification_queue,
     },
+    typegen::lua::LuaAnnotation,
 };
 
 const BATCH_SIZE: usize = 500;
@@ -47,8 +48,13 @@ impl Default for CreateManyOptions {
 }
 
 /// Result of a bulk create operation.
+#[derive(crate::typegen::lua::LuaAnnotation)]
+#[lua(class = "crap.CreateManyResult")]
 pub struct CreateManyResult {
+    /// Number of documents created.
     pub created: i64,
+    /// The created documents in order.
+    #[lua(ty = "crap.Document[]")]
     pub documents: Vec<crate::core::Document>,
 }
 

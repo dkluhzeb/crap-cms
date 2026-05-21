@@ -102,7 +102,7 @@ fn surfaces_to_lua(lua: &Lua, surfaces: &SurfaceSet) -> mlua::Result<Table> {
 fn activation_to_lua(lua: &Lua, act: &Activation) -> mlua::Result<Table> {
     let t = lua.create_table()?;
     match act {
-        Activation::Always(_) => {
+        Activation::Always { .. } => {
             t.set("always", true)?;
         }
         Activation::Header { header } => {

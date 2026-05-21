@@ -13,18 +13,21 @@ use crate::{
 };
 
 /// Top-level nav data exposed at `{{nav.*}}`.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.nav")]
 pub struct NavData {
     pub collections: Vec<NavCollection>,
     pub globals: Vec<NavGlobal>,
     /// Filesystem-routed custom admin pages registered via
     /// `crap.pages.register`. Only entries with a `label` set appear here.
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[lua(optional)]
     pub custom_pages: Vec<CustomPage>,
 }
 
 /// One sidebar entry for a collection.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.nav_collection")]
 pub struct NavCollection {
     pub slug: String,
     pub display_name: String,
@@ -33,40 +36,11 @@ pub struct NavCollection {
 }
 
 /// One sidebar entry for a global.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.nav_global")]
 pub struct NavGlobal {
     pub slug: String,
     pub display_name: String,
-}
-
-impl LuaAnnotation for NavCollection {
-    fn render_lua_annotation(out: &mut String) {
-        out.push_str("---@class crap.template.nav_collection\n");
-        out.push_str("---@field slug string\n");
-        out.push_str("---@field display_name string\n");
-        out.push_str("---@field is_auth boolean\n");
-        out.push_str("---@field is_upload boolean\n");
-        out.push('\n');
-    }
-}
-
-impl LuaAnnotation for NavGlobal {
-    fn render_lua_annotation(out: &mut String) {
-        out.push_str("---@class crap.template.nav_global\n");
-        out.push_str("---@field slug string\n");
-        out.push_str("---@field display_name string\n");
-        out.push('\n');
-    }
-}
-
-impl LuaAnnotation for NavData {
-    fn render_lua_annotation(out: &mut String) {
-        out.push_str("---@class crap.template.nav\n");
-        out.push_str("---@field collections crap.template.nav_collection[]\n");
-        out.push_str("---@field globals crap.template.nav_global[]\n");
-        out.push_str("---@field custom_pages? crap.template.custom_page[]\n");
-        out.push('\n');
-    }
 }
 
 impl NavData {

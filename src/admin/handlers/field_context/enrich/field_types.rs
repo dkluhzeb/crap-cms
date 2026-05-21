@@ -69,7 +69,10 @@ pub(super) fn sub_select_radio(cf: &mut ChoiceField, sf: &FieldDefinition, val: 
 
 /// Enrich a Date sub-field context.
 pub(super) fn sub_date(df: &mut DateField, sf: &FieldDefinition, val: &str, tz_value: &str) {
-    let appearance = sf.picker_appearance.as_deref().unwrap_or("dayOnly");
+    let appearance = sf
+        .picker_appearance
+        .as_ref()
+        .map_or("dayOnly", crate::core::PickerAppearance::as_str);
     df.picker_appearance = appearance.to_string();
 
     // Convert UTC back to local time for display if timezone is stored
@@ -237,7 +240,8 @@ fn apply_array_row_metadata(af: &mut ArrayField, sf: &FieldDefinition, indexed_n
     af.min_rows = sf.min_rows;
     af.add_label = sf
         .admin
-        .labels_singular
+        .labels
+        .singular
         .as_ref()
         .map(|ls| ls.resolve_default().to_string());
 }
@@ -250,7 +254,8 @@ fn apply_blocks_row_metadata(bf: &mut BlocksField, sf: &FieldDefinition, indexed
     bf.min_rows = sf.min_rows;
     bf.add_label = sf
         .admin
-        .labels_singular
+        .labels
+        .singular
         .as_ref()
         .map(|ls| ls.resolve_default().to_string());
 }

@@ -14,4 +14,4 @@ mod upload;
 
 pub use collection::parse_collection_definition;
 pub use global::parse_global_definition;
-pub use job::parse_job_definition;
+pub use job::{JobDefinitionConfig, parse_job_definition};

@@ -27,36 +27,56 @@
 //! separate "page data" concept.
 
 use anyhow::Result;
-use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
+use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
+use serde::Deserialize;
 
 use crate::hooks::lifecycle::InitPhase;
+use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
+
+/// Sidebar / access metadata for a custom admin page.
+#[derive(Default, Deserialize, LuaAnnotation)]
+#[serde(default)]
+#[lua(class = "crap.PageOptions")]
+pub(crate) struct PageOptions {
+    /// Sidebar section heading (e.g., `"Tools"`).
+    pub(crate) section: Option<String>,
+    /// Sidebar label (defaults to title-cased slug when omitted).
+    pub(crate) label: Option<String>,
+    /// Material Symbols icon name.
+    pub(crate) icon: Option<String>,
+    /// Lua function ref for access control (resolved against the same
+    /// registry as collection-level `access.*`).
+    pub(crate) access: Option<String>,
+}
+
+impl FromLua for PageOptions {
+    fn from_lua(value: Value, lua: &Lua) -> LuaResult<Self> {
+        match value {
+            Value::Nil => Ok(Self::default()),
+            other => lua.from_value(other),
+        }
+    }
+}
 
 /// Named registry value that holds the `slug → page-table` map.
 pub(crate) const PAGES_KEY: &str = "_crap_custom_pages";
 
-/// Register `crap.pages.register` and the storage table.
-pub(super) fn register_pages(lua: &Lua, crap: &Table) -> Result<()> {
-    lua.set_named_registry_value(PAGES_KEY, lua.create_table()?)?;
-
-    let t = lua.create_table()?;
-
-    t.set(
-        "register",
-        lua.create_function(|lua, (slug, opts): (String, Table)| register_page(lua, &slug, opts))?,
-    )?;
-    t.set("list", lua.create_function(|lua, ()| list_pages(lua))?)?;
-
-    crap.set("pages", t)?;
-
-    Ok(())
-}
-
-fn register_page(lua: &Lua, slug: &str, opts: Table) -> LuaResult<()> {
-    // Custom pages are read into `AdminState.custom_pages` once at startup
-    // (see `admin::server::start`). A runtime call would only land in the
-    // current VM's named registry and never reach the live registry, so the
-    // sidebar entry would silently fail to appear and the route would not
-    // be added. Refuse explicitly with a pointer to the right place.
+/// Register a custom admin page. Must be called from init.lua or a
+/// definition file — runtime registration is rejected (custom pages are
+/// read once at startup, so a runtime call would silently land in the
+/// current VM's named registry without ever appearing on the sidebar
+/// or routes).
+#[lua_fn(path = "crap.pages.register")]
+fn page_register(
+    lua: &Lua,
+    #[lua(doc = "Page slug (a-z, 0-9, '-', '_'); also the route under `/admin/p/<slug>`.")]
+    slug: String,
+    #[lua(
+        ty = "crap.PageOptions",
+        doc = "Sidebar / access metadata (all keys optional)."
+    )]
+    opts: PageOptions,
+) -> LuaResult<()> {
     if lua.app_data_ref::<InitPhase>().is_none() {
         return Err(RuntimeError(
             "crap.pages.register must be called from init.lua or a definition file \
@@ -65,18 +85,34 @@ fn register_page(lua: &Lua, slug: &str, opts: Table) -> LuaResult<()> {
         ));
     }
 
-    if !is_valid_slug(slug) {
+    if !is_valid_slug(&slug) {
         return Err(RuntimeError(format!(
             "crap.pages.register: invalid slug {slug:?} (use a-z, 0-9, '-', '_')"
         )));
     }
 
     let pages: Table = lua.named_registry_value(PAGES_KEY)?;
-    pages.set(slug, opts)?;
+    let entry = lua.create_table()?;
+    if let Some(s) = &opts.section {
+        entry.set("section", s.as_str())?;
+    }
+    if let Some(l) = &opts.label {
+        entry.set("label", l.as_str())?;
+    }
+    if let Some(i) = &opts.icon {
+        entry.set("icon", i.as_str())?;
+    }
+    if let Some(a) = &opts.access {
+        entry.set("access", a.as_str())?;
+    }
+    pages.set(slug, entry)?;
     Ok(())
 }
 
-fn list_pages(lua: &Lua) -> LuaResult<Table> {
+/// List the slugs of every registered custom page (in iteration order
+/// — not deterministic across runs).
+#[lua_fn(path = "crap.pages.list", returns = "string[]")]
+fn page_list(lua: &Lua) -> LuaResult<Table> {
     let pages: Table = lua.named_registry_value(PAGES_KEY)?;
     let names = lua.create_table()?;
     for (i, pair) in (1..).zip(pages.pairs::<Value, Value>()) {
@@ -84,6 +120,22 @@ fn list_pages(lua: &Lua) -> LuaResult<Table> {
         names.set(i, key)?;
     }
     Ok(names)
+}
+
+lua_table! {
+    name: crap_pages,
+    path: "crap.pages",
+    state: (),
+    header: "Declare custom admin pages and their sidebar metadata. The page\nTEMPLATE lives at `<config_dir>/templates/pages/<slug>.hbs`; this\nAPI only adds the sidebar entry and the optional access gate.",
+    fns: [page_register, page_list],
+}
+
+/// Register `crap.pages.register` and the storage table. Parent `crap`
+/// table must already be in globals.
+pub(super) fn register_pages(lua: &Lua) -> Result<()> {
+    lua.set_named_registry_value(PAGES_KEY, lua.create_table()?)?;
+    register_crap_pages(lua, ())?;
+    Ok(())
 }
 
 /// Mirrors `admin::custom_pages::is_valid_slug` so we can validate
@@ -102,9 +154,10 @@ mod tests {
     /// marker set, mimicking the state during `execute_init_lua`.
     fn lua_in_init_phase() -> Lua {
         let lua = Lua::new();
-        let crap = lua.create_table().unwrap();
-        register_pages(&lua, &crap).unwrap();
-        lua.globals().set("crap", crap).unwrap();
+        lua.globals()
+            .set("crap", lua.create_table().unwrap())
+            .unwrap();
+        register_pages(&lua).unwrap();
         lua.set_app_data(InitPhase);
         lua
     }
@@ -146,9 +199,10 @@ mod tests {
     #[test]
     fn register_outside_init_phase_is_rejected() {
         let lua = Lua::new();
-        let crap = lua.create_table().unwrap();
-        register_pages(&lua, &crap).unwrap();
-        lua.globals().set("crap", crap).unwrap();
+        lua.globals()
+            .set("crap", lua.create_table().unwrap())
+            .unwrap();
+        register_pages(&lua).unwrap();
         // Note: NO `set_app_data(InitPhase)` — we're simulating a runtime hook.
 
         let err = lua

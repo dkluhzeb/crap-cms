@@ -4,90 +4,131 @@
 //! - `crap.email.queue(opts)` — async, queued with retries via job system
 
 use anyhow::Result;
-use mlua::{Error::RuntimeError, Lua, Table};
+use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Value};
+use serde::Deserialize;
 
-use crate::{
-    config::CrapConfig,
-    core::email::{EmailJobData, create_email_provider, queue_email, validate_no_crlf},
+use crate::config::{CrapConfig, EmailConfig};
+use crate::core::email::{
+    EmailJobData, SharedEmailProvider, create_email_provider, queue_email, validate_no_crlf,
 };
-
 use crate::hooks::lua_api::crud::get_tx_conn;
+use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
-/// Validate header-derived email fields from a Lua `opts` table. Rejects any
-/// `\r`, `\n`, or `\0` in `to` or `subject` — the two fields currently
-/// accepted from Lua that end up in SMTP headers. Body fields (`html`,
-/// `text`) are not validated: they are MIME-encoded / JSON-escaped downstream.
-fn validate_email_fields(to: &str, subject: &str) -> mlua::Result<()> {
+/// Options table for `crap.email.send` / `crap.email.queue`.
+#[derive(Deserialize, LuaAnnotation)]
+#[lua(class = "crap.EmailOptions")]
+pub(crate) struct EmailOptions {
+    /// Recipient email address.
+    pub(crate) to: String,
+    /// Email subject line.
+    pub(crate) subject: String,
+    /// HTML email body.
+    pub(crate) html: String,
+    /// Plain-text fallback body.
+    pub(crate) text: Option<String>,
+    /// Per-call override of the queue retry count (only honoured by
+    /// `crap.email.queue`).
+    pub(crate) retries: Option<u32>,
+}
+
+impl FromLua for EmailOptions {
+    fn from_lua(value: Value, lua: &Lua) -> LuaResult<Self> {
+        lua.from_value(value)
+    }
+}
+
+/// State threaded into `crap.email.send` / `crap.email.queue` — the
+/// shared provider (sender) and a snapshot of the email config (for
+/// queueing defaults).
+pub(super) struct EmailState {
+    provider: SharedEmailProvider,
+    config: EmailConfig,
+}
+
+/// Validate header-derived email fields. Rejects any `\r`, `\n`, or
+/// `\0` in `to` or `subject` — the two fields currently accepted from
+/// Lua that end up in SMTP headers. Body fields (`html`, `text`) are
+/// not validated: they are MIME-encoded / JSON-escaped downstream.
+fn validate_email_fields(to: &str, subject: &str) -> LuaResult<()> {
     validate_no_crlf("to", to).map_err(|e| RuntimeError(format!("{e:#}")))?;
     validate_no_crlf("subject", subject).map_err(|e| RuntimeError(format!("{e:#}")))?;
-
     Ok(())
 }
 
-/// Register `crap.email` — outbound email sending via the configured provider.
-pub(super) fn register_email(lua: &Lua, crap: &Table, config: &CrapConfig) -> Result<()> {
-    let email_table = lua.create_table()?;
+/// Send an email via SMTP. Blocking — safe to call from hooks.
+/// Returns true on success. If email is not configured (`smtp_host` empty), logs a warning and returns true (no-op).
+#[lua_fn(
+    path = "crap.email.send",
+    returns_doc = "True on success (also true when SMTP is disabled — call is a no-op)."
+)]
+fn email_send(
+    state: &EmailState,
+    _: &Lua,
+    #[lua(ty = "crap.EmailOptions", doc = "Email options.")] opts: EmailOptions,
+) -> LuaResult<bool> {
+    validate_email_fields(&opts.to, &opts.subject)?;
 
-    // crap.email.send(opts) — immediate, blocking
+    state
+        .provider
+        .send(&opts.to, &opts.subject, &opts.html, opts.text.as_deref())
+        .map_err(|e| RuntimeError(format!("email send error: {e:#}")))?;
+
+    Ok(true)
+}
+
+/// Queue an email for async delivery via the job system. Returns the job
+/// run ID. Per-call `retries` override on `opts` takes precedence over
+/// the global `EmailConfig.queue_retries`.
+#[lua_fn(path = "crap.email.queue", returns_doc = "Queued job ID.")]
+fn email_queue(
+    state: &EmailState,
+    lua: &Lua,
+    #[lua(
+        ty = "crap.EmailOptions",
+        doc = "Email options (with optional `retries` override)."
+    )]
+    opts: EmailOptions,
+) -> LuaResult<String> {
+    validate_email_fields(&opts.to, &opts.subject)?;
+
+    let mut config = state.config.clone();
+    if let Some(retries) = opts.retries {
+        config.queue_retries = retries;
+    }
+
+    let conn = get_tx_conn(lua)?;
+
+    let job_id = queue_email(
+        conn,
+        &EmailJobData {
+            to: opts.to,
+            subject: opts.subject,
+            html: opts.html,
+            text: opts.text,
+        },
+        &config,
+    )
+    .map_err(|e| RuntimeError(format!("email queue error: {e:#}")))?;
+
+    Ok(job_id)
+}
+
+lua_table! {
+    name: crap_email,
+    path: "crap.email",
+    state: EmailState,
+    header: "Email sending (requires SMTP configuration in crap.toml).",
+    fns: [email_send, email_queue],
+}
+
+/// Register `crap.email` — outbound email sending via the configured
+/// provider. The parent `crap` table must already be in globals.
+pub(super) fn register_email(lua: &Lua, config: &CrapConfig) -> Result<()> {
     let provider = create_email_provider(&config.email)?;
-
-    let email_send_fn = lua.create_function(move |_, opts: Table| -> mlua::Result<bool> {
-        let to: String = opts.get("to")?;
-        let subject: String = opts.get("subject")?;
-        let html: String = opts.get("html")?;
-        let text: Option<String> = opts.get("text")?;
-
-        validate_email_fields(&to, &subject)?;
-
-        provider
-            .send(&to, &subject, &html, text.as_deref())
-            .map_err(|e| RuntimeError(format!("email send error: {e:#}")))?;
-
-        Ok(true)
-    })?;
-
-    // crap.email.queue(opts) — async, queued with retries.
-    //
-    // We clone the email config into the closure so per-call `opts.retries`
-    // overrides flow through `EmailConfig::queue_retries` without changing
-    // the `queue_email` signature. `EmailConfig` is plain owned data, so the
-    // clone is cheap and per-call mutation can't leak back to the global.
-    let email_config = config.email.clone();
-
-    let email_queue_fn = lua.create_function(move |lua, opts: Table| -> mlua::Result<String> {
-        let to: String = opts.get("to")?;
-        let subject: String = opts.get("subject")?;
-        let html: String = opts.get("html")?;
-        let text: Option<String> = opts.get("text")?;
-
-        validate_email_fields(&to, &subject)?;
-
-        // Per-call `retries` override; falls back to the captured config.
-        let mut config = email_config.clone();
-        if let Ok(Some(retries)) = opts.get::<Option<u32>>("retries") {
-            config.queue_retries = retries;
-        }
-
-        let conn = get_tx_conn(lua)?;
-
-        let job_id = queue_email(
-            conn,
-            &EmailJobData {
-                to,
-                subject,
-                html,
-                text,
-            },
-            &config,
-        )
-        .map_err(|e| RuntimeError(format!("email queue error: {e:#}")))?;
-
-        Ok(job_id)
-    })?;
-
-    email_table.set("send", email_send_fn)?;
-    email_table.set("queue", email_queue_fn)?;
-    crap.set("email", email_table)?;
-
+    let state = EmailState {
+        provider,
+        config: config.email.clone(),
+    };
+    register_crap_email(lua, state)?;
     Ok(())
 }

@@ -6,7 +6,7 @@
 //! Group fields so hook lookups land at the right `data_key`.
 
 use anyhow::{Result, anyhow};
-use mlua::{Lua, Value};
+use mlua::{Lua, LuaSerdeExt as _, Value};
 use serde_json::Value as JsonValue;
 use tracing::debug;
 
@@ -14,10 +14,7 @@ use crate::{
     core::{DocumentFields, FieldDefinition, FieldType, field::FieldHooks},
     db::query::helpers::prefixed_name,
     hooks::{
-        lifecycle::{
-            FieldHookEvent, UiLocaleContext, UserContext, converters::document_to_lua_table,
-            runner::FieldHooksCall,
-        },
+        lifecycle::{FieldHookEvent, UiLocaleContext, UserContext, runner::FieldHooksCall},
         lua_api,
     },
 };
@@ -195,34 +192,20 @@ pub(crate) fn call_field_hook_ref(
     // Convert the field value to Lua
     let lua_value = lua_api::json_to_lua(lua, value)?;
 
-    // Build context table
-    let ctx_table = lua.create_table()?;
-    ctx_table.set("field_name", field_name)?;
-    ctx_table.set("collection", collection)?;
-    ctx_table.set("operation", operation)?;
-
-    let data_table = lua.create_table()?;
-
-    for (k, v) in data {
-        data_table.set(k.as_str(), lua_api::json_to_lua(lua, v)?)?;
-    }
-
-    ctx_table.set("data", data_table)?;
-
-    // Inject user and ui_locale from TxContext if available
-    if let Some(user_ctx) = lua.app_data_ref::<UserContext>()
-        && let Some(ref user) = user_ctx.0
-    {
-        let user_table = document_to_lua_table(lua, user)?;
-
-        ctx_table.set("user", user_table)?;
-    }
-
-    if let Some(locale_ctx) = lua.app_data_ref::<UiLocaleContext>()
-        && let Some(ref locale) = locale_ctx.0
-    {
-        ctx_table.set("ui_locale", locale.as_str())?;
-    }
+    // Build context table from a typed Rust struct so the Lua shape is
+    // the single source of truth (see
+    // `hooks::lifecycle::FieldHookContext`).
+    let user_ctx_ref = lua.app_data_ref::<UserContext>();
+    let locale_ctx_ref = lua.app_data_ref::<UiLocaleContext>();
+    let ctx = crate::hooks::lifecycle::FieldHookContext {
+        field_name,
+        collection,
+        operation,
+        data,
+        user: user_ctx_ref.as_ref().and_then(|c| c.0.as_ref()),
+        ui_locale: locale_ctx_ref.as_ref().and_then(|c| c.0.as_deref()),
+    };
+    let ctx_table = lua.to_value(&ctx)?;
 
     // Call: new_value = hook(value, context)
     let result: Value = func.call((lua_value, ctx_table))?;

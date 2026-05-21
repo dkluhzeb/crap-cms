@@ -8,11 +8,13 @@ mod localized_string;
 mod relationship;
 mod select_option;
 
-pub use admin::{FieldAdmin, FieldAdminBuilder, validate_template_name};
+pub use admin::{
+    FieldAdmin, FieldAdminBuilder, FieldAdminLabels, FieldWidth, validate_template_name,
+};
 pub use block_definition::{BlockDefinition, FieldTab};
 pub use definition::{
-    FieldAccess, FieldDefinition, FieldDefinitionBuilder, FieldHooks, McpFieldConfig,
-    flatten_array_sub_fields, to_title_case,
+    FieldAccess, FieldDefinition, FieldDefinitionBuilder, FieldHookFn, FieldHooks, McpFieldConfig,
+    PickerAppearance, ValidateFunction, flatten_array_sub_fields, to_title_case,
 };
 pub use field_type::FieldType;
 pub use localized_string::LocalizedString;

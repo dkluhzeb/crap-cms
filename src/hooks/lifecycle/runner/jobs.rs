@@ -1,7 +1,7 @@
 //! `HookRunner` methods for job execution and arbitrary Lua evaluation.
 
 use anyhow::{Result, anyhow};
-use mlua::Value;
+use mlua::{LuaSerdeExt as _, Value};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::{
@@ -35,27 +35,26 @@ impl HookRunner {
         let lua = self.pool.acquire()?;
         let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
-        // Build context table
-        let ctx = lua.create_table()?;
-
-        // Parse data JSON into Lua table
+        // Build context from a typed Rust struct so the Lua shape is
+        // the single source of truth (see
+        // `hooks::lifecycle::JobHandlerContext`).
         let data_value: JsonValue =
             serde_json::from_str(data_json).unwrap_or(JsonValue::Object(JsonMap::new()));
-        let data_lua = lua_api::json_to_lua(&lua, &data_value)?;
-        ctx.set("data", data_lua)?;
-
-        // Job metadata
-        let job_meta = lua.create_table()?;
-        job_meta.set("slug", slug)?;
-        job_meta.set("attempt", attempt)?;
-        job_meta.set("max_attempts", max_attempts)?;
-        ctx.set("job", job_meta)?;
+        let ctx = crate::hooks::lifecycle::JobHandlerContext {
+            data: &data_value,
+            job: crate::hooks::lifecycle::JobInfo {
+                slug,
+                attempt,
+                max_attempts,
+            },
+        };
+        let ctx_value = lua.to_value(&ctx)?;
 
         // Resolve the handler function (e.g., "jobs.cleanup.run")
         let func = resolve_hook_function(&lua, handler_ref)?;
 
         // Call handler(ctx)
-        let return_val: Value = func.call(ctx)?;
+        let return_val: Value = func.call(ctx_value)?;
 
         // Convert return value to JSON
         match return_val {

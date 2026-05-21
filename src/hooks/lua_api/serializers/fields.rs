@@ -589,13 +589,13 @@ mod tests {
     #[test]
     fn test_field_config_to_lua_localized_and_picker_appearance() {
         let lua = mlua::Lua::new();
-        let f = FieldDefinition::builder("body", FieldType::Text)
+        let f = FieldDefinition::builder("published_at", FieldType::Date)
             .localized(true)
-            .picker_appearance("drawer")
+            .picker_appearance(crate::core::PickerAppearance::MonthOnly)
             .build();
         let tbl = field_config_to_lua(&lua, &f).unwrap();
         assert!(tbl.get::<bool>("localized").unwrap());
-        assert_eq!(tbl.get::<String>("picker_appearance").unwrap(), "drawer");
+        assert_eq!(tbl.get::<String>("picker_appearance").unwrap(), "monthOnly");
     }
 
     #[test]
@@ -604,7 +604,7 @@ mod tests {
         let f = FieldDefinition::builder("start_date", FieldType::Date)
             .timezone(true)
             .default_timezone("America/New_York")
-            .picker_appearance("dayAndTime")
+            .picker_appearance(crate::core::PickerAppearance::DayAndTime)
             .build();
         let tbl = field_config_to_lua(&lua, &f).unwrap();
 

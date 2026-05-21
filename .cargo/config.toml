@@ -1,0 +1,6 @@
+# Workspace task runner alias — `cargo xtask gen-lua-types --check` etc.
+# Standard cargo-xtask pattern. Keeps build-tool entry points typed Rust
+# (with editor support) rather than shell scripts, while remaining
+# discoverable via `cargo`.
+[alias]
+xtask = "run --package xtask --"

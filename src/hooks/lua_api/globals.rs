@@ -3,122 +3,160 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use mlua::{Error::RuntimeError, Lua, Table, Value};
+use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
 use super::serializers::global_config_to_lua;
 
-use crate::{
-    core::{Registry, SharedRegistry},
-    hooks::{lifecycle::InitPhase, lua_api::parse::parse_global_definition},
-};
+use crate::core::{Registry, SharedRegistry};
+use crate::hooks::lifecycle::InitPhase;
+use crate::hooks::lua_api::parse::parse_global_definition;
+use crate::typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
 const DEFINE_INIT_ONLY_ERROR: &str = "crap.globals.define must be called from a definition file \
      or init.lua. To change a registered global, edit the file and restart the process.";
 
+// ── crap.globals.define ──────────────────────────────────────────────
+
+/// Define a new global. Call this in global definition files.
+#[lua_fn(path = "crap.globals.define")]
+fn globals_define_init(
+    state: &SharedRegistry,
+    lua: &Lua,
+    #[lua(doc = "Unique global identifier.")] slug: String,
+    #[lua(ty = "crap.GlobalConfig", doc = "Global configuration.")] config: Table,
+) -> LuaResult<()> {
+    if lua.app_data_ref::<InitPhase>().is_none() {
+        return Err(RuntimeError(DEFINE_INIT_ONLY_ERROR.into()));
+    }
+    let def = parse_global_definition(lua, &slug, &config)
+        .map_err(|e| RuntimeError(format!("Failed to parse global '{slug}': {e}")))?;
+    state
+        .write()
+        .map_err(|e| RuntimeError(format!("Registry lock poisoned: {e:#}")))?
+        .register_global(def);
+    Ok(())
+}
+
+/// Pool-VM no-op variant — same `InitPhase` guard, but never writes
+/// since the init VM already registered the global on the shared
+/// registry.
+#[lua_fn(path = "crap.globals.define")]
+fn globals_define_pool(
+    _state: &(),
+    lua: &Lua,
+    _slug: String,
+    #[lua(ty = "crap.GlobalConfig")] _config: Table,
+) -> LuaResult<()> {
+    if lua.app_data_ref::<InitPhase>().is_none() {
+        return Err(RuntimeError(DEFINE_INIT_ONLY_ERROR.into()));
+    }
+    Ok(())
+}
+
+// ── crap.globals.config ──────────────────────────────────────────────
+
+/// Get a global's current definition as a Lua table.
+/// Returns the full config compatible with `define()` for round-trip editing.
+#[lua_fn(
+    path = "crap.globals.config.get",
+    returns = "crap.GlobalConfig?",
+    returns_doc = "The global config, or nil if not found."
+)]
+fn globals_config_get_init(
+    state: &SharedRegistry,
+    lua: &Lua,
+    #[lua(doc = "Global slug.")] slug: String,
+) -> LuaResult<Value> {
+    let r = state
+        .read()
+        .map_err(|e| RuntimeError(format!("Registry lock poisoned: {e:#}")))?;
+    config_get_impl(lua, &r, &slug)
+}
+
+/// Pool-VM variant: reads via the per-VM `Arc<Registry>` snapshot.
+#[lua_fn(path = "crap.globals.config.get", returns = "crap.GlobalConfig?")]
+fn globals_config_get_pool(state: &Arc<Registry>, lua: &Lua, slug: String) -> LuaResult<Value> {
+    config_get_impl(lua, state, &slug)
+}
+
+/// List all registered globals as a slug-keyed table of full configs.
+/// Iterate with `for slug, def in pairs(crap.globals.config.list()) do ... end`.
+#[lua_fn(
+    path = "crap.globals.config.list",
+    returns = "table<string, crap.GlobalConfig>",
+    returns_doc = "Slug -> global config map."
+)]
+fn globals_config_list_init(state: &SharedRegistry, lua: &Lua) -> LuaResult<Table> {
+    let r = state
+        .read()
+        .map_err(|e| RuntimeError(format!("Registry lock poisoned: {e:#}")))?;
+    config_list_impl(lua, &r)
+}
+
+/// Pool-VM variant of `crap.globals.config.list`.
+#[lua_fn(
+    path = "crap.globals.config.list",
+    returns = "table<string, crap.GlobalConfig>"
+)]
+fn globals_config_list_pool(state: &Arc<Registry>, lua: &Lua) -> LuaResult<Table> {
+    config_list_impl(lua, state)
+}
+
+// ── lua_table! groupings ─────────────────────────────────────────────
+
+lua_table! {
+    name: crap_globals_init_root,
+    path: "crap.globals",
+    state: SharedRegistry,
+    header: "Global (singleton document) definition and runtime operations.",
+    fns: [globals_define_init],
+}
+
+lua_table! {
+    name: crap_globals_init_config,
+    path: "crap.globals.config",
+    state: SharedRegistry,
+    header: "Schema introspection sub-table for globals.",
+    fns: [globals_config_get_init, globals_config_list_init],
+}
+
+lua_table! {
+    name: crap_globals_pool_root,
+    path: "crap.globals",
+    state: (),
+    fns: [globals_define_pool],
+}
+
+lua_table! {
+    name: crap_globals_pool_config,
+    path: "crap.globals.config",
+    state: Arc<Registry>,
+    fns: [globals_config_get_pool, globals_config_list_pool],
+}
+
+// ── Registration entry points ────────────────────────────────────────
+
 /// Init-time registration: registers `crap.globals.define` (write-capable),
 /// `crap.globals.config.get`, and `crap.globals.config.list`.
-pub(super) fn register_globals_init(
-    lua: &Lua,
-    crap: &Table,
-    registry: SharedRegistry,
-) -> Result<()> {
-    let globals_table = lua.create_table()?;
-
-    let reg = Arc::clone(&registry);
-    globals_table.set(
-        "define",
-        lua.create_function(move |lua, (slug, config): (String, Table)| {
-            define_init(lua, &reg, &slug, &config)
-        })?,
-    )?;
-
-    let config_table = lua.create_table()?;
-
-    let reg = Arc::clone(&registry);
-    config_table.set(
-        "get",
-        lua.create_function(move |lua, slug: String| {
-            let r = reg
-                .read()
-                .map_err(|e| RuntimeError(format!("Registry lock poisoned: {e:#}")))?;
-            get(lua, &r, &slug)
-        })?,
-    )?;
-
-    let reg = registry;
-    config_table.set(
-        "list",
-        lua.create_function(move |lua, ()| {
-            let r = reg
-                .read()
-                .map_err(|e| RuntimeError(format!("Registry lock poisoned: {e:#}")))?;
-            list(lua, &r)
-        })?,
-    )?;
-
-    globals_table.set("config", config_table)?;
-    crap.set("globals", globals_table)?;
-
+pub(super) fn register_globals_init(lua: &Lua, registry: SharedRegistry) -> Result<()> {
+    register_crap_globals_init_root(lua, Arc::clone(&registry))?;
+    register_crap_globals_init_config(lua, registry)?;
     Ok(())
 }
 
 /// Pool-VM registration: `define` is a no-op stub; config.get/list
-/// read from the snapshot Arc. See [`register_collections_pool_init`]
-/// for the rationale.
-pub(super) fn register_globals_pool_init(
-    lua: &Lua,
-    crap: &Table,
-    registry: Arc<Registry>,
-) -> Result<()> {
-    let globals_table = lua.create_table()?;
-
-    globals_table.set(
-        "define",
-        lua.create_function(|lua, _: (String, Table)| -> mlua::Result<()> {
-            if lua.app_data_ref::<InitPhase>().is_none() {
-                return Err(RuntimeError(DEFINE_INIT_ONLY_ERROR.into()));
-            }
-            Ok(())
-        })?,
-    )?;
-
-    let config_table = lua.create_table()?;
-
-    let reg = Arc::clone(&registry);
-    config_table.set(
-        "get",
-        lua.create_function(move |lua, slug: String| get(lua, &reg, &slug))?,
-    )?;
-
-    let reg = registry;
-    config_table.set("list", lua.create_function(move |lua, ()| list(lua, &reg))?)?;
-
-    globals_table.set("config", config_table)?;
-    crap.set("globals", globals_table)?;
-
+/// read from the per-VM `Arc<Registry>` snapshot.
+pub(super) fn register_globals_pool_init(lua: &Lua, registry: Arc<Registry>) -> Result<()> {
+    register_crap_globals_pool_root(lua, ())?;
+    register_crap_globals_pool_config(lua, registry)?;
     Ok(())
 }
 
-/// Init-time define: parses + registers the global. The strict `InitPhase`
-/// guard rejects any caller that landed here outside init.
-fn define_init(lua: &Lua, reg: &SharedRegistry, slug: &str, config: &Table) -> mlua::Result<()> {
-    if lua.app_data_ref::<InitPhase>().is_none() {
-        return Err(RuntimeError(DEFINE_INIT_ONLY_ERROR.into()));
-    }
-
-    let def = parse_global_definition(lua, slug, config)
-        .map_err(|e| RuntimeError(format!("Failed to parse global '{slug}': {e}")))?;
-
-    reg.write()
-        .map_err(|e| RuntimeError(format!("Registry lock poisoned: {e:#}")))?
-        .register_global(def);
-
-    Ok(())
-}
+// ── Shared read helpers ──────────────────────────────────────────────
 
 /// Read a single global config as a Lua table. Shared between init and
-/// runtime closures.
-fn get(lua: &Lua, reg: &Registry, slug: &str) -> mlua::Result<Value> {
+/// pool closures.
+fn config_get_impl(lua: &Lua, reg: &Registry, slug: &str) -> LuaResult<Value> {
     match reg.get_global(slug) {
         Some(def) => Ok(Value::Table(global_config_to_lua(lua, def)?)),
         None => Ok(Value::Nil),
@@ -126,14 +164,12 @@ fn get(lua: &Lua, reg: &Registry, slug: &str) -> mlua::Result<Value> {
 }
 
 /// Read all global configs as a Lua table. Shared between init and
-/// runtime closures.
-fn list(lua: &Lua, reg: &Registry) -> mlua::Result<Table> {
+/// pool closures.
+fn config_list_impl(lua: &Lua, reg: &Registry) -> LuaResult<Table> {
     let map = lua.create_table()?;
-
     for (slug, def) in &reg.globals {
         map.set(&**slug, global_config_to_lua(lua, def)?)?;
     }
-
     Ok(map)
 }
 
@@ -144,17 +180,23 @@ mod tests {
     use crate::core::Registry;
     use std::sync::{Arc, RwLock};
 
+    fn lua_with_globals() -> (Lua, SharedRegistry) {
+        let lua = Lua::new();
+        lua.globals()
+            .set("crap", lua.create_table().unwrap())
+            .unwrap();
+        let registry: SharedRegistry = Arc::new(RwLock::new(Registry::new()));
+        register_globals_init(&lua, Arc::clone(&registry)).unwrap();
+        (lua, registry)
+    }
+
     /// Regression: `crap.globals.define` from a runtime hook must be
     /// rejected — same reasoning as `crap.collections.define`. Without
     /// the guard, a hook can plant a global into `SharedRegistry` whose
     /// backing row never gets created and whose admin routes never wire.
     #[test]
     fn define_outside_init_phase_is_rejected() {
-        let lua = Lua::new();
-        let crap = lua.create_table().unwrap();
-        let registry: SharedRegistry = Arc::new(RwLock::new(Registry::new()));
-        register_globals_init(&lua, &crap, Arc::clone(&registry)).unwrap();
-        lua.globals().set("crap", crap).unwrap();
+        let (lua, registry) = lua_with_globals();
         // Note: NO `set_app_data(InitPhase)` — simulating a runtime hook.
 
         let err = lua
@@ -180,11 +222,7 @@ mod tests {
     /// `init.lua` where `InitPhase` is set.
     #[test]
     fn runtime_define_rejected_for_existing_slug() {
-        let lua = Lua::new();
-        let crap = lua.create_table().unwrap();
-        let registry: SharedRegistry = Arc::new(RwLock::new(Registry::new()));
-        register_globals_init(&lua, &crap, Arc::clone(&registry)).unwrap();
-        lua.globals().set("crap", crap).unwrap();
+        let (lua, registry) = lua_with_globals();
 
         {
             let mut reg = registry.write().unwrap();
@@ -205,11 +243,7 @@ mod tests {
     /// loading path.
     #[test]
     fn init_phase_define_succeeds() {
-        let lua = Lua::new();
-        let crap = lua.create_table().unwrap();
-        let registry: SharedRegistry = Arc::new(RwLock::new(Registry::new()));
-        register_globals_init(&lua, &crap, Arc::clone(&registry)).unwrap();
-        lua.globals().set("crap", crap).unwrap();
+        let (lua, registry) = lua_with_globals();
 
         lua.set_app_data(InitPhase);
         let r = lua.load(r#"crap.globals.define("settings", {})"#).exec();

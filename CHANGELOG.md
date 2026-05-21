@@ -95,6 +95,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking Changes
 
+- **`crap.schema.get_collection` / `get_global` field shape:** admin
+  hints and join config are now nested objects instead of flat
+  top-level fields, mirroring the write-side `crap.FieldAdmin` /
+  `crap.FieldDefinition.join` shapes. Affects callers reading field
+  metadata from the schema-introspection API.
+  - **Was:** `field.language`, `field.features`, `field.picker`,
+    `field.collection` (for `Join` fields), `field.on`.
+  - **Now:** `field.admin.language`, `field.admin.features`,
+    `field.admin.picker`, `field.join.collection`, `field.join.on`.
+  - Also new: `field.picker_appearance` for `Date` fields (was
+    silently dropped from the schema output before).
+  - Migration: `field.picker` → `field.admin.picker` etc. The
+    nested objects are skipped from the emitted table when empty
+    (no `admin` block on a field with no admin-UI hints, no `join`
+    block on non-`Join` fields).
+
+- **`crap.util.json_encode` / `crap.util.json_decode` removed.** Use
+  `crap.json.encode` / `crap.json.decode` instead. The dual
+  registration was leftover technical debt from an incomplete
+  migration to a dedicated `crap.json` namespace; the old aliases
+  shipped as a back-compat measure that was never actually wound
+  down. Cleaned up while restructuring the Lua API typegen
+  surface — the new derive-driven generation expects a single
+  canonical path per function, and `crap.json.*` is the cleaner
+  location (matches Lua convention like `string.format`,
+  `math.pi`). Migration: search-replace `crap.util.json_encode` →
+  `crap.json.encode` and `crap.util.json_decode` →
+  `crap.json.decode` in your collection definitions and hooks.
+
 - **`auth.strategies`, `auth.disable_local`, `auth.verify_email`,
   `auth.forgot_password`, `auth.mfa` removed from
   `CollectionDefinition.auth`.** Replaced by a single ordered
@@ -115,6 +144,82 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   each `auth = { … }` block per the new shape; the shorthand
   `auth = { enabled = true }` continues to work and populates
   the default methods.
+
+### Internal
+
+- **Lua typegen: every `--- @class crap.X` and `--- @alias crap.X`
+  block now derives from a real Rust type.** The
+  `src/typegen/lua/doc_structs/` directory is gone — what was a
+  pile of phantom unit-structs and `()`-typed fields used only
+  for documentation has been collapsed into real `Serialize`-
+  or `Deserialize`-able Rust types. Drift between the runtime
+  and the Lua-facing doc is now impossible by construction.
+  Migrations in this pass:
+  - `Document`, `HookContext`, `AccessContext`, `AuthStrategyContext`,
+    `FieldHookContext`, `ValidateContext`, `JobHandlerContext` +
+    `JobInfo`, `DeleteManyResult`, `SchemaCollection` +
+    `SchemaField`, `HttpResponse`, `ValidateResult`,
+    `VersionSummary`, `ListVersionsResult`, `FindResult` — derived
+    on the real struct that the handler constructs and emits via
+    `LuaSerdeExt::to_value(&struct)`.
+  - `Activation` (refactored from `Always(AlwaysMarker)` to a
+    struct variant) + `AuthMethod` — derived via the new
+    `LuaTaggedClass` macro, which emits one
+    `crap.X<VariantName>` class per variant (with the
+    discriminator field as a literal) plus a `--- @alias crap.X`
+    union. Better LuaLS narrowing than the old flat
+    discriminated-union class.
+  - `RichtextNodeSpec` — real Rust struct with hand-written
+    `FromLua` that parses `attrs` into `Vec<FieldDefinition>`
+    eagerly and keeps `render` as `mlua::Function`. The
+    `register_node` handler now takes the typed struct directly.
+  - `FieldWidth` — enum with `Full | Half | Third | Custom(String)`
+    plus `From<String>` / `From<&str>` and serde
+    `Serialize`/`Deserialize` round-trip. Replaces the old
+    `width: Option<String>` field on `FieldAdmin`. `LuaAlias`
+    derive extended for mixed unit + newtype variants — emits
+    `crap.FieldWidth = "full" | "half" | "third" | string`.
+  - `PickerAppearance` — strict 4-variant enum with `FromStr`,
+    serde camelCase. Replaces `picker_appearance: Option<String>`
+    on `FieldDefinition`. Parser warns + drops invalid values
+    (the templates already treated anything not in the four
+    canonical strings as `dayOnly`).
+  - `ValidateFunction` / `FieldHookFn` — relocated to
+    `core::field::definition` as `LuaTypeAlias` decls next to
+    `FieldDefinition.validate` / `FieldHooks`.
+  - `FindQuery`, `CountQuery`, `UpdateManyQuery`,
+    `DeleteManyQuery`, `FilterOperators`, `FilterValue`,
+    `FilterScalar`, `OrCondition` — new typed input structs in
+    `hooks/lua_api/crud/query_input.rs`. The 4 query handlers
+    (`find`, `count`, `update_many`, `delete_many`) accept these
+    via `FromLua` (via `LuaSerdeExt::from_value`); each
+    `into_find_query()` produces the runtime `db::FindQuery`.
+    The old free-form `lua_table_to_find_query` walker is gone.
+  Net result: `cargo xtask gen-lua-types` produces 130 typed
+  blocks, every one of them sourced from a Rust definition that
+  the compiler verifies.
+- **New derives + macro extensions.**
+  - `#[derive(LuaTaggedClass)]` — Rust tagged enum (or
+    `#[serde(untagged)]`) → per-variant `--- @class` + union
+    `--- @alias`. Honors `#[lua(tag = "...")]` and
+    `#[lua(rename_all = "...")]` for the discriminator field +
+    variant naming.
+  - `#[derive(LuaAnnotation)]` supports generic lifetimes —
+    context structs like `AccessContext<'a>` /
+    `AuthStrategyContext<'a>` borrow request-scoped data instead
+    of cloning into owned strings just to satisfy the derive.
+    Stackable with `#[derive(LuaFieldTypeViews)]` on the same
+    struct.
+  - `#[derive(LuaAlias)]` mixed-mode — unit + newtype variants
+    on one enum render as a single-line `"name" | type` union
+    (was a hard error before).
+- **Macro crate restructured.** `crap-cms-macros` now has one
+  file per derive (`lua_annotation.rs`, `lua_alias.rs`,
+  `lua_type_alias.rs`, `lua_field_type_views.rs`,
+  `lua_tagged_class.rs`, `lua_fn.rs`, `lua_table.rs`) plus a
+  `shared.rs` for the type-mapping + field-emission helpers
+  cross-derives use. `lib.rs` collapses to the proc-macro
+  registration shims.
 
 ### Fixed
 
@@ -2294,6 +2399,226 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     `pub(in crate::hooks::lifecycle::validation)` visibility
     so the three callers can `use ...::is_empty_value`
     instead of carrying the same match arm three times.
+
+- **`types/crap.lua` is now generated from Rust source.** A
+  `cargo xtask gen-lua-types` task in the new `xtask` workspace
+  member assembles the file from one renderer per section
+  (`src/typegen/lua/static_file.rs`), interleaving short static
+  block files in `src/typegen/lua/blocks/` with derive- and
+  macro-emitted output. The CI `check` job and the pre-commit
+  hook both run `cargo xtask gen-lua-types --check` to keep the
+  on-disk file in sync. Three new derives in `crap-cms-macros`
+  drive the generation:
+  - `#[derive(LuaAnnotation)]` for `--- @class` blocks (struct
+    fields, with `#[lua(rename / ty / optional / skip /
+    extends / rename_all)]` overrides; also auto-flattens
+    nested struct fields marked `#[lua(flatten)]` via the
+    companion `LuaFieldBlock` trait).
+  - `#[derive(LuaAlias)]` for `--- @alias` blocks (enums —
+    unit-only variants emit literal unions like `"a" | "b"`;
+    single-payload variants emit type unions like
+    `string | table<string, string>`; mixed is a derive error).
+  - `#[derive(LuaFieldTypeViews)]` for `FieldDefinition`'s
+    polymorphic per-type config classes (`crap.TextField`,
+    `crap.NumberField`, etc.) driven by `#[lua(view_class =
+    "...")]` on the variants of the discriminator enum
+    (`FieldType`), with `#[lua(applies_to = "text, textarea")]`
+    on each shared field selecting which views it appears in.
+  Plus `#[lua_fn(path = "crap.X.Y", returns_doc = "...")]`
+  attribute macro and `lua_table!` function-like macro that
+  together register a Lua-side function table at a given path
+  AND emit the corresponding `--- @param … function crap.X.Y(…)`
+  doc block. Each `#[lua(doc = "…")]` per-param attribute drives
+  the rendered `--- @param` description, so the Rust source is
+  the single source of truth for the function's typed signature
+  and docs. All 17 files under `src/hooks/lua_api/`, all 14 CRUD
+  fns under `src/hooks/lua_api/crud/`, all enum aliases, and
+  every Rust-backed struct in the Lua surface are now derive-
+  driven. Pure-Lua helpers in
+  `src/hooks/lua_api/util_helpers.lua` carry
+  `-- @typegen-start … -- @typegen-end` sentinel regions; a
+  small extractor at `src/typegen/lua/sentinel_extract.rs`
+  parses each annotated `function util.<name>(<args>)` and its
+  preceding `---` doc block into the static file, so the docs
+  live next to the implementation. New docs surface for three
+  previously-undocumented runtime functions
+  (`crap.collections.unpublish`, `undelete`, `validate`) plus
+  the bulk/versions result classes. The proc-macro auto-emits
+  `#[allow(clippy::needless_pass_by_value,
+  clippy::unnecessary_wraps, clippy::used_underscore_binding,
+  clippy::trivially_copy_pass_by_ref)]` on each generated
+  wrapper — these lints fire structurally from mlua's
+  `FromLuaMulti` (owned param requirement) and the wrapper
+  closure's `LuaResult<T>` return type, scoped to the macro's
+  footprint so app code stays allow-free. Existing
+  `cargo xtask gen-lua-types` is idempotent — re-running on a
+  clean tree changes nothing; running after a Rust-side edit
+  emits the diff that needs to be committed.
+
+- **Typed `opts` structs at the CRUD boundary.** Every scalar
+  options table for the Lua CRUD API
+  (`crap.collections.{find_by_id, create, update, delete,
+  unpublish, undelete, validate, list_versions, restore_version,
+  create_many, update_many, delete_many}` and
+  `crap.globals.{get, update}`) is now a Rust struct deriving
+  `serde::Deserialize` + `LuaAnnotation`, decoded via mlua's
+  `LuaSerdeExt::from_value` at the function boundary instead of
+  N keyed `opts.get::<T>("key")` calls per fn body. The three
+  bulk variants reuse the single-op `CreateOptions` /
+  `UpdateOptions` / `DeleteOptions` structs since their per-doc
+  semantics are identical. `crap.email.send` /
+  `crap.email.queue` now take a typed `EmailOptions`, and
+  `crap.http.request` takes a typed `HttpRequest` — the
+  `HashMap<String, String>` headers field uses
+  `#[lua(ty = "table<string, string>")]` to bridge to the Lua
+  side (no automatic mapping for `HashMap<...>` in
+  `LuaAnnotation`). `crap.jobs.define` now takes a typed
+  `JobDefinitionConfig` — the `parse_job_definition` parser
+  consumes the typed struct directly instead of reading keys
+  off a raw mlua table, and the matching
+  `--- @class crap.JobDefinitionConfig` block emits from the
+  derive instead of from the hand-written
+  `24a_jobs_helper_classes.lua` prose file. `JobLabels` (in
+  `core/job/labels.rs`) gained `Serialize`/`Deserialize` derives
+  so it can ride along as a nested optional field. This collapses what used to be two parallel
+  definitions — a hand-written `--- @class crap.XOptions` block
+  in a prose file plus untyped Rust extraction — into a single
+  Rust struct that emits the Lua class docs via the same derive
+  that drives every other LuaLS type. Surfaced one drift: the
+  `overrideAccess` flag on `crap.globals.get` was being read
+  from Rust but missing from the Lua docs; it's now documented
+  end-to-end. The `where`-shaped query opts
+  (`CountQuery`, `FindQuery`, `UpdateManyQuery`,
+  `DeleteManyQuery`) still go through the hand-written
+  `lua_table_to_find_query` decoder — typing them requires
+  typing the filter-clause parser itself, which is a separate
+  workstream.
+
+- **`lua_table!` macro auto-emits the section header.** A new
+  optional `header: "..."` attribute on `lua_table!` makes the
+  generated `render_X_lua` emit the `-- ── crap.X ─...─`
+  divider + `--- <doc>` prose + `--- @class crap.X` +
+  `crap.X = {}` block before the function declarations. Divider
+  widths normalize to a uniform 64 visual columns (replacing the
+  62/63/64/66 mix the hand-written intro files had drifted to).
+  16 namespace-stub `.lua` block files deleted as part of this:
+  log, json, util, auth, access, env, http, email, config,
+  locale, crypto, schema, jobs, pages, template_data,
+  collections, globals, hooks. Each affected
+  `static_file::render_crap_X` shrinks to one or two lines —
+  the generated render fn carries everything that used to live
+  in `Nx_crap_X_intro.lua`. New helper
+  `format_lua_section_header(out, path, doc)` in
+  `src/typegen/lua/fn_render.rs` is the format owner;
+  `lua_table!` calls it from its emitted code. The remaining
+  `include_str!` calls in `static_file.rs` (~23) cover
+  genuine hand-written content — section transitions between
+  Rust-derived classes, hand-written class blocks like
+  `crap.HookContext`, `crap.RichtextNodeSpec`, the
+  FindQuery-shaped CRUD opts, and output types like
+  `crap.HttpResponse` / `crap.SchemaCollection` that aren't yet
+  backed by `LuaAnnotation`-deriving structs. `crap.pages` also
+  picked up a typed `PageOptions` Rust struct during this round
+  (deriving `Deserialize` + `LuaAnnotation`).
+
+- **Doc-only `LuaAnnotation` structs for context / result / output
+  types.** New `src/typegen/lua/doc_structs.rs` holds Rust structs
+  that exist solely to drive `--- @class crap.X` emission — no
+  `Serialize` / `Deserialize` / `FromLua`, no runtime use. The
+  matching Lua tables are still built ad-hoc by Rust handlers, but
+  the doc lives next to the Rust code rather than in parallel
+  hand-written `.lua` blocks. 14 types covered: hook & access
+  context (`HookContext`, `AccessContext`, `AuthStrategyContext`,
+  `FieldHookContext`, `ValidateContext`); CRUD result types
+  (`ValidateResult`, `UpdateManyResult`, `DeleteManyResult`,
+  `CreateManyResult`, `VersionSummary`, `ListVersionsResult`,
+  `FindResult`); schema-introspection output (`SchemaCollection`,
+  `SchemaField`); HTTP output (`HttpResponse`); job-handler
+  context (`JobHandlerContext`, `JobInfo`). All section-divider
+  block files (`-- ── Field Types ──` etc.) dropped — LuaLS
+  doesn't consume the cosmetic dividers, and they were the bulk
+  of the remaining `include_str!` calls. The remaining 14
+  `include_str!`s in `static_file.rs` cover content that doesn't
+  yet have a clean derive shape: the file header, `Document` /
+  `FilterValue` / `FilterOperators` / `OrCondition` / `FindQuery`
+  (recursive filter shapes), `CountQuery` / `UpdateManyQuery` /
+  `DeleteManyQuery` (depend on the filter shape), `FieldDefinition`
+  (the catch-all union), `Activation` / `AuthMethod` (tagged enum
+  with per-variant fields), `RichtextNodeSpec` (function-typed
+  field), and a handful of factory / sub-namespace intros.
+
+- **Zero hand-written `.lua` block files.** The `blocks/`
+  directory under `src/typegen/lua/` is gone entirely. Every
+  class / alias / function block in `types/crap.lua` is now
+  emitted by a Rust derive or a `lua_table!`-generated render
+  fn. New machinery added in this round:
+  - `LuaTypeAlias` proc-macro derive (on unit structs) for
+    callable / literal-target `--- @alias` blocks. Used for
+    `crap.ValidateFunction`, `crap.FieldHookFn`,
+    `crap.FilterValue`.
+  - `#[lua(extra_field = "[K] V")]` struct-level attr on
+    `LuaAnnotation` emits a trailing `--- @field [K] V` line.
+    Used for `crap.Document`'s `[string] any` index signature.
+  - `LuaAnnotation` and `LuaFieldTypeViews` containers now
+    accept each other's struct-level attrs as ignored
+    optionals, so the same struct (e.g. `FieldDefinition`) can
+    stack both derives.
+  - Additional doc-only structs in
+    `src/typegen/lua/doc_structs.rs`: `FieldWidth`,
+    `PickerAppearance` (string aliases), `ValidateFunction`,
+    `FieldHookFn` (function aliases), `Activation`,
+    `AuthMethod` (discriminated-union doc class), `Document`,
+    `FilterOperators`, `FilterValue`, `OrCondition`,
+    `FindQuery`, `CountQuery`, `UpdateManyQuery`,
+    `DeleteManyQuery` (query / filter types),
+    `RichtextNodeSpec` (richtext input).
+  - `crap.FieldDefinition` catch-all class: the existing Rust
+    `FieldDefinition` struct now stacks
+    `#[derive(LuaAnnotation, LuaFieldTypeViews)]` so the same
+    source drives both the per-type subclass family
+    (`crap.TextField` etc.) and the union catch-all.
+    `crap.JoinConfig` is now emitted (was declared but never
+    rendered).
+  - The `crap` global banner moved from `00_header.lua` to an
+    inline `HEADER: &str` constant in `static_file.rs`.
+
+- **Typegen housekeeping: macro crate split + doc-structs split +
+  dedup.** Three follow-on refactors after the static-file pipeline
+  landed:
+  - `macros/src/lib.rs` (~1700 lines) split into per-derive
+    modules: `shared.rs`, `lua_annotation.rs`, `lua_alias.rs`,
+    `lua_type_alias.rs`, `lua_field_type_views.rs`, `lua_fn.rs`,
+    `lua_table.rs`. `lib.rs` is now the thin entry point — proc-macro
+    registration + crate doc only. Each derive's container struct,
+    helpers, and codegen live in their own file.
+  - `src/typegen/lua/doc_structs.rs` (600+ lines) split into
+    `doc_structs/{auth,aliases,context,query,result,misc}.rs` so
+    each domain (auth method shape, filter/query, hook context,
+    CRUD result, etc.) is navigable on its own. `mod.rs` re-exports
+    everything.
+  - Dedup: `CreateManyResult` and `UpdateManyResult` previously
+    existed both in `src/service/collections/` (real Rust types
+    used by the bulk service) and as doc-only copies in
+    `doc_structs.rs`. `LuaAnnotation` now derives on the real Rust
+    structs directly; the doc-only copies are gone.
+    `crap.HookContext` does the same — `hooks::lifecycle::HookContext`
+    now derives `LuaAnnotation` with `#[lua(ty = "...")]` overrides
+    on the `DocumentFields` / `ReqContext` / `Option<Document>`
+    fields, plus the new `extra_field` attr injects `hook_depth`
+    (which isn't on the Rust struct — it's populated at
+    `to_lua_table` time from `HookDepth` app-data). The remaining
+    doc-only types are those whose Lua user-facing shape genuinely
+    diverges from the Rust runtime representation (`Activation`,
+    `AuthMethod`: Rust-idiomatic tagged enums vs Lua flat
+    discriminated-union; `Document` /  `FindQuery`: denormalized
+    Lua view vs `DocumentFields` / `FilterClause` Rust internals;
+    etc.). Each doc-only submodule's docstring explains the
+    divergence so a future contributor knows when to derive on a
+    real type vs add a doc-only.
+  - Stale `Phase 1-7` comments removed from `typegen/lua/{mod,
+    annotation, fn_spec, fn_render, ensure_table}.rs` and
+    `macros/src/lib.rs`. The migration is done; the comments
+    described work that's already in `git log`.
 
 ## [0.1.0-alpha.8] — 2026-05-03
 

@@ -27,7 +27,7 @@ Make a blocking HTTP request.
 -- Simple GET
 local resp = crap.http.request({ url = "https://api.example.com/data" })
 if resp.status == 200 then
-    local data = crap.util.json_decode(resp.body)
+    local data = crap.json.decode(resp.body)
     crap.log.info("Got " .. #data .. " items")
 end
 
@@ -39,7 +39,7 @@ local resp = crap.http.request({
         ["Content-Type"] = "application/json",
         ["Authorization"] = "Bearer " .. crap.env.get("CRAP_API_TOKEN"),
     },
-    body = crap.util.json_encode({ event = "document.created", id = ctx.data.id }),
+    body = crap.json.encode({ event = "document.created", id = ctx.data.id }),
     timeout = 10,
 })
 ```

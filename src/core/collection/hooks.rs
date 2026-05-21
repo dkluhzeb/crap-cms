@@ -2,32 +2,43 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::typegen::lua::LuaAnnotation;
+
 /// Lua function references for lifecycle hooks.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, LuaAnnotation)]
+#[lua(class = "crap.Hooks")]
 pub struct Hooks {
-    /// Functions called before document validation.
+    /// Hook refs to run before field validation.
     #[serde(default)]
+    #[lua(optional)]
     pub before_validate: Vec<String>,
-    /// Functions called before a document is changed (created or updated).
+    /// Hook refs to run before create/update write.
     #[serde(default)]
+    #[lua(optional)]
     pub before_change: Vec<String>,
-    /// Functions called after a document is changed.
+    /// Hook refs to run after create/update write.
     #[serde(default)]
+    #[lua(optional)]
     pub after_change: Vec<String>,
-    /// Functions called before a document is read.
+    /// Hook refs to run before returning read results.
     #[serde(default)]
+    #[lua(optional)]
     pub before_read: Vec<String>,
-    /// Functions called after a document is read.
+    /// Hook refs to run after read, before response.
     #[serde(default)]
+    #[lua(optional)]
     pub after_read: Vec<String>,
-    /// Functions called before a document is deleted.
+    /// Hook refs to run before delete.
     #[serde(default)]
+    #[lua(optional)]
     pub before_delete: Vec<String>,
-    /// Functions called after a document is deleted.
+    /// Hook refs to run after delete.
     #[serde(default)]
+    #[lua(optional)]
     pub after_delete: Vec<String>,
-    /// Functions called before an event is broadcast.
+    /// Hook refs to run before broadcasting live update events. Can suppress or transform event data. No CRUD access.
     #[serde(default)]
+    #[lua(optional)]
     pub before_broadcast: Vec<String>,
 }
 

@@ -4,19 +4,15 @@
 //! - `table` → Constrained (read-only WHERE filters merged into the query)
 
 use anyhow::Result;
-use mlua::{Lua, Value};
+use mlua::{Lua, LuaSerdeExt, Value};
 use tracing::warn;
 
 use crate::{
     core::{Document, DocumentFields},
     db::{AccessResult, Filter, FilterClause, FilterOp},
     hooks::{
-        lifecycle::{
-            DefaultDeny,
-            converters::{document_to_lua_table, lua_parse_filter_op},
-            execution::resolve_hook_function,
-        },
-        lua_api,
+        lifecycle::{DefaultDeny, execution::resolve_hook_function},
+        lua_api::crud::filter::FilterValue,
     },
 };
 
@@ -40,28 +36,11 @@ pub(crate) fn check_access_with_lua(
 
     let func = resolve_hook_function(lua, func_ref)?;
 
-    // Build context table: { user = ..., id = ..., data = ... }
-    let ctx_table = lua.create_table()?;
-
-    if let Some(user_doc) = user {
-        let user_table = document_to_lua_table(lua, user_doc)?;
-
-        ctx_table.set("user", user_table)?;
-    }
-
-    if let Some(doc_id) = id {
-        ctx_table.set("id", doc_id)?;
-    }
-
-    if let Some(doc_data) = data {
-        let data_table = lua.create_table()?;
-
-        for (k, v) in doc_data {
-            data_table.set(k.as_str(), lua_api::json_to_lua(lua, v)?)?;
-        }
-
-        ctx_table.set("data", data_table)?;
-    }
+    // Build the access-context table from a typed Rust struct (see
+    // `hooks::lifecycle::AccessContext`) so the Lua shape is the single
+    // source of truth.
+    let ctx = crate::hooks::lifecycle::AccessContext { user, id, data };
+    let ctx_table = lua.to_value(&ctx)?;
 
     // A Lua error inside the access function (e.g. typo, runtime
     // exception, called a nil method) is fail-safe: treat as
@@ -85,7 +64,7 @@ pub(crate) fn check_access_with_lua(
     match result {
         Value::Boolean(true) => Ok(AccessResult::Allowed),
         Value::Boolean(false) | Value::Nil => Ok(AccessResult::Denied),
-        Value::Table(tbl) => parse_access_constraints(&tbl),
+        Value::Table(tbl) => parse_access_constraints(lua, &tbl),
         other => {
             warn!(
                 "Access function '{}' returned unexpected type '{}', denying access",
@@ -98,57 +77,39 @@ pub(crate) fn check_access_with_lua(
     }
 }
 
-/// Parse an access constraint table into filter clauses.
-fn parse_access_constraints(tbl: &mlua::Table) -> Result<AccessResult> {
+/// Parse an access constraint table into filter clauses. Shares the
+/// `FilterValue` parser with the user-CRUD path
+/// (`hooks::lua_api::crud::filter`); the only access-specific
+/// quirk is top-level booleans which bind as `"1"`/`"0"` for SQL
+/// integer-boolean column compatibility (the CRUD path emits
+/// `"true"`/`"false"` because that's what `serde_json` produces).
+fn parse_access_constraints(lua: &Lua, tbl: &mlua::Table) -> Result<AccessResult> {
     let mut clauses = Vec::new();
 
     for pair in tbl.pairs::<String, Value>() {
         let (field, value) = pair?;
 
-        match value {
-            Value::String(s) => {
-                clauses.push(FilterClause::Single(Filter {
-                    field,
-                    op: FilterOp::Equals(s.to_str()?.to_string()),
-                }));
-            }
-            Value::Integer(i) => {
-                clauses.push(FilterClause::Single(Filter {
-                    field,
-                    op: FilterOp::Equals(i.to_string()),
-                }));
-            }
-            Value::Number(n) => {
-                clauses.push(FilterClause::Single(Filter {
-                    field,
-                    op: FilterOp::Equals(n.to_string()),
-                }));
-            }
-            Value::Table(op_tbl) => {
-                for op_pair in op_tbl.pairs::<String, Value>() {
-                    let (op_name, op_val) = op_pair?;
-                    let op = lua_parse_filter_op(&op_name, &op_val)?;
+        // Boolean is a top-level access-filter quirk: SQL bind for
+        // boolean (integer) columns expects `"1"`/`"0"`.
+        if let Value::Boolean(b) = &value {
+            clauses.push(FilterClause::Single(Filter {
+                field,
+                op: FilterOp::Equals(if *b { "1" } else { "0" }.to_string()),
+            }));
+            continue;
+        }
 
+        match FilterValue::from_lua_value(lua, &value) {
+            Ok(fv) => {
+                for op in fv.into_filter_ops() {
                     clauses.push(FilterClause::Single(Filter {
                         field: field.clone(),
                         op,
                     }));
                 }
             }
-            Value::Boolean(b) => {
-                let val = if b { "1" } else { "0" };
-
-                clauses.push(FilterClause::Single(Filter {
-                    field,
-                    op: FilterOp::Equals(val.to_string()),
-                }));
-            }
-            _ => {
-                warn!(
-                    "Access constraint for field '{}': unsupported value type, denying",
-                    field
-                );
-
+            Err(e) => {
+                warn!("Access constraint for field '{}': {}; denying", field, e);
                 return Ok(AccessResult::Denied);
             }
         }

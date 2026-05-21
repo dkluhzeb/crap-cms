@@ -59,7 +59,7 @@ fn json_encode_table() {
         &runner,
         r#"
         local t = { name = "test", count = 42 }
-        return crap.util.json_encode(t)
+        return crap.json.encode(t)
     "#,
     );
     let parsed: serde_json::Value = serde_json::from_str(&result).expect("valid JSON");
@@ -73,7 +73,7 @@ fn json_decode_string() {
     let result = eval_lua(
         &runner,
         r#"
-        local t = crap.util.json_decode('{"key":"value","num":99}')
+        local t = crap.json.decode('{"key":"value","num":99}')
         return t.key .. ":" .. tostring(t.num)
     "#,
     );
@@ -87,8 +87,8 @@ fn json_roundtrip() {
         &runner,
         r#"
         local original = { a = 1, b = "hello", c = true }
-        local encoded = crap.util.json_encode(original)
-        local decoded = crap.util.json_decode(encoded)
+        local encoded = crap.json.encode(original)
+        local decoded = crap.json.decode(encoded)
         return tostring(decoded.a) .. ":" .. decoded.b .. ":" .. tostring(decoded.c)
     "#,
     );
@@ -102,7 +102,7 @@ fn json_encode_nested() {
         &runner,
         r"
         local t = { nested = { x = 1, y = 2 }, arr = { 10, 20, 30 } }
-        return crap.util.json_encode(t)
+        return crap.json.encode(t)
     ",
     );
     let parsed: serde_json::Value = serde_json::from_str(&result).expect("valid JSON");

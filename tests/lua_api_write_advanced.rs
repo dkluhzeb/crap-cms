@@ -518,9 +518,12 @@ fn lua_find_unknown_filter_operator_errors() {
         msg.starts_with("ERROR:"),
         "Unknown filter operator should error: {msg}"
     );
+    // Typed `FilterOperators` rejects unknown ops via serde's
+    // `deny_unknown_fields`, which surfaces as "unknown field" with
+    // the field name in the message.
     assert!(
-        msg.contains("unknown filter operator"),
-        "Error should mention unknown operator: {msg}"
+        msg.contains("bad_operator"),
+        "Error should mention the bad operator name: {msg}"
     );
 }
 

@@ -193,7 +193,7 @@ mod tests {
     #[test]
     fn build_field_contexts_date_day_and_time() {
         let mut date_field = make_field("event_at", FieldType::Date);
-        date_field.picker_appearance = Some("dayAndTime".to_string());
+        date_field.picker_appearance = Some(crate::core::PickerAppearance::DayAndTime);
         let fields = vec![date_field];
         let mut values = HashMap::new();
         values.insert(
@@ -208,7 +208,7 @@ mod tests {
     #[test]
     fn build_field_contexts_date_time_only() {
         let mut date_field = make_field("reminder", FieldType::Date);
-        date_field.picker_appearance = Some("timeOnly".to_string());
+        date_field.picker_appearance = Some(crate::core::PickerAppearance::TimeOnly);
         let fields = vec![date_field];
         let mut values = HashMap::new();
         values.insert("reminder".to_string(), "14:30".to_string());
@@ -220,7 +220,7 @@ mod tests {
     #[test]
     fn build_field_contexts_date_month_only() {
         let mut date_field = make_field("birth_month", FieldType::Date);
-        date_field.picker_appearance = Some("monthOnly".to_string());
+        date_field.picker_appearance = Some(crate::core::PickerAppearance::MonthOnly);
         let fields = vec![date_field];
         let mut values = HashMap::new();
         values.insert("birth_month".to_string(), "2026-01".to_string());
@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn build_field_contexts_date_short_value_day_and_time() {
         let mut field = make_field("d", FieldType::Date);
-        field.picker_appearance = Some("dayAndTime".to_string());
+        field.picker_appearance = Some(crate::core::PickerAppearance::DayAndTime);
         let mut values = HashMap::new();
         values.insert("d".to_string(), "short".to_string()); // less than 16 chars
         let fields = vec![field];
@@ -662,7 +662,7 @@ mod tests {
     fn build_field_contexts_array_labels_singular() {
         let mut arr = make_field("slides", FieldType::Array);
         arr.fields = vec![make_field("title", FieldType::Text)];
-        arr.admin.labels_singular = Some(LocalizedString::Plain("Slide".to_string()));
+        arr.admin.labels.singular = Some(LocalizedString::Plain("Slide".to_string()));
         let fields = vec![arr];
         let result = build_value_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
         assert_eq!(result[0]["add_label"], "Slide");
@@ -714,7 +714,7 @@ mod tests {
             "text",
             vec![make_field("body", FieldType::Text)],
         )];
-        blocks.admin.labels_singular = Some(LocalizedString::Plain("Block".to_string()));
+        blocks.admin.labels.singular = Some(LocalizedString::Plain("Block".to_string()));
         let fields = vec![blocks];
         let result = build_value_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
         assert_eq!(result[0]["add_label"], "Block");

@@ -3,109 +3,67 @@
 
 use anyhow::{Context as _, Result};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
-use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value as LuaValue};
+use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Value as LuaValue};
 use nanoid::nanoid;
 use serde_json::Value;
 
 use super::{json_to_lua, lua_to_json};
+use crate::typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
 /// Pure Lua table and string helpers, compiled in from `util_helpers.lua`.
 const LUA_UTIL_HELPERS: &str = include_str!("util_helpers.lua");
 
-/// Register `crap.util` and `crap.json` — slugify, nanoid, JSON, date helpers.
-pub(super) fn register_util(lua: &Lua, crap: &Table) -> Result<()> {
-    let t = lua.create_table()?;
+// ── crap.util ────────────────────────────────────────────────────────
 
-    t.set(
-        "slugify",
-        lua.create_function(|_, s: String| Ok(slugify(&s)))?,
-    )?;
-    t.set("nanoid", lua.create_function(|_, ()| Ok(nanoid!()))?)?;
-
-    let json_encode_fn = lua.create_function(|_, value: LuaValue| json_encode(&value))?;
-    let json_decode_fn = lua.create_function(|lua, s: String| json_decode(lua, &s))?;
-
-    t.set("json_encode", json_encode_fn.clone())?;
-    t.set("json_decode", json_decode_fn.clone())?;
-
-    // Dedicated crap.json namespace (aliases)
-    let json_table = lua.create_table()?;
-    json_table.set("encode", json_encode_fn)?;
-    json_table.set("decode", json_decode_fn)?;
-    crap.set("json", json_table)?;
-
-    // Date helpers
-    t.set("date_now", lua.create_function(|_, ()| Ok(date_now()))?)?;
-    t.set(
-        "date_timestamp",
-        lua.create_function(|_, ()| Ok(date_timestamp()))?,
-    )?;
-    t.set(
-        "date_parse",
-        lua.create_function(|_, s: String| date_parse(&s))?,
-    )?;
-    t.set(
-        "date_format",
-        lua.create_function(|_, (ts, fmt): (i64, String)| date_format(ts, &fmt))?,
-    )?;
-    t.set(
-        "date_add",
-        lua.create_function(|_, (ts, secs): (i64, i64)| Ok(ts + secs))?,
-    )?;
-    t.set(
-        "date_diff",
-        lua.create_function(|_, (a, b): (i64, i64)| Ok(a - b))?,
-    )?;
-
-    crap.set("util", t)?;
-    Ok(())
+/// Generate a URL-safe slug from a string.
+#[lua_fn(
+    path = "crap.util.slugify",
+    returns_doc = "Lowercased, hyphenated slug."
+)]
+fn util_slugify(_: &Lua, #[lua(doc = "Input string.")] str: String) -> LuaResult<String> {
+    Ok(slugify(&str))
 }
 
-/// Load pure Lua helpers onto `crap.util` (must be called after `crap` global is set).
-pub(super) fn load_lua_helpers(lua: &Lua) -> Result<()> {
-    lua.load(LUA_UTIL_HELPERS)
-        .exec()
-        .context("Failed to load Lua util helpers")?;
-    Ok(())
-}
-
-// ── Helper functions ────────────────────────────────────────────────────
-
-/// Encode a Lua value to JSON string.
-fn json_encode(value: &LuaValue) -> LuaResult<String> {
-    let json_value = lua_to_json(value)?;
-    serde_json::to_string(&json_value)
-        .map_err(|e| RuntimeError(format!("JSON encode error: {e:#}")))
-}
-
-/// Decode a JSON string to a Lua value.
-fn json_decode(lua: &Lua, s: &str) -> LuaResult<LuaValue> {
-    let value: Value =
-        serde_json::from_str(s).map_err(|e| RuntimeError(format!("JSON decode error: {e:#}")))?;
-    json_to_lua(lua, &value)
+/// Generate a unique nanoid.
+#[lua_fn(path = "crap.util.nanoid", returns_doc = "Random nanoid string.")]
+fn util_nanoid(_: &Lua) -> LuaResult<String> {
+    Ok(nanoid!())
 }
 
 /// Current time as RFC 3339 string.
-fn date_now() -> String {
-    Utc::now().to_rfc3339()
+#[lua_fn(path = "crap.util.date_now", returns_doc = "RFC 3339 timestamp.")]
+fn util_date_now(_: &Lua) -> LuaResult<String> {
+    Ok(Utc::now().to_rfc3339())
 }
 
-/// Current Unix timestamp.
-fn date_timestamp() -> i64 {
-    Utc::now().timestamp()
+/// Current Unix timestamp (seconds since epoch).
+#[lua_fn(
+    path = "crap.util.date_timestamp",
+    returns_doc = "Seconds since the Unix epoch."
+)]
+fn util_date_timestamp(_: &Lua) -> LuaResult<i64> {
+    Ok(Utc::now().timestamp())
 }
 
-/// Parse a date string into a Unix timestamp. Supports RFC 3339, "YYYY-MM-DD HH:MM:SS", "YYYY-MM-DD".
-fn date_parse(s: &str) -> LuaResult<i64> {
-    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+/// Parse a date string into a Unix timestamp. Supports RFC 3339,
+/// "YYYY-MM-DD HH:MM:SS", and "YYYY-MM-DD".
+#[lua_fn(
+    path = "crap.util.date_parse",
+    returns_doc = "Seconds since the Unix epoch."
+)]
+fn util_date_parse(
+    _: &Lua,
+    #[lua(doc = "Date string (RFC 3339, `YYYY-MM-DD HH:MM:SS`, or `YYYY-MM-DD`).")] s: String,
+) -> LuaResult<i64> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(&s) {
         return Ok(dt.timestamp());
     }
 
-    if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+    if let Ok(dt) = NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
         return Ok(dt.and_utc().timestamp());
     }
 
-    if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+    if let Ok(d) = NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
         return Ok(d
             .and_hms_opt(0, 0, 0)
             .expect("00:00:00 is valid")
@@ -117,10 +75,110 @@ fn date_parse(s: &str) -> LuaResult<i64> {
 }
 
 /// Format a Unix timestamp with a chrono format string.
-fn date_format(ts: i64, fmt: &str) -> LuaResult<String> {
+#[lua_fn(path = "crap.util.date_format", returns_doc = "Formatted date string.")]
+fn util_date_format(
+    _: &Lua,
+    #[lua(doc = "Unix timestamp (seconds).")] ts: i64,
+    #[lua(doc = "Chrono format string (e.g. `\"%Y-%m-%d %H:%M:%S\"`).")] fmt: String,
+) -> LuaResult<String> {
     let dt =
         DateTime::from_timestamp(ts, 0).ok_or_else(|| RuntimeError("invalid timestamp".into()))?;
-    Ok(dt.format(fmt).to_string())
+    Ok(dt.format(&fmt).to_string())
+}
+
+/// Add seconds to a Unix timestamp.
+#[lua_fn(
+    path = "crap.util.date_add",
+    returns_doc = "New timestamp (`ts + secs`)."
+)]
+fn util_date_add(
+    _: &Lua,
+    #[lua(doc = "Base timestamp.")] ts: i64,
+    #[lua(doc = "Seconds to add (may be negative).")] secs: i64,
+) -> LuaResult<i64> {
+    Ok(ts + secs)
+}
+
+/// Difference (in seconds) between two Unix timestamps (`a - b`).
+#[lua_fn(
+    path = "crap.util.date_diff",
+    returns_doc = "Seconds elapsed (`a - b`)."
+)]
+fn util_date_diff(
+    _: &Lua,
+    #[lua(doc = "First timestamp.")] a: i64,
+    #[lua(doc = "Second timestamp.")] b: i64,
+) -> LuaResult<i64> {
+    Ok(a - b)
+}
+
+lua_table! {
+    name: crap_util,
+    path: "crap.util",
+    state: (),
+    header: "Utility functions.",
+    fns: [
+        util_slugify,
+        util_nanoid,
+        util_date_now,
+        util_date_timestamp,
+        util_date_parse,
+        util_date_format,
+        util_date_add,
+        util_date_diff,
+    ],
+}
+
+// ── crap.json ────────────────────────────────────────────────────────
+
+/// Encode a Lua value as a JSON string.
+#[lua_fn(path = "crap.json.encode", returns_doc = "JSON string.")]
+fn json_encode_fn(
+    _: &Lua,
+    #[lua(ty = "any", doc = "Lua value to encode.")] value: LuaValue,
+) -> LuaResult<String> {
+    let json_value = lua_to_json(&value)?;
+    serde_json::to_string(&json_value)
+        .map_err(|e| RuntimeError(format!("JSON encode error: {e:#}")))
+}
+
+/// Decode a JSON string into a Lua value.
+#[lua_fn(
+    path = "crap.json.decode",
+    returns = "any",
+    returns_doc = "Decoded Lua value."
+)]
+fn json_decode_fn(lua: &Lua, #[lua(doc = "JSON string.")] str: String) -> LuaResult<LuaValue> {
+    let value: Value = serde_json::from_str(&str)
+        .map_err(|e| RuntimeError(format!("JSON decode error: {e:#}")))?;
+    json_to_lua(lua, &value)
+}
+
+lua_table! {
+    name: crap_json,
+    path: "crap.json",
+    state: (),
+    header: "JSON encode/decode.",
+    fns: [json_encode_fn, json_decode_fn],
+}
+
+// ── Registration ─────────────────────────────────────────────────────
+
+/// Register `crap.util` and `crap.json`. Parent `crap` must already be
+/// in globals (`register_api` sets it up-front).
+pub(super) fn register_util(lua: &Lua) -> Result<()> {
+    register_crap_util(lua, ())?;
+    register_crap_json(lua, ())?;
+    Ok(())
+}
+
+/// Load pure Lua helpers onto `crap.util` (must be called after `crap`
+/// global is set, and after `register_util` has created `crap.util`).
+pub(super) fn load_lua_helpers(lua: &Lua) -> Result<()> {
+    lua.load(LUA_UTIL_HELPERS)
+        .exec()
+        .context("Failed to load Lua util helpers")?;
+    Ok(())
 }
 
 /// Convert a string to a URL-safe slug.
@@ -179,9 +237,10 @@ mod tests {
 
     fn setup_lua() -> Lua {
         let lua = Lua::new();
-        let crap = lua.create_table().unwrap();
-        register_util(&lua, &crap).unwrap();
-        lua.globals().set("crap", crap).unwrap();
+        lua.globals()
+            .set("crap", lua.create_table().unwrap())
+            .unwrap();
+        register_util(&lua).unwrap();
         load_lua_helpers(&lua).unwrap();
         lua
     }
@@ -223,16 +282,5 @@ mod tests {
             .eval()
             .unwrap();
         assert_eq!(result, "ab1");
-    }
-
-    #[test]
-    fn json_util_aliases_still_work() {
-        let lua = setup_lua();
-        let result: String = lua
-            .load(r"return crap.util.json_encode({ ok = true })")
-            .eval()
-            .unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(parsed["ok"], true);
     }
 }

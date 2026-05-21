@@ -10,6 +10,7 @@ use crate::{
     },
     db::{DbConnection, query::SharedPopulateSingleflight},
     service::{EventQueue, ServiceContext, VerificationQueue},
+    typegen::lua::LuaAlias,
 };
 
 /// Result of evaluating a display condition function.
@@ -28,7 +29,8 @@ pub enum DisplayConditionResult {
 }
 
 /// Events that trigger hooks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, LuaAlias)]
+#[lua(alias = "crap.HookEvent", rename_all = "snake_case")]
 pub enum HookEvent {
     BeforeValidate,
     BeforeChange,
