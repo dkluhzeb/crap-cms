@@ -8,17 +8,36 @@ use super::super::helpers::{is_optional, rel_has_many, to_pascal_case, w};
 
 /// Write a single field's type definition.
 pub(super) fn write_field(out: &mut String, field: &FieldDefinition, parent_pascal: &str) {
+    write_field_inner(out, field, parent_pascal, false);
+}
+
+/// Write a single field's type definition with EVERY field forced
+/// optional. Used by `crap.partial.X` / `crap.global_partial.X`
+/// emissions where the type represents a partial-update payload —
+/// every field is optional regardless of whether `required = true`
+/// on the schema. Layout-only wrappers still promote their children
+/// transparently.
+pub(super) fn write_field_partial(out: &mut String, field: &FieldDefinition, parent_pascal: &str) {
+    write_field_inner(out, field, parent_pascal, true);
+}
+
+fn write_field_inner(
+    out: &mut String,
+    field: &FieldDefinition,
+    parent_pascal: &str,
+    force_optional: bool,
+) {
     // Row is layout-only — promote sub-fields to parent level (no prefix)
     if field.field_type == FieldType::Row {
         for sub in &field.fields {
-            write_field(out, sub, parent_pascal);
+            write_field_inner(out, sub, parent_pascal, force_optional);
         }
         return;
     }
     // Collapsible is layout-only — promote sub-fields to parent level (no prefix)
     if field.field_type == FieldType::Collapsible {
         for sub in &field.fields {
-            write_field(out, sub, parent_pascal);
+            write_field_inner(out, sub, parent_pascal, force_optional);
         }
         return;
     }
@@ -26,7 +45,7 @@ pub(super) fn write_field(out: &mut String, field: &FieldDefinition, parent_pasc
     if field.field_type == FieldType::Tabs {
         for tab in &field.tabs {
             for sub in &tab.fields {
-                write_field(out, sub, parent_pascal);
+                write_field_inner(out, sub, parent_pascal, force_optional);
             }
         }
         return;
@@ -40,7 +59,11 @@ pub(super) fn write_field(out: &mut String, field: &FieldDefinition, parent_pasc
         w!(out, "--- Polymorphic relationship — targets: {}", targets);
     }
     let lua_type = field_to_lua_type(field, parent_pascal);
-    let opt = if is_optional(field) { "?" } else { "" };
+    let opt = if force_optional || is_optional(field) {
+        "?"
+    } else {
+        ""
+    };
     w!(out, "---@field {}{opt} {lua_type}", field.name);
 }
 

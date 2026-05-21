@@ -82,17 +82,16 @@ pub struct CollectionDefinition {
     #[lua(optional)]
     pub indexes: Vec<IndexDefinition>,
     /// Enable soft deletes (move to trash instead of permanent deletion).
-    //
-    // Not surfaced on Lua's `CollectionConfig` today — soft-delete is an
-    // internal-rollout flag set elsewhere. Re-add to Lua docs if/when
-    // it becomes a user-facing config knob.
+    /// When `true`, `delete` moves documents to trash; the row is purged
+    /// later according to `soft_delete_retention`.
     #[serde(default)]
-    #[lua(skip)]
+    #[lua(optional)]
     pub soft_delete: bool,
     /// Retention period for soft-deleted documents before auto-purge.
-    /// Human-readable duration: "30d", "7d", "90d". None = manual purge only.
+    /// Human-readable duration: `"30d"`, `"7d"`, `"90d"`. `nil` = manual
+    /// purge only. Only relevant when `soft_delete = true`.
     #[serde(default)]
-    #[lua(skip)]
+    #[lua(optional)]
     pub soft_delete_retention: Option<String>,
 }
 

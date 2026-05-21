@@ -20,11 +20,13 @@ pub struct Access {
     /// Hook ref for delete access control.
     #[serde(default)]
     pub delete: Option<String>,
-    // Soft-delete trash access — Rust-internal, falls back to `update` when
-    // unset. Not part of the user-facing Lua API; the trash behavior is
-    // configured via `soft_delete` on the collection itself.
+    /// Hook ref for soft-delete (trash) access control. Falls back to
+    /// `update` when unset, so most collections don't set this
+    /// explicitly. Set to lock trashing behind a different policy
+    /// than update — e.g. only editors can trash, but authors can
+    /// still update their own drafts.
     #[serde(default)]
-    #[lua(skip)]
+    #[lua(optional)]
     pub trash: Option<String>,
 }
 

@@ -1,4 +1,4 @@
----@meta crap
+---@meta
 --- Crap CMS Lua API type definitions for lua-language-server (LuaLS).
 ---
 --- This file is NOT executed at runtime. It provides type annotations
@@ -72,7 +72,7 @@ crap = {}
 --- @field row_label? string Lua function ref for computed row labels (arrays/blocks). Receives the row data table, returns a display string or nil. Takes priority over `label_field`. Signature: `fun(row: table): string?`.
 --- @field labels? crap.FieldAdminLabels Custom singular/plural labels for row items (e.g., `{ singular = "Slide", plural = "Slides" }` → "Add Slide" button).
 --- @field position? string "main" or "sidebar".
---- @field condition? string Lua function ref for conditional show/hide. The function receives form data and returns either: - a boolean (server-evaluated on each change via HTMX) - a condition table (serialized to JSON, client-evaluated instantly)
+--- @field condition? string Lua function ref (string) for conditional show/hide — e.g. `"hooks.conditions.show_external_url"`. Inline condition tables are not accepted here; this field is the name of the function, not the condition itself. The referenced function receives form data and returns either: - a boolean (server-evaluated on each change via HTMX), or - a condition table (serialized to JSON, client-evaluated instantly). See `docs/src/admin-ui/guides/display-conditions.md`.
 --- @field step? string Step value for number inputs (default: "any"). Use "1" for integers, "0.01" for cents, etc.
 --- @field rows? integer Number of rows for textarea fields (default: 8).
 --- @field language? string Default language mode for code fields (default: "json"). Options: "json", "javascript", "html", "css", "python", "plain". When `languages` is non-empty, this is the initial value; the editor can switch to any other language in the allow-list at edit time.
@@ -82,6 +82,8 @@ crap = {}
 --- @field format? string Storage format for richtext fields: "html" (default) or "json" (`ProseMirror` JSON). FTS extracts plain text from JSON automatically.
 --- @field nodes? string[] Custom `ProseMirror` node types for richtext fields. Names must match nodes registered via `crap.richtext.register_node()`.
 --- @field resizable? boolean Allow vertical resize on textarea/richtext fields (default: true).
+--- @field template? string Custom template name to render this field instead of the default `fields/<field_type>` lookup. The path is relative to `templates/` (no `.hbs` extension), e.g. `"fields/rating"` or `"fields/custom/star-picker"`. Provides a per-instance opt-out from the type-based template routing in `RenderFieldHelper` so an individual field can declare its own admin UI without requiring a global override of `templates/fields/<type>.hbs`. The custom template receives the same field render context as the built-in template at that path. Restricted to safe characters (`a-zA-Z0-9/_-`); `..` and absolute paths are rejected.
+--- @field extra? table<string, any> Freeform per-field configuration map, available to the field's admin template at `{{admin.extra.<key>}}`. Pairs naturally with [`Self::template`] — a custom template reads its config from `extra` so the same template + JS component can be reused across fields with different settings (icon, color, swatches, step labels, …) without per-field forking. Values are JSON-serializable (string / number / bool / array / nested object). For dynamic values (computed at render time), register a [`crap.template_data`](crate::admin::templates) function and pull from `{{data "name"}}` in the template instead — `extra` is parsed once at field-definition time and is **static** per field instance. Empty by default. Empty maps don't serialize (`skip_serializing_if`), keeping schema dumps and roundtrips clean.
 
 --- Custom validation function type.
 --- Return `nil` (or `true`) if valid; return a string error message if invalid.
@@ -190,11 +192,11 @@ crap = {}
 --- @class crap.RichtextField : crap.BaseField
 
 --- @class crap.SelectField : crap.BaseField
---- @field options crap.SelectOption[] Option list (required).
+--- @field options? crap.SelectOption[] Option list (required).
 --- @field has_many? boolean Multi-value tag input. Stored as JSON array in TEXT column (text/number) or multi-select dropdown (select).
 
 --- @class crap.RadioField : crap.BaseField
---- @field options crap.SelectOption[] Option list (required).
+--- @field options? crap.SelectOption[] Option list (required).
 
 --- @class crap.CheckboxField : crap.BaseField
 
@@ -216,26 +218,26 @@ crap = {}
 --- @field relationship? crap.RelationshipConfig Target collection and cardinality.
 
 --- @class crap.ArrayField : crap.BaseField
---- @field fields crap.FieldDefinition[] Sub-field definitions (required). For row/collapsible: promoted to parent level (no prefix).
+--- @field fields? crap.FieldDefinition[] Sub-field definitions (required). For row/collapsible: promoted to parent level (no prefix).
 --- @field min_rows? integer Minimum rows. Validated on create/update.
 --- @field max_rows? integer Maximum rows. Admin disables "Add" at max.
 
 --- @class crap.GroupField : crap.BaseField
---- @field fields crap.FieldDefinition[] Sub-field definitions (required). For row/collapsible: promoted to parent level (no prefix).
+--- @field fields? crap.FieldDefinition[] Sub-field definitions (required). For row/collapsible: promoted to parent level (no prefix).
 
 --- @class crap.BlocksField : crap.BaseField
---- @field blocks crap.BlockDefinition[] Block type definitions (required).
+--- @field blocks? crap.BlockDefinition[] Block type definitions (required).
 --- @field min_rows? integer Minimum rows. Validated on create/update.
 --- @field max_rows? integer Maximum rows. Admin disables "Add" at max.
 
 --- @class crap.RowField : crap.BaseField
---- @field fields crap.FieldDefinition[] Sub-field definitions (required). For row/collapsible: promoted to parent level (no prefix).
+--- @field fields? crap.FieldDefinition[] Sub-field definitions (required). For row/collapsible: promoted to parent level (no prefix).
 
 --- @class crap.CollapsibleField : crap.BaseField
---- @field fields crap.FieldDefinition[] Sub-field definitions (required). For row/collapsible: promoted to parent level (no prefix).
+--- @field fields? crap.FieldDefinition[] Sub-field definitions (required). For row/collapsible: promoted to parent level (no prefix).
 
 --- @class crap.TabsField : crap.BaseField
---- @field tabs crap.FieldTab[] Tab definitions (required). Each tab has a label and fields.
+--- @field tabs? crap.FieldTab[] Tab definitions (required). Each tab has a label and fields.
 
 --- @class crap.CodeField : crap.BaseField
 
@@ -255,15 +257,15 @@ crap = {}
 --- @field index? boolean Create a B-tree index on this column (default: false). Skipped when unique=true.
 --- @field validate? string Lua function ref called as `crap.ValidateFunction`.
 --- @field default_value? any Default value on create.
---- @field options crap.SelectOption[] Option list (required).
+--- @field options? crap.SelectOption[] Option list (required).
 --- @field admin? crap.FieldAdmin Admin UI display options.
 --- @field hooks? crap.FieldHooks Per-field lifecycle hooks.
 --- @field access? crap.FieldAccess Field-level access control (read/create/update).
 --- @field mcp? crap.McpFieldConfig MCP tool schema options.
 --- @field relationship? crap.RelationshipConfig Target collection and cardinality.
---- @field fields crap.FieldDefinition[] Sub-field definitions (required). For row/collapsible: promoted to parent level (no prefix).
---- @field blocks crap.BlockDefinition[] Block type definitions (required).
---- @field tabs crap.FieldTab[] Tab definitions (required). Each tab has a label and fields.
+--- @field fields? crap.FieldDefinition[] Sub-field definitions (required). For row/collapsible: promoted to parent level (no prefix).
+--- @field blocks? crap.BlockDefinition[] Block type definitions (required).
+--- @field tabs? crap.FieldTab[] Tab definitions (required). Each tab has a label and fields.
 --- @field localized? boolean Per-locale values (default: false).
 --- @field picker_appearance? crap.PickerAppearance Input type: "dayOnly" (default), "dayAndTime", "timeOnly", "monthOnly".
 --- @field min_rows? integer Minimum rows. Validated on create/update.
@@ -440,6 +442,7 @@ function crap.fields.join(config) end
 --- @field create? string Hook ref for create access control.
 --- @field update? string Hook ref for update access control.
 --- @field delete? string Hook ref for delete access control.
+--- @field trash? string Hook ref for soft-delete (trash) access control. Falls back to `update` when unset, so most collections don't set this explicitly. Set to lock trashing behind a different policy than update — e.g. only editors can trash, but authors can still update their own drafts.
 
 --- Context passed to `strategy`-type auth `authenticate` hooks.
 --- @class crap.AuthStrategyContext
@@ -595,6 +598,8 @@ function crap.fields.join(config) end
 --- @field live? boolean | string Live event broadcasting. `false` to disable, string for Lua function ref that receives `{ collection, operation, data }` and returns boolean. Absent = enabled (broadcast all).
 --- @field versions? boolean | crap.VersionsConfig Enable versioning. `true` for defaults, or a config table with `drafts`/`max_versions`.
 --- @field indexes? crap.IndexDefinition[] Compound indexes (multi-column). Created on startup, stale indexes dropped.
+--- @field soft_delete? boolean Enable soft deletes (move to trash instead of permanent deletion). When `true`, `delete` moves documents to trash; the row is purged later according to `soft_delete_retention`.
+--- @field soft_delete_retention? string Retention period for soft-deleted documents before auto-purge. Human-readable duration: `"30d"`, `"7d"`, `"90d"`. `nil` = manual purge only. Only relevant when `soft_delete = true`.
 
 --- A compound index definition (multi-column, optionally unique).
 --- @class crap.IndexDefinition
@@ -627,11 +632,21 @@ function crap.fields.join(config) end
 --- @field endCursor? string Opaque cursor of the last document in results (cursor mode only).
 
 --- A single content document with an ID, user-defined fields, and optional timestamps.
+---
+--- **Type-emission note:** the `LuaLS` class deliberately does NOT carry an
+--- `[string] any` index signature. Adding one caused `LuaLS` to collapse
+--- typed subclasses (`crap.doc.Posts : crap.Document`, etc.) back into
+--- the permissive base — hover popups showed `crap.Document` even when
+--- the per-collection narrowing was correct, because an index signature
+--- of `any` subsumes the structural extension. Subclasses now expose
+--- their typed fields cleanly; for the dynamic-slug `find()` fallback
+--- (returning the bare `crap.FindResult`), users either cast with
+--- `--[[@as crap.doc.X]]` or index via `doc["field"]` if they need to
+--- reach a field outside the base shape.
 --- @class crap.Document
 --- @field id string Unique document ID (nanoid).
 --- @field created_at? string ISO 8601 timestamp (if `timestamps` enabled on the collection).
 --- @field updated_at? string ISO 8601 timestamp (if `timestamps` enabled on the collection).
---- @field [string] any
 
 --- Scalar filter value — `string`, `integer`, `number`, or `boolean`.
 --- Modeled as an untagged Rust enum so a Lua string and a Lua number
@@ -744,20 +759,13 @@ crap.collections.config = {}
 --- Get a collection's current definition as a Lua table.
 --- Returns the full config compatible with `define()` for round-trip editing.
 --- @param slug string  Collection slug.
---- @return crap.CollectionConfig?  The collection config, or nil if not found.
+--- @return crap.CollectionConfig? # The collection config, or nil if not found.
 function crap.collections.config.get(slug) end
 
 --- List all registered collections as a slug-keyed table of full configs.
 --- Iterate with `for slug, def in pairs(crap.collections.config.list()) do ... end`.
---- @return table<string, crap.CollectionConfig>  Slug -> collection config map.
+--- @return table<string, crap.CollectionConfig> # Slug -> collection config map.
 function crap.collections.config.list() end
-
---- Find documents matching a query. Returns documents and total count.
---- Inside hooks, runs within the parent operation's transaction.
---- @param collection string  Collection slug.
---- @param query crap.FindQuery  Optional query parameters.
---- @return crap.FindResult
-function crap.collections.find(collection, query) end
 
 --- Optional options for `crap.collections.find_by_id`.
 --- @class crap.FindByIdOptions
@@ -766,14 +774,6 @@ function crap.collections.find(collection, query) end
 --- @field select? string[] Fields to return. Nil or empty = all fields. `id` is always included.
 --- @field draft? boolean When `true` and the collection has `versions.drafts`, returns the latest draft version snapshot instead of the published main-table data.
 --- @field overrideAccess? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass collection-level and field-level access for the current user.
-
---- Find a single document by ID. Returns `nil` if not found.
---- Inside hooks, runs within the parent operation's transaction.
---- @param collection string  Collection slug.
---- @param id string  Document ID.
---- @param opts crap.FindByIdOptions  Optional options (e.g., `{ depth = 1 }`).
---- @return crap.Document?
-function crap.collections.find_by_id(collection, id, opts) end
 
 --- Optional options for `crap.collections.create`.
 --- @class crap.CreateOptions
@@ -818,7 +818,7 @@ function crap.collections.update(collection, id, data, opts) end
 --- @param collection string  Collection slug.
 --- @param id string  Document ID.
 --- @param opts crap.DeleteOptions  Optional options.
---- @return boolean  True on successful delete.
+--- @return boolean # True on successful delete.
 function crap.collections.delete(collection, id, opts) end
 
 --- Optional options for `crap.collections.unpublish`.
@@ -846,7 +846,7 @@ function crap.collections.unpublish(collection, id, opts) end
 --- @param collection string  Collection slug.
 --- @param id string  Document ID.
 --- @param opts crap.UndeleteOptions  Optional options.
---- @return boolean  True when the document was successfully restored.
+--- @return boolean # True when the document was successfully restored.
 function crap.collections.undelete(collection, id, opts) end
 
 --- Optional options for `crap.collections.validate`.
@@ -884,7 +884,7 @@ function crap.collections.validate(collection, data, opts) end
 --- Inside hooks, runs within the parent operation's transaction.
 --- @param collection string  Collection slug.
 --- @param query crap.CountQuery  Optional query parameters.
---- @return integer  Number of matching documents.
+--- @return integer # Number of matching documents.
 function crap.collections.count(collection, query) end
 
 --- Query passed to `crap.collections.update_many(collection, query, data, opts?)`.
@@ -1001,7 +1001,7 @@ function crap.collections.restore_version(collection, id, version_id, opts) end
 --- Inside hooks, runs within the parent operation's transaction.
 --- @param collection string  Collection slug.
 --- @param id string  Document ID.
---- @return integer  Number of incoming references.
+--- @return integer # Number of incoming references.
 function crap.collections.ref_count(collection, id) end
 
 -- ── crap.globals ─────────────────────────────────────────────
@@ -1024,12 +1024,12 @@ crap.globals.config = {}
 --- Get a global's current definition as a Lua table.
 --- Returns the full config compatible with `define()` for round-trip editing.
 --- @param slug string  Global slug.
---- @return crap.GlobalConfig?  The global config, or nil if not found.
+--- @return crap.GlobalConfig? # The global config, or nil if not found.
 function crap.globals.config.get(slug) end
 
 --- List all registered globals as a slug-keyed table of full configs.
 --- Iterate with `for slug, def in pairs(crap.globals.config.list()) do ... end`.
---- @return table<string, crap.GlobalConfig>  Slug -> global config map.
+--- @return table<string, crap.GlobalConfig> # Slug -> global config map.
 function crap.globals.config.list() end
 
 --- Optional options for `crap.globals.get`.
@@ -1074,7 +1074,7 @@ function crap.hooks.remove(event, func) end
 
 --- List all registered hook functions for an event.
 --- @param event crap.HookEvent  The lifecycle event.
---- @return fun(context: crap.HookContext): crap.HookContext[]  Array of hook functions.
+--- @return fun(context: crap.HookContext): crap.HookContext[] # Array of hook functions.
 function crap.hooks.list(event) end
 
 --- Events that trigger hooks.
@@ -1120,7 +1120,7 @@ function crap.richtext.register_node(name, spec) end
 --- Render richtext content, replacing custom nodes with their rendered HTML.
 --- Detects format automatically: starts with '{' = JSON, otherwise HTML.
 --- @param content string  Richtext content (HTML or `ProseMirror` JSON).
---- @return string  Rendered HTML output.
+--- @return string # Rendered HTML output.
 function crap.richtext.render(content) end
 
 
@@ -1151,12 +1151,12 @@ crap.json = {}
 
 --- Encode a Lua value as a JSON string.
 --- @param value any  Lua value to encode.
---- @return string  JSON string.
+--- @return string # JSON string.
 function crap.json.encode(value) end
 
 --- Decode a JSON string into a Lua value.
 --- @param str string  JSON string.
---- @return any  Decoded Lua value.
+--- @return any # Decoded Lua value.
 function crap.json.decode(str) end
 
 
@@ -1168,43 +1168,43 @@ crap.util = {}
 
 --- Generate a URL-safe slug from a string.
 --- @param str string  Input string.
---- @return string  Lowercased, hyphenated slug.
+--- @return string # Lowercased, hyphenated slug.
 function crap.util.slugify(str) end
 
 --- Generate a unique nanoid.
---- @return string  Random nanoid string.
+--- @return string # Random nanoid string.
 function crap.util.nanoid() end
 
 --- Current time as RFC 3339 string.
---- @return string  RFC 3339 timestamp.
+--- @return string # RFC 3339 timestamp.
 function crap.util.date_now() end
 
 --- Current Unix timestamp (seconds since epoch).
---- @return integer  Seconds since the Unix epoch.
+--- @return integer # Seconds since the Unix epoch.
 function crap.util.date_timestamp() end
 
 --- Parse a date string into a Unix timestamp. Supports RFC 3339,
 --- "YYYY-MM-DD HH:MM:SS", and "YYYY-MM-DD".
 --- @param s string  Date string (RFC 3339, `YYYY-MM-DD HH:MM:SS`, or `YYYY-MM-DD`).
---- @return integer  Seconds since the Unix epoch.
+--- @return integer # Seconds since the Unix epoch.
 function crap.util.date_parse(s) end
 
 --- Format a Unix timestamp with a chrono format string.
 --- @param ts integer  Unix timestamp (seconds).
 --- @param fmt string  Chrono format string (e.g. `"%Y-%m-%d %H:%M:%S"`).
---- @return string  Formatted date string.
+--- @return string # Formatted date string.
 function crap.util.date_format(ts, fmt) end
 
 --- Add seconds to a Unix timestamp.
 --- @param ts integer  Base timestamp.
 --- @param secs integer  Seconds to add (may be negative).
---- @return integer  New timestamp (`ts + secs`).
+--- @return integer # New timestamp (`ts + secs`).
 function crap.util.date_add(ts, secs) end
 
 --- Difference (in seconds) between two Unix timestamps (`a - b`).
 --- @param a integer  First timestamp.
 --- @param b integer  Second timestamp.
---- @return integer  Seconds elapsed (`a - b`).
+--- @return integer # Seconds elapsed (`a - b`).
 function crap.util.date_diff(a, b) end
 
 
@@ -1312,7 +1312,7 @@ crap.auth = {}
 
 --- Hash a plaintext password (Argon2id).
 --- @param password string  Plaintext password.
---- @return string  Hashed password.
+--- @return string # Hashed password.
 function crap.auth.hash_password(password) end
 
 --- Verify a password against a hash.
@@ -1370,13 +1370,13 @@ crap.access = {}
 --- current user. Returns `"allowed"`, `"denied"`, or a constraint-filter table.
 --- @param collection string  Collection or global slug.
 --- @param operation string  Operation: `"read"`, `"create"`, `"update"`, `"delete"`, or `"trash"`.
---- @return "allowed" | "denied" | table  "allowed" / "denied" string, or a `{ field = filter, ... }` constraint table.
+--- @return "allowed" | "denied" | table # "allowed" / "denied" string, or a `{ field = filter, ... }` constraint table.
 function crap.access.check(collection, operation) end
 
 --- Return the names of fields the current user cannot read for this
 --- collection/global.
 --- @param collection string  Collection or global slug.
---- @return string[]  Names of fields the current user cannot read.
+--- @return string[] # Names of fields the current user cannot read.
 function crap.access.field_read_denied(collection) end
 
 --- Return the names of fields the current user cannot write for this
@@ -1384,7 +1384,7 @@ function crap.access.field_read_denied(collection) end
 --- `"update"`).
 --- @param collection string  Collection or global slug.
 --- @param operation string  Operation: `"create"` or `"update"`.
---- @return string[]  Names of fields the current user cannot write.
+--- @return string[] # Names of fields the current user cannot write.
 function crap.access.field_write_denied(collection, operation) end
 
 
@@ -1396,7 +1396,7 @@ crap.env = {}
 
 --- Get an environment variable.
 --- @param key string  Variable name.
---- @return string?  Value or nil if not set.
+--- @return string? # Value or nil if not set.
 function crap.env.get(key) end
 
 
@@ -1440,14 +1440,14 @@ crap.email = {}
 --- Send an email via SMTP. Blocking — safe to call from hooks.
 --- Returns true on success. If email is not configured (`smtp_host` empty), logs a warning and returns true (no-op).
 --- @param opts crap.EmailOptions  Email options.
---- @return boolean  True on success (also true when SMTP is disabled — call is a no-op).
+--- @return boolean # True on success (also true when SMTP is disabled — call is a no-op).
 function crap.email.send(opts) end
 
 --- Queue an email for async delivery via the job system. Returns the job
 --- run ID. Per-call `retries` override on `opts` takes precedence over
 --- the global `EmailConfig.queue_retries`.
 --- @param opts crap.EmailOptions  Email options (with optional `retries` override).
---- @return string  Queued job ID.
+--- @return string # Queued job ID.
 function crap.email.queue(opts) end
 
 --- Options table for `crap.email.send` / `crap.email.queue`.
@@ -1469,7 +1469,7 @@ crap.config = {}
 
 --- Get a configuration value using dot notation.
 --- @param key string  Dot-separated config key (e.g., "server.admin_port").
---- @return any  Value at the key path, or nil if any segment is missing or not a table.
+--- @return any # Value at the key path, or nil if any segment is missing or not a table.
 function crap.config.get(key) end
 
 
@@ -1481,16 +1481,16 @@ function crap.config.get(key) end
 crap.locale = {}
 
 --- Get the default locale (e.g., `"en"`).
---- @return string  Default locale code.
+--- @return string # Default locale code.
 function crap.locale.get_default() end
 
 --- List every configured locale (in the order declared in `crap.toml`).
---- @return string[]  Configured locale codes (insertion order).
+--- @return string[] # Configured locale codes (insertion order).
 function crap.locale.get_all() end
 
 --- Whether localization is enabled (true when at least one locale is
 --- configured).
---- @return boolean  True iff at least one locale is configured.
+--- @return boolean # True iff at least one locale is configured.
 function crap.locale.is_enabled() end
 
 
@@ -1502,7 +1502,7 @@ crap.crypto = {}
 
 --- SHA-256 hash of a string, returned as hex.
 --- @param data string  Data to hash.
---- @return string  64-character hex string.
+--- @return string # 64-character hex string.
 function crap.crypto.sha256(data) end
 
 --- HMAC-SHA256 of data with a key, returned as hex.
@@ -1510,7 +1510,7 @@ function crap.crypto.sha256(data) end
 --- `==`, to avoid timing attacks.
 --- @param data string  Data to authenticate.
 --- @param key string  HMAC key.
---- @return string  64-character hex string.
+--- @return string # 64-character hex string.
 function crap.crypto.hmac_sha256(data, key) end
 
 --- Constant-time byte-string equality. Use this — never `==` — to compare
@@ -1518,7 +1518,7 @@ function crap.crypto.hmac_sha256(data, key) end
 --- mismatch are indistinguishable from the return value.
 --- @param a string
 --- @param b string
---- @return boolean  True iff `a` equals `b`.
+--- @return boolean # True iff `a` equals `b`.
 function crap.crypto.constant_time_eq(a, b) end
 
 --- Base64-encode a string.
@@ -1533,18 +1533,18 @@ function crap.crypto.base64_decode(str) end
 
 --- Generate `n` random bytes, returned as hex.
 --- @param n integer  Number of random bytes.
---- @return string  Hex string of length 2*n.
+--- @return string # Hex string of length 2*n.
 function crap.crypto.random_bytes(n) end
 
 --- Encrypt plaintext using AES-256-GCM. Key derived from auth secret.
 --- Returns base64-encoded ciphertext (nonce prepended).
 --- @param plaintext string
---- @return string  Base64-encoded ciphertext.
+--- @return string # Base64-encoded ciphertext.
 function crap.crypto.encrypt(plaintext) end
 
 --- Decrypt ciphertext produced by `encrypt`.
 --- @param ciphertext string  Base64-encoded ciphertext from `encrypt`.
---- @return string  Decoded plaintext string.
+--- @return string # Decoded plaintext string.
 function crap.crypto.decrypt(ciphertext) end
 
 
@@ -1658,7 +1658,7 @@ function crap.jobs.define(slug, config) end
 --- Only available inside hooks with transaction context.
 --- @param slug string  Job slug (must be previously defined).
 --- @param data table?  Input data passed to the handler (default: {}).
---- @return string  The queued job run ID.
+--- @return string # The queued job run ID.
 function crap.jobs.queue(slug, data) end
 
 -- ── crap.pages ───────────────────────────────────────────────

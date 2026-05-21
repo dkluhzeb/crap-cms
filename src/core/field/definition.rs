@@ -163,7 +163,7 @@ pub struct FieldDefinition {
     pub default_value: Option<Value>,
     /// Option list (required).
     #[serde(default)]
-    #[lua(applies_to = "select, radio")]
+    #[lua(applies_to = "select, radio", optional)]
     pub options: Vec<SelectOption>,
     /// Admin UI display options.
     #[serde(default)]
@@ -189,16 +189,17 @@ pub struct FieldDefinition {
     #[serde(default)]
     #[lua(
         applies_to = "array, group, row, collapsible",
-        ty = "crap.FieldDefinition[]"
+        ty = "crap.FieldDefinition[]",
+        optional
     )]
     pub fields: Vec<FieldDefinition>,
     /// Block type definitions (required).
     #[serde(default)]
-    #[lua(applies_to = "blocks")]
+    #[lua(applies_to = "blocks", optional)]
     pub blocks: Vec<BlockDefinition>,
     /// Tab definitions (required). Each tab has a label and fields.
     #[serde(default)]
-    #[lua(applies_to = "tabs")]
+    #[lua(applies_to = "tabs", optional)]
     pub tabs: Vec<FieldTab>,
     /// Per-locale values (default: false).
     #[serde(default)]

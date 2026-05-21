@@ -36,11 +36,11 @@ function M.run(ctx)
     -- ctx.data = input data from queue() or {} for cron
     -- ctx.job = { slug, attempt, max_attempts }
     -- Full CRUD access available
-    local expired = crap.collections.find("posts", {
+    local expired = crap.collections.posts.find({
         where = { expires_at = { less_than = os.date("!%Y-%m-%dT%H:%M:%SZ") } }
     })
     for _, doc in ipairs(expired.documents) do
-        crap.collections.delete("posts", doc.id)
+        crap.collections.posts.delete(doc.id)
     end
     return { deleted = #expired.documents }
 end

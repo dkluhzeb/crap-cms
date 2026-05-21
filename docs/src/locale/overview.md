@@ -128,20 +128,20 @@ All Lua CRUD functions accept an optional `locale` parameter:
 
 ```lua
 -- Find with locale
-local result = crap.collections.find("pages", { locale = "de" })
+local result = crap.collections.pages.find({ locale = "de" })
 
 -- Find by ID with locale
-local doc = crap.collections.find_by_id("pages", id, { locale = "de" })
+local doc = crap.collections.pages.find_by_id(id, { locale = "de" })
 
 -- Create in a specific locale
-crap.collections.create("pages", data, { locale = "de" })
+crap.collections.pages.create(data, { locale = "de" })
 
 -- Update in a specific locale
-crap.collections.update("pages", id, data, { locale = "de" })
+crap.collections.pages.update(id, data, { locale = "de" })
 
 -- Globals
-local settings = crap.globals.get("site_settings", { locale = "de" })
-crap.globals.update("site_settings", data, { locale = "de" })
+local settings = crap.globals.site_settings.get({ locale = "de" })
+crap.globals.site_settings.update(data, { locale = "de" })
 ```
 
 ### Locale Configuration Access

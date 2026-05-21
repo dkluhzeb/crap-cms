@@ -287,7 +287,7 @@ For array fields: `crap.array_row.*` with the sub-field types.
 
 Select fields become union types: `"draft" | "published" | "archived"`.
 
-Function overloads are generated so `crap.collections.find("posts", ...)` returns `crap.find_result.Posts` instead of the generic `crap.FindResult`.
+Function overloads are generated so `crap.collections.posts.find(...)` returns `crap.find_result.Posts` instead of the generic `crap.FindResult`.
 
 ### IDE Setup
 

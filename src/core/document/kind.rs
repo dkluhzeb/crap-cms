@@ -5,8 +5,19 @@ use crate::core::{DocumentFields, DocumentId};
 use crate::typegen::lua::LuaAnnotation;
 
 /// A single content document with an ID, user-defined fields, and optional timestamps.
+///
+/// **Type-emission note:** the `LuaLS` class deliberately does NOT carry an
+/// `[string] any` index signature. Adding one caused `LuaLS` to collapse
+/// typed subclasses (`crap.doc.Posts : crap.Document`, etc.) back into
+/// the permissive base — hover popups showed `crap.Document` even when
+/// the per-collection narrowing was correct, because an index signature
+/// of `any` subsumes the structural extension. Subclasses now expose
+/// their typed fields cleanly; for the dynamic-slug `find()` fallback
+/// (returning the bare `crap.FindResult`), users either cast with
+/// `--[[@as crap.doc.X]]` or index via `doc["field"]` if they need to
+/// reach a field outside the base shape.
 #[derive(Debug, Clone, Serialize, Deserialize, LuaAnnotation)]
-#[lua(class = "crap.Document", extra_field = "[string] any")]
+#[lua(class = "crap.Document")]
 pub struct Document {
     /// Unique document ID (nanoid).
     #[lua(ty = "string")]

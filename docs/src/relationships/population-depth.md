@@ -66,10 +66,10 @@ grpcurl -plaintext -d '{
 
 ```lua
 -- Find with depth
-local result = crap.collections.find("posts", { depth = 1 })
+local result = crap.collections.posts.find({ depth = 1 })
 
 -- FindByID with depth
-local post = crap.collections.find_by_id("posts", id, { depth = 2 })
+local post = crap.collections.posts.find_by_id(id, { depth = 2 })
 ```
 
 ## Circular Reference Protection

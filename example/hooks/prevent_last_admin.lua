@@ -6,8 +6,9 @@ return function(context)
     return context
   end
 
-  ---@type crap.find_result.Users
-  local result = crap.collections.find("users", {
+  -- Per-collection accessor — return type narrows to
+  -- `crap.find_result.Users` automatically.
+  local result = crap.collections.users.find({
     where = { role = "admin" },
     overrideAccess = true,
   })

@@ -6,9 +6,12 @@
 //! emitted by a derive (`LuaAnnotation`, `LuaAlias`, `LuaTypeAlias`,
 //! `LuaFieldTypeViews`) or a `lua_table!`-generated `render_X_lua`
 //! fn — there are no hand-written `.lua` block files left in the
-//! pipeline. The fixed `---@meta crap` banner at the top of the
-//! output is the only literal string content, declared inline as
-//! [`HEADER`] for visibility.
+//! pipeline. The fixed `---@meta` banner at the top of the output
+//! is the only literal string content, declared inline as
+//! [`HEADER`] for visibility. Bare `---@meta` (no module name) marks
+//! the file as a stub: `LuaLS` treats every declaration as a type-only
+//! definition and indexes it once even when the file appears in both
+//! `Lua.workspace.library` and the workspace root.
 
 use super::{LuaAlias, LuaAnnotation, LuaFieldTypeViews};
 
@@ -45,8 +48,8 @@ use crate::hooks::lua_api::{
             },
             read::{
                 count::{CountQueryInput, render_crap_collections_count_lua},
-                find::{FindQueryInput, FindResult, render_crap_collections_find_lua},
-                find_by_id::{FindByIdOptions, render_crap_collections_find_by_id_lua},
+                find::{FindQueryInput, FindResult},
+                find_by_id::FindByIdOptions,
             },
             ref_count::render_crap_collections_ref_count_lua,
             versions::{
@@ -143,7 +146,7 @@ pub fn render_static_file() -> String {
 /// content, no Rust counterpart — emitted verbatim once at the top of
 /// the output.
 const HEADER: &str = "\
----@meta crap
+---@meta
 --- Crap CMS Lua API type definitions for lua-language-server (LuaLS).
 ---
 --- This file is NOT executed at runtime. It provides type annotations
@@ -231,9 +234,17 @@ fn render_hook_context_types(out: &mut String) {
 fn render_crap_collections(out: &mut String) {
     render_crap_collections_init_root_lua(out);
     render_crap_collections_init_config_lua(out);
-    render_crap_collections_find_lua(out);
+    // `find` and `find_by_id` are intentionally NOT emitted into the
+    // static crap.lua: their typed signatures live exclusively in the
+    // per-project `generated.lua` so the per-collection
+    // `---@overload`s can narrow the return type from the slug
+    // literal. Declaring the same function in both files made LuaLS
+    // merge the two return types into a union — every call site
+    // showed `crap.FindResult | crap.find_result.Categories | ...`,
+    // and iterating `result.documents` produced a union of every
+    // per-collection `crap.doc.*[]`. Runtime registration is
+    // unaffected; this only skips type-annotation emission.
     FindByIdOptions::render_lua_annotation(out);
-    render_crap_collections_find_by_id_lua(out);
     CreateOptions::render_lua_annotation(out);
     render_crap_collections_create_lua(out);
     UpdateOptions::render_lua_annotation(out);

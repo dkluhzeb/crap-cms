@@ -33,7 +33,7 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     let pascal = to_pascal_case(&col.slug);
 
     // Sub-types (Array rows and Group shapes)
-    for stf in collect_sub_type_fields(&col.fields) {
+    for stf in collect_sub_type_fields(&col.fields, &pascal) {
         let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
         w!(out, "export interface {} {{", sub_pascal);
         for sf in &stf.field.fields {
@@ -72,7 +72,7 @@ fn render_global(out: &mut String, global: &GlobalDefinition) {
     let pascal = to_pascal_case(&global.slug);
 
     // Sub-types (Array rows and Group shapes)
-    for stf in collect_sub_type_fields(&global.fields) {
+    for stf in collect_sub_type_fields(&global.fields, &pascal) {
         let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
         w!(out, "export interface {} {{", sub_pascal);
         for sf in &stf.field.fields {

@@ -39,7 +39,13 @@ pub fn format_lua_fn_spec(out: &mut String, spec: &LuaFnSpec) {
         out.push_str("--- @return ");
         out.push_str(r.ty);
         if !r.doc.is_empty() {
-            out.push_str("  ");
+            // `# ` is LuaLS's explicit "rest of the line is description"
+            // separator. Without it, LuaLS parses `@return TYPE NAME DESC`
+            // — the first word of the description is treated as the
+            // return-value name, and any later identifier (after a comma
+            // or period) gets flagged as an undefined type. The `# `
+            // separator disambiguates and silences those false positives.
+            out.push_str(" # ");
             out.push_str(r.doc);
         }
         out.push('\n');
@@ -158,7 +164,7 @@ mod tests {
 
         let expected = concat!(
             "--- Generate a unique nanoid.\n",
-            "--- @return string  Random nanoid string.\n",
+            "--- @return string # Random nanoid string.\n",
             "function crap.util.nanoid() end\n",
             "\n",
         );

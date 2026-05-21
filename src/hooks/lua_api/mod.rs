@@ -37,7 +37,7 @@ pub(crate) mod jobs;
 pub(crate) mod log;
 pub mod pages;
 pub mod parse;
-mod register;
+pub(crate) mod register;
 pub(crate) mod richtext;
 pub(crate) mod schema;
 mod serializers;

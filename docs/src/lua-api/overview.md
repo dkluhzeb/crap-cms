@@ -23,9 +23,30 @@ The `crap` global table is the entry point for all CMS operations in Lua. It's a
 | `crap.schema` | Runtime schema introspection |
 | `crap.richtext` | Custom rich text node registration |
 
+## Two ways to address a collection
+
+Every defined collection is reachable in two forms:
+
+- **Per-collection accessor (recommended for static slugs):**
+  `crap.collections.<slug>.find(query)`, `crap.collections.<slug>.create(data)`,
+  …  Slug is bound, return values fully typed for editor autocomplete.
+- **Slug-keyed dispatch (required for dynamic slugs):**
+  `crap.collections.find(slug, query)`, `crap.collections.create(slug, data)`,
+  …  Same semantics, slug passed at call time. Use when the collection
+  varies at runtime (auth strategies, generic plugins, migration loops).
+
+Globals follow the same pattern: `crap.globals.<slug>.{get,update}(...)`
+versus `crap.globals.{get,update}(slug, ...)`.
+
+See [`crap.collections`](collections.md) and [`crap.globals`](globals.md)
+for the full surface of each accessor.
+
 ## CRUD Availability
 
-CRUD functions (`crap.collections.find`, `.create`, `.update`, `.delete`, `crap.globals.get`, `.update`) are **only available inside hooks with transaction context**:
+CRUD functions (whether called as `crap.collections.<slug>.find(...)` or
+`crap.collections.find(slug, ...)`, and `crap.globals.<slug>.{get,update}(...)`
+or the slug-keyed equivalents) are **only available inside hooks with
+transaction context**:
 
 - `before_validate` hooks — Yes
 - `before_change` hooks — Yes

@@ -78,7 +78,7 @@ function M.run(ctx)
     -- ctx.job.max_attempts: total attempts allowed
 
     -- Full CRUD access:
-    local result = crap.collections.find("posts", {
+    local result = crap.collections.posts.find({
         where = { status = "expired" }
     })
 

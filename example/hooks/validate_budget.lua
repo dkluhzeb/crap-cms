@@ -1,8 +1,8 @@
 --- Field before_validate hook: validate budget against max from config.
 ---@param value number|nil
----@param context crap.field_hook.Inquiries
+---@param _context crap.field_hook.Inquiries
 ---@return number|nil
-return function(value, context)
+return function(value, _context)
   if not value then
     return value
   end

@@ -57,62 +57,59 @@ end
 
 See [Plugins](../plugins/overview.md) for patterns using these functions.
 
-## crap.globals.get(slug, opts?)
+## Runtime operations — `crap.globals.<slug>`
 
-Get a global's current value. Returns a document table.
+Every global registered via `define()` gets a typed accessor at
+`crap.globals.<slug>` with `get` / `update` methods. The slug is
+bound; return values are typed as the per-global document class.
 
-**Only available inside hooks with transaction context.**
+Both operations are **only available inside hooks with transaction
+context**.
 
-### Parameters
+> For the rare dynamic-slug case (you don't know the slug until
+> runtime — e.g. iterating `crap.globals.config.list()`), call the
+> slug-keyed dispatch: `crap.globals.get(slug, opts?)` /
+> `crap.globals.update(slug, data, opts?)`. Same semantics, slug as
+> the first arg.
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `slug` | string | Global slug |
-| `opts` | table (optional) | Options table |
+### `crap.globals.<slug>.get(opts?)`
 
-### Options
+Get a global's current value. Returns the typed document.
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `locale` | string | Locale code (e.g., `"en"`, `"de"`). Fetches locale-specific field values. If omitted, returns the default locale data. |
+**Options:** `locale` (string) — locale code (e.g. `"en"`, `"de"`).
+Fetches locale-specific field values; omit for default locale.
 
 ```lua
-local settings = crap.globals.get("site_settings")
+local settings = crap.globals.site_settings.get()
 print(settings.site_name)  -- "My Site"
 print(settings.id)         -- always "default"
 
 -- Fetch German locale data
-local settings_de = crap.globals.get("site_settings", { locale = "de" })
+local settings_de = crap.globals.site_settings.get({ locale = "de" })
 ```
 
-## crap.globals.update(slug, data, opts?)
+### `crap.globals.<slug>.update(data, opts?)`
 
-Update a global's value. Returns the updated document.
+Update a global's value. `data` is a partial payload — only the
+fields being changed need to be present. Returns the updated typed
+document.
 
-**Only available inside hooks with transaction context.**
-
-### Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `slug` | string | Global slug |
-| `data` | table | Fields to update |
-| `opts` | table (optional) | Options table |
-
-### Options
+**Options:**
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `locale` | string | Locale code (e.g., `"en"`, `"de"`). Updates locale-specific field values. If omitted, updates the default locale data. |
+| `locale` | string | Locale code. Updates locale-specific field values; omit for default locale. |
+| `overrideAccess` | boolean | Bypass the global's `access.update` check (default `false`). |
+| `hooks` | boolean | Run lifecycle hooks (default `true`). Set `false` for seeding/migrations. |
 
 ```lua
-local settings = crap.globals.update("site_settings", {
+local settings = crap.globals.site_settings.update({
     site_name = "New Site Name",
     tagline = "A new beginning",
 })
 
 -- Update German locale data
-crap.globals.update("site_settings", {
+crap.globals.site_settings.update({
     site_name = "Neuer Seitenname",
 }, { locale = "de" })
 ```

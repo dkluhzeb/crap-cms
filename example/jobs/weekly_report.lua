@@ -1,14 +1,15 @@
 --- Cron job: weekly content report logged to stdout.
 local M = {}
 
----@param context crap.JobHandlerContext
-function M.run(context)
-  ---@type crap.find_result.Posts
-  local posts = crap.collections.find("posts", { limit = 0, overrideAccess = true })
-  ---@type crap.find_result.Projects
-  local projects = crap.collections.find("projects", { limit = 0, overrideAccess = true })
-  ---@type crap.find_result.Inquiries
-  local inquiries = crap.collections.find("inquiries", {
+--- The runtime passes a `crap.JobHandlerContext` but this job doesn't
+--- need it, so the param is omitted. Lua silently drops the extra
+--- argument; no annotation needed.
+function M.run()
+  -- Per-collection accessors give full return-type narrowing and
+  -- per-column `where` autocomplete without any `---@type` ceremony.
+  local posts = crap.collections.posts.find({ limit = 0, overrideAccess = true })
+  local projects = crap.collections.projects.find({ limit = 0, overrideAccess = true })
+  local inquiries = crap.collections.inquiries.find({
     where = { status = "new" },
     limit = 0,
     overrideAccess = true,

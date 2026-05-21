@@ -44,7 +44,7 @@ crap.collections.define("events", {
       name = "event_url",
       admin = {
         placeholder = "https://zoom.us/...",
-        condition = { field = "online", condition = "equals", value = true },
+        condition = "hooks.conditions.show_event_url",
       },
     }),
     -- Location group

@@ -80,35 +80,55 @@ pub(super) enum SubTypeKind {
 }
 
 /// A field that needs a named sub-type definition.
+///
+/// `parent_pascal` is the `PascalCase` path of the field's enclosing
+/// owner — for top-level fields it's the collection or global slug
+/// `PascalCase`d (e.g. `"Navigation"`); for fields nested inside another
+/// Array or Group it's the parent's compound name (e.g.
+/// `"NavigationMainNav"`). Concatenating `parent_pascal` with the
+/// field's own `PascalCase`d name gives the sub-type class name. Layout
+/// wrappers (Row/Collapsible/Tabs) are transparent and don't
+/// contribute to the path.
 pub(super) struct SubTypeField<'a> {
     pub field: &'a FieldDefinition,
     pub kind: SubTypeKind,
+    pub parent_pascal: String,
 }
 
 /// Recursively collect Array and Group fields that need sub-type definitions.
 /// Walks through Row, Collapsible, Tabs, and Group containers to find nested
-/// fields at any depth. Returns `(kind, field)` pairs where kind distinguishes
-/// Array from Group for naming/rendering.
-pub(super) fn collect_sub_type_fields(fields: &[FieldDefinition]) -> Vec<SubTypeField<'_>> {
+/// fields at any depth. `parent_pascal` is the `PascalCase` path of the
+/// caller's enclosing owner (collection/global slug or an outer
+/// Array/Group's compound name). Each returned [`SubTypeField`] carries
+/// the path of its own immediate parent, so declarations match the
+/// references emitted by [`super::lua::field`].
+pub(super) fn collect_sub_type_fields<'a>(
+    fields: &'a [FieldDefinition],
+    parent_pascal: &str,
+) -> Vec<SubTypeField<'a>> {
     let mut result = Vec::new();
     for f in fields {
         if f.field_type == FieldType::Array && !f.fields.is_empty() {
+            let inner_pascal = format!("{}{}", parent_pascal, to_pascal_case(&f.name));
             result.push(SubTypeField {
                 field: f,
                 kind: SubTypeKind::Array,
+                parent_pascal: parent_pascal.to_string(),
             });
-            result.extend(collect_sub_type_fields(&f.fields));
+            result.extend(collect_sub_type_fields(&f.fields, &inner_pascal));
         } else if f.field_type == FieldType::Group && !f.fields.is_empty() {
+            let inner_pascal = format!("{}{}", parent_pascal, to_pascal_case(&f.name));
             result.push(SubTypeField {
                 field: f,
                 kind: SubTypeKind::Group,
+                parent_pascal: parent_pascal.to_string(),
             });
-            result.extend(collect_sub_type_fields(&f.fields));
+            result.extend(collect_sub_type_fields(&f.fields, &inner_pascal));
         } else if matches!(f.field_type, FieldType::Row | FieldType::Collapsible) {
-            result.extend(collect_sub_type_fields(&f.fields));
+            result.extend(collect_sub_type_fields(&f.fields, parent_pascal));
         } else if f.field_type == FieldType::Tabs {
             for tab in &f.tabs {
-                result.extend(collect_sub_type_fields(&tab.fields));
+                result.extend(collect_sub_type_fields(&tab.fields, parent_pascal));
             }
         }
     }
@@ -257,7 +277,7 @@ mod tests {
                 .build(),
             text_field("name", true),
         ];
-        let result = collect_sub_type_fields(&fields);
+        let result = collect_sub_type_fields(&fields, "Test");
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].field.name, "items");
         assert_eq!(result[0].kind, SubTypeKind::Array);
@@ -293,7 +313,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let result = collect_sub_type_fields(&fields);
+        let result = collect_sub_type_fields(&fields, "Test");
         let names: Vec<&str> = result.iter().map(|s| s.field.name.as_str()).collect();
         assert!(names.contains(&"row_items"), "array inside Row: {names:?}");
         assert!(
@@ -321,9 +341,17 @@ mod tests {
                 ])
                 .build(),
         ];
-        let result = collect_sub_type_fields(&fields);
+        let result = collect_sub_type_fields(&fields, "Test");
         let names: Vec<&str> = result.iter().map(|s| s.field.name.as_str()).collect();
         assert_eq!(names, vec!["outer", "inner", "group", "nested_arr"]);
+
+        // Regression: nested sub-types must carry the compound parent
+        // path so declarations match the references emitted by the
+        // per-language `field_to_*` mappers. Outer-level fields get the
+        // initial `parent_pascal`; inner fields get `parent_pascal +
+        // outer.PascalName`.
+        let parents: Vec<&str> = result.iter().map(|s| s.parent_pascal.as_str()).collect();
+        assert_eq!(parents, vec!["Test", "TestOuter", "Test", "TestGroup"]);
     }
 
     #[test]
@@ -332,7 +360,7 @@ mod tests {
             FieldDefinition::builder("empty_arr", FieldType::Array).build(),
             FieldDefinition::builder("empty_group", FieldType::Group).build(),
         ];
-        let result = collect_sub_type_fields(&fields);
+        let result = collect_sub_type_fields(&fields, "Test");
         assert!(
             result.is_empty(),
             "empty Array/Group should not produce sub-types"

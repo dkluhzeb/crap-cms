@@ -32,7 +32,7 @@ Prefix a field name with `-` for descending order. When `order_by` is omitted, r
 **Lua:**
 
 ```lua
-crap.collections.find("posts", { order_by = "-created_at" })
+crap.collections.posts.find({ order_by = "-created_at" })
 ```
 
 **gRPC:**
@@ -51,7 +51,7 @@ Use `limit` and `page` for pagination. The response includes a nested `paginatio
 **Lua:**
 
 ```lua
-local result = crap.collections.find("posts", {
+local result = crap.collections.posts.find({
     limit = 10,
     page = 3,
 })
@@ -87,7 +87,7 @@ Cursor-based pagination is opt-in via `[pagination] mode = "cursor"` in `crap.to
 
 ```lua
 -- First page
-local result = crap.collections.find("posts", {
+local result = crap.collections.posts.find({
     order_by = "-created_at",
     limit = 10,
 })
@@ -97,14 +97,14 @@ local result = crap.collections.find("posts", {
 -- result.pagination.endCursor    = "eyJpZCI6Inh5ejc4OSJ9"  (cursor of last doc)
 
 -- Next page (forward)
-local page2 = crap.collections.find("posts", {
+local page2 = crap.collections.posts.find({
     order_by = "-created_at",
     limit = 10,
     after_cursor = result.pagination.endCursor,
 })
 
 -- Previous page (backward)
-local page1_again = crap.collections.find("posts", {
+local page1_again = crap.collections.posts.find({
     order_by = "-created_at",
     limit = 10,
     before_cursor = page2.pagination.startCursor,
@@ -148,7 +148,7 @@ Multiple filters are combined with AND:
 **Lua:**
 
 ```lua
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         status = "published",
         created_at = { greater_than = "2024-01-01" },
@@ -178,7 +178,7 @@ Use the `or` key to combine groups of conditions with OR logic. Each element in 
 
 ```lua
 -- title contains "hello" OR category = "news"
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         ["or"] = {
             { title = { contains = "hello" } },
@@ -188,7 +188,7 @@ crap.collections.find("posts", {
 })
 
 -- status = "published" AND (title contains "hello" OR title contains "world")
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         status = "published",
         ["or"] = {
@@ -199,7 +199,7 @@ crap.collections.find("posts", {
 })
 
 -- Multi-condition groups: (status = "published" AND title contains "hello") OR (status = "draft")
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         ["or"] = {
             { status = "published", title = { contains = "hello" } },
@@ -235,12 +235,12 @@ Use `select` to specify which fields to return. Reduces data transfer and skips 
 
 ```lua
 -- Return only title and status
-crap.collections.find("posts", {
+crap.collections.posts.find({
     select = { "title", "status" },
 })
 
 -- Works with find_by_id too
-crap.collections.find_by_id("posts", id, {
+crap.collections.posts.find_by_id(id, {
     select = { "title", "status" },
 })
 ```
@@ -280,13 +280,13 @@ Collections with `versions = { drafts = true }` automatically filter by `_status
 
 ```lua
 -- Default: only published documents
-local published = crap.collections.find("articles", {})
+local published = crap.collections.articles.find({})
 
 -- Include drafts
-local all = crap.collections.find("articles", { draft = true })
+local all = crap.collections.articles.find({ draft = true })
 
 -- FindByID: get the latest version (may be a draft)
-local latest = crap.collections.find_by_id("articles", id, { draft = true })
+local latest = crap.collections.articles.find_by_id(id, { draft = true })
 ```
 
 **gRPC:**
@@ -320,7 +320,7 @@ Group sub-fields can be filtered using dot notation. Internally, `seo.meta_title
 **Lua:**
 
 ```lua
-crap.collections.find("pages", {
+crap.collections.pages.find({
     where = {
         ["seo.meta_title"] = { contains = "SEO" },
     },
@@ -344,7 +344,7 @@ Filter by sub-field values in array rows. Uses an `EXISTS` subquery against the 
 
 ```lua
 -- Find products where any variant has color "red"
-crap.collections.find("products", {
+crap.collections.products.find({
     where = {
         ["variants.color"] = "red",
     },
@@ -352,7 +352,7 @@ crap.collections.find("products", {
 
 -- Group-in-array: filter by a group sub-field within array rows
 -- (uses json_extract on the JSON column in the join table)
-crap.collections.find("products", {
+crap.collections.products.find({
     where = {
         ["variants.dimensions.width"] = "10",
     },
@@ -367,21 +367,21 @@ Filter by field values inside block rows. Uses `json_extract` on the block `data
 
 ```lua
 -- Find posts where any content block has body containing "hello"
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         ["content.body"] = { contains = "hello" },
     },
 })
 
 -- Filter by block type
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         ["content._block_type"] = "image",
     },
 })
 
 -- Group-in-block: filter by a group sub-field within block data
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         ["content.meta.author"] = "Alice",
     },
@@ -396,7 +396,7 @@ Filter by related document IDs. Uses an `EXISTS` subquery against the relationsh
 
 ```lua
 -- Find posts that have tag "tag-123"
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         ["tags.id"] = "tag-123",
     },
@@ -410,7 +410,7 @@ Nested field filters can be freely combined with regular column filters and OR g
 **Lua:**
 
 ```lua
-crap.collections.find("products", {
+crap.collections.products.find({
     where = {
         status = "published",
         ["variants.color"] = "red",
@@ -431,7 +431,7 @@ Use the `search` parameter for fast full-text search powered by SQLite FTS5. Thi
 **Lua:**
 
 ```lua
-local result = crap.collections.find("posts", {
+local result = crap.collections.posts.find({
     search = "hello world",
     limit = 10,
 })

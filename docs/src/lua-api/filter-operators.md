@@ -43,7 +43,7 @@ Use a table to specify an operator:
 
 ```lua
 -- Published posts containing "hello"
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         status = "published",
         title = { contains = "hello" },
@@ -51,28 +51,28 @@ crap.collections.find("posts", {
 })
 
 -- Posts created after a date
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         created_at = { greater_than = "2024-01-01" },
     },
 })
 
 -- Posts with specific statuses
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         status = { ["in"] = { "draft", "published" } },
     },
 })
 
 -- Posts without a category
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         category = { not_exists = true },
     },
 })
 
 -- Posts with wildcard title match
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         title = { like = "Hello%" },
     },
@@ -84,7 +84,7 @@ crap.collections.find("posts", {
 Multiple filters are combined with AND:
 
 ```lua
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         status = "published",
         created_at = { greater_than = "2024-01-01" },
@@ -100,7 +100,7 @@ Use the `["or"]` key to combine groups of conditions with OR logic. Each element
 
 ```lua
 -- title contains "hello" OR category = "news"
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         ["or"] = {
             { title = { contains = "hello" } },
@@ -115,7 +115,7 @@ OR can combine with top-level AND filters:
 
 ```lua
 -- status = "published" AND (title contains "hello" OR title contains "world")
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         status = "published",
         ["or"] = {
@@ -131,7 +131,7 @@ Each OR element can have multiple fields (AND-ed within the group):
 
 ```lua
 -- (status = "published" AND title contains "hello") OR (status = "draft")
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         ["or"] = {
             { status = "published", title = { contains = "hello" } },
@@ -150,27 +150,27 @@ Filter on sub-fields of group, array, blocks, and has-many relationship fields u
 
 ```lua
 -- Group sub-field: seo.meta_title → seo__meta_title column
-crap.collections.find("pages", {
+crap.collections.pages.find({
     where = { ["seo.meta_title"] = { contains = "SEO" } },
 })
 
 -- Array sub-field: find products with any variant color "red"
-crap.collections.find("products", {
+crap.collections.products.find({
     where = { ["variants.color"] = "red" },
 })
 
 -- Block sub-field: find posts with any content block containing "hello"
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = { ["content.body"] = { contains = "hello" } },
 })
 
 -- Block type filter
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = { ["content._block_type"] = "image" },
 })
 
 -- Has-many relationship: find posts with a specific tag
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = { ["tags.id"] = "tag-123" },
 })
 ```
@@ -197,17 +197,17 @@ bind as TEXT regardless of the field type.
 
 ```lua
 -- Number field — bound as REAL, comparison is numeric
-crap.collections.find("products", {
+crap.collections.products.find({
     where = { price = { greater_than = 9.99 } },
 })
 
 -- Checkbox field — bound as INTEGER 1
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = { published = true },
 })
 
 -- Text-only operator on a number field still binds as TEXT
-crap.collections.find("products", {
+crap.collections.products.find({
     where = { sku = { contains = "42" } },
 })
 ```

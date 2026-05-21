@@ -1,12 +1,18 @@
 --- Cron job: daily cleanup of archived inquiries older than 90 days.
 local M = {}
 
----@param context crap.JobHandlerContext
-function M.run(context)
-  local cutoff = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time() - (90 * 24 * 60 * 60))
+--- The runtime passes a `crap.JobHandlerContext` but this job doesn't
+--- need it, so the param is omitted. Lua silently drops the extra
+--- argument; no annotation needed.
+function M.run()
+  -- `os.date(fmt, time)` is typed as `string|osdate`. The bang prefix
+  -- in the format string guarantees a string return, but LuaLS can't
+  -- infer that — cast explicitly so the value type-checks downstream
+  -- as a `crap.FilterScalar`.
+  local cutoff = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time() - (90 * 24 * 60 * 60)) --[[@as string]]
 
-  ---@type crap.find_result.Inquiries
-  local result = crap.collections.find("inquiries", {
+  -- Per-collection accessor — `result` is `crap.find_result.Inquiries`.
+  local result = crap.collections.inquiries.find({
     where = {
       status = "archived",
       created_at = { less_than = cutoff },
@@ -20,7 +26,7 @@ function M.run(context)
 
   local count = 0
   for _, doc in ipairs(result.documents) do
-    crap.collections.delete("inquiries", doc.id, { overrideAccess = true })
+    crap.collections.inquiries.delete(doc.id, { overrideAccess = true })
     count = count + 1
   end
 

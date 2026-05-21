@@ -2,7 +2,10 @@
 //! `generate_proto_conversion`. Pick a [`Language`] backend, render
 //! the registry, write to disk.
 
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::Result;
 
@@ -38,17 +41,17 @@ pub fn generate_lang(
     lang: Language,
     output_dir: Option<&Path>,
 ) -> Result<PathBuf> {
-    let types_dir =
-        output_dir.map_or_else(|| config_dir.join("types"), std::path::Path::to_path_buf);
-    std::fs::create_dir_all(&types_dir)?;
+    let types_dir = output_dir.map_or_else(|| config_dir.join("types"), Path::to_path_buf);
+    fs::create_dir_all(&types_dir)?;
 
     // Always write the API surface types (keeps them in sync with CMS version)
-    std::fs::write(types_dir.join("crap.lua"), LUA_API_TYPES)?;
+    fs::write(types_dir.join("crap.lua"), LUA_API_TYPES)?;
 
     let output = render(registry, lang);
     let filename = format!("generated.{}", lang.file_extension());
     let path = types_dir.join(filename);
-    std::fs::write(&path, output)?;
+    fs::write(&path, output)?;
+
     Ok(path)
 }
 
@@ -65,13 +68,13 @@ pub fn generate_proto_conversion(
     proto_mod: &str,
     output_dir: Option<&Path>,
 ) -> Result<PathBuf> {
-    let types_dir =
-        output_dir.map_or_else(|| config_dir.join("types"), std::path::Path::to_path_buf);
-    std::fs::create_dir_all(&types_dir)?;
+    let types_dir = output_dir.map_or_else(|| config_dir.join("types"), Path::to_path_buf);
+    fs::create_dir_all(&types_dir)?;
 
     let output = rust_proto::render(registry, proto_mod);
     let path = types_dir.join("generated_proto.rs");
-    std::fs::write(&path, output)?;
+    fs::write(&path, output)?;
+
     Ok(path)
 }
 

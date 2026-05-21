@@ -126,13 +126,13 @@ When `trash = true`:
 
 ```lua
 -- Soft delete (moves to trash)
-crap.collections.delete("posts", id)
+crap.collections.posts.delete(id)
 
 -- Force permanent delete
-crap.collections.delete("posts", id, { forceHardDelete = true })
+crap.collections.posts.delete(id, { forceHardDelete = true })
 
 -- Undelete from trash
-crap.collections.undelete("posts", id)
+crap.collections.posts.undelete(id)
 ```
 
 ### MCP

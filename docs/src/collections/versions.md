@@ -155,17 +155,17 @@ The `draft` option is available on `create` and `update`:
 
 ```lua
 -- Create as draft
-local doc = crap.collections.create("articles", {
+local doc = crap.collections.articles.create({
     title = "Work in progress",
 }, { draft = true })
 
 -- Draft update (version-only save)
-crap.collections.update("articles", doc.id, {
+crap.collections.articles.update(doc.id, {
     title = "Still editing...",
 }, { draft = true })
 
 -- Publish
-crap.collections.update("articles", doc.id, {
+crap.collections.articles.update(doc.id, {
     title = "Final Title",
 })  -- draft defaults to false
 ```

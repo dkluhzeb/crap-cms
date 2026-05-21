@@ -67,185 +67,186 @@ end
 
 See [Plugins](../plugins/overview.md) for patterns using these functions.
 
-## crap.collections.find(collection, query?)
+## Runtime operations — `crap.collections.<slug>`
 
-Find documents matching a query. Returns a result table with `documents` and `pagination`.
+Every collection registered via `define()` gets a typed accessor at
+`crap.collections.<slug>` exposing the full CRUD surface. The slug
+is bound; return values are typed against the per-collection
+`crap.doc.X` / `crap.find_result.X` classes — full IDE narrowing
+without `---@type` ceremony.
 
-**Only available inside hooks with transaction context.**
+All operations below are **only available inside hooks with
+transaction context**.
+
+> **Dynamic-slug dispatch.** For the rare case where the slug isn't
+> known until runtime (auth strategies handed `context.collection`,
+> a plugin iterating `crap.collections.config.list()`, the down-side
+> of a migration), the same operations are reachable as
+> `crap.collections.<method>(slug, ...)` — identical semantics, slug
+> as the first arg. Use the slug-keyed form only when you genuinely
+> don't have a string literal.
+>
+> Slugs that would shadow a method name on `crap.collections` (e.g.
+> a collection literally named `"find"`) fail startup with a clear
+> error. Rename the collection.
+
+### `crap.collections.<slug>.find(query?)`
+
+Find documents matching a query. Returns a typed result with
+`documents` (array of `crap.doc.<Slug>`) and `pagination`.
 
 ```lua
-local result = crap.collections.find("posts", {
-    where = {
-        status = "published",
-        title = { contains = "hello" },
-    },
+local result = crap.collections.posts.find({
+    where = { status = "published", title = { contains = "hello" } },
     order_by = "-created_at",
     limit = 10,
     page = 1,
     depth = 1,
 })
 
--- result.documents               = array of document tables
--- result.pagination.totalDocs    = total count (before limit/page)
--- result.pagination.limit        = applied limit
--- result.pagination.totalPages   = total pages (offset mode only)
--- result.pagination.page         = current page (offset mode only, 1-based)
--- result.pagination.pageStart    = 1-based index of first doc on this page
--- result.pagination.hasNextPage  = boolean
--- result.pagination.hasPrevPage  = boolean
--- result.pagination.prevPage     = previous page number (nil if first page)
--- result.pagination.nextPage     = next page number (nil if last page)
--- result.pagination.startCursor  = opaque cursor of first doc (cursor mode only)
--- result.pagination.endCursor    = opaque cursor of last doc (cursor mode only)
-
 for _, doc in ipairs(result.documents) do
-    print(doc.id, doc.title)
+    print(doc.id, doc.title)   -- doc: crap.doc.Posts
 end
 ```
 
-### Query Parameters
+`result.pagination` carries `totalDocs`, `limit`, `page`, `totalPages`,
+`pageStart`, `hasNextPage`, `hasPrevPage`, `prevPage`, `nextPage`,
+`startCursor`, `endCursor` (cursor fields only when
+`[pagination] mode = "cursor"` in `crap.toml`).
+
+**Query fields:**
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `where` | table | `{}` | Field filters. See [Filter Operators](filter-operators.md). Supports `["or"]` key for OR groups. |
+| `where` | table | `{}` | Field filters. See [Filter Operators](filter-operators.md). Supports `["or"]` for OR groups. |
 | `order_by` | string | `nil` | Sort field. Prefix with `-` for descending. |
 | `limit` | integer | `nil` | Max results to return. |
 | `page` | integer | `1` | Page number (1-based). Converted to offset internally. |
-| `offset` | integer | `nil` | Number of results to skip (backward compat alias for `page`). |
-| `after_cursor` | string | `nil` | Forward cursor from a previous `result.pagination.endCursor`. Fetches the page after the cursor position. Mutually exclusive with `page`/`offset`/`before_cursor`. Only effective when `[pagination] mode = "cursor"` in `crap.toml`. |
-| `before_cursor` | string | `nil` | Backward cursor from a previous `result.pagination.startCursor`. Fetches the page before the cursor position. Mutually exclusive with `page`/`offset`/`after_cursor`. Only effective when `[pagination] mode = "cursor"` in `crap.toml`. |
+| `offset` | integer | `nil` | Number of results to skip (alias for `page`). |
+| `after_cursor` | string | `nil` | Forward cursor from a previous `result.pagination.endCursor`. Mutually exclusive with `page`/`offset`/`before_cursor`. Cursor-mode only. |
+| `before_cursor` | string | `nil` | Backward cursor from a previous `result.pagination.startCursor`. Mutually exclusive with `page`/`offset`/`after_cursor`. Cursor-mode only. |
 | `depth` | integer | `0` | Population depth for relationship fields. |
-| `select` | string[] | `nil` | Fields to return. `nil` = all fields. Always includes `id`. When specified, `created_at` and `updated_at` are only included if explicitly listed. |
-| `draft` | boolean | `false` | Include draft documents. Only affects versioned collections with `drafts = true`. |
-| `locale` | string | `nil` | Locale code for localized fields (e.g., `"en"`, `"de"`). |
-| `overrideAccess` | boolean | `false` | Bypass access control checks. Set to `true` to skip collection-level and field-level access for the current user. |
-| `search` | string | `nil` | FTS5 full-text search query. Filters results to documents matching this search term. |
+| `select` | string[] | `nil` | Fields to return. `nil` = all fields. Always includes `id`. When specified, `created_at`/`updated_at` are included only if explicitly listed. |
+| `draft` | boolean | `false` | Include draft documents (versioned collections with `drafts = true`). |
+| `locale` | string | `nil` | Locale code for localized fields. |
+| `overrideAccess` | boolean | `false` | Bypass collection-level and field-level access checks. |
+| `search` | string | `nil` | FTS5 full-text search query. |
 
-## crap.collections.find_by_id(collection, id, opts?)
+### `crap.collections.<slug>.find_by_id(id, opts?)`
 
-Find a single document by ID. Returns the document table or `nil`.
-
-**Only available inside hooks with transaction context.**
+Find a single document by ID. Returns the typed document or `nil`.
 
 ```lua
-local doc = crap.collections.find_by_id("posts", "abc123")
+local doc = crap.collections.posts.find_by_id("abc123")
 if doc then
     print(doc.title)
 end
 
 -- With population depth
-local doc = crap.collections.find_by_id("posts", "abc123", { depth = 2 })
+local doc = crap.collections.posts.find_by_id("abc123", { depth = 2 })
 
--- With field selection (only return title and status)
-local doc = crap.collections.find_by_id("posts", "abc123", { select = { "title", "status" } })
+-- With field selection
+local doc = crap.collections.posts.find_by_id("abc123", { select = { "title", "status" } })
 ```
 
-### Options
+**Options:** `depth`, `select`, `draft`, `locale`, `overrideAccess` — same semantics as `find`.
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `depth` | integer | `0` | Population depth for relationship fields. |
-| `select` | string[] | `nil` | Fields to return. `nil` = all fields. Always includes `id`. |
-| `draft` | boolean | `false` | Return the latest draft version snapshot instead of the published main-table data. Only affects versioned collections with `drafts = true`. |
-| `locale` | string | `nil` | Locale code for localized fields (e.g., `"en"`, `"de"`). |
-| `overrideAccess` | boolean | `false` | Bypass access control checks. Set to `true` to skip collection-level and field-level access for the current user. |
+### `crap.collections.<slug>.create(data, opts?)`
 
-## crap.collections.create(collection, data, opts?)
-
-Create a new document. Returns the created document.
-
-**Only available inside hooks with transaction context.**
+Create a new document. Returns the created typed document.
 
 ```lua
-local doc = crap.collections.create("posts", {
+local doc = crap.collections.posts.create({
     title = "New Post",
     slug = "new-post",
 })
 print(doc.id)  -- auto-generated nanoid
 
 -- Create as draft (versioned collections only)
-local draft = crap.collections.create("articles", {
+local draft = crap.collections.articles.create({
     title = "Work in progress",
 }, { draft = true })
 ```
 
-### Options
+**Options:**
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `locale` | string | `nil` | Locale code for localized fields. |
-| `draft` | boolean | `false` | Create as draft. Skips required field validation. Only affects versioned collections with `drafts = true`. |
-| `overrideAccess` | boolean | `false` | Bypass access control checks. Set to `true` to skip collection-level and field-level access for the current user. |
-| `hooks` | boolean | `true` | Run lifecycle hooks. Set to `false` to skip all hooks (before_validate, before_change, after_change) and validation. The DB operation still executes. |
+| `draft` | boolean | `false` | Create as draft. Skips required-field validation (versioned + `drafts = true`). |
+| `overrideAccess` | boolean | `false` | Bypass collection/field access checks. |
+| `hooks` | boolean | `true` | Run lifecycle hooks. Set `false` to skip all hooks and validation; DB write still runs. |
 
-## crap.collections.update(collection, id, data, opts?)
+#### Auth collections
 
-Update an existing document. Returns the updated document.
+For collections with `auth = true`, the `password` field is handled
+automatically: on create/update it's extracted before hooks run,
+hashed with Argon2id, and stored in the hidden `_password_hash`
+column. Hooks never see the raw password. On update, leaving
+`password` out (or empty) keeps the current hash. Matches the
+gRPC/admin behavior.
 
-**Only available inside hooks with transaction context.**
+### `crap.collections.<slug>.update(id, data, opts?)`
+
+Update an existing document. `data` is a partial payload — only the
+fields being changed need to be present. Returns the updated typed
+document.
 
 ```lua
-local doc = crap.collections.update("posts", "abc123", {
+local doc = crap.collections.posts.update("abc123", {
     title = "Updated Title",
 })
 
 -- Draft update: saves a version snapshot only, main table unchanged
-crap.collections.update("articles", "abc123", {
+crap.collections.articles.update("abc123", {
     title = "Still editing...",
 }, { draft = true })
 ```
 
-### Options
+**Options:**
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `locale` | string | `nil` | Locale code for localized fields. |
-| `draft` | boolean | `false` | Version-only save. Creates a draft version snapshot without modifying the main table. Only affects versioned collections with `drafts = true`. |
-| `unpublish` | boolean | `false` | Set document status to draft and create a draft version snapshot. Ignores the `data` fields when unpublishing. Only affects versioned collections. |
-| `overrideAccess` | boolean | `false` | Bypass access control checks. Set to `true` to skip collection-level and field-level access for the current user. |
-| `hooks` | boolean | `true` | Run lifecycle hooks. Set to `false` to skip all hooks (before_validate, before_change, after_change) and validation. The DB operation still executes. |
+| `draft` | boolean | `false` | Version-only save. Creates a draft version snapshot without touching the main table. |
+| `unpublish` | boolean | `false` | Set status to `draft` and create a draft version snapshot. Ignores `data` when unpublishing. Versioned collections only. |
+| `overrideAccess` | boolean | `false` | Bypass collection/field access checks. |
+| `hooks` | boolean | `true` | Run lifecycle hooks. |
 
-### Auth Collections
+### `crap.collections.<slug>.delete(id, opts?)`
 
-For collections with `auth = true`, the `password` field is automatically handled:
-- On **create**, if the data contains a `password` key, it is extracted before hooks run, hashed with Argon2id, and stored in the hidden `_password_hash` column. Hooks never see the raw password.
-- On **update**, same pattern — if `password` is present and non-empty, the password is updated. Leave it out or set it to `""` to keep the current password.
-
-This matches the behavior of the gRPC API and admin UI.
-
-## crap.collections.delete(collection, id, opts?)
-
-Delete a document. Returns `true` on success. For collections with `soft_delete = true`, moves the document to trash by default. For upload collections, associated files are cleaned up on permanent deletion (not on soft delete).
-
-**Only available inside hooks with transaction context.**
+Delete a document. Returns `true` on success. For collections with
+`soft_delete = true` this moves the document to trash by default;
+upload collections clean up their files on permanent delete (not
+soft delete).
 
 ```lua
--- Soft-delete (moves to trash if collection has soft_delete)
-crap.collections.delete("posts", "abc123")
+-- Soft-delete (moves to trash if the collection has soft_delete)
+crap.collections.posts.delete("abc123")
 
 -- Force permanent delete even on soft-delete collections
-crap.collections.delete("posts", "abc123", { forceHardDelete = true })
+crap.collections.posts.delete("abc123", { forceHardDelete = true })
 
 -- Bypass access control for internal operations
-crap.collections.delete("posts", "abc123", { overrideAccess = true })
+crap.collections.posts.delete("abc123", { overrideAccess = true })
 ```
 
-### Options
+**Options:**
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `overrideAccess` | boolean | `false` | Bypass access control checks. Set to `true` to skip `access.trash` (soft delete) or `access.delete` (permanent delete) checks. |
-| `hooks` | boolean | `true` | Run lifecycle hooks. Set to `false` to skip before_delete and after_delete hooks. |
-| `forceHardDelete` | boolean | `false` | Permanently delete even when the collection has `soft_delete = true`. Requires `access.delete` permission when `overrideAccess = false`. |
+| `overrideAccess` | boolean | `false` | Bypass `access.trash` (soft) or `access.delete` (permanent). |
+| `hooks` | boolean | `true` | Run `before_delete` / `after_delete` hooks. |
+| `forceHardDelete` | boolean | `false` | Skip `soft_delete` and remove the row permanently. Still requires `access.delete` when `overrideAccess = false`. |
 
-## crap.collections.undelete(collection, id)
+### `crap.collections.<slug>.undelete(id)`
 
-Undelete a soft-deleted document from trash. Returns `true` on success. Only works on collections with `soft_delete = true`. Re-syncs the FTS index after undelete.
-
-**Only available inside hooks with transaction context.**
+Restore a soft-deleted document from trash. Returns `true` on
+success. Only available on collections with `soft_delete = true`.
+Re-syncs the FTS index after undelete.
 
 ```lua
-crap.collections.undelete("posts", "abc123")
+crap.collections.posts.undelete("abc123")
 ```
 
 ## Lifecycle Hooks in Lua CRUD
@@ -282,7 +283,7 @@ function M.my_hook(ctx)
     if ctx.hook_depth >= 2 then
         return ctx  -- bail early to avoid deep recursion
     end
-    crap.collections.create("audit", { action = ctx.operation })
+    crap.collections.audit.create({ action = ctx.operation })
     return ctx
 end
 ```
@@ -293,7 +294,7 @@ Pass `hooks = false` to any write CRUD call to skip all lifecycle hooks:
 
 ```lua
 -- Create without triggering any hooks
-crap.collections.create("logs", { message = "raw insert" }, { hooks = false })
+crap.collections.logs.create({ message = "raw insert" }, { hooks = false })
 ```
 
 ## Access Control in Hooks
@@ -310,12 +311,12 @@ When `overrideAccess` is `false` (the default), the function enforces the same a
 
 ```lua
 -- Default: access control is enforced (only shows posts the user can see)
-local result = crap.collections.find("posts", {
+local result = crap.collections.posts.find({
     where = { status = "published" },
 })
 
 -- Bypass access control for internal/admin operations
-local all = crap.collections.find("posts", {
+local all = crap.collections.posts.find({
     overrideAccess = true,
 })
 ```
@@ -327,8 +328,8 @@ Count documents matching a query. Returns an integer count.
 **Only available inside hooks with transaction context.**
 
 ```lua
-local n = crap.collections.count("posts")
-local published = crap.collections.count("posts", {
+local n = crap.collections.posts.count()
+local published = crap.collections.posts.count({
     where = { status = "published" },
 })
 ```
@@ -356,7 +357,7 @@ Only provided fields are written (partial update). Absent fields are left unchan
 **Only available inside hooks with transaction context.**
 
 ```lua
-local result = crap.collections.update_many("posts", {
+local result = crap.collections.posts.update_many({
     where = { status = "draft" },
 }, {
     status = "published",
@@ -364,7 +365,7 @@ local result = crap.collections.update_many("posts", {
 print(result.modified)  -- number of updated documents
 
 -- Skip hooks and validation for performance
-local result = crap.collections.update_many("posts", {
+local result = crap.collections.posts.update_many({
     where = { status = "draft" },
 }, {
     status = "published",
@@ -398,16 +399,16 @@ List version snapshots for a document, newest first. Returns a table with `docs`
 
 ```lua
 -- List the 10 most recent versions for a document
-local result = crap.collections.list_versions("posts", "abc123", { limit = 10 })
+local result = crap.collections.posts.list_versions("abc123", { limit = 10 })
 for _, v in ipairs(result.docs) do
     print(v.version, v.status, v.created_at, v.latest)
 end
 
 -- Paginate
-local page2 = crap.collections.list_versions("posts", "abc123", { limit = 10, offset = 10 })
+local page2 = crap.collections.posts.list_versions("abc123", { limit = 10, offset = 10 })
 
 -- Internal listing that must ignore collection-level read access (e.g. a migration)
-local all = crap.collections.list_versions("posts", "abc123", { overrideAccess = true })
+local all = crap.collections.posts.list_versions("abc123", { overrideAccess = true })
 ```
 
 ### Options
@@ -438,11 +439,11 @@ Restore a previous version: copies the snapshot data back onto the parent docume
 
 ```lua
 -- Restore version "v2-abc" of document "post-1"
-local doc = crap.collections.restore_version("posts", "post-1", "v2-abc")
+local doc = crap.collections.posts.restore_version("post-1", "v2-abc")
 print(doc.title)
 
 -- Internal restore bypassing per-user access (e.g. automated rollback job)
-crap.collections.restore_version("posts", "post-1", "v2-abc", { overrideAccess = true })
+crap.collections.posts.restore_version("post-1", "v2-abc", { overrideAccess = true })
 ```
 
 ### Options
@@ -462,19 +463,19 @@ Fires per-document lifecycle hooks (`before_delete`, `after_delete`) by default.
 **Only available inside hooks with transaction context.**
 
 ```lua
-local result = crap.collections.delete_many("posts", {
+local result = crap.collections.posts.delete_many({
     where = { status = "archived" },
 })
 print(result.deleted)  -- number of deleted documents
 print(result.skipped)  -- number skipped due to outstanding references
 
 -- Bypass access control for internal operations
-local result = crap.collections.delete_many("posts", {
+local result = crap.collections.posts.delete_many({
     where = { status = "archived" },
 }, { overrideAccess = true })
 
 -- Skip hooks for performance
-local result = crap.collections.delete_many("posts", {
+local result = crap.collections.posts.delete_many({
     where = { status = "archived" },
 }, { hooks = false })
 ```

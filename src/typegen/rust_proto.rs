@@ -232,7 +232,7 @@ fn render_collection_impl(out: &mut String, col: &CollectionDefinition) {
     let pascal = to_pascal_case(&col.slug);
 
     // Sub-type from_struct impls for arrays
-    for stf in collect_sub_type_fields(&col.fields) {
+    for stf in collect_sub_type_fields(&col.fields, &pascal) {
         let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
         render_sub_type_from_struct(out, &sub_pascal, &stf.field.fields);
     }
@@ -265,7 +265,7 @@ fn render_collection_impl(out: &mut String, col: &CollectionDefinition) {
 fn render_global_impl(out: &mut String, global: &GlobalDefinition) {
     let pascal = to_pascal_case(&global.slug);
 
-    for stf in collect_sub_type_fields(&global.fields) {
+    for stf in collect_sub_type_fields(&global.fields, &pascal) {
         let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
         render_sub_type_from_struct(out, &sub_pascal, &stf.field.fields);
     }

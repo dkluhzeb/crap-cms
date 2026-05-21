@@ -1,9 +1,9 @@
 --- Field after_read hook: compute reading time from richtext content.
 --- Returns a virtual "X min read" string.
 ---@param value any
----@param context crap.field_hook.Posts
+---@param _context crap.field_hook.Posts
 ---@return string
-return function(value, context)
+return function(value, _context)
   if not value or value == "" then
     return "1 min read"
   end

@@ -148,11 +148,16 @@ pub struct FieldAdmin {
     #[serde(default)]
     #[lua(optional)]
     pub position: Option<String>,
-    /// Lua function ref for conditional show/hide.
+    /// Lua function ref (string) for conditional show/hide — e.g.
+    /// `"hooks.conditions.show_external_url"`. Inline condition tables
+    /// are not accepted here; this field is the name of the function,
+    /// not the condition itself.
     ///
-    /// The function receives form data and returns either:
-    /// - a boolean (server-evaluated on each change via HTMX)
-    /// - a condition table (serialized to JSON, client-evaluated instantly)
+    /// The referenced function receives form data and returns either:
+    /// - a boolean (server-evaluated on each change via HTMX), or
+    /// - a condition table (serialized to JSON, client-evaluated instantly).
+    ///
+    /// See `docs/src/admin-ui/guides/display-conditions.md`.
     #[serde(default)]
     #[lua(optional)]
     pub condition: Option<String>,
@@ -206,7 +211,7 @@ pub struct FieldAdmin {
     /// template at that path. Restricted to safe characters
     /// (`a-zA-Z0-9/_-`); `..` and absolute paths are rejected.
     #[serde(default)]
-    #[lua(skip)]
+    #[lua(optional)]
     pub template: Option<String>,
     /// Freeform per-field configuration map, available to the field's
     /// admin template at `{{admin.extra.<key>}}`. Pairs naturally with
@@ -225,7 +230,7 @@ pub struct FieldAdmin {
     /// Empty by default. Empty maps don't serialize (`skip_serializing_if`),
     /// keeping schema dumps and roundtrips clean.
     #[serde(default, skip_serializing_if = "Map::is_empty")]
-    #[lua(skip)]
+    #[lua(ty = "table<string, any>", optional)]
     pub extra: Map<String, Value>,
 }
 

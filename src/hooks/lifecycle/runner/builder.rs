@@ -17,7 +17,9 @@ use crate::{
             execution::scan_registered_events,
             types::{DefaultDeny, HookDepth, LuaLocaleConfig, MaxHookDepth, MaxInstructions},
         },
-        lua_api::{self, VmLabel, crud::register_crud_functions},
+        lua_api::{
+            self, VmLabel, crud::register_crud_functions, register::register_per_slug_accessors,
+        },
     },
 };
 
@@ -107,7 +109,7 @@ impl<'a> HookRunnerBuilder<'a> {
         for i in 0..pool_size {
             vms.push(create_lua_vm(
                 config_dir,
-                Arc::clone(&registry),
+                &registry,
                 config,
                 i + 1,
                 invalidation_transport.clone(),
@@ -144,7 +146,7 @@ impl<'a> HookRunnerBuilder<'a> {
 /// collection/global/job loading, and init.lua execution.
 fn create_lua_vm(
     config_dir: &Path,
-    registry: Arc<Registry>,
+    registry: &Arc<Registry>,
     config: &CrapConfig,
     vm_index: usize,
     invalidation_transport: Option<SharedInvalidationTransport>,
@@ -217,9 +219,19 @@ fn setup_package_paths(lua: &Lua, config_dir: &Path) -> Result<()> {
 /// CRUD layer — the registry is fully populated by the time `HookRunner`
 /// is built, and `crap.<x>.define` calls during pool VM init are
 /// no-ops (the `init_lua` VM already wrote those defs).
-fn register_apis(lua: &Lua, registry: Arc<Registry>, config: &CrapConfig) -> Result<()> {
-    lua_api::register_api_pool_init(lua, Arc::clone(&registry), config)?;
-    register_crud_functions(lua, registry, &config.locale, &config.pagination)?;
+fn register_apis(lua: &Lua, registry: &Arc<Registry>, config: &CrapConfig) -> Result<()> {
+    lua_api::register_api_pool_init(lua, Arc::clone(registry), config)?;
+    register_crud_functions(
+        lua,
+        Arc::clone(registry),
+        &config.locale,
+        &config.pagination,
+    )?;
+    // Per-collection / per-global accessors at `crap.collections.<slug>`
+    // / `crap.globals.<slug>` — typed wrappers that bind the slug and
+    // dispatch to the slug-keyed CRUD API. Runs LAST so every method
+    // they wrap exists on `crap.collections` / `crap.globals`.
+    register_per_slug_accessors(lua, registry)?;
 
     Ok(())
 }
