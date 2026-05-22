@@ -426,23 +426,61 @@ pub(super) static CLI_DETAIL_IMPORT: CliCommandDetail = CliCommandDetail {
 };
 
 pub(super) static CLI_DETAIL_TYPEGEN: CliCommandDetail = CliCommandDetail {
-    command: "crap-cms typegen [OPTIONS]",
-    description: "Generate typed definitions from collection schemas",
-    flags: Some(&[
-        CliFlag {
-            flag: "-l, --lang <LANG>",
-            description: "Output language: lua, ts, go, py, rs, all (default: lua)",
+    command: "crap-cms typegen <SUBCOMMAND>",
+    description: "Generate typed definitions from collection schemas (lua / client / proto)",
+    flags: None,
+    args: None,
+    subcommands: Some(&[
+        CliSubcommand {
+            name: "lua",
+            usage: "crap-cms typegen lua [-o DIR]",
+            description: "Server-side Lua types: types/crap.lua + types/hooks.lua",
+            flags: Some(&[CliFlag {
+                flag: "-o, --output <DIR>",
+                description: "Output directory (default: <config>/types/)",
+            }]),
+            examples: Some(&["crap-cms typegen lua"]),
         },
-        CliFlag {
-            flag: "-o, --output <DIR>",
-            description: "Output directory (default: <config>/types/)",
+        CliSubcommand {
+            name: "client",
+            usage: "crap-cms typegen client -l <LANG[,LANG...]> [-o DIR]",
+            description: "Consumer-side per-collection types for API clients (ts, go, py, rs)",
+            flags: Some(&[
+                CliFlag {
+                    flag: "-l, --lang <LANG[,LANG...]>",
+                    description: "Comma list of client languages: ts, go, py, rs (required)",
+                },
+                CliFlag {
+                    flag: "-o, --output <DIR>",
+                    description: "Output directory (default: <config>/types/)",
+                },
+            ]),
+            examples: Some(&[
+                "crap-cms typegen client -l ts",
+                "crap-cms typegen client -l ts,go,py,rs",
+            ]),
+        },
+        CliSubcommand {
+            name: "proto",
+            usage: "crap-cms typegen proto -m <MODULE_PATH> [-o DIR]",
+            description: "`From<proto::Document>` conversions for Rust gRPC servers (types/proto.rs)",
+            flags: Some(&[
+                CliFlag {
+                    flag: "-m, --module <MODULE_PATH>",
+                    description: "Rust module path to the prost-generated proto types (required)",
+                },
+                CliFlag {
+                    flag: "-o, --output <DIR>",
+                    description: "Output directory (default: <config>/types/)",
+                },
+            ]),
+            examples: Some(&["crap-cms typegen proto -m crate::proto"]),
         },
     ]),
-    args: None,
-    subcommands: None,
     examples: Some(&[
-        "crap-cms typegen -l ts",
-        "crap-cms typegen -l all -o ./types",
+        "crap-cms typegen lua",
+        "crap-cms typegen client -l ts,go",
+        "crap-cms typegen proto -m crate::proto",
     ]),
 };
 

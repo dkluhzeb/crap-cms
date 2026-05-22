@@ -277,7 +277,7 @@ fn render_collection_typing_factories(out: &mut String, col: &CollectionDefiniti
     // under the `too_many_lines` clippy threshold and to make the Lua
     // output legible at the source level. Multi-line string literals
     // preserve their content verbatim, so what's written here is what
-    // ends up in `generated.lua`.
+    // ends up in `hooks.lua`.
 
     wraw!(
         out,

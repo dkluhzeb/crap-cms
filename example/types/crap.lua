@@ -752,12 +752,12 @@ function crap.fields.join(config) end
 
 --- Generic collection hook. Use for hooks that take `crap.HookContext`
 --- (no per-collection narrowing); for typed contexts use
---- `crap.hook_fn.<Pascal>` from `generated.lua`.
+--- `crap.hook_fn.<Pascal>` from `hooks.lua`.
 --- @alias crap.hook_fn fun(ctx: crap.HookContext): crap.HookContext
 
 --- Generic field hook. Use for hooks that take the generic
 --- `crap.FieldHookContext`; for typed contexts use
---- `crap.field_hook_fn.<Pascal>` from `generated.lua`. Same shape
+--- `crap.field_hook_fn.<Pascal>` from `hooks.lua`. Same shape
 --- as the older `crap.FieldHookFn` alias — both are kept; new code
 --- should prefer this lowercase name for naming consistency with
 --- the per-collection variants.

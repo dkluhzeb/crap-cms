@@ -117,7 +117,7 @@ pub fn register_api_pool_init(
 
 /// Register per-collection and per-global accessor tables that
 /// dispatch to the existing slug-keyed CRUD API. Type signatures live
-/// in the generated `types/generated.lua`; the runtime mapping is
+/// in the generated `types/hooks.lua`; the runtime mapping is
 /// just `crap.collections.<slug>.find(q)` → `crap.collections.find(slug, q)`.
 ///
 /// Errors out if a slug would shadow an existing method (e.g. a

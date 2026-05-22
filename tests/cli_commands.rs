@@ -370,11 +370,11 @@ fn cmd_user_create_non_auth_errors() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
-fn cmd_typegen_via_library() {
+fn cmd_typegen_lua_via_library() {
     let (tmp, _pool, _registry) = full_setup();
     let config_dir = tmp.path().join("config");
 
-    let result = commands::typegen::run(&config_dir, "lua", None, None);
+    let result = commands::typegen::run(&config_dir, commands::TypegenAction::Lua { output: None });
     assert!(
         result.is_ok(),
         "typegen lua should succeed: {:?}",
@@ -383,14 +383,25 @@ fn cmd_typegen_via_library() {
 }
 
 #[test]
-fn cmd_typegen_all_via_library() {
+fn cmd_typegen_client_all_langs_via_library() {
     let (tmp, _pool, _registry) = full_setup();
     let config_dir = tmp.path().join("config");
 
-    let result = commands::typegen::run(&config_dir, "all", None, None);
+    let result = commands::typegen::run(
+        &config_dir,
+        commands::TypegenAction::Client {
+            lang: vec![
+                "ts".to_string(),
+                "go".to_string(),
+                "py".to_string(),
+                "rs".to_string(),
+            ],
+            output: None,
+        },
+    );
     assert!(
         result.is_ok(),
-        "typegen all should succeed: {:?}",
+        "typegen client (all langs) should succeed: {:?}",
         result.err()
     );
 }
@@ -400,12 +411,18 @@ fn cmd_typegen_invalid_lang_errors() {
     let (tmp, _pool, _registry) = full_setup();
     let config_dir = tmp.path().join("config");
 
-    let result = commands::typegen::run(&config_dir, "invalid_lang", None, None);
+    let result = commands::typegen::run(
+        &config_dir,
+        commands::TypegenAction::Client {
+            lang: vec!["invalid_lang".to_string()],
+            output: None,
+        },
+    );
     assert!(result.is_err(), "typegen with invalid language should fail");
     let err_msg = result.unwrap_err().to_string();
     assert!(
-        err_msg.contains("Unknown language"),
-        "error should mention 'Unknown language', got: {err_msg}"
+        err_msg.contains("unknown client language"),
+        "error should mention 'unknown client language', got: {err_msg}"
     );
 }
 
@@ -415,19 +432,24 @@ fn cmd_typegen_custom_output_dir() {
     let config_dir = tmp.path().join("config");
     let custom_output = tmp.path().join("custom_types");
 
-    let result = commands::typegen::run(&config_dir, "lua", Some(&custom_output), None);
+    let result = commands::typegen::run(
+        &config_dir,
+        commands::TypegenAction::Lua {
+            output: Some(custom_output.clone()),
+        },
+    );
     assert!(
         result.is_ok(),
-        "typegen with custom output should succeed: {:?}",
+        "typegen lua with custom output should succeed: {:?}",
         result.err()
     );
     assert!(
-        custom_output.join("generated.lua").exists(),
-        "should write to custom output dir"
+        custom_output.join("hooks.lua").exists(),
+        "should write hooks.lua to custom output dir"
     );
     assert!(
         custom_output.join("crap.lua").exists(),
-        "should write API types to custom output dir"
+        "should write crap.lua to custom output dir"
     );
 }
 

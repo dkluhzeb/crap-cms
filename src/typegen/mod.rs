@@ -10,9 +10,9 @@
 //!
 //! ## Layout
 //!
-//! - [`Language`] (enum + accessors) — `language.rs`
-//! - File-output entry points (`generate`, `generate_lang`,
-//!   `generate_proto_conversion`) + the per-language render dispatch —
+//! - [`Language`] (client-language enum + accessors) — `language.rs`
+//! - File-output entry points (`generate_lua`, `generate_client`,
+//!   `generate_proto`) + the per-language render dispatch —
 //!   `dispatch.rs`
 //! - Cross-language helpers (`to_pascal_case`, `is_optional`,
 //!   `rel_has_many`, `sorted_*_slugs`, `collect_sub_type_fields`) —
@@ -39,7 +39,7 @@ mod rust_proto;
 mod rust_types;
 mod typescript;
 
-pub use dispatch::{generate, generate_lang, generate_proto_conversion};
+pub use dispatch::{generate_client, generate_lua, generate_proto};
 pub(crate) use helpers::to_pascal_case;
 pub use language::Language;
 pub use lua::LuaAnnotation;

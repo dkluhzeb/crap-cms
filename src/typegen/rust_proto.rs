@@ -1,6 +1,6 @@
 //! Rust proto conversion generator — `from_document` impls using `prost_types`.
 //!
-//! Generates `generated_proto.rs` with direct `prost_types` extraction:
+//! Generates `proto.rs` with direct `prost_types` extraction:
 //! no JSON intermediate, no serde deserialization in the hot path.
 
 use crate::core::{

@@ -241,16 +241,22 @@ fn typegen_lua() {
     let cfg = CrapConfig::load(&config_dir).expect("load config");
     let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
 
-    let path = typegen::generate(&config_dir, &registry).unwrap();
-    assert!(path.exists());
-    assert!(path.to_string_lossy().ends_with("generated.lua"));
+    let paths = typegen::generate_lua(&config_dir, &registry, None).unwrap();
+    assert_eq!(paths.len(), 2, "generate_lua writes crap.lua + hooks.lua");
 
-    let content = std::fs::read_to_string(&path).unwrap();
-    assert!(!content.is_empty());
+    let crap_lua = &paths[0];
+    let hooks_lua = &paths[1];
+    assert!(crap_lua.to_string_lossy().ends_with("crap.lua"));
+    assert!(hooks_lua.to_string_lossy().ends_with("hooks.lua"));
+    assert!(crap_lua.exists());
+    assert!(hooks_lua.exists());
+
+    let hooks_content = std::fs::read_to_string(hooks_lua).unwrap();
+    assert!(!hooks_content.is_empty());
 }
 
 #[test]
-fn typegen_all_languages() {
+fn typegen_all_client_languages() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("config");
     copy_dir(&fixture_dir(), &config_dir);
@@ -259,12 +265,12 @@ fn typegen_all_languages() {
     let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
 
     for lang in typegen::Language::all() {
-        let path = typegen::generate_lang(&config_dir, &registry, *lang, None).unwrap();
+        let path = typegen::generate_client(&config_dir, &registry, *lang, None).unwrap();
         assert!(path.exists(), "file should exist for {lang:?}");
-        let expected_ext = format!("generated.{}", lang.file_extension());
+        let expected_ext = format!("client.{}", lang.file_extension());
         assert!(
             path.to_string_lossy().ends_with(&expected_ext),
-            "expected ext {}, got {}",
+            "expected suffix {}, got {}",
             expected_ext,
             path.display()
         );

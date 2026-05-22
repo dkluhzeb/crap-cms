@@ -378,6 +378,46 @@ pub enum UserAction {
     },
 }
 
+/// Actions for the `typegen` subcommand. Three artifacts, three audiences:
+/// `lua` for server-side hook authors, `client` for external API
+/// consumers, `proto` for Rust gRPC implementations of the
+/// proto-conversion glue.
+#[derive(Subcommand)]
+pub enum TypegenAction {
+    /// Server-side Lua types — `types/crap.lua` (API surface from the binary)
+    /// plus `types/hooks.lua` (per-collection hook context narrowing).
+    Lua {
+        /// Output directory (default: `<config>/types/`)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Consumer-side per-collection types for gRPC/REST API clients.
+    /// Pass one or more languages as a comma list (`-l ts,go`).
+    Client {
+        /// Output languages — comma list. Supported: `ts`, `go`, `py`, `rs`.
+        #[arg(short, long, value_delimiter = ',', num_args = 1..)]
+        lang: Vec<String>,
+
+        /// Output directory (default: `<config>/types/`)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// `From<proto::Document>` conversion code for Rust gRPC servers.
+    /// The `--module` value is the Rust path to the prost-generated
+    /// proto types (e.g. `crate::proto`). Writes `types/proto.rs`.
+    Proto {
+        /// Rust module path to the prost-generated proto types.
+        #[arg(short, long)]
+        module: String,
+
+        /// Output directory (default: `<config>/types/`)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+}
+
 /// Actions for the `migrate` subcommand.
 #[derive(Subcommand)]
 pub enum MigrateAction {

@@ -344,12 +344,12 @@ fn render_callable_aliases(out: &mut String) {
 
 --- Generic collection hook. Use for hooks that take `crap.HookContext`
 --- (no per-collection narrowing); for typed contexts use
---- `crap.hook_fn.<Pascal>` from `generated.lua`.
+--- `crap.hook_fn.<Pascal>` from `hooks.lua`.
 --- @alias crap.hook_fn fun(ctx: crap.HookContext): crap.HookContext
 
 --- Generic field hook. Use for hooks that take the generic
 --- `crap.FieldHookContext`; for typed contexts use
---- `crap.field_hook_fn.<Pascal>` from `generated.lua`. Same shape
+--- `crap.field_hook_fn.<Pascal>` from `hooks.lua`. Same shape
 --- as the older `crap.FieldHookFn` alias — both are kept; new code
 --- should prefer this lowercase name for naming consistency with
 --- the per-collection variants.
@@ -379,7 +379,7 @@ fn render_crap_collections(out: &mut String) {
     render_crap_collections_init_config_lua(out);
     // `find` and `find_by_id` are intentionally NOT emitted into the
     // static crap.lua: their typed signatures live exclusively in the
-    // per-project `generated.lua` so the per-collection
+    // per-project `hooks.lua` so the per-collection
     // `---@overload`s can narrow the return type from the slug
     // literal. Declaring the same function in both files made LuaLS
     // merge the two return types into a union — every call site

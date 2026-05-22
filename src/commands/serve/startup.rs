@@ -235,11 +235,23 @@ fn init_lua_and_typegen(config_dir: &Path, cfg: &CrapConfig) -> Result<Arc<Regis
         debug!("  Collection '{}': {} field(s)", slug, col.fields.len());
     }
 
-    // Auto-generate Lua type definitions on startup
-    typegen::generate(config_dir, &registry)
-        .inspect(|path| info!("Generated type definitions: {}", path.display()))
-        .inspect_err(|e| warn!("Failed to generate type definitions: {}", e))
-        .ok();
+    // Auto-regenerate server-side Lua types in dev_mode so hook authors
+    // see updated `crap.lua` / `hooks.lua` after editing collections
+    // without remembering to run `crap-cms typegen lua`. In production
+    // we skip the I/O entirely — types are an explicit user action via
+    // `crap-cms typegen lua`, and surprise file writes on every startup
+    // are undesirable. Failures are warn-only — a missing/un-writeable
+    // types dir should never block the server.
+    if cfg.admin.dev_mode {
+        typegen::generate_lua(config_dir, &registry, None)
+            .inspect(|paths| {
+                for path in paths {
+                    info!("Regenerated Lua types: {}", path.display());
+                }
+            })
+            .inspect_err(|e| warn!("Failed to regenerate Lua types: {}", e))
+            .ok();
+    }
 
     Ok(registry)
 }

@@ -1,10 +1,12 @@
-//! Supported output languages for type generation + the `Language`
-//! enum's CLI parsing / file-extension / label accessors.
+//! Supported **client** output languages for type generation. The
+//! `Language` enum exclusively names languages the `typegen client`
+//! subcommand can emit per-collection types for. Lua is server-side
+//! (see `dispatch::generate_lua`) and lives outside this enum.
 
-/// Supported output languages for type generation.
+/// Client (consumer) output languages — Lua is server-side and not
+/// represented here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Language {
-    Lua,
     Typescript,
     Go,
     Python,
@@ -15,7 +17,6 @@ impl Language {
     #[must_use]
     pub fn from_name(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
-            "lua" => Some(Self::Lua),
             "ts" | "typescript" => Some(Self::Typescript),
             "go" | "golang" => Some(Self::Go),
             "py" | "python" => Some(Self::Python),
@@ -27,7 +28,6 @@ impl Language {
     #[must_use]
     pub fn file_extension(&self) -> &'static str {
         match self {
-            Self::Lua => "lua",
             Self::Typescript => "ts",
             Self::Go => "go",
             Self::Python => "py",
@@ -37,19 +37,12 @@ impl Language {
 
     #[must_use]
     pub fn all() -> &'static [Self] {
-        &[
-            Self::Lua,
-            Self::Typescript,
-            Self::Go,
-            Self::Python,
-            Self::Rust,
-        ]
+        &[Self::Typescript, Self::Go, Self::Python, Self::Rust]
     }
 
     #[must_use]
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Lua => "lua",
             Self::Typescript => "ts",
             Self::Go => "go",
             Self::Python => "py",
@@ -64,7 +57,6 @@ mod tests {
 
     #[test]
     fn language_from_str_all_variants() {
-        assert_eq!(Language::from_name("lua"), Some(Language::Lua));
         assert_eq!(Language::from_name("ts"), Some(Language::Typescript));
         assert_eq!(
             Language::from_name("typescript"),
@@ -79,8 +71,14 @@ mod tests {
     }
 
     #[test]
+    fn language_from_str_lua_rejected() {
+        // Lua is server-side; `typegen lua` lives outside the client
+        // languages enum and `--lang lua` must not parse.
+        assert_eq!(Language::from_name("lua"), None);
+    }
+
+    #[test]
     fn language_from_str_case_insensitive() {
-        assert_eq!(Language::from_name("LUA"), Some(Language::Lua));
         assert_eq!(
             Language::from_name("TypeScript"),
             Some(Language::Typescript)
@@ -95,7 +93,6 @@ mod tests {
 
     #[test]
     fn language_file_extension() {
-        assert_eq!(Language::Lua.file_extension(), "lua");
         assert_eq!(Language::Typescript.file_extension(), "ts");
         assert_eq!(Language::Go.file_extension(), "go");
         assert_eq!(Language::Python.file_extension(), "py");
@@ -104,7 +101,6 @@ mod tests {
 
     #[test]
     fn language_label() {
-        assert_eq!(Language::Lua.label(), "lua");
         assert_eq!(Language::Typescript.label(), "ts");
         assert_eq!(Language::Go.label(), "go");
         assert_eq!(Language::Python.label(), "py");
@@ -112,7 +108,7 @@ mod tests {
     }
 
     #[test]
-    fn language_all_contains_five() {
-        assert_eq!(Language::all().len(), 5);
+    fn language_all_contains_four() {
+        assert_eq!(Language::all().len(), 4);
     }
 }

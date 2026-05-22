@@ -1,6 +1,8 @@
-//! File-output entry points: `generate`, `generate_lang`,
-//! `generate_proto_conversion`. Pick a [`Language`] backend, render
-//! the registry, write to disk.
+//! File-output entry points for each typegen artifact. The CLI's
+//! `typegen lua`, `typegen client --lang X`, and `typegen proto` map
+//! one-to-one to [`generate_lua`], [`generate_client`], and
+//! [`generate_proto`]. Each writes only its own files — no implicit
+//! cross-artifact side effects.
 
 use std::{
     fs,
@@ -13,75 +15,88 @@ use crate::core::Registry;
 
 use super::{Language, go, lua, python, rust_proto, rust_types, typescript};
 
-/// Embedded Lua API type definitions — kept in sync with the CMS binary version.
+/// Embedded Lua API surface — kept in sync with the CMS binary version.
+/// Copied verbatim into the user's project on `typegen lua` (and on
+/// `serve` startup under `dev_mode`).
 const LUA_API_TYPES: &str = include_str!("../../types/crap.lua");
 
-/// Generate Lua type definitions (default behavior, used on server startup).
-/// Writes to `<config_dir>/types/generated.lua`.
+/// Server-side Lua extension types. Writes two files into
+/// `<types_dir>/`:
+/// - `crap.lua` — the binary's embedded Lua API surface (`crap.*`
+///   namespace, hook context types, function aliases).
+/// - `hooks.lua` — per-collection narrowed hook/data/doc shapes
+///   rendered from the loaded registry.
 ///
 /// # Errors
 ///
-/// Returns an error if the types directory can't be created or the output
-/// file can't be written.
-pub fn generate(config_dir: &Path, registry: &Registry) -> Result<PathBuf> {
-    generate_lang(config_dir, registry, Language::Lua, None)
+/// Returns an error if the types directory can't be created or either
+/// output file can't be written.
+pub fn generate_lua(
+    config_dir: &Path,
+    registry: &Registry,
+    output_dir: Option<&Path>,
+) -> Result<Vec<PathBuf>> {
+    let types_dir = resolve_types_dir(config_dir, output_dir);
+    fs::create_dir_all(&types_dir)?;
+
+    let crap_path = types_dir.join("crap.lua");
+    fs::write(&crap_path, LUA_API_TYPES)?;
+
+    let hooks_path = types_dir.join("hooks.lua");
+    fs::write(&hooks_path, lua::render(registry))?;
+
+    Ok(vec![crap_path, hooks_path])
 }
 
-/// Generate type definitions for a specific language.
-/// Writes to `<output_dir>/generated.<ext>` (defaults to `<config_dir>/types/`).
-/// Also writes `crap.lua` API surface types (keeps them in sync with CMS binary version).
+/// Consumer-side per-collection types for the given client language.
+/// Writes `<types_dir>/client.<ext>`.
 ///
 /// # Errors
 ///
-/// Returns an error if the types directory can't be created or any output
-/// file can't be written.
-pub fn generate_lang(
+/// Returns an error if the types directory can't be created or the
+/// output file can't be written.
+pub fn generate_client(
     config_dir: &Path,
     registry: &Registry,
     lang: Language,
     output_dir: Option<&Path>,
 ) -> Result<PathBuf> {
-    let types_dir = output_dir.map_or_else(|| config_dir.join("types"), Path::to_path_buf);
+    let types_dir = resolve_types_dir(config_dir, output_dir);
     fs::create_dir_all(&types_dir)?;
 
-    // Always write the API surface types (keeps them in sync with CMS version)
-    fs::write(types_dir.join("crap.lua"), LUA_API_TYPES)?;
-
-    let output = render(registry, lang);
-    let filename = format!("generated.{}", lang.file_extension());
-    let path = types_dir.join(filename);
-    fs::write(&path, output)?;
-
+    let path = types_dir.join(format!("client.{}", lang.file_extension()));
+    fs::write(&path, render_client(registry, lang))?;
     Ok(path)
 }
 
-/// Generate proto conversion code for Rust (`prost_types` → typed structs).
-/// Writes to `<output_dir>/generated_proto.rs`.
+/// `From<proto::Document>` conversion code for Rust gRPC servers.
+/// Writes `<types_dir>/proto.rs`. `proto_mod` is the Rust module path
+/// to the prost-generated proto types (e.g. `"crate::proto"`).
 ///
 /// # Errors
 ///
-/// Returns an error if the types directory can't be created or the output
-/// file can't be written.
-pub fn generate_proto_conversion(
+/// Returns an error if the types directory can't be created or the
+/// output file can't be written.
+pub fn generate_proto(
     config_dir: &Path,
     registry: &Registry,
     proto_mod: &str,
     output_dir: Option<&Path>,
 ) -> Result<PathBuf> {
-    let types_dir = output_dir.map_or_else(|| config_dir.join("types"), Path::to_path_buf);
+    let types_dir = resolve_types_dir(config_dir, output_dir);
     fs::create_dir_all(&types_dir)?;
 
-    let output = rust_proto::render(registry, proto_mod);
-    let path = types_dir.join("generated_proto.rs");
-    fs::write(&path, output)?;
-
+    let path = types_dir.join("proto.rs");
+    fs::write(&path, rust_proto::render(registry, proto_mod))?;
     Ok(path)
 }
 
-/// Render type definitions for the given language.
-fn render(registry: &Registry, lang: Language) -> String {
+fn resolve_types_dir(config_dir: &Path, output_dir: Option<&Path>) -> PathBuf {
+    output_dir.map_or_else(|| config_dir.join("types"), Path::to_path_buf)
+}
+
+fn render_client(registry: &Registry, lang: Language) -> String {
     match lang {
-        Language::Lua => lua::render(registry),
         Language::Typescript => typescript::render(registry),
         Language::Go => go::render(registry),
         Language::Python => python::render(registry),

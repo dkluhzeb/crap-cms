@@ -16,8 +16,8 @@ use crap_cms::{
     cli::{self, crap_theme},
     commands::{
         self, BenchAction, BlueprintAction, DbAction, ImagesAction, JobsAction, LogsAction,
-        MakeAction, MigrateAction, TemplatesAction, TrashAction, UpdateCmd, UserAction,
-        serve::ServeMode,
+        MakeAction, MigrateAction, TemplatesAction, TrashAction, TypegenAction, UpdateCmd,
+        UserAction, serve::ServeMode,
     },
     config::{CrapConfig, LogRotation},
 };
@@ -139,18 +139,8 @@ enum Command {
 
     /// Generate typed definitions from collection schemas
     Typegen {
-        /// Output language: lua, ts, go, py, rs (default: lua). Use "all" for all languages.
-        #[arg(short, long, default_value = "lua")]
-        lang: String,
-
-        /// Output directory for generated files (default: <config>/types/)
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-
-        /// Generate `prost_types` conversion code for Rust. Value is the proto module path
-        /// (e.g. "`crate::proto`"). Writes `generated_proto.rs` alongside generated.rs.
-        #[arg(long)]
-        proto: Option<String>,
+        #[command(subcommand)]
+        action: TypegenAction,
     },
 
     /// Export the embedded content.proto file for gRPC client codegen
@@ -639,13 +629,9 @@ async fn dispatch_command(command: Command, config_flag: Option<PathBuf>) -> Res
         Command::Init { dir, no_input } => commands::init::run(dir, no_input),
         Command::Make { action } => with_config(config_flag, |c| commands::make::run(c, action)),
         Command::Blueprint { action } => dispatch_blueprint(action, config_flag),
-        Command::Typegen {
-            lang,
-            output,
-            proto,
-        } => with_config(config_flag, |c| {
-            commands::typegen::run(c, &lang, output.as_deref(), proto.as_deref())
-        }),
+        Command::Typegen { action } => {
+            with_config(config_flag, |c| commands::typegen::run(c, action))
+        }
         Command::Proto { output } => crap_cms::scaffold::proto_export(output.as_deref()),
         Command::Migrate { action } => {
             with_config(config_flag, |c| commands::db::migrate(c, &action))

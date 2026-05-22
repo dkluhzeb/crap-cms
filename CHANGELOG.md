@@ -95,6 +95,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking Changes
 
+- **`crap-cms typegen` restructured into three subcommands.** The
+  single `typegen --lang X [--proto M]` shape conflated server-side
+  Lua extensibility types with consumer-side gRPC client types and
+  with the Rust proto-conversion glue — three artifacts for three
+  audiences sharing one verb. Split into:
+  - `crap-cms typegen lua [-o DIR]` — server-side Lua types for
+    hook authors. Writes `types/crap.lua` (API surface) +
+    `types/hooks.lua` (per-collection narrowings). Replaces the
+    implicit `crap.lua` side-effect that fired on every old
+    `typegen` invocation.
+  - `crap-cms typegen client -l <LANG[,LANG...]> [-o DIR]` —
+    per-collection types for external API consumers. `--lang`
+    accepts a comma list of `ts`, `go`, `py`, `rs`. Writes
+    `types/client.<ext>` per language.
+  - `crap-cms typegen proto -m <MODULE_PATH> [-o DIR]` —
+    `From<proto::Document>` impls for Rust gRPC servers. Replaces
+    the old `--proto` flag. Writes `types/proto.rs`.
+
+  Output filenames renamed (the breaking part):
+  - `types/generated.lua` → `types/hooks.lua`
+  - `types/generated.{ts,go,py,rs}` → `types/client.{ts,go,py,rs}`
+  - `types/generated_proto.rs` → `types/proto.rs`
+  - `types/crap.lua` unchanged.
+
+  Migration: replace `crap-cms typegen` (no args) with
+  `crap-cms typegen lua`; replace `crap-cms typegen -l ts` with
+  `crap-cms typegen client -l ts`; replace
+  `crap-cms typegen -l rs --proto crate::proto` with
+  `crap-cms typegen proto -m crate::proto`. Drop any stale
+  `.luarc.json` paths pointing at `generated.lua` — the
+  `Lua.workspace.library = ["./types"]` glob picks up
+  `hooks.lua` automatically. The `--lang all` aggregator is
+  gone; chain explicit invocations instead.
+
+  Auto-regeneration on `crap-cms serve` is now gated on
+  `admin.dev_mode = true`. Production startups no longer write
+  the Lua type files. Run `crap-cms typegen lua` explicitly after
+  a binary upgrade if you haven't enabled `dev_mode`.
+
 - **`crap.schema.get_collection` / `get_global` field shape:** admin
   hints and join config are now nested objects instead of flat
   top-level fields, mirroring the write-side `crap.FieldAdmin` /

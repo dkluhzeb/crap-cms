@@ -77,7 +77,7 @@ pub use helpers::load_config_and_sync;
 pub use resolve_config::resolve_config_dir;
 pub use types::{
     BenchAction, BlueprintAction, DbAction, ImagesAction, JobsAction, LogsAction, MakeAction,
-    MigrateAction, TemplatesAction, TrashAction, UserAction, parse_key_val,
+    MigrateAction, TemplatesAction, TrashAction, TypegenAction, UserAction, parse_key_val,
 };
 pub use update::UpdateCmd;
 

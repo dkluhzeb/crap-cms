@@ -629,24 +629,34 @@ crap-cms import backup.json -c posts
 
 ### `typegen` — Generate typed definitions
 
-```bash
-crap-cms typegen [-l <LANG>] [-o <DIR>] [--proto <MODULE_PATH>]
-```
-
-| Flag | Short | Default | Description |
-|------|-------|---------|-------------|
-| `--lang` | `-l` | `lua` | Output language: `lua`, `ts`, `go`, `py`, `rs`, `all` |
-| `--output` | `-o` | `<config>/types/` | Output directory for generated files |
-| `--proto` | — | — | (Rust only) Generate `From<proto::Document>` conversions alongside `generated.rs`. The value is the Rust module path to the prost-generated proto types (e.g. `"crate::proto"`). Writes `generated_proto.rs` next to `generated.rs`. |
+Three subcommands, one per artifact / audience:
 
 ```bash
-crap-cms typegen
-crap-cms typegen -l all
-crap-cms typegen -l ts -o ./client/src/types
-
-# Rust + proto conversions
-crap-cms typegen -l rs --proto "crate::proto"
+crap-cms typegen lua    [-o <DIR>]
+crap-cms typegen client -l <LANG[,LANG...]> [-o <DIR>]
+crap-cms typegen proto  -m <MODULE_PATH>    [-o <DIR>]
 ```
+
+| Subcommand | Writes | Audience |
+|------------|--------|----------|
+| `lua` | `types/crap.lua` (API surface) + `types/hooks.lua` (per-collection hook narrowings) | Server-side Lua hook / access / job authors |
+| `client` | `types/client.<ext>` per requested language (`ts`, `go`, `py`, `rs`) | External gRPC / REST API consumers |
+| `proto` | `types/proto.rs` | Rust gRPC servers wanting `From<proto::Document>` conversions |
+
+| Flag | Short | Default | Subcommand | Description |
+|------|-------|---------|------------|-------------|
+| `--lang` | `-l` | — | `client` | Comma list of client languages (`ts`, `go`, `py`, `rs`). Required. |
+| `--module` | `-m` | — | `proto` | Rust module path to the prost-generated proto types (e.g. `"crate::proto"`). Required. |
+| `--output` | `-o` | `<config>/types/` | all | Output directory. |
+
+```bash
+crap-cms typegen lua                            # types/crap.lua + types/hooks.lua
+crap-cms typegen client -l ts                   # types/client.ts
+crap-cms typegen client -l ts,go,py -o ./shared # multiple langs, custom dir
+crap-cms typegen proto -m "crate::proto"        # types/proto.rs
+```
+
+Running `crap-cms typegen` with no subcommand prints help. Under `admin.dev_mode = true`, the `serve` command auto-regenerates `crap.lua` + `hooks.lua` on startup so hook authors don't have to remember `typegen lua` after editing collections — production startups skip this.
 
 ### `proto` — Export proto file
 
