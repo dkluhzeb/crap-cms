@@ -2,7 +2,10 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use anyhow::{Context as _, Result};
@@ -68,6 +71,16 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
     let mut image_ticker = interval(poll_interval);
 
     let running_jobs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    // Single-flight gate for the image worker. The `image_ticker` fires
+    // every `poll_interval` seconds (1s by default); image conversions
+    // (AVIF in particular) can take multiple seconds, so without this
+    // flag each tick would spawn a new worker on top of the in-flight
+    // one. Concurrent workers all call `claim_image_batch` →
+    // `BEGIN`/`UPDATE`/`COMMIT`, contending on SQLite's single writer
+    // slot. Even with a 30s `busy_timeout`, the pile-up logged a stream
+    // of "database is locked" errors after every upload that enqueued
+    // multiple format-conversion entries.
+    let image_running = Arc::new(AtomicBool::new(false));
     let mut last_cron_check = Utc::now();
     let mut purge_counter: u64 = 0;
 
@@ -122,9 +135,24 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
                 update_heartbeats(&pool, &running_jobs);
             }
             _ = image_ticker.tick() => {
+                // Skip the tick if a worker is still draining the previous
+                // batch. `compare_exchange` is the standard single-flight
+                // pattern: only the thread that flipped `false → true`
+                // proceeds; all others bail. Reset to `false` after the
+                // worker finishes (success OR error), so the next tick
+                // can pick up new entries.
+                if image_running
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_err()
+                {
+                    debug!("Image queue worker still running — skipping tick");
+                    continue;
+                }
+
                 let pool = pool.clone();
                 let batch_size = config.image_queue_batch_size;
                 let img_storage = storage.clone();
+                let running_flag = Arc::clone(&image_running);
 
                 tokio::spawn(async move {
                     if let Err(e) = process_image_queue(&pool, batch_size, &img_storage).await {
@@ -133,6 +161,7 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
                         // outer "execute failed: UPDATE …" wrapper.
                         error!("Image queue error: {:#}", e);
                     }
+                    running_flag.store(false, Ordering::Release);
                 });
             }
         }
@@ -200,7 +229,10 @@ fn run_periodic_purges(p: &PurgeTickInput<'_>) {
     // claim a fresh window and run the purge twice.
     let purge_window_secs = p.cron_interval_secs.saturating_mul(10);
 
-    let claimed = match conn.transaction() {
+    // `transaction_immediate()` — `claim_retention_purge_tick` runs SELECTs
+    // and an INSERT/UPDATE on `_crap_cron_fired`. Same `SQLITE_BUSY_SNAPSHOT`
+    // hazard if a concurrent writer commits between the read and write.
+    let claimed = match conn.transaction_immediate() {
         Ok(tx) => match claim_retention_purge_tick(&tx, Utc::now(), purge_window_secs) {
             Ok(true) => match tx.commit() {
                 Ok(()) => true,
@@ -276,6 +308,15 @@ async fn process_image_queue(
 }
 
 /// Claim a batch of pending image entries atomically.
+///
+/// Uses `transaction_immediate()` (not `transaction()`) on purpose:
+/// `SQLite`'s WAL mode treats `BEGIN DEFERRED` as a snapshot transaction —
+/// if a concurrent writer (e.g. the per-second `poll_ticker` running
+/// `claim_pending_jobs`) commits between this transaction's SELECT and
+/// UPDATE, the UPDATE returns `SQLITE_BUSY_SNAPSHOT` (which surfaces
+/// as primary code 5 / "database is locked") and is NOT retried by
+/// the `busy_timeout` handler. Acquiring the write lock at BEGIN
+/// avoids the snapshot upgrade entirely.
 #[cfg(not(tarpaulin_include))]
 fn claim_image_batch(
     pool: &DbPool,
@@ -285,7 +326,7 @@ fn claim_image_batch(
         .get()
         .context("Image queue: failed to get DB connection")?;
     let tx = conn
-        .transaction()
+        .transaction_immediate()
         .context("Image queue: failed to begin claim transaction")?;
     let entries = image_query::claim_pending_images(&tx, batch_size)?;
     tx.commit()
@@ -388,8 +429,12 @@ fn record_conversion_success(
     entry: &image_query::ImageQueueEntry,
     entry_id: &str,
 ) -> Result<()> {
+    // `transaction_immediate()` — same reasoning as in `claim_image_batch`.
+    // Avoids `SQLITE_BUSY_SNAPSHOT` against concurrent writers (poll_ticker,
+    // cron checks, other completion tasks) that commit between our reads
+    // and writes.
     let tx = conn
-        .transaction()
+        .transaction_immediate()
         .context("Image queue: failed to begin completion transaction")?;
 
     tx.execute(

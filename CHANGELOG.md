@@ -262,6 +262,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Image queue scheduler no longer spams "database is locked"
+  errors and no longer leaves entries stuck in `processing`.** Two
+  related defects in `src/scheduler/loop_runner.rs`, both latent
+  since pre-alpha.1; not regressions of this release.
+  - **`SQLITE_BUSY_SNAPSHOT` from `BEGIN DEFERRED`.** `claim_image_batch`,
+    `record_conversion_success`, and the retention-purge claim all
+    opened transactions via `conn.transaction()` (which expands to
+    `BEGIN DEFERRED`). In WAL mode, a DEFERRED transaction takes a
+    snapshot on its first SELECT, then needs to upgrade to a write
+    lock on first UPDATE — but if any other writer (e.g. the
+    1-Hz `poll_ticker` running `claim_pending_jobs`) committed
+    between the SELECT and the UPDATE, SQLite returns
+    `SQLITE_BUSY_SNAPSHOT` (primary code 5, message "database is
+    locked"). This error is **not** retried by the `busy_timeout`
+    handler — it's a deadlock-prevention signal, fires immediately.
+    Hence the symptom: a 1-Hz error stream perfectly synced with
+    the poll-ticker cadence, even with a 30s busy timeout. All
+    three sites now use `transaction_immediate()`, acquiring the
+    write lock at `BEGIN` so the snapshot upgrade is impossible.
+  - **No single-flight gate on the image worker.** The
+    `image_ticker.tick()` arm unconditionally `tokio::spawn`ed a
+    fresh worker every poll interval (1s by default). When AVIF
+    encoding for one entry took several seconds, ticks 2..N each
+    spawned new workers on top of the in-flight one — multiple
+    concurrent `claim_image_batch` callers contended on the writer
+    slot. Added an `AtomicBool` `image_running` flag: a tick only
+    spawns a worker if no previous one is in flight, and the flag
+    resets on worker completion (success or error). Skipped ticks
+    log at `debug` instead of erroring.
+
+- **Admin UI select fields no longer paint a double focus ring.**
+  `static/styles/parts/forms.css` had two overlapping rules:
+  `:focus` set `outline: none` + a soft `box-shadow` halo plus a
+  primary-coloured border; `:focus-visible` then added a solid
+  `2px` outline at `outline-offset: 1px`. For `<input>` /
+  `<textarea>` the browser doesn't promote mouse focus to
+  `:focus-visible`, so only one rule applied at a time — but
+  `<select>` is special: browsers promote it to `:focus-visible`
+  whenever it returns focus after option selection. Result: the
+  coloured border AND the outline painted together, 1px apart,
+  visually a double ring. Dropped the `:focus-visible` block
+  entirely so the `:focus` treatment (coloured border + soft halo)
+  is the single focus indicator for both mouse and keyboard —
+  still WCAG-strong.
+
 - **Access functions that raise a Lua error now deny access (and
   log a warning) instead of returning `Status::internal`.**
   `check_access_with_lua` previously propagated `func.call(...)`'s
