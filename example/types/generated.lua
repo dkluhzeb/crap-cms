@@ -162,6 +162,10 @@ function _coll_categories.ref_count(id) end
 
 crap.collections.categories = _coll_categories
 
+--- Define a lifecycle hook for the `categories` collection (`before_create`,
+--- `after_update`, `before_delete`, etc. — registered via `crap.hooks.on(...)`).
+--- The wrapper is a runtime no-op; its purpose is to narrow `ctx` to
+--- `crap.hook.Categories` so `ctx.data.<field>` autocompletes.
 ---@param fn crap.hook_fn.Categories
 ---@return crap.hook_fn.Categories
 function crap.collections.categories.hook(fn) end
@@ -173,20 +177,42 @@ function crap.collections.categories.hook(fn) end
 ---@overload fun(field: "color", fn: fun(value: string, ctx: crap.field_hook.Categories): string?)
 ---@overload fun(field: string, fn: crap.field_hook_fn.Categories)
 ---@overload fun(fn: crap.field_hook_fn.Categories)
+--- Define a field hook for the `categories` collection. Two-arg form
+--- (`field_hook("<field>", fn)`) narrows `value` to the typed field;
+--- single-arg form (`field_hook(fn)`) leaves `value` as `any`.
+--- Use for value transformation (e.g. slug normalization, computed
+--- defaults). Runtime no-op; LuaLS uses the signature to infer `value`
+--- and `ctx: crap.field_hook.Categories`.
 function crap.collections.categories.field_hook(field, fn) end
 
+--- Display condition for an admin-UI field on the `categories` collection.
+--- Return `true`/`false` for visible/hidden, or a table
+--- `{ visible = bool, error = string? }` for richer control. Runtime
+--- no-op; LuaLS narrows `data` to `crap.data.Categories`.
 ---@param fn crap.display_condition_fn.Categories
 ---@return crap.display_condition_fn.Categories
 function crap.collections.categories.condition(fn) end
 
+--- Access-control function for `categories` operations. Return `true`/`false`
+--- for global allow/deny, or a filter table to constrain results.
+--- Runtime no-op; context type (`crap.AccessContext`) is uniform across
+--- collections, so this is just a discoverable alias for `crap.any.access`.
 ---@param fn crap.access_fn
 ---@return crap.access_fn
 function crap.collections.categories.access(fn) end
 
+--- Custom auth-strategy `authenticate` callback for the `categories` collection.
+--- Receives request headers + the slug; returns a user document on
+--- success or `nil` to fall through. Runtime no-op; discoverable alias
+--- for `crap.any.auth_strategy`.
 ---@param fn crap.auth_strategy_fn
 ---@return crap.auth_strategy_fn
 function crap.collections.categories.auth_strategy(fn) end
 
+--- Compute a display label for an array/blocks row on the `categories`
+--- collection. Receives the row table and returns a string (or `nil`
+--- to fall back to `label_field`). Runtime no-op; discoverable alias
+--- for `crap.any.row_label`.
 ---@param fn crap.row_label_fn
 ---@return crap.row_label_fn
 function crap.collections.categories.row_label(fn) end
@@ -371,6 +397,10 @@ function _coll_clients.ref_count(id) end
 
 crap.collections.clients = _coll_clients
 
+--- Define a lifecycle hook for the `clients` collection (`before_create`,
+--- `after_update`, `before_delete`, etc. — registered via `crap.hooks.on(...)`).
+--- The wrapper is a runtime no-op; its purpose is to narrow `ctx` to
+--- `crap.hook.Clients` so `ctx.data.<field>` autocompletes.
 ---@param fn crap.hook_fn.Clients
 ---@return crap.hook_fn.Clients
 function crap.collections.clients.hook(fn) end
@@ -384,20 +414,42 @@ function crap.collections.clients.hook(fn) end
 ---@overload fun(field: "notes", fn: fun(value: string, ctx: crap.field_hook.Clients): string?)
 ---@overload fun(field: string, fn: crap.field_hook_fn.Clients)
 ---@overload fun(fn: crap.field_hook_fn.Clients)
+--- Define a field hook for the `clients` collection. Two-arg form
+--- (`field_hook("<field>", fn)`) narrows `value` to the typed field;
+--- single-arg form (`field_hook(fn)`) leaves `value` as `any`.
+--- Use for value transformation (e.g. slug normalization, computed
+--- defaults). Runtime no-op; LuaLS uses the signature to infer `value`
+--- and `ctx: crap.field_hook.Clients`.
 function crap.collections.clients.field_hook(field, fn) end
 
+--- Display condition for an admin-UI field on the `clients` collection.
+--- Return `true`/`false` for visible/hidden, or a table
+--- `{ visible = bool, error = string? }` for richer control. Runtime
+--- no-op; LuaLS narrows `data` to `crap.data.Clients`.
 ---@param fn crap.display_condition_fn.Clients
 ---@return crap.display_condition_fn.Clients
 function crap.collections.clients.condition(fn) end
 
+--- Access-control function for `clients` operations. Return `true`/`false`
+--- for global allow/deny, or a filter table to constrain results.
+--- Runtime no-op; context type (`crap.AccessContext`) is uniform across
+--- collections, so this is just a discoverable alias for `crap.any.access`.
 ---@param fn crap.access_fn
 ---@return crap.access_fn
 function crap.collections.clients.access(fn) end
 
+--- Custom auth-strategy `authenticate` callback for the `clients` collection.
+--- Receives request headers + the slug; returns a user document on
+--- success or `nil` to fall through. Runtime no-op; discoverable alias
+--- for `crap.any.auth_strategy`.
 ---@param fn crap.auth_strategy_fn
 ---@return crap.auth_strategy_fn
 function crap.collections.clients.auth_strategy(fn) end
 
+--- Compute a display label for an array/blocks row on the `clients`
+--- collection. Receives the row table and returns a string (or `nil`
+--- to fall back to `label_field`). Runtime no-op; discoverable alias
+--- for `crap.any.row_label`.
 ---@param fn crap.row_label_fn
 ---@return crap.row_label_fn
 function crap.collections.clients.row_label(fn) end
@@ -608,6 +660,10 @@ function _coll_events.ref_count(id) end
 
 crap.collections.events = _coll_events
 
+--- Define a lifecycle hook for the `events` collection (`before_create`,
+--- `after_update`, `before_delete`, etc. — registered via `crap.hooks.on(...)`).
+--- The wrapper is a runtime no-op; its purpose is to narrow `ctx` to
+--- `crap.hook.Events` so `ctx.data.<field>` autocompletes.
 ---@param fn crap.hook_fn.Events
 ---@return crap.hook_fn.Events
 function crap.collections.events.hook(fn) end
@@ -622,20 +678,42 @@ function crap.collections.events.hook(fn) end
 ---@overload fun(field: "categories", fn: fun(value: string[], ctx: crap.field_hook.Events): string[]?)
 ---@overload fun(field: string, fn: crap.field_hook_fn.Events)
 ---@overload fun(fn: crap.field_hook_fn.Events)
+--- Define a field hook for the `events` collection. Two-arg form
+--- (`field_hook("<field>", fn)`) narrows `value` to the typed field;
+--- single-arg form (`field_hook(fn)`) leaves `value` as `any`.
+--- Use for value transformation (e.g. slug normalization, computed
+--- defaults). Runtime no-op; LuaLS uses the signature to infer `value`
+--- and `ctx: crap.field_hook.Events`.
 function crap.collections.events.field_hook(field, fn) end
 
+--- Display condition for an admin-UI field on the `events` collection.
+--- Return `true`/`false` for visible/hidden, or a table
+--- `{ visible = bool, error = string? }` for richer control. Runtime
+--- no-op; LuaLS narrows `data` to `crap.data.Events`.
 ---@param fn crap.display_condition_fn.Events
 ---@return crap.display_condition_fn.Events
 function crap.collections.events.condition(fn) end
 
+--- Access-control function for `events` operations. Return `true`/`false`
+--- for global allow/deny, or a filter table to constrain results.
+--- Runtime no-op; context type (`crap.AccessContext`) is uniform across
+--- collections, so this is just a discoverable alias for `crap.any.access`.
 ---@param fn crap.access_fn
 ---@return crap.access_fn
 function crap.collections.events.access(fn) end
 
+--- Custom auth-strategy `authenticate` callback for the `events` collection.
+--- Receives request headers + the slug; returns a user document on
+--- success or `nil` to fall through. Runtime no-op; discoverable alias
+--- for `crap.any.auth_strategy`.
 ---@param fn crap.auth_strategy_fn
 ---@return crap.auth_strategy_fn
 function crap.collections.events.auth_strategy(fn) end
 
+--- Compute a display label for an array/blocks row on the `events`
+--- collection. Receives the row table and returns a string (or `nil`
+--- to fall back to `label_field`). Runtime no-op; discoverable alias
+--- for `crap.any.row_label`.
 ---@param fn crap.row_label_fn
 ---@return crap.row_label_fn
 function crap.collections.events.row_label(fn) end
@@ -814,6 +892,10 @@ function _coll_inquiries.ref_count(id) end
 
 crap.collections.inquiries = _coll_inquiries
 
+--- Define a lifecycle hook for the `inquiries` collection (`before_create`,
+--- `after_update`, `before_delete`, etc. — registered via `crap.hooks.on(...)`).
+--- The wrapper is a runtime no-op; its purpose is to narrow `ctx` to
+--- `crap.hook.Inquiries` so `ctx.data.<field>` autocompletes.
 ---@param fn crap.hook_fn.Inquiries
 ---@return crap.hook_fn.Inquiries
 function crap.collections.inquiries.hook(fn) end
@@ -831,20 +913,42 @@ function crap.collections.inquiries.hook(fn) end
 ---@overload fun(field: "metadata", fn: fun(value: any, ctx: crap.field_hook.Inquiries): any?)
 ---@overload fun(field: string, fn: crap.field_hook_fn.Inquiries)
 ---@overload fun(fn: crap.field_hook_fn.Inquiries)
+--- Define a field hook for the `inquiries` collection. Two-arg form
+--- (`field_hook("<field>", fn)`) narrows `value` to the typed field;
+--- single-arg form (`field_hook(fn)`) leaves `value` as `any`.
+--- Use for value transformation (e.g. slug normalization, computed
+--- defaults). Runtime no-op; LuaLS uses the signature to infer `value`
+--- and `ctx: crap.field_hook.Inquiries`.
 function crap.collections.inquiries.field_hook(field, fn) end
 
+--- Display condition for an admin-UI field on the `inquiries` collection.
+--- Return `true`/`false` for visible/hidden, or a table
+--- `{ visible = bool, error = string? }` for richer control. Runtime
+--- no-op; LuaLS narrows `data` to `crap.data.Inquiries`.
 ---@param fn crap.display_condition_fn.Inquiries
 ---@return crap.display_condition_fn.Inquiries
 function crap.collections.inquiries.condition(fn) end
 
+--- Access-control function for `inquiries` operations. Return `true`/`false`
+--- for global allow/deny, or a filter table to constrain results.
+--- Runtime no-op; context type (`crap.AccessContext`) is uniform across
+--- collections, so this is just a discoverable alias for `crap.any.access`.
 ---@param fn crap.access_fn
 ---@return crap.access_fn
 function crap.collections.inquiries.access(fn) end
 
+--- Custom auth-strategy `authenticate` callback for the `inquiries` collection.
+--- Receives request headers + the slug; returns a user document on
+--- success or `nil` to fall through. Runtime no-op; discoverable alias
+--- for `crap.any.auth_strategy`.
 ---@param fn crap.auth_strategy_fn
 ---@return crap.auth_strategy_fn
 function crap.collections.inquiries.auth_strategy(fn) end
 
+--- Compute a display label for an array/blocks row on the `inquiries`
+--- collection. Receives the row table and returns a string (or `nil`
+--- to fall back to `label_field`). Runtime no-op; discoverable alias
+--- for `crap.any.row_label`.
 ---@param fn crap.row_label_fn
 ---@return crap.row_label_fn
 function crap.collections.inquiries.row_label(fn) end
@@ -1103,6 +1207,10 @@ function _coll_media.ref_count(id) end
 
 crap.collections.media = _coll_media
 
+--- Define a lifecycle hook for the `media` collection (`before_create`,
+--- `after_update`, `before_delete`, etc. — registered via `crap.hooks.on(...)`).
+--- The wrapper is a runtime no-op; its purpose is to narrow `ctx` to
+--- `crap.hook.Media` so `ctx.data.<field>` autocompletes.
 ---@param fn crap.hook_fn.Media
 ---@return crap.hook_fn.Media
 function crap.collections.media.hook(fn) end
@@ -1140,20 +1248,42 @@ function crap.collections.media.hook(fn) end
 ---@overload fun(field: "credit", fn: fun(value: string, ctx: crap.field_hook.Media): string?)
 ---@overload fun(field: string, fn: crap.field_hook_fn.Media)
 ---@overload fun(fn: crap.field_hook_fn.Media)
+--- Define a field hook for the `media` collection. Two-arg form
+--- (`field_hook("<field>", fn)`) narrows `value` to the typed field;
+--- single-arg form (`field_hook(fn)`) leaves `value` as `any`.
+--- Use for value transformation (e.g. slug normalization, computed
+--- defaults). Runtime no-op; LuaLS uses the signature to infer `value`
+--- and `ctx: crap.field_hook.Media`.
 function crap.collections.media.field_hook(field, fn) end
 
+--- Display condition for an admin-UI field on the `media` collection.
+--- Return `true`/`false` for visible/hidden, or a table
+--- `{ visible = bool, error = string? }` for richer control. Runtime
+--- no-op; LuaLS narrows `data` to `crap.data.Media`.
 ---@param fn crap.display_condition_fn.Media
 ---@return crap.display_condition_fn.Media
 function crap.collections.media.condition(fn) end
 
+--- Access-control function for `media` operations. Return `true`/`false`
+--- for global allow/deny, or a filter table to constrain results.
+--- Runtime no-op; context type (`crap.AccessContext`) is uniform across
+--- collections, so this is just a discoverable alias for `crap.any.access`.
 ---@param fn crap.access_fn
 ---@return crap.access_fn
 function crap.collections.media.access(fn) end
 
+--- Custom auth-strategy `authenticate` callback for the `media` collection.
+--- Receives request headers + the slug; returns a user document on
+--- success or `nil` to fall through. Runtime no-op; discoverable alias
+--- for `crap.any.auth_strategy`.
 ---@param fn crap.auth_strategy_fn
 ---@return crap.auth_strategy_fn
 function crap.collections.media.auth_strategy(fn) end
 
+--- Compute a display label for an array/blocks row on the `media`
+--- collection. Receives the row table and returns a string (or `nil`
+--- to fall back to `label_field`). Runtime no-op; discoverable alias
+--- for `crap.any.row_label`.
 ---@param fn crap.row_label_fn
 ---@return crap.row_label_fn
 function crap.collections.media.row_label(fn) end
@@ -1317,6 +1447,10 @@ function _coll_pages.ref_count(id) end
 
 crap.collections.pages = _coll_pages
 
+--- Define a lifecycle hook for the `pages` collection (`before_create`,
+--- `after_update`, `before_delete`, etc. — registered via `crap.hooks.on(...)`).
+--- The wrapper is a runtime no-op; its purpose is to narrow `ctx` to
+--- `crap.hook.Pages` so `ctx.data.<field>` autocompletes.
 ---@param fn crap.hook_fn.Pages
 ---@return crap.hook_fn.Pages
 function crap.collections.pages.hook(fn) end
@@ -1325,20 +1459,42 @@ function crap.collections.pages.hook(fn) end
 ---@overload fun(field: "slug", fn: fun(value: string, ctx: crap.field_hook.Pages): string?)
 ---@overload fun(field: string, fn: crap.field_hook_fn.Pages)
 ---@overload fun(fn: crap.field_hook_fn.Pages)
+--- Define a field hook for the `pages` collection. Two-arg form
+--- (`field_hook("<field>", fn)`) narrows `value` to the typed field;
+--- single-arg form (`field_hook(fn)`) leaves `value` as `any`.
+--- Use for value transformation (e.g. slug normalization, computed
+--- defaults). Runtime no-op; LuaLS uses the signature to infer `value`
+--- and `ctx: crap.field_hook.Pages`.
 function crap.collections.pages.field_hook(field, fn) end
 
+--- Display condition for an admin-UI field on the `pages` collection.
+--- Return `true`/`false` for visible/hidden, or a table
+--- `{ visible = bool, error = string? }` for richer control. Runtime
+--- no-op; LuaLS narrows `data` to `crap.data.Pages`.
 ---@param fn crap.display_condition_fn.Pages
 ---@return crap.display_condition_fn.Pages
 function crap.collections.pages.condition(fn) end
 
+--- Access-control function for `pages` operations. Return `true`/`false`
+--- for global allow/deny, or a filter table to constrain results.
+--- Runtime no-op; context type (`crap.AccessContext`) is uniform across
+--- collections, so this is just a discoverable alias for `crap.any.access`.
 ---@param fn crap.access_fn
 ---@return crap.access_fn
 function crap.collections.pages.access(fn) end
 
+--- Custom auth-strategy `authenticate` callback for the `pages` collection.
+--- Receives request headers + the slug; returns a user document on
+--- success or `nil` to fall through. Runtime no-op; discoverable alias
+--- for `crap.any.auth_strategy`.
 ---@param fn crap.auth_strategy_fn
 ---@return crap.auth_strategy_fn
 function crap.collections.pages.auth_strategy(fn) end
 
+--- Compute a display label for an array/blocks row on the `pages`
+--- collection. Receives the row table and returns a string (or `nil`
+--- to fall back to `label_field`). Runtime no-op; discoverable alias
+--- for `crap.any.row_label`.
 ---@param fn crap.row_label_fn
 ---@return crap.row_label_fn
 function crap.collections.pages.row_label(fn) end
@@ -1543,6 +1699,10 @@ function _coll_posts.ref_count(id) end
 
 crap.collections.posts = _coll_posts
 
+--- Define a lifecycle hook for the `posts` collection (`before_create`,
+--- `after_update`, `before_delete`, etc. — registered via `crap.hooks.on(...)`).
+--- The wrapper is a runtime no-op; its purpose is to narrow `ctx` to
+--- `crap.hook.Posts` so `ctx.data.<field>` autocompletes.
 ---@param fn crap.hook_fn.Posts
 ---@return crap.hook_fn.Posts
 function crap.collections.posts.hook(fn) end
@@ -1562,20 +1722,42 @@ function crap.collections.posts.hook(fn) end
 ---@overload fun(field: "related_content", fn: fun(value: string[], ctx: crap.field_hook.Posts): string[]?)
 ---@overload fun(field: string, fn: crap.field_hook_fn.Posts)
 ---@overload fun(fn: crap.field_hook_fn.Posts)
+--- Define a field hook for the `posts` collection. Two-arg form
+--- (`field_hook("<field>", fn)`) narrows `value` to the typed field;
+--- single-arg form (`field_hook(fn)`) leaves `value` as `any`.
+--- Use for value transformation (e.g. slug normalization, computed
+--- defaults). Runtime no-op; LuaLS uses the signature to infer `value`
+--- and `ctx: crap.field_hook.Posts`.
 function crap.collections.posts.field_hook(field, fn) end
 
+--- Display condition for an admin-UI field on the `posts` collection.
+--- Return `true`/`false` for visible/hidden, or a table
+--- `{ visible = bool, error = string? }` for richer control. Runtime
+--- no-op; LuaLS narrows `data` to `crap.data.Posts`.
 ---@param fn crap.display_condition_fn.Posts
 ---@return crap.display_condition_fn.Posts
 function crap.collections.posts.condition(fn) end
 
+--- Access-control function for `posts` operations. Return `true`/`false`
+--- for global allow/deny, or a filter table to constrain results.
+--- Runtime no-op; context type (`crap.AccessContext`) is uniform across
+--- collections, so this is just a discoverable alias for `crap.any.access`.
 ---@param fn crap.access_fn
 ---@return crap.access_fn
 function crap.collections.posts.access(fn) end
 
+--- Custom auth-strategy `authenticate` callback for the `posts` collection.
+--- Receives request headers + the slug; returns a user document on
+--- success or `nil` to fall through. Runtime no-op; discoverable alias
+--- for `crap.any.auth_strategy`.
 ---@param fn crap.auth_strategy_fn
 ---@return crap.auth_strategy_fn
 function crap.collections.posts.auth_strategy(fn) end
 
+--- Compute a display label for an array/blocks row on the `posts`
+--- collection. Receives the row table and returns a string (or `nil`
+--- to fall back to `label_field`). Runtime no-op; discoverable alias
+--- for `crap.any.row_label`.
 ---@param fn crap.row_label_fn
 ---@return crap.row_label_fn
 function crap.collections.posts.row_label(fn) end
@@ -1793,6 +1975,10 @@ function _coll_projects.ref_count(id) end
 
 crap.collections.projects = _coll_projects
 
+--- Define a lifecycle hook for the `projects` collection (`before_create`,
+--- `after_update`, `before_delete`, etc. — registered via `crap.hooks.on(...)`).
+--- The wrapper is a runtime no-op; its purpose is to narrow `ctx` to
+--- `crap.hook.Projects` so `ctx.data.<field>` autocompletes.
 ---@param fn crap.hook_fn.Projects
 ---@return crap.hook_fn.Projects
 function crap.collections.projects.hook(fn) end
@@ -1811,20 +1997,42 @@ function crap.collections.projects.hook(fn) end
 ---@overload fun(field: "budget", fn: fun(value: number, ctx: crap.field_hook.Projects): number?)
 ---@overload fun(field: string, fn: crap.field_hook_fn.Projects)
 ---@overload fun(fn: crap.field_hook_fn.Projects)
+--- Define a field hook for the `projects` collection. Two-arg form
+--- (`field_hook("<field>", fn)`) narrows `value` to the typed field;
+--- single-arg form (`field_hook(fn)`) leaves `value` as `any`.
+--- Use for value transformation (e.g. slug normalization, computed
+--- defaults). Runtime no-op; LuaLS uses the signature to infer `value`
+--- and `ctx: crap.field_hook.Projects`.
 function crap.collections.projects.field_hook(field, fn) end
 
+--- Display condition for an admin-UI field on the `projects` collection.
+--- Return `true`/`false` for visible/hidden, or a table
+--- `{ visible = bool, error = string? }` for richer control. Runtime
+--- no-op; LuaLS narrows `data` to `crap.data.Projects`.
 ---@param fn crap.display_condition_fn.Projects
 ---@return crap.display_condition_fn.Projects
 function crap.collections.projects.condition(fn) end
 
+--- Access-control function for `projects` operations. Return `true`/`false`
+--- for global allow/deny, or a filter table to constrain results.
+--- Runtime no-op; context type (`crap.AccessContext`) is uniform across
+--- collections, so this is just a discoverable alias for `crap.any.access`.
 ---@param fn crap.access_fn
 ---@return crap.access_fn
 function crap.collections.projects.access(fn) end
 
+--- Custom auth-strategy `authenticate` callback for the `projects` collection.
+--- Receives request headers + the slug; returns a user document on
+--- success or `nil` to fall through. Runtime no-op; discoverable alias
+--- for `crap.any.auth_strategy`.
 ---@param fn crap.auth_strategy_fn
 ---@return crap.auth_strategy_fn
 function crap.collections.projects.auth_strategy(fn) end
 
+--- Compute a display label for an array/blocks row on the `projects`
+--- collection. Receives the row table and returns a string (or `nil`
+--- to fall back to `label_field`). Runtime no-op; discoverable alias
+--- for `crap.any.row_label`.
 ---@param fn crap.row_label_fn
 ---@return crap.row_label_fn
 function crap.collections.projects.row_label(fn) end
@@ -2020,6 +2228,10 @@ function _coll_services.ref_count(id) end
 
 crap.collections.services = _coll_services
 
+--- Define a lifecycle hook for the `services` collection (`before_create`,
+--- `after_update`, `before_delete`, etc. — registered via `crap.hooks.on(...)`).
+--- The wrapper is a runtime no-op; its purpose is to narrow `ctx` to
+--- `crap.hook.Services` so `ctx.data.<field>` autocompletes.
 ---@param fn crap.hook_fn.Services
 ---@return crap.hook_fn.Services
 function crap.collections.services.hook(fn) end
@@ -2034,20 +2246,42 @@ function crap.collections.services.hook(fn) end
 ---@overload fun(field: "hero_image", fn: fun(value: string, ctx: crap.field_hook.Services): string?)
 ---@overload fun(field: string, fn: crap.field_hook_fn.Services)
 ---@overload fun(fn: crap.field_hook_fn.Services)
+--- Define a field hook for the `services` collection. Two-arg form
+--- (`field_hook("<field>", fn)`) narrows `value` to the typed field;
+--- single-arg form (`field_hook(fn)`) leaves `value` as `any`.
+--- Use for value transformation (e.g. slug normalization, computed
+--- defaults). Runtime no-op; LuaLS uses the signature to infer `value`
+--- and `ctx: crap.field_hook.Services`.
 function crap.collections.services.field_hook(field, fn) end
 
+--- Display condition for an admin-UI field on the `services` collection.
+--- Return `true`/`false` for visible/hidden, or a table
+--- `{ visible = bool, error = string? }` for richer control. Runtime
+--- no-op; LuaLS narrows `data` to `crap.data.Services`.
 ---@param fn crap.display_condition_fn.Services
 ---@return crap.display_condition_fn.Services
 function crap.collections.services.condition(fn) end
 
+--- Access-control function for `services` operations. Return `true`/`false`
+--- for global allow/deny, or a filter table to constrain results.
+--- Runtime no-op; context type (`crap.AccessContext`) is uniform across
+--- collections, so this is just a discoverable alias for `crap.any.access`.
 ---@param fn crap.access_fn
 ---@return crap.access_fn
 function crap.collections.services.access(fn) end
 
+--- Custom auth-strategy `authenticate` callback for the `services` collection.
+--- Receives request headers + the slug; returns a user document on
+--- success or `nil` to fall through. Runtime no-op; discoverable alias
+--- for `crap.any.auth_strategy`.
 ---@param fn crap.auth_strategy_fn
 ---@return crap.auth_strategy_fn
 function crap.collections.services.auth_strategy(fn) end
 
+--- Compute a display label for an array/blocks row on the `services`
+--- collection. Receives the row table and returns a string (or `nil`
+--- to fall back to `label_field`). Runtime no-op; discoverable alias
+--- for `crap.any.row_label`.
 ---@param fn crap.row_label_fn
 ---@return crap.row_label_fn
 function crap.collections.services.row_label(fn) end
@@ -2205,6 +2439,10 @@ function _coll_tags.ref_count(id) end
 
 crap.collections.tags = _coll_tags
 
+--- Define a lifecycle hook for the `tags` collection (`before_create`,
+--- `after_update`, `before_delete`, etc. — registered via `crap.hooks.on(...)`).
+--- The wrapper is a runtime no-op; its purpose is to narrow `ctx` to
+--- `crap.hook.Tags` so `ctx.data.<field>` autocompletes.
 ---@param fn crap.hook_fn.Tags
 ---@return crap.hook_fn.Tags
 function crap.collections.tags.hook(fn) end
@@ -2214,20 +2452,42 @@ function crap.collections.tags.hook(fn) end
 ---@overload fun(field: "tag_type", fn: fun(value: "topic" | "technology" | "industry" | "skill", ctx: crap.field_hook.Tags): "topic" | "technology" | "industry" | "skill"?)
 ---@overload fun(field: string, fn: crap.field_hook_fn.Tags)
 ---@overload fun(fn: crap.field_hook_fn.Tags)
+--- Define a field hook for the `tags` collection. Two-arg form
+--- (`field_hook("<field>", fn)`) narrows `value` to the typed field;
+--- single-arg form (`field_hook(fn)`) leaves `value` as `any`.
+--- Use for value transformation (e.g. slug normalization, computed
+--- defaults). Runtime no-op; LuaLS uses the signature to infer `value`
+--- and `ctx: crap.field_hook.Tags`.
 function crap.collections.tags.field_hook(field, fn) end
 
+--- Display condition for an admin-UI field on the `tags` collection.
+--- Return `true`/`false` for visible/hidden, or a table
+--- `{ visible = bool, error = string? }` for richer control. Runtime
+--- no-op; LuaLS narrows `data` to `crap.data.Tags`.
 ---@param fn crap.display_condition_fn.Tags
 ---@return crap.display_condition_fn.Tags
 function crap.collections.tags.condition(fn) end
 
+--- Access-control function for `tags` operations. Return `true`/`false`
+--- for global allow/deny, or a filter table to constrain results.
+--- Runtime no-op; context type (`crap.AccessContext`) is uniform across
+--- collections, so this is just a discoverable alias for `crap.any.access`.
 ---@param fn crap.access_fn
 ---@return crap.access_fn
 function crap.collections.tags.access(fn) end
 
+--- Custom auth-strategy `authenticate` callback for the `tags` collection.
+--- Receives request headers + the slug; returns a user document on
+--- success or `nil` to fall through. Runtime no-op; discoverable alias
+--- for `crap.any.auth_strategy`.
 ---@param fn crap.auth_strategy_fn
 ---@return crap.auth_strategy_fn
 function crap.collections.tags.auth_strategy(fn) end
 
+--- Compute a display label for an array/blocks row on the `tags`
+--- collection. Receives the row table and returns a string (or `nil`
+--- to fall back to `label_field`). Runtime no-op; discoverable alias
+--- for `crap.any.row_label`.
 ---@param fn crap.row_label_fn
 ---@return crap.row_label_fn
 function crap.collections.tags.row_label(fn) end
@@ -2433,6 +2693,10 @@ function _coll_test_nesting.ref_count(id) end
 
 crap.collections.test_nesting = _coll_test_nesting
 
+--- Define a lifecycle hook for the `test_nesting` collection (`before_create`,
+--- `after_update`, `before_delete`, etc. — registered via `crap.hooks.on(...)`).
+--- The wrapper is a runtime no-op; its purpose is to narrow `ctx` to
+--- `crap.hook.TestNesting` so `ctx.data.<field>` autocompletes.
 ---@param fn crap.hook_fn.TestNesting
 ---@return crap.hook_fn.TestNesting
 function crap.collections.test_nesting.hook(fn) end
@@ -2440,20 +2704,42 @@ function crap.collections.test_nesting.hook(fn) end
 ---@overload fun(field: "name", fn: fun(value: string, ctx: crap.field_hook.TestNesting): string?)
 ---@overload fun(field: string, fn: crap.field_hook_fn.TestNesting)
 ---@overload fun(fn: crap.field_hook_fn.TestNesting)
+--- Define a field hook for the `test_nesting` collection. Two-arg form
+--- (`field_hook("<field>", fn)`) narrows `value` to the typed field;
+--- single-arg form (`field_hook(fn)`) leaves `value` as `any`.
+--- Use for value transformation (e.g. slug normalization, computed
+--- defaults). Runtime no-op; LuaLS uses the signature to infer `value`
+--- and `ctx: crap.field_hook.TestNesting`.
 function crap.collections.test_nesting.field_hook(field, fn) end
 
+--- Display condition for an admin-UI field on the `test_nesting` collection.
+--- Return `true`/`false` for visible/hidden, or a table
+--- `{ visible = bool, error = string? }` for richer control. Runtime
+--- no-op; LuaLS narrows `data` to `crap.data.TestNesting`.
 ---@param fn crap.display_condition_fn.TestNesting
 ---@return crap.display_condition_fn.TestNesting
 function crap.collections.test_nesting.condition(fn) end
 
+--- Access-control function for `test_nesting` operations. Return `true`/`false`
+--- for global allow/deny, or a filter table to constrain results.
+--- Runtime no-op; context type (`crap.AccessContext`) is uniform across
+--- collections, so this is just a discoverable alias for `crap.any.access`.
 ---@param fn crap.access_fn
 ---@return crap.access_fn
 function crap.collections.test_nesting.access(fn) end
 
+--- Custom auth-strategy `authenticate` callback for the `test_nesting` collection.
+--- Receives request headers + the slug; returns a user document on
+--- success or `nil` to fall through. Runtime no-op; discoverable alias
+--- for `crap.any.auth_strategy`.
 ---@param fn crap.auth_strategy_fn
 ---@return crap.auth_strategy_fn
 function crap.collections.test_nesting.auth_strategy(fn) end
 
+--- Compute a display label for an array/blocks row on the `test_nesting`
+--- collection. Receives the row table and returns a string (or `nil`
+--- to fall back to `label_field`). Runtime no-op; discoverable alias
+--- for `crap.any.row_label`.
 ---@param fn crap.row_label_fn
 ---@return crap.row_label_fn
 function crap.collections.test_nesting.row_label(fn) end
@@ -2631,6 +2917,10 @@ function _coll_testimonials.ref_count(id) end
 
 crap.collections.testimonials = _coll_testimonials
 
+--- Define a lifecycle hook for the `testimonials` collection (`before_create`,
+--- `after_update`, `before_delete`, etc. — registered via `crap.hooks.on(...)`).
+--- The wrapper is a runtime no-op; its purpose is to narrow `ctx` to
+--- `crap.hook.Testimonials` so `ctx.data.<field>` autocompletes.
 ---@param fn crap.hook_fn.Testimonials
 ---@return crap.hook_fn.Testimonials
 function crap.collections.testimonials.hook(fn) end
@@ -2645,20 +2935,42 @@ function crap.collections.testimonials.hook(fn) end
 ---@overload fun(field: "featured", fn: fun(value: boolean, ctx: crap.field_hook.Testimonials): boolean?)
 ---@overload fun(field: string, fn: crap.field_hook_fn.Testimonials)
 ---@overload fun(fn: crap.field_hook_fn.Testimonials)
+--- Define a field hook for the `testimonials` collection. Two-arg form
+--- (`field_hook("<field>", fn)`) narrows `value` to the typed field;
+--- single-arg form (`field_hook(fn)`) leaves `value` as `any`.
+--- Use for value transformation (e.g. slug normalization, computed
+--- defaults). Runtime no-op; LuaLS uses the signature to infer `value`
+--- and `ctx: crap.field_hook.Testimonials`.
 function crap.collections.testimonials.field_hook(field, fn) end
 
+--- Display condition for an admin-UI field on the `testimonials` collection.
+--- Return `true`/`false` for visible/hidden, or a table
+--- `{ visible = bool, error = string? }` for richer control. Runtime
+--- no-op; LuaLS narrows `data` to `crap.data.Testimonials`.
 ---@param fn crap.display_condition_fn.Testimonials
 ---@return crap.display_condition_fn.Testimonials
 function crap.collections.testimonials.condition(fn) end
 
+--- Access-control function for `testimonials` operations. Return `true`/`false`
+--- for global allow/deny, or a filter table to constrain results.
+--- Runtime no-op; context type (`crap.AccessContext`) is uniform across
+--- collections, so this is just a discoverable alias for `crap.any.access`.
 ---@param fn crap.access_fn
 ---@return crap.access_fn
 function crap.collections.testimonials.access(fn) end
 
+--- Custom auth-strategy `authenticate` callback for the `testimonials` collection.
+--- Receives request headers + the slug; returns a user document on
+--- success or `nil` to fall through. Runtime no-op; discoverable alias
+--- for `crap.any.auth_strategy`.
 ---@param fn crap.auth_strategy_fn
 ---@return crap.auth_strategy_fn
 function crap.collections.testimonials.auth_strategy(fn) end
 
+--- Compute a display label for an array/blocks row on the `testimonials`
+--- collection. Receives the row table and returns a string (or `nil`
+--- to fall back to `label_field`). Runtime no-op; discoverable alias
+--- for `crap.any.row_label`.
 ---@param fn crap.row_label_fn
 ---@return crap.row_label_fn
 function crap.collections.testimonials.row_label(fn) end
@@ -2820,6 +3132,10 @@ function _coll_users.ref_count(id) end
 
 crap.collections.users = _coll_users
 
+--- Define a lifecycle hook for the `users` collection (`before_create`,
+--- `after_update`, `before_delete`, etc. — registered via `crap.hooks.on(...)`).
+--- The wrapper is a runtime no-op; its purpose is to narrow `ctx` to
+--- `crap.hook.Users` so `ctx.data.<field>` autocompletes.
 ---@param fn crap.hook_fn.Users
 ---@return crap.hook_fn.Users
 function crap.collections.users.hook(fn) end
@@ -2832,20 +3148,42 @@ function crap.collections.users.hook(fn) end
 ---@overload fun(field: "bio", fn: fun(value: string, ctx: crap.field_hook.Users): string?)
 ---@overload fun(field: string, fn: crap.field_hook_fn.Users)
 ---@overload fun(fn: crap.field_hook_fn.Users)
+--- Define a field hook for the `users` collection. Two-arg form
+--- (`field_hook("<field>", fn)`) narrows `value` to the typed field;
+--- single-arg form (`field_hook(fn)`) leaves `value` as `any`.
+--- Use for value transformation (e.g. slug normalization, computed
+--- defaults). Runtime no-op; LuaLS uses the signature to infer `value`
+--- and `ctx: crap.field_hook.Users`.
 function crap.collections.users.field_hook(field, fn) end
 
+--- Display condition for an admin-UI field on the `users` collection.
+--- Return `true`/`false` for visible/hidden, or a table
+--- `{ visible = bool, error = string? }` for richer control. Runtime
+--- no-op; LuaLS narrows `data` to `crap.data.Users`.
 ---@param fn crap.display_condition_fn.Users
 ---@return crap.display_condition_fn.Users
 function crap.collections.users.condition(fn) end
 
+--- Access-control function for `users` operations. Return `true`/`false`
+--- for global allow/deny, or a filter table to constrain results.
+--- Runtime no-op; context type (`crap.AccessContext`) is uniform across
+--- collections, so this is just a discoverable alias for `crap.any.access`.
 ---@param fn crap.access_fn
 ---@return crap.access_fn
 function crap.collections.users.access(fn) end
 
+--- Custom auth-strategy `authenticate` callback for the `users` collection.
+--- Receives request headers + the slug; returns a user document on
+--- success or `nil` to fall through. Runtime no-op; discoverable alias
+--- for `crap.any.auth_strategy`.
 ---@param fn crap.auth_strategy_fn
 ---@return crap.auth_strategy_fn
 function crap.collections.users.auth_strategy(fn) end
 
+--- Compute a display label for an array/blocks row on the `users`
+--- collection. Receives the row table and returns a string (or `nil`
+--- to fall back to `label_field`). Runtime no-op; discoverable alias
+--- for `crap.any.row_label`.
 ---@param fn crap.row_label_fn
 ---@return crap.row_label_fn
 function crap.collections.users.row_label(fn) end
@@ -2913,6 +3251,9 @@ function _glob_footer.update(data, opts) end
 
 crap.globals.footer = _glob_footer
 
+--- Define a lifecycle hook for the `footer` global (`before_update`,
+--- `after_update`, `before_read`, …). Runtime no-op; LuaLS narrows
+--- `ctx` to `crap.hook.global_footer` so `ctx.data.<field>` autocompletes.
 ---@param fn crap.hook_fn.global_footer
 ---@return crap.hook_fn.global_footer
 function crap.globals.footer.hook(fn) end
@@ -2921,16 +3262,29 @@ function crap.globals.footer.hook(fn) end
 ---@overload fun(field: "show_social_links", fn: fun(value: boolean, ctx: crap.field_hook.global_footer): boolean?)
 ---@overload fun(field: string, fn: crap.field_hook_fn.global_footer)
 ---@overload fun(fn: crap.field_hook_fn.global_footer)
+--- Define a field hook for the `footer` global. Two-arg form narrows
+--- `value` to the typed field; single-arg form leaves it as `any`.
+--- Runtime no-op; LuaLS uses the signature to infer `value` and
+--- `ctx: crap.field_hook.global_footer`.
 function crap.globals.footer.field_hook(field, fn) end
 
+--- Display condition for an admin-UI field on the `footer` global.
+--- Return `true`/`false`, or a `{ visible, error }` table. Runtime
+--- no-op; LuaLS narrows `data` to `crap.global_data.Footer`.
 ---@param fn crap.display_condition_fn.global_footer
 ---@return crap.display_condition_fn.global_footer
 function crap.globals.footer.condition(fn) end
 
+--- Access-control function for `footer` global operations. Return
+--- `true`/`false` or a filter table. Runtime no-op; discoverable alias
+--- for `crap.any.access`.
 ---@param fn crap.access_fn
 ---@return crap.access_fn
 function crap.globals.footer.access(fn) end
 
+--- Compute a display label for an array/blocks row on the `footer`
+--- global. Returns a string (or `nil` to fall back to `label_field`).
+--- Runtime no-op; discoverable alias for `crap.any.row_label`.
 ---@param fn crap.row_label_fn
 ---@return crap.row_label_fn
 function crap.globals.footer.row_label(fn) end
@@ -2997,22 +3351,38 @@ function _glob_navigation.update(data, opts) end
 
 crap.globals.navigation = _glob_navigation
 
+--- Define a lifecycle hook for the `navigation` global (`before_update`,
+--- `after_update`, `before_read`, …). Runtime no-op; LuaLS narrows
+--- `ctx` to `crap.hook.global_navigation` so `ctx.data.<field>` autocompletes.
 ---@param fn crap.hook_fn.global_navigation
 ---@return crap.hook_fn.global_navigation
 function crap.globals.navigation.hook(fn) end
 
 ---@overload fun(field: string, fn: crap.field_hook_fn.global_navigation)
 ---@overload fun(fn: crap.field_hook_fn.global_navigation)
+--- Define a field hook for the `navigation` global. Two-arg form narrows
+--- `value` to the typed field; single-arg form leaves it as `any`.
+--- Runtime no-op; LuaLS uses the signature to infer `value` and
+--- `ctx: crap.field_hook.global_navigation`.
 function crap.globals.navigation.field_hook(field, fn) end
 
+--- Display condition for an admin-UI field on the `navigation` global.
+--- Return `true`/`false`, or a `{ visible, error }` table. Runtime
+--- no-op; LuaLS narrows `data` to `crap.global_data.Navigation`.
 ---@param fn crap.display_condition_fn.global_navigation
 ---@return crap.display_condition_fn.global_navigation
 function crap.globals.navigation.condition(fn) end
 
+--- Access-control function for `navigation` global operations. Return
+--- `true`/`false` or a filter table. Runtime no-op; discoverable alias
+--- for `crap.any.access`.
 ---@param fn crap.access_fn
 ---@return crap.access_fn
 function crap.globals.navigation.access(fn) end
 
+--- Compute a display label for an array/blocks row on the `navigation`
+--- global. Returns a string (or `nil` to fall back to `label_field`).
+--- Runtime no-op; discoverable alias for `crap.any.row_label`.
 ---@param fn crap.row_label_fn
 ---@return crap.row_label_fn
 function crap.globals.navigation.row_label(fn) end
@@ -3103,22 +3473,38 @@ function _glob_site_settings.update(data, opts) end
 
 crap.globals.site_settings = _glob_site_settings
 
+--- Define a lifecycle hook for the `site_settings` global (`before_update`,
+--- `after_update`, `before_read`, …). Runtime no-op; LuaLS narrows
+--- `ctx` to `crap.hook.global_site_settings` so `ctx.data.<field>` autocompletes.
 ---@param fn crap.hook_fn.global_site_settings
 ---@return crap.hook_fn.global_site_settings
 function crap.globals.site_settings.hook(fn) end
 
 ---@overload fun(field: string, fn: crap.field_hook_fn.global_site_settings)
 ---@overload fun(fn: crap.field_hook_fn.global_site_settings)
+--- Define a field hook for the `site_settings` global. Two-arg form narrows
+--- `value` to the typed field; single-arg form leaves it as `any`.
+--- Runtime no-op; LuaLS uses the signature to infer `value` and
+--- `ctx: crap.field_hook.global_site_settings`.
 function crap.globals.site_settings.field_hook(field, fn) end
 
+--- Display condition for an admin-UI field on the `site_settings` global.
+--- Return `true`/`false`, or a `{ visible, error }` table. Runtime
+--- no-op; LuaLS narrows `data` to `crap.global_data.SiteSettings`.
 ---@param fn crap.display_condition_fn.global_site_settings
 ---@return crap.display_condition_fn.global_site_settings
 function crap.globals.site_settings.condition(fn) end
 
+--- Access-control function for `site_settings` global operations. Return
+--- `true`/`false` or a filter table. Runtime no-op; discoverable alias
+--- for `crap.any.access`.
 ---@param fn crap.access_fn
 ---@return crap.access_fn
 function crap.globals.site_settings.access(fn) end
 
+--- Compute a display label for an array/blocks row on the `site_settings`
+--- global. Returns a string (or `nil` to fall back to `label_field`).
+--- Runtime no-op; discoverable alias for `crap.any.row_label`.
 ---@param fn crap.row_label_fn
 ---@return crap.row_label_fn
 function crap.globals.site_settings.row_label(fn) end

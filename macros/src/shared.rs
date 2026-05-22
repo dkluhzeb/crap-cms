@@ -127,6 +127,16 @@ pub(crate) fn build_field_emit(name: &str, f: &LuaField) -> darling::Result<Vec<
     let doc_suffix = build_field_doc_suffix(&f.attrs);
     let prefix = format!("--- @field {name}{opt_marker} ");
 
+    // `ty` and `ty_expr` both set is almost always a copy-paste bug — one
+    // is a compile-time literal, the other a runtime expression — and
+    // silently preferring `ty` masks the typo. Error out so the user
+    // picks one explicitly.
+    if f.lua_ty.is_some() && f.ty_expr.is_some() {
+        return Err(darling::Error::custom(format!(
+            "field `{name}`: `#[lua(ty = \"...\")]` and `#[lua(ty_expr = \"...\")]` are mutually exclusive — pick one"
+        )));
+    }
+
     if let Some(lit) = &f.lua_ty {
         let line = format!("{prefix}{lit}{doc_suffix}\n");
         return Ok(vec![quote! { out.push_str(#line); }]);

@@ -5793,6 +5793,7 @@ dependencies = [
  "clap",
  "crap-cms",
  "similar",
+ "tempfile",
 ]
 
 [[package]]

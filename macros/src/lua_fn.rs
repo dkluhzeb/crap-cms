@@ -77,6 +77,23 @@ fn expand(attr: &LuaFnAttr, item_fn: &mut ItemFn) -> darling::Result<TokenStream
     let fn_name = item_fn.sig.ident.clone();
     let fn_docs = extract_docs(&item_fn.attrs);
 
+    // Lua FFI requires concrete types. A generic / where-bounded fn
+    // would expand into a `*_SPEC` const referencing type parameters
+    // that have no value at const-init time — the resulting error is
+    // far from the macro site. Reject up front with a clear message.
+    if !item_fn.sig.generics.params.is_empty() {
+        return Err(darling::Error::custom(
+            "#[lua_fn] does not support generic functions — Lua FFI requires concrete types",
+        )
+        .with_span(&item_fn.sig.generics.span()));
+    }
+    if let Some(wc) = &item_fn.sig.generics.where_clause {
+        return Err(darling::Error::custom(
+            "#[lua_fn] does not support `where` clauses — Lua FFI requires concrete types",
+        )
+        .with_span(&wc.span()));
+    }
+
     // `#[lua_fn]` signature constraints are determined by mlua's
     // `FromLuaMulti` (owned params; `&str`/`&Table` don't satisfy the
     // 'static-ish lifetime bound) and by the wrapper closure that the

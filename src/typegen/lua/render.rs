@@ -14,7 +14,7 @@ use crate::{
     core::{CollectionDefinition, Registry, Slug, collection::GlobalDefinition},
     db::query::get_column_names,
     typegen::{
-        helpers::{SubTypeKind, collect_sub_type_fields, to_pascal_case, w},
+        helpers::{SubTypeKind, collect_sub_type_fields, to_pascal_case, w, wraw},
         lua::LuaAnnotation,
     },
 };
@@ -273,11 +273,24 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
 fn render_collection_typing_factories(out: &mut String, col: &CollectionDefinition, pascal: &str) {
     let slug = &col.slug;
 
-    // hook(fn) — typed collection-hook factory.
-    w!(out, "---@param fn crap.hook_fn.{pascal}");
-    w!(out, "---@return crap.hook_fn.{pascal}");
-    w!(out, "function crap.collections.{slug}.hook(fn) end");
-    out.push('\n');
+    // Each block consolidated into one `format!` to keep the function
+    // under the `too_many_lines` clippy threshold and to make the Lua
+    // output legible at the source level. Multi-line string literals
+    // preserve their content verbatim, so what's written here is what
+    // ends up in `generated.lua`.
+
+    wraw!(
+        out,
+        "--- Define a lifecycle hook for the `{slug}` collection (`before_create`,
+--- `after_update`, `before_delete`, etc. — registered via `crap.hooks.on(...)`).
+--- The wrapper is a runtime no-op; its purpose is to narrow `ctx` to
+--- `crap.hook.{pascal}` so `ctx.data.<field>` autocompletes.
+---@param fn crap.hook_fn.{pascal}
+---@return crap.hook_fn.{pascal}
+function crap.collections.{slug}.hook(fn) end
+
+"
+    );
 
     // field_hook(field, fn) — per-field overloads + any-field + dynamic-slug fallback.
     let scalar = |ft: &crate::core::FieldType| {
@@ -312,54 +325,70 @@ fn render_collection_typing_factories(out: &mut String, col: &CollectionDefiniti
             field = f.name,
         );
     }
-    // Dynamic field name — generic per-collection callback.
-    w!(
+    // Doc-prose comment lives below the overloads — LuaLS attaches the
+    // prose adjacent to the `function ... end` decl to ALL overloads.
+    wraw!(
         out,
-        "---@overload fun(field: string, fn: crap.field_hook_fn.{pascal})"
-    );
-    // Single-arg form — any field of this collection, value: any.
-    w!(out, "---@overload fun(fn: crap.field_hook_fn.{pascal})");
-    w!(
-        out,
-        "function crap.collections.{slug}.field_hook(field, fn) end"
-    );
-    out.push('\n');
+        "---@overload fun(field: string, fn: crap.field_hook_fn.{pascal})
+---@overload fun(fn: crap.field_hook_fn.{pascal})
+--- Define a field hook for the `{slug}` collection. Two-arg form
+--- (`field_hook(\"<field>\", fn)`) narrows `value` to the typed field;
+--- single-arg form (`field_hook(fn)`) leaves `value` as `any`.
+--- Use for value transformation (e.g. slug normalization, computed
+--- defaults). Runtime no-op; LuaLS uses the signature to infer `value`
+--- and `ctx: crap.field_hook.{pascal}`.
+function crap.collections.{slug}.field_hook(field, fn) end
 
-    // condition(fn) — typed display-condition factory.
-    w!(out, "---@param fn crap.display_condition_fn.{pascal}");
-    w!(out, "---@return crap.display_condition_fn.{pascal}");
-    w!(out, "function crap.collections.{slug}.condition(fn) end");
-    out.push('\n');
+"
+    );
+
+    wraw!(
+        out,
+        "--- Display condition for an admin-UI field on the `{slug}` collection.
+--- Return `true`/`false` for visible/hidden, or a table
+--- `{{ visible = bool, error = string? }}` for richer control. Runtime
+--- no-op; LuaLS narrows `data` to `crap.data.{pascal}`.
+---@param fn crap.display_condition_fn.{pascal}
+---@return crap.display_condition_fn.{pascal}
+function crap.collections.{slug}.condition(fn) end
+
+"
+    );
 
     // access(fn) / auth_strategy(fn) — discoverable aliases for
-    // `crap.any.access` / `crap.any.auth_strategy`. The context types
-    // are uniform across collections (`crap.AccessContext` /
-    // `crap.AuthStrategyContext`) so no per-collection narrowing is
+    // `crap.any.access` / `crap.any.auth_strategy`. Context types are
+    // uniform across collections so no per-collection narrowing is
     // possible, but surfacing them on the collection accessor makes
     // them findable via `crap.collections.<slug>.<TAB>` instead of
     // requiring users to know about the `crap.any` namespace upfront.
-    w!(out, "---@param fn crap.access_fn");
-    w!(out, "---@return crap.access_fn");
-    w!(out, "function crap.collections.{slug}.access(fn) end");
-    out.push('\n');
-
-    w!(out, "---@param fn crap.auth_strategy_fn");
-    w!(out, "---@return crap.auth_strategy_fn");
-    w!(
+    wraw!(
         out,
-        "function crap.collections.{slug}.auth_strategy(fn) end"
-    );
-    out.push('\n');
+        "--- Access-control function for `{slug}` operations. Return `true`/`false`
+--- for global allow/deny, or a filter table to constrain results.
+--- Runtime no-op; context type (`crap.AccessContext`) is uniform across
+--- collections, so this is just a discoverable alias for `crap.any.access`.
+---@param fn crap.access_fn
+---@return crap.access_fn
+function crap.collections.{slug}.access(fn) end
 
-    // row_label(fn) — discoverable alias. The row table is generic
-    // (`table<string, any>`) here; per-field narrowing to the specific
-    // `crap.array_row.<X>` type would require a separate
-    // `row_label(field, fn)` overload that's worth adding once we
-    // have a real use case.
-    w!(out, "---@param fn crap.row_label_fn");
-    w!(out, "---@return crap.row_label_fn");
-    w!(out, "function crap.collections.{slug}.row_label(fn) end");
-    out.push('\n');
+--- Custom auth-strategy `authenticate` callback for the `{slug}` collection.
+--- Receives request headers + the slug; returns a user document on
+--- success or `nil` to fall through. Runtime no-op; discoverable alias
+--- for `crap.any.auth_strategy`.
+---@param fn crap.auth_strategy_fn
+---@return crap.auth_strategy_fn
+function crap.collections.{slug}.auth_strategy(fn) end
+
+--- Compute a display label for an array/blocks row on the `{slug}`
+--- collection. Receives the row table and returns a string (or `nil`
+--- to fall back to `label_field`). Runtime no-op; discoverable alias
+--- for `crap.any.row_label`.
+---@param fn crap.row_label_fn
+---@return crap.row_label_fn
+function crap.collections.{slug}.row_label(fn) end
+
+"
+    );
 }
 
 /// Render the per-collection accessor at `crap.collections.<slug>`.
@@ -590,11 +619,20 @@ fn render_global(out: &mut String, global: &GlobalDefinition) {
 fn render_global_typing_factories(out: &mut String, global: &GlobalDefinition, pascal: &str) {
     let slug = &global.slug;
 
-    // hook(fn) — typed global-hook factory.
-    w!(out, "---@param fn crap.hook_fn.global_{slug}");
-    w!(out, "---@return crap.hook_fn.global_{slug}");
-    w!(out, "function crap.globals.{slug}.hook(fn) end");
-    out.push('\n');
+    // Same consolidation as the per-collection variant — see
+    // `render_collection_typing_factories` for the rationale.
+
+    wraw!(
+        out,
+        "--- Define a lifecycle hook for the `{slug}` global (`before_update`,
+--- `after_update`, `before_read`, …). Runtime no-op; LuaLS narrows
+--- `ctx` to `crap.hook.global_{slug}` so `ctx.data.<field>` autocompletes.
+---@param fn crap.hook_fn.global_{slug}
+---@return crap.hook_fn.global_{slug}
+function crap.globals.{slug}.hook(fn) end
+
+"
+    );
 
     // field_hook(field, fn) — per-field overloads + any-field form.
     let scalar = |ft: &crate::core::FieldType| {
@@ -629,39 +667,39 @@ fn render_global_typing_factories(out: &mut String, global: &GlobalDefinition, p
             field = f.name,
         );
     }
-    w!(
+    wraw!(
         out,
-        "---@overload fun(field: string, fn: crap.field_hook_fn.global_{slug})"
-    );
-    w!(
-        out,
-        "---@overload fun(fn: crap.field_hook_fn.global_{slug})"
-    );
-    w!(
-        out,
-        "function crap.globals.{slug}.field_hook(field, fn) end"
-    );
-    out.push('\n');
+        "---@overload fun(field: string, fn: crap.field_hook_fn.global_{slug})
+---@overload fun(fn: crap.field_hook_fn.global_{slug})
+--- Define a field hook for the `{slug}` global. Two-arg form narrows
+--- `value` to the typed field; single-arg form leaves it as `any`.
+--- Runtime no-op; LuaLS uses the signature to infer `value` and
+--- `ctx: crap.field_hook.global_{slug}`.
+function crap.globals.{slug}.field_hook(field, fn) end
 
-    // condition(fn) — typed display-condition factory.
-    w!(out, "---@param fn crap.display_condition_fn.global_{slug}");
-    w!(out, "---@return crap.display_condition_fn.global_{slug}");
-    w!(out, "function crap.globals.{slug}.condition(fn) end");
-    out.push('\n');
+--- Display condition for an admin-UI field on the `{slug}` global.
+--- Return `true`/`false`, or a `{{ visible, error }}` table. Runtime
+--- no-op; LuaLS narrows `data` to `crap.global_data.{pascal}`.
+---@param fn crap.display_condition_fn.global_{slug}
+---@return crap.display_condition_fn.global_{slug}
+function crap.globals.{slug}.condition(fn) end
 
-    // access(fn) — discoverable alias for `crap.any.access`
-    // (uniform `crap.AccessContext`, same reasoning as the
-    // per-collection variant).
-    w!(out, "---@param fn crap.access_fn");
-    w!(out, "---@return crap.access_fn");
-    w!(out, "function crap.globals.{slug}.access(fn) end");
-    out.push('\n');
+--- Access-control function for `{slug}` global operations. Return
+--- `true`/`false` or a filter table. Runtime no-op; discoverable alias
+--- for `crap.any.access`.
+---@param fn crap.access_fn
+---@return crap.access_fn
+function crap.globals.{slug}.access(fn) end
 
-    // row_label(fn) — discoverable alias (same as per-collection).
-    w!(out, "---@param fn crap.row_label_fn");
-    w!(out, "---@return crap.row_label_fn");
-    w!(out, "function crap.globals.{slug}.row_label(fn) end");
-    out.push('\n');
+--- Compute a display label for an array/blocks row on the `{slug}`
+--- global. Returns a string (or `nil` to fall back to `label_field`).
+--- Runtime no-op; discoverable alias for `crap.any.row_label`.
+---@param fn crap.row_label_fn
+---@return crap.row_label_fn
+function crap.globals.{slug}.row_label(fn) end
+
+"
+    );
 }
 
 /// Per-global accessor at `crap.globals.<slug>`. Single-arg

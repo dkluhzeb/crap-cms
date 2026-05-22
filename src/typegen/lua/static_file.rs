@@ -554,4 +554,22 @@ mod tests {
         // before the diff test does.
         assert_eq!(BLOCK_RENDERS.len(), 28);
     }
+
+    #[test]
+    fn render_static_file_is_idempotent() {
+        // Two back-to-back renders must produce byte-identical output.
+        // Guards against any future hashmap/hashset iteration creeping
+        // into the derive pipeline (e.g. LuaAlias variant order,
+        // LuaAnnotation field order, lua_table fn order). The
+        // assembled_output diff test already catches this implicitly
+        // by comparing to the on-disk file, but an explicit
+        // idempotency check makes the determinism contract a
+        // first-class invariant.
+        let a = render_static_file();
+        let b = render_static_file();
+        assert_eq!(
+            a, b,
+            "render_static_file produced different output on two consecutive runs — non-deterministic ordering in a derive"
+        );
+    }
 }

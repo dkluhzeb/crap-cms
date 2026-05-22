@@ -131,6 +131,13 @@ pub fn register_api_pool_init(
 /// factories. Every entry is a pass-through (`f(fn) = fn`); the
 /// runtime never inspects the wrapped function. Type signatures
 /// live in `types/crap.lua`.
+///
+/// **These wrappers do not validate at runtime.** A user passing a
+/// field-hook function to `crap.any.collection_hook` (wrong wrapper)
+/// will still run — only `LuaLS` would flag the mismatch via
+/// `Lua.type.inferParamType`. By design: the factory exists purely
+/// to give `LuaLS` a typed parameter slot. Do not add validation here
+/// without aligning the wrapper signatures and the typegen.
 pub(crate) fn register_any_factories(lua: &Lua) -> Result<()> {
     const ANY_METHODS: &[&str] = &[
         "collection_hook",
@@ -144,7 +151,7 @@ pub(crate) fn register_any_factories(lua: &Lua) -> Result<()> {
     let crap: mlua::Table = lua.globals().get("crap")?;
     let any = lua.create_table()?;
     for method in ANY_METHODS {
-        // Identity closure: `function(fn) return fn end`.
+        // Identity closure — intentional runtime no-op (see fn docs).
         let factory: mlua::Function = lua
             .load("return function(fn) return fn end")
             .set_name(format!("crap.any.{method}"))
@@ -310,12 +317,21 @@ pub(crate) fn register_per_slug_accessors(lua: &Lua, registry: &Arc<Registry>) -
 /// unused at runtime (the same function value is returned either
 /// way; the field-name parameter exists purely to let `LuaLS`
 /// narrow per-field via overloads).
+///
+/// **Runtime no-op by design.** These wrappers exist to feed `LuaLS`
+/// typed callback slots — they do not validate the wrapped function's
+/// shape. Mismatched wrapping (e.g. wrapping an access fn with
+/// `.field_hook`) executes correctly; only `LuaLS` would flag it.
+/// Do not add runtime validation without coordinating with the typegen
+/// surface (`types/crap.lua` overloads).
 fn attach_typing_helpers(
     lua: &Lua,
     accessor: &mlua::Table,
     helpers: &[(&str, usize)],
 ) -> Result<()> {
     for (method, arity) in helpers {
+        // 1-arg identity / 2-arg (field, fn) identity — both intentional
+        // runtime no-ops (see fn docs).
         let chunk = if *arity == 1 {
             "return function(fn) return fn end"
         } else {

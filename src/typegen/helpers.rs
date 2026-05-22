@@ -30,6 +30,20 @@ macro_rules! w {
 }
 pub(super) use w;
 
+/// `write!`-without-trailing-newline variant of [`w!`]. Use for
+/// multi-line format-string emissions where the string literal
+/// already carries its own newlines (e.g. doc-prose blocks that span
+/// several `--- ...` lines). Suppresses the `clippy::format_push_string`
+/// warning that fires on the equivalent `out.push_str(&format!(...))`
+/// pattern.
+macro_rules! wraw {
+    ($out:expr, $($arg:tt)*) => {{
+        use ::std::fmt::Write as _;
+        ::std::write!($out, $($arg)*).expect("write to String")
+    }};
+}
+pub(super) use wraw;
+
 /// Convert a slug like "`site_settings`" to `PascalCase` "`SiteSettings`".
 pub(crate) fn to_pascal_case(slug: &str) -> String {
     slug.split('_')

@@ -126,6 +126,13 @@ pub(crate) fn derive(input: TokenStream) -> TokenStream {
 
 /// Render literal-union, type-union, or mixed-mode alias depending on
 /// the variant shape.
+///
+/// Output order matches the variant declaration order in the source
+/// enum (darling/syn populate `Data::take_enum()` in source order and
+/// `map_type_to_string` is a deterministic AST walk — no `HashMap` /
+/// `HashSet` iteration anywhere on this path). The full pipeline's
+/// idempotency is exercised by
+/// `static_file::tests::render_static_file_is_idempotent`.
 fn render_alias_body(
     alias: &str,
     enum_docs: &[String],

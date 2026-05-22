@@ -14,6 +14,17 @@
 //! Both `register_*` and `render_*` are idempotent w.r.t. table
 //! creation — `ensure_table` reuses existing parent tables when sibling
 //! `lua_table!` calls have already created them.
+//!
+//! ## Linkage to `#[lua_fn]`
+//!
+//! Each ident in `fns: [...]` must name a fn carrying `#[lua_fn(...)]`
+//! in the calling module's scope — the macro expands to references to
+//! the `<NAME>_SPEC` const and `<name>_register` wrapper that
+//! `#[lua_fn]` emits. Proc macros run before name resolution, so a
+//! typo can't be diagnosed here; the resulting rustc error reads
+//! `cannot find value [TYPO]_SPEC in this scope` and points at the
+//! `lua_table!` call site. If you see that, check the ident in `fns:`
+//! against the matching `#[lua_fn] fn ...` declaration.
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};

@@ -124,3 +124,69 @@ fn print_diff(existing: &str, generated: &str) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn check_drift_returns_ok_when_file_matches() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        let content = "hello\nworld\n";
+        f.write_all(content.as_bytes()).unwrap();
+        f.flush().unwrap();
+
+        let result = check_drift(f.path(), content);
+        assert!(
+            result.is_ok(),
+            "check_drift should succeed when file matches generated content"
+        );
+    }
+
+    #[test]
+    fn check_drift_returns_err_when_file_differs() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(b"on-disk\n").unwrap();
+        f.flush().unwrap();
+
+        let result = check_drift(f.path(), "regenerated\n");
+        let err = result.expect_err("check_drift should fail when file diverges");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("regenerate"),
+            "error should advise running the regen command, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn check_drift_returns_err_when_file_missing() {
+        // Path under a tempdir we then drop — guarantees nonexistence.
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("does-not-exist.lua");
+
+        let result = check_drift(&missing, "anything");
+        assert!(
+            result.is_err(),
+            "check_drift should error when the target file doesn't exist"
+        );
+    }
+
+    #[test]
+    fn render_static_file_matches_repo_copy() {
+        // Mirror of the main-crate `assembled_output_matches_on_disk`
+        // test but at the xtask layer — proves that what `xtask
+        // gen-lua-types --check` would compare against the on-disk
+        // file is exactly what the typegen produces. Catches the
+        // case where someone edits `types/crap.lua` by hand and
+        // commits it without re-running the generator.
+        let generated = crap_cms::typegen::lua::render_static_file();
+        let path = lua_types_path().expect("xtask manifest dir resolvable");
+        let on_disk = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        assert_eq!(
+            generated, on_disk,
+            "types/crap.lua is out of sync with Rust source — run `cargo xtask gen-lua-types`"
+        );
+    }
+}
