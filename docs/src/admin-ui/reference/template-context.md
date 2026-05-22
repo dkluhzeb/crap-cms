@@ -1,7 +1,7 @@
 <!--
   AUTO-GENERATED — do not edit by hand.
   Source of truth: typed page-context structs in `src/admin/context/page/`.
-  Regenerate with: `UPDATE_SCHEMA_DOC=1 cargo test template_context_doc_is_in_sync`
+  Regenerate with: `cargo xtask gen-template-doc`
 -->
 
 # Admin template context reference

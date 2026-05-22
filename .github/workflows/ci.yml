@@ -90,6 +90,14 @@ jobs:
         # be regenerated (`cargo xtask gen-lua-types`) and committed.
         run: cargo xtask gen-lua-types --check
 
+      - name: Template-context reference in sync (cargo xtask gen-template-doc --check)
+        # `docs/src/admin-ui/reference/template-context.md` is rendered
+        # from the typed admin page-context structs. If any per-page
+        # struct changed shape (added/removed/renamed a field), the
+        # Markdown must be regenerated (`cargo xtask gen-template-doc`)
+        # and committed.
+        run: cargo xtask gen-template-doc --check
+
       - name: Security audit (cargo audit)
         run: |
           # Pin to exact version — caret ranges let crates.io serve

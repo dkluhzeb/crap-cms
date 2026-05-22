@@ -133,36 +133,61 @@ No runtime dependencies required. An `example.tar.gz` with a sample project is i
 | Hooks        | Lua 5.4 via mlua                      |
 | IDs          | nanoid                                |
 
-### Project Structure
+### Workspace layout
+
+The repo is a Cargo workspace with four members. Each non-trivial member ships its own README — those are the source of truth for module-level conventions, derive surfaces, and authoring patterns. This README only points at them.
+
+| Member             | Path       | What it does                                                                          | Details                                  |
+|--------------------|------------|---------------------------------------------------------------------------------------|------------------------------------------|
+| `crap-cms`         | `.`        | Main binary + library (admin UI, gRPC API, Lua hooks, scheduler, MCP)                 | source tree below                        |
+| `crap-cms-macros`  | `macros/`  | Proc-macro derives that drive typegen (`LuaAnnotation`, `LuaAlias`, `#[lua_fn]`, …)   | [`macros/README.md`](macros/README.md)   |
+| `crap-cms-e2e`     | `e2e/`     | End-to-end + HTML integration tests (headless Chrome via `chromiumoxide`)             | `e2e/src/{browser,helpers,html}.rs` + `e2e/tests/*.rs` |
+| `xtask`            | `xtask/`   | Workspace task runner — typegen + reference-doc regeneration with CI drift gates      | [`xtask/README.md`](xtask/README.md)     |
+
+`default-members = [".", "macros"]` — plain `cargo build` / `cargo test` from the root skips the e2e and xtask crates. Workspace-wide deps + lints are inherited via `[workspace.package]`, `[workspace.dependencies]`, and `[workspace.lints]` in the root `Cargo.toml`; members opt in with `*.workspace = true`.
+
+### Main-crate source layout
 
 ```
 src/
 ├── main.rs           # binary entry point, subcommand dispatch
-├── lib.rs            # crate exports
+├── lib.rs            # crate exports (incl. pub `typegen` + `docgen` for xtask)
 ├── config/           # crap.toml loading + defaults
 ├── core/             # collection, field, document types
 ├── db/               # pool, migrations, query builder
 ├── service/          # service layer — chokepoint for CRUD lifecycle
 ├── hooks/            # Lua VM, crap.* API, hook lifecycle
-├── admin/            # Axum admin UI (handlers, templates)
+├── admin/            # Axum admin UI (handlers, templates, typed page contexts)
 ├── api/              # Tonic gRPC service
 ├── scheduler/        # background job scheduler
 ├── mcp/              # Model Context Protocol server
 ├── cli/              # CLI argument parsing
 ├── commands/         # CLI subcommand implementations
-├── typegen/          # type generation (Rust, Lua, TS, Python, Go)
+├── typegen/          # type generation (Rust, Lua, TS, Python, Go) — derive consumers
 └── scaffold/         # init/make scaffolding
 ```
+
+The Lua-API surface (`crap.collections`, `crap.hooks`, `crap.config`, …) lives under `src/hooks/lua_api/` — each `#[lua_fn]` annotated function there contributes one block to the generated `types/crap.lua`. See [`macros/README.md`](macros/README.md) for the derive contract.
 
 ### Building
 
 ```bash
 git config core.hooksPath .githooks  # enable shared git hooks (fmt + clippy pre-commit)
-cargo build                          # compile
-cargo test                           # run tests
+cargo build                          # compile (default-members: main + macros)
+cargo test --workspace --exclude crap-cms-e2e   # what CI's `check` job runs
+cargo test -p crap-cms-e2e -- --test-threads=1  # browser/HTML integration tests (needs Chrome)
 cargo tarpaulin --out html           # coverage report
 crap-cms serve -C ./example          # run with example config
 ```
+
+After touching anything that affects the generated `types/crap.lua` (any `#[derive(Lua*)]`, `#[lua_fn]`, or `lua_table!` input) or the typed admin-page contexts under `src/admin/context/page/`, regenerate via the workspace task runner:
+
+```bash
+cargo xtask gen-lua-types       # regen types/crap.lua
+cargo xtask gen-template-doc    # regen docs/src/admin-ui/reference/template-context.md
+```
+
+CI gates on `--check` variants of both. See [`xtask/README.md`](xtask/README.md) for the full subcommand list and how to add a new one.
 
 Default templates and static files are compiled into the binary via `include_dir!`. The config directory overlay takes priority — any file placed in `{config_dir}/static/` or `{config_dir}/templates/` is served from disk without rebuilding. Only changes to the *embedded* defaults (under `static/` or `templates/` in the source tree) require `cargo build`.
 
@@ -213,7 +238,7 @@ cd docs && mdbook serve            # local preview at localhost:3000
 
 | Workflow | Trigger | What it does |
 |----------|---------|--------------|
-| **CI** | Every push & PR | fmt, clippy, tests |
+| **CI** | Every push & PR | fmt, clippy, tests, `cargo xtask gen-lua-types --check`, `cargo xtask gen-template-doc --check`, security audit |
 | **Nightly** | Push to main | x86_64 musl binary, Docker `nightly` tag, docs deploy |
 | **Release** | Tag `v*` | Multi-arch binaries, Docker semver tags, GitHub Release, docs deploy |
 

@@ -1,20 +1,18 @@
 //! Auto-generated reference doc for the typed admin page contexts.
 //!
 //! Walks every per-page typed context (login, dashboard, collection edit,
-//! …), produces a Markdown reference at
-//! `docs/src/admin-ui/reference/template-context.md`, and verifies (via the
-//! [`template_context_doc_is_in_sync`] test) that the committed file matches
-//! what the typed structs would produce. Run with
-//! `UPDATE_SCHEMA_DOC=1 cargo test template_context_doc_is_in_sync` to bless
-//! changes after touching a page-context struct.
+//! …) and produces the Markdown content at
+//! `docs/src/admin-ui/reference/template-context.md` via
+//! [`generate_template_context_md`]. The xtask
+//! `cargo xtask gen-template-doc [--check]` writes / diffs that file; an
+//! in-crate `#[test]` at the bottom of this file also asserts drift so
+//! local `cargo test` runs catch staleness without needing the xtask.
 //!
 //! The Markdown structure lives in an inline Handlebars template (we already
 //! depend on the engine for admin pages, so reusing it keeps the doc layout
 //! editable as a template and out of Rust string concat). The Rust side
 //! preprocesses each per-page schema into a flat `DocContext` struct that
 //! the template renders.
-
-use std::fmt::Write as _;
 
 use handlebars::Handlebars;
 use schemars::{Schema, schema_for};
@@ -51,7 +49,7 @@ use crate::admin::context::{
 const TEMPLATE: &str = r"<!--
   AUTO-GENERATED — do not edit by hand.
   Source of truth: typed page-context structs in `src/admin/context/page/`.
-  Regenerate with: `UPDATE_SCHEMA_DOC=1 cargo test template_context_doc_is_in_sync`
+  Regenerate with: `cargo xtask gen-template-doc`
 -->
 
 # Admin template context reference
@@ -408,7 +406,25 @@ fn build_doc_context() -> DocContext {
     DocContext { pages, definitions }
 }
 
-fn generate_template_context_md() -> String {
+/// Render the full `template-context.md` content from the typed
+/// page-context structs. Pure function — no I/O. Consumed by the
+/// `cargo xtask gen-template-doc` subcommand (write / `--check` diff
+/// modes) and by the local-drift assertion test below.
+///
+/// Public so the xtask binary can call it via the
+/// [`crate::docgen`](crate::docgen) re-export — the module itself
+/// stays `pub(crate)` because nothing else in the public surface
+/// needs to walk these typed schemas at runtime.
+///
+/// # Panics
+///
+/// Panics only on programmer error: the inline Handlebars template
+/// failing to parse, or the typed `DocContext` failing to render
+/// against it. Both are static — neither depends on runtime input —
+/// so a panic here means the source has been broken at build time
+/// and CI / `cargo test` will fail before any release.
+#[must_use]
+pub fn generate_template_context_md() -> String {
     let mut hb = Handlebars::new();
     hb.set_strict_mode(true);
     // The output is Markdown, not HTML — turn off HTML-escaping so backticks,
@@ -422,31 +438,28 @@ fn generate_template_context_md() -> String {
         .expect("template renders against typed DocContext")
 }
 
-#[test]
-fn template_context_doc_is_in_sync() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("docs/src/admin-ui/reference/template-context.md");
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fmt::Write as _;
 
-    let generated = generate_template_context_md();
+    #[test]
+    fn template_context_doc_is_in_sync() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/src/admin-ui/reference/template-context.md");
 
-    if std::env::var("UPDATE_SCHEMA_DOC").is_ok() {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).expect("create docs parent");
+        let generated = generate_template_context_md();
+        let committed = std::fs::read_to_string(&path).unwrap_or_else(|_| {
+            panic!(
+                "Could not read {} — regenerate with: cargo xtask gen-template-doc",
+                path.display()
+            )
+        });
+
+        if generated == committed {
+            return;
         }
-        std::fs::write(&path, &generated).expect("write template-context.md");
-        eprintln!("Wrote {} bytes to {}", generated.len(), path.display());
-        return;
-    }
 
-    let committed = std::fs::read_to_string(&path).unwrap_or_else(|_| {
-        panic!(
-            "Could not read {} — bless it with: \
-             UPDATE_SCHEMA_DOC=1 cargo test template_context_doc_is_in_sync",
-            path.display()
-        )
-    });
-
-    if generated != committed {
         let g_lines: Vec<&str> = generated.lines().collect();
         let c_lines: Vec<&str> = committed.lines().collect();
         let mut hint = String::new();
@@ -479,7 +492,7 @@ fn template_context_doc_is_in_sync() {
         panic!(
             "template-context.md is out of sync with the typed page contexts.\n\
              Regenerate with:\n\
-             \n  UPDATE_SCHEMA_DOC=1 cargo test template_context_doc_is_in_sync\n\
+             \n  cargo xtask gen-template-doc\n\
              \nFirst differing lines:\n{hint}"
         );
     }
