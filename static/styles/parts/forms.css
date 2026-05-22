@@ -51,12 +51,14 @@ textarea:focus {
   outline: none;
 }
 
-input:focus-visible,
-select:focus-visible,
-textarea:focus-visible {
-  outline: 2px solid var(--color-primary);
-  outline-offset: 1px;
-}
+/* Note: we intentionally do NOT add a separate `:focus-visible` rule
+   with a hard outline. The `:focus` treatment above (colored border +
+   soft halo + suppressed UA outline) is the single focus indicator
+   for both mouse and keyboard focus. A `:focus-visible` outline would
+   paint *in addition to* the colored border — browsers promote
+   `<select>` to `:focus-visible` after option selection, which would
+   surface a double-ring (solid border + solid outline, 1px apart).
+   The unified treatment is WCAG-strong and avoids the duplicate. */
 
 input::placeholder,
 textarea::placeholder {
