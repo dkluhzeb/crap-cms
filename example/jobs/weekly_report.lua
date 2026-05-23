@@ -25,6 +25,9 @@ end)
 crap.jobs.define("weekly_report", {
   handler = "jobs.weekly_report.run",
   schedule = "0 9 * * 1",
+  -- Low priority — read-only aggregation that can wait if the queue
+  -- is busy. See `cleanup_archived.lua` for the rationale.
+  priority = -5,
   labels = { singular = "Weekly Report" },
 })
 

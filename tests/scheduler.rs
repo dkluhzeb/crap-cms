@@ -17,11 +17,17 @@ use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::job::{JobDefinition, JobStatus};
+use crap_cms::core::upload::{SharedStorage, storage::LocalStorage};
 use crap_cms::db::query::jobs as job_query;
 use crap_cms::db::{DbConnection, DbValue, migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::scheduler;
+
+/// Build a no-op storage for tests that don't exercise upload conversion.
+fn test_storage() -> SharedStorage {
+    Arc::new(LocalStorage::new("/tmp/crap-cms-scheduler-test-storage"))
+}
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/job_tests")
@@ -67,19 +73,26 @@ fn execute_job_echo_completes_successfully() {
         "manual",
         1,
         "default",
+        0,
     )
     .expect("insert_job");
-    let running_counts = job_query::count_running_per_slug(&conn).unwrap();
     let job_concurrency = std::collections::HashMap::new();
-    let claimed =
-        job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
+    let claimed = job_query::claim_pending_jobs(
+        &conn,
+        5,
+        &job_concurrency,
+        &std::collections::HashMap::new(),
+        0,
+    )
+    .unwrap();
     assert_eq!(claimed.len(), 1);
     drop(conn);
 
     let job_def = registry.get_job("test_echo_job").unwrap().clone();
 
     let job_run = &claimed[0];
-    scheduler::execute_job(&pool, &runner, &job_def, job_run, None).expect("execute_job");
+    scheduler::execute_job(&pool, &runner, &job_def, job_run, None, &test_storage())
+        .expect("execute_job");
 
     // Verify the job is marked as completed
     let conn = pool.get().expect("DB connection");
@@ -104,18 +117,25 @@ fn execute_job_creates_document() {
         "manual",
         1,
         "default",
+        0,
     )
     .expect("insert_job");
-    let running_counts = job_query::count_running_per_slug(&conn).unwrap();
     let job_concurrency = std::collections::HashMap::new();
-    let claimed =
-        job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
+    let claimed = job_query::claim_pending_jobs(
+        &conn,
+        5,
+        &job_concurrency,
+        &std::collections::HashMap::new(),
+        0,
+    )
+    .unwrap();
     assert_eq!(claimed.len(), 1);
     drop(conn);
 
     let job_def = registry.get_job("test_create_post").unwrap().clone();
 
-    scheduler::execute_job(&pool, &runner, &job_def, &claimed[0], None).expect("execute_job");
+    scheduler::execute_job(&pool, &runner, &job_def, &claimed[0], None, &test_storage())
+        .expect("execute_job");
 
     // Verify the document was created
     let def = registry.get_collection("posts").unwrap().clone();
@@ -141,12 +161,17 @@ fn execute_job_failing_handler_marks_failed() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let conn = pool.get().expect("DB connection");
-    let run = job_query::insert_job(&conn, "test_failing_job", "{}", "manual", 1, "default")
+    let run = job_query::insert_job(&conn, "test_failing_job", "{}", "manual", 1, "default", 0)
         .expect("insert_job");
-    let running_counts = job_query::count_running_per_slug(&conn).unwrap();
     let job_concurrency = std::collections::HashMap::new();
-    let claimed =
-        job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
+    let claimed = job_query::claim_pending_jobs(
+        &conn,
+        5,
+        &job_concurrency,
+        &std::collections::HashMap::new(),
+        0,
+    )
+    .unwrap();
     assert_eq!(claimed.len(), 1);
     drop(conn);
 
@@ -155,7 +180,8 @@ fn execute_job_failing_handler_marks_failed() {
         .build();
 
     // execute_job itself returns Ok — it handles the error internally
-    scheduler::execute_job(&pool, &runner, &job_def, &claimed[0], None).expect("execute_job");
+    scheduler::execute_job(&pool, &runner, &job_def, &claimed[0], None, &test_storage())
+        .expect("execute_job");
 
     // Verify the job is marked as failed (attempt 1, max_attempts 1 => no retry)
     let conn = pool.get().expect("DB connection");
@@ -178,12 +204,17 @@ fn execute_job_failing_handler_retries() {
 
     let conn = pool.get().expect("DB connection");
     // max_attempts=3 so it should be retried
-    let run = job_query::insert_job(&conn, "test_failing_job", "{}", "manual", 3, "default")
+    let run = job_query::insert_job(&conn, "test_failing_job", "{}", "manual", 3, "default", 0)
         .expect("insert_job");
-    let running_counts = job_query::count_running_per_slug(&conn).unwrap();
     let job_concurrency = std::collections::HashMap::new();
-    let claimed =
-        job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
+    let claimed = job_query::claim_pending_jobs(
+        &conn,
+        5,
+        &job_concurrency,
+        &std::collections::HashMap::new(),
+        0,
+    )
+    .unwrap();
     assert_eq!(claimed.len(), 1);
     drop(conn);
 
@@ -192,7 +223,8 @@ fn execute_job_failing_handler_retries() {
         .build();
 
     // claimed[0].attempt = 1 (after claim), max_attempts = 3 => should_retry = true
-    scheduler::execute_job(&pool, &runner, &job_def, &claimed[0], None).expect("execute_job");
+    scheduler::execute_job(&pool, &runner, &job_def, &claimed[0], None, &test_storage())
+        .expect("execute_job");
 
     let conn = pool.get().expect("DB connection");
     let fetched = job_query::get_job_run(&conn, &run.id).unwrap().unwrap();
@@ -209,11 +241,17 @@ fn recover_stale_jobs_on_full_setup() {
     let conn = pool.get().expect("DB connection");
 
     // Insert and claim a job, then simulate server crash (leave it running with old heartbeat)
-    let run = job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default").unwrap();
-    let running_counts = job_query::count_running_per_slug(&conn).unwrap();
+    let run =
+        job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
     let job_concurrency = std::collections::HashMap::new();
-    let claimed =
-        job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
+    let claimed = job_query::claim_pending_jobs(
+        &conn,
+        5,
+        &job_concurrency,
+        &std::collections::HashMap::new(),
+        0,
+    )
+    .unwrap();
     assert_eq!(claimed.len(), 1);
 
     // Backdate the heartbeat to make it appear stale
@@ -265,7 +303,7 @@ fn check_cron_schedules_skip_if_running_integration() {
     // Insert a running job for the cron job
     {
         let conn = pool.get().unwrap();
-        job_query::insert_job(&conn, "test_cron_job", "{}", "manual", 1, "default").unwrap();
+        job_query::insert_job(&conn, "test_cron_job", "{}", "manual", 1, "default", 0).unwrap();
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running' WHERE slug = 'test_cron_job'",
             &[],
@@ -289,4 +327,171 @@ fn check_cron_schedules_skip_if_running_integration() {
         job_query::list_job_runs(&conn, Some("test_cron_nonskip"), Some("pending"), 100, 0)
             .unwrap();
     assert_eq!(nonskip.len(), 1);
+}
+
+// ── crap.transaction(fn): commit + rollback semantics ──────────────────
+
+/// Happy path for `crap.transaction(fn)`: two creates inside one tx
+/// both end up visible after the job completes.
+#[test]
+fn tx_two_creates_both_committed() {
+    let (_tmp, pool, registry, runner) = setup();
+
+    let conn = pool.get().expect("DB connection");
+    job_query::insert_job(
+        &conn,
+        "test_tx_two_creates",
+        "{}",
+        "manual",
+        1,
+        "default",
+        0,
+    )
+    .expect("insert_job");
+    let job_concurrency = std::collections::HashMap::new();
+    let claimed = job_query::claim_pending_jobs(
+        &conn,
+        5,
+        &job_concurrency,
+        &std::collections::HashMap::new(),
+        0,
+    )
+    .unwrap();
+    drop(conn);
+
+    let job_def = registry.get_job("test_tx_two_creates").unwrap().clone();
+    scheduler::execute_job(&pool, &runner, &job_def, &claimed[0], None, &test_storage())
+        .expect("execute_job");
+
+    let posts_def = registry.get_collection("posts").unwrap().clone();
+    let conn = pool.get().expect("DB connection");
+    let docs = query::find(
+        &conn,
+        "posts",
+        &posts_def,
+        &query::FindQuery::default(),
+        None,
+    )
+    .expect("find posts");
+
+    let titles: Vec<&str> = docs
+        .iter()
+        .filter_map(|d| d.fields.get("title").and_then(|v| v.as_str()))
+        .collect();
+    assert!(
+        titles.contains(&"tx-doc-1") && titles.contains(&"tx-doc-2"),
+        "expected both tx-doc-1 and tx-doc-2 to be committed; got titles={titles:?}"
+    );
+}
+
+/// Rollback path for `crap.transaction(fn)`: a create followed by
+/// `error()` inside the tx leaves NO documents.
+#[test]
+fn tx_rollback_leaves_no_documents() {
+    let (_tmp, pool, registry, runner) = setup();
+
+    let conn = pool.get().expect("DB connection");
+    job_query::insert_job(
+        &conn,
+        "test_tx_rollback_mid",
+        "{}",
+        "manual",
+        1,
+        "default",
+        0,
+    )
+    .expect("insert_job");
+    let job_concurrency = std::collections::HashMap::new();
+    let claimed = job_query::claim_pending_jobs(
+        &conn,
+        5,
+        &job_concurrency,
+        &std::collections::HashMap::new(),
+        0,
+    )
+    .unwrap();
+    drop(conn);
+
+    let job_def = registry.get_job("test_tx_rollback_mid").unwrap().clone();
+    scheduler::execute_job(&pool, &runner, &job_def, &claimed[0], None, &test_storage())
+        .expect("execute_job");
+
+    let posts_def = registry.get_collection("posts").unwrap().clone();
+    let conn = pool.get().expect("DB connection");
+    let docs = query::find(
+        &conn,
+        "posts",
+        &posts_def,
+        &query::FindQuery::default(),
+        None,
+    )
+    .expect("find posts");
+
+    let leaked: Vec<&str> = docs
+        .iter()
+        .filter_map(|d| d.fields.get("title").and_then(|v| v.as_str()))
+        .filter(|t| *t == "should-not-exist")
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "transaction rollback must remove all pending writes; found leaked: {leaked:?}"
+    );
+}
+
+/// Pool-mode + per-block atomicity: two SEPARATE `crap.transaction`
+/// blocks. The first commits; the second errors and rolls back. The
+/// first must remain visible.
+#[test]
+fn tx_separate_blocks_first_commits_when_second_rolls_back() {
+    let (_tmp, pool, registry, runner) = setup();
+
+    let conn = pool.get().expect("DB connection");
+    job_query::insert_job(
+        &conn,
+        "test_tx_separate_blocks",
+        "{}",
+        "manual",
+        1,
+        "default",
+        0,
+    )
+    .expect("insert_job");
+    let job_concurrency = std::collections::HashMap::new();
+    let claimed = job_query::claim_pending_jobs(
+        &conn,
+        5,
+        &job_concurrency,
+        &std::collections::HashMap::new(),
+        0,
+    )
+    .unwrap();
+    drop(conn);
+
+    let job_def = registry.get_job("test_tx_separate_blocks").unwrap().clone();
+    scheduler::execute_job(&pool, &runner, &job_def, &claimed[0], None, &test_storage())
+        .expect("execute_job");
+
+    let posts_def = registry.get_collection("posts").unwrap().clone();
+    let conn = pool.get().expect("DB connection");
+    let docs = query::find(
+        &conn,
+        "posts",
+        &posts_def,
+        &query::FindQuery::default(),
+        None,
+    )
+    .expect("find posts");
+
+    let titles: Vec<&str> = docs
+        .iter()
+        .filter_map(|d| d.fields.get("title").and_then(|v| v.as_str()))
+        .collect();
+    assert!(
+        titles.contains(&"block-1-doc"),
+        "first crap.transaction block must commit; got titles={titles:?}"
+    );
+    assert!(
+        !titles.contains(&"block-2-doc"),
+        "second crap.transaction block must roll back; got titles={titles:?}"
+    );
 }

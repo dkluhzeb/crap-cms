@@ -52,7 +52,11 @@ pub(crate) struct CollectionsRestoreVersionState {
 /// parent document and writes a new version row. Returns the restored
 /// document. Only available on collections with `versions` enabled.
 /// Inside hooks, runs within the parent operation's transaction.
-#[lua_fn(path = "crap.collections.restore_version", returns = "crap.Document")]
+#[lua_fn(
+    path = "crap.collections.restore_version",
+    returns = "crap.Document",
+    auto_tx
+)]
 fn collections_restore_version(
     state: &CollectionsRestoreVersionState,
     lua: &Lua,

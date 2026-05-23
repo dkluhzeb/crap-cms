@@ -18,7 +18,8 @@ use crate::{
 /// Inside hooks, runs within the parent operation's transaction.
 #[lua_fn(
     path = "crap.collections.ref_count",
-    returns_doc = "Number of incoming references."
+    returns_doc = "Number of incoming references.",
+    auto_tx
 )]
 fn collections_ref_count(
     state: &Arc<Registry>,

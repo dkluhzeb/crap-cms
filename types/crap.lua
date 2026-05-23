@@ -1728,6 +1728,7 @@ function crap.jobs.define(slug, config) end
 --- @field retries? integer Max retry attempts on failure (default: `0`).
 --- @field timeout? integer Seconds before a running job is marked failed (default: `60`).
 --- @field concurrency? integer Max concurrent runs of this job (default: `1`).
+--- @field priority? integer Default scheduling priority for this job. Used when a queue site doesn't pass an explicit `{ priority = N }`. Higher = claimed sooner; negative = run only when otherwise idle. Default: `0`.
 --- @field skip_if_running? boolean Skip scheduled run if a previous run is still active (default: `true`).
 --- @field labels? crap.JobLabels Display labels for the admin UI.
 --- @field access? string Lua function ref for access control on gRPC/CLI trigger.
@@ -1748,8 +1749,9 @@ function crap.jobs.define(slug, config) end
 --- Only available inside hooks with transaction context.
 --- @param slug string  Job slug (must be previously defined).
 --- @param data table?  Input data passed to the handler (default: {}).
+--- @param opts table?  Options table. Supports `priority` (integer, default falls back to the job definition's priority; higher = sooner), `delay` (integer seconds or duration string `"5m"` / `"30s"` / `"1h"`; default 0 = immediate), and `unique` (string dedup key — if another pending/running job has the same slug+unique key, returns its id instead of inserting a duplicate).
 --- @return string # The queued job run ID.
-function crap.jobs.queue(slug, data) end
+function crap.jobs.queue(slug, data, opts) end
 
 -- ── crap.pages ───────────────────────────────────────────────
 
@@ -1801,5 +1803,28 @@ function crap.template_data.register(name, func) end
 --- iteration order — not deterministic across runs).
 --- @return string[]
 function crap.template_data.list() end
+
+
+-- ── crap.transaction — explicit multi-step atomicity ───────────────
+
+--- Wrap `fn` in a single IMMEDIATE transaction. Use inside job
+--- handlers when multiple CRUD operations need to be atomic — by
+--- default each Lua CRUD call in a job opens its own short-lived
+--- transaction (pool-mode), so a `find` followed by an `update` are
+--- two separate writes. Wrap them in `crap.transaction(function()
+--- ... end)` to make the block atomic.
+---
+--- Returns whatever `fn` returns. Errors raised inside `fn` roll back
+--- the transaction and propagate as Lua errors. Inside a hook (which
+--- already runs in the parent's write transaction) this is a
+--- pass-through.
+---
+--- Only valid from a job handler — calling from init.lua / collection
+--- definitions / top-level scripts raises a runtime error.
+---
+--- @generic T
+--- @param fn fun(): T
+--- @return T
+function crap.transaction(fn) end
 
 

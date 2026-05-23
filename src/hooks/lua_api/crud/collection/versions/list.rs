@@ -80,7 +80,8 @@ pub(crate) struct ListVersionsResult {
 /// Inside hooks, runs within the parent operation's transaction.
 #[lua_fn(
     path = "crap.collections.list_versions",
-    returns = "crap.ListVersionsResult"
+    returns = "crap.ListVersionsResult",
+    auto_tx
 )]
 fn collections_list_versions(
     state: &Arc<Registry>,

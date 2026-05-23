@@ -532,6 +532,7 @@ fn cmd_jobs_trigger_and_status() {
         commands::JobsAction::Trigger {
             slug: "cleanup".to_string(),
             data: Some(r#"{"key": "value"}"#.to_string()),
+            priority: None,
         },
     )
     .unwrap();
@@ -562,6 +563,7 @@ fn cmd_jobs_trigger_nonexistent_errors() {
         commands::JobsAction::Trigger {
             slug: "nonexistent_job".to_string(),
             data: None,
+            priority: None,
         },
     );
     assert!(result.is_err(), "triggering nonexistent job should fail");
@@ -579,6 +581,7 @@ fn cmd_jobs_trigger_invalid_json_errors() {
         commands::JobsAction::Trigger {
             slug: "cleanup".to_string(),
             data: Some("not valid json {{{".to_string()),
+            priority: None,
         },
     );
     assert!(result.is_err(), "triggering with invalid JSON should fail");
@@ -595,6 +598,7 @@ fn cmd_jobs_status_single_run() {
         commands::JobsAction::Trigger {
             slug: "cleanup".to_string(),
             data: None,
+            priority: None,
         },
     )
     .unwrap();
@@ -679,6 +683,7 @@ fn cmd_jobs_purge() {
         commands::JobsAction::Trigger {
             slug: "cleanup".to_string(),
             data: None,
+            priority: None,
         },
     )
     .unwrap();

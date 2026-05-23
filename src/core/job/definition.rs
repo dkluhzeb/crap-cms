@@ -17,6 +17,12 @@ pub struct JobDefinition {
     pub timeout: u64,
     /// Maximum concurrent runs of this specific job. Default: 1.
     pub concurrency: u32,
+    /// Default scheduling priority applied when a queue site doesn't
+    /// pass an explicit value (cron-fired runs, gRPC trigger without
+    /// `priority`, Lua `crap.jobs.queue` without `{ priority = … }`).
+    /// Higher = sooner; negative = run only when otherwise idle.
+    /// Default: 0.
+    pub priority: i32,
     /// Skip scheduled run if a previous run is still running. Default: true.
     pub skip_if_running: bool,
     /// Display labels for admin UI.
@@ -41,6 +47,7 @@ impl Default for JobDefinition {
             retries: 0,
             timeout: 60,
             concurrency: 1,
+            priority: 0,
             skip_if_running: true,
             labels: JobLabels::default(),
             access: None,
@@ -99,6 +106,13 @@ impl JobDefinitionBuilder {
     #[must_use]
     pub fn concurrency(mut self, n: u32) -> Self {
         self.inner.concurrency = n;
+
+        self
+    }
+
+    #[must_use]
+    pub fn priority(mut self, p: i32) -> Self {
+        self.inner.priority = p;
 
         self
     }

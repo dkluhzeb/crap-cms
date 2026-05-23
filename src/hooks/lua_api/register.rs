@@ -28,6 +28,7 @@ use super::{
     richtext::{register_richtext_init, register_richtext_pool_init},
     schema::{register_schema_init, register_schema_pool},
     template_data::register_template_data,
+    transaction::register_transaction,
     utils::{load_lua_helpers, register_util},
 };
 
@@ -69,6 +70,12 @@ pub fn register_api(lua: &Lua, registry: &SharedRegistry, config: &CrapConfig) -
     // pool-VM registration in `register_api_pool_init`.
     register_any_factories(lua)?;
 
+    // `crap.transaction(fn)` — explicit multi-step atomicity for jobs.
+    // Registered on both init and pool VMs so calling it from init.lua
+    // gives a descriptive runtime error ("requires a job or pool
+    // context") instead of "nil is not callable".
+    register_transaction(lua)?;
+
     // Load pure Lua helpers onto crap.util (after crap global is set)
     load_lua_helpers(lua)?;
 
@@ -109,6 +116,7 @@ pub fn register_api_pool_init(
     register_fields(lua)?;
     register_template_data(lua)?;
     register_pages(lua)?;
+    register_transaction(lua)?;
 
     load_lua_helpers(lua)?;
 

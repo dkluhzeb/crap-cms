@@ -355,9 +355,6 @@ fn run_migration_invalid_direction_fails() {
 fn run_job_handler_with_valid_function() {
     let (_tmp, pool, _registry, runner) = setup();
 
-    // Add a simple job handler Lua function
-    let conn = pool.get().expect("DB connection");
-
     // We can test using eval_lua_with_conn to define a function, then call run_job_handler.
     // But run_job_handler resolves a function ref, so we need to write it to a Lua file.
     // Instead, let's use the field_hooks module which is already loaded.
@@ -371,7 +368,7 @@ fn run_job_handler_with_valid_function() {
         r#"{"key": "value"}"#,
         1,
         3,
-        &conn,
+        &pool,
     );
     assert!(
         result.is_ok(),
@@ -383,9 +380,8 @@ fn run_job_handler_with_valid_function() {
 #[test]
 fn run_job_handler_invalid_ref_fails() {
     let (_tmp, pool, _registry, runner) = setup();
-    let conn = pool.get().expect("DB connection");
 
-    let result = runner.run_job_handler("hooks.nonexistent.handler", "test-job", "{}", 1, 3, &conn);
+    let result = runner.run_job_handler("hooks.nonexistent.handler", "test-job", "{}", 1, 3, &pool);
     assert!(result.is_err(), "Invalid handler ref should fail");
 }
 
@@ -617,7 +613,6 @@ fn run_job_handler_with_return_value() {
         .build()
         .expect("HookRunner::new");
 
-    let conn = pool.get().expect("conn");
     let result = runner
         .run_job_handler(
             "jobs.test_job.run",
@@ -625,7 +620,7 @@ fn run_job_handler_with_return_value() {
             r#"{"key": "hello"}"#,
             1,
             3,
-            &conn,
+            &pool,
         )
         .expect("run_job_handler failed");
 
@@ -686,9 +681,8 @@ fn run_job_handler_nil_return() {
         .build()
         .expect("HookRunner::new");
 
-    let conn = pool.get().expect("conn");
     let result = runner
-        .run_job_handler("jobs.void_job.run", "void-job", "{}", 1, 1, &conn)
+        .run_job_handler("jobs.void_job.run", "void-job", "{}", 1, 1, &pool)
         .expect("run_job_handler failed");
 
     assert!(result.is_none(), "Job returning nil should give None");

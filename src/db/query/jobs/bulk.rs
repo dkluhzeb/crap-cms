@@ -81,8 +81,8 @@ mod tests {
     fn test_cancel_pending_jobs_by_slug() {
         let (_dir, conn) = setup_db();
 
-        insert_job(&conn, "cleanup", "{}", "cli", 1, "default").unwrap();
-        insert_job(&conn, "notify", "{}", "cli", 1, "default").unwrap();
+        insert_job(&conn, "cleanup", "{}", "cli", 1, "default", 0).unwrap();
+        insert_job(&conn, "notify", "{}", "cli", 1, "default", 0).unwrap();
 
         // Cancel only "cleanup" pending jobs
         let deleted = cancel_pending_jobs(&conn, Some("cleanup")).unwrap();

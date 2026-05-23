@@ -66,7 +66,11 @@ pub(crate) struct CollectionsFindByIdState {
 
 /// Find a single document by ID. Returns `nil` if not found.
 /// Inside hooks, runs within the parent operation's transaction.
-#[lua_fn(path = "crap.collections.find_by_id", returns = "crap.Document?")]
+#[lua_fn(
+    path = "crap.collections.find_by_id",
+    returns = "crap.Document?",
+    auto_tx
+)]
 fn collections_find_by_id(
     state: &CollectionsFindByIdState,
     lua: &Lua,

@@ -56,7 +56,8 @@ return M
 | `queue` | string | `"default"` | Queue name for grouping |
 | `retries` | integer | 0 | Max retry attempts on failure (see [Retry Backoff](#retry-backoff) below) |
 | `timeout` | integer | 60 | Seconds before job is marked failed |
-| `concurrency` | integer | 1 | Max concurrent runs of this job |
+| `concurrency` | integer | 1 | Max concurrent runs of this job (cluster-wide) |
+| `priority` | integer | 0 | Default scheduling priority; higher = sooner. Per-enqueue value overrides this. |
 | `skip_if_running` | boolean | true | Skip cron trigger if previous run still active |
 | `labels` | table | nil | Display labels (`{ singular = "..." }`) |
 | `access` | string | nil | Lua function ref for trigger access control |
@@ -66,12 +67,22 @@ return M
 Jobs can be queued programmatically from hooks:
 
 ```lua
--- In a hook
+-- Basic enqueue:
 crap.jobs.queue("send_welcome_email", { user_id = ctx.data.id, email = ctx.data.email })
+
+-- With per-enqueue options:
+crap.jobs.queue("send_password_reset", { user_id = id }, {
+    priority = 10,         -- jump the queue
+    delay = "5m",          -- defer claim by 5 minutes
+    unique = "reset:" .. id, -- dedup against active jobs with this key
+})
 ```
 
-`queue()` inserts a pending job and returns immediately. The scheduler picks it up
-on its next poll cycle.
+`queue()` inserts a pending job and returns its id immediately. The scheduler
+picks it up on its next poll cycle. When `unique` matches an existing
+pending/running job, `queue()` returns that job's id instead of inserting a
+duplicate. See [`crap.jobs.queue` reference](../lua-api/jobs.md#crapjobsqueueslug-data-opts)
+for full opts.
 
 ## Handler Context
 
@@ -86,16 +97,31 @@ function M.run(ctx)
 end
 ```
 
-The handler has full CRUD access (`crap.collections.find()`, `.create()`, etc.) running
-inside its own database transaction. If the handler returns a table, it's stored as the
-job result (JSON). If it errors, the job is marked failed (and retried if attempts remain).
+The handler has full CRUD access (`crap.collections.find()`, `.create()`, etc.).
+**Each CRUD op opens its own short-lived `BEGIN IMMEDIATE` transaction**
+(pool-mode), so a `find` followed by an `update` are two separate atomic
+writes. If you need multi-step atomicity (read-modify-write, multi-write
+all-or-nothing), wrap the block in
+[`crap.transaction(fn)`](../lua-api/jobs.md#craptransactionfn--explicit-multi-step-atomicity).
+
+If the handler returns a table, it's stored as the job result (JSON).
+If it errors, the job is marked failed (and retried if attempts remain).
 
 ## Back Pressure
 
-- **Global concurrency**: `[jobs] max_concurrent` in `crap.toml` (default: 10)
-- **Per-job concurrency**: `concurrency` field on the definition
+Concurrency caps stack, strictest wins (all cluster-wide via the shared DB):
+
+- **Global**: `[jobs] max_concurrent` in `crap.toml` (default: 10)
+- **Per-queue**: `[jobs.queues.<name>] concurrency = N` for resource-shared
+  work (SMTP pool, image encoders). Framework default: `images = { concurrency = 2 }`.
+- **Per-job**: `concurrency` field on the definition (default: 1)
 - **Timeout**: Jobs running longer than `timeout` are marked failed
 - **Skip-if-running**: Cron-triggered jobs skip if a previous run is still active
+
+For aging-based promotion of low-priority jobs in busy queues, set
+`[jobs] priority_decay = "1m"` — see
+[Concurrency model](../lua-api/jobs.md#concurrency-model) for the
+full picture.
 
 ## Error Handling
 

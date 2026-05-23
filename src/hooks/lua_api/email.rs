@@ -79,7 +79,7 @@ fn email_send(
 /// Queue an email for async delivery via the job system. Returns the job
 /// run ID. Per-call `retries` override on `opts` takes precedence over
 /// the global `EmailConfig.queue_retries`.
-#[lua_fn(path = "crap.email.queue", returns_doc = "Queued job ID.")]
+#[lua_fn(path = "crap.email.queue", returns_doc = "Queued job ID.", auto_tx)]
 fn email_queue(
     state: &EmailState,
     lua: &Lua,

@@ -57,6 +57,14 @@ fallback = true
 
 [jobs]
 poll_interval = 1
+# priority_decay = "1m"           # uncomment to age low-priority jobs (+1 effective priority per minute waiting)
+
+# Per-queue aggregate concurrency caps (cluster-wide).
+# `images` defaults to 2 via the framework — override here if needed.
+[jobs.queues]
+notifications = { concurrency = 2 }   # SMTP + webhook burst-protection for `process_inquiry`
+# images = { concurrency = 4 }        # raise on hosts with more CPU
+# emails = { concurrency = 4 }
 
 [pagination]
 # default_limit = 20

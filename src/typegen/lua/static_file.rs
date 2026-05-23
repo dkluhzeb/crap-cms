@@ -89,6 +89,7 @@ use crate::hooks::lua_api::{
     richtext::{RichtextNodeSpec, render_crap_richtext_init_lua, render_crap_richtext_render_lua},
     schema::{SchemaCollection, SchemaField, render_crap_schema_init_lua},
     template_data::render_crap_template_data_lua,
+    transaction::render_crap_transaction_lua,
     utils::{render_crap_json_lua, render_crap_util_lua},
 };
 use crate::service::{CreateManyResult, UpdateManyResult};
@@ -128,6 +129,7 @@ const BLOCK_RENDERS: &[BlockRender] = &[
     render_crap_jobs,
     render_crap_pages,
     render_crap_template_data,
+    render_crap_transaction,
 ];
 
 /// Render the complete static `types/crap.lua` file from Rust source.
@@ -528,6 +530,10 @@ fn render_crap_template_data(out: &mut String) {
     render_crap_template_data_lua(out);
     out.push('\n');
 }
+fn render_crap_transaction(out: &mut String) {
+    render_crap_transaction_lua(out);
+    out.push('\n');
+}
 
 #[cfg(test)]
 mod tests {
@@ -552,7 +558,7 @@ mod tests {
         // Sanity check: 28 section renderers. If a future PR adds a
         // namespace but forgets to add a renderer, this catches it
         // before the diff test does.
-        assert_eq!(BLOCK_RENDERS.len(), 28);
+        assert_eq!(BLOCK_RENDERS.len(), 29);
     }
 
     #[test]

@@ -1039,6 +1039,7 @@ async fn trigger_job_unauthenticated() {
         .trigger_job(Request::new(content::TriggerJobRequest {
             slug: "cleanup".to_string(),
             data_json: None,
+            priority: None,
         }))
         .await
         .unwrap_err();

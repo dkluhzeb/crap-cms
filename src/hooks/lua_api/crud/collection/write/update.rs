@@ -82,7 +82,7 @@ pub(crate) struct CollectionsUpdateState {
 
 /// Update an existing document.
 /// Inside hooks, runs within the parent operation's transaction.
-#[lua_fn(path = "crap.collections.update", returns = "crap.Document")]
+#[lua_fn(path = "crap.collections.update", returns = "crap.Document", auto_tx)]
 fn collections_update(
     state: &CollectionsUpdateState,
     lua: &Lua,

@@ -131,12 +131,23 @@ fallback = true
 # http_max_response_bytes = "10MB" # max HTTP response body size for crap.http.request
 
 # [jobs]
-# max_concurrent = 10             # max concurrent job executions
+# max_concurrent = 10             # cluster-wide cap on concurrent jobs (counted via DB)
 # poll_interval = 1              # seconds between job queue polls
 # cron_interval = 60             # seconds between cron schedule checks
 # heartbeat_interval = 10        # seconds between running job heartbeats
 # auto_purge = 604800            # auto-purge completed/failed jobs older than N seconds (7 days)
-# image_queue_batch_size = 10    # image conversions per scheduler poll
+# priority_decay = 0              # priority aging period (e.g. "1m") — 0 disables (pure static priority)
+
+# Per-queue aggregate concurrency caps (all caps in jobs are cluster-wide).
+# Strictest of: max_concurrent / queue cap / per-slug JobDefinition::concurrency
+# wins. Queues without an entry are unconstrained beyond the global cap.
+#
+# Framework defaults applied if not overridden:
+#   images = { concurrency = 2 }   — AVIF/WebP encoders are CPU-bound
+[jobs.queues]
+images = { concurrency = 2 }       # override the framework default if needed
+# emails  = { concurrency = 4 }    # cap a shared SMTP pool
+# reports = { concurrency = 1 }    # serialize heavy report generation
 
 # [cors]
 # allowed_origins = []           # empty = CORS disabled; ["*"] = allow any origin

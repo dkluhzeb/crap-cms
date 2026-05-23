@@ -136,7 +136,9 @@ pub(crate) fn delete_document_in_conn(
         query::fts::fts_delete(conn, ctx.slug, id)?;
     }
     if def.is_upload_collection() {
-        let _ = query::images::delete_entries_for_document(conn, ctx.slug, id);
+        // Best-effort cleanup of any queued `_system_image_convert`
+        // jobs targeting this doc — see `core/upload/queue.rs`.
+        let _ = crate::core::upload::delete_image_jobs_for_document(conn, ctx.slug, id);
     }
 
     // After-delete hooks

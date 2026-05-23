@@ -35,6 +35,12 @@ end)
 crap.jobs.define("cleanup_archived", {
   handler = "jobs.cleanup_archived.run",
   schedule = "0 3 * * *",
+  -- Low priority: this is background maintenance. If the queue has a
+  -- backlog of user-triggered work, let it drain first. Operators
+  -- can enable `[jobs] priority_decay = "1h"` in crap.toml if they
+  -- want this job to age into being claimable even during sustained
+  -- high-priority traffic.
+  priority = -5,
   labels = { singular = "Cleanup Archived Inquiries" },
 })
 

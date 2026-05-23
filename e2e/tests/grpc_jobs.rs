@@ -141,6 +141,7 @@ async fn trigger_job_queues_run_visible_via_get_and_list() {
             TriggerJobRequest {
                 slug: "cleanup".to_string(),
                 data_json: Some(r#"{"foo":"bar"}"#.to_string()),
+                priority: None,
             },
             &token,
         ))
@@ -207,6 +208,7 @@ async fn trigger_job_unknown_slug_returns_not_found() {
             TriggerJobRequest {
                 slug: "no-such-job".to_string(),
                 data_json: None,
+                priority: None,
             },
             &token,
         ))

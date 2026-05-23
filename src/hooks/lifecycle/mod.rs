@@ -24,7 +24,8 @@ pub(crate) use execution::{
 };
 pub(crate) use types::{
     DefaultDeny, HookDepth, HookDepthGuard, LuaInvalidationTransport, LuaLocaleConfig,
-    LuaPopulateSingleflight, LuaStorage, MaxHookDepth, TxContext, UiLocaleContext, UserContext,
+    LuaPopulateSingleflight, LuaStorage, MaxHookDepth, PoolContext, TxContext, UiLocaleContext,
+    UserContext,
 };
 pub use validation::ValidationCtx;
 pub use validation::is_valid_email_format;

@@ -1286,6 +1286,11 @@ message TriggerJobRequest {
   // Optional JSON-serialized input data passed to the job handler as its argument.
   // Defaults to "{}" when absent.
   optional string data_json = 2;
+
+  // Optional scheduling priority. Higher = claimed sooner; same-priority jobs
+  // claim FIFO. Negative values are allowed (run only when otherwise idle).
+  // Defaults to 0 when absent.
+  optional int32 priority = 3;
 }
 
 // TriggerJobResponse returns the ID of the newly created job run.
@@ -1337,6 +1342,14 @@ message GetJobRunResponse {
 
   // ISO-8601 UTC timestamp when execution finished. Absent if still running.
   optional string completed_at = 12;
+
+  // Scheduling priority — higher values are claimed sooner. Static
+  // numeric priority set at queue time; `0` is the default.
+  int32 priority = 13;
+
+  // Dedup key set when this job was enqueued via
+  // `{ unique = "..." }`. Absent for normal enqueues.
+  optional string unique_key = 14;
 }
 
 // ListJobRunsRequest filters the job run history.

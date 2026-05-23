@@ -6,7 +6,6 @@ pub mod filter;
 pub mod find_pagination;
 pub mod fts;
 pub mod global;
-pub mod images;
 pub mod jobs;
 pub mod join;
 pub mod pagination_result;

@@ -66,7 +66,7 @@ pub(crate) struct GlobalsUpdateState {
 }
 
 /// Update a global's value.
-#[lua_fn(path = "crap.globals.update", returns = "crap.Document")]
+#[lua_fn(path = "crap.globals.update", returns = "crap.Document", auto_tx)]
 fn globals_update(
     state: &GlobalsUpdateState,
     lua: &Lua,

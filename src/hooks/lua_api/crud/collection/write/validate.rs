@@ -73,7 +73,11 @@ pub(crate) struct CollectionsValidateState {
 /// `{ valid = true }` on success, or `{ valid = false, errors = {...} }`
 /// on validation failure (errors keyed by field name).
 /// Inside hooks, runs within the parent operation's transaction.
-#[lua_fn(path = "crap.collections.validate", returns = "crap.ValidateResult")]
+#[lua_fn(
+    path = "crap.collections.validate",
+    returns = "crap.ValidateResult",
+    auto_tx
+)]
 fn collections_validate(
     state: &CollectionsValidateState,
     lua: &Lua,

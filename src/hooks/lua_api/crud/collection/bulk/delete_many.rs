@@ -93,7 +93,8 @@ pub(crate) struct CollectionsDeleteManyState {
 /// Inside hooks, runs within the parent operation's transaction.
 #[lua_fn(
     path = "crap.collections.delete_many",
-    returns = "crap.DeleteManyResult"
+    returns = "crap.DeleteManyResult",
+    auto_tx
 )]
 fn collections_delete_many(
     state: &CollectionsDeleteManyState,

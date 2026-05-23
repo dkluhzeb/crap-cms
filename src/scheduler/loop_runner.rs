@@ -2,10 +2,7 @@
 
 use std::{
     collections::HashMap,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex},
 };
 
 use anyhow::{Context as _, Result};
@@ -17,12 +14,9 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    config::LocaleConfig,
-    core::{JobDefinition, JobRun, Registry, SharedStorage, email::SYSTEM_EMAIL_JOB, upload},
-    db::{
-        BoxedConnection, DbConnection, DbPool, DbValue,
-        query::{self, images as image_query, jobs as job_query},
-    },
+    config::{JobsConfig, LocaleConfig},
+    core::{JobDefinition, JobRun, Registry, SharedStorage, email::SYSTEM_EMAIL_JOB},
+    db::{BoxedConnection, DbConnection, DbPool, query::jobs as job_query},
     hooks::HookRunner,
 };
 
@@ -30,7 +24,7 @@ use super::runner::{
     check_cron_schedules, claim_retention_purge_tick, execute_job, purge_soft_deleted,
     recover_stale_jobs,
 };
-use super::types::{EmailQueueConfig, SchedulerParams};
+use super::types::{EmailQueueConfig, SchedulerParams, SystemJobConfig};
 
 /// Start the scheduler background loop. Runs until the cancellation token fires.
 ///
@@ -58,29 +52,31 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
         config.poll_interval, config.cron_interval, config.max_concurrent
     );
 
+    warn_unused_queue_config(&config, &registry);
+
     recover_on_startup(&pool, &registry)?;
 
     let poll_interval = Duration::from_secs(config.poll_interval);
     let cron_interval = Duration::from_secs(config.cron_interval);
     let heartbeat_interval = Duration::from_secs(config.heartbeat_interval);
     let auto_purge_secs = config.auto_purge;
+    let priority_decay = config.priority_decay;
+
+    // Build the per-queue concurrency map once at startup. Config
+    // doesn't change at runtime, so recomputing this each tick would
+    // burn cycles allocating an identical HashMap.
+    let queue_concurrency: HashMap<String, u32> = config
+        .queues
+        .iter()
+        .filter(|(_, q)| q.concurrency > 0)
+        .map(|(name, q)| (name.clone(), q.concurrency))
+        .collect();
 
     let mut poll_ticker = interval(poll_interval);
     let mut cron_ticker = interval(cron_interval);
     let mut heartbeat_ticker = interval(heartbeat_interval);
-    let mut image_ticker = interval(poll_interval);
 
     let running_jobs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    // Single-flight gate for the image worker. The `image_ticker` fires
-    // every `poll_interval` seconds (1s by default); image conversions
-    // (AVIF in particular) can take multiple seconds, so without this
-    // flag each tick would spawn a new worker on top of the in-flight
-    // one. Concurrent workers all call `claim_image_batch` →
-    // `BEGIN`/`UPDATE`/`COMMIT`, contending on SQLite's single writer
-    // slot. Even with a 30s `busy_timeout`, the pile-up logged a stream
-    // of "database is locked" errors after every upload that enqueued
-    // multiple format-conversion entries.
-    let image_running = Arc::new(AtomicBool::new(false));
     let mut last_cron_check = Utc::now();
     let mut purge_counter: u64 = 0;
 
@@ -102,10 +98,15 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
                     timeout: email_queue_timeout,
                     concurrency: email_queue_concurrency,
                 };
+                let sys = SystemJobConfig {
+                    priority_decay,
+                    queue_concurrency: queue_concurrency.clone(),
+                    storage: storage.clone(),
+                };
 
                 tokio::spawn(async move {
                     if let Err(e) = poll_and_execute(
-                        &pool, &hook_runner, &registry, max_concurrent, &running_jobs, &eq,
+                        &pool, &hook_runner, &registry, max_concurrent, &running_jobs, &eq, &sys,
                     ) {
                         error!("Scheduler poll error: {}", e);
                     }
@@ -134,41 +135,21 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
             _ = heartbeat_ticker.tick() => {
                 update_heartbeats(&pool, &running_jobs);
             }
-            _ = image_ticker.tick() => {
-                // Skip the tick if a worker is still draining the previous
-                // batch. `compare_exchange` is the standard single-flight
-                // pattern: only the thread that flipped `false → true`
-                // proceeds; all others bail. Reset to `false` after the
-                // worker finishes (success OR error), so the next tick
-                // can pick up new entries.
-                if image_running
-                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                    .is_err()
-                {
-                    debug!("Image queue worker still running — skipping tick");
-                    continue;
-                }
-
-                let pool = pool.clone();
-                let batch_size = config.image_queue_batch_size;
-                let img_storage = storage.clone();
-                let running_flag = Arc::clone(&image_running);
-
-                tokio::spawn(async move {
-                    if let Err(e) = process_image_queue(&pool, batch_size, &img_storage).await {
-                        // `{:#}` walks the anyhow chain so the SQLite / pool
-                        // cause shows up in the log instead of only the
-                        // outer "execute failed: UPDATE …" wrapper.
-                        error!("Image queue error: {:#}", e);
-                    }
-                    running_flag.store(false, Ordering::Release);
-                });
-            }
+            // Image conversion now runs through the unified job queue as
+            // `_system_image_convert` system jobs — see
+            // `runner::execute_system_image_convert`. The poll_ticker arm
+            // above picks them up alongside email and Lua-handler jobs.
+            // No dedicated image ticker / single-flight gate needed; the
+            // job queue's `max_concurrent` + per-slug `job_concurrency`
+            // map handle worker throttling.
         }
     }
 }
 
-/// Recover stale jobs and image queue entries on startup.
+/// Recover stale jobs on startup. (Image queue recovery is now handled
+/// by `recover_stale_jobs` because image conversion lives in the
+/// unified job queue as `_system_image_convert` jobs — see the
+/// alpha.9 image-queue → job-queue harmonization in CHANGELOG.)
 #[cfg(not(tarpaulin_include))]
 fn recover_on_startup(pool: &DbPool, registry: &Registry) -> Result<()> {
     let conn = pool
@@ -176,12 +157,6 @@ fn recover_on_startup(pool: &DbPool, registry: &Registry) -> Result<()> {
         .context("Scheduler: failed to get DB connection for recovery")?;
 
     recover_stale_jobs(&conn, registry)?;
-
-    match image_query::recover_stale_images(&conn) {
-        Ok(n) if n > 0 => info!("Recovered {} stale image queue entries", n),
-        Ok(_) => {}
-        Err(e) => warn!("Image queue recovery error: {}", e),
-    }
 
     Ok(())
 }
@@ -291,176 +266,6 @@ fn update_heartbeats(pool: &DbPool, running_jobs: &Arc<Mutex<Vec<String>>>) {
     }
 }
 
-/// Process pending image format conversions from the queue.
-#[cfg(not(tarpaulin_include))]
-async fn process_image_queue(
-    pool: &DbPool,
-    batch_size: usize,
-    storage: &SharedStorage,
-) -> Result<()> {
-    let entries = claim_image_batch(pool, batch_size)?;
-
-    for entry in entries {
-        process_single_image(pool, &entry, storage).await?;
-    }
-
-    Ok(())
-}
-
-/// Claim a batch of pending image entries atomically.
-///
-/// Uses `transaction_immediate()` (not `transaction()`) on purpose:
-/// `SQLite`'s WAL mode treats `BEGIN DEFERRED` as a snapshot transaction —
-/// if a concurrent writer (e.g. the per-second `poll_ticker` running
-/// `claim_pending_jobs`) commits between this transaction's SELECT and
-/// UPDATE, the UPDATE returns `SQLITE_BUSY_SNAPSHOT` (which surfaces
-/// as primary code 5 / "database is locked") and is NOT retried by
-/// the `busy_timeout` handler. Acquiring the write lock at BEGIN
-/// avoids the snapshot upgrade entirely.
-#[cfg(not(tarpaulin_include))]
-fn claim_image_batch(
-    pool: &DbPool,
-    batch_size: usize,
-) -> Result<Vec<image_query::ImageQueueEntry>> {
-    let mut conn = pool
-        .get()
-        .context("Image queue: failed to get DB connection")?;
-    let tx = conn
-        .transaction_immediate()
-        .context("Image queue: failed to begin claim transaction")?;
-    let entries = image_query::claim_pending_images(&tx, batch_size)?;
-    tx.commit()
-        .context("Image queue: failed to commit claim transaction")?;
-
-    Ok(entries)
-}
-
-/// Process a single image queue entry: convert format and update DB.
-#[cfg(not(tarpaulin_include))]
-async fn process_single_image(
-    pool: &DbPool,
-    entry: &image_query::ImageQueueEntry,
-    storage: &SharedStorage,
-) -> Result<()> {
-    let entry_id = entry.id.clone();
-
-    if !query::is_valid_identifier(&entry.collection) {
-        warn!(
-            "Image queue: skipping entry {} — invalid collection '{}'",
-            entry_id, entry.collection
-        );
-        return Ok(());
-    }
-    if !query::is_valid_identifier(&entry.url_column) {
-        warn!(
-            "Image queue: skipping entry {} — invalid url_column '{}'",
-            entry_id, entry.url_column
-        );
-        return Ok(());
-    }
-
-    let source = entry.source_path.clone();
-    let target = entry.target_path.clone();
-    let format = entry.format.clone();
-    let quality = entry.quality;
-    let img_storage = storage.clone();
-
-    let result = tokio::task::spawn_blocking(move || {
-        upload::process_image_entry_with_storage(&source, &target, &format, quality, &*img_storage)
-    })
-    .await;
-
-    let mut conn = pool
-        .get()
-        .context("Image queue: failed to get DB connection")?;
-
-    match result {
-        Ok(Ok(())) => {
-            // Atomically: write the new URL into the collection doc AND mark
-            // the queue entry completed. Leaving this as two sequential
-            // statements would orphan the queue row in `processing` whenever
-            // the second write hit `SQLITE_BUSY` after the first succeeded.
-            let commit = record_conversion_success(&mut conn, entry, &entry_id);
-
-            match commit {
-                Ok(()) => debug!("Image conversion completed: {}", entry_id),
-                Err(e) => {
-                    // The file is on disk and valid, but the DB commit lost.
-                    // Mark the row failed so startup / retry can pick it back
-                    // up; never leave it stuck in `processing`.
-                    warn!(
-                        "Image queue: DB commit failed after successful conversion {}: {:#}",
-                        entry_id, e
-                    );
-
-                    if let Err(fe) = image_query::fail_image_entry(
-                        &conn,
-                        &entry_id,
-                        &format!("db commit failed: {e}"),
-                    ) {
-                        error!(
-                            "Image queue: failed to record failure for {}: {:#}",
-                            entry_id, fe
-                        );
-                    }
-                }
-            }
-        }
-        Ok(Err(e)) => {
-            warn!("Image conversion failed: {}: {:#}", entry_id, e);
-            image_query::fail_image_entry(&conn, &entry_id, &e.to_string())?;
-        }
-        Err(e) => {
-            error!("Image conversion panicked: {}: {}", entry_id, e);
-            image_query::fail_image_entry(&conn, &entry_id, &format!("panic: {e}"))?;
-        }
-    }
-
-    Ok(())
-}
-
-/// Atomically update the target document's URL column and mark the queue
-/// entry completed. Wrapping both writes in a single transaction guarantees
-/// the queue row never stays in `processing` while the document shows the
-/// new URL (or vice-versa) — on any write failure the whole thing rolls back
-/// and the caller can mark the entry failed for later retry.
-fn record_conversion_success(
-    conn: &mut crate::db::BoxedConnection,
-    entry: &image_query::ImageQueueEntry,
-    entry_id: &str,
-) -> Result<()> {
-    // `transaction_immediate()` — same reasoning as in `claim_image_batch`.
-    // Avoids `SQLITE_BUSY_SNAPSHOT` against concurrent writers (poll_ticker,
-    // cron checks, other completion tasks) that commit between our reads
-    // and writes.
-    let tx = conn
-        .transaction_immediate()
-        .context("Image queue: failed to begin completion transaction")?;
-
-    tx.execute(
-        &format!(
-            "UPDATE \"{}\" SET \"{}\" = {} WHERE id = {}",
-            entry.collection,
-            entry.url_column,
-            tx.placeholder(1),
-            tx.placeholder(2)
-        ),
-        &[
-            DbValue::Text(entry.url_value.clone()),
-            DbValue::Text(entry.document_id.clone()),
-        ],
-    )
-    .context("Image queue: failed to update document")?;
-
-    image_query::complete_image_entry(&tx, entry_id)
-        .context("Image queue: failed to mark entry completed")?;
-
-    tx.commit()
-        .context("Image queue: failed to commit completion transaction")?;
-
-    Ok(())
-}
-
 /// Poll for pending jobs and execute them.
 #[cfg(not(tarpaulin_include))]
 fn poll_and_execute(
@@ -470,6 +275,7 @@ fn poll_and_execute(
     max_concurrent: usize,
     running_jobs: &Arc<Mutex<Vec<String>>>,
     email: &EmailQueueConfig,
+    system: &SystemJobConfig,
 ) -> Result<()> {
     let mut conn = pool.get().context("Failed to get DB connection")?;
 
@@ -484,8 +290,13 @@ fn poll_and_execute(
     let available = max_concurrent - running_usize;
     let job_concurrency = read_job_concurrency(registry);
 
-    let empty_counts = HashMap::new();
-    let claimed = claim_pending_jobs(&mut conn, available, &empty_counts, &job_concurrency)?;
+    let claimed = claim_pending_jobs(
+        &mut conn,
+        available,
+        &job_concurrency,
+        &system.queue_concurrency,
+        system.priority_decay,
+    )?;
     drop(conn);
 
     for job_run in claimed {
@@ -498,6 +309,7 @@ fn poll_and_execute(
             hook_runner,
             running_jobs,
             email,
+            storage: &system.storage,
             job_run: &job_run,
             job_def: &job_def,
         });
@@ -506,7 +318,11 @@ fn poll_and_execute(
     Ok(())
 }
 
-/// Read per-slug concurrency limits from the registry.
+/// Read per-slug concurrency limits — sourced from
+/// `crap.jobs.define({ concurrency = N })` on each user-defined
+/// job. System jobs (`_system_image_convert`, `_system_email`) aren't
+/// in the registry; their aggregate throttling is handled by the
+/// per-queue cap mechanism (`[jobs.queues.images] concurrency = N`).
 #[cfg(not(tarpaulin_include))]
 fn read_job_concurrency(registry: &Registry) -> HashMap<String, u32> {
     registry
@@ -516,28 +332,70 @@ fn read_job_concurrency(registry: &Registry) -> HashMap<String, u32> {
         .collect()
 }
 
+/// Queue names that the framework seeds via
+/// `JobsConfig::apply_queue_defaults` even if the operator doesn't
+/// declare them. We skip these in [`warn_unused_queue_config`]
+/// because a "no job uses queue X" warning would be a false positive
+/// for a framework-supplied default (e.g. a deployment that has no
+/// upload collection defined — the `images` queue cap is dormant but
+/// not an operator typo).
+const FRAMEWORK_DEFAULT_QUEUES: &[&str] = &["images"];
+
+/// Warn (don't error) if `[jobs.queues]` references a queue name that
+/// no defined job uses. Catches operator typos like
+/// `[jobs.queues.mailings] concurrency = 4` when the real queue is
+/// `emails`. Framework-seeded defaults (see `FRAMEWORK_DEFAULT_QUEUES`)
+/// are excluded to avoid false positives.
+#[cfg(not(tarpaulin_include))]
+fn warn_unused_queue_config(config: &JobsConfig, registry: &Registry) {
+    let known_queues: std::collections::HashSet<&str> = registry
+        .jobs
+        .values()
+        .map(|def| def.queue.as_str())
+        .collect();
+
+    for name in config.queues.keys() {
+        if FRAMEWORK_DEFAULT_QUEUES.contains(&name.as_str()) {
+            continue;
+        }
+        if !known_queues.contains(name.as_str()) {
+            tracing::warn!(
+                "[jobs.queues.{name}] is configured but no defined job uses queue '{name}' — \
+                 check for a typo in `crap.toml` or `crap.jobs.define`"
+            );
+        }
+    }
+}
+
 /// Claim pending jobs, using IMMEDIATE transaction for `SQLite`.
 #[cfg(not(tarpaulin_include))]
 fn claim_pending_jobs(
     conn: &mut BoxedConnection,
     available: usize,
-    running_counts: &HashMap<String, i64>,
     job_concurrency: &HashMap<String, u32>,
+    queue_concurrency: &HashMap<String, u32>,
+    decay_secs: u64,
 ) -> Result<Vec<JobRun>> {
     if conn.kind() == "sqlite" {
         let tx = conn
             .transaction_immediate()
             .context("Failed to start claim transaction")?;
-        let result =
-            job_query::claim_pending_jobs(&tx, available, running_counts, job_concurrency)?;
+        let result = job_query::claim_pending_jobs(
+            &tx,
+            available,
+            job_concurrency,
+            queue_concurrency,
+            decay_secs,
+        )?;
         tx.commit().context("Failed to commit claim transaction")?;
         Ok(result)
     } else {
         Ok(job_query::claim_pending_jobs(
             conn,
             available,
-            running_counts,
             job_concurrency,
+            queue_concurrency,
+            decay_secs,
         )?)
     }
 }
@@ -586,6 +444,7 @@ struct SpawnJobInput<'a> {
     hook_runner: &'a HookRunner,
     running_jobs: &'a Arc<Mutex<Vec<String>>>,
     email: &'a EmailQueueConfig,
+    storage: &'a SharedStorage,
     job_run: &'a JobRun,
     job_def: &'a JobDefinition,
 }
@@ -608,6 +467,7 @@ fn spawn_job_execution(s: &SpawnJobInput<'_>) {
     let id_log = s.job_run.id.clone();
     let slug_log = s.job_run.slug.clone();
     let ep = s.email.provider.clone();
+    let storage = s.storage.clone();
     let job_def = s.job_def.clone();
     let job_run = s.job_run.clone();
 
@@ -616,7 +476,14 @@ fn spawn_job_execution(s: &SpawnJobInput<'_>) {
         let result = tokio::time::timeout(
             timeout_dur,
             tokio::task::spawn_blocking(move || {
-                execute_job(&pool, &hook_runner, &job_def, &job_run, ep.as_deref())
+                execute_job(
+                    &pool,
+                    &hook_runner,
+                    &job_def,
+                    &job_run,
+                    ep.as_deref(),
+                    &storage,
+                )
             }),
         )
         .await;

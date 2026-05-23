@@ -81,7 +81,8 @@ pub(crate) struct CollectionsUpdateManyState {
 /// Inside hooks, runs within the parent operation's transaction.
 #[lua_fn(
     path = "crap.collections.update_many",
-    returns = "crap.UpdateManyResult"
+    returns = "crap.UpdateManyResult",
+    auto_tx
 )]
 fn collections_update_many(
     state: &CollectionsUpdateManyState,

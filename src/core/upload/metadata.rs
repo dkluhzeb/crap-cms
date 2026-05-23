@@ -7,12 +7,12 @@ use serde_json::Value;
 use crate::{
     core::{
         Document, DocumentFields,
-        upload::{CollectionUpload, ProcessedUpload, QueuedConversion, storage::StorageBackend},
+        upload::{
+            CollectionUpload, ImageConvertJobData, ProcessedUpload, QueuedConversion,
+            queue_image_conversion, storage::StorageBackend,
+        },
     },
-    db::{
-        DbConnection,
-        query::images::{NewImageEntry, insert_image_queue_entry},
-    },
+    db::DbConnection,
 };
 
 /// One entry under the document's `sizes` object — the PayloadCMS-style nested
@@ -162,12 +162,15 @@ pub fn delete_upload_files(storage: &dyn StorageBackend, doc_fields: &DocumentFi
     }
 }
 
-/// Insert queued format conversions into the image processing queue.
+/// Insert queued format conversions as `_system_image_convert` jobs.
 /// Called after document creation, when the document ID is known.
+/// The unified job queue handles retries, heartbeats, recovery, and
+/// per-slug concurrency — see
+/// `core::upload::queue::queue_image_conversion`.
 ///
 /// # Errors
 ///
-/// Returns a backend error if any INSERT into the image queue fails.
+/// Returns a backend error if any job insert fails.
 pub fn enqueue_conversions(
     conn: &dyn DbConnection,
     collection: &str,
@@ -175,17 +178,17 @@ pub fn enqueue_conversions(
     conversions: &[QueuedConversion],
 ) -> Result<()> {
     for c in conversions {
-        let entry = NewImageEntry {
-            collection,
-            document_id,
-            source_path: &c.source_path,
-            target_path: &c.target_path,
-            format: &c.format,
+        let data = ImageConvertJobData {
+            collection: collection.to_string(),
+            document_id: document_id.to_string(),
+            source_path: c.source_path.clone(),
+            target_path: c.target_path.clone(),
+            format: c.format.clone(),
             quality: c.quality,
-            url_column: &c.url_column,
-            url_value: &c.url_value,
+            url_column: c.url_column.clone(),
+            url_value: c.url_value.clone(),
         };
-        insert_image_queue_entry(conn, &entry)?;
+        queue_image_conversion(conn, &data)?;
     }
     Ok(())
 }

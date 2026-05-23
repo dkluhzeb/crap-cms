@@ -618,6 +618,7 @@ return M
         commands::JobsAction::Trigger {
             slug: "cleanup".to_string(),
             data: None,
+            priority: None,
         },
     )
     .unwrap();

@@ -34,3 +34,19 @@ pub(super) struct EmailQueueConfig {
     pub timeout: u64,
     pub concurrency: u32,
 }
+
+/// Per-tick system-job config — the parts the poll loop reads from
+/// `JobsConfig` but doesn't carry on `JobDefinition`. Currently:
+/// image conversion concurrency + priority-decay aging. Future system
+/// jobs (email retention sweeps etc.) land here.
+pub(super) struct SystemJobConfig {
+    pub priority_decay: u64,
+    /// Per-queue aggregate concurrency caps, sourced from
+    /// `[jobs.queues.<name>] concurrency = N` plus framework defaults
+    /// applied by `JobsConfig::apply_queue_defaults` (currently just
+    /// `images = { concurrency = 2 }`). Operator overrides win;
+    /// queues without entries are unconstrained beyond the global
+    /// `max_concurrent` and per-slug caps.
+    pub queue_concurrency: std::collections::HashMap<String, u32>,
+    pub storage: SharedStorage,
+}

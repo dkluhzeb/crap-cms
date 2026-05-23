@@ -43,6 +43,19 @@ struct LuaFnAttr {
     returns: Option<String>,
     #[darling(default)]
     returns_doc: Option<String>,
+    /// When `true`, the generated `_register` wrapper routes the user
+    /// fn call through `with_lua_db`, which installs a per-op
+    /// `TxContext` when running in pool-mode (job handler). User code
+    /// keeps calling `get_tx_conn(lua)?` exactly as before — the
+    /// wrapper just makes the same call work transparently for both
+    /// hook-mode (shared tx) and job-mode (per-op IMMEDIATE tx).
+    ///
+    /// Opt-in: only DB-touching `#[lua_fn]` declarations should set
+    /// this. Plain utility fns (`crap.json.encode`, `crap.log.info`)
+    /// don't need it and would error in untyped Lua contexts where
+    /// no transaction is appropriate.
+    #[darling(default)]
+    auto_tx: bool,
 }
 
 /// Per-parameter attribute: `#[lua(ty = "...")]` on a function
@@ -157,14 +170,25 @@ fn expand(attr: &LuaFnAttr, item_fn: &mut ItemFn) -> darling::Result<TokenStream
     // is clean.
     strip_lua_param_attrs(item_fn);
 
-    // Build the closure body:
-    // `move |lua, (a, b, c): (TA, TB, TC)| fn_name(&state, lua, a, b, c)`
-    // or for stateless:
-    // `|lua, (a, b, c): (TA, TB, TC)| fn_name(lua, a, b, c)`.
-    let inner_call = if state_ty.is_some() {
+    // Build the inner call:
+    // `fn_name(&state, lua, a, b, c)` (stateful) or `fn_name(lua, a, b, c)` (stateless).
+    let raw_call = if state_ty.is_some() {
         quote! { #fn_name(&state, lua, #(#closure_arg_names),*) }
     } else {
         quote! { #fn_name(lua, #(#closure_arg_names),*) }
+    };
+
+    // `auto_tx`: route through `with_lua_db` so the user fn's
+    // `get_tx_conn(lua)?` works transparently in both hook-mode
+    // (existing shared TxContext) and job-mode (PoolContext →
+    // per-op IMMEDIATE tx). The `_conn` arg is unused — user code
+    // pulls the conn from `get_tx_conn` as before.
+    let inner_call = if attr.auto_tx {
+        quote! {
+            ::crap_cms::hooks::lua_api::crud::with_lua_db(lua, |_conn| { #raw_call })
+        }
+    } else {
+        raw_call
     };
     let closure_body = build_closure_body(&inner_call, &closure_arg_names, &closure_arg_types);
 

@@ -11,6 +11,8 @@ pub struct QueueJobInput<'a> {
     pub job_def: &'a JobDefinition,
     pub data: Option<&'a str>,
     pub scheduled_by: &'a str,
+    /// Static scheduling priority; higher = sooner. `0` = standard FIFO.
+    pub priority: i32,
 }
 
 /// Queue a new job run, enforcing access control if configured.
@@ -54,6 +56,7 @@ pub fn queue_job(ctx: &ServiceContext, input: &QueueJobInput) -> Result<JobRun, 
         input.scheduled_by,
         input.job_def.retries + 1,
         &input.job_def.queue,
+        input.priority,
     )
     .map_err(ServiceError::Internal)?;
 

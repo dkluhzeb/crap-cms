@@ -213,7 +213,11 @@ fn run_purge(p: &PurgeParams<'_>) -> Result<()> {
                 cli::info(&format!("Would purge: {slug} / {id}"));
             }
         } else {
-            let tx = conn.transaction().context("Start transaction")?;
+            // `transaction_immediate()` — `purge_documents` issues
+            // reads (find_by_id_unfiltered to look up upload paths) and
+            // writes (DELETEs + FTS sync) on the same tx. DEFERRED would
+            // risk `SQLITE_BUSY_SNAPSHOT` against concurrent writers.
+            let tx = conn.transaction_immediate().context("Start transaction")?;
             purge_documents(&tx, slug, def, &ids, p.storage)?;
             tx.commit().context("Commit purge")?;
 
@@ -300,7 +304,11 @@ fn run_restore(registry: &Registry, pool: &DbPool, collection: &str, id: &str) -
         .with_context(|| format!("Collection '{collection}' not found"))?;
 
     let mut conn = pool.get().context("Failed to get DB connection")?;
-    let tx = conn.transaction().context("Start transaction")?;
+    // `transaction_immediate()` — restore reads (find_by_id_unfiltered
+    // for the FTS re-sync) and writes (UPDATE deleted_at, FTS upsert)
+    // on the same tx. Avoid `SQLITE_BUSY_SNAPSHOT` against concurrent
+    // writers.
+    let tx = conn.transaction_immediate().context("Start transaction")?;
 
     let restored = query::restore(&tx, collection, id)?;
 
@@ -358,7 +366,10 @@ fn run_empty(
     }
 
     let ids: Vec<String> = docs.iter().map(|d| d.id.to_string()).collect();
-    let tx = conn.transaction().context("Start transaction")?;
+    // `transaction_immediate()` — `purge_documents` interleaves reads
+    // (upload path lookups) and writes (DELETEs + FTS sync) on the
+    // same tx. See the matching note in `run_purge`.
+    let tx = conn.transaction_immediate().context("Start transaction")?;
 
     purge_documents(&tx, collection, &def, &ids, storage)?;
 

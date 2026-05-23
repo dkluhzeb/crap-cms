@@ -30,6 +30,11 @@ pub struct JobDefinitionConfig {
     pub timeout: Option<u64>,
     /// Max concurrent runs of this job (default: `1`).
     pub concurrency: Option<u32>,
+    /// Default scheduling priority for this job. Used when a queue
+    /// site doesn't pass an explicit `{ priority = N }`. Higher =
+    /// claimed sooner; negative = run only when otherwise idle.
+    /// Default: `0`.
+    pub priority: Option<i32>,
     /// Skip scheduled run if a previous run is still active (default:
     /// `true`).
     pub skip_if_running: Option<bool>,
@@ -77,6 +82,7 @@ pub fn parse_job_definition(slug: &str, config: JobDefinitionConfig) -> Result<J
         .retries(config.retries.unwrap_or(0))
         .timeout(config.timeout.unwrap_or(60))
         .concurrency(config.concurrency.unwrap_or(1))
+        .priority(config.priority.unwrap_or(0))
         .skip_if_running(config.skip_if_running.unwrap_or(true))
         .labels(config.labels.unwrap_or_default());
 

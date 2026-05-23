@@ -25,6 +25,8 @@ struct TriggerJobBlockingInput {
     data_json: String,
     slug: String,
     token: Option<String>,
+    /// `None` → use the definition's default priority; `Some(N)` → override.
+    priority: Option<i32>,
 }
 
 /// Resolve the auth user, look up the job definition, and queue the job.
@@ -64,12 +66,17 @@ fn trigger_job_blocking(input: TriggerJobBlockingInput) -> Result<String, Status
         .user(auth_user.as_ref().map(|u| &u.user_doc))
         .build();
 
+    // Per-call gRPC priority overrides the definition's default;
+    // absent → fall back to `JobDefinition::priority`.
+    let effective_priority = input.priority.unwrap_or(job_def.priority);
+
     let job_run = service::jobs::queue_job(
         &job_ctx,
         &service::jobs::QueueJobInput {
             job_def: &job_def,
             data: Some(&input.data_json),
             scheduled_by: "grpc",
+            priority: effective_priority,
         },
     )
     .map_err(Status::from)?;
@@ -98,6 +105,7 @@ impl ContentService {
             slug: req.slug.clone(),
             token,
             headers,
+            priority: req.priority,
         };
 
         let job_id = task::spawn_blocking(move || trigger_job_blocking(input))

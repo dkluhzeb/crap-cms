@@ -64,7 +64,11 @@ impl FromLua for UnpublishOptions {
 /// the underlying field data. Only available on collections with
 /// `versions` enabled.
 /// Inside hooks, runs within the parent operation's transaction.
-#[lua_fn(path = "crap.collections.unpublish", returns = "crap.Document")]
+#[lua_fn(
+    path = "crap.collections.unpublish",
+    returns = "crap.Document",
+    auto_tx
+)]
 fn collections_unpublish(
     state: &Arc<Registry>,
     lua: &Lua,

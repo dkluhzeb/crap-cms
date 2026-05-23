@@ -29,7 +29,8 @@ use crate::{
 /// Inside hooks, runs within the parent operation's transaction.
 #[lua_fn(
     path = "crap.collections.create_many",
-    returns = "crap.CreateManyResult"
+    returns = "crap.CreateManyResult",
+    auto_tx
 )]
 fn collections_create_many(
     state: &Arc<Registry>,

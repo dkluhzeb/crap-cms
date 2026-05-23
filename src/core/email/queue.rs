@@ -53,6 +53,7 @@ pub fn queue_email(
         "system",
         config.queue_retries + 1,
         &config.queue_name,
+        0,
     )?;
 
     tracing::debug!(

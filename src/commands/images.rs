@@ -1,4 +1,9 @@
-//! `images` command — manage the image processing queue.
+//! `images` command — manage queued image-format conversions.
+//!
+//! As of alpha.9, image conversion lives in the unified job queue
+//! (`_crap_jobs`) as `_system_image_convert` system jobs. This command
+//! is a thin operator wrapper around that table, filtered to the
+//! image-convert slug.
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use std::path::Path;
@@ -7,7 +12,8 @@ use super::ImagesAction;
 use crate::{
     cli::{self, Table},
     config::{CrapConfig, parse_duration_string},
-    db::{BoxedConnection, pool, query},
+    core::upload::SYSTEM_IMAGE_CONVERT_JOB,
+    db::{BoxedConnection, DbConnection, DbValue, pool, query::jobs as job_query},
 };
 
 /// Handle the `images` subcommand — dispatches to the appropriate action handler.
@@ -29,17 +35,22 @@ pub fn run(config_dir: &Path, action: ImagesAction) -> Result<()> {
     match action {
         ImagesAction::List { status, limit } => list_entries(&conn, status.as_deref(), limit),
         ImagesAction::Stats => show_stats(&conn),
-        ImagesAction::Retry { id, all, confirm } => retry_entries(&conn, id, all, confirm),
+        ImagesAction::Retry {
+            id,
+            all,
+            confirm,
+            priority,
+        } => retry_entries(&conn, id, all, confirm, priority),
         ImagesAction::Purge { older_than } => purge_entries(&conn, &older_than),
     }
 }
 
-/// List image processing queue entries with optional status filter.
+/// List image-convert job runs with optional status filter.
 fn list_entries(conn: &BoxedConnection, status: Option<&str>, limit: i64) -> Result<()> {
-    let entries = query::images::list_image_entries(conn, status, limit)?;
+    let entries = job_query::list_job_runs(conn, Some(SYSTEM_IMAGE_CONVERT_JOB), status, limit, 0)?;
 
     if entries.is_empty() {
-        cli::info("No queue entries found.");
+        cli::info("No image-convert jobs found.");
         return Ok(());
     }
 
@@ -48,27 +59,48 @@ fn list_entries(conn: &BoxedConnection, status: Option<&str>, limit: i64) -> Res
         "Collection",
         "Document",
         "Format",
+        "Prio",
         "Created",
         "Status",
     ]);
 
     for e in &entries {
-        let created = e.created_at.as_deref().unwrap_or("-");
+        // Decode the payload so we can show the collection / document /
+        // format columns the user expects from the legacy `images list`.
+        let payload: serde_json::Value =
+            serde_json::from_str(&e.data).unwrap_or(serde_json::Value::Null);
+        let collection = payload
+            .get("collection")
+            .and_then(|v| v.as_str())
+            .unwrap_or("-");
+        let document_id = payload
+            .get("document_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("-");
+        let format = payload
+            .get("format")
+            .and_then(|v| v.as_str())
+            .unwrap_or("-");
 
-        let status_str = if e.status == "failed" {
-            format!("failed: {}", e.error.as_deref().unwrap_or("unknown"))
-        } else {
-            e.status.clone()
+        let created = e.created_at.as_deref().unwrap_or("-");
+        let priority = e.priority.to_string();
+
+        let status_str = match &e.status {
+            crate::core::job::JobStatus::Failed => {
+                format!("failed: {}", e.error.as_deref().unwrap_or("unknown"))
+            }
+            other => other.as_str().to_string(),
         };
 
         let id_display: String = e.id.chars().take(22).collect();
-        let doc_display: String = e.document_id.chars().take(10).collect();
+        let doc_display: String = document_id.chars().take(10).collect();
 
         table.row(vec![
             &id_display,
-            &e.collection,
+            collection,
             &doc_display,
-            &e.format,
+            format,
+            &priority,
             created,
             &status_str,
         ]);
@@ -82,43 +114,75 @@ fn list_entries(conn: &BoxedConnection, status: Option<&str>, limit: i64) -> Res
 
 /// Show queue statistics by status.
 fn show_stats(conn: &BoxedConnection) -> Result<()> {
-    let pending = query::images::count_image_entries_by_status(conn, "pending")?;
-    let processing = query::images::count_image_entries_by_status(conn, "processing")?;
-    let completed = query::images::count_image_entries_by_status(conn, "completed")?;
-    let failed = query::images::count_image_entries_by_status(conn, "failed")?;
+    let pending = job_query::count_job_runs(conn, Some(SYSTEM_IMAGE_CONVERT_JOB), Some("pending"))?;
+    let running = job_query::count_job_runs(conn, Some(SYSTEM_IMAGE_CONVERT_JOB), Some("running"))?;
+    let completed =
+        job_query::count_job_runs(conn, Some(SYSTEM_IMAGE_CONVERT_JOB), Some("completed"))?;
+    let failed = job_query::count_job_runs(conn, Some(SYSTEM_IMAGE_CONVERT_JOB), Some("failed"))?;
 
     cli::header("Image processing queue");
     cli::kv("Pending", &pending.to_string());
-    cli::kv("Processing", &processing.to_string());
+    cli::kv("Running", &running.to_string());
     cli::kv("Completed", &completed.to_string());
     cli::kv("Failed", &failed.to_string());
     cli::kv(
         "Total",
-        &(pending + processing + completed + failed).to_string(),
+        &(pending + running + completed + failed).to_string(),
     );
 
     Ok(())
 }
 
-/// Retry failed queue entries — either a single entry by ID or all failed entries.
+/// Retry failed image-convert jobs — either a single entry by ID or all failed.
+/// `priority` is set on the retried rows so an operator can urgent-bump a
+/// reset (default `0` keeps the original FIFO behaviour).
 fn retry_entries(
     conn: &BoxedConnection,
     id: Option<String>,
     all: bool,
     confirm: bool,
+    priority: i32,
 ) -> Result<()> {
     if all {
         if !confirm {
             bail!("Use -y to confirm retrying all failed entries");
         }
 
-        let count = query::images::retry_all_failed_images(conn)?;
+        let count = conn.execute(
+            &format!(
+                "UPDATE _crap_jobs SET status = 'pending', error = NULL, attempt = 0, \
+                                 completed_at = NULL, started_at = NULL, retry_after = NULL, \
+                                 priority = {} \
+                 WHERE slug = {} AND status = 'failed'",
+                conn.placeholder(1),
+                conn.placeholder(2)
+            ),
+            &[
+                DbValue::Integer(i64::from(priority)),
+                DbValue::Text(SYSTEM_IMAGE_CONVERT_JOB.to_string()),
+            ],
+        )?;
 
         cli::success(&format!("Reset {count} failed entry/entries to pending"));
     } else if let Some(entry_id) = id {
-        let found = query::images::retry_image_entry(conn, &entry_id)?;
+        let count = conn.execute(
+            &format!(
+                "UPDATE _crap_jobs SET status = 'pending', error = NULL, attempt = 0, \
+                                 completed_at = NULL, started_at = NULL, retry_after = NULL, \
+                                 priority = {} \
+                 WHERE id = {} AND slug = {} AND status = 'failed'",
+                conn.placeholder(1),
+                conn.placeholder(2),
+                conn.placeholder(3)
+            ),
+            &[
+                DbValue::Integer(i64::from(priority)),
+                DbValue::Text(entry_id.clone()),
+                DbValue::Text(SYSTEM_IMAGE_CONVERT_JOB.to_string()),
+            ],
+        )?;
 
-        if found {
+        if count > 0 {
             cli::success(&format!("Reset entry {entry_id} to pending"));
         } else {
             bail!("Entry '{entry_id}' not found or not in 'failed' status");
@@ -130,7 +194,8 @@ fn retry_entries(
     Ok(())
 }
 
-/// Purge old completed/failed entries older than the specified duration.
+/// Purge old completed/failed image-convert jobs older than the
+/// specified duration.
 fn purge_entries(conn: &BoxedConnection, older_than: &str) -> Result<()> {
     let secs = parse_duration_string(older_than).ok_or_else(|| {
         anyhow!(
@@ -138,7 +203,22 @@ fn purge_entries(conn: &BoxedConnection, older_than: &str) -> Result<()> {
         )
     })?;
 
-    let deleted = query::images::purge_old_image_entries(conn, secs)?;
+    let secs_i64 = i64::try_from(secs).context("Duration overflows i64 seconds")?;
+
+    let (offset_sql, offset_param) = conn.date_offset_expr(-secs_i64, 2);
+    let deleted = conn.execute(
+        &format!(
+            "DELETE FROM _crap_jobs \
+             WHERE slug = {} AND status IN ('completed', 'failed') \
+                AND created_at < {}",
+            conn.placeholder(1),
+            offset_sql,
+        ),
+        &[
+            DbValue::Text(SYSTEM_IMAGE_CONVERT_JOB.to_string()),
+            offset_param,
+        ],
+    )?;
 
     cli::success(&format!("Purged {deleted} old queue entry/entries"));
 

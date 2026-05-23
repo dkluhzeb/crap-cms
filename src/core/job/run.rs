@@ -17,6 +17,16 @@ pub struct JobRun {
     pub error: Option<String>,
     pub attempt: u32,
     pub max_attempts: u32,
+    /// Static numeric priority; higher = claimed sooner. Default 0.
+    /// Combined with the configured `priority_decay` to produce the
+    /// effective scheduling priority in `claim_pending_jobs`.
+    pub priority: i32,
+    /// Dedup key set by callers passing `{ unique = "..." }` to
+    /// `crap.jobs.queue`. `None` for normal enqueues. While the row
+    /// is `pending` or `running`, the partial unique index on
+    /// `(slug, unique_key)` prevents a second active row with the
+    /// same pair from being inserted.
+    pub unique_key: Option<String>,
     /// How this job was triggered: "cron", "manual", "hook", "grpc", "cli".
     pub scheduled_by: Option<String>,
     pub created_at: Option<String>,
@@ -46,6 +56,8 @@ pub struct JobRunBuilder {
     error: Option<String>,
     attempt: u32,
     max_attempts: u32,
+    priority: i32,
+    unique_key: Option<String>,
     scheduled_by: Option<String>,
     created_at: Option<String>,
     started_at: Option<String>,
@@ -67,6 +79,8 @@ impl JobRunBuilder {
             error: None,
             attempt: 0,
             max_attempts: 1,
+            priority: 0,
+            unique_key: None,
             scheduled_by: None,
             created_at: None,
             started_at: None,
@@ -126,6 +140,20 @@ impl JobRunBuilder {
     }
 
     #[must_use]
+    pub fn priority(mut self, p: i32) -> Self {
+        self.priority = p;
+
+        self
+    }
+
+    #[must_use]
+    pub fn unique_key(mut self, k: impl Into<String>) -> Self {
+        self.unique_key = Some(k.into());
+
+        self
+    }
+
+    #[must_use]
     pub fn scheduled_by(mut self, s: impl Into<String>) -> Self {
         self.scheduled_by = Some(s.into());
 
@@ -180,6 +208,8 @@ impl JobRunBuilder {
             error: self.error,
             attempt: self.attempt,
             max_attempts: self.max_attempts,
+            priority: self.priority,
+            unique_key: self.unique_key,
             scheduled_by: self.scheduled_by,
             created_at: self.created_at,
             started_at: self.started_at,

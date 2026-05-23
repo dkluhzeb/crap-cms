@@ -93,6 +93,7 @@ fn insert_job_creates_pending_row() {
         "manual",
         1,
         "default",
+        0,
     )
     .expect("insert_job");
 
@@ -110,13 +111,18 @@ fn claim_pending_jobs_marks_running() {
     let conn = pool.get().expect("DB connection");
 
     // Insert two pending jobs with different slugs (each has default concurrency=1)
-    job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default").unwrap();
-    job_query::insert_job(&conn, "test_create_post", "{}", "manual", 1, "default").unwrap();
+    job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
+    job_query::insert_job(&conn, "test_create_post", "{}", "manual", 1, "default", 0).unwrap();
 
-    let running_counts = job_query::count_running_per_slug(&conn).unwrap();
     let job_concurrency = std::collections::HashMap::new();
-    let claimed =
-        job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
+    let claimed = job_query::claim_pending_jobs(
+        &conn,
+        5,
+        &job_concurrency,
+        &std::collections::HashMap::new(),
+        0,
+    )
+    .unwrap();
 
     assert_eq!(
         claimed.len(),
@@ -133,11 +139,17 @@ fn complete_job_sets_completed_status() {
     let (_tmp, pool, _registry, _runner) = setup();
     let conn = pool.get().expect("DB connection");
 
-    let run = job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default").unwrap();
-    let running_counts = job_query::count_running_per_slug(&conn).unwrap();
+    let run =
+        job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
     let job_concurrency = std::collections::HashMap::new();
-    let claimed =
-        job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
+    let claimed = job_query::claim_pending_jobs(
+        &conn,
+        5,
+        &job_concurrency,
+        &std::collections::HashMap::new(),
+        0,
+    )
+    .unwrap();
     assert_eq!(claimed.len(), 1);
 
     job_query::complete_job(&conn, &run.id, Some("{\"done\":true}")).unwrap();
@@ -155,10 +167,16 @@ fn fail_job_with_retry_resets_to_pending() {
 
     // max_attempts = 3 (retries=2 means 3 total attempts)
     let run =
-        job_query::insert_job(&conn, "test_failing_job", "{}", "manual", 3, "default").unwrap();
-    let running_counts = job_query::count_running_per_slug(&conn).unwrap();
+        job_query::insert_job(&conn, "test_failing_job", "{}", "manual", 3, "default", 0).unwrap();
     let job_concurrency = std::collections::HashMap::new();
-    job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
+    job_query::claim_pending_jobs(
+        &conn,
+        5,
+        &job_concurrency,
+        &std::collections::HashMap::new(),
+        0,
+    )
+    .unwrap();
 
     // Fail with should_retry = true (attempt < max_attempts)
     job_query::fail_job(&conn, &run.id, "test error", true, 1).unwrap();
@@ -179,10 +197,16 @@ fn fail_job_no_retry_stays_failed() {
     let conn = pool.get().expect("DB connection");
 
     let run =
-        job_query::insert_job(&conn, "test_failing_job", "{}", "manual", 1, "default").unwrap();
-    let running_counts = job_query::count_running_per_slug(&conn).unwrap();
+        job_query::insert_job(&conn, "test_failing_job", "{}", "manual", 1, "default", 0).unwrap();
     let job_concurrency = std::collections::HashMap::new();
-    job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
+    job_query::claim_pending_jobs(
+        &conn,
+        5,
+        &job_concurrency,
+        &std::collections::HashMap::new(),
+        0,
+    )
+    .unwrap();
 
     // Fail with should_retry = false
     job_query::fail_job(&conn, &run.id, "permanent failure", false, 1).unwrap();
@@ -197,8 +221,8 @@ fn list_job_runs_filters() {
     let (_tmp, pool, _registry, _runner) = setup();
     let conn = pool.get().expect("DB connection");
 
-    job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default").unwrap();
-    job_query::insert_job(&conn, "test_failing_job", "{}", "cron", 1, "default").unwrap();
+    job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
+    job_query::insert_job(&conn, "test_failing_job", "{}", "cron", 1, "default", 0).unwrap();
 
     // Filter by slug
     let echo_runs = job_query::list_job_runs(&conn, Some("test_echo_job"), None, 50, 0).unwrap();
@@ -220,14 +244,20 @@ fn count_running_jobs() {
     let conn = pool.get().expect("DB connection");
 
     // Use different slugs to avoid per-job concurrency=1 limiting claims
-    job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default").unwrap();
-    job_query::insert_job(&conn, "test_create_post", "{}", "manual", 1, "default").unwrap();
+    job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
+    job_query::insert_job(&conn, "test_create_post", "{}", "manual", 1, "default", 0).unwrap();
 
     assert_eq!(job_query::count_running(&conn, None).unwrap(), 0);
 
-    let running_counts = job_query::count_running_per_slug(&conn).unwrap();
     let job_concurrency = std::collections::HashMap::new();
-    job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
+    job_query::claim_pending_jobs(
+        &conn,
+        5,
+        &job_concurrency,
+        &std::collections::HashMap::new(),
+        0,
+    )
+    .unwrap();
 
     assert_eq!(job_query::count_running(&conn, None).unwrap(), 2);
     assert_eq!(
@@ -249,10 +279,17 @@ fn purge_old_jobs() {
     let (_tmp, pool, _registry, _runner) = setup();
     let conn = pool.get().expect("DB connection");
 
-    let run = job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default").unwrap();
-    let running_counts = job_query::count_running_per_slug(&conn).unwrap();
+    let run =
+        job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
     let job_concurrency = std::collections::HashMap::new();
-    job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
+    job_query::claim_pending_jobs(
+        &conn,
+        5,
+        &job_concurrency,
+        &std::collections::HashMap::new(),
+        0,
+    )
+    .unwrap();
     job_query::complete_job(&conn, &run.id, None).unwrap();
 
     // Backdate created_at so the purge threshold catches it
@@ -276,8 +313,6 @@ fn purge_old_jobs() {
 #[test]
 fn execute_echo_job_via_hook_runner() {
     let (_tmp, pool, _registry, runner) = setup();
-    let conn = pool.get().expect("DB connection");
-
     let result = runner
         .run_job_handler(
             "jobs.test_job.echo",
@@ -285,7 +320,7 @@ fn execute_echo_job_via_hook_runner() {
             "{\"hello\":\"world\"}",
             1,
             1,
-            &conn,
+            &pool,
         )
         .expect("run_job_handler");
 
@@ -297,8 +332,6 @@ fn execute_echo_job_via_hook_runner() {
 #[test]
 fn execute_job_that_creates_document() {
     let (_tmp, pool, registry, runner) = setup();
-    let mut conn = pool.get().expect("DB connection");
-    let tx = conn.transaction().expect("Start transaction");
 
     runner
         .run_job_handler(
@@ -307,11 +340,9 @@ fn execute_job_that_creates_document() {
             "{\"title\":\"From Job\"}",
             1,
             1,
-            &tx,
+            &pool,
         )
         .expect("run_job_handler");
-
-    tx.commit().expect("Commit");
 
     // Verify the post was created
     let def = registry.get_collection("posts").unwrap().clone();
@@ -330,10 +361,8 @@ fn execute_job_that_creates_document() {
 #[test]
 fn execute_failing_job_returns_error() {
     let (_tmp, pool, _registry, runner) = setup();
-    let conn = pool.get().expect("DB connection");
-
     let result =
-        runner.run_job_handler("jobs.test_job.fail", "test_failing_job", "{}", 1, 3, &conn);
+        runner.run_job_handler("jobs.test_job.fail", "test_failing_job", "{}", 1, 3, &pool);
 
     assert!(result.is_err(), "Failing job should return an error");
     let err_msg = result.unwrap_err().to_string();
@@ -350,10 +379,17 @@ fn find_stale_jobs_detects_running() {
     let (_tmp, pool, _registry, _runner) = setup();
     let conn = pool.get().expect("DB connection");
 
-    let run = job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default").unwrap();
-    let running_counts = job_query::count_running_per_slug(&conn).unwrap();
+    let run =
+        job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
     let job_concurrency = std::collections::HashMap::new();
-    job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
+    job_query::claim_pending_jobs(
+        &conn,
+        5,
+        &job_concurrency,
+        &std::collections::HashMap::new(),
+        0,
+    )
+    .unwrap();
 
     // Manually backdate the heartbeat so it appears stale
     conn.execute(
@@ -373,10 +409,17 @@ fn mark_stale_changes_status() {
     let (_tmp, pool, _registry, _runner) = setup();
     let conn = pool.get().expect("DB connection");
 
-    let run = job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default").unwrap();
-    let running_counts = job_query::count_running_per_slug(&conn).unwrap();
+    let run =
+        job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
     let job_concurrency = std::collections::HashMap::new();
-    job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
+    job_query::claim_pending_jobs(
+        &conn,
+        5,
+        &job_concurrency,
+        &std::collections::HashMap::new(),
+        0,
+    )
+    .unwrap();
 
     job_query::mark_stale(&conn, &run.id, "server restarted").unwrap();
 

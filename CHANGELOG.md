@@ -93,7 +93,224 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   values. A strategy hook returning `_locked = "1"` (string) used
   to silently bypass the lock check.
 
+### Added
+
+- **Job priorities + optional priority decay.** `_crap_jobs` gained a
+  `priority INTEGER NOT NULL DEFAULT 0` column (idempotent ALTER on
+  upgrade; `priority DESC, created_at` index added). Higher values
+  are claimed sooner; same-priority jobs claim FIFO. Two surfaces:
+
+    - **Lua**: `crap.jobs.queue(slug, data, { priority = N })` — an
+      optional third options table. Forward-compatible for future per-
+      enqueue options (`delay`, `unique`, …).
+    - **Config**: `[jobs] priority_decay` (duration; `0` = disabled,
+      default). When set, the claim ORDER BY adds `(now - created_at)
+      / priority_decay` to the effective priority so old low-priority
+      jobs eventually age into being claimable instead of starving
+      forever behind a backlog of higher-priority work. Disabled
+      keeps the index-friendly fast path.
+
+  System jobs default to `priority = 0` (image conversion, email,
+  cron-fired jobs). Image conversion is throttled via the per-queue
+  cap on `images` (`[jobs.queues.images] concurrency = N`, default
+  `2`); other system jobs are unconstrained beyond the global
+  `max_concurrent`.
+
+  CLI surfaces:
+    - `crap-cms jobs trigger <slug> --priority N` queues at a custom
+      priority (negative values allowed; `0` is the default).
+    - `crap-cms jobs status` lists now have a `Prio` column; the
+      single-run detail view shows `Priority` in the kv block.
+    - `crap-cms images list` also shows the `Prio` column.
+    - `crap-cms images retry --priority N` sets the priority on
+      reset jobs, letting operators urgent-bump a specific retry.
+
+  gRPC surface:
+    - `TriggerJobRequest.priority` (optional `int32`, field 3) lets
+      external clients queue at a custom priority. Omitted /
+      `null` → defaults to `0`. Wire-compatible with older clients
+      that don't set the field.
+
+  System-job slugs (`_system_image_convert`, `_system_email`) are
+  now re-exported from a single place (`core::job::system`) for
+  discoverability, with a `SYSTEM_JOB_SLUGS` static slice. The
+  per-subsystem definitions are unchanged.
+
+- **`[jobs] image_concurrency` removed; replaced by per-queue cap.**
+  The dedicated `image_concurrency` knob from earlier in the alpha.9
+  cycle is gone. Image conversion runs in queue `"images"`, so the
+  per-queue mechanism handles it: `[jobs.queues.images] concurrency = N`.
+
+  The framework auto-applies a default of `2` to the `images` queue
+  at config load (`JobsConfig::apply_queue_defaults`) so the
+  conservative behaviour is preserved for operators who don't set
+  the queue config. Explicit operator overrides win.
+
+  ```toml
+  # before (alpha.9 mid-cycle):
+  # [jobs] image_concurrency = 4
+
+  # after:
+  [jobs.queues.images]
+  concurrency = 4
+  ```
+
+  Removes one special case from `JobsConfig` and from
+  `SystemJobConfig` — image conversion is now "just another queue"
+  in the config model.
+
+- **Unified job-claim path across backends.** `claim_pending_jobs`
+  is now a single function with backend-specific SQL fragments
+  (`FOR UPDATE SKIP LOCKED` on Postgres; no clause on SQLite — its
+  `IMMEDIATE` transaction provides equivalent isolation). Both
+  backends now:
+    - Strict global priority ordering (single SELECT ORDER BY priority).
+    - Strict per-slug and per-queue cap enforcement within a tick
+      (the SELECT's locking holds candidate rows for the
+      transaction's duration).
+    - Identical observable behavior — operators reasoning about job
+      claim semantics get one mental model regardless of backend.
+
+  The previous Postgres path iterated DISTINCT slugs and enforced
+  per-slug caps via a subquery; it had hard per-slug enforcement but
+  only approximate cross-slug priority. The unified path trades the
+  "subquery cap" for Rust-side cap checks against locked rows — same
+  guarantee under multi-server load, simpler code, and now
+  cross-slug priority is exact.
+
+- **Per-queue concurrency caps.** New `[jobs.queues.<name>]
+  concurrency = N` config knob throttles the aggregate of jobs
+  running in a queue, independent of per-slug caps. Use for
+  shared-resource queues (SMTP pool, image encoder pool, …):
+
+  ```toml
+  [jobs.queues]
+  emails = { concurrency = 4 }
+  images = { concurrency = 2 }
+  ```
+
+  Composition: strictest of `max_concurrent` (per-server) / queue
+  cap (cluster-global) / per-slug `JobDefinition::concurrency`
+  (cluster-global) wins. Queues without an entry are unconstrained
+  beyond the global cap. The scheduler logs a warning at startup if
+  `[jobs.queues]` references a queue name that no defined job uses
+  (typo catcher).
+
+  See [Multi-server semantics](docs/src/lua-api/jobs.md#multi-server-semantics)
+  in `jobs.md` for the full per-server vs cluster-global breakdown of
+  every job-concurrency knob.
+
+- **`JobDefinition.priority`** — define-time default priority. Set
+  on `crap.jobs.define({ priority = -5, ... })` to make every cron
+  firing, gRPC trigger, and Lua `crap.jobs.queue()` of that slug
+  default to the given priority. Per-call values still win when
+  passed explicitly.
+
+- **`crap.jobs.queue` `delay` option** — `{ delay = "5m" }` or
+  `{ delay = 30 }` (integer seconds) defers the job's earliest
+  claim time. Reuses the existing `retry_after` column (same
+  mechanism as exponential-backoff retries) so no new column is
+  needed for delivery scheduling.
+
+- **`crap.jobs.queue` `unique` option** — `{ unique = "reindex:posts" }`
+  dedups against any pending/running job with the same `(slug,
+  unique_key)`. Returns the existing job's id when a duplicate is
+  detected; lets handlers use Lua `crap.jobs.queue` as a
+  fire-and-forget "ensure this work is queued" primitive without
+  building dedup logic at the call site. Added `unique_key TEXT`
+  column to `_crap_jobs` with a partial unique index on `(slug,
+  unique_key) WHERE status IN ('pending', 'running')` —
+  completed/failed runs don't block re-enqueue. Idempotent ALTER on
+  upgrade.
+
+  Rust callers wanting the dedup-or-create distinction get
+  `query::jobs::insert_job_with(conn, &InsertJobOpts)` which
+  returns `InsertedJob::{Created, Existing}`. The simpler positional
+  `insert_job(...)` is unchanged and still preferred for the common
+  case.
+
 ### Breaking Changes
+
+- **Image conversion moved into the unified job queue.** The dedicated
+  `_crap_image_queue` table and its bespoke worker are gone. Image
+  conversions now run as `_system_image_convert` system jobs in the
+  same `_crap_jobs` table that powers email and Lua-handler jobs —
+  inheriting heartbeat, retry/backoff (`attempt`/`max_attempts`),
+  stale-recovery, and the global `max_concurrent` + per-slug
+  `job_concurrency` knobs for free.
+
+  One-time migration runs on first startup with the new code: any
+  non-completed rows from `_crap_image_queue` are copied into
+  `_crap_jobs` as system jobs, then the legacy table is dropped.
+  Idempotent — re-running is a no-op.
+
+  CLI surface (`crap-cms images list / stats / retry / purge`) is
+  unchanged; the implementation now reads from `_crap_jobs` filtered
+  by `slug = "_system_image_convert"`.
+
+  The old `[jobs] image_queue_batch_size` field is **removed**;
+  replaced by `[jobs] image_concurrency` (default `2`) which caps the
+  number of AVIF / WebP conversions running at once. Image encoding
+  is CPU-bound, so capping it separately from the global
+  `max_concurrent` prevents a backlog from saturating every core and
+  starving other jobs. The value is injected as a synthetic per-slug
+  entry in the job queue's `job_concurrency` map for
+  `_system_image_convert`.
+
+  Internals (for plugin authors poking at lifecycle internals):
+  `core::upload::enqueue_conversions` now writes to `_crap_jobs` via
+  `core::upload::queue_image_conversion`. The Rust handler lives in
+  `scheduler/runner.rs::execute_system_image_convert`, mirroring
+  `execute_system_email`. `scheduler::execute_job` now takes a
+  `&SharedStorage` parameter (alongside `email_provider`).
+
+- **Lua job handlers run in pool-mode** — each CRUD operation
+  (`crap.collections.X.find` / `update` / `delete` / …) inside a job
+  now opens its own short-lived `BEGIN IMMEDIATE` transaction instead
+  of sharing one outer `BEGIN DEFERRED`. Fixes the
+  `SQLITE_BUSY_SNAPSHOT` failure mode that long-running handlers hit
+  whenever they did `find` followed by `update` and any concurrent
+  writer committed in between (it's a deadlock-prevention error, not
+  retried by `busy_timeout`).
+
+  For multi-step atomicity inside a job, wrap CRUD ops in the new
+  `crap.transaction(function() … end)` helper — it opens a single
+  IMMEDIATE tx for the block, commits on success, rolls back on
+  error. Inside hooks (which already run in the parent write tx),
+  `crap.transaction` is a pass-through.
+
+  Migration: jobs that depended on implicit cross-CRUD atomicity
+  (e.g., update doc A then doc B with an "all-or-nothing" expectation)
+  need to be wrapped:
+
+  ```lua
+  -- Before (implicit atomicity, SQLITE_BUSY_SNAPSHOT-prone):
+  function M.run(ctx)
+      crap.collections.posts.update(id_a, { count = 1 })
+      crap.collections.posts.update(id_b, { count = 2 })
+  end
+
+  -- After (explicit):
+  function M.run(ctx)
+      crap.transaction(function()
+          crap.collections.posts.update(id_a, { count = 1 })
+          crap.collections.posts.update(id_b, { count = 2 })
+      end)
+  end
+  ```
+
+  Hooks are unaffected — they still share the parent's write
+  transaction. Full model documented in
+  `docs/src/lua-api/jobs.md#transactions-in-job-handlers`.
+
+  Internals (for plugin authors poking at lifecycle internals):
+  `HookRunner::run_job_handler` now takes `&DbPool` instead of
+  `&dyn DbConnection`. `TxContextGuard::set_pool` is the new entry
+  point used by job execution; `set` remains for hooks /
+  `crap.transaction` bodies. Every `#[lua_fn]` CRUD declaration
+  carries a new `auto_tx` attribute that routes the user fn through
+  `with_lua_db`, dispatching transparently between hook-mode (shared
+  tx) and job-mode (per-op IMMEDIATE tx).
 
 - **`crap-cms typegen` restructured into three subcommands.** The
   single `typegen --lang X [--proto M]` shape conflated server-side
@@ -261,6 +478,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   registration shims.
 
 ### Fixed
+
+- **Eliminated `SQLITE_BUSY_SNAPSHOT` failure class across the
+  codebase.** The scheduler's image queue was the symptom (see the
+  next entry); the same hazard pattern existed at every site that
+  opened a `conn.transaction()` (deferred) and then did a SELECT
+  followed by an UPDATE/INSERT/DELETE on that same tx. In WAL
+  mode, a DEFERRED transaction takes a snapshot on its first read;
+  if any other writer commits between the SELECT and the write,
+  SQLite returns `SQLITE_BUSY_SNAPSHOT` (primary code 5) — which
+  is **not** retried by the `busy_timeout` handler. Audited every
+  call site and upgraded read-then-write transactions to
+  `conn.transaction_immediate()`:
+  - `src/api/handlers/auth/verify_email.rs` — email-verification
+    token consume (read token → mark verified).
+  - `src/api/handlers/auth/reset_password.rs` — password-reset
+    token consume (read token → write new password hash).
+  - `src/commands/trash.rs` — three sites: `purge`, `restore`,
+    and `empty_trash` all interleave reads (find_by_id, FTS
+    lookups) with writes (DELETE, UPDATE, FTS sync) inside one
+    tx.
+  - Sites kept on `transaction()` (DEFERRED) because they're
+    read-only by design: access-fn evaluation (the four
+    `check_access` paths in `api/handlers` + `admin/handlers`),
+    SSE subscribe resolution, the validation endpoint (always
+    rolled back), and the startup `on_init` hook (serial, no
+    concurrent writers).
+  - One known-deferred site remains by design: `scheduler/runner.
+    rs::execute_job` wraps the Lua handler in a DEFERRED tx so
+    user-defined handlers can do CRUD via the shared tx. Long-
+    running Lua jobs that do read-then-write on the same tx can
+    still hit `SQLITE_BUSY_SNAPSHOT`. A follow-up release moves
+    job handlers to pool-mode (each CRUD op opens its own
+    IMMEDIATE tx) with an explicit `crap.transaction(fn)` helper
+    for users who need multi-step atomicity.
 
 - **Image queue scheduler no longer spams "database is locked"
   errors and no longer leaves entries stuck in `processing`.** Two

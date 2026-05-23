@@ -142,9 +142,13 @@ impl CrapConfig {
 
             substitute_in_value(&mut value)?;
 
-            let config: CrapConfig = value
+            let mut config: CrapConfig = value
                 .try_into()
                 .with_context(|| format!("Failed to deserialize {}", config_path.display()))?;
+
+            // Apply framework defaults for queues the operator didn't
+            // set explicitly. See `JobsConfig::apply_queue_defaults`.
+            config.jobs.apply_queue_defaults();
 
             config
                 .locale
@@ -159,7 +163,9 @@ impl CrapConfig {
         } else {
             info!("No crap.toml found, using defaults");
 
-            Ok(CrapConfig::default())
+            let mut config = CrapConfig::default();
+            config.jobs.apply_queue_defaults();
+            Ok(config)
         }
     }
 
@@ -171,6 +177,7 @@ impl CrapConfig {
     pub fn test_default() -> Self {
         let mut config = Self::default();
         config.access.default_deny = false;
+        config.jobs.apply_queue_defaults();
         config
     }
 

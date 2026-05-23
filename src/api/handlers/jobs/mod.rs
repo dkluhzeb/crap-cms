@@ -23,5 +23,7 @@ pub(super) fn job_run_to_proto(run: &JobRun) -> content::GetJobRunResponse {
         created_at: run.created_at.clone(),
         started_at: run.started_at.clone(),
         completed_at: run.completed_at.clone(),
+        priority: run.priority,
+        unique_key: run.unique_key.clone(),
     }
 }

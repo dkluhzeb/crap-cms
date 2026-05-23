@@ -79,7 +79,8 @@ pub(crate) struct CollectionsCountState {
 /// Inside hooks, runs within the parent operation's transaction.
 #[lua_fn(
     path = "crap.collections.count",
-    returns_doc = "Number of matching documents."
+    returns_doc = "Number of matching documents.",
+    auto_tx
 )]
 fn collections_count(
     state: &CollectionsCountState,

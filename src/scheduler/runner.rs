@@ -13,14 +13,17 @@ use crate::{
     core::{
         CollectionDefinition, JobDefinition, JobRun, Registry,
         email::{EmailJobData, EmailProvider, SYSTEM_EMAIL_JOB},
-        upload::{self, StorageBackend},
+        upload::{
+            self, ImageConvertJobData, SYSTEM_IMAGE_CONVERT_JOB, SharedStorage, StorageBackend,
+        },
     },
     db::{DbConnection, DbPool, DbValue, query, query::jobs as job_query},
     hooks::HookRunner,
 };
 
 /// Execute a single job: call the Lua handler with CRUD access,
-/// or handle system jobs (like `_system_email`) directly in Rust.
+/// or handle system jobs (`_system_email`, `_system_image_convert`)
+/// directly in Rust.
 ///
 /// # Errors
 ///
@@ -32,6 +35,7 @@ pub fn execute_job(
     job_def: &JobDefinition,
     job_run: &JobRun,
     email_provider: Option<&dyn EmailProvider>,
+    storage: &SharedStorage,
 ) -> Result<()> {
     let start = Instant::now();
 
@@ -45,24 +49,32 @@ pub fn execute_job(
         return execute_system_email(pool, job_run, email_provider, start);
     }
 
-    // Open a transaction for the job handler (same TxContext pattern as hooks)
-    let mut conn = pool.get().context("Failed to get DB connection for job")?;
-    let tx = conn
-        .transaction()
-        .context("Failed to begin job transaction")?;
+    // System image-convert job: encode + write URL column + complete.
+    // Rust handler — no Lua VM needed.
+    if job_run.slug == SYSTEM_IMAGE_CONVERT_JOB {
+        return execute_system_image_convert(pool, job_run, storage, start);
+    }
 
+    // Lua job handler runs in **pool-mode**: no outer transaction.
+    // Each CRUD operation inside the handler opens its own short-lived
+    // IMMEDIATE transaction (via `with_lua_db` / the `auto_tx` attribute
+    // on every `#[lua_fn]` CRUD declaration). For multi-step atomicity
+    // the user wraps a block in `crap.transaction(function() ... end)`,
+    // which temporarily swaps the pool context for a shared tx context.
+    // This avoids the `SQLITE_BUSY_SNAPSHOT` hazard that the previous
+    // single-deferred-outer-tx model exposed for long-running handlers
+    // that did read-then-write.
     let result = hook_runner.run_job_handler(
         &job_def.handler,
         &job_run.slug,
         &job_run.data,
         job_run.attempt,
         job_run.max_attempts,
-        &tx,
+        pool,
     );
 
     match result {
         Ok(result_json) => {
-            tx.commit().context("Failed to commit job transaction")?;
             let c = pool
                 .get()
                 .context("Failed to get DB connection for completion")?;
@@ -77,8 +89,6 @@ pub fn execute_job(
             );
         }
         Err(e) => {
-            // Explicit drop triggers rollback (BoxedTransaction rolls back on drop)
-            drop(tx);
             let error_msg = e.to_string();
             let should_retry = job_run.attempt < job_run.max_attempts;
             let c = pool
@@ -149,6 +159,122 @@ fn execute_system_email(
                 );
             } else {
                 error!("Email job {} failed permanently: {}", job_run.id, error_msg);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Execute a `_system_image_convert` job: encode the source image,
+/// write the converted bytes to storage, update the target document's
+/// URL column, and mark the job completed. On encode / storage / DB
+/// failure, defer to the job runner's standard `fail_job` retry path.
+///
+/// Mirrors the shape of [`execute_system_email`] — no Lua VM, no
+/// outer transaction held during the slow encode step.
+fn execute_system_image_convert(
+    pool: &DbPool,
+    job_run: &JobRun,
+    storage: &SharedStorage,
+    start: Instant,
+) -> Result<()> {
+    let data: ImageConvertJobData =
+        from_str(&job_run.data).context("Invalid image-convert job data")?;
+
+    if !query::is_valid_identifier(&data.collection) {
+        let error_msg = format!("invalid collection slug: {}", data.collection);
+        let c = pool
+            .get()
+            .context("Failed to get DB connection for image-convert failure")?;
+        job_query::fail_job(&c, &job_run.id, &error_msg, false, job_run.attempt)?;
+        error!(
+            "Image-convert job {} failed permanently: {}",
+            job_run.id, error_msg
+        );
+        return Ok(());
+    }
+    if !query::is_valid_identifier(&data.url_column) {
+        let error_msg = format!("invalid url_column: {}", data.url_column);
+        let c = pool
+            .get()
+            .context("Failed to get DB connection for image-convert failure")?;
+        job_query::fail_job(&c, &job_run.id, &error_msg, false, job_run.attempt)?;
+        error!(
+            "Image-convert job {} failed permanently: {}",
+            job_run.id, error_msg
+        );
+        return Ok(());
+    }
+
+    let encode_result = upload::process_image_entry_with_storage(
+        &data.source_path,
+        &data.target_path,
+        &data.format,
+        data.quality,
+        &**storage,
+    );
+
+    match encode_result {
+        Ok(()) => {
+            let mut conn = pool
+                .get()
+                .context("Failed to get DB connection for image-convert completion")?;
+
+            // One IMMEDIATE tx wraps the URL write + completion mark so the
+            // queue row never lands in `completed` while the document's URL
+            // column is unchanged, or vice versa. Same atomicity property
+            // the legacy `record_conversion_success` provided.
+            let tx = conn
+                .transaction_immediate()
+                .context("Failed to begin image-convert completion transaction")?;
+
+            tx.execute(
+                &format!(
+                    "UPDATE \"{}\" SET \"{}\" = {} WHERE id = {}",
+                    data.collection,
+                    data.url_column,
+                    tx.placeholder(1),
+                    tx.placeholder(2)
+                ),
+                &[
+                    DbValue::Text(data.url_value.clone()),
+                    DbValue::Text(data.document_id.clone()),
+                ],
+            )
+            .context("Failed to update document URL column")?;
+
+            job_query::complete_job(&tx, &job_run.id, None)?;
+
+            tx.commit()
+                .context("Failed to commit image-convert completion transaction")?;
+
+            info!(
+                "Image-convert job {} completed in {:?} ({} → {})",
+                job_run.id,
+                start.elapsed(),
+                data.format,
+                data.target_path
+            );
+        }
+        Err(e) => {
+            let error_msg = format!("{e:#}");
+            let should_retry = job_run.attempt < job_run.max_attempts;
+            let c = pool
+                .get()
+                .context("Failed to get DB connection for image-convert failure")?;
+            job_query::fail_job(&c, &job_run.id, &error_msg, should_retry, job_run.attempt)?;
+
+            if should_retry {
+                warn!(
+                    "Image-convert job {} failed (attempt {}/{}), will retry: {}",
+                    job_run.id, job_run.attempt, job_run.max_attempts, error_msg
+                );
+            } else {
+                error!(
+                    "Image-convert job {} failed permanently: {}",
+                    job_run.id, error_msg
+                );
             }
         }
     }
@@ -229,7 +355,15 @@ pub fn check_cron_schedules(
         }
 
         // Insert a pending job
-        let job = job_query::insert_job(&tx, slug, "{}", "cron", def.retries + 1, &def.queue)?;
+        let job = job_query::insert_job(
+            &tx,
+            slug,
+            "{}",
+            "cron",
+            def.retries + 1,
+            &def.queue,
+            def.priority,
+        )?;
 
         info!("Cron scheduled job '{}' (run {})", slug, job.id);
     }
@@ -390,9 +524,10 @@ fn purge_collection(p: &PurgeCollectionInput<'_>) -> Result<u64> {
             upload_docs.push(doc);
         }
 
-        // Cancel pending image conversions
+        // Cancel pending image conversions — see
+        // `core/upload/queue.rs::delete_image_jobs_for_document`.
         if p.def.is_upload_collection() {
-            let _ = query::images::delete_entries_for_document(p.conn, p.slug, &id);
+            let _ = upload::delete_image_jobs_for_document(p.conn, p.slug, &id);
         }
 
         // Clean up FTS index before hard delete
@@ -621,7 +756,7 @@ mod tests {
         ]);
 
         // Insert a running job (simulates server crash with running job)
-        job_query::insert_job(&conn, "my_job", "{}", "manual", 1, "default").unwrap();
+        job_query::insert_job(&conn, "my_job", "{}", "manual", 1, "default", 0).unwrap();
         conn.execute_batch(
             "UPDATE _crap_jobs SET status = 'running', heartbeat_at = datetime('now', '-600 seconds')",
         ).unwrap();
@@ -650,7 +785,7 @@ mod tests {
                 .build(), // 1 hour
         ]);
 
-        job_query::insert_job(&conn, "long_job", "{}", "manual", 1, "default").unwrap();
+        job_query::insert_job(&conn, "long_job", "{}", "manual", 1, "default", 0).unwrap();
         conn.execute_batch(
             "UPDATE _crap_jobs SET status = 'running', heartbeat_at = datetime('now', '-600 seconds')",
         ).unwrap();
@@ -669,7 +804,7 @@ mod tests {
         // Registry has no job definitions — slug not found, uses default timeout=60
         let registry = make_registry_with_jobs(vec![]);
 
-        job_query::insert_job(&conn, "unknown_job", "{}", "manual", 1, "default").unwrap();
+        job_query::insert_job(&conn, "unknown_job", "{}", "manual", 1, "default", 0).unwrap();
         conn.execute_batch(
             "UPDATE _crap_jobs SET status = 'running', heartbeat_at = datetime('now', '-600 seconds')",
         ).unwrap();
@@ -688,7 +823,7 @@ mod tests {
         let registry = make_registry_with_jobs(vec![]);
 
         // Insert a pending job — should not be affected
-        job_query::insert_job(&conn, "my_job", "{}", "manual", 1, "default").unwrap();
+        job_query::insert_job(&conn, "my_job", "{}", "manual", 1, "default", 0).unwrap();
 
         recover_stale_jobs(&conn, &registry).unwrap();
 
@@ -712,8 +847,8 @@ mod tests {
                 .build(),
         ]);
 
-        job_query::insert_job(&conn, "job_a", "{}", "manual", 1, "default").unwrap();
-        job_query::insert_job(&conn, "job_b", "{}", "manual", 1, "default").unwrap();
+        job_query::insert_job(&conn, "job_a", "{}", "manual", 1, "default", 0).unwrap();
+        job_query::insert_job(&conn, "job_b", "{}", "manual", 1, "default", 0).unwrap();
         conn.execute_batch("UPDATE _crap_jobs SET status = 'running'")
             .unwrap();
 
@@ -740,30 +875,14 @@ mod tests {
 
         let pool = DbPool::from_pool(inner);
 
-        // Create the jobs table
+        // Build the standard jobs schema via the canonical migration
+        // path so we can't drift from production. `_crap_cron_fired`
+        // is colocated here since these tests exercise the cron loop.
         let conn = pool.get().unwrap();
+        crate::db::migrate::create_jobs_table(&conn, "TEXT DEFAULT (datetime('now'))", "TEXT")
+            .expect("create_jobs_table");
         conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS _crap_jobs (
-                id TEXT PRIMARY KEY,
-                slug TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                queue TEXT NOT NULL DEFAULT 'default',
-                data TEXT DEFAULT '{}',
-                result TEXT,
-                error TEXT,
-                attempt INTEGER NOT NULL DEFAULT 0,
-                max_attempts INTEGER NOT NULL DEFAULT 1,
-                scheduled_by TEXT,
-                created_at TEXT DEFAULT (datetime('now')),
-                started_at TEXT,
-                completed_at TEXT,
-                heartbeat_at TEXT,
-                retry_after TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_crap_jobs_status ON _crap_jobs(status);
-            CREATE INDEX IF NOT EXISTS idx_crap_jobs_queue ON _crap_jobs(queue, status);
-            CREATE INDEX IF NOT EXISTS idx_crap_jobs_slug ON _crap_jobs(slug, status);
-            CREATE TABLE IF NOT EXISTS _crap_cron_fired (
+            "CREATE TABLE IF NOT EXISTS _crap_cron_fired (
                 slug TEXT PRIMARY KEY,
                 fired_at TEXT NOT NULL DEFAULT (datetime('now'))
             );",
@@ -858,7 +977,7 @@ mod tests {
         // Insert a running job for this slug
         {
             let conn = pool.get().unwrap();
-            job_query::insert_job(&conn, "skip_job", "{}", "manual", 1, "default").unwrap();
+            job_query::insert_job(&conn, "skip_job", "{}", "manual", 1, "default", 0).unwrap();
             conn.execute_batch("UPDATE _crap_jobs SET status = 'running'")
                 .unwrap();
         }
@@ -888,7 +1007,7 @@ mod tests {
         // Insert a running job
         {
             let conn = pool.get().unwrap();
-            job_query::insert_job(&conn, "noskip_job", "{}", "manual", 1, "default").unwrap();
+            job_query::insert_job(&conn, "noskip_job", "{}", "manual", 1, "default", 0).unwrap();
             conn.execute_batch("UPDATE _crap_jobs SET status = 'running'")
                 .unwrap();
         }

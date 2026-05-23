@@ -176,3 +176,7 @@
 
 - [Deployment](deployment/single-server.md)
 - [Multi-Server](deployment/multi-server.md)
+
+# Upgrade
+
+- [alpha.9](upgrade/alpha-9.md)

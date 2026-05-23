@@ -48,7 +48,7 @@ pub(crate) struct GlobalsGetState {
 }
 
 /// Get a global's current value.
-#[lua_fn(path = "crap.globals.get", returns = "crap.Document")]
+#[lua_fn(path = "crap.globals.get", returns = "crap.Document", auto_tx)]
 fn globals_get(
     state: &GlobalsGetState,
     lua: &Lua,

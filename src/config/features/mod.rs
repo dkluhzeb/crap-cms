@@ -24,7 +24,7 @@ pub use cache::CacheConfig;
 pub use depth::DepthConfig;
 pub use email::{EmailConfig, SmtpTls};
 pub use hooks::HooksConfig;
-pub use jobs::JobsConfig;
+pub use jobs::{JobsConfig, QueueConfig};
 pub use live::LiveConfig;
 pub use locale::LocaleConfig;
 pub use logging::{LogRotation, LoggingConfig};

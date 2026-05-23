@@ -76,7 +76,7 @@ pub(crate) struct CollectionsCreateState {
 
 /// Create a new document.
 /// Inside hooks, runs within the parent operation's transaction.
-#[lua_fn(path = "crap.collections.create", returns = "crap.Document")]
+#[lua_fn(path = "crap.collections.create", returns = "crap.Document", auto_tx)]
 fn collections_create(
     state: &CollectionsCreateState,
     lua: &Lua,

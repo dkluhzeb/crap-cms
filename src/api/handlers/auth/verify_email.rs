@@ -26,8 +26,14 @@ fn verify_email_blocking(input: &VerifyEmailBlockingInput) -> Result<bool, Statu
         .get()
         .inspect_err(|e| error!("Verify email DB connection error: {}", e))
         .map_err(|_| Status::internal("Internal error"))?;
+    // `transaction_immediate()` — `consume_verification_token` does
+    // SELECT (find token row) → UPDATE (mark verified, clear token).
+    // A DEFERRED transaction would take a snapshot on the SELECT and
+    // fail the UPDATE with `SQLITE_BUSY_SNAPSHOT` if any concurrent
+    // writer commits between them. See `scheduler/loop_runner.rs::
+    // claim_image_batch` for the full rationale.
     let tx = conn
-        .transaction()
+        .transaction_immediate()
         .inspect_err(|e| error!("Verify email start transaction error: {}", e))
         .map_err(|_| Status::internal("Internal error"))?;
 

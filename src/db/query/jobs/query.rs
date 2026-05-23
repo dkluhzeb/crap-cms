@@ -55,6 +55,35 @@ pub fn count_running_per_slug(conn: &dyn DbConnection) -> Result<HashMap<String,
     Ok(map)
 }
 
+/// Count currently-running jobs grouped by queue name. Used by the
+/// scheduler to enforce per-queue concurrency caps
+/// (`[jobs.queues.<name>] concurrency = N`).
+///
+/// The count is computed across the whole DB, so per-queue caps are
+/// cluster-wide in a multi-server deployment.
+///
+/// # Errors
+///
+/// Returns a backend error if the COUNT query fails.
+pub fn count_running_per_queue(conn: &dyn DbConnection) -> Result<HashMap<String, i64>> {
+    let rows = conn.query_all(
+        "SELECT queue, COUNT(*) FROM _crap_jobs WHERE status = 'running' GROUP BY queue",
+        &[],
+    )?;
+    let mut map = HashMap::new();
+
+    for row in rows {
+        let Some(queue) = row.opt_text_at(0) else {
+            continue;
+        };
+        let count = row.i64_at(1).unwrap_or(0);
+
+        map.insert(queue, count);
+    }
+
+    Ok(map)
+}
+
 /// Count job runs with optional filters (same WHERE clause as [`list_job_runs`]).
 ///
 /// # Errors
@@ -97,7 +126,8 @@ pub fn list_job_runs(
 ) -> Result<Vec<JobRun>> {
     let mut sql = String::from(
         "SELECT id, slug, status, queue, data, result, error, attempt, max_attempts,
-                scheduled_by, created_at, started_at, completed_at, heartbeat_at, retry_after
+                scheduled_by, created_at, started_at, completed_at, heartbeat_at, retry_after,
+                priority, unique_key
          FROM _crap_jobs WHERE 1=1",
     );
     let mut params: Vec<DbValue> = Vec::new();
@@ -135,7 +165,8 @@ pub fn get_job_run(conn: &dyn DbConnection, id: &str) -> Result<Option<JobRun>> 
     let row = conn.query_one(
         &format!(
             "SELECT id, slug, status, queue, data, result, error, attempt, max_attempts,
-                scheduled_by, created_at, started_at, completed_at, heartbeat_at, retry_after
+                scheduled_by, created_at, started_at, completed_at, heartbeat_at, retry_after,
+                priority, unique_key
          FROM _crap_jobs WHERE id = {}",
             conn.placeholder(1)
         ),
@@ -217,7 +248,8 @@ pub fn last_completed_run(conn: &dyn DbConnection, slug: &str) -> Result<Option<
     let row = conn.query_one(
         &format!(
             "SELECT id, slug, status, queue, data, result, error, attempt, max_attempts,
-                scheduled_by, created_at, started_at, completed_at, heartbeat_at, retry_after
+                scheduled_by, created_at, started_at, completed_at, heartbeat_at, retry_after,
+                priority, unique_key
          FROM _crap_jobs
          WHERE slug = {} AND status = 'completed'
          ORDER BY completed_at DESC
@@ -257,6 +289,11 @@ fn row_to_job_run(row: &DbRow) -> JobRun {
             row.i64_at(8)
                 .and_then(|v| u32::try_from(v).ok())
                 .unwrap_or(0),
+        )
+        .priority(
+            row.i64_at(15)
+                .and_then(|v| i32::try_from(v).ok())
+                .unwrap_or(0),
         );
 
     if let Some(r) = row.opt_text_at(5) {
@@ -291,6 +328,10 @@ fn row_to_job_run(row: &DbRow) -> JobRun {
         b = b.retry_after(ra);
     }
 
+    if let Some(uk) = row.opt_text_at(16) {
+        b = b.unique_key(uk);
+    }
+
     b.build()
 }
 
@@ -303,8 +344,8 @@ mod tests {
     #[test]
     fn test_count_running() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "job_a", "{}", "cron", 1, "default").unwrap();
-        insert_job(&conn, "job_b", "{}", "cron", 1, "default").unwrap();
+        insert_job(&conn, "job_a", "{}", "cron", 1, "default", 0).unwrap();
+        insert_job(&conn, "job_b", "{}", "cron", 1, "default", 0).unwrap();
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running' WHERE slug = 'job_a'",
             &[],
@@ -319,8 +360,8 @@ mod tests {
     #[test]
     fn test_list_job_runs() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "job_a", "{}", "cron", 1, "default").unwrap();
-        insert_job(&conn, "job_b", "{}", "manual", 1, "default").unwrap();
+        insert_job(&conn, "job_a", "{}", "cron", 1, "default", 0).unwrap();
+        insert_job(&conn, "job_b", "{}", "manual", 1, "default", 0).unwrap();
 
         let all = list_job_runs(&conn, None, None, 100, 0).unwrap();
         assert_eq!(all.len(), 2);
@@ -332,9 +373,9 @@ mod tests {
     #[test]
     fn test_count_running_per_slug() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "job_a", "{}", "cron", 1, "default").unwrap();
-        insert_job(&conn, "job_a", "{}", "cron", 1, "default").unwrap();
-        insert_job(&conn, "job_b", "{}", "cron", 1, "default").unwrap();
+        insert_job(&conn, "job_a", "{}", "cron", 1, "default", 0).unwrap();
+        insert_job(&conn, "job_a", "{}", "cron", 1, "default", 0).unwrap();
+        insert_job(&conn, "job_b", "{}", "cron", 1, "default", 0).unwrap();
 
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running' WHERE slug = 'job_a'",
@@ -362,8 +403,8 @@ mod tests {
     #[test]
     fn test_list_job_runs_with_status_filter() {
         let (_dir, conn) = setup_db();
-        insert_job(&conn, "job_a", "{}", "cron", 1, "default").unwrap();
-        insert_job(&conn, "job_b", "{}", "cron", 1, "default").unwrap();
+        insert_job(&conn, "job_a", "{}", "cron", 1, "default", 0).unwrap();
+        insert_job(&conn, "job_b", "{}", "cron", 1, "default", 0).unwrap();
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running' WHERE slug = 'job_a'",
             &[],
@@ -382,7 +423,7 @@ mod tests {
     #[test]
     fn test_find_stale_jobs() {
         let (_dir, conn) = setup_db();
-        let job = insert_job(&conn, "test", "{}", "manual", 1, "default").unwrap();
+        let job = insert_job(&conn, "test", "{}", "manual", 1, "default", 0).unwrap();
         // Set job as running with a stale heartbeat
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running', heartbeat_at = datetime('now', '-3600 seconds') WHERE id = ?1",

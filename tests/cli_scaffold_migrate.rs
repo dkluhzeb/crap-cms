@@ -704,7 +704,10 @@ fn make_job_creates_lua_file() {
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(content.contains("crap.jobs.define(\"cleanup\""));
     assert!(content.contains("jobs.cleanup.run"));
-    assert!(content.contains("function M.run(context)"));
+    // The scaffold now wraps the handler in the `crap.any.job_handler`
+    // typesafe factory: `M.run = crap.any.job_handler(function(context)…`.
+    // Match the inner shape so the assertion stays robust.
+    assert!(content.contains("M.run = crap.any.job_handler(function(context)"));
 }
 
 #[test]

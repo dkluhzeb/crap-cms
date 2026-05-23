@@ -554,7 +554,12 @@ fn make_hook_creates_file() {
     let path = tmp.path().join("hooks/posts/auto_slug.lua");
     assert!(path.exists(), "hook file should be created");
     let content = std::fs::read_to_string(&path).unwrap();
-    assert!(content.contains("return function(context)"));
+    // Scaffold wraps the user's handler in a typesafe-factory call —
+    // the literal in the generated file is e.g.
+    // `return crap.collections.posts.hook(function(context)`. Match on
+    // the inner `function(context)` chunk so the assertion stays
+    // robust to the surrounding factory wrapping.
+    assert!(content.contains("function(context)"));
 }
 
 #[test]
@@ -574,7 +579,10 @@ fn make_hook_collection_hook() {
     let content = std::fs::read_to_string(tmp.path().join("hooks/posts/auto_slug.lua")).unwrap();
     assert!(content.contains("crap.collections.posts.hook("));
     assert!(content.contains("before_change hook for posts"));
-    assert!(content.contains("return function(context)"));
+    // Factory-wrapped — `function(context)` lives inside the
+    // `crap.collections.posts.hook(...)` call rather than after a
+    // bare `return`. Match the inner chunk.
+    assert!(content.contains("function(context)"));
     assert!(content.contains("return context"));
 }
 
@@ -597,7 +605,8 @@ fn make_hook_field_hook() {
         content.contains("crap.collections.posts.field_hook(\"title\", "),
         "should use typed field hook context"
     );
-    assert!(content.contains("return function(value, context)"));
+    // Same factory-wrap pattern — match the inner closure shape.
+    assert!(content.contains("function(value, context)"));
     assert!(content.contains("return value"));
 }
 

@@ -217,12 +217,24 @@ locales = ["en", "de"]   # Supported locales (empty = disabled)
 fallback = true          # Fall back to default locale if field is NULL
 
 [jobs]
-max_concurrent = 10          # Max concurrent job executions across all queues
+max_concurrent = 10          # Cluster-wide cap on concurrent jobs (counted via DB)
 poll_interval = "1s"         # How often to poll for pending jobs
 cron_interval = "1m"         # How often to check cron schedules
 heartbeat_interval = "10s"   # How often running jobs update their heartbeat
 auto_purge = "7d"            # Auto-purge completed/failed runs older than this
-image_queue_batch_size = 10  # Pending image conversions to process per poll
+priority_decay = 0           # Priority aging ("1m", "30s", "1h"); 0 = disabled
+
+[jobs.queues]
+# Per-queue aggregate concurrency caps. All caps in `[jobs]` are
+# cluster-wide (counted from the shared DB). Composition: strictest
+# of max_concurrent / queue cap / per-slug JobDefinition.concurrency
+# wins.
+#
+# Framework defaults if not overridden:
+#   images = { concurrency = 2 }   — applied by `apply_queue_defaults`
+images  = { concurrency = 2 }   # override the framework default
+emails  = { concurrency = 4 }   # cap a shared SMTP pool
+reports = { concurrency = 1 }
 
 [access]
 default_deny = true      # When true (default), deny all operations without explicit access functions
@@ -457,7 +469,48 @@ See [Live Updates](../live-updates/overview.md) for full documentation.
 | `cron_interval` | integer/string | `60` (`"1m"`) | How often to evaluate cron schedules. Accepts seconds or human-readable. |
 | `heartbeat_interval` | integer/string | `10` (`"10s"`) | How often running jobs update their heartbeat. Used to detect stale jobs. Accepts seconds or human-readable. |
 | `auto_purge` | integer/string | `"7d"` | Auto-purge completed/failed runs older than this duration. Accepts seconds or human-readable (`"7d"`, `"24h"`, `"30m"`, `"3600"`). Set to `""` (empty string) to disable auto-purge. Absent = 7 days default. |
-| `image_queue_batch_size` | integer | `10` | Number of pending image format conversions to claim per scheduler poll cycle. Increase for higher throughput on capable hardware. |
+| `priority_decay` | integer/string | `0` | Priority aging period: wait time required for a job's effective scheduling priority to bump by `+1`. `0` disables decay (pure static `priority DESC, created_at ASC` ordering — index-friendly fast path). Positive durations (`"1m"`, `"30s"`, `"1h"`) enable aging-based promotion so older lower-priority jobs eventually get claimed instead of starving forever. |
+
+### `[jobs.queues]`
+
+Per-queue aggregate concurrency caps, keyed by queue name. Used to
+throttle resource-shared work (a `emails` queue with a shared SMTP
+pool, an `images` queue limited by CPU, …) independent of per-job
+caps.
+
+```toml
+[jobs.queues]
+emails = { concurrency = 4 }
+images = { concurrency = 2 }
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `concurrency` | integer | `0` (unlimited) | Max concurrent runs across all slugs in this queue. `0` means no per-queue cap; only the global `[jobs] max_concurrent` and per-slug `JobDefinition::concurrency` apply. |
+
+**Framework-supplied defaults** — the following queues get sensible
+caps applied at config load time unless the operator explicitly sets
+them:
+
+| Queue | Default cap | Why |
+|---|---|---|
+| `images` | `2` | AVIF / WebP encoders are CPU-bound; cap to avoid pinning every core during an upload burst. |
+
+Operator overrides win — set `[jobs.queues.images] concurrency = N`
+(or `0` for unlimited) to change the cap.
+
+**Composition** — when claiming a job, all of the following caps apply, strictest wins. **All three caps are cluster-wide** (counted from the shared DB):
+
+1. `[jobs] max_concurrent` — total jobs in flight across the cluster
+2. `[jobs.queues.<name>] concurrency` — jobs in flight in that queue
+3. `JobDefinition::concurrency` — jobs in flight of that specific slug
+
+Queues without an entry in `[jobs.queues]` are unconstrained beyond
+the global cap. The scheduler warns at startup if `[jobs.queues]`
+references a queue name that no defined job uses (catches typos).
+
+See [Multi-server semantics](../lua-api/jobs.md#multi-server-semantics)
+for how these caps interact when multiple servers share the same DB.
 
 ### `[access]`
 

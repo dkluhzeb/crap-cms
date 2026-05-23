@@ -1,17 +1,37 @@
-//! Helper for retrieving the active transaction connection from Lua `app_data`.
-//! Used by every Lua CRUD closure to access the shared transaction.
+//! Helpers for retrieving the active DB connection from Lua `app_data`.
+//! Used by every Lua CRUD closure. Two dispatch modes:
+//!
+//! - **Conn-mode** (hooks, `crap.transaction(fn)`): a single `TxContext`
+//!   is set in `app_data` for the duration of the outer call; every CRUD
+//!   op uses that shared transaction.
+//! - **Pool-mode** (job handlers): a `PoolContext` is set instead, and
+//!   each CRUD op opens its own short-lived `IMMEDIATE` transaction via
+//!   the pool. Avoids the `SQLITE_BUSY_SNAPSHOT` hazard that fires when
+//!   a long-running handler's read snapshot collides with concurrent
+//!   writers.
+//!
+//! Callers should use [`with_lua_db`] which handles both modes uniformly;
+//! [`get_tx_conn`] is the conn-mode-only path retained for hook-internal
+//! code that knows the mode.
 
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult};
 
-use crate::{db::DbConnection, hooks::lifecycle::TxContext};
+use crate::{
+    db::DbConnection,
+    hooks::lifecycle::{PoolContext, TxContext},
+};
 
 /// Get the active transaction connection from Lua `app_data`.
-/// Returns an error if called outside of `run_hooks_with_conn`.
+/// Returns an error if no `TxContext` is set (i.e. called outside hook
+/// context or `crap.transaction(fn)`).
 ///
-/// The returned reference is valid for the duration of the current hook call.
-/// `TxContextGuard` (set by the runner) keeps the underlying connection alive
-/// until the hook returns, and the `&Lua` borrow forces callers to release the
-/// reference before the VM can be reused for another call.
+/// The returned reference is valid for the duration of the current hook
+/// call. `TxContextGuard` (set by the runner) keeps the underlying
+/// connection alive until the hook returns.
+///
+/// Prefer [`with_lua_db`] over this — it transparently handles pool-mode
+/// (jobs) as well. Direct callers of `get_tx_conn` are restricted to
+/// conn-mode contexts.
 pub(crate) fn get_tx_conn(lua: &Lua) -> LuaResult<&dyn DbConnection> {
     let ctx = lua.app_data_ref::<TxContext>().ok_or_else(|| {
         RuntimeError(
@@ -26,6 +46,88 @@ pub(crate) fn get_tx_conn(lua: &Lua) -> LuaResult<&dyn DbConnection> {
     // call. The guard removes the `TxContext` from app_data on drop, which
     // strictly outlives any `&'a dyn DbConnection` we hand out tied to `&'a Lua`.
     Ok(unsafe { &*ptr })
+}
+
+/// Run `work` with a Lua context that has a `TxContext` set up,
+/// dispatching on the active mode:
+///
+/// - **`TxContext`** already present → conn-mode pass-through. Just
+///   calls `work` — the outer caller (hook runner, `crap.transaction`)
+///   already installed the shared tx.
+/// - **`PoolContext`** present → pool-mode. Pulls a fresh connection,
+///   opens an `IMMEDIATE` transaction, **installs the tx as
+///   `TxContext`** for the duration of `work`, runs `work`, removes
+///   the `TxContext`, and commits on `Ok` (or rolls back on `Err`).
+/// - Neither set → returns a clear error.
+///
+/// `work` receives the same connection that's now visible to nested
+/// `get_tx_conn(lua)` calls — so user code inside `work` can keep
+/// using `get_tx_conn` unchanged. The `&dyn DbConnection` argument is
+/// passed in case `work` wants to skip the indirection.
+///
+/// This is the helper that the `#[lua_fn(auto_tx)]` attribute wraps
+/// every CRUD closure with: hook handlers use the outer shared tx;
+/// job handlers (pool-mode) get a per-op IMMEDIATE tx without the
+/// user fn knowing the difference.
+///
+/// # Errors
+///
+/// Returns a Lua runtime error if neither context is set, or if pool
+/// acquisition / `BEGIN IMMEDIATE` / `COMMIT` fail.
+pub(crate) fn with_lua_db<R>(
+    lua: &Lua,
+    work: impl FnOnce(&dyn DbConnection) -> LuaResult<R>,
+) -> LuaResult<R> {
+    // Conn-mode: a shared outer tx is already open. Hand the existing
+    // connection to `work` — `get_tx_conn(lua)` inside `work` sees the
+    // same TxContext.
+    if lua.app_data_ref::<TxContext>().is_some() {
+        let conn = get_tx_conn(lua)?;
+        return work(conn);
+    }
+
+    // Pool-mode: open a short-lived IMMEDIATE tx for this single op
+    // and install it as `TxContext` so existing `get_tx_conn` users
+    // inside `work` continue to work transparently.
+    let pool = lua
+        .app_data_ref::<PoolContext>()
+        .ok_or_else(|| {
+            RuntimeError(
+                "crap.collections CRUD functions require a transaction or pool \
+                 context (called inside a hook, a job handler, or \
+                 `crap.transaction(fn)`)"
+                    .into(),
+            )
+        })?
+        .0
+        .clone();
+
+    let mut conn = pool
+        .get()
+        .map_err(|e| RuntimeError(format!("pool.get: {e}")))?;
+    let tx = conn
+        .transaction_immediate()
+        .map_err(|e| RuntimeError(format!("begin transaction: {e}")))?;
+
+    // SAFETY: TxContext stores a fat-pointer to `&tx`. `tx` lives on
+    // this function's stack and outlives the `work(&tx)` call below.
+    // We `remove_app_data` before `tx.commit()` / drop, so the pointer
+    // is never dereferenced after the tx is gone.
+    lua.set_app_data(TxContext::new(&tx));
+    let result = work(&tx);
+    lua.remove_app_data::<TxContext>();
+
+    match result {
+        Ok(value) => {
+            tx.commit()
+                .map_err(|e| RuntimeError(format!("commit transaction: {e}")))?;
+            Ok(value)
+        }
+        Err(e) => {
+            // `tx` drops here → automatic rollback.
+            Err(e)
+        }
+    }
 }
 
 #[cfg(test)]

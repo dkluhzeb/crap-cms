@@ -33,8 +33,12 @@ fn reset_password_blocking(
         .get()
         .inspect_err(|e| error!("Reset password DB connection error: {}", e))
         .map_err(|_| Status::internal("Internal error"))?;
+    // `transaction_immediate()` — same SELECT-then-UPDATE pattern as
+    // `verify_email_blocking`: reads the reset-token row, then writes
+    // the new password hash. DEFERRED would risk `SQLITE_BUSY_SNAPSHOT`
+    // under concurrent writers.
     let tx = conn
-        .transaction()
+        .transaction_immediate()
         .inspect_err(|e| error!("Reset password start transaction error: {}", e))
         .map_err(|_| Status::internal("Internal error"))?;
 

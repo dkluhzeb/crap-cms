@@ -6,7 +6,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::{
     core::Document,
-    db::DbConnection,
+    db::{DbConnection, DbPool},
     hooks::{
         HookRunner,
         lifecycle::{InitPhase, execution::resolve_hook_function, types::TxContextGuard},
@@ -15,9 +15,19 @@ use crate::{
 };
 
 impl HookRunner {
-    /// Execute a job handler function with CRUD access via `TxContext`.
-    /// The handler receives a context table `{ data, job = { slug, attempt, max_attempts, queued_at } }`.
-    /// Returns the handler's return value as JSON string (or None if nil).
+    /// Execute a job handler function in **pool-mode**: no outer
+    /// transaction is opened. Each Lua CRUD call inside the handler
+    /// opens its own short-lived IMMEDIATE transaction via
+    /// `with_lua_db` (wired by the `#[lua_fn(auto_tx)]` attribute).
+    ///
+    /// The handler receives a context table
+    /// `{ data, job = { slug, attempt, max_attempts, queued_at } }`.
+    /// Returns the handler's return value as a JSON string (or `None`
+    /// for nil).
+    ///
+    /// For multi-step atomicity, user code wraps a block in
+    /// `crap.transaction(function() ... end)` which temporarily swaps
+    /// the pool context for a single shared tx context.
     ///
     /// # Errors
     ///
@@ -30,10 +40,10 @@ impl HookRunner {
         data_json: &str,
         attempt: u32,
         max_attempts: u32,
-        conn: &dyn DbConnection,
+        pool: &DbPool,
     ) -> Result<Option<String>> {
         let lua = self.pool.acquire()?;
-        let _guard = TxContextGuard::set(&lua, conn, None, None, None);
+        let _guard = TxContextGuard::set_pool(&lua, pool.clone(), None, None, None);
 
         // Build context from a typed Rust struct so the Lua shape is
         // the single source of truth (see

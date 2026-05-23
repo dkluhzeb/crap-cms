@@ -8,7 +8,7 @@ use crate::{
         ConditionExpr, Document, SharedCache, SharedEventTransport, SharedInvalidationTransport,
         SharedStorage,
     },
-    db::{DbConnection, query::SharedPopulateSingleflight},
+    db::{DbConnection, DbPool, query::SharedPopulateSingleflight},
     service::{EventQueue, ServiceContext, VerificationQueue},
     typegen::lua::LuaAlias,
 };
@@ -117,6 +117,18 @@ impl TxContext {
 // is never sent across threads independently.
 unsafe impl Send for TxContext {}
 unsafe impl Sync for TxContext {}
+
+/// Owns a clonable `DbPool` for **pool-mode** dispatch. Set in Lua
+/// `app_data` by job handlers (`run_job_handler`) where each Lua CRUD
+/// operation should open its own short-lived IMMEDIATE transaction
+/// instead of using a shared outer tx. Distinguishes job context from
+/// hook context — hooks set `TxContext` (shared tx); jobs set
+/// `PoolContext` (per-op tx).
+///
+/// The `crap.transaction(fn)` Lua API temporarily swaps `PoolContext`
+/// for `TxContext` during `fn` so a sequence of CRUD ops shares one
+/// tx for explicit multi-step atomicity.
+pub(crate) struct PoolContext(pub(crate) DbPool);
 
 /// Optional authenticated user context injected alongside `TxContext`.
 /// CRUD closures read this when overrideAccess = false.
@@ -246,8 +258,10 @@ pub(crate) struct TxContextGuard<'a> {
 }
 
 impl<'a> TxContextGuard<'a> {
-    /// Set `TxContext`, `UserContext`, `UiLocaleContext`, and optionally `LuaCrudInfra`,
-    /// returning a guard that cleans up on drop.
+    /// Set `TxContext` (conn-mode), `UserContext`, `UiLocaleContext`,
+    /// and optionally `LuaCrudInfra`, returning a guard that cleans up
+    /// on drop. Used by hooks and `crap.transaction(fn)` — all callers
+    /// where a single shared outer transaction is the right model.
     pub(crate) fn set(
         lua: &'a Lua,
         conn: &dyn DbConnection,
@@ -265,11 +279,37 @@ impl<'a> TxContextGuard<'a> {
 
         Self { lua }
     }
+
+    /// Set `PoolContext` (pool-mode), `UserContext`, `UiLocaleContext`,
+    /// and optionally `LuaCrudInfra`. Used by job handlers — each Lua
+    /// CRUD operation will open its own short-lived IMMEDIATE
+    /// transaction via the pool path (see
+    /// `hooks::lua_api::crud::tx_conn::with_lua_db`). Avoids the
+    /// `SQLITE_BUSY_SNAPSHOT` hazard that fires when a long-running
+    /// handler's read snapshot conflicts with concurrent writers.
+    pub(crate) fn set_pool(
+        lua: &'a Lua,
+        pool: DbPool,
+        user: Option<Document>,
+        ui_locale: Option<String>,
+        infra: Option<LuaCrudInfra>,
+    ) -> Self {
+        lua.set_app_data(PoolContext(pool));
+        lua.set_app_data(UserContext(user));
+        lua.set_app_data(UiLocaleContext(ui_locale));
+
+        if let Some(infra) = infra {
+            lua.set_app_data(infra);
+        }
+
+        Self { lua }
+    }
 }
 
 impl Drop for TxContextGuard<'_> {
     fn drop(&mut self) {
         self.lua.remove_app_data::<TxContext>();
+        self.lua.remove_app_data::<PoolContext>();
         self.lua.remove_app_data::<UserContext>();
         self.lua.remove_app_data::<UiLocaleContext>();
         self.lua.remove_app_data::<LuaCrudInfra>();

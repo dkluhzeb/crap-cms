@@ -519,6 +519,10 @@ pub enum JobsAction {
         /// JSON data to pass to the job (default: "{}")
         #[arg(short, long)]
         data: Option<String>,
+        /// Scheduling priority (higher = sooner). When omitted, uses
+        /// the priority set on the job definition (or `0` if none).
+        #[arg(short, long, allow_hyphen_values = true)]
+        priority: Option<i32>,
     },
     /// Show job run history
     Status {
@@ -614,6 +618,10 @@ pub enum ImagesAction {
         /// Confirm retry all (required with --all)
         #[arg(short = 'y', long)]
         confirm: bool,
+
+        /// Scheduling priority for the retried job(s); higher = sooner.
+        #[arg(short, long, default_value_t = 0, allow_hyphen_values = true)]
+        priority: i32,
     },
     /// Purge old completed/failed entries
     Purge {

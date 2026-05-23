@@ -163,33 +163,32 @@ fn setup_with_job() -> (tempfile::TempDir, PathBuf) {
 fn typegen_lua() {
     let (_tmp, config_dir) = setup();
 
-    run_ok_in(&config_dir, &["typegen", "--lang", "lua"]);
+    run_ok_in(&config_dir, &["typegen", "lua"]);
 
     let types_dir = config_dir.join("types");
-    let has_lua = std::fs::read_dir(&types_dir)
-        .unwrap()
-        .filter_map(std::result::Result::ok)
-        .any(|e| e.file_name().to_string_lossy().ends_with(".lua"));
-    assert!(has_lua, "types/ should contain a .lua file");
+    assert!(
+        types_dir.join("crap.lua").exists(),
+        "typegen lua should write types/crap.lua"
+    );
+    assert!(
+        types_dir.join("hooks.lua").exists(),
+        "typegen lua should write types/hooks.lua"
+    );
 }
 
 #[test]
-fn typegen_all_languages() {
+fn typegen_client_all_languages() {
     let (_tmp, config_dir) = setup();
 
-    run_ok_in(&config_dir, &["typegen", "--lang", "all"]);
+    run_ok_in(&config_dir, &["typegen", "client", "--lang", "ts,go,py,rs"]);
 
     let types_dir = config_dir.join("types");
-    let files: Vec<String> = std::fs::read_dir(&types_dir)
-        .unwrap()
-        .filter_map(std::result::Result::ok)
-        .map(|e| e.file_name().to_string_lossy().to_string())
-        .collect();
-
-    for ext in &[".lua", ".ts", ".go", ".py", ".rs"] {
+    for ext in &["ts", "go", "py", "rs"] {
+        let expected = types_dir.join(format!("client.{ext}"));
         assert!(
-            files.iter().any(|f| f.ends_with(ext)),
-            "types/ should contain a {ext} file, got: {files:?}"
+            expected.exists(),
+            "typegen client should write types/client.{ext}, missing: {}",
+            expected.display()
         );
     }
 }
@@ -321,7 +320,7 @@ fn images_list_empty() {
 
     let stdout = run_ok_in(&config_dir, &["images", "list"]);
     assert!(
-        stdout.contains("No queue entries") || stdout.contains("0 entr"),
+        stdout.contains("No image-convert jobs found"),
         "should show empty queue, got: {stdout}"
     );
 }

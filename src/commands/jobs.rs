@@ -93,6 +93,7 @@ fn run_status(pool: &DbPool, id: Option<&str>, slug: Option<&str>, limit: i64) -
         cli::kv("Job", &run.slug);
         cli::kv("Status", run.status.as_str());
         cli::kv("Queue", &run.queue);
+        cli::kv("Priority", &run.priority.to_string());
         cli::kv("Attempt", &format!("{}/{}", run.attempt, run.max_attempts));
         cli::kv("Scheduled", run.scheduled_by.as_deref().unwrap_or("-"));
         cli::kv("Created", run.created_at.as_deref().unwrap_or("-"));
@@ -119,10 +120,13 @@ fn run_status(pool: &DbPool, id: Option<&str>, slug: Option<&str>, limit: i64) -
             return Ok(());
         }
 
-        let mut table = Table::new(vec!["ID", "Job", "Status", "Attempt", "Error", "Created"]);
+        let mut table = Table::new(vec![
+            "ID", "Job", "Status", "Prio", "Attempt", "Error", "Created",
+        ]);
 
         for run in &runs {
             let attempt = format!("{}/{}", run.attempt, run.max_attempts);
+            let priority = run.priority.to_string();
             let error = run
                 .error
                 .as_deref()
@@ -140,6 +144,7 @@ fn run_status(pool: &DbPool, id: Option<&str>, slug: Option<&str>, limit: i64) -
                 &run.id,
                 &run.slug,
                 run.status.as_str(),
+                &priority,
                 &attempt,
                 &error,
                 run.created_at.as_deref().unwrap_or("-"),
@@ -222,7 +227,13 @@ fn run_healthcheck(cfg: &CrapConfig, registry: &Registry, pool: &DbPool) -> Resu
 
 /// Trigger a job manually by slug, queuing it for the scheduler.
 #[cfg(not(tarpaulin_include))]
-fn run_trigger(registry: &Registry, pool: &DbPool, slug: &str, data: Option<&str>) -> Result<()> {
+fn run_trigger(
+    registry: &Registry,
+    pool: &DbPool,
+    slug: &str,
+    data: Option<&str>,
+    priority: Option<i32>,
+) -> Result<()> {
     let job_def = registry
         .get_job(slug)
         .ok_or_else(|| anyhow!("Job '{slug}' not defined"))?;
@@ -230,6 +241,8 @@ fn run_trigger(registry: &Registry, pool: &DbPool, slug: &str, data: Option<&str
     let data_json = data.unwrap_or("{}");
 
     serde_json::from_str::<Value>(data_json).context("Invalid JSON data")?;
+
+    let effective_priority = priority.unwrap_or(job_def.priority);
 
     let conn = pool.get().context("Failed to get DB connection")?;
     let job_run = query::jobs::insert_job(
@@ -239,6 +252,7 @@ fn run_trigger(registry: &Registry, pool: &DbPool, slug: &str, data: Option<&str
         "cli",
         job_def.retries + 1,
         &job_def.queue,
+        effective_priority,
     )?;
 
     cli::success(&format!("Queued job '{}' (run {})", slug, job_run.id));
@@ -304,9 +318,13 @@ pub fn run(config_dir: &Path, action: JobsAction) -> Result<()> {
             let (_cfg, registry, pool) = init_stack(config_dir)?;
             run_list(&registry, &pool)
         }
-        JobsAction::Trigger { slug, data } => {
+        JobsAction::Trigger {
+            slug,
+            data,
+            priority,
+        } => {
             let (_cfg, registry, pool) = init_stack(config_dir)?;
-            run_trigger(&registry, &pool, &slug, data.as_deref())
+            run_trigger(&registry, &pool, &slug, data.as_deref(), priority)
         }
         JobsAction::Status { id, slug, limit } => {
             let (_cfg, _registry, pool) = init_stack(config_dir)?;

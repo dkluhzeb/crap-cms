@@ -41,7 +41,8 @@ impl FromLua for UndeleteOptions {
 /// Inside hooks, runs within the parent operation's transaction.
 #[lua_fn(
     path = "crap.collections.undelete",
-    returns_doc = "True when the document was successfully restored."
+    returns_doc = "True when the document was successfully restored.",
+    auto_tx
 )]
 fn collections_undelete(
     state: &Arc<Registry>,
