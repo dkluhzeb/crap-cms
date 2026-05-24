@@ -36,7 +36,7 @@ use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
 use crap_cms::core::{JwtSecret, Registry};
-use crap_cms::db::{migrate, pool, query};
+use crap_cms::db::{DbConnection, DbValue, migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -436,8 +436,6 @@ async fn list_items_url_status_filter_narrows_drafts_only() {
     let mut data2 = DocumentFields::new();
     data2.insert("title".to_string(), json!("Pending Draft"));
     let draft_doc = query::create(&tx, "posts", &def, &data2, None).expect("draft create ok");
-    use crap_cms::db::DbConnection;
-    use crap_cms::db::DbValue;
     tx.execute(
         "UPDATE posts SET _status = 'draft' WHERE id = ?1",
         &[DbValue::Text(draft_doc.id.to_string())],

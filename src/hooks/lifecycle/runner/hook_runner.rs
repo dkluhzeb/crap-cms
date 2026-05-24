@@ -17,6 +17,15 @@ pub struct HookRunner {
     pub(super) registered_events: Arc<HashSet<String>>,
     /// Snapshot of the registry for richtext node attr validation.
     pub(super) registry: Arc<Registry>,
+    /// Snapshot of `[access] default_deny` so [`check_access`] can
+    /// answer "no access function configured" without acquiring a
+    /// Lua VM from the pool. With pool size 16 and bench concurrency
+    /// 50, the unconditional `pool.acquire()` previously serialized
+    /// 34 out of 50 concurrent reads on the VM-pool mutex — dwarfed
+    /// every other allocation cost in the profile.
+    ///
+    /// [`check_access`]: Self::check_access
+    pub(super) default_deny: bool,
 }
 
 impl HookRunner {

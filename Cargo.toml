@@ -317,3 +317,13 @@ opt-level = 2
 lto = true
 codegen-units = 1
 strip = true
+
+# Release-with-symbols for `perf record` / flamegraph. Mirrors
+# `[profile.release]` (same LTO / codegen settings so we profile what
+# we'd actually ship) but keeps debug symbols in the binary so stack
+# frames resolve to function names. Build with `cargo build --profile
+# profiling` → `target/profiling/crap-cms`.
+[profile.profiling]
+inherits = "release"
+strip = false
+debug = "line-tables-only"

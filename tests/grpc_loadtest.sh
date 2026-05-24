@@ -371,6 +371,32 @@ scenario_create() {
     }' "$GRPC_ADDR" crap.ContentAPI/DeleteMany 2>/dev/null)
     deleted=$(echo "$result" | jq -r '((.deleted // "0") | tonumber) + ((.softDeleted // "0") | tonumber)')
     ok "Cleaned up ${deleted} loadtest posts"
+
+    # SQLite-side cleanup: the gRPC hard-delete drops the posts rows
+    # but leaves the `_versions_posts` rows orphaned (FK cascade is
+    # declared in the schema but doesn't fire — `PRAGMA foreign_keys`
+    # defaults to OFF in SQLite). Without this purge, every bench run
+    # accumulates ~`requests` rows in the versions table, bloating the
+    # DB file and flooding SQLite's page cache. We measured this:
+    # without cleanup, `count @ 50` and `find_by_id @ 50` drop to ~1/3
+    # of baseline after a few back-to-back bench runs; with cleanup,
+    # they stay at baseline.
+    #
+    # Postgres-backed deployments enforce the FK so this is a no-op
+    # there; only the SQLite local-dev path needs the extra DELETE.
+    # We point at `./example/data/crap.db` by default (matches the
+    # `cargo run -- -C ./example serve` invocation in the script
+    # preamble); override with `LOADTEST_DB=/path/to/db`.
+    local loadtest_db="${LOADTEST_DB:-./example/data/crap.db}"
+    if [[ -f "$loadtest_db" ]] && command -v sqlite3 >/dev/null 2>&1; then
+        info "  Purging orphaned version rows from $loadtest_db..."
+        local version_rows
+        version_rows=$(sqlite3 "$loadtest_db" \
+            "DELETE FROM _versions_posts WHERE _parent NOT IN (SELECT id FROM posts); \
+             SELECT changes(); \
+             PRAGMA wal_checkpoint(TRUNCATE);" 2>/dev/null | head -1)
+        ok "Purged ${version_rows:-0} orphaned version rows"
+    fi
 }
 
 scenario_update() {

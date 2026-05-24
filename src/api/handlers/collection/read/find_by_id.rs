@@ -95,7 +95,7 @@ impl ContentService {
     ) -> Result<Response<content::FindByIdResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
-        let headers = Self::extract_metadata_headers(&metadata);
+        let headers = self.metadata_headers(&metadata);
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 

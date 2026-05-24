@@ -54,8 +54,8 @@ use crate::{
     api::upload::upload_router,
     config::{CompressionMode, CrapConfig},
     core::{
-        JwtSecret, Registry, SharedCache, SharedEventTransport, SharedInvalidationTransport,
-        SharedPasswordProvider, SharedStorage, SharedTokenProvider,
+        CollectionDefinition, JwtSecret, Registry, SharedCache, SharedEventTransport,
+        SharedInvalidationTransport, SharedPasswordProvider, SharedStorage, SharedTokenProvider,
         email::{EmailRenderer, create_email_provider},
         event::InProcessInvalidationBus,
         rate_limit::LoginRateLimiter,
@@ -144,7 +144,7 @@ pub async fn start(
     let has_auth = registry
         .collections
         .values()
-        .any(crate::core::CollectionDefinition::is_auth_collection);
+        .any(CollectionDefinition::is_auth_collection);
 
     let max_sse_connections = config.live.max_sse_connections;
     let subscriber_send_timeout_ms = config.live.subscriber_send_timeout_ms;

@@ -100,7 +100,7 @@ impl ContentService {
     ) -> Result<Response<content::TriggerJobResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
-        let headers = Self::extract_metadata_headers(&metadata);
+        let headers = self.metadata_headers(&metadata);
         let req = request.into_inner();
 
         let input = TriggerJobBlockingInput {

@@ -49,6 +49,28 @@ pub struct ContentService {
     /// defined without an explicit `retries` field. Only populated for
     /// queues whose `retries` is `Some`.
     pub(in crate::api::handlers) queue_retries: HashMap<String, u32>,
+    /// Cached `registry.has_any_strategy()` result. Lets per-request
+    /// helpers like [`metadata_headers`](Self::metadata_headers)
+    /// short-circuit work that only the strategy evaluator consumes —
+    /// for the common deployment with no strategy methods configured,
+    /// we skip materialising the gRPC metadata into a `HashMap` on
+    /// every request, eliminating the per-request allocation churn
+    /// that dominated the profile.
+    pub(in crate::api::handlers) has_strategies: bool,
+    /// Whether any `Activation::Always` strategy exists for this
+    /// surface. When true, every anonymous request needs the full
+    /// metadata `HashMap` materialised because the strategy fires
+    /// unconditionally; when false, the `HashMap` is only built when a
+    /// header-activated strategy's discriminator is actually present
+    /// in the request.
+    pub(in crate::api::handlers) has_always_strategy: bool,
+    /// Lowercased set of header names that any header-activated
+    /// strategy fires on. Used by [`metadata_headers`] to pre-scan
+    /// the gRPC `MetadataMap` for a match before allocating the
+    /// full `HashMap` — anonymous requests on a deployment whose
+    /// only strategy is gated by `x-api-key` pay zero per-request
+    /// allocation when no `x-api-key` is on the wire.
+    pub(in crate::api::handlers) wanted_strategy_headers: std::collections::HashSet<String>,
     pub(in crate::api::handlers) event_transport: Option<SharedEventTransport>,
     pub(in crate::api::handlers) locale_config: LocaleConfig,
     pub(in crate::api::handlers) storage: SharedStorage,
@@ -152,6 +174,49 @@ impl ContentService {
         }
         out
     }
+
+    /// Per-request wrapper around [`extract_metadata_headers`] that
+    /// only materialises the `HashMap` when a strategy is actually
+    /// going to consume it.
+    ///
+    /// Decision order:
+    /// 1. No strategy methods configured at all → return empty
+    ///    immediately (deployments that use only `password_login` /
+    ///    `bearer` / `session_cookie` pay nothing).
+    /// 2. An `Activation::Always` strategy exists for this surface
+    ///    → materialise; the strategy fires unconditionally and
+    ///    needs the headers.
+    /// 3. Otherwise → pre-scan the `MetadataMap` for any
+    ///    header-activated strategy's discriminator. Materialise
+    ///    only if one is present; return empty if none match.
+    ///
+    /// For the typical deployment with a single `x-api-key`-gated
+    /// strategy, anonymous traffic that doesn't send `x-api-key`
+    /// pays zero per-request allocation here — was the dominant
+    /// allocation source on the read hot path before this fix.
+    pub(in crate::api::handlers) fn metadata_headers(
+        &self,
+        metadata: &MetadataMap,
+    ) -> HashMap<String, String> {
+        if !self.has_strategies {
+            return HashMap::new();
+        }
+        if self.has_always_strategy {
+            return Self::extract_metadata_headers(metadata);
+        }
+        let any_wanted = metadata.iter().any(|entry| {
+            matches!(
+                entry,
+                tonic::metadata::KeyAndValueRef::Ascii(name, _)
+                    if self.wanted_strategy_headers.contains(name.as_str())
+            )
+        });
+        if any_wanted {
+            Self::extract_metadata_headers(metadata)
+        } else {
+            HashMap::new()
+        }
+    }
 }
 
 /// I/O-bound methods: constructor, DB-backed auth resolution, access checks.
@@ -179,7 +244,24 @@ impl ContentService {
             .populate_singleflight
             .unwrap_or_else(|| Arc::new(Singleflight::new()));
 
+        let has_strategies = deps.registry.has_any_strategy();
+        let has_always_strategy = deps
+            .registry
+            .always_strategies
+            .get(&Surface::Grpc)
+            .is_some_and(|v| !v.is_empty());
+        let wanted_strategy_headers: std::collections::HashSet<String> = deps
+            .registry
+            .header_strategies
+            .keys()
+            .filter(|(_, surface)| *surface == Surface::Grpc)
+            .map(|(header, _)| header.clone())
+            .collect();
+
         Self {
+            has_strategies,
+            has_always_strategy,
+            wanted_strategy_headers,
             pool: deps.pool,
             registry: deps.registry,
             hook_runner: deps.hook_runner,

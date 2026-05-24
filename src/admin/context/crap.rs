@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use crate::{
     admin::{AdminState, csp_nonce::current_nonce_or_empty},
+    core::CollectionDefinition,
     typegen::LuaAnnotation,
 };
 
@@ -65,5 +66,5 @@ fn has_auth_collections(state: &AdminState) -> bool {
         .registry
         .collections
         .values()
-        .any(crate::core::CollectionDefinition::is_auth_collection)
+        .any(CollectionDefinition::is_auth_collection)
 }

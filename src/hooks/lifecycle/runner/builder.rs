@@ -140,6 +140,7 @@ impl<'a> HookRunnerBuilder<'a> {
             pool: Arc::new(VmPool::new(vms)),
             registered_events: Arc::new(registered_events),
             registry,
+            default_deny: config.access.default_deny,
         })
     }
 }

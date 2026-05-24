@@ -45,6 +45,20 @@ pub struct DatabaseConfig {
     /// Lower values keep the WAL file smaller; higher values reduce checkpoint frequency.
     #[serde(default = "default_wal_autocheckpoint")]
     pub wal_autocheckpoint: u32,
+    /// rusqlite per-connection prepared-statement cache capacity.
+    /// Default: 128.
+    ///
+    /// rusqlite's built-in default is 16. With more than ~16 distinct
+    /// SQL strings on the hot path (find + per-doc hydrate joins +
+    /// auth resolve), the LRU evicts and the next call re-runs
+    /// `sqlite3_prepare_v2` → the query planner → `SQLite`'s internal
+    /// allocator (globally locked). Profiling at concurrency 50
+    /// attributed ~53% of CPU to `native_queued_spin_lock_slowpath`
+    /// inside `sqlite3LockAndPrepare` before this knob existed.
+    /// 128 covers the current workload comfortably; bump it if a
+    /// hot path adds enough new SQL variants to thrash again.
+    #[serde(default = "default_stmt_cache_capacity")]
+    pub stmt_cache_capacity: usize,
 }
 
 fn default_cache_size() -> i64 {
@@ -57,6 +71,10 @@ fn default_mmap_size() -> u64 {
 
 fn default_wal_autocheckpoint() -> u32 {
     1000
+}
+
+fn default_stmt_cache_capacity() -> usize {
+    128
 }
 
 fn default_backend() -> String {
@@ -75,6 +93,7 @@ impl Default for DatabaseConfig {
             cache_size: default_cache_size(),
             mmap_size: default_mmap_size(),
             wal_autocheckpoint: default_wal_autocheckpoint(),
+            stmt_cache_capacity: default_stmt_cache_capacity(),
         }
     }
 }
@@ -96,5 +115,23 @@ mod tests {
         let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.database.pool_max_size, 32);
         assert_eq!(config.database.busy_timeout, 60000);
+    }
+
+    #[test]
+    fn stmt_cache_capacity_defaults_to_128() {
+        let config = crate::config::CrapConfig::default();
+        assert_eq!(config.database.stmt_cache_capacity, 128);
+    }
+
+    #[test]
+    fn stmt_cache_capacity_from_toml() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            tmp.path().join("crap.toml"),
+            "[database]\nstmt_cache_capacity = 64\n",
+        )
+        .unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
+        assert_eq!(config.database.stmt_cache_capacity, 64);
     }
 }

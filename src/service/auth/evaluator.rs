@@ -31,7 +31,7 @@ use tracing::{debug, warn};
 use crate::core::{
     AuthUser, Claims, Document, Registry, Slug,
     auth::{ClaimsBuilder, TokenProvider},
-    collection::{Activation, Auth, AuthMethod, Surface},
+    collection::{Auth, Surface},
 };
 use crate::db::{DbConnection, query};
 use crate::hooks::HookRunner;
@@ -263,6 +263,26 @@ pub fn evaluate(request: &AuthRequest<'_>, deps: &EvaluateDeps<'_>) -> Resolutio
 
     // ── 3. Strategies (cross-collection walk) ──────────────────────
     //
+    // Fast-path: skip the entire walk when no collection declares a
+    // strategy. Deployments that only use `password_login` / `bearer`
+    // / `session_cookie` (the common case) pay zero per-request cost
+    // for the strategy machinery — no collection iteration, no
+    // method scan, no `activation_matches` checks. This is critical
+    // for anonymous-read workloads where the token + cookie checks
+    // both miss and we'd otherwise walk the registry on every
+    // request to discover there is nothing to do.
+    if !deps.registry.has_any_strategy() {
+        return if credential_supplied {
+            // Caller presented a credential but nothing accepted it.
+            // Surface `Unaccepted` so the admin middleware clears
+            // the dead cookie and gRPC returns 401 instead of
+            // treating the request as anonymous.
+            Resolution::Invalid(AuthFailure::Unaccepted)
+        } else {
+            Resolution::Anonymous
+        };
+    }
+
     // Strategy hooks have no per-call timeout: mlua doesn't expose
     // cooperative interruption at a stable enough API, and abandoning
     // the `spawn_blocking` thread (`tokio::time::timeout` around the
@@ -271,76 +291,37 @@ pub fn evaluate(request: &AuthRequest<'_>, deps: &EvaluateDeps<'_>) -> Resolutio
     // degree they trust the Lua they shipped — a hostile or buggy
     // hook can hang the request. The validator warns on
     // `Always`-active strategies; for header-discriminated strategies
-    // the activation filter already keeps slow code off the hot path
-    // for requests that don't carry the discriminator.
-    for (slug, def) in &deps.registry.collections {
-        let Some(ref auth) = def.auth else { continue };
-        if !auth.enabled {
-            continue;
+    // the precomputed `header_strategies` index already keeps slow
+    // code off the hot path for requests that don't carry the
+    // discriminator (no walk, just a HashMap lookup).
+    //
+    // Iteration order: always-active strategies first (matches the
+    // pre-precompute walk's semantics for cross-collection precedence
+    // — they always ran first by virtue of `activation_matches`
+    // returning true unconditionally), then header-discriminated
+    // strategies indexed by each request header that has a match.
+    if let Some(entries) = deps.registry.always_strategies.get(&request.surface) {
+        for entry in entries {
+            if let Some(res) = try_strategy(entry, request, deps) {
+                return res;
+            }
         }
-        for method in &auth.methods {
-            let AuthMethod::Strategy {
-                name,
-                authenticate,
-                activates_on,
-                surfaces,
-            } = method
-            else {
+    }
+    if !deps.registry.header_strategies.is_empty() {
+        // Only iterate request headers when at least one
+        // header-activated strategy exists in the registry. Each
+        // header key is matched (lowercased) against the
+        // `header_strategies` index — no walk, no allocation per
+        // miss.
+        for header_name in request.headers.keys() {
+            let key = (header_name.to_ascii_lowercase(), request.surface);
+            let Some(entries) = deps.registry.header_strategies.get(&key) else {
                 continue;
             };
-            if !surfaces.contains(request.surface) {
-                continue;
-            }
-            if !activation_matches(activates_on, request.headers) {
-                continue;
-            }
-            match deps
-                .hook_runner
-                .run_auth_strategy(authenticate, slug, request.headers, deps.conn)
-            {
-                Ok(Some(doc)) => {
-                    // Refuse the strategy's result if the user is in a
-                    // state where authentication MUST fail regardless of
-                    // method. Bearer / cookie paths do these checks in
-                    // `resolve_token`; the strategy path has to mirror
-                    // them or a locked / unverified user could re-enter
-                    // via the strategy after admin lockout.
-                    if is_locked(&doc) {
-                        debug!(
-                            collection = %slug,
-                            strategy = %name,
-                            user = %doc.id,
-                            "strategy returned locked user; refusing"
-                        );
-                        continue;
-                    }
-                    if auth.requires_verify_email() && !is_verified(&doc) {
-                        debug!(
-                            collection = %slug,
-                            strategy = %name,
-                            user = %doc.id,
-                            "strategy returned unverified user (verify_email required); refusing"
-                        );
-                        continue;
-                    }
-                    if let Some(user) = build_strategy_authuser(doc, slug, auth.token_expiry) {
-                        return Resolution::Authenticated(Box::new(AuthenticatedResolution {
-                            user,
-                            via: ResolvedMethod::Strategy {
-                                collection: slug.clone(),
-                                name: name.clone(),
-                            },
-                        }));
-                    }
-                    // claims build failed — already logged; try next method
+            for entry in entries {
+                if let Some(res) = try_strategy(entry, request, deps) {
+                    return res;
                 }
-                Ok(None) => {}
-                Err(e) => warn!(
-                    collection = %slug,
-                    strategy = %name,
-                    error = ?e,
-                    "auth strategy returned error; continuing to next method"
-                ),
             }
         }
     }
@@ -355,13 +336,79 @@ pub fn evaluate(request: &AuthRequest<'_>, deps: &EvaluateDeps<'_>) -> Resolutio
     Resolution::Anonymous
 }
 
-/// True when this method's activation discriminator matches the
-/// current request. `Always` always fires; `Header` fires when the
-/// named header is present in `headers`, matched case-insensitively
-/// per HTTP semantics. The Lua-visible `ctx.headers` map keeps its
-/// original casing so existing hooks aren't broken — only the
-/// activation check itself is case-insensitive.
-fn activation_matches(activation: &Activation, headers: &HashMap<String, String>) -> bool {
+/// Try a single strategy entry against the current request. Returns
+/// `Some(Resolution::Authenticated)` on a hit, `None` to keep
+/// iterating. Mirrors the per-strategy `is_locked` / verify-email
+/// guard the bearer / cookie paths apply in `resolve_token`, so the
+/// strategy path can't be used to bypass account-state checks.
+fn try_strategy(
+    entry: &crate::core::StrategyEntry,
+    request: &AuthRequest<'_>,
+    deps: &EvaluateDeps<'_>,
+) -> Option<Resolution> {
+    let def = deps.registry.get_collection(&entry.slug)?;
+    let auth = def.auth.as_ref()?;
+    match deps.hook_runner.run_auth_strategy(
+        &entry.authenticate,
+        &entry.slug,
+        request.headers,
+        deps.conn,
+    ) {
+        Ok(Some(doc)) => {
+            if is_locked(&doc) {
+                debug!(
+                    collection = %entry.slug,
+                    strategy = %entry.name,
+                    user = %doc.id,
+                    "strategy returned locked user; refusing"
+                );
+                return None;
+            }
+            if auth.requires_verify_email() && !is_verified(&doc) {
+                debug!(
+                    collection = %entry.slug,
+                    strategy = %entry.name,
+                    user = %doc.id,
+                    "strategy returned unverified user (verify_email required); refusing"
+                );
+                return None;
+            }
+            let user = build_strategy_authuser(doc, &entry.slug, auth.token_expiry)?;
+            Some(Resolution::Authenticated(Box::new(
+                AuthenticatedResolution {
+                    user,
+                    via: ResolvedMethod::Strategy {
+                        collection: entry.slug.clone(),
+                        name: entry.name.clone(),
+                    },
+                },
+            )))
+        }
+        Ok(None) => None,
+        Err(e) => {
+            warn!(
+                collection = %entry.slug,
+                strategy = %entry.name,
+                error = ?e,
+                "auth strategy returned error; continuing to next method"
+            );
+            None
+        }
+    }
+}
+
+/// Historical activation-matching helper. The runtime evaluator no
+/// longer calls it — the precomputed `header_strategies` /
+/// `always_strategies` indexes on `Registry` answer the same
+/// question without iterating. Kept for the existing unit tests
+/// that pin the case-insensitive matching semantics; if those tests
+/// move to exercising the precomputed maps directly, this can go.
+#[cfg(test)]
+fn activation_matches(
+    activation: &crate::core::collection::Activation,
+    headers: &HashMap<String, String>,
+) -> bool {
+    use crate::core::collection::Activation;
     match activation {
         Activation::Always { .. } => true,
         Activation::Header { header } => {
@@ -556,7 +603,7 @@ fn build_strategy_authuser(doc: Document, slug: &Slug, token_expiry: u64) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::collection::{Auth, AuthMethod, SurfaceSet};
+    use crate::core::collection::{Activation, Auth, AuthMethod, SurfaceSet};
 
     #[test]
     fn activation_always_always_fires() {

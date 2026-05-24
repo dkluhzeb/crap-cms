@@ -7,17 +7,55 @@ use std::{
 use tracing::{debug, warn};
 
 use crate::core::{
-    CollectionDefinition, FieldDefinition, FieldType, Slug, collection::GlobalDefinition,
-    job::JobDefinition, richtext::RichtextNodeDef,
+    CollectionDefinition, FieldDefinition, FieldType, Slug,
+    collection::{Activation, AuthMethod, GlobalDefinition, Surface},
+    job::JobDefinition,
+    richtext::RichtextNodeDef,
 };
 
+/// Materialised pointer to a single `AuthMethod::Strategy` in the
+/// registry. Carries the bits the evaluator needs to invoke the hook
+/// without re-walking the collection tree per request.
+#[derive(Debug, Clone)]
+pub struct StrategyEntry {
+    /// Collection slug the strategy was declared on. Threaded into
+    /// the Lua hook as `ctx.collection` and used to look up the
+    /// collection's auth config (locked / `verify_email` / token
+    /// expiry) when a strategy hit produces a user document.
+    pub slug: Slug,
+    /// Identifier used in logs and `ResolvedMethod::Strategy.name`.
+    pub name: String,
+    /// Lua function reference (`module.function`) for the strategy.
+    pub authenticate: String,
+}
+
 /// Holds all collection, global, and job definitions loaded at startup.
+///
+/// `always_strategies` and `header_strategies` are precomputed indexes
+/// derived from the strategy `AuthMethod`s in `collections`. They're
+/// built by [`Self::rebuild_strategy_index`] (called at snapshot
+/// time) so the per-request auth evaluator can answer "does any
+/// strategy fire for this request?" without walking every collection
+/// × method on every call. Previously every gRPC request paid an
+/// O(collections × methods × activation-checks) scan even when
+/// nothing was going to match.
 #[derive(Clone, Default)]
 pub struct Registry {
     pub collections: HashMap<Slug, CollectionDefinition>,
     pub globals: HashMap<Slug, GlobalDefinition>,
     pub jobs: HashMap<Slug, JobDefinition>,
     pub richtext_nodes: HashMap<String, RichtextNodeDef>,
+    /// `Activation::Always`-activated strategies grouped by the
+    /// surface they fire on. Looked up once per request to enumerate
+    /// strategies that run unconditionally for that surface.
+    pub always_strategies: HashMap<Surface, Vec<StrategyEntry>>,
+    /// `Activation::Header { header }` strategies grouped by
+    /// `(lowercased-header-name, surface)`. Looked up once per
+    /// request-header to enumerate strategies discriminated by that
+    /// header on that surface. Header names are stored lowercased so
+    /// the lookup matches HTTP / gRPC metadata case-insensitivity
+    /// without per-request normalisation.
+    pub header_strategies: HashMap<(String, Surface), Vec<StrategyEntry>>,
 }
 
 /// Thread-safe shared reference to the registry. Used during init when
@@ -205,7 +243,87 @@ impl Registry {
         let reg = shared
             .read()
             .expect("Registry lock poisoned during snapshot");
-        Arc::new(reg.clone())
+        let mut snap = reg.clone();
+        snap.rebuild_strategy_index();
+        Arc::new(snap)
+    }
+
+    /// Recompute [`Self::always_strategies`] and
+    /// [`Self::header_strategies`] from the current `collections`
+    /// state. Idempotent — clears and refills both maps. Called once
+    /// at [`Self::snapshot`] time so runtime callers reuse the same
+    /// indexes for every request. Cost is O(collections × methods),
+    /// paid once at startup instead of per request.
+    pub fn rebuild_strategy_index(&mut self) {
+        self.always_strategies.clear();
+        self.header_strategies.clear();
+
+        for (slug, def) in &self.collections {
+            let Some(auth) = def.auth.as_ref() else {
+                continue;
+            };
+            if !auth.enabled {
+                continue;
+            }
+            for method in &auth.methods {
+                let AuthMethod::Strategy {
+                    name,
+                    authenticate,
+                    activates_on,
+                    surfaces,
+                } = method
+                else {
+                    continue;
+                };
+                let entry = StrategyEntry {
+                    slug: slug.clone(),
+                    name: name.clone(),
+                    authenticate: authenticate.clone(),
+                };
+                for surface in surfaces {
+                    match activates_on {
+                        Activation::Always { .. } => {
+                            self.always_strategies
+                                .entry(*surface)
+                                .or_default()
+                                .push(entry.clone());
+                        }
+                        Activation::Header { header } => {
+                            self.header_strategies
+                                .entry((header.to_ascii_lowercase(), *surface))
+                                .or_default()
+                                .push(entry.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whether any collection's `auth.methods` contains a
+    /// `Strategy` variant. Used by the auth evaluator and the gRPC
+    /// metadata-header extractor to short-circuit per-request work
+    /// when no strategy is configured: an anonymous request on a
+    /// deployment that only uses `password_login` / `bearer` /
+    /// `session_cookie` does not need to walk every collection
+    /// looking for a header-activated strategy, and does not need
+    /// to materialise the request's metadata into a `HashMap` since
+    /// no consumer will read it.
+    ///
+    /// Short-circuiting iterator — returns on the first strategy
+    /// found. With a handful of collections + a handful of methods
+    /// each, this is a few cmp-and-branches per call; cheaper than
+    /// the work it gates by orders of magnitude.
+    #[must_use]
+    pub fn has_any_strategy(&self) -> bool {
+        self.collections.values().any(|def| {
+            def.auth.as_ref().is_some_and(|a| {
+                a.enabled
+                    && a.methods
+                        .iter()
+                        .any(|m| matches!(m, AuthMethod::Strategy { .. }))
+            })
+        })
     }
 }
 

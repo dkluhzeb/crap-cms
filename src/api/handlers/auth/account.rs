@@ -135,7 +135,7 @@ impl ContentService {
     ) -> Result<Response<content::AccountActionResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
-        let headers = Self::extract_metadata_headers(&metadata);
+        let headers = self.metadata_headers(&metadata);
         let req = request.into_inner();
         validate_auth_collection(self, &req.collection)?;
 
@@ -160,7 +160,7 @@ impl ContentService {
     ) -> Result<Response<content::AccountActionResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
-        let headers = Self::extract_metadata_headers(&metadata);
+        let headers = self.metadata_headers(&metadata);
         let req = request.into_inner();
         validate_auth_collection(self, &req.collection)?;
 
@@ -183,7 +183,7 @@ impl ContentService {
     ) -> Result<Response<content::AccountActionResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
-        let headers = Self::extract_metadata_headers(&metadata);
+        let headers = self.metadata_headers(&metadata);
         let req = request.into_inner();
         validate_auth_collection(self, &req.collection)?;
         validate_verify_email_enabled(self, &req.collection)?;
@@ -207,7 +207,7 @@ impl ContentService {
     ) -> Result<Response<content::AccountActionResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
-        let headers = Self::extract_metadata_headers(&metadata);
+        let headers = self.metadata_headers(&metadata);
         let req = request.into_inner();
         validate_auth_collection(self, &req.collection)?;
         validate_verify_email_enabled(self, &req.collection)?;

@@ -148,6 +148,7 @@ fn create_sqlite_pool(config_dir: &Path, config: &CrapConfig) -> Result<DbPool> 
             cache_size: config.database.cache_size,
             mmap_size: config.database.mmap_size,
             wal_autocheckpoint: config.database.wal_autocheckpoint,
+            stmt_cache_capacity: config.database.stmt_cache_capacity,
         }))
         .test_on_check_out(false)
         .build(manager)
@@ -163,6 +164,7 @@ struct SqlitePragmas {
     cache_size: i64,
     mmap_size: u64,
     wal_autocheckpoint: u32,
+    stmt_cache_capacity: usize,
 }
 
 #[cfg(feature = "sqlite")]
@@ -179,6 +181,16 @@ impl r2d2::CustomizeConnection<rusqlite::Connection, rusqlite::Error> for Sqlite
              PRAGMA temp_store = MEMORY;",
             self.busy_timeout, self.wal_autocheckpoint, self.cache_size, self.mmap_size
         ))?;
+        // rusqlite's default prepared-statement cache holds 16 entries
+        // per connection. With more than ~16 distinct SQL strings on
+        // the hot path (find + per-doc hydrate joins + auth resolve),
+        // the LRU evicts and the next call re-runs `sqlite3_prepare_v2`
+        // → the query planner → SQLite's internal allocator (globally
+        // locked). Profiling at concurrency 50 attributed ~53% of CPU
+        // to `native_queued_spin_lock_slowpath` inside
+        // `sqlite3LockAndPrepare` before this knob was wired up.
+        // Configurable via `[database] stmt_cache_capacity`.
+        conn.set_prepared_statement_cache_capacity(self.stmt_cache_capacity);
         Ok(())
     }
 }

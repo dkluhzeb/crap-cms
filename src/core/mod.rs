@@ -74,7 +74,7 @@ pub use field::{
 };
 pub use job::{JobDefinition, JobLabels, JobRun, JobStatus};
 pub(crate) use registry::RegistryRead;
-pub use registry::{Registry, SharedRegistry};
+pub use registry::{Registry, SharedRegistry, StrategyEntry};
 pub use req_context::ReqContext;
 pub use richtext::RichtextNodeDef;
 pub use slug::Slug;

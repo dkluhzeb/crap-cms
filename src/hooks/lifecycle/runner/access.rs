@@ -108,6 +108,22 @@ impl HookRunner {
         data: Option<&DocumentFields>,
         conn: &dyn DbConnection,
     ) -> Result<AccessResult> {
+        // No access function configured — the in-Lua path would
+        // only read the `DefaultDeny` flag from `app_data` and
+        // return immediately, so skip the entire VM round-trip.
+        // With pool size 16 and 50 concurrent reads, the previous
+        // unconditional `pool.acquire()` serialized 34 requests on
+        // the VM-pool mutex per tick (was 26% of total CPU spent in
+        // futex syscalls). The cached `default_deny` flag is set
+        // at builder time from `[access] default_deny`.
+        if access_ref.is_none() {
+            return Ok(if self.default_deny {
+                AccessResult::Denied
+            } else {
+                AccessResult::Allowed
+            });
+        }
+
         let lua = self.pool.acquire()?;
         let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 

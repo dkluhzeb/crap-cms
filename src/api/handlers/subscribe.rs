@@ -388,7 +388,7 @@ impl ContentService {
             .ok_or_else(|| Status::unavailable("Live updates disabled"))?;
 
         let token = Self::extract_token(&metadata);
-        let headers = Self::extract_metadata_headers(&metadata);
+        let headers = self.metadata_headers(&metadata);
 
         let requested_ops: HashSet<String> = if req.operations.is_empty() {
             ["create", "update", "delete"]
