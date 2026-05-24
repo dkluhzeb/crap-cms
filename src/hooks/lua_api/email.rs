@@ -7,7 +7,7 @@ use anyhow::Result;
 use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Value};
 use serde::Deserialize;
 
-use crate::config::{CrapConfig, EmailConfig};
+use crate::config::CrapConfig;
 use crate::core::email::{
     EmailJobData, SharedEmailProvider, create_email_provider, queue_email, validate_no_crlf,
 };
@@ -38,11 +38,11 @@ impl FromLua for EmailOptions {
 }
 
 /// State threaded into `crap.email.send` / `crap.email.queue` — the
-/// shared provider (sender) and a snapshot of the email config (for
-/// queueing defaults).
+/// shared provider (sender) and the queue's default `max_attempts`
+/// (resolved at register time from `[jobs.queues.email] retries`).
 pub(super) struct EmailState {
     provider: SharedEmailProvider,
-    config: EmailConfig,
+    queue_max_attempts: u32,
 }
 
 /// Validate header-derived email fields. Rejects any `\r`, `\n`, or
@@ -78,7 +78,7 @@ fn email_send(
 
 /// Queue an email for async delivery via the job system. Returns the job
 /// run ID. Per-call `retries` override on `opts` takes precedence over
-/// the global `EmailConfig.queue_retries`.
+/// the queue default from `[jobs.queues.email] retries`.
 #[lua_fn(path = "crap.email.queue", returns_doc = "Queued job ID.", auto_tx)]
 fn email_queue(
     state: &EmailState,
@@ -91,10 +91,9 @@ fn email_queue(
 ) -> LuaResult<String> {
     validate_email_fields(&opts.to, &opts.subject)?;
 
-    let mut config = state.config.clone();
-    if let Some(retries) = opts.retries {
-        config.queue_retries = retries;
-    }
+    let max_attempts = opts
+        .retries
+        .map_or(state.queue_max_attempts, |r| r.saturating_add(1));
 
     let conn = get_tx_conn(lua)?;
 
@@ -106,7 +105,7 @@ fn email_queue(
             html: opts.html,
             text: opts.text,
         },
-        &config,
+        max_attempts,
     )
     .map_err(|e| RuntimeError(format!("email queue error: {e:#}")))?;
 
@@ -127,7 +126,7 @@ pub(super) fn register_email(lua: &Lua, config: &CrapConfig) -> Result<()> {
     let provider = create_email_provider(&config.email)?;
     let state = EmailState {
         provider,
-        config: config.email.clone(),
+        queue_max_attempts: config.jobs.system_email_max_attempts(),
     };
     register_crap_email(lua, state)?;
     Ok(())

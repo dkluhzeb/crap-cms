@@ -274,8 +274,6 @@ pub async fn run(
         storage,
         locale_config: cfg.locale.clone(),
         email_provider: Some(email_provider),
-        email_queue_timeout: cfg.email.queue_timeout,
-        email_queue_concurrency: cfg.email.queue_concurrency,
     })
     .await?;
 

@@ -18,6 +18,7 @@
 )]
 
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -205,7 +206,7 @@ fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data: DocumentFields = std::collections::HashMap::from([
+    let data: DocumentFields = HashMap::from([
         ("email".to_string(), json!(email)),
         ("name".to_string(), json!("Test User")),
     ])

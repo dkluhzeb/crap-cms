@@ -18,6 +18,7 @@
 )]
 
 use serde_json::json;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -262,7 +263,7 @@ fn create_test_user_with_role(
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let mut data: DocumentFields = std::collections::HashMap::from([
+    let mut data: DocumentFields = HashMap::from([
         ("email".to_string(), json!(email)),
         ("name".to_string(), json!("Test User")),
     ])
@@ -842,8 +843,7 @@ async fn dashboard_renders_collection_counts() {
     for title in &["Post A", "Post B"] {
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let data: DocumentFields =
-            std::collections::HashMap::from([("title".to_string(), json!(title))]).into();
+        let data: DocumentFields = HashMap::from([("title".to_string(), json!(title))]).into();
         query::create(&tx, "posts", &def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -964,7 +964,7 @@ fn global_read_admin_via_service_layer_allowed() {
 
     let def = registry.get_global("restricted_settings").unwrap().clone();
 
-    let mut admin_fields = std::collections::HashMap::new();
+    let mut admin_fields = HashMap::new();
     admin_fields.insert("role".to_string(), serde_json::json!("admin"));
     admin_fields.insert("email".to_string(), serde_json::json!("admin@test.com"));
     let admin = Document {

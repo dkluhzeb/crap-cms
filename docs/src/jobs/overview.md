@@ -54,7 +54,7 @@ return M
 | `handler` | string | (required) | Lua function ref (e.g., `"jobs.cleanup.run"`) |
 | `schedule` | string | nil | Cron expression for automatic scheduling |
 | `queue` | string | `"default"` | Queue name for grouping |
-| `retries` | integer | 0 | Max retry attempts on failure (see [Retry Backoff](#retry-backoff) below) |
+| `retries` | integer | inherits queue, else 0 | Max retry attempts on failure (see [Retry Backoff](#retry-backoff) below). Omit to inherit `[jobs.queues.<queue>] retries` from `crap.toml`; set explicitly (including `0`) to override the queue default. |
 | `timeout` | integer | 60 | Seconds before job is marked failed |
 | `concurrency` | integer | 1 | Max concurrent runs of this job (cluster-wide) |
 | `priority` | integer | 0 | Default scheduling priority; higher = sooner. Per-enqueue value overrides this. |
@@ -112,8 +112,12 @@ If it errors, the job is marked failed (and retried if attempts remain).
 Concurrency caps stack, strictest wins (all cluster-wide via the shared DB):
 
 - **Global**: `[jobs] max_concurrent` in `crap.toml` (default: 10)
-- **Per-queue**: `[jobs.queues.<name>] concurrency = N` for resource-shared
-  work (SMTP pool, image encoders). Framework default: `images = { concurrency = 2 }`.
+- **Per-queue**: `[jobs.queues.<name>]` for queue-level defaults —
+  `concurrency = N` (aggregate cap), `timeout = "5m"` (per-job
+  wall-clock timeout for system jobs in this queue), `retries = N`
+  (default `max_attempts - 1` for system jobs in this queue). Partial
+  overrides keep framework defaults intact. Framework ships
+  `images = { concurrency = 2, timeout = "5m", retries = 2 }`.
 - **Per-job**: `concurrency` field on the definition (default: 1)
 - **Timeout**: Jobs running longer than `timeout` are marked failed
 - **Skip-if-running**: Cron-triggered jobs skip if a previous run is still active

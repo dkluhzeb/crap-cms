@@ -13,6 +13,8 @@
 //! `crap.hooks.register`) are NOT validated here — they may resolve through
 //! different mechanisms at runtime.
 
+use std::collections::HashMap;
+
 use anyhow::{Result, bail};
 use mlua::Lua;
 use tracing::warn;
@@ -112,8 +114,7 @@ fn check_hooks(lua: &Lua, hooks: &Hooks, source: &str, out: &mut Vec<String>) {
 ///   authentication outcome depends on registration order).
 pub fn validate_auth_methods(registry: &Registry) -> Result<()> {
     let mut errors: Vec<String> = Vec::new();
-    let mut always_by_surface: std::collections::HashMap<Surface, Vec<(String, String)>> =
-        std::collections::HashMap::new();
+    let mut always_by_surface: HashMap<Surface, Vec<(String, String)>> = HashMap::new();
 
     for (slug, def) in &registry.collections {
         let Some(auth) = def.auth.as_ref() else {
@@ -150,7 +151,7 @@ fn check_one_collection_methods(
     slug: &Slug,
     methods: &[AuthMethod],
     errors: &mut Vec<String>,
-    always_by_surface: &mut std::collections::HashMap<Surface, Vec<(String, String)>>,
+    always_by_surface: &mut HashMap<Surface, Vec<(String, String)>>,
 ) {
     let mut password_count = 0;
     let mut bearer_count = 0;
@@ -211,7 +212,7 @@ fn check_strategy_shape(
     activates_on: &Activation,
     surfaces: &crate::core::collection::SurfaceSet,
     errors: &mut Vec<String>,
-    always_by_surface: &mut std::collections::HashMap<Surface, Vec<(String, String)>>,
+    always_by_surface: &mut HashMap<Surface, Vec<(String, String)>>,
 ) {
     if authenticate.trim().is_empty() {
         errors.push(format!(
@@ -243,7 +244,7 @@ fn check_strategy_shape(
 }
 
 fn warn_on_always_cross_collection_collisions(
-    always_by_surface: &std::collections::HashMap<Surface, Vec<(String, String)>>,
+    always_by_surface: &HashMap<Surface, Vec<(String, String)>>,
 ) {
     for (surface, owners) in always_by_surface {
         if owners.len() > 1 {

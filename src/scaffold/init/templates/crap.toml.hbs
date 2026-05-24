@@ -145,9 +145,13 @@ fallback = true
 # Framework defaults applied if not overridden:
 #   images = { concurrency = 2 }   — AVIF/WebP encoders are CPU-bound
 [jobs.queues]
-images = { concurrency = 2 }       # override the framework default if needed
-# emails  = { concurrency = 4 }    # cap a shared SMTP pool
-# reports = { concurrency = 1 }    # serialize heavy report generation
+# Per-queue knobs: { concurrency, timeout, retries }. Operator-supplied
+# fields override the framework defaults; unspecified fields keep them.
+# Framework defaults: images = { concurrency = 2, timeout = "5m", retries = 2 }
+#                     email  = { concurrency = 5, timeout = "30s", retries = 3 }
+images = { concurrency = 2 }
+# email   = { concurrency = 8, timeout = "1m", retries = 5 }
+# reports = { concurrency = 1, timeout = "30m", retries = 0 }
 
 # [cors]
 # allowed_origins = []           # empty = CORS disabled; ["*"] = allow any origin

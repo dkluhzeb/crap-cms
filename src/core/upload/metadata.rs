@@ -176,6 +176,7 @@ pub fn enqueue_conversions(
     collection: &str,
     document_id: &str,
     conversions: &[QueuedConversion],
+    max_attempts: u32,
 ) -> Result<()> {
     for c in conversions {
         let data = ImageConvertJobData {
@@ -188,7 +189,7 @@ pub fn enqueue_conversions(
             url_column: c.url_column.clone(),
             url_value: c.url_value.clone(),
         };
-        queue_image_conversion(conn, &data)?;
+        queue_image_conversion(conn, &data, max_attempts)?;
     }
     Ok(())
 }

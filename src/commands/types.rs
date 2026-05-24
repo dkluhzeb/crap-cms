@@ -106,7 +106,10 @@ pub enum MakeAction {
         #[arg(short, long)]
         queue: Option<String>,
 
-        /// Max retry attempts (default: 0)
+        /// Max retry attempts. Omit to let the `JobDefinition`
+        /// inherit `[jobs.queues.<queue>] retries` at runtime. Pass
+        /// an explicit value (including `0`) to override the queue
+        /// default in the generated Lua.
         #[arg(short, long)]
         retries: Option<u32>,
 

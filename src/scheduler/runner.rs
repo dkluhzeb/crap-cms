@@ -1,6 +1,6 @@
 //! Job execution, cron scheduling, stale recovery, cron normalization, and soft-delete purge.
 
-use std::{str::FromStr, time::Instant};
+use std::{collections::HashMap, str::FromStr, time::Instant};
 
 use anyhow::{Context as _, Result, anyhow};
 use chrono::{DateTime, Utc};
@@ -292,6 +292,7 @@ pub fn check_cron_schedules(
     registry: &Registry,
     last_check: DateTime<Utc>,
     now: DateTime<Utc>,
+    queue_retries: &HashMap<String, u32>,
 ) -> Result<()> {
     let mut conn = pool.get().context("Failed to get DB connection for cron")?;
     let tx = conn
@@ -354,13 +355,16 @@ pub fn check_cron_schedules(
             }
         }
 
-        // Insert a pending job
+        // Insert a pending job. `effective_max_attempts` resolves
+        // `JobDefinition.retries` first, falling back to
+        // `[jobs.queues.<queue>] retries` when the definition didn't
+        // set it.
         let job = job_query::insert_job(
             &tx,
             slug,
             "{}",
             "cron",
-            def.retries + 1,
+            def.effective_max_attempts(queue_retries.get(&def.queue).copied()),
             &def.queue,
             def.priority,
         )?;
@@ -909,7 +913,7 @@ mod tests {
         let now = chrono::Utc::now();
         let last_check = now - chrono::Duration::minutes(2);
 
-        check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+        check_cron_schedules(&pool, &registry, last_check, now, &HashMap::new()).unwrap();
 
         let conn = pool.get().unwrap();
         let jobs = job_query::list_job_runs(&conn, Some("cron_job"), None, 100, 0).unwrap();
@@ -928,7 +932,7 @@ mod tests {
         let now = chrono::Utc::now();
         let last_check = now - chrono::Duration::minutes(2);
 
-        check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+        check_cron_schedules(&pool, &registry, last_check, now, &HashMap::new()).unwrap();
 
         let conn = pool.get().unwrap();
         let jobs = job_query::list_job_runs(&conn, None, None, 100, 0).unwrap();
@@ -953,7 +957,7 @@ mod tests {
             .unwrap();
         let last_check = now - chrono::Duration::seconds(1);
 
-        check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+        check_cron_schedules(&pool, &registry, last_check, now, &HashMap::new()).unwrap();
 
         let conn = pool.get().unwrap();
         let jobs = job_query::list_job_runs(&conn, None, None, 100, 0).unwrap();
@@ -985,7 +989,7 @@ mod tests {
         let now = chrono::Utc::now();
         let last_check = now - chrono::Duration::minutes(2);
 
-        check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+        check_cron_schedules(&pool, &registry, last_check, now, &HashMap::new()).unwrap();
 
         // Should NOT insert a new pending job because skip_if_running=true and one is running
         let conn = pool.get().unwrap();
@@ -1015,7 +1019,7 @@ mod tests {
         let now = chrono::Utc::now();
         let last_check = now - chrono::Duration::minutes(2);
 
-        check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+        check_cron_schedules(&pool, &registry, last_check, now, &HashMap::new()).unwrap();
 
         // Should insert a new pending job even though one is running
         let conn = pool.get().unwrap();
@@ -1037,7 +1041,7 @@ mod tests {
         let last_check = now - chrono::Duration::minutes(2);
 
         // Should not error, just skip the invalid expression
-        check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+        check_cron_schedules(&pool, &registry, last_check, now, &HashMap::new()).unwrap();
 
         let conn = pool.get().unwrap();
         let jobs = job_query::list_job_runs(&conn, None, None, 100, 0).unwrap();
@@ -1075,6 +1079,74 @@ mod tests {
         assert!(third, "a claim past the window should win again");
     }
 
+    /// Regression: a job defined without `retries` inherits
+    /// `[jobs.queues.<queue>] retries` at cron-fire time. Pre-Option<u32>
+    /// migration this silently collapsed to `0` (one attempt); the
+    /// queue config wins now.
+    #[test]
+    fn check_cron_schedules_inherits_queue_retries() {
+        let pool = make_test_pool();
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition::builder("inherits_cron", "some.handler")
+                .schedule("* * * * *")
+                // NO .retries() call — JobDefinition.retries = None,
+                // so the queue's `retries = 5` should apply.
+                .queue("reports")
+                .skip_if_running(false)
+                .build(),
+        ]);
+
+        let mut queue_retries = HashMap::new();
+        queue_retries.insert("reports".to_string(), 5);
+
+        let now = chrono::Utc::now();
+        let last_check = now - chrono::Duration::minutes(2);
+
+        check_cron_schedules(&pool, &registry, last_check, now, &queue_retries).unwrap();
+
+        let conn = pool.get().unwrap();
+        let jobs = job_query::list_job_runs(&conn, Some("inherits_cron"), None, 100, 0).unwrap();
+        assert_eq!(jobs.len(), 1);
+        // queue retries=5 → max_attempts = 5 + 1 = 6 (inherited)
+        assert_eq!(
+            jobs[0].max_attempts, 6,
+            "JobDefinition without retries should inherit [jobs.queues.reports] retries = 5"
+        );
+    }
+
+    /// Companion to `check_cron_schedules_inherits_queue_retries`:
+    /// explicit `.retries(0)` BEATS the queue default (operator chose
+    /// no retries even though the queue says 5).
+    #[test]
+    fn check_cron_schedules_explicit_zero_retries_overrides_queue() {
+        let pool = make_test_pool();
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition::builder("explicit_zero_cron", "some.handler")
+                .schedule("* * * * *")
+                .retries(0) // explicit "no retries"
+                .queue("reports")
+                .skip_if_running(false)
+                .build(),
+        ]);
+
+        let mut queue_retries = HashMap::new();
+        queue_retries.insert("reports".to_string(), 5);
+
+        let now = chrono::Utc::now();
+        let last_check = now - chrono::Duration::minutes(2);
+
+        check_cron_schedules(&pool, &registry, last_check, now, &queue_retries).unwrap();
+
+        let conn = pool.get().unwrap();
+        let jobs =
+            job_query::list_job_runs(&conn, Some("explicit_zero_cron"), None, 100, 0).unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(
+            jobs[0].max_attempts, 1,
+            "explicit retries(0) must override the queue default of 5"
+        );
+    }
+
     #[test]
     fn check_cron_schedules_retries_stored() {
         let pool = make_test_pool();
@@ -1090,7 +1162,7 @@ mod tests {
         let now = chrono::Utc::now();
         let last_check = now - chrono::Duration::minutes(2);
 
-        check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+        check_cron_schedules(&pool, &registry, last_check, now, &HashMap::new()).unwrap();
 
         let conn = pool.get().unwrap();
         let jobs = job_query::list_job_runs(&conn, Some("retried_cron"), None, 100, 0).unwrap();

@@ -11,8 +11,13 @@ pub struct JobDefinition {
     pub schedule: Option<String>,
     /// Queue name for grouping jobs. Default: "default".
     pub queue: String,
-    /// Maximum retry attempts on failure. Default: 0 (no retries).
-    pub retries: u32,
+    /// Maximum retry attempts on failure, when set explicitly at
+    /// `crap.jobs.define` time. `None` = inherit from
+    /// `[jobs.queues.<queue>] retries`; falls back to `0` (no retries)
+    /// if neither the definition nor the queue config supplies a
+    /// value. Resolve via [`Self::effective_max_attempts`] at queue
+    /// time — never compute `retries + 1` directly.
+    pub retries: Option<u32>,
     /// Timeout in seconds before a running job is marked failed. Default: 60.
     pub timeout: u64,
     /// Maximum concurrent runs of this specific job. Default: 1.
@@ -35,6 +40,23 @@ impl JobDefinition {
     pub fn builder(slug: impl Into<Slug>, handler: impl Into<String>) -> JobDefinitionBuilder {
         JobDefinitionBuilder::new(slug, handler)
     }
+
+    /// Total attempts (initial + retries) for a job in this definition.
+    /// Resolution order: explicit `JobDefinition.retries` wins, then
+    /// the queue's `[jobs.queues.<queue>] retries`, then `0` (one
+    /// attempt, no retries).
+    ///
+    /// `queue_retries` is the operator's `Option<u32>` from
+    /// `JobsConfig.queues.get(&self.queue).and_then(|q| q.retries)` —
+    /// pass `None` from contexts that don't have config access (the
+    /// definition's `retries` still applies; the fallback is `0`).
+    #[must_use]
+    pub fn effective_max_attempts(&self, queue_retries: Option<u32>) -> u32 {
+        self.retries
+            .or(queue_retries)
+            .unwrap_or(0)
+            .saturating_add(1)
+    }
 }
 
 impl Default for JobDefinition {
@@ -44,7 +66,7 @@ impl Default for JobDefinition {
             handler: String::new(),
             schedule: None,
             queue: "default".to_string(),
-            retries: 0,
+            retries: None,
             timeout: 60,
             concurrency: 1,
             priority: 0,
@@ -89,9 +111,13 @@ impl JobDefinitionBuilder {
         self
     }
 
+    /// Set an explicit retry count. Marks this `JobDefinition` as
+    /// "operator chose N retries", overriding any per-queue default.
+    /// To leave the field unset (inherit from `[jobs.queues.<queue>]
+    /// retries`), simply don't call this method.
     #[must_use]
     pub fn retries(mut self, n: u32) -> Self {
-        self.inner.retries = n;
+        self.inner.retries = Some(n);
 
         self
     }
@@ -153,7 +179,8 @@ mod tests {
     fn job_definition_default() {
         let def = JobDefinition::default();
         assert_eq!(def.queue, "default");
-        assert_eq!(def.retries, 0);
+        assert_eq!(def.retries, None);
+        assert_eq!(def.effective_max_attempts(None), 1);
         assert_eq!(def.timeout, 60);
         assert_eq!(def.concurrency, 1);
         assert!(def.skip_if_running);
@@ -167,7 +194,8 @@ mod tests {
         assert_eq!(def.slug, "cleanup");
         assert_eq!(def.handler, "jobs.cleanup.run");
         assert_eq!(def.queue, "default");
-        assert_eq!(def.retries, 0);
+        assert_eq!(def.retries, None);
+        assert_eq!(def.effective_max_attempts(None), 1);
         assert_eq!(def.timeout, 60);
         assert_eq!(def.concurrency, 1);
         assert!(def.skip_if_running);
@@ -188,10 +216,29 @@ mod tests {
             .build();
         assert_eq!(def.schedule.as_deref(), Some("0 3 * * *"));
         assert_eq!(def.queue, "reports");
-        assert_eq!(def.retries, 3);
+        assert_eq!(def.retries, Some(3));
         assert_eq!(def.timeout, 120);
         assert_eq!(def.concurrency, 2);
         assert!(!def.skip_if_running);
         assert_eq!(def.access.as_deref(), Some("access.admin_only"));
+    }
+
+    #[test]
+    fn effective_max_attempts_resolves_in_priority_order() {
+        // Explicit definition retries wins over queue default.
+        let def = JobDefinitionBuilder::new("x", "x.run").retries(5).build();
+        assert_eq!(def.effective_max_attempts(Some(2)), 6);
+        assert_eq!(def.effective_max_attempts(None), 6);
+
+        // Operator-set retries=0 means "no retries" — beats queue default.
+        let def_zero = JobDefinitionBuilder::new("x", "x.run").retries(0).build();
+        assert_eq!(def_zero.effective_max_attempts(Some(7)), 1);
+
+        // Unset definition inherits the queue default.
+        let def_unset = JobDefinitionBuilder::new("x", "x.run").build();
+        assert_eq!(def_unset.effective_max_attempts(Some(3)), 4);
+
+        // Neither set → 1 attempt (no retries).
+        assert_eq!(def_unset.effective_max_attempts(None), 1);
     }
 }

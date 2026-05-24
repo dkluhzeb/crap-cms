@@ -1,7 +1,7 @@
 //! Scheduler event loop — polls jobs, evaluates cron, processes images, manages heartbeats.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
 };
 
@@ -15,7 +15,11 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     config::{JobsConfig, LocaleConfig},
-    core::{JobDefinition, JobRun, Registry, SharedStorage, email::SYSTEM_EMAIL_JOB},
+    core::{
+        JobDefinition, JobRun, Registry, SharedEmailProvider, SharedStorage,
+        email::{SYSTEM_EMAIL_JOB, SYSTEM_EMAIL_QUEUE},
+        upload::{IMAGE_CONVERT_QUEUE, SYSTEM_IMAGE_CONVERT_JOB},
+    },
     db::{BoxedConnection, DbConnection, DbPool, query::jobs as job_query},
     hooks::HookRunner,
 };
@@ -24,7 +28,7 @@ use super::runner::{
     check_cron_schedules, claim_retention_purge_tick, execute_job, purge_soft_deleted,
     recover_stale_jobs,
 };
-use super::types::{EmailQueueConfig, SchedulerParams, SystemJobConfig};
+use super::types::{SchedulerParams, SystemJobConfig};
 
 /// Start the scheduler background loop. Runs until the cancellation token fires.
 ///
@@ -43,8 +47,6 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
         storage,
         locale_config,
         email_provider,
-        email_queue_timeout,
-        email_queue_concurrency,
     } = params;
 
     info!(
@@ -62,15 +64,11 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
     let auto_purge_secs = config.auto_purge;
     let priority_decay = config.priority_decay;
 
-    // Build the per-queue concurrency map once at startup. Config
-    // doesn't change at runtime, so recomputing this each tick would
-    // burn cycles allocating an identical HashMap.
-    let queue_concurrency: HashMap<String, u32> = config
-        .queues
-        .iter()
-        .filter(|(_, q)| q.concurrency > 0)
-        .map(|(name, q)| (name.clone(), q.concurrency))
-        .collect();
+    let QueueMaps {
+        queue_concurrency,
+        queue_timeouts,
+        queue_retries,
+    } = build_queue_maps(&config);
 
     let mut poll_ticker = interval(poll_interval);
     let mut cron_ticker = interval(cron_interval);
@@ -93,20 +91,17 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
                 let running_jobs = running_jobs.clone();
                 let max_concurrent = config.max_concurrent;
 
-                let eq = EmailQueueConfig {
-                    provider: email_provider.clone(),
-                    timeout: email_queue_timeout,
-                    concurrency: email_queue_concurrency,
-                };
+                let ep = email_provider.clone();
                 let sys = SystemJobConfig {
                     priority_decay,
                     queue_concurrency: queue_concurrency.clone(),
+                    queue_timeouts: queue_timeouts.clone(),
                     storage: storage.clone(),
                 };
 
                 tokio::spawn(async move {
                     if let Err(e) = poll_and_execute(
-                        &pool, &hook_runner, &registry, max_concurrent, &running_jobs, &eq, &sys,
+                        &pool, &hook_runner, &registry, max_concurrent, &running_jobs, ep.as_ref(), &sys,
                     ) {
                         error!("Scheduler poll error: {}", e);
                     }
@@ -115,7 +110,9 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
             _ = cron_ticker.tick() => {
                 let now = Utc::now();
 
-                if let Err(e) = check_cron_schedules(&pool, &registry, last_cron_check, now) {
+                if let Err(e) =
+                    check_cron_schedules(&pool, &registry, last_cron_check, now, &queue_retries)
+                {
                     error!("Scheduler cron error: {}", e);
                 }
 
@@ -159,6 +156,63 @@ fn recover_on_startup(pool: &DbPool, registry: &Registry) -> Result<()> {
     recover_stale_jobs(&conn, registry)?;
 
     Ok(())
+}
+
+/// Pre-built per-queue lookup maps derived from `JobsConfig.queues`.
+/// Built once at scheduler startup so each poll / cron tick reuses the
+/// same snapshot — config is immutable at runtime, so re-allocating per
+/// tick would burn cycles. Fields keep the `queue_` prefix to match
+/// the names used at the call sites and avoid mismatched lookups.
+#[allow(clippy::struct_field_names)]
+struct QueueMaps {
+    /// Per-queue aggregate concurrency caps; entries with `0`
+    /// (unlimited) are filtered out — `claim_pending_jobs` treats a
+    /// missing key as "no per-queue cap."
+    queue_concurrency: HashMap<String, u32>,
+    /// Per-queue timeouts for system jobs (`_system_email`,
+    /// `_system_image_convert`). Entries with `0` are filtered out —
+    /// `resolve_job_def` falls back to a hardcoded default per slug.
+    queue_timeouts: HashMap<String, u64>,
+    /// Per-queue retry budgets. Only queues with an explicit
+    /// `Some(N)` retries entry appear here;
+    /// `JobDefinition::effective_max_attempts` falls back to `0` (one
+    /// attempt) when neither the definition nor this map supplies a
+    /// value.
+    queue_retries: HashMap<String, u32>,
+}
+
+/// Snapshot `[jobs.queues]` into the three lookup maps used by the
+/// scheduler's poll / cron / Lua-queue paths.
+fn build_queue_maps(config: &JobsConfig) -> QueueMaps {
+    let queue_concurrency = config
+        .queues
+        .iter()
+        .filter_map(|(name, q)| {
+            let c = q.effective_concurrency();
+            (c > 0).then(|| (name.clone(), c))
+        })
+        .collect();
+
+    let queue_timeouts = config
+        .queues
+        .iter()
+        .filter_map(|(name, q)| {
+            let t = q.effective_timeout();
+            (t > 0).then(|| (name.clone(), t))
+        })
+        .collect();
+
+    let queue_retries = config
+        .queues
+        .iter()
+        .filter_map(|(name, q)| q.retries.map(|r| (name.clone(), r)))
+        .collect();
+
+    QueueMaps {
+        queue_concurrency,
+        queue_timeouts,
+        queue_retries,
+    }
 }
 
 /// Bundle of refs needed by the periodic-purge tick. Bundled into a
@@ -274,7 +328,7 @@ fn poll_and_execute(
     registry: &Registry,
     max_concurrent: usize,
     running_jobs: &Arc<Mutex<Vec<String>>>,
-    email: &EmailQueueConfig,
+    email_provider: Option<&SharedEmailProvider>,
     system: &SystemJobConfig,
 ) -> Result<()> {
     let mut conn = pool.get().context("Failed to get DB connection")?;
@@ -300,7 +354,8 @@ fn poll_and_execute(
     drop(conn);
 
     for job_run in claimed {
-        let Some(job_def) = resolve_job_def(registry, &job_run, pool, email) else {
+        let Some(job_def) = resolve_job_def(registry, &job_run, pool, &system.queue_timeouts)
+        else {
             continue;
         };
 
@@ -308,7 +363,7 @@ fn poll_and_execute(
             pool,
             hook_runner,
             running_jobs,
-            email,
+            email_provider,
             storage: &system.storage,
             job_run: &job_run,
             job_def: &job_def,
@@ -335,11 +390,17 @@ fn read_job_concurrency(registry: &Registry) -> HashMap<String, u32> {
 /// Queue names that the framework seeds via
 /// `JobsConfig::apply_queue_defaults` even if the operator doesn't
 /// declare them. We skip these in [`warn_unused_queue_config`]
-/// because a "no job uses queue X" warning would be a false positive
-/// for a framework-supplied default (e.g. a deployment that has no
-/// upload collection defined — the `images` queue cap is dormant but
-/// not an operator typo).
-const FRAMEWORK_DEFAULT_QUEUES: &[&str] = &["images"];
+/// because a "no job uses queue X" warning would be a false positive:
+/// these queues host **system jobs** (`_system_image_convert`,
+/// `_system_email`) which live outside `registry.jobs` (they're
+/// inserted directly by Rust without a `crap.jobs.define(...)`
+/// call), so the registry never reports a user job in them even when
+/// the queue is actively in use.
+///
+/// Keep in sync with the seeding logic in
+/// [`JobsConfig::apply_queue_defaults`] and the system-job slug list
+/// in `core::job::system::SYSTEM_JOB_SLUGS`.
+const FRAMEWORK_DEFAULT_QUEUES: &[&str] = &["images", "email"];
 
 /// Warn (don't error) if `[jobs.queues]` references a queue name that
 /// no defined job uses. Catches operator typos like
@@ -348,7 +409,7 @@ const FRAMEWORK_DEFAULT_QUEUES: &[&str] = &["images"];
 /// are excluded to avoid false positives.
 #[cfg(not(tarpaulin_include))]
 fn warn_unused_queue_config(config: &JobsConfig, registry: &Registry) {
-    let known_queues: std::collections::HashSet<&str> = registry
+    let known_queues: HashSet<&str> = registry
         .jobs
         .values()
         .map(|def| def.queue.as_str())
@@ -400,23 +461,59 @@ fn claim_pending_jobs(
     }
 }
 
+/// Hardcoded fallback timeout (seconds) for the
+/// `_system_image_convert` system job when neither
+/// `[jobs.queues.images] timeout` nor an explicit value can be
+/// resolved. Matches the framework default applied by
+/// `JobsConfig::apply_queue_defaults` for the `images` queue, used
+/// only if the config flow somehow doesn't reach this code.
+const SYSTEM_IMAGE_CONVERT_FALLBACK_TIMEOUT_SECS: u64 = 300;
+
+/// Hardcoded fallback timeout (seconds) for the `_system_email`
+/// system job when `[jobs.queues.email] timeout` is unresolved.
+/// Matches the framework default applied by
+/// `JobsConfig::apply_queue_defaults` for the `email` queue.
+const SYSTEM_EMAIL_FALLBACK_TIMEOUT_SECS: u64 = 30;
+
 /// Resolve the job definition for a claimed job run.
 #[cfg(not(tarpaulin_include))]
 fn resolve_job_def(
     registry: &Registry,
     job_run: &JobRun,
     pool: &DbPool,
-    email: &EmailQueueConfig,
+    queue_timeouts: &HashMap<String, u64>,
 ) -> Option<JobDefinition> {
     if let Some(def) = registry.get_job(&job_run.slug) {
         return Some(def.clone());
     }
 
+    // `_system_email` and `_system_image_convert` are dispatched by
+    // `execute_job` directly (no Lua VM). Synthesize minimal
+    // `JobDefinition`s so the scheduler can flow them through the
+    // standard claim/execute path. Per-queue concurrency throttling
+    // is handled via `[jobs.queues.<queue>] concurrency = N`.
     if job_run.slug == SYSTEM_EMAIL_JOB {
+        let timeout = queue_timeouts
+            .get(SYSTEM_EMAIL_QUEUE)
+            .copied()
+            .unwrap_or(SYSTEM_EMAIL_FALLBACK_TIMEOUT_SECS);
         return Some(
             JobDefinition::builder(SYSTEM_EMAIL_JOB, "_system")
-                .timeout(email.timeout)
-                .concurrency(email.concurrency)
+                .queue(SYSTEM_EMAIL_QUEUE)
+                .timeout(timeout)
+                .build(),
+        );
+    }
+
+    if job_run.slug == SYSTEM_IMAGE_CONVERT_JOB {
+        let timeout = queue_timeouts
+            .get(IMAGE_CONVERT_QUEUE)
+            .copied()
+            .unwrap_or(SYSTEM_IMAGE_CONVERT_FALLBACK_TIMEOUT_SECS);
+        return Some(
+            JobDefinition::builder(SYSTEM_IMAGE_CONVERT_JOB, "_system")
+                .queue(IMAGE_CONVERT_QUEUE)
+                .timeout(timeout)
                 .build(),
         );
     }
@@ -443,7 +540,7 @@ struct SpawnJobInput<'a> {
     pool: &'a DbPool,
     hook_runner: &'a HookRunner,
     running_jobs: &'a Arc<Mutex<Vec<String>>>,
-    email: &'a EmailQueueConfig,
+    email_provider: Option<&'a SharedEmailProvider>,
     storage: &'a SharedStorage,
     job_run: &'a JobRun,
     job_def: &'a JobDefinition,
@@ -466,7 +563,7 @@ fn spawn_job_execution(s: &SpawnJobInput<'_>) {
     let job_id = s.job_run.id.clone();
     let id_log = s.job_run.id.clone();
     let slug_log = s.job_run.slug.clone();
-    let ep = s.email.provider.clone();
+    let ep = s.email_provider.cloned();
     let storage = s.storage.clone();
     let job_def = s.job_def.clone();
     let job_run = s.job_run.clone();

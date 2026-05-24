@@ -824,8 +824,16 @@ fn make_job_default_timeout_omitted() {
     assert!(!content.contains("timeout ="));
 }
 
+/// Under the alpha.9 queue-inheritance model, `--retries 0` is an
+/// explicit operator choice ("no retries even if the queue default is
+/// higher"), so the generator must emit `retries = 0` verbatim — the
+/// resulting `JobDefinition` is `Some(0)`, not `None` (which would
+/// silently inherit `[jobs.queues.<queue>] retries`). Previously the
+/// generator collapsed `Some(0)` to "omit" because pre-alpha.9 `0`
+/// was the field's default value; this regression test pins the
+/// alpha.9 behaviour.
 #[test]
-fn make_job_zero_retries_omitted() {
+fn make_job_zero_retries_is_emitted() {
     let tmp = tempfile::tempdir().expect("tempdir");
     scaffold::make_job(&scaffold::MakeJobOptions {
         config_dir: tmp.path(),
@@ -839,7 +847,10 @@ fn make_job_zero_retries_omitted() {
     .unwrap();
 
     let content = std::fs::read_to_string(tmp.path().join("jobs/noretry.lua")).unwrap();
-    assert!(!content.contains("retries ="));
+    assert!(
+        content.contains("retries = 0"),
+        "explicit `--retries 0` must appear in the generated Lua; got:\n{content}"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

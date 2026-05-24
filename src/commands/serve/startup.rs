@@ -578,8 +578,6 @@ async fn run_scheduler_task(
         storage: res.storage.clone(),
         locale_config: res.config.locale.clone(),
         email_provider: Some(create_email_provider(&res.config.email)?),
-        email_queue_timeout: res.config.email.queue_timeout,
-        email_queue_concurrency: res.config.email.queue_concurrency,
     })
     .await
 }

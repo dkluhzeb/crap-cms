@@ -48,6 +48,8 @@ pub(super) fn resolve_join_fallback_locale(
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
+    use std::collections::HashMap;
+
     use serde_json::json;
 
     use super::*;
@@ -319,10 +321,7 @@ mod tests {
 
         // Insert EN-only data
         let sub = vec![FieldDefinition::builder("name", FieldType::Text).build()];
-        let rows = vec![std::collections::HashMap::from([(
-            "name".to_string(),
-            json!("FallbackItem"),
-        )])];
+        let rows = vec![HashMap::from([("name".to_string(), json!("FallbackItem"))])];
         set_array_rows(
             &conn,
             "posts",

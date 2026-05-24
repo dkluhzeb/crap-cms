@@ -38,6 +38,7 @@ struct UploadCreateBlockingInput {
     form_data: HashMap<String, String>,
     ui_locale: Option<String>,
     max_file_size: u64,
+    image_max_attempts: u32,
 }
 
 fn create_upload_blocking(
@@ -56,6 +57,7 @@ fn create_upload_blocking(
         input.form_data,
         input.ui_locale,
         input.max_file_size,
+        input.image_max_attempts,
     )
 }
 
@@ -125,6 +127,7 @@ pub(super) async fn create_upload(
         form_data,
         ui_locale: auth_user.as_ref().map(|au| au.ui_locale.clone()),
         max_file_size: state.config.upload.max_file_size,
+        image_max_attempts: state.config.jobs.system_image_max_attempts(),
     };
 
     let result = task::spawn_blocking(move || create_upload_blocking(input)).await;

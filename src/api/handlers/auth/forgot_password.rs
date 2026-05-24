@@ -59,6 +59,7 @@ impl ContentService {
         let email_renderer = self.email_renderer.clone();
         let server_config = self.server_config.clone();
         let reset_expiry = self.reset_token_expiry;
+        let email_max_attempts = self.email_max_attempts;
 
         task::spawn_blocking(move || {
             send_reset_email(&ResetEmailCtx {
@@ -70,6 +71,7 @@ impl ContentService {
                 email_renderer: &email_renderer,
                 server_config: &server_config,
                 reset_expiry,
+                email_max_attempts,
             });
         });
 
@@ -87,6 +89,7 @@ struct ResetEmailCtx<'a> {
     email_renderer: &'a EmailRenderer,
     server_config: &'a ServerConfig,
     reset_expiry: u64,
+    email_max_attempts: u32,
 }
 
 /// Generate a reset token, store it, and queue the reset email.
@@ -149,7 +152,7 @@ fn send_reset_email(ctx: &ResetEmailCtx) {
             html,
             text: None,
         },
-        ctx.email_config,
+        ctx.email_max_attempts,
     ) {
         error!("Failed to queue reset email: {}", e);
     }

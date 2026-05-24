@@ -48,7 +48,13 @@ fn handle_update_success(state: &AdminState, slug: &str, id: &str, upload: Optio
 
         if !ur.queued_conversions.is_empty()
             && let Ok(conn) = state.pool.get()
-            && let Err(e) = enqueue_conversions(&conn, slug, id, &ur.queued_conversions)
+            && let Err(e) = enqueue_conversions(
+                &conn,
+                slug,
+                id,
+                &ur.queued_conversions,
+                state.config.jobs.system_image_max_attempts(),
+            )
         {
             warn!("Failed to enqueue image conversions: {}", e);
         }

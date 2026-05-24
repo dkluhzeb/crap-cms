@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::{
     cli::{self, Table},
     commands::{JobsAction, helpers::init_stack},
-    config::{CrapConfig, parse_duration_string},
+    config::{CrapConfig, JobsConfig, parse_duration_string},
     core::{Registry, job::JobStatus},
     db::{DbPool, pool, query},
 };
@@ -230,6 +230,7 @@ fn run_healthcheck(cfg: &CrapConfig, registry: &Registry, pool: &DbPool) -> Resu
 fn run_trigger(
     registry: &Registry,
     pool: &DbPool,
+    jobs_config: &JobsConfig,
     slug: &str,
     data: Option<&str>,
     priority: Option<i32>,
@@ -243,6 +244,10 @@ fn run_trigger(
     serde_json::from_str::<Value>(data_json).context("Invalid JSON data")?;
 
     let effective_priority = priority.unwrap_or(job_def.priority);
+    let queue_retries = jobs_config
+        .queues
+        .get(&job_def.queue)
+        .and_then(|q| q.retries);
 
     let conn = pool.get().context("Failed to get DB connection")?;
     let job_run = query::jobs::insert_job(
@@ -250,7 +255,7 @@ fn run_trigger(
         slug,
         data_json,
         "cli",
-        job_def.retries + 1,
+        job_def.effective_max_attempts(queue_retries),
         &job_def.queue,
         effective_priority,
     )?;
@@ -323,8 +328,15 @@ pub fn run(config_dir: &Path, action: JobsAction) -> Result<()> {
             data,
             priority,
         } => {
-            let (_cfg, registry, pool) = init_stack(config_dir)?;
-            run_trigger(&registry, &pool, &slug, data.as_deref(), priority)
+            let (cfg, registry, pool) = init_stack(config_dir)?;
+            run_trigger(
+                &registry,
+                &pool,
+                &cfg.jobs,
+                &slug,
+                data.as_deref(),
+                priority,
+            )
         }
         JobsAction::Status { id, slug, limit } => {
             let (_cfg, _registry, pool) = init_stack(config_dir)?;

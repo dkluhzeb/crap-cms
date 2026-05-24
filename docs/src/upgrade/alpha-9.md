@@ -12,6 +12,13 @@ follow.
   the field was removed; use `[jobs.queues.images] concurrency = N`
   instead. The framework auto-applies a default of `2` if you don't
   set it.
+- **Update `crap.toml` if you set `[email] queue_*`** — the four
+  `queue_retries` / `queue_name` / `queue_timeout` / `queue_concurrency`
+  fields were removed; use `[jobs.queues.email] retries = N`,
+  `timeout = "..."`, `concurrency = N` instead. Defaults are
+  identical to alpha.8 (`retries = 3`, `timeout = "30s"`,
+  `concurrency = 5`), so you only need to migrate if you customized
+  any of them.
 - **Review multi-step Lua job handlers.** Per-CRUD transactions are
   now opened independently (pool-mode). Wrap multi-write atomic
   sequences in `crap.transaction(fn)`.
@@ -39,6 +46,40 @@ If you were happy with the previous default of `2`, you can omit the
 `apply_queue_defaults` auto-applies `concurrency = 2` to the `images`
 queue when no operator config is present. The default is documented
 in `[jobs.queues]`'s "Framework-supplied defaults" section.
+
+### 1b. Remove `[email] queue_*` from `crap.toml`
+
+If present, config load fails with `unknown field "queue_retries"`
+(or `queue_name` / `queue_timeout` / `queue_concurrency`).
+`_system_email` now reads the same `[jobs.queues.<name>]` table as
+`_system_image_convert` — one config mechanism for every system job.
+
+```diff
+  [email]
+  smtp_host = "smtp.example.com"
+- queue_retries = 5
+- queue_timeout = 60
+- queue_concurrency = 8
+- queue_name = "email"
++
++ [jobs.queues.email]
++ retries = 5
++ timeout = "1m"
++ concurrency = 8
+```
+
+If you were on alpha.8 defaults (`queue_retries = 3`,
+`queue_timeout = 30`, `queue_concurrency = 5`), you can omit the
+`[jobs.queues.email]` block entirely — the framework auto-applies
+those exact values via `apply_queue_defaults`. Per-call overrides
+still work: `crap.email.queue{ retries = N }` wins over the queue
+default.
+
+**`queue_name` is dropped without replacement.** `_system_email`
+now always uses the queue named `"email"`. If you previously set
+`[email] queue_name = "<other>"` to route email jobs into a custom
+queue, rename your `[jobs.queues.<other>]` block to
+`[jobs.queues.email]`.
 
 ### 2. Review multi-step Lua job handlers
 
@@ -124,6 +165,17 @@ The legacy `_crap_image_queue` table is drained into `_crap_jobs` as
 `_system_image_convert` jobs, then `DROP`ped. Idempotent — safe on
 re-runs and on installs that never had the table.
 
+**Operator action if you upgraded a pre-fix alpha.9 build** (i.e.
+you saw `Job definition '_system_image_convert' not found, marking
+as failed` in the logs before this build): the drained jobs were
+incorrectly marked failed. Reset them with:
+
+```sh
+crap-cms images retry --all -y
+```
+
+New uploads on the current build process normally.
+
 ## Opt-in features (alpha.9)
 
 ### Job priority
@@ -172,20 +224,64 @@ If another `reindex_collection` job with `unique = "reindex:posts"`
 is already pending or running, `queue()` returns that job's id —
 not a new one. Completed and failed jobs don't block re-enqueue.
 
-### Per-queue concurrency caps
+### Per-queue concurrency, timeout, and retry defaults
 
-Throttle aggregate work in a queue independent of per-slug caps:
+Throttle aggregate work and supply timeout / retry defaults for jobs
+in a queue independent of per-slug caps:
 
 ```toml
 [jobs.queues]
-emails = { concurrency = 4 }    # shared SMTP pool
-images = { concurrency = 2 }    # CPU-bound encoders (framework default)
-reports = { concurrency = 1 }   # serialize heavy report generation
+emails  = { concurrency = 4, timeout = "1m" }
+images  = { concurrency = 2 }                  # framework defaults: timeout = 5m, retries = 2
+reports = { concurrency = 1, timeout = "30m", retries = 0 }
 ```
 
-Caps are **cluster-wide** (counted from the shared DB), composing
-with global `max_concurrent` and per-slug `JobDefinition::concurrency`
-(strictest wins). See [Concurrency model] in `jobs.md`.
+| Field | Meaning |
+|---|---|
+| `concurrency` | Max concurrent runs in this queue. `0` = unlimited. |
+| `timeout` | Per-job wall-clock timeout for system jobs (`_system_image_convert`, `_system_email`) that lack their own `JobDefinition`. Accepts seconds or human-readable. |
+| `retries` | Default `max_attempts` for jobs in this queue, expressed as **retries** (total attempts = `retries + 1`). Used by system jobs AND by user Lua jobs that omit `retries` in `crap.jobs.define`. Explicit `JobDefinition.retries` (including `retries = 0`) overrides the queue default. `crap.email.queue{ retries = N }` overrides for that one call. |
+
+Partial overrides merge field-by-field — supplying only `concurrency`
+leaves the framework's `timeout` / `retries` defaults intact. The
+framework ships sensible `images` defaults (`concurrency = 2`,
+`timeout = "5m"`, `retries = 2`); operator config wins on a per-field
+basis.
+
+Concurrency caps are **cluster-wide** (counted from the shared DB),
+composing with global `max_concurrent` and per-slug
+`JobDefinition::concurrency` (strictest wins). See [Concurrency model]
+in `jobs.md`.
+
+> **Earlier alpha.9 builds hardcoded the image-convert timeout at
+> 120s.** Large originals on slow storage hit that ceiling. Upgrade
+> and adjust `[jobs.queues.images] timeout` if your workload needs
+> more (the new framework default is `5m`).
+
+**Reach for `retries`.** Resolution at queue time, strictest-explicit
+wins:
+
+1. `JobDefinition.retries` set explicitly in `crap.jobs.define` (any
+   value, including `0`).
+2. `[jobs.queues.<queue>] retries` from `crap.toml` when (1) is
+   omitted.
+3. `0` (one attempt) when neither is set.
+
+So an operator who writes `[jobs.queues.reports] retries = 5` and a
+user who registers `crap.jobs.define("rollup", { queue = "reports" })`
+without retries gets 6 total attempts per rollup — symmetric with how
+system jobs inherit from `[jobs.queues.email]` /
+`[jobs.queues.images]`.
+
+`crap.email.queue{ retries = N }` is the only per-call retry override
+on the Lua surface; `crap.jobs.queue` for user jobs accepts
+`priority` / `delay` / `unique` (no `retries`).
+
+**Reach for `timeout`.** Applies to system jobs only —
+`_system_image_convert` reads `[jobs.queues.images] timeout`,
+`_system_email` reads `[jobs.queues.email] timeout`. User Lua jobs
+use the `timeout` declared on their `JobDefinition` (`60` if
+omitted).
 
 ### Priority decay (aging-based promotion)
 

@@ -1,6 +1,6 @@
 //! Field/column resolution helpers for FTS5 indexing.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 
@@ -135,10 +135,8 @@ pub fn get_fts_columns(
 
 /// Build a set of column names that are JSON-format richtext fields.
 /// Checks both bare field names and locale-expanded variants (`field__locale`).
-pub(super) fn json_richtext_columns(
-    def: &CollectionDefinition,
-) -> std::collections::HashSet<String> {
-    let mut set = std::collections::HashSet::new();
+pub(super) fn json_richtext_columns(def: &CollectionDefinition) -> HashSet<String> {
+    let mut set = HashSet::new();
     for f in &def.fields {
         if f.field_type == FieldType::Richtext && f.admin.richtext_format.as_deref() == Some("json")
         {

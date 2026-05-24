@@ -50,34 +50,6 @@ pub struct EmailConfig {
     /// Extra HTTP headers for webhook requests (e.g., Authorization).
     #[serde(default)]
     pub webhook_headers: HashMap<String, String>,
-    /// Retry count for queued emails via `crap.email.queue()`. Default: 3.
-    #[serde(default = "default_queue_retries")]
-    pub queue_retries: u32,
-    /// Job queue name for queued emails. Default: "email".
-    #[serde(default = "default_queue_name")]
-    pub queue_name: String,
-    /// Per-attempt timeout for queued email jobs in seconds. Default: 30.
-    #[serde(default = "default_queue_timeout")]
-    pub queue_timeout: u64,
-    /// Max concurrent queued email jobs. Default: 5.
-    #[serde(default = "default_queue_concurrency")]
-    pub queue_concurrency: u32,
-}
-
-fn default_queue_retries() -> u32 {
-    3
-}
-
-fn default_queue_name() -> String {
-    "email".to_string()
-}
-
-fn default_queue_timeout() -> u64 {
-    30
-}
-
-fn default_queue_concurrency() -> u32 {
-    5
 }
 
 fn default_email_provider() -> String {
@@ -102,10 +74,6 @@ impl Default for EmailConfig {
             smtp_timeout: 30,
             webhook_url: None,
             webhook_headers: HashMap::new(),
-            queue_retries: default_queue_retries(),
-            queue_name: default_queue_name(),
-            queue_timeout: default_queue_timeout(),
-            queue_concurrency: default_queue_concurrency(),
         }
     }
 }
@@ -113,6 +81,7 @@ impl Default for EmailConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CrapConfig;
 
     #[test]
     fn email_config_defaults() {
@@ -127,5 +96,32 @@ mod tests {
         assert_eq!(email.smtp_tls, SmtpTls::Starttls);
         assert_eq!(email.from_address, "noreply@example.com");
         assert_eq!(email.from_name, "Crap CMS");
+    }
+
+    /// Regression: the removed `[email]` queue-* fields surface a
+    /// clear "unknown field" error for operators carrying alpha.8
+    /// configs forward, so they land on the CHANGELOG / migration
+    /// docs that explain the move to `[jobs.queues.email]`.
+    #[test]
+    fn removed_email_queue_fields_rejected() {
+        for (field, value) in [
+            ("queue_retries", "5"),
+            ("queue_name", "\"mail\""),
+            ("queue_timeout", "60"),
+            ("queue_concurrency", "8"),
+        ] {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            std::fs::write(
+                tmp.path().join("crap.toml"),
+                format!("[email]\n{field} = {value}\n"),
+            )
+            .unwrap();
+            let err = CrapConfig::load(tmp.path()).unwrap_err();
+            let chain = format!("{err:#}");
+            assert!(
+                chain.contains(field),
+                "expected error to mention removed `{field}`; got chain: {chain}"
+            );
+        }
     }
 }

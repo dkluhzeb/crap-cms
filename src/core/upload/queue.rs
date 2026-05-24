@@ -22,12 +22,12 @@ pub const SYSTEM_IMAGE_CONVERT_JOB: &str = "_system_image_convert";
 /// jobs.
 pub const IMAGE_CONVERT_QUEUE: &str = "images";
 
-/// Default retry budget for image conversions. Encoder failures
-/// (`webp::Encoder` / `ravif`) on the first attempt occasionally
-/// succeed on a retry under memory pressure; persistent failures
-/// (corrupt source, unsupported pixel format) fail through after the
-/// budget is exhausted.
-const DEFAULT_MAX_ATTEMPTS: u32 = 3;
+/// Fallback `max_attempts` for image conversions when the caller
+/// doesn't supply one (e.g. the legacy-queue drain migration).
+/// Matches the framework default applied by
+/// `JobsConfig::apply_queue_defaults` for `[jobs.queues.images]
+/// retries = 2` (= 3 total attempts).
+pub const FALLBACK_MAX_ATTEMPTS: u32 = 3;
 
 /// Data payload for a queued image-conversion job. Mirrors the
 /// shape of the legacy `NewImageEntry` but as an owned, JSON-friendly
@@ -56,6 +56,13 @@ pub struct ImageConvertJobData {
 
 /// Queue an image conversion for async processing by the job system.
 ///
+/// `max_attempts` is the total number of attempts (including the
+/// initial one). Callers should compute this from the operator's
+/// `[jobs.queues.images] retries` setting via
+/// `JobsConfig::system_image_max_attempts`. Pass
+/// [`FALLBACK_MAX_ATTEMPTS`] when no config is reachable
+/// (e.g. one-off migrations).
+///
 /// Returns the job-run ID.
 ///
 /// # Errors
@@ -65,6 +72,7 @@ pub struct ImageConvertJobData {
 pub fn queue_image_conversion(
     conn: &dyn DbConnection,
     data: &ImageConvertJobData,
+    max_attempts: u32,
 ) -> Result<String> {
     let data_json = serde_json::to_string(data)?;
 
@@ -73,7 +81,7 @@ pub fn queue_image_conversion(
         SYSTEM_IMAGE_CONVERT_JOB,
         &data_json,
         "system",
-        DEFAULT_MAX_ATTEMPTS,
+        max_attempts,
         IMAGE_CONVERT_QUEUE,
         0,
     )?;

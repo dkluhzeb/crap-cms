@@ -1153,7 +1153,7 @@ crap.jobs.define("cleanup", {
     assert_eq!(job.handler, "hooks.jobs.cleanup");
     assert_eq!(job.schedule, Some("0 0 * * *".to_string()));
     assert_eq!(job.queue, "maintenance");
-    assert_eq!(job.retries, 3);
+    assert_eq!(job.retries, Some(3));
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

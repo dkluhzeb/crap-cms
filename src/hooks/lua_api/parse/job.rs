@@ -79,12 +79,19 @@ pub fn parse_job_definition(slug: &str, config: JobDefinitionConfig) -> Result<J
 
     let mut builder = JobDefinitionBuilder::new(slug, handler)
         .queue(config.queue.unwrap_or_else(|| "default".to_string()))
-        .retries(config.retries.unwrap_or(0))
         .timeout(config.timeout.unwrap_or(60))
         .concurrency(config.concurrency.unwrap_or(1))
         .priority(config.priority.unwrap_or(0))
         .skip_if_running(config.skip_if_running.unwrap_or(true))
         .labels(config.labels.unwrap_or_default());
+
+    // Retries: pass through only when the operator set it. `None` leaves
+    // the field unset on the JobDefinition so that
+    // `effective_max_attempts` can later fall back to
+    // `[jobs.queues.<queue>] retries`.
+    if let Some(n) = config.retries {
+        builder = builder.retries(n);
+    }
 
     if let Some(s) = config.schedule {
         builder = builder.schedule(s);
@@ -117,7 +124,10 @@ mod tests {
         assert_eq!(job.handler, "jobs.my_job.run");
         assert!(job.schedule.is_none());
         assert_eq!(job.queue, "default");
-        assert_eq!(job.retries, 0);
+        assert_eq!(
+            job.retries, None,
+            "retries omitted in define → None on JobDefinition (queue default applies at queue-time)"
+        );
         assert_eq!(job.timeout, 60);
         assert_eq!(job.concurrency, 1);
         assert!(job.skip_if_running);
@@ -147,7 +157,7 @@ mod tests {
         assert_eq!(job.handler, "jobs.sync.run");
         assert_eq!(job.schedule.as_deref(), Some("*/5 * * * *"));
         assert_eq!(job.queue, "sync");
-        assert_eq!(job.retries, 3);
+        assert_eq!(job.retries, Some(3));
         assert_eq!(job.timeout, 300);
         assert_eq!(job.concurrency, 2);
         assert!(!job.skip_if_running);

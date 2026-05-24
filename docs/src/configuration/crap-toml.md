@@ -225,16 +225,19 @@ auto_purge = "7d"            # Auto-purge completed/failed runs older than this
 priority_decay = 0           # Priority aging ("1m", "30s", "1h"); 0 = disabled
 
 [jobs.queues]
-# Per-queue aggregate concurrency caps. All caps in `[jobs]` are
-# cluster-wide (counted from the shared DB). Composition: strictest
-# of max_concurrent / queue cap / per-slug JobDefinition.concurrency
-# wins.
+# Per-queue scheduling knobs: { concurrency, timeout, retries }. All
+# concurrency caps are cluster-wide (counted from the shared DB).
+# Composition: strictest of max_concurrent / queue cap / per-slug
+# JobDefinition.concurrency wins. `timeout` and `retries` apply to
+# system jobs (_system_image_convert, _system_email) — user Lua jobs
+# use their JobDefinition values.
 #
-# Framework defaults if not overridden:
-#   images = { concurrency = 2 }   — applied by `apply_queue_defaults`
-images  = { concurrency = 2 }   # override the framework default
-emails  = { concurrency = 4 }   # cap a shared SMTP pool
-reports = { concurrency = 1 }
+# Framework defaults applied by `apply_queue_defaults`:
+#   images = { concurrency = 2, timeout = "5m",  retries = 2 }
+#   email  = { concurrency = 5, timeout = "30s", retries = 3 }
+images  = { concurrency = 2 }                  # keeps framework timeout + retries
+# email   = { concurrency = 8, timeout = "1m", retries = 5 }
+# reports = { concurrency = 1 }
 
 [access]
 default_deny = true      # When true (default), deny all operations without explicit access functions
@@ -419,10 +422,12 @@ S3-compatible storage configuration. Only used when `storage = "s3"`.
 | `smtp_timeout` | integer/string | `30` | SMTP connection and send timeout in seconds. Accepts integer or duration string (`"30s"`, `"1m"`). |
 | `webhook_url` | string | `""` | URL for the webhook email provider. Receives POST with JSON body. |
 | `webhook_headers` | map | `{}` | Extra HTTP headers for webhook requests (e.g., `{ Authorization = "Bearer ..." }`). |
-| `queue_retries` | integer | `3` | Retry count for emails sent via `crap.email.queue()`. |
-| `queue_name` | string | `"email"` | Job queue name for queued emails. |
-| `queue_timeout` | integer | `30` | Per-attempt timeout in seconds for queued email jobs. |
-| `queue_concurrency` | integer | `5` | Max concurrent queued email jobs processed by the scheduler. |
+
+Background email delivery (queue size, retry budget, per-attempt
+timeout) is configured via [`[jobs.queues.email]`](#jobsqueues) —
+same per-queue mechanism as image conversions. Framework defaults
+match alpha.8 (`retries = 3`, `timeout = "30s"`, `concurrency = 5`),
+so operators who never touched these fields don't need to migrate.
 
 When configured, email enables password reset ("Forgot password?" link on login), email verification (optional per-collection), and the `crap.email.send()` Lua API. The `log` provider is useful for development — it logs email content to tracing without sending. The `custom` provider delegates to Lua via `crap.email.register()`.
 
@@ -480,24 +485,36 @@ caps.
 
 ```toml
 [jobs.queues]
-emails = { concurrency = 4 }
-images = { concurrency = 2 }
+emails  = { concurrency = 4, timeout = "1m" }
+images  = { concurrency = 2 }                  # keeps framework timeout + retries defaults
+reports = { concurrency = 1, timeout = "30m", retries = 0 }
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `concurrency` | integer | `0` (unlimited) | Max concurrent runs across all slugs in this queue. `0` means no per-queue cap; only the global `[jobs] max_concurrent` and per-slug `JobDefinition::concurrency` apply. |
+| `timeout` | integer/string | unset (worker default) | Per-job wall-clock timeout for jobs in this queue. Applies to system jobs (`_system_image_convert`, `_system_email`) that don't carry their own `JobDefinition`; user Lua jobs use the timeout declared on the `JobDefinition` itself. Accepts seconds or human-readable (`"5m"`, `"30s"`). |
+| `retries` | integer | unset (worker default) | Default `max_attempts` for jobs in this queue, expressed as **retries**: total attempts = `retries + 1`. Used by system jobs AND by user Lua jobs that omit `retries` in `crap.jobs.define`. Explicit `JobDefinition.retries` (including `retries = 0`) overrides the queue default. `crap.email.queue{ retries = N }` overrides for that one call. |
+
+Each field is independent — supplying only `concurrency` leaves the
+framework's `timeout` / `retries` defaults intact for that queue.
 
 **Framework-supplied defaults** — the following queues get sensible
-caps applied at config load time unless the operator explicitly sets
-them:
+defaults applied at config load time unless the operator explicitly
+sets them:
 
-| Queue | Default cap | Why |
-|---|---|---|
-| `images` | `2` | AVIF / WebP encoders are CPU-bound; cap to avoid pinning every core during an upload burst. |
+| Queue | Field | Default | Why |
+|---|---|---|---|
+| `images` | `concurrency` | `2` | AVIF / WebP encoders are CPU-bound; cap to avoid pinning every core during an upload burst. |
+| `images` | `timeout` | `"5m"` | Large originals can spend minutes in libheif on slow disks; the worker's hardcoded 120s was too tight for production-sized files. |
+| `images` | `retries` | `2` | Image jobs flake on transient I/O — total 3 attempts is the historic worker default and survives one storage hiccup with a retry to spare. |
+| `email` | `concurrency` | `5` | Bounded burst for shared SMTP pools; matches the historic `[email] queue_concurrency` default. |
+| `email` | `timeout` | `"30s"` | SMTP handshake + delivery; matches the historic `[email] queue_timeout` default. |
+| `email` | `retries` | `3` | Survives greylisting + brief outbound network blips; matches the historic `[email] queue_retries` default. |
 
-Operator overrides win — set `[jobs.queues.images] concurrency = N`
-(or `0` for unlimited) to change the cap.
+Operator overrides win — partial overrides are merged field-by-field
+(`[jobs.queues.images] concurrency = 4` keeps the framework's
+`timeout` and `retries` defaults).
 
 **Composition** — when claiming a job, all of the following caps apply, strictest wins. **All three caps are cluster-wide** (counted from the shared DB):
 

@@ -16,6 +16,7 @@
     clippy::unreadable_literal
 )]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -195,7 +196,7 @@ fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data: DocumentFields = std::collections::HashMap::from([
+    let data: DocumentFields = HashMap::from([
         ("email".to_string(), json!(email)),
         ("name".to_string(), json!("Test User")),
     ])
@@ -352,8 +353,7 @@ async fn update_action_validation_error() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data: DocumentFields =
-        std::collections::HashMap::from([("title".to_string(), json!("Valid Title"))]).into();
+    let data: DocumentFields = HashMap::from([("title".to_string(), json!("Valid Title"))]).into();
     let doc = query::create(&tx, "articles", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -410,8 +410,7 @@ async fn update_action_post_with_method_delete() {
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let data: DocumentFields =
-        std::collections::HashMap::from([("title".to_string(), json!("Method Delete Test"))])
-            .into();
+        HashMap::from([("title".to_string(), json!("Method Delete Test"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -514,7 +513,7 @@ async fn versioned_collection_edit_shows_versions() {
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let data: DocumentFields =
-        std::collections::HashMap::from([("title".to_string(), json!("Versioned Doc"))]).into();
+        HashMap::from([("title".to_string(), json!("Versioned Doc"))]).into();
     let doc = query::create(&tx, "articles", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -549,7 +548,7 @@ async fn versioned_collection_update_unpublish() {
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let data: DocumentFields =
-        std::collections::HashMap::from([("title".to_string(), json!("Published Post"))]).into();
+        HashMap::from([("title".to_string(), json!("Published Post"))]).into();
     let doc = query::create(&tx, "articles", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -713,7 +712,7 @@ async fn versioned_collection_versions_page() {
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let data: DocumentFields =
-        std::collections::HashMap::from([("title".to_string(), json!("Versioned Page"))]).into();
+        HashMap::from([("title".to_string(), json!("Versioned Page"))]).into();
     let doc = query::create(&tx, "articles", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -747,8 +746,7 @@ async fn non_versioned_collection_versions_page_redirects() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data: DocumentFields =
-        std::collections::HashMap::from([("title".to_string(), json!("No Versions"))]).into();
+    let data: DocumentFields = HashMap::from([("title".to_string(), json!("No Versions"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -783,8 +781,7 @@ async fn restore_version_non_versioned_redirects() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data: DocumentFields =
-        std::collections::HashMap::from([("title".to_string(), json!("No Versions"))]).into();
+    let data: DocumentFields = HashMap::from([("title".to_string(), json!("No Versions"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 

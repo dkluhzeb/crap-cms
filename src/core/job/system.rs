@@ -18,10 +18,21 @@ pub use crate::core::upload::SYSTEM_IMAGE_CONVERT_JOB;
 
 /// All built-in system-job slugs as a static slice. Useful for
 /// validation, admin tooling, and future enumeration over the set.
+///
+/// **Adding a new system job requires updating three places:**
+/// 1. Define the slug constant in the subsystem's `queue.rs`.
+/// 2. Re-export it here and append to `SYSTEM_JOB_SLUGS`.
+/// 3. Add a seeding block to
+///    [`crate::config::JobsConfig::apply_queue_defaults`] so a fresh
+///    `crap.toml` resolves sane `timeout` / `retries` /
+///    `concurrency` for the new queue — the regression test
+///    `system_queues_have_all_defaults_seeded` guards this.
 pub const SYSTEM_JOB_SLUGS: &[&str] = &[SYSTEM_EMAIL_JOB, SYSTEM_IMAGE_CONVERT_JOB];
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     #[test]
@@ -36,7 +47,7 @@ mod tests {
 
     #[test]
     fn system_slugs_are_unique() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         for slug in SYSTEM_JOB_SLUGS {
             assert!(seen.insert(*slug), "duplicate system job slug: {slug}");
         }

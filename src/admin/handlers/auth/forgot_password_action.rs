@@ -35,6 +35,7 @@ struct ResetEmailParams {
     email_renderer: Arc<EmailRenderer>,
     base_url: String,
     reset_expiry: u64,
+    email_max_attempts: u32,
 }
 
 /// Check whether the collection supports forgot-password.
@@ -106,7 +107,7 @@ fn send_reset_email(params: &ResetEmailParams) {
             html,
             text: None,
         },
-        &params.email_config,
+        params.email_max_attempts,
     ) {
         error!("Failed to queue reset email: {}", e);
     }
@@ -146,6 +147,7 @@ pub async fn forgot_password_action(
             email_renderer: state.email_renderer.clone(),
             base_url: state.config.server.base_url(),
             reset_expiry: state.config.auth.reset_token_expiry,
+            email_max_attempts: state.config.jobs.system_email_max_attempts(),
         };
 
         task::spawn_blocking(move || send_reset_email(&params));

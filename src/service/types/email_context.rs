@@ -6,6 +6,7 @@ use crate::{
     config::{EmailConfig, ServerConfig},
     core::email::EmailRenderer,
     db::DbPool,
+    service::{VerificationEmailInput, send_verification_email},
 };
 
 /// Bundled email configuration for verification emails.
@@ -15,6 +16,10 @@ pub struct EmailContext {
     pub email_config: EmailConfig,
     pub email_renderer: Arc<EmailRenderer>,
     pub server_config: ServerConfig,
+    /// Total attempts (initial + retries) for `_system_email` jobs,
+    /// resolved from `[jobs.queues.email] retries` via
+    /// `JobsConfig::system_email_max_attempts`.
+    pub email_max_attempts: u32,
 }
 
 impl EmailContext {
@@ -27,14 +32,15 @@ impl EmailContext {
         doc_id: String,
         email: String,
     ) {
-        crate::service::send_verification_email(
+        send_verification_email(VerificationEmailInput {
             pool,
-            self.email_config.clone(),
-            self.email_renderer.clone(),
-            self.server_config.clone(),
+            email_config: self.email_config.clone(),
+            email_renderer: self.email_renderer.clone(),
+            server_config: self.server_config.clone(),
+            email_max_attempts: self.email_max_attempts,
             slug,
-            doc_id,
-            email,
-        );
+            user_id: doc_id,
+            user_email: email,
+        });
     }
 }

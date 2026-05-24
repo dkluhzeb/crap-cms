@@ -174,6 +174,7 @@ struct MfaCodeParams {
     user_email: String,
     email_config: EmailConfig,
     email_renderer: Arc<EmailRenderer>,
+    email_max_attempts: u32,
 }
 
 /// Store a 6-digit MFA code in the DB and queue the verification email.
@@ -223,7 +224,7 @@ fn send_mfa_code(params: &MfaCodeParams, code: &str) {
             html,
             text: None,
         },
-        &params.email_config,
+        params.email_max_attempts,
     ) {
         error!("Failed to queue MFA email: {}", e);
     }
@@ -276,6 +277,7 @@ fn handle_mfa_challenge(
         user_email,
         email_config: state.config.email.clone(),
         email_renderer: state.email_renderer.clone(),
+        email_max_attempts: state.config.jobs.system_email_max_attempts(),
     };
 
     task::spawn_blocking(move || send_mfa_code(&params, &code_for_db));

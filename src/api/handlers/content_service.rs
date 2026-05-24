@@ -43,6 +43,12 @@ pub struct ContentService {
     pub(in crate::api::handlers) email_config: EmailConfig,
     pub(in crate::api::handlers) email_renderer: Arc<EmailRenderer>,
     pub(in crate::api::handlers) server_config: ServerConfig,
+    pub(in crate::api::handlers) email_max_attempts: u32,
+    /// `[jobs.queues.<name>] retries` snapshot, used by gRPC
+    /// `TriggerJob` to compute the effective `max_attempts` for jobs
+    /// defined without an explicit `retries` field. Only populated for
+    /// queues whose `retries` is `Some`.
+    pub(in crate::api::handlers) queue_retries: HashMap<String, u32>,
     pub(in crate::api::handlers) event_transport: Option<SharedEventTransport>,
     pub(in crate::api::handlers) locale_config: LocaleConfig,
     pub(in crate::api::handlers) storage: SharedStorage,
@@ -92,6 +98,7 @@ impl ContentService {
             email_config: self.email_config.clone(),
             email_renderer: self.email_renderer.clone(),
             server_config: self.server_config.clone(),
+            email_max_attempts: self.email_max_attempts,
         }
     }
 
@@ -178,6 +185,14 @@ impl ContentService {
             hook_runner: deps.hook_runner,
             default_depth,
             max_depth,
+            email_max_attempts: deps.config.jobs.system_email_max_attempts(),
+            queue_retries: deps
+                .config
+                .jobs
+                .queues
+                .iter()
+                .filter_map(|(name, q)| q.retries.map(|r| (name.clone(), r)))
+                .collect(),
             email_config: deps.config.email,
             email_renderer: deps.email_renderer,
             server_config: deps.config.server,

@@ -30,7 +30,7 @@ crap.jobs.define("{{slug}}", {
 {{#if queue}}
     queue = "{{queue}}",
 {{/if}}
-{{#if retries}}
+{{#if has_retries}}
     retries = {{retries}},
 {{/if}}
 {{#if timeout}}

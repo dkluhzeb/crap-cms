@@ -12,20 +12,37 @@ use crate::{
     db::{DbPool, query},
 };
 
+/// Inputs for [`send_verification_email`]. All fields are required;
+/// every call site builds this once and consumes it, so a plain
+/// struct literal is enough — no builder.
+pub(crate) struct VerificationEmailInput {
+    pub pool: DbPool,
+    pub email_config: EmailConfig,
+    pub email_renderer: Arc<EmailRenderer>,
+    pub server_config: ServerConfig,
+    pub email_max_attempts: u32,
+    pub slug: String,
+    pub user_id: String,
+    pub user_email: String,
+}
+
 /// Generate a verification token and send the verification email.
 /// Spawns its own `spawn_blocking` task internally.
 // Excluded from coverage: async tokio task that requires SMTP email transport,
 // DB pool, and email renderer — cannot be unit tested without external services.
 #[cfg(not(tarpaulin_include))]
-pub(crate) fn send_verification_email(
-    pool: DbPool,
-    email_config: EmailConfig,
-    email_renderer: Arc<EmailRenderer>,
-    server_config: ServerConfig,
-    slug: String,
-    user_id: String,
-    user_email: String,
-) {
+pub(crate) fn send_verification_email(input: VerificationEmailInput) {
+    let VerificationEmailInput {
+        pool,
+        email_config,
+        email_renderer,
+        server_config,
+        email_max_attempts,
+        slug,
+        user_id,
+        user_email,
+    } = input;
+
     tokio::task::spawn_blocking(move || {
         if !is_configured(&email_config) {
             warn!(
@@ -79,7 +96,7 @@ pub(crate) fn send_verification_email(
                 html,
                 text: None,
             },
-            &email_config,
+            email_max_attempts,
         ) {
             error!("Failed to queue verification email: {}", e);
         }

@@ -1535,7 +1535,7 @@ function crap.email.send(opts) end
 
 --- Queue an email for async delivery via the job system. Returns the job
 --- run ID. Per-call `retries` override on `opts` takes precedence over
---- the global `EmailConfig.queue_retries`.
+--- the queue default from `[jobs.queues.email] retries`.
 --- @param opts crap.EmailOptions  Email options (with optional `retries` override).
 --- @return string # Queued job ID.
 function crap.email.queue(opts) end

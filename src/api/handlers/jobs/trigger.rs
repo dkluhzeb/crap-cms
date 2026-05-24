@@ -27,6 +27,10 @@ struct TriggerJobBlockingInput {
     token: Option<String>,
     /// `None` → use the definition's default priority; `Some(N)` → override.
     priority: Option<i32>,
+    /// Snapshot of `[jobs.queues]` retries by queue name. Used by
+    /// `effective_max_attempts` so jobs defined without an explicit
+    /// `retries` inherit the operator's queue-level default.
+    queue_retries: HashMap<String, u32>,
 }
 
 /// Resolve the auth user, look up the job definition, and queue the job.
@@ -70,6 +74,8 @@ fn trigger_job_blocking(input: TriggerJobBlockingInput) -> Result<String, Status
     // absent → fall back to `JobDefinition::priority`.
     let effective_priority = input.priority.unwrap_or(job_def.priority);
 
+    let queue_retries = input.queue_retries.get(&job_def.queue).copied();
+
     let job_run = service::jobs::queue_job(
         &job_ctx,
         &service::jobs::QueueJobInput {
@@ -77,6 +83,7 @@ fn trigger_job_blocking(input: TriggerJobBlockingInput) -> Result<String, Status
             data: Some(&input.data_json),
             scheduled_by: "grpc",
             priority: effective_priority,
+            queue_retries,
         },
     )
     .map_err(Status::from)?;
@@ -106,6 +113,7 @@ impl ContentService {
             token,
             headers,
             priority: req.priority,
+            queue_retries: self.queue_retries.clone(),
         };
 
         let job_id = task::spawn_blocking(move || trigger_job_blocking(input))

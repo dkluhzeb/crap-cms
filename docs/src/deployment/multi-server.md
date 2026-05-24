@@ -177,9 +177,9 @@ webhook_headers = { Authorization = "Bearer ${SENDGRID_API_KEY}" }
 Emails are queued and processed by workers with automatic retries. Configure retry behavior:
 
 ```toml
-[email]
-queue_retries = 5
-queue_concurrency = 10
+[jobs.queues.email]
+retries     = 5
+concurrency = 10        # cluster-wide cap on concurrent email sends
 ```
 
 ## Load Balancer Stickiness

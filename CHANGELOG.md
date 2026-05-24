@@ -178,23 +178,102 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   guarantee under multi-server load, simpler code, and now
   cross-slug priority is exact.
 
-- **Per-queue concurrency caps.** New `[jobs.queues.<name>]
-  concurrency = N` config knob throttles the aggregate of jobs
-  running in a queue, independent of per-slug caps. Use for
-  shared-resource queues (SMTP pool, image encoder pool, …):
+- **Per-queue concurrency, timeout, and retry defaults.** New
+  `[jobs.queues.<name>]` table accepts three knobs that apply to every
+  job in a queue, independent of per-slug definitions:
 
   ```toml
   [jobs.queues]
-  emails = { concurrency = 4 }
-  images = { concurrency = 2 }
+  emails  = { concurrency = 4, timeout = "1m" }
+  images  = { concurrency = 2 }                  # keeps framework timeout + retries defaults
+  reports = { concurrency = 1, timeout = "30m", retries = 0 }
   ```
 
-  Composition: strictest of `max_concurrent` (per-server) / queue
-  cap (cluster-global) / per-slug `JobDefinition::concurrency`
-  (cluster-global) wins. Queues without an entry are unconstrained
-  beyond the global cap. The scheduler logs a warning at startup if
-  `[jobs.queues]` references a queue name that no defined job uses
-  (typo catcher).
+  - `concurrency` — aggregate cap on jobs running in this queue
+    (cluster-wide). Composes with global `max_concurrent` and per-slug
+    `JobDefinition::concurrency` — strictest wins.
+  - `timeout` — wall-clock per-job timeout (seconds or human-readable
+    duration). Applies to system jobs (`_system_image_convert`,
+    `_system_email`) that lack their own `JobDefinition`; user Lua
+    jobs use the timeout declared on the definition itself.
+  - `retries` — default `max_attempts` for jobs in this queue
+    (`max_attempts = retries + 1`). Used by system jobs AND by user
+    Lua jobs that omit `retries` in `crap.jobs.define`. Explicit
+    `JobDefinition.retries` (including `retries = 0`) overrides the
+    queue default. `crap.email.queue{ retries = N }` overrides for
+    that one call.
+
+  All three fields are independent `Option<T>` — partial overrides
+  merge with framework defaults instead of zeroing them out. Writing
+  `[jobs.queues.images] concurrency = 4` keeps the framework's
+  `timeout = "5m"` and `retries = 2` for the `images` queue.
+
+  Framework defaults applied at config load:
+  - `images.concurrency = 2` — AVIF / WebP encoders are CPU-bound.
+  - `images.timeout = "5m"` — large originals can spend minutes in
+    libheif on slow disks. Replaces the previously hardcoded 120 s
+    that some operators hit in production.
+  - `images.retries = 2` — three total attempts, matches the historic
+    image-worker default.
+
+  The scheduler logs a warning at startup if `[jobs.queues]`
+  references a queue name that no defined job uses (typo catcher).
+
+  **Reach for `retries`** — resolution at queue time:
+  `JobDefinition.retries` (explicit, including `0`) → queue-level
+  `[jobs.queues.<queue>] retries` → `0` (one attempt). System jobs
+  AND user Lua jobs flow through the same path. So
+  `[jobs.queues.reports] retries = 5` combined with
+  `crap.jobs.define("rollup", { queue = "reports" })` (no retries
+  field) gives 6 attempts per rollup. `crap.email.queue{ retries = N }`
+  is the only per-call override on the Lua surface;
+  `crap.jobs.queue` for user jobs accepts only
+  `priority` / `delay` / `unique`.
+
+  **Reach for `timeout`** — system jobs only.
+  `_system_image_convert` reads `[jobs.queues.images]`,
+  `_system_email` reads `[jobs.queues.email]`. User Lua jobs use
+  `JobDefinition.timeout` (60 if omitted).
+
+- **`JobDefinition.retries` is `Option<u32>` internally.** Required
+  for the symmetric queue-default fallback story above:
+  `None` = "inherit from `[jobs.queues.<queue>] retries`",
+  `Some(N)` = "explicit N retries". The Lua surface is unchanged —
+  `crap.jobs.define { retries = N }` still works exactly as before;
+  omitting it now inherits the queue default instead of silently
+  collapsing to `0`. Read sites resolve through
+  `JobDefinition::effective_max_attempts(queue_retries)` so the
+  resolution rule lives in one place.
+
+- **`[email] queue_*` knobs removed; replaced by `[jobs.queues.email]`.**
+  The dedicated `queue_retries` / `queue_name` / `queue_timeout` /
+  `queue_concurrency` fields on `[email]` are gone — `_system_email`
+  now flows through the same per-queue config mechanism as
+  `_system_image_convert`. One mental model, no duplicate knobs.
+
+  ```toml
+  # before (alpha.8):
+  # [email]
+  # queue_retries = 3
+  # queue_timeout = 30
+  # queue_concurrency = 5
+  # queue_name = "email"
+
+  # after:
+  [jobs.queues.email]
+  retries = 3
+  timeout = "30s"
+  concurrency = 5
+  ```
+
+  The framework auto-applies the same defaults at config load
+  (`retries = 3`, `timeout = "30s"`, `concurrency = 5`), so operators
+  who never touched these fields don't need to do anything.
+
+  `queue_name` is dropped without replacement — `_system_email` now
+  always uses the queue named `"email"`. Operators who relied on
+  routing email jobs to a custom queue should rename their
+  `[jobs.queues.<name>]` block to `[jobs.queues.email]`.
 
   See [Multi-server semantics](docs/src/lua-api/jobs.md#multi-server-semantics)
   in `jobs.md` for the full per-server vs cluster-global breakdown of

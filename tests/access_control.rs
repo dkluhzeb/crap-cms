@@ -1080,6 +1080,7 @@ fn access_hook_filter_table_on_job_trigger_is_rejected() {
         data: None,
         scheduled_by: "test",
         priority: 0,
+        queue_retries: None,
     };
 
     let err = queue_job(&ctx, &input).expect_err("Constrained on job trigger must be rejected");

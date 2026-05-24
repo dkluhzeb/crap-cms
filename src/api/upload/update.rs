@@ -36,6 +36,7 @@ struct UploadUpdateBlockingInput {
     ui_locale: Option<String>,
     locale_config: LocaleConfig,
     max_file_size: u64,
+    image_max_attempts: u32,
 }
 
 fn update_upload_blocking(
@@ -57,6 +58,7 @@ fn update_upload_blocking(
             ui_locale: input.ui_locale,
             locale_config: &input.locale_config,
             upload_max_file_size: input.max_file_size,
+            image_max_attempts: input.image_max_attempts,
         },
     )
 }
@@ -128,6 +130,7 @@ pub(super) async fn update_upload(
         ui_locale: auth_user.as_ref().map(|au| au.ui_locale.clone()),
         locale_config: state.config.locale.clone(),
         max_file_size: state.config.upload.max_file_size,
+        image_max_attempts: state.config.jobs.system_image_max_attempts(),
     };
 
     let result = task::spawn_blocking(move || update_upload_blocking(input)).await;

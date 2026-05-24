@@ -13,6 +13,12 @@ pub struct QueueJobInput<'a> {
     pub scheduled_by: &'a str,
     /// Static scheduling priority; higher = sooner. `0` = standard FIFO.
     pub priority: i32,
+    /// Queue-level retries default (`[jobs.queues.<queue>] retries`),
+    /// used as the fallback when `job_def.retries` is `None`. Pass
+    /// `None` if the caller has no `JobsConfig` access — the
+    /// definition's explicit retries still applies; the fallback is
+    /// `0` (one attempt).
+    pub queue_retries: Option<u32>,
 }
 
 /// Queue a new job run, enforcing access control if configured.
@@ -54,7 +60,7 @@ pub fn queue_job(ctx: &ServiceContext, input: &QueueJobInput) -> Result<JobRun, 
         ctx.slug,
         input.data.unwrap_or("{}"),
         input.scheduled_by,
-        input.job_def.retries + 1,
+        input.job_def.effective_max_attempts(input.queue_retries),
         &input.job_def.queue,
         input.priority,
     )

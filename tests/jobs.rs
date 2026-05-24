@@ -12,6 +12,7 @@
     clippy::unreadable_literal
 )]
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -72,11 +73,11 @@ fn job_definitions_loaded_from_lua() {
 
     let def = registry.get_job("test_create_post").unwrap();
     assert_eq!(def.handler, "jobs.test_job.create_post");
-    assert_eq!(def.retries, 1);
+    assert_eq!(def.retries, Some(1));
     assert_eq!(def.timeout, 30);
 
     let fail_def = registry.get_job("test_failing_job").unwrap();
-    assert_eq!(fail_def.retries, 2);
+    assert_eq!(fail_def.retries, Some(2));
 }
 
 // ── Job Queuing (DB operations) ─────────────────────────────────────────
@@ -114,15 +115,9 @@ fn claim_pending_jobs_marks_running() {
     job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
     job_query::insert_job(&conn, "test_create_post", "{}", "manual", 1, "default", 0).unwrap();
 
-    let job_concurrency = std::collections::HashMap::new();
-    let claimed = job_query::claim_pending_jobs(
-        &conn,
-        5,
-        &job_concurrency,
-        &std::collections::HashMap::new(),
-        0,
-    )
-    .unwrap();
+    let job_concurrency = HashMap::new();
+    let claimed =
+        job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
 
     assert_eq!(
         claimed.len(),
@@ -141,15 +136,9 @@ fn complete_job_sets_completed_status() {
 
     let run =
         job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
-    let job_concurrency = std::collections::HashMap::new();
-    let claimed = job_query::claim_pending_jobs(
-        &conn,
-        5,
-        &job_concurrency,
-        &std::collections::HashMap::new(),
-        0,
-    )
-    .unwrap();
+    let job_concurrency = HashMap::new();
+    let claimed =
+        job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
     assert_eq!(claimed.len(), 1);
 
     job_query::complete_job(&conn, &run.id, Some("{\"done\":true}")).unwrap();
@@ -168,15 +157,8 @@ fn fail_job_with_retry_resets_to_pending() {
     // max_attempts = 3 (retries=2 means 3 total attempts)
     let run =
         job_query::insert_job(&conn, "test_failing_job", "{}", "manual", 3, "default", 0).unwrap();
-    let job_concurrency = std::collections::HashMap::new();
-    job_query::claim_pending_jobs(
-        &conn,
-        5,
-        &job_concurrency,
-        &std::collections::HashMap::new(),
-        0,
-    )
-    .unwrap();
+    let job_concurrency = HashMap::new();
+    job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
 
     // Fail with should_retry = true (attempt < max_attempts)
     job_query::fail_job(&conn, &run.id, "test error", true, 1).unwrap();
@@ -198,15 +180,8 @@ fn fail_job_no_retry_stays_failed() {
 
     let run =
         job_query::insert_job(&conn, "test_failing_job", "{}", "manual", 1, "default", 0).unwrap();
-    let job_concurrency = std::collections::HashMap::new();
-    job_query::claim_pending_jobs(
-        &conn,
-        5,
-        &job_concurrency,
-        &std::collections::HashMap::new(),
-        0,
-    )
-    .unwrap();
+    let job_concurrency = HashMap::new();
+    job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
 
     // Fail with should_retry = false
     job_query::fail_job(&conn, &run.id, "permanent failure", false, 1).unwrap();
@@ -249,15 +224,8 @@ fn count_running_jobs() {
 
     assert_eq!(job_query::count_running(&conn, None).unwrap(), 0);
 
-    let job_concurrency = std::collections::HashMap::new();
-    job_query::claim_pending_jobs(
-        &conn,
-        5,
-        &job_concurrency,
-        &std::collections::HashMap::new(),
-        0,
-    )
-    .unwrap();
+    let job_concurrency = HashMap::new();
+    job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
 
     assert_eq!(job_query::count_running(&conn, None).unwrap(), 2);
     assert_eq!(
@@ -281,15 +249,8 @@ fn purge_old_jobs() {
 
     let run =
         job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
-    let job_concurrency = std::collections::HashMap::new();
-    job_query::claim_pending_jobs(
-        &conn,
-        5,
-        &job_concurrency,
-        &std::collections::HashMap::new(),
-        0,
-    )
-    .unwrap();
+    let job_concurrency = HashMap::new();
+    job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
     job_query::complete_job(&conn, &run.id, None).unwrap();
 
     // Backdate created_at so the purge threshold catches it
@@ -381,15 +342,8 @@ fn find_stale_jobs_detects_running() {
 
     let run =
         job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
-    let job_concurrency = std::collections::HashMap::new();
-    job_query::claim_pending_jobs(
-        &conn,
-        5,
-        &job_concurrency,
-        &std::collections::HashMap::new(),
-        0,
-    )
-    .unwrap();
+    let job_concurrency = HashMap::new();
+    job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
 
     // Manually backdate the heartbeat so it appears stale
     conn.execute(
@@ -411,15 +365,8 @@ fn mark_stale_changes_status() {
 
     let run =
         job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
-    let job_concurrency = std::collections::HashMap::new();
-    job_query::claim_pending_jobs(
-        &conn,
-        5,
-        &job_concurrency,
-        &std::collections::HashMap::new(),
-        0,
-    )
-    .unwrap();
+    let job_concurrency = HashMap::new();
+    job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
 
     job_query::mark_stale(&conn, &run.id, "server restarted").unwrap();
 

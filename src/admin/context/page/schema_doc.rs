@@ -338,7 +338,7 @@ fn render_type(prop: &Value) -> String {
         if non_null.len() == 1 {
             let inner = format_simple_type(non_null[0], prop);
             return if nullable {
-                format!("Option<{inner}>")
+                format!("Option&lt;{inner}&gt;")
             } else {
                 inner
             };
@@ -373,7 +373,7 @@ fn format_simple_type(t: &str, prop: &Value) -> String {
             let item_ty = prop
                 .get("items")
                 .map_or_else(|| "any".to_string(), render_type);
-            format!("Vec<{item_ty}>")
+            format!("Vec&lt;{item_ty}&gt;")
         }
         "object" => "Object".to_string(),
         other => other.to_string(),

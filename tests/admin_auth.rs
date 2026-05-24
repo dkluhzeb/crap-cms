@@ -17,7 +17,7 @@
 )]
 
 use serde_json::json;
-use std::{net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use axum::{
     body::Body,
@@ -205,7 +205,7 @@ fn create_test_user_with_role(app: &TestApp, email: &str, password: &str, role: 
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data: DocumentFields = std::collections::HashMap::from([
+    let data: DocumentFields = HashMap::from([
         ("email".to_string(), json!(email)),
         ("name".to_string(), json!("Test User")),
         ("role".to_string(), json!(role)),
@@ -794,7 +794,7 @@ async fn login_unverified_email() {
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data: DocumentFields = std::collections::HashMap::from([
+    let data: DocumentFields = HashMap::from([
         ("email".to_string(), json!("unverified@test.com")),
         ("name".to_string(), json!("Unverified User")),
     ])
@@ -844,7 +844,7 @@ async fn verify_email_with_valid_token() {
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data: DocumentFields = std::collections::HashMap::from([
+    let data: DocumentFields = HashMap::from([
         ("email".to_string(), json!("toverify@test.com")),
         ("name".to_string(), json!("To Verify")),
     ])

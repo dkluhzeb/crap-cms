@@ -1,5 +1,6 @@
 //! Registration of `crap.jobs.queue` Lua function.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -14,6 +15,25 @@ use crate::hooks::lua_api;
 use crate::hooks::lua_api::crud::{get_tx_conn, helpers::hook_user};
 use crate::typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
+/// State threaded into `crap.jobs.queue` — the loaded `Registry` plus a
+/// snapshot of `[jobs.queues.<name>] retries` so jobs defined without
+/// an explicit `retries` field inherit the operator's queue-level
+/// default at queue time. Only queues with a `Some(N)` retries entry
+/// appear in the map.
+pub(crate) struct JobsQueueState {
+    registry: Arc<Registry>,
+    queue_retries: HashMap<String, u32>,
+}
+
+impl JobsQueueState {
+    pub(crate) fn new(registry: Arc<Registry>, queue_retries: HashMap<String, u32>) -> Self {
+        Self {
+            registry,
+            queue_retries,
+        }
+    }
+}
+
 /// Queue a job for background execution. Returns the job run ID.
 /// Only available inside hooks with transaction context.
 #[lua_fn(
@@ -22,7 +42,7 @@ use crate::typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
     auto_tx
 )]
 fn jobs_queue(
-    state: &Arc<Registry>,
+    state: &JobsQueueState,
     lua: &Lua,
     #[lua(doc = "Job slug (must be previously defined).")] slug: String,
     #[lua(doc = "Input data passed to the handler (default: {}).")] data: Option<Table>,
@@ -37,7 +57,7 @@ fn jobs_queue(
 lua_table! {
     name: crap_jobs_queue,
     path: "crap.jobs",
-    state: Arc<Registry>,
+    state: JobsQueueState,
     fns: [jobs_queue],
 }
 
@@ -45,12 +65,8 @@ lua_table! {
 /// must already exist (populated by `register_jobs_init` or
 /// `register_jobs_pool_init`).
 #[cfg(not(tarpaulin_include))]
-pub(crate) fn register_jobs_queue(
-    lua: &Lua,
-    _table: &Table,
-    registry: Arc<Registry>,
-) -> Result<()> {
-    register_crap_jobs_queue(lua, registry)?;
+pub(crate) fn register_jobs_queue(lua: &Lua, _table: &Table, state: JobsQueueState) -> Result<()> {
+    register_crap_jobs_queue(lua, state)?;
     Ok(())
 }
 
@@ -58,11 +74,12 @@ pub(crate) fn register_jobs_queue(
 /// stays thin and the hot path is easy to read on its own.
 fn queue_job_inner(
     lua: &Lua,
-    reg: &Registry,
+    state: &JobsQueueState,
     slug: &str,
     data: Option<Table>,
     opts: Option<&Table>,
 ) -> LuaResult<String> {
+    let reg = state.registry.as_ref();
     let conn = get_tx_conn(lua)?;
 
     let job_def = reg
@@ -113,11 +130,13 @@ fn queue_job_inner(
         None => "{}".to_string(),
     };
 
+    let queue_retries = state.queue_retries.get(&job_def.queue).copied();
+
     let insert_opts = InsertJobOpts {
         slug,
         data: &data_json,
         scheduled_by: "hook",
-        max_attempts: job_def.retries + 1,
+        max_attempts: job_def.effective_max_attempts(queue_retries),
         queue: &job_def.queue,
         priority,
         delay_secs,

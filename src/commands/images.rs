@@ -11,25 +11,26 @@ use std::path::Path;
 use super::ImagesAction;
 use crate::{
     cli::{self, Table},
-    config::{CrapConfig, parse_duration_string},
+    commands::helpers::init_stack,
+    config::parse_duration_string,
     core::upload::SYSTEM_IMAGE_CONVERT_JOB,
-    db::{BoxedConnection, DbConnection, DbValue, pool, query::jobs as job_query},
+    db::{BoxedConnection, DbConnection, DbValue, query::jobs as job_query},
 };
 
 /// Handle the `images` subcommand — dispatches to the appropriate action handler.
 ///
 /// # Errors
 ///
-/// Returns an error if config loading, pool creation, or the dispatched
-/// action fails.
+/// Returns an error if config loading, pool creation, schema migration,
+/// or the dispatched action fails.
 #[cfg(not(tarpaulin_include))]
 pub fn run(config_dir: &Path, action: ImagesAction) -> Result<()> {
-    let config_dir = config_dir
-        .canonicalize()
-        .unwrap_or_else(|_| config_dir.to_path_buf());
-
-    let cfg = CrapConfig::load(&config_dir)?;
-    let pool = pool::create_pool(&config_dir, &cfg)?;
+    // `init_stack` runs `sync_all` which ensures the `_crap_jobs`
+    // schema (priority + unique_key columns, indexes, legacy
+    // image-queue drain) is up to date before any read. Operators
+    // upgrading from alpha.8 who run `images list` before `serve`
+    // would otherwise hit a "no such column: priority" error.
+    let (_cfg, _registry, pool) = init_stack(config_dir)?;
     let conn = pool.get().context("Failed to get DB connection")?;
 
     match action {

@@ -26,7 +26,7 @@ hits the cache and the top-level `define` does **not** re-run.
   - `handler` (string, required) — Lua function ref (e.g., `"jobs.cleanup.run"`)
   - `schedule` (string, optional) — Cron expression (e.g., `"0 3 * * *"`)
   - `queue` (string, default: `"default"`) — Queue name
-  - `retries` (integer, default: 0) — Max retry attempts
+  - `retries` (integer, optional) — Max retry attempts. When omitted, inherits `[jobs.queues.<queue>] retries` from `crap.toml`; if the queue has no entry either, defaults to `0` (one attempt). Set explicitly (including `retries = 0`) to override the queue default.
   - `timeout` (integer, default: 60) — Seconds before timeout
   - `concurrency` (integer, default: 1) — Max concurrent runs
   - `skip_if_running` (boolean, default: true) — Skip cron if still running
@@ -274,6 +274,19 @@ Queues without an entry in `[jobs.queues]` are unconstrained beyond
 the global `max_concurrent`. The scheduler logs a warning at startup
 if `[jobs.queues]` references a queue name that no defined job uses
 (typo catcher).
+
+`[jobs.queues.<name>]` also carries two non-concurrency knobs that
+apply to **system jobs** (`_system_image_convert`, `_system_email`)
+which lack their own `JobDefinition`:
+
+| Field | What it sets |
+|---|---|
+| `timeout` | Per-job wall-clock timeout for system jobs in this queue. User Lua jobs use the timeout on their `JobDefinition` instead. |
+| `retries` | Default `max_attempts` for jobs in this queue (`max_attempts = retries + 1`). Used by system jobs AND by user Lua jobs that omit `retries` in `crap.jobs.define`. Explicit `JobDefinition.retries` (including `retries = 0`) overrides the queue default. `crap.email.queue{ retries = N }` overrides for that one call. |
+
+See [`[jobs.queues]`](../configuration/crap-toml.md#jobsqueues) in
+the config reference for the full field table, defaults, and merging
+semantics.
 
 ## Multi-server semantics
 

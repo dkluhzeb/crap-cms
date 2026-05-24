@@ -180,6 +180,10 @@ mod tests {
 
         let reg = registry.read().unwrap();
         let def = reg.get_job("send_email").expect("still registered");
-        assert_eq!(def.retries, 1, "registry entry untouched by rejected call");
+        assert_eq!(
+            def.retries,
+            Some(1),
+            "registry entry untouched by rejected call"
+        );
     }
 }

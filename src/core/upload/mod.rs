@@ -26,7 +26,7 @@ pub use metadata::{
 pub use process::{CleanupGuard, process_upload};
 pub use processed_upload::ProcessedUpload;
 pub use queue::{
-    IMAGE_CONVERT_QUEUE, ImageConvertJobData, SYSTEM_IMAGE_CONVERT_JOB,
+    FALLBACK_MAX_ATTEMPTS, IMAGE_CONVERT_QUEUE, ImageConvertJobData, SYSTEM_IMAGE_CONVERT_JOB,
     delete_image_jobs_for_document, queue_image_conversion,
 };
 pub use queued_conversion::QueuedConversion;

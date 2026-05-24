@@ -53,6 +53,7 @@ pub fn create_upload(
     mut form_data: HashMap<String, String>,
     ui_locale: Option<String>,
     upload_max_file_size: u64,
+    image_max_attempts: u32,
 ) -> Result<UploadCreateResult, ServiceError> {
     let def = ctx.collection_def()?;
 
@@ -100,7 +101,13 @@ pub fn create_upload(
     if !queued_conversions.is_empty()
         && let Some(pool) = ctx.pool
         && let Ok(conn) = pool.get()
-        && let Err(e) = enqueue_conversions(&conn, ctx.slug, &doc.id, &queued_conversions)
+        && let Err(e) = enqueue_conversions(
+            &conn,
+            ctx.slug,
+            &doc.id,
+            &queued_conversions,
+            image_max_attempts,
+        )
     {
         warn!("Failed to enqueue image conversions: {}", e);
     }
@@ -117,6 +124,11 @@ pub struct UpdateUploadInput<'a> {
     pub ui_locale: Option<String>,
     pub locale_config: &'a LocaleConfig,
     pub upload_max_file_size: u64,
+    /// `max_attempts` passed to `enqueue_conversions` when new image
+    /// conversions are queued. Derived from
+    /// `JobsConfig::system_image_max_attempts()` at the API/admin
+    /// layer; tests can pass [`crate::core::upload::FALLBACK_MAX_ATTEMPTS`].
+    pub image_max_attempts: u32,
 }
 
 /// Process a file (optional) and update an upload document.
@@ -139,6 +151,7 @@ pub fn update_upload(
     let ui_locale = input.ui_locale;
     let locale_config = input.locale_config;
     let upload_max_file_size = input.upload_max_file_size;
+    let image_max_attempts = input.image_max_attempts;
     let def = ctx.collection_def()?;
     let locale_ctx = LocaleContext::from_locale_string(None, locale_config)?;
 
@@ -203,7 +216,13 @@ pub fn update_upload(
     if !queued_conversions.is_empty()
         && let Some(pool) = ctx.pool
         && let Ok(conn) = pool.get()
-        && let Err(e) = enqueue_conversions(&conn, ctx.slug, &doc.id, &queued_conversions)
+        && let Err(e) = enqueue_conversions(
+            &conn,
+            ctx.slug,
+            &doc.id,
+            &queued_conversions,
+            image_max_attempts,
+        )
     {
         warn!("Failed to enqueue image conversions: {}", e);
     }

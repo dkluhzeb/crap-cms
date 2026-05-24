@@ -6,7 +6,7 @@ use anyhow::Result;
 use mlua::{Lua, Table};
 
 use crate::{
-    config::{LocaleConfig, PaginationConfig},
+    config::{JobsConfig, LocaleConfig, PaginationConfig},
     core::Registry,
 };
 
@@ -33,6 +33,7 @@ pub(crate) fn register_crud_functions(
     registry: Arc<Registry>,
     locale_config: &LocaleConfig,
     pagination_config: &PaginationConfig,
+    jobs_config: &JobsConfig,
 ) -> Result<()> {
     let crap: Table = lua.globals().get("crap")?;
     let ctx = CrudRegisterCtx {
@@ -43,7 +44,7 @@ pub(crate) fn register_crud_functions(
 
     register_collection_functions(lua, &crap, &ctx)?;
     register_global_functions(lua, &crap, &ctx)?;
-    register_job_functions(lua, &crap, registry)?;
+    register_job_functions(lua, &crap, registry, jobs_config)?;
 
     Ok(())
 }
@@ -161,10 +162,25 @@ fn register_global_functions(lua: &Lua, crap: &Table, ctx: &CrudRegisterCtx<'_>)
 
 /// Register `crap.jobs.*` functions.
 #[cfg(not(tarpaulin_include))]
-fn register_job_functions(lua: &Lua, crap: &Table, registry: Arc<Registry>) -> Result<()> {
+fn register_job_functions(
+    lua: &Lua,
+    crap: &Table,
+    registry: Arc<Registry>,
+    jobs_config: &JobsConfig,
+) -> Result<()> {
     let jobs: Table = crap.get("jobs")?;
 
-    jobs::queue::register_jobs_queue(lua, &jobs, registry)?;
+    // Snapshot the queue-level retries defaults — only queues with an
+    // explicit `Some(N)` make it into the map. Lookups in
+    // `effective_max_attempts` use `HashMap::get(...).copied()`.
+    let queue_retries = jobs_config
+        .queues
+        .iter()
+        .filter_map(|(name, q)| q.retries.map(|r| (name.clone(), r)))
+        .collect();
+
+    let state = jobs::queue::JobsQueueState::new(registry, queue_retries);
+    jobs::queue::register_jobs_queue(lua, &jobs, state)?;
 
     Ok(())
 }

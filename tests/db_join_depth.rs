@@ -13,7 +13,7 @@
 )]
 #![cfg(feature = "sqlite")]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::DocumentFields;
@@ -206,13 +206,13 @@ fn global_array_field_save_and_read() {
 
     let rows = vec![
         {
-            let mut m = std::collections::HashMap::new();
+            let mut m = HashMap::new();
             m.insert("url".to_string(), json!("https://example.com"));
             m.insert("label".to_string(), json!("Example"));
             m
         },
         {
-            let mut m = std::collections::HashMap::new();
+            let mut m = HashMap::new();
             m.insert("url".to_string(), json!("https://rust-lang.org"));
             m.insert("label".to_string(), json!("Rust"));
             m
@@ -664,7 +664,7 @@ fn global_alter_table_adds_join_tables() {
     let tx = conn2.transaction().expect("Start transaction");
     let items_field = def_v2.fields.iter().find(|f| f.name == "items").unwrap();
     let rows = vec![{
-        let mut m = std::collections::HashMap::new();
+        let mut m = HashMap::new();
         m.insert("label".to_string(), json!("First"));
         m
     }];

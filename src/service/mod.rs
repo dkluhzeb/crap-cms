@@ -79,7 +79,7 @@ pub use collections::{
     UpdateManyOptions, UpdateManyResult, create_document, create_many, delete_document,
     delete_many, undelete_document, unpublish_document, update_document, update_many,
 };
-pub(crate) use email::send_verification_email;
+pub(crate) use email::{VerificationEmailInput, send_verification_email};
 pub use globals::{unpublish_global_document, update_global_document, update_global_in_conn};
 pub(crate) use helpers::run_after_change_hooks;
 pub use hooks::{

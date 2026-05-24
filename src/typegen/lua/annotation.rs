@@ -102,6 +102,8 @@ pub use crap_cms_macros::{
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::{LuaAlias, LuaAnnotation};
 
     // ── LuaAnnotation: full type-mapping coverage ──────────────────
@@ -289,7 +291,7 @@ mod tests {
     #[allow(dead_code)]
     enum TestLocalized {
         Plain(String),
-        Localized(std::collections::HashMap<String, String>),
+        Localized(HashMap<String, String>),
     }
 
     #[test]

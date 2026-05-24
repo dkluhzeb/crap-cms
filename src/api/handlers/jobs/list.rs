@@ -82,7 +82,14 @@ impl ContentService {
                 handler: def.handler.clone(),
                 schedule: def.schedule.clone(),
                 queue: def.queue.clone(),
-                retries: def.retries,
+                // Surface the effective retry count: explicit
+                // `JobDefinition.retries` wins, else the queue's
+                // `[jobs.queues.<queue>] retries`, else `0`. Consumers
+                // (admin UI, ops tooling) get the same number that the
+                // scheduler actually uses on queue-time.
+                retries: def
+                    .retries
+                    .unwrap_or_else(|| self.queue_retries.get(&def.queue).copied().unwrap_or(0)),
                 timeout: def.timeout,
                 concurrency: def.concurrency,
                 skip_if_running: def.skip_if_running,

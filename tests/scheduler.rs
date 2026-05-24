@@ -12,6 +12,7 @@
     clippy::unreadable_literal
 )]
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -36,7 +37,7 @@ fn fixture_dir() -> PathBuf {
 fn setup() -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    std::sync::Arc<crap_cms::core::Registry>,
+    Arc<crap_cms::core::Registry>,
     HookRunner,
 ) {
     let config_dir = fixture_dir();
@@ -76,15 +77,9 @@ fn execute_job_echo_completes_successfully() {
         0,
     )
     .expect("insert_job");
-    let job_concurrency = std::collections::HashMap::new();
-    let claimed = job_query::claim_pending_jobs(
-        &conn,
-        5,
-        &job_concurrency,
-        &std::collections::HashMap::new(),
-        0,
-    )
-    .unwrap();
+    let job_concurrency = HashMap::new();
+    let claimed =
+        job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
     assert_eq!(claimed.len(), 1);
     drop(conn);
 
@@ -120,15 +115,9 @@ fn execute_job_creates_document() {
         0,
     )
     .expect("insert_job");
-    let job_concurrency = std::collections::HashMap::new();
-    let claimed = job_query::claim_pending_jobs(
-        &conn,
-        5,
-        &job_concurrency,
-        &std::collections::HashMap::new(),
-        0,
-    )
-    .unwrap();
+    let job_concurrency = HashMap::new();
+    let claimed =
+        job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
     assert_eq!(claimed.len(), 1);
     drop(conn);
 
@@ -163,15 +152,9 @@ fn execute_job_failing_handler_marks_failed() {
     let conn = pool.get().expect("DB connection");
     let run = job_query::insert_job(&conn, "test_failing_job", "{}", "manual", 1, "default", 0)
         .expect("insert_job");
-    let job_concurrency = std::collections::HashMap::new();
-    let claimed = job_query::claim_pending_jobs(
-        &conn,
-        5,
-        &job_concurrency,
-        &std::collections::HashMap::new(),
-        0,
-    )
-    .unwrap();
+    let job_concurrency = HashMap::new();
+    let claimed =
+        job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
     assert_eq!(claimed.len(), 1);
     drop(conn);
 
@@ -206,15 +189,9 @@ fn execute_job_failing_handler_retries() {
     // max_attempts=3 so it should be retried
     let run = job_query::insert_job(&conn, "test_failing_job", "{}", "manual", 3, "default", 0)
         .expect("insert_job");
-    let job_concurrency = std::collections::HashMap::new();
-    let claimed = job_query::claim_pending_jobs(
-        &conn,
-        5,
-        &job_concurrency,
-        &std::collections::HashMap::new(),
-        0,
-    )
-    .unwrap();
+    let job_concurrency = HashMap::new();
+    let claimed =
+        job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
     assert_eq!(claimed.len(), 1);
     drop(conn);
 
@@ -243,15 +220,9 @@ fn recover_stale_jobs_on_full_setup() {
     // Insert and claim a job, then simulate server crash (leave it running with old heartbeat)
     let run =
         job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
-    let job_concurrency = std::collections::HashMap::new();
-    let claimed = job_query::claim_pending_jobs(
-        &conn,
-        5,
-        &job_concurrency,
-        &std::collections::HashMap::new(),
-        0,
-    )
-    .unwrap();
+    let job_concurrency = HashMap::new();
+    let claimed =
+        job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
     assert_eq!(claimed.len(), 1);
 
     // Backdate the heartbeat to make it appear stale
@@ -287,7 +258,7 @@ fn check_cron_schedules_fires_test_cron_job() {
     let now = chrono::Utc::now();
     let last_check = now - chrono::Duration::minutes(2);
 
-    scheduler::check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+    scheduler::check_cron_schedules(&pool, &registry, last_check, now, &HashMap::new()).unwrap();
 
     let conn = pool.get().unwrap();
     let jobs = job_query::list_job_runs(&conn, Some("test_cron_job"), None, 100, 0).unwrap();
@@ -314,7 +285,7 @@ fn check_cron_schedules_skip_if_running_integration() {
     let now = chrono::Utc::now();
     let last_check = now - chrono::Duration::minutes(2);
 
-    scheduler::check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+    scheduler::check_cron_schedules(&pool, &registry, last_check, now, &HashMap::new()).unwrap();
 
     // test_cron_job has skip_if_running=true, so no new pending job
     let conn = pool.get().unwrap();
@@ -348,15 +319,9 @@ fn tx_two_creates_both_committed() {
         0,
     )
     .expect("insert_job");
-    let job_concurrency = std::collections::HashMap::new();
-    let claimed = job_query::claim_pending_jobs(
-        &conn,
-        5,
-        &job_concurrency,
-        &std::collections::HashMap::new(),
-        0,
-    )
-    .unwrap();
+    let job_concurrency = HashMap::new();
+    let claimed =
+        job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
     drop(conn);
 
     let job_def = registry.get_job("test_tx_two_creates").unwrap().clone();
@@ -401,15 +366,9 @@ fn tx_rollback_leaves_no_documents() {
         0,
     )
     .expect("insert_job");
-    let job_concurrency = std::collections::HashMap::new();
-    let claimed = job_query::claim_pending_jobs(
-        &conn,
-        5,
-        &job_concurrency,
-        &std::collections::HashMap::new(),
-        0,
-    )
-    .unwrap();
+    let job_concurrency = HashMap::new();
+    let claimed =
+        job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
     drop(conn);
 
     let job_def = registry.get_job("test_tx_rollback_mid").unwrap().clone();
@@ -456,15 +415,9 @@ fn tx_separate_blocks_first_commits_when_second_rolls_back() {
         0,
     )
     .expect("insert_job");
-    let job_concurrency = std::collections::HashMap::new();
-    let claimed = job_query::claim_pending_jobs(
-        &conn,
-        5,
-        &job_concurrency,
-        &std::collections::HashMap::new(),
-        0,
-    )
-    .unwrap();
+    let job_concurrency = HashMap::new();
+    let claimed =
+        job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
     drop(conn);
 
     let job_def = registry.get_job("test_tx_separate_blocks").unwrap().clone();

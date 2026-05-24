@@ -228,6 +228,7 @@ fn register_apis(lua: &Lua, registry: &Arc<Registry>, config: &CrapConfig) -> Re
         Arc::clone(registry),
         &config.locale,
         &config.pagination,
+        &config.jobs,
     )?;
     // Per-collection / per-global accessors at `crap.collections.<slug>`
     // / `crap.globals.<slug>` — typed wrappers that bind the slug and

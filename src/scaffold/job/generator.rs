@@ -23,6 +23,12 @@ struct JobTemplateContext<'a> {
     schedule: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     queue: Option<&'a str>,
+    /// Companion boolean for `retries`. Handlebars `{{#if retries}}`
+    /// treats integer `0` as falsy, so we need a separate flag to
+    /// distinguish "operator said 0 retries" (emit) from "operator
+    /// didn't pass --retries" (skip). The template uses
+    /// `{{#if has_retries}}` to decide whether to emit the line.
+    has_retries: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     retries: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -75,9 +81,14 @@ fn render_job_lua(opts: &MakeJobOptions) -> Result<String> {
     let label = to_title_case(opts.slug);
     let pascal = to_pascal_case(opts.slug);
 
-    // Filter out default values so {{#if}} in the template skips them
+    // Filter out default values so {{#if}} in the template skips them.
+    // Retries: pass through verbatim — `--retries 0` is an explicit
+    // operator choice ("no retries even if the queue default is
+    // higher") under the alpha.9 queue-inheritance model, not a
+    // synonym for "default". Filtering it out would silently demote
+    // the choice to "inherit queue default."
     let queue = opts.queue.filter(|q| *q != "default");
-    let retries = opts.retries.filter(|&r| r > 0);
+    let retries = opts.retries;
     let timeout = opts.timeout.filter(|&t| t != 60);
 
     render(
@@ -88,6 +99,7 @@ fn render_job_lua(opts: &MakeJobOptions) -> Result<String> {
             pascal,
             schedule: opts.schedule,
             queue,
+            has_retries: retries.is_some(),
             retries,
             timeout,
         },
@@ -216,6 +228,31 @@ mod tests {
         let content = fs::read_to_string(tmp.path().join("jobs/import.lua")).unwrap();
         assert!(content.contains("retries = 3"));
         assert!(content.contains("timeout = 300"));
+    }
+
+    /// Regression: `--retries 0` is an explicit operator choice
+    /// ("no retries even if the queue default is higher"); the
+    /// generator must emit it verbatim so the `JobDefinition` ends up
+    /// with `Some(0)` rather than `None` (which would silently inherit
+    /// `[jobs.queues.<queue>] retries`).
+    #[test]
+    fn explicit_zero_retries_is_emitted() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        make_job(&opts(
+            tmp.path(),
+            "no_retry_job",
+            None,
+            None,
+            Some(0),
+            None,
+            false,
+        ))
+        .unwrap();
+        let content = fs::read_to_string(tmp.path().join("jobs/no_retry_job.lua")).unwrap();
+        assert!(
+            content.contains("retries = 0"),
+            "explicit `--retries 0` must appear in the generated Lua so the JobDefinition is `Some(0)`, not `None`; got:\n{content}"
+        );
     }
 
     #[test]

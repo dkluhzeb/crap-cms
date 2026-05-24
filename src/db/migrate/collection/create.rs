@@ -237,6 +237,8 @@ fn warn_default_type_mismatch(default: &Value, field_type: &FieldType) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use serde_json::json;
 
     use super::*;
@@ -250,7 +252,7 @@ mod tests {
         slug: &str,
         def: &CollectionDefinition,
         locale: &LocaleConfig,
-    ) -> std::collections::HashSet<String> {
+    ) -> HashSet<String> {
         let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
 

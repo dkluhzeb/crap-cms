@@ -111,6 +111,7 @@ impl AdminState {
             email_config: self.config.email.clone(),
             email_renderer: self.email_renderer.clone(),
             server_config: self.config.server.clone(),
+            email_max_attempts: self.config.jobs.system_email_max_attempts(),
         }
     }
 

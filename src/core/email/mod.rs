@@ -20,6 +20,6 @@ pub use backend::{EmailProvider, SharedEmailProvider};
 pub use contexts::{MfaCodeEmailContext, PasswordResetEmailContext, VerifyEmailContext};
 pub use custom::CustomEmailProvider;
 pub use factory::{create_email_provider, is_configured};
-pub use queue::{EmailJobData, SYSTEM_EMAIL_JOB, queue_email};
+pub use queue::{EmailJobData, SYSTEM_EMAIL_JOB, SYSTEM_EMAIL_QUEUE, queue_email};
 pub use renderer::EmailRenderer;
 pub use validation::validate_no_crlf;

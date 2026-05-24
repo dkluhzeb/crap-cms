@@ -17,6 +17,7 @@
 )]
 
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -195,7 +196,7 @@ fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data: DocumentFields = std::collections::HashMap::from([
+    let data: DocumentFields = HashMap::from([
         ("email".to_string(), json!(email)),
         ("name".to_string(), json!("Test User")),
     ])
@@ -433,7 +434,7 @@ async fn search_uses_configured_searchable_fields() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data: DocumentFields = std::collections::HashMap::from([
+    let data: DocumentFields = HashMap::from([
         ("title".to_string(), json!("Unique Title XYZ")),
         ("body".to_string(), json!("Some body text")),
         ("category".to_string(), json!("tech")),
@@ -579,7 +580,7 @@ async fn list_items_uses_title_field() {
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let data: DocumentFields =
-        std::collections::HashMap::from([("title".to_string(), json!("My Custom Title"))]).into();
+        HashMap::from([("title".to_string(), json!("My Custom Title"))]).into();
     query::create(&tx, "posts", &real_def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -744,7 +745,7 @@ async fn post_with_method_delete_deletes_document() {
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let data: DocumentFields =
-        std::collections::HashMap::from([("title".to_string(), json!("Method Delete"))]).into();
+        HashMap::from([("title".to_string(), json!("Method Delete"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -848,8 +849,7 @@ async fn restore_version_nonversioned_redirects() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data: DocumentFields =
-        std::collections::HashMap::from([("title".to_string(), json!("NV Restore"))]).into();
+    let data: DocumentFields = HashMap::from([("title".to_string(), json!("NV Restore"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -1476,7 +1476,7 @@ async fn delete_confirm_page_returns_200() {
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let data: DocumentFields =
-        std::collections::HashMap::from([("title".to_string(), json!("To Confirm Delete"))]).into();
+        HashMap::from([("title".to_string(), json!("To Confirm Delete"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -1509,8 +1509,7 @@ async fn delete_confirm_page_with_schema_mismatch_returns_200() {
         reg.get_collection("posts").unwrap().clone()
     };
     let tx = conn.transaction().unwrap();
-    let data: DocumentFields =
-        std::collections::HashMap::from([("title".to_string(), json!("Broken Doc"))]).into();
+    let data: DocumentFields = HashMap::from([("title".to_string(), json!("Broken Doc"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 

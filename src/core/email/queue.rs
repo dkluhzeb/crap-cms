@@ -6,15 +6,18 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    config::EmailConfig,
-    db::{DbConnection, query},
-};
+use crate::db::{DbConnection, query};
 
 use super::validation::validate_no_crlf;
 
 /// System job slug for queued emails.
 pub const SYSTEM_EMAIL_JOB: &str = "_system_email";
+
+/// Queue name for `_system_email` jobs. Operators configure aggregate
+/// behaviour (concurrency, timeout, retries) via `[jobs.queues.email]`
+/// in `crap.toml`; the framework supplies sensible defaults via
+/// `JobsConfig::apply_queue_defaults`.
+pub const SYSTEM_EMAIL_QUEUE: &str = "email";
 
 /// Data payload for a queued email job.
 #[derive(Debug, Serialize, Deserialize)]
@@ -28,9 +31,14 @@ pub struct EmailJobData {
 
 /// Queue an email for async delivery via the job system.
 ///
-/// The email will be processed by the scheduler with retries on failure.
-/// `config` supplies the retry budget (`queue_retries + 1` total attempts)
-/// and the queue name. Returns the job run ID.
+/// `max_attempts` is the total number of attempts (including the
+/// initial one). Callers should compute it from the operator's
+/// `[jobs.queues.email] retries` setting via
+/// [`crate::config::JobsConfig::system_email_max_attempts`]; per-call
+/// Lua overrides (`crap.email.queue{ retries = N }`) compute
+/// `N + 1` directly.
+///
+/// Returns the job run ID.
 ///
 /// # Errors
 ///
@@ -39,7 +47,7 @@ pub struct EmailJobData {
 pub fn queue_email(
     conn: &dyn DbConnection,
     data: &EmailJobData,
-    config: &EmailConfig,
+    max_attempts: u32,
 ) -> Result<String> {
     validate_no_crlf("to", &data.to)?;
     validate_no_crlf("subject", &data.subject)?;
@@ -51,8 +59,8 @@ pub fn queue_email(
         SYSTEM_EMAIL_JOB,
         &data_json,
         "system",
-        config.queue_retries + 1,
-        &config.queue_name,
+        max_attempts,
+        SYSTEM_EMAIL_QUEUE,
         0,
     )?;
 
