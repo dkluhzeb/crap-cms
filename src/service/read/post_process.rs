@@ -157,17 +157,20 @@ pub(crate) fn post_process_docs(
     let user = ctx.user;
 
     if opts.hydrate() {
-        for doc in docs.iter_mut() {
-            if let Err(e) = query::hydrate_document(
-                conn,
-                slug,
-                &def.fields,
-                doc,
-                opts.select(),
-                opts.locale_ctx(),
-            ) {
-                warn!("hydrate error for {slug}/{}: {e:#}", doc.id);
-            }
+        // Batched plural-doc hydrate: one `WHERE parent_id IN (…)`
+        // SELECT per top-level has-many relationship field instead of
+        // one per (doc, field). Non-batched field shapes (Array,
+        // Blocks, fields nested in Group/Tabs) still go per-doc
+        // inside `hydrate_documents`.
+        if let Err(e) = query::hydrate_documents(
+            conn,
+            slug,
+            &def.fields,
+            docs.as_mut_slice(),
+            opts.select(),
+            opts.locale_ctx(),
+        ) {
+            warn!("hydrate error for {slug}: {e:#}");
         }
     }
 

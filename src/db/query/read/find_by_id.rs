@@ -8,7 +8,8 @@ use crate::{
         DbConnection, DbValue, LocaleContext, LocaleMode,
         document::row_to_document,
         query::{
-            get_column_names, get_locale_select_columns_full, group_locale_fields, hydrate_document,
+            get_column_names, get_locale_select_columns_full, group_locale_fields,
+            hydrate_document, hydrate_documents,
         },
     },
 };
@@ -116,7 +117,7 @@ pub fn find_by_ids(
         .query_all(&sql, &params)
         .with_context(|| format!("Failed to execute find_by_ids on '{slug}'"))?;
 
-    let mut documents = Vec::new();
+    let mut documents = Vec::with_capacity(rows.len());
     for row in &rows {
         let mut doc = row_to_document(conn, row)?;
 
@@ -126,9 +127,15 @@ pub fn find_by_ids(
         {
             group_locale_fields(&mut doc, &def.fields, &ctx.config)?;
         }
-        hydrate_document(conn, slug, &def.fields, &mut doc, None, locale_ctx)?;
         documents.push(doc);
     }
+
+    // Batched hydrate: one `WHERE parent_id IN (…)` SELECT per
+    // relationship field instead of one per (doc, field). This is the
+    // same fix as `post_process_docs` — critical here too because
+    // `find_by_ids` is the inner step of `populate` at depth > 0, so
+    // a find_deep@50 hits this path once per level per parent batch.
+    hydrate_documents(conn, slug, &def.fields, &mut documents, None, locale_ctx)?;
 
     Ok(documents)
 }
