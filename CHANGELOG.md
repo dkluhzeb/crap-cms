@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.1.0-alpha.9] — Unreleased
+## [0.1.0-alpha.9] — 2026-05-25
 
 ### Security
 
@@ -28,6 +28,104 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   request as unauthenticated.
 
 ### Changed
+
+- **Read throughput recovered on the SQL-bound RPCs.** Five
+  targeted fixes, each measured against the post-revert baseline
+  on the same hardware. Numbers are gRPC ghz at concurrency 50
+  unless noted:
+
+  1. **`[database] stmt_cache_capacity` (default 128).** rusqlite's
+     built-in prepared-statement cache holds 16 entries per
+     connection. With more than ~16 distinct SQL strings on the
+     hot path (find + per-doc hydrate joins + auth resolve), the
+     LRU evicted and the next call re-ran `sqlite3_prepare_v2` →
+     the query planner → `SQLite`'s globally-locked allocator.
+     Profiling at c=50 attributed ~53% of CPU to
+     `native_queued_spin_lock_slowpath` inside
+     `sqlite3LockAndPrepare` before the knob was wired. Bumping
+     to 128 drops that to ~5%. (`src/db/pool.rs`,
+     `src/config/server/database.rs`)
+
+  2. **Batched hydrate (`hydrate_documents`).** `post_process_docs`
+     was calling `hydrate_document` once per doc — a classic N+1
+     for has-many relationship fields. The new
+     `hydrate_documents` plural variant issues one
+     `WHERE parent_id IN (…)` SELECT per top-level relationship
+     field across all docs and distributes results in Rust. A
+     `find` returning 10 docs with 3 relationship fields used to
+     do 30 SELECTs; now it does 3. New helpers
+     `find_related_ids_batch`, `find_polymorphic_related_batch`.
+     Non-batched field shapes (Array, Blocks, fields nested in
+     Group/Tabs) still go per-doc; arrays / blocks can be batched
+     the same way later if profiling demands it.
+     (`src/db/query/join/relationships.rs`,
+     `src/db/query/join/hydrate/read.rs`,
+     `src/service/read/post_process.rs`)
+
+  3. **`find_by_ids` switched to batched hydrate.** This is the
+     inner step of `populate` at depth > 0, so a `find_deep @ 50`
+     hits it once per populate level per parent batch. Per-row
+     hydrate was the same N+1 pattern that
+     `post_process_docs` had; the fix mirrors point 2.
+     (`src/db/query/read/find_by_id.rs`)
+
+  4. **Auth evaluator early-outs.** `evaluate` now short-circuits
+     when no collection declares a strategy (the common case),
+     skipping the cross-collection methods walk entirely. The
+     strategy index (`Registry.always_strategies` /
+     `header_strategies`) is precomputed at registry build time
+     so the walk that does run is a HashMap lookup, not an
+     iteration. `check_access` skips Lua-VM acquisition when
+     `access_ref` is `None` — the in-Lua path only reads the
+     `DefaultDeny` flag and returns, so a process-wide bool
+     cached on `HookRunner` short-circuits the round-trip. With
+     pool size 16 and 50 concurrent reads, the prior
+     unconditional `pool.acquire()` was serialising 34 of 50
+     requests on the VM-pool mutex.
+     (`src/service/auth/evaluator.rs`,
+     `src/core/registry.rs`,
+     `src/hooks/lifecycle/runner/access.rs`,
+     `src/hooks/lifecycle/runner/hook_runner.rs`)
+
+  5. **Lazy gRPC metadata header extraction.** Headers were
+     materialised into a `HashMap<String, String>` on every gRPC
+     request whether the auth path needed them or not.
+     `ContentService::metadata_headers` now returns an empty
+     HashMap unless either an `Always`-active strategy exists on
+     this surface (forcing the headers) or at least one of the
+     known strategy-activator header names is actually present
+     in the request metadata. Deployments that use only
+     `password_login` / `bearer` / `session_cookie` (the common
+     case) pay zero per-request cost for the strategy machinery.
+     (`src/api/handlers/content_service.rs`)
+
+  Profiling on a single dev box guided each change; absolute
+  throughput numbers vary too much with system load (kernel
+  version, parallel workload, page-cache state) to be quoted
+  meaningfully without a controlled benchmarking harness, which
+  we do not yet have. `tests/grpc_loadtest.sh` is the local
+  measurement tool used during this work; rerun it on the target
+  hardware for representative numbers. `find_deep` /
+  `find_deep5` at high concurrency remain bottlenecked on
+  response-size-proportional costs (prost `encoded_len` 2-pass
+  on nested `Value` maps, mlua field-hook overhead per populated
+  doc) that no SQL-side fix can attack — those are tracked as
+  follow-up work.
+
+- **`tests/grpc_loadtest.sh` purges orphaned `_versions_<slug>`
+  rows after the `create` scenario.** Production hard-delete
+  cascades version rows via the existing SQLite `ON DELETE
+  CASCADE` (verified by four tests:
+  `db::pool::tests::fk_cascade_fires_on_pooled_connection_delete`,
+  `fk_cascade_visible_across_pool_connections`,
+  `tests/versions.rs::delete_document_cascades_to_versions`, and
+  `bulk_hard_delete_cascades_to_versions_via_service`). This
+  purge exists for the bench environment specifically: pre-Mar-30
+  runs used soft-delete (no `forceHardDelete`) and left tens of
+  thousands of orphaned versions that bloat the SQLite page
+  cache and tank measured throughput on subsequent runs; the
+  purge is gated on `_parent NOT IN (SELECT id FROM posts)` so
+  it only touches genuinely orphaned rows.
 
 - **Unified per-request auth evaluator at
   `service::auth::evaluate`.** Replaces the legacy split between
@@ -557,6 +655,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   registration shims.
 
 ### Fixed
+
+- **Admin `GET /admin/{collections|globals}/.../versions/{id}/restore`
+  returned 500 with "read_hooks not set".** Both `restore_confirm`
+  handlers (collections and globals) built `ServiceContext` without
+  `.read_hooks(...)`, but `find_version_by_id` runs an access check
+  against the collection's `read` access ref and requires hooks to
+  be wired. Now both handlers attach `RunnerReadHooks` and the
+  current user document to the context, matching the version-list
+  handler. Regression test at
+  `tests/admin_collections_versioning.rs::restore_confirm_get_renders_for_existing_version`
+  exercises the exact admin URL pattern. Audited every other admin
+  handler that builds a `ServiceContext` and calls a read-hook-
+  requiring service function — only the two `restore_confirm` files
+  had the defect.
+  (`src/admin/handlers/collections/item/versions/restore_confirm.rs`,
+  `src/admin/handlers/globals/versions/restore_confirm.rs`)
+
+- **Form fields for Groups nested inside `Tabs` / `Row` /
+  `Collapsible` rendered empty even when the DB had values.**
+  `flatten_document_values` only checked top-level field defs when
+  deciding whether to flatten a `Group` object into `parent__child`
+  form keys. A `Group("social")` nested in a `Tabs` (the shape
+  `example/globals/site_settings.lua` uses) was not recognised as a
+  Group, so the loaded `social: { github: ..., twitter: ... }` got
+  stringified as JSON instead of expanded — the form rendered every
+  social URL input empty. Layout wrappers are transparent for
+  column-naming everywhere else in the codebase; this helper was
+  the lone hold-out. Save path was unaffected (form fields already
+  POST with raw `parent__child` names). Regression tests:
+  `flatten_document_values_group_inside_tabs`,
+  `flatten_document_values_group_inside_row`.
+  (`src/admin/handlers/shared/document.rs::flatten_document_values`)
 
 - **Eliminated `SQLITE_BUSY_SNAPSHOT` failure class across the
   codebase.** The scheduler's image queue was the symptom (see the
