@@ -769,6 +769,62 @@ async fn non_versioned_collection_versions_page_redirects() {
     );
 }
 
+/// Regression: the GET restore-confirmation page (`/admin/collections/
+/// {slug}/{id}/versions/{version_id}/restore`) was 500-ing in
+/// production with `"read_hooks not set"` because `restore_confirm`
+/// built `ServiceContext` without `.read_hooks(...)`, and
+/// `find_version_by_id` requires hooks for the per-call access check.
+/// This test exercises the exact admin URL path that surfaced the bug.
+#[tokio::test]
+async fn restore_confirm_get_renders_for_existing_version() {
+    let app = setup_app(vec![make_versioned_posts_def(), make_users_def()], vec![]);
+    let user_id = create_test_user(&app, "rcconfirm@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "rcconfirm@test.com");
+
+    // Create a versioned article + a snapshot we can restore.
+    let def = {
+        let reg = &app.registry;
+        reg.get_collection("articles").unwrap().clone()
+    };
+    let mut conn = app.pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let data: DocumentFields =
+        HashMap::from([("title".to_string(), json!("Restore Confirm Target"))]).into();
+    let doc = query::create(&tx, "articles", &def, &data, None).unwrap();
+    let snap = query::build_snapshot(&tx, "articles", &def.fields, &doc).unwrap();
+    query::create_version(&tx, "articles", &doc.id, "published", &snap).unwrap();
+    tx.commit().unwrap();
+
+    let version = {
+        let conn = app.pool.get().unwrap();
+        query::list_versions(&conn, "articles", &doc.id, None, None)
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("at least one version")
+    };
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::get(format!(
+                "/admin/collections/articles/{}/versions/{}/restore",
+                doc.id, version.id
+            ))
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "GET restore-confirm must render OK; if this returns 500, \
+         `ServiceContext.read_hooks` is missing on the handler again"
+    );
+}
+
 #[tokio::test]
 async fn restore_version_non_versioned_redirects() {
     let app = setup_app(vec![make_posts_def(), make_users_def()], vec![]);

@@ -55,6 +55,14 @@ pub fn compute_row_label(
 /// Flattens document fields for form rendering. Group fields become `parent__child` keys,
 /// recursively flattening nested groups (e.g. `address: { geo: { lat: "40" } }` →
 /// `address__geo__lat: "40"`).
+///
+/// Tabs / Row / Collapsible are transparent layout wrappers — their inner
+/// fields are still at the table's top level, so Groups nested inside any
+/// of them are recognised the same way as top-level Groups. Without this
+/// pass-through, a `Group("social")` nested in a `Tabs` would be
+/// stringified as JSON instead of expanded into `social__github`,
+/// `social__twitter`, … and the form would render every social field
+/// empty even though the DB has the values.
 pub fn flatten_document_values(
     fields: &DocumentFields,
     field_defs: &[FieldDefinition],
@@ -63,9 +71,7 @@ pub fn flatten_document_values(
         .iter()
         .flat_map(|(k, v)| {
             if let Value::Object(obj) = v
-                && field_defs
-                    .iter()
-                    .any(|f| f.name == *k && f.field_type == FieldType::Group)
+                && is_group_field(field_defs, k)
             {
                 let mut out = Vec::new();
                 flatten_group_value(k, obj, &mut out);
@@ -75,6 +81,19 @@ pub fn flatten_document_values(
             vec![(k.clone(), value_to_form_string(v))]
         })
         .collect()
+}
+
+/// True iff `name` refers to a Group field at the effective top level of
+/// `field_defs`. Recurses through Tabs/Row/Collapsible — those wrappers are
+/// transparent for column-naming purposes, so a Group nested in any of
+/// them is still a "top-level Group" for the form-flatten contract.
+fn is_group_field(field_defs: &[FieldDefinition], name: &str) -> bool {
+    field_defs.iter().any(|f| match f.field_type {
+        FieldType::Group => f.name == name,
+        FieldType::Row | FieldType::Collapsible => is_group_field(&f.fields, name),
+        FieldType::Tabs => f.tabs.iter().any(|t| is_group_field(&t.fields, name)),
+        _ => false,
+    })
 }
 
 /// Recursively flatten a group object into `prefix__key` pairs.
@@ -281,6 +300,80 @@ mod tests {
         let flat = flatten_document_values(&fields, &defs);
         assert_eq!(flat.get("meta__title").unwrap(), "Test");
         assert_eq!(flat.get("meta__tags").unwrap(), "[\"a\",\"b\"]");
+    }
+
+    /// Regression: a `Group` nested inside a `Tabs` wrapper (the shape
+    /// `example/globals/site_settings.lua` uses for the Social tab) must
+    /// still flatten to `parent__child` form keys. Before the fix,
+    /// `flatten_document_values` only inspected top-level defs, so the
+    /// Group was treated as an opaque object and stringified to JSON
+    /// — the form rendered every social URL empty even when the DB
+    /// had values.
+    #[test]
+    fn flatten_document_values_group_inside_tabs() {
+        use crate::core::FieldTab;
+
+        let mut fields = DocumentFields::new();
+        fields.insert(
+            "social".to_string(),
+            json!({"github": "https://github.com/crap", "twitter": "https://test.at"}),
+        );
+
+        let defs = vec![
+            FieldDefinition::builder("settings_tabs", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "Social",
+                    vec![
+                        FieldDefinition::builder("social", FieldType::Group)
+                            .fields(vec![
+                                FieldDefinition::builder("github", FieldType::Text).build(),
+                                FieldDefinition::builder("twitter", FieldType::Text).build(),
+                            ])
+                            .build(),
+                    ],
+                )])
+                .build(),
+        ];
+
+        let flat = flatten_document_values(&fields, &defs);
+        assert_eq!(
+            flat.get("social__github").map(String::as_str),
+            Some("https://github.com/crap"),
+            "Group inside Tabs must flatten to __ keys"
+        );
+        assert_eq!(
+            flat.get("social__twitter").map(String::as_str),
+            Some("https://test.at")
+        );
+        assert!(
+            !flat.contains_key("social"),
+            "raw Group key must not survive the flatten when it's nested in Tabs"
+        );
+    }
+
+    /// Same regression shape but with a `Row` layout wrapper. Row and
+    /// Collapsible are transparent: a Group inside them lives at the
+    /// table's top level just like Tabs.
+    #[test]
+    fn flatten_document_values_group_inside_row() {
+        let mut fields = DocumentFields::new();
+        fields.insert("seo".to_string(), json!({"title": "Hello"}));
+
+        let defs = vec![
+            FieldDefinition::builder("row_layout", FieldType::Row)
+                .fields(vec![
+                    FieldDefinition::builder("seo", FieldType::Group)
+                        .fields(vec![
+                            FieldDefinition::builder("title", FieldType::Text).build(),
+                        ])
+                        .build(),
+                ])
+                .build(),
+        ];
+
+        let flat = flatten_document_values(&fields, &defs);
+        assert_eq!(flat.get("seo__title").map(String::as_str), Some("Hello"));
+        assert!(!flat.contains_key("seo"));
     }
 
     fn test_translations() -> Translations {

@@ -21,7 +21,7 @@ use crate::{
     },
     core::auth::{AuthUser, Claims},
     db::query::AccessResult,
-    service,
+    service::{self, RunnerReadHooks},
 };
 
 /// GET /`admin/collections/{slug}/{id}/versions/{version_id}/restore` — confirmation page
@@ -58,8 +58,16 @@ pub async fn restore_confirm(
         return server_error(&state, "Database error");
     };
 
+    // `find_version_by_id` (called by `load_version_with_missing_relations`)
+    // runs an access check against the collection's `read` access ref, so
+    // `ServiceContext.read_hooks` must be wired or it errors out with
+    // "read_hooks not set" → 500. The version list handler does the same.
+    let read_hooks = RunnerReadHooks::new(&state.hook_runner, &conn);
+    let user_doc = auth_user.as_ref().map(|Extension(u)| &u.user_doc);
     let version_ctx = service::ServiceContext::collection(&slug, &def)
         .conn(&conn)
+        .read_hooks(&read_hooks)
+        .user(user_doc)
         .build();
 
     let (version, missing) = match load_version_with_missing_relations(
