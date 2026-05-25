@@ -1268,3 +1268,123 @@ async fn grpc_create_published_sets_status() {
     let status = query::get_document_status(&conn, "articles", &doc.id).unwrap();
     assert_eq!(status.as_deref(), Some("published"));
 }
+
+// ── Production-critical: FK cascade fires through the full service path ──
+//
+// Mirrors the gRPC `DeleteMany` + `forceHardDelete: true` path used by the
+// loadtest. Build a versioned + soft-delete collection, create rows + version
+// snapshots, then hard-delete via the bulk service entry point. Asserts the
+// `_versions_*` rows are gone — i.e. SQLite's FK cascade fires as designed
+// even when the request goes through the multi-stage service pipeline
+// (transaction_immediate → query::find → query::delete inside a tx). A
+// regression here would silently bloat `_versions_<collection>` on every
+// hard delete in production.
+
+#[test]
+fn bulk_hard_delete_cascades_to_versions_via_service() {
+    use crap_cms::db::{Filter, FilterClause, FilterOp};
+    use crap_cms::hooks::lifecycle::HookRunner;
+    use crap_cms::service::{DeleteManyOptions, ServiceContext, delete_many};
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    // Versioned + soft-delete collection — same shape as the example's
+    // `posts` collection used in `tests/grpc_loadtest.sh`.
+    let mut def = make_versioned_def();
+    def.slug = "articles".into();
+    def.soft_delete = true;
+
+    let (_tmp, pool, registry) = setup_db(vec![def.clone()]);
+
+    let tmp_runner_dir = tempdir().expect("tempdir for hook runner");
+    let cfg = CrapConfig::test_default();
+    let runner = HookRunner::builder()
+        .config_dir(tmp_runner_dir.path())
+        .registry(Arc::clone(&registry))
+        .config(&cfg)
+        .build()
+        .expect("build hook runner");
+
+    // Create 3 versioned articles + 2 explicit version snapshots each.
+    let conn = pool.get().unwrap();
+    let mut doc_ids = Vec::new();
+    for i in 0..3 {
+        let data: DocumentFields = [("title".to_string(), json!(format!("Article {i}")))]
+            .into_iter()
+            .collect();
+        let doc = query::create(&conn, "articles", &def, &data, None).unwrap();
+        let snap = query::build_snapshot(&conn, "articles", &def.fields, &doc).unwrap();
+        query::create_version(&conn, "articles", &doc.id, "published", &snap).unwrap();
+        query::create_version(&conn, "articles", &doc.id, "draft", &snap).unwrap();
+        doc_ids.push(doc.id.to_string());
+    }
+    drop(conn);
+
+    // Pre-condition: 6 versions total (3 docs × 2 versions each).
+    let pre_versions: i64 = pool
+        .get()
+        .unwrap()
+        .query_one("SELECT COUNT(*) AS c FROM _versions_articles", &[])
+        .unwrap()
+        .unwrap()
+        .get_i64("c")
+        .unwrap();
+    assert_eq!(pre_versions, 6, "fixture should have 6 versions");
+
+    // Simulate the gRPC `forceHardDelete: true` path: clear soft_delete
+    // on the def before calling the service. This matches what
+    // `delete_many_impl` does at `src/api/handlers/collection/bulk/delete_many.rs:122`.
+    let mut hard_delete_def = def.clone();
+    hard_delete_def.soft_delete = false;
+
+    let ctx = ServiceContext::collection("articles", &hard_delete_def)
+        .pool(&pool)
+        .runner(&runner)
+        .build();
+
+    // Match all 3 docs via an `id IN (…)` filter, the same way the loadtest's
+    // `slug LIKE 'loadtest-ghz-%'` would match its rows.
+    let filters = vec![FilterClause::Single(Filter {
+        field: "id".to_string(),
+        op: FilterOp::In(doc_ids.clone()),
+    })];
+
+    let result = delete_many(&ctx, &filters, &cfg.locale, &DeleteManyOptions::default())
+        .expect("delete_many should succeed");
+
+    assert_eq!(result.hard_deleted, 3, "all 3 docs must be hard-deleted");
+    assert_eq!(result.soft_deleted, 0);
+    assert_eq!(result.skipped, 0);
+
+    // The posts rows are gone.
+    let post_rows: i64 = pool
+        .get()
+        .unwrap()
+        .query_one("SELECT COUNT(*) AS c FROM articles", &[])
+        .unwrap()
+        .unwrap()
+        .get_i64("c")
+        .unwrap();
+    assert_eq!(
+        post_rows, 0,
+        "articles table must be empty after hard delete"
+    );
+
+    // **Critical**: FK cascade must have fired — every `_versions_articles`
+    // row should be gone, not orphaned. This is what we measured failing in
+    // the bench environment (61k orphans accumulated across runs); if this
+    // assertion ever fires, production deployments leak versioned data.
+    let post_versions: i64 = pool
+        .get()
+        .unwrap()
+        .query_one("SELECT COUNT(*) AS c FROM _versions_articles", &[])
+        .unwrap()
+        .unwrap()
+        .get_i64("c")
+        .unwrap();
+    assert_eq!(
+        post_versions, 0,
+        "FK cascade must remove _versions_articles rows when parent articles are hard-deleted; \
+         orphaned versions indicate `PRAGMA foreign_keys` is not active for the delete path"
+    );
+}

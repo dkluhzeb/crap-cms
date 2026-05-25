@@ -372,21 +372,30 @@ scenario_create() {
     deleted=$(echo "$result" | jq -r '((.deleted // "0") | tonumber) + ((.softDeleted // "0") | tonumber)')
     ok "Cleaned up ${deleted} loadtest posts"
 
-    # SQLite-side cleanup: the gRPC hard-delete drops the posts rows
-    # but leaves the `_versions_posts` rows orphaned (FK cascade is
-    # declared in the schema but doesn't fire — `PRAGMA foreign_keys`
-    # defaults to OFF in SQLite). Without this purge, every bench run
-    # accumulates ~`requests` rows in the versions table, bloating the
-    # DB file and flooding SQLite's page cache. We measured this:
-    # without cleanup, `count @ 50` and `find_by_id @ 50` drop to ~1/3
-    # of baseline after a few back-to-back bench runs; with cleanup,
-    # they stay at baseline.
+    # Bench-environment hygiene: scrub orphaned `_versions_posts` rows.
     #
-    # Postgres-backed deployments enforce the FK so this is a no-op
-    # there; only the SQLite local-dev path needs the extra DELETE.
-    # We point at `./example/data/crap.db` by default (matches the
-    # `cargo run -- -C ./example serve` invocation in the script
-    # preamble); override with `LOADTEST_DB=/path/to/db`.
+    # The gRPC hard-delete above DOES cascade-delete versions in
+    # production — SQLite `ON DELETE CASCADE` fires because the pool
+    # sets `PRAGMA foreign_keys = ON` on every connection acquisition.
+    # See `db::pool::tests::fk_cascade_*` and
+    # `tests/versions.rs::bulk_hard_delete_cascades_to_versions_via_service`
+    # for the proof.
+    #
+    # This purge exists for the BENCH environment specifically:
+    # - Runs from before commit 28334c72 used soft-delete (no
+    #   `forceHardDelete: true`), which left posts + their versions
+    #   intact. Tens of thousands of those orphans accumulated in
+    #   `example/data/crap.db` and bloat the SQLite page cache; we
+    #   measured `count @ 50` and `find_by_id @ 50` drop to ~1/3 of
+    #   baseline once `_versions_posts` grew past ~50k rows.
+    # - Interrupted bench runs that don't reach this cleanup step also
+    #   leave soft-deleted residue when the create scenario hasn't
+    #   finished.
+    #
+    # The DELETE is gated on `_parent NOT IN (SELECT id FROM posts)`
+    # so it only touches genuinely orphaned rows. Default DB path
+    # matches the `cargo run -- -C ./example serve` invocation in the
+    # script preamble; override with `LOADTEST_DB=/path/to/db`.
     local loadtest_db="${LOADTEST_DB:-./example/data/crap.db}"
     if [[ -f "$loadtest_db" ]] && command -v sqlite3 >/dev/null 2>&1; then
         info "  Purging orphaned version rows from $loadtest_db..."

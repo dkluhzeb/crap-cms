@@ -292,4 +292,94 @@ mod tests {
         let checkpoint = row.unwrap().get_i64("wal_autocheckpoint").unwrap();
         assert_eq!(checkpoint, 1000, "wal_autocheckpoint should be 1000");
     }
+
+    /// Production-critical: foreign-key cascade must fire when a parent
+    /// row is deleted through a pooled connection. If this regresses,
+    /// every hard-delete of a versioned document leaves orphan rows in
+    /// `_versions_<collection>` that grow without bound. Mirrors the
+    /// real `_versions_posts → posts(id) ON DELETE CASCADE` schema.
+    #[test]
+    fn fk_cascade_fires_on_pooled_connection_delete() {
+        let (_dir, pool) = temp_pool();
+        let conn = pool.get().expect("failed to get connection");
+
+        conn.execute_batch(
+            "CREATE TABLE posts (id TEXT PRIMARY KEY);
+             CREATE TABLE _versions_posts (
+                id TEXT PRIMARY KEY,
+                _parent TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+                snapshot TEXT
+             );
+             INSERT INTO posts (id) VALUES ('p1'), ('p2');
+             INSERT INTO _versions_posts VALUES \
+                ('v1', 'p1', '{}'), \
+                ('v2', 'p1', '{}'), \
+                ('v3', 'p2', '{}');",
+        )
+        .unwrap();
+
+        let before = conn
+            .query_one("SELECT COUNT(*) AS c FROM _versions_posts", &[])
+            .unwrap()
+            .unwrap()
+            .get_i64("c")
+            .unwrap();
+        assert_eq!(before, 3, "fixture: 3 versions before delete");
+
+        conn.execute("DELETE FROM posts WHERE id = 'p1'", &[])
+            .unwrap();
+
+        let after = conn
+            .query_one("SELECT COUNT(*) AS c FROM _versions_posts", &[])
+            .unwrap()
+            .unwrap()
+            .get_i64("c")
+            .unwrap();
+
+        assert_eq!(
+            after, 1,
+            "FK cascade must remove v1 + v2 when p1 is deleted; only v3 (p2's version) should remain"
+        );
+    }
+
+    /// Sibling check: cascade fires *across* connection boundaries when
+    /// a different pooled connection observes the parent table after
+    /// the delete. Catches a class of "FK ON for the writer but OFF for
+    /// the reader" misconfigurations that would let orphans accumulate
+    /// in production where many connections share the pool.
+    #[test]
+    fn fk_cascade_visible_across_pool_connections() {
+        let (_dir, pool) = temp_pool();
+        let writer = pool.get().expect("writer connection");
+
+        writer
+            .execute_batch(
+                "CREATE TABLE posts (id TEXT PRIMARY KEY);
+                 CREATE TABLE _versions_posts (
+                    id TEXT PRIMARY KEY,
+                    _parent TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+                    snapshot TEXT
+                 );
+                 INSERT INTO posts (id) VALUES ('p1');
+                 INSERT INTO _versions_posts VALUES ('v1', 'p1', '{}');",
+            )
+            .unwrap();
+
+        writer
+            .execute("DELETE FROM posts WHERE id = 'p1'", &[])
+            .unwrap();
+
+        // Drop the writer so r2d2 returns it to the pool, then read on
+        // a freshly-acquired connection.
+        drop(writer);
+
+        let reader = pool.get().expect("reader connection");
+        let count = reader
+            .query_one("SELECT COUNT(*) AS c FROM _versions_posts", &[])
+            .unwrap()
+            .unwrap()
+            .get_i64("c")
+            .unwrap();
+        assert_eq!(count, 0, "orphaned version row must be gone after cascade");
+    }
 }
