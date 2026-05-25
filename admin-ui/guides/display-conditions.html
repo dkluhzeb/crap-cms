@@ -15,8 +15,8 @@
         <link rel="icon" href="../../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../../css/general-2459343d.css">
-        <link rel="stylesheet" href="../../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-d82968e4.js";
+            window.path_to_searchindex_js = "../../searchindex-f41986e9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../../toc-094f01c0.js"></script>
+        <script src="../../toc-e21319d4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -198,25 +198,27 @@
 <h3 id="client-side-condition-table"><a class="header" href="#client-side-condition-table">Client-Side (Condition Table)</a></h3>
 <p>When the function returns a <strong>table</strong>, it is serialized to JSON and embedded in the HTML. JavaScript evaluates it instantly on field changes — no server round-trip.</p>
 <pre><code class="language-lua">-- hooks/posts/show_external_url.lua
----@param data crap.data.Posts
----@return table
-return function(data)
+return crap.collections.posts.condition(function(data)
+    -- data is typed crap.data.Posts; data.post_type narrows to its select union
     return { field = "post_type", equals = "link" }
-end
+end)
 </code></pre>
+<p>The <code>crap.collections.posts.condition(fn)</code> factory narrows <code>data</code> to
+<code>crap.data.Posts</code> for body-level autocomplete. See
+<a href="../../lua-api/collections.html"><code>crap.collections.&lt;slug&gt;.condition</code></a>
+and <a href="../../lua-api/typing-factories.html"><code>crap.any.display_condition</code></a>
+for the generic equivalent.</p>
 <h3 id="server-side-boolean"><a class="header" href="#server-side-boolean">Server-Side (Boolean)</a></h3>
 <p>When the function returns a <strong>boolean</strong>, the field visibility is re-evaluated on the server via a debounced fetch (300ms delay after the last input change). Use this for complex logic that can’t be expressed as a simple condition table.</p>
 <pre><code class="language-lua">-- hooks/posts/show_premium_options.lua
----@param data crap.data.Posts
----@return boolean
-return function(data)
+return crap.collections.posts.condition(function(data)
     -- Complex logic that needs server-side evaluation
     local tags = data.tags or {}
     for _, tag in ipairs(tags) do
         if tag == "premium" then return true end
     end
     return false
-end
+end)
 </code></pre>
 <blockquote>
 <p><strong>Performance tip:</strong> Prefer condition tables over booleans whenever possible. Tables evaluate instantly in the browser; booleans require a server round-trip on every field change.</p>
@@ -240,14 +242,12 @@ end
 <h2 id="multiple-conditions-and"><a class="header" href="#multiple-conditions-and">Multiple Conditions (AND)</a></h2>
 <p>Return an array of condition tables to require all conditions to be true:</p>
 <pre><code class="language-lua">-- hooks/posts/show_advanced.lua
----@param data crap.data.Posts
----@return table
-return function(data)
+return crap.collections.posts.condition(function(data)
     return {
         { field = "post_type", not_equals = "link" },
         { field = "excerpt", is_truthy = true },
     }
-end
+end)
 </code></pre>
 <h2 id="how-it-works"><a class="header" href="#how-it-works">How It Works</a></h2>
 <h3 id="page-load"><a class="header" href="#page-load">Page Load</a></h3>
@@ -337,11 +337,11 @@ end
 
         <script src="../../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../../mark-09e88c2c.min.js"></script>
-        <script src="../../searcher-c2a407aa.js"></script>
+        <script src="../../searcher-09f2665d.js"></script>
 
         <script src="../../clipboard-1626706a.min.js"></script>
         <script src="../../highlight-abc7f01d.js"></script>
-        <script src="../../book-a0b12cfe.js"></script>
+        <script src="../../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

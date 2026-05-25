@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d82968e4.js";
+            window.path_to_searchindex_js = "../searchindex-f41986e9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-094f01c0.js"></script>
+        <script src="../toc-e21319d4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -190,11 +190,14 @@ smtp_tls = "starttls"    # "starttls" (default), "tls" (implicit), "none" (plain
 from_address = "noreply@example.com"
 from_name = "My App"
 
-# Queue settings for crap.email.queue()
-queue_retries = 3        # retry count (default: 3)
-queue_name = "email"     # job queue name (default: "email")
-queue_timeout = 30       # per-attempt timeout in seconds (default: 30)
-queue_concurrency = 5    # max concurrent queued emails (default: 5)
+# Background email delivery (queue retries / timeout / concurrency)
+# lives under [jobs.queues.email] — same per-queue mechanism as image
+# conversions. Framework defaults are sane for typical SMTP setups, so
+# you only need this block when you want to tune it.
+[jobs.queues.email]
+retries     = 3          # default: 3 — total attempts = retries + 1
+timeout     = "30s"      # default: 30s — per-attempt wall-clock timeout
+concurrency = 5          # default: 5 — max concurrent emails in flight
 </code></pre>
 <p>If <code>smtp_host</code> is empty with the default <code>smtp</code> provider, emails are logged instead of sent (equivalent to <code>provider = "log"</code>).</p>
 <h2 id="crapemailsendopts"><a class="header" href="#crapemailsendopts">crap.email.send(opts)</a></h2>
@@ -233,7 +236,7 @@ queue_concurrency = 5    # max concurrent queued emails (default: 5)
 <tr><td><code>subject</code></td><td>string</td><td>yes</td><td>Email subject line</td></tr>
 <tr><td><code>html</code></td><td>string</td><td>yes</td><td>HTML email body</td></tr>
 <tr><td><code>text</code></td><td>string</td><td>no</td><td>Plain text fallback body</td></tr>
-<tr><td><code>retries</code></td><td>integer</td><td>no</td><td>Override retry count from config (default: <code>email.queue_retries</code>)</td></tr>
+<tr><td><code>retries</code></td><td>integer</td><td>no</td><td>Override retry count from config (default: <code>[jobs.queues.email] retries</code>)</td></tr>
 </tbody>
 </table>
 </div>
@@ -346,11 +349,11 @@ end
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

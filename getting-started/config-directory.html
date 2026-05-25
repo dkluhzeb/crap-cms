@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d82968e4.js";
+            window.path_to_searchindex_js = "../searchindex-f41986e9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-094f01c0.js"></script>
+        <script src="../toc-e21319d4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -212,8 +212,10 @@
 ├── uploads/               # Uploaded files (auto-created per collection)
 │   └── media/
 └── types/                 # Auto-generated type definitions (see `typegen`)
-    ├── crap.lua           # API surface types (crap.* functions)
-    └── generated.lua      # Per-collection types (data, doc, hook, filters)
+    ├── crap.lua           # API surface (crap.* functions, hook context, …)
+    ├── hooks.lua          # Per-collection hook types (data, doc, filters)
+    ├── client.&lt;ext&gt;       # Per-collection types for API clients (ts, go, py, rs)
+    └── proto.rs           # (optional) `From&lt;proto::Document&gt;` impls for Rust gRPC
 </code></pre>
 <p>The <code>access/</code>, <code>jobs/</code>, <code>plugins/</code>, <code>migrations/</code>, <code>templates/</code>, and <code>static/</code> directories are created empty by <code>crap-cms init</code> — populate them as needed. The <code>translations/</code> directory is not scaffolded; create it yourself when you want to override admin UI strings (see <a href="../locale/overview.html">Localization</a>).</p>
 <h2 id="file-loading-order"><a class="header" href="#file-loading-order">File Loading Order</a></h2>
@@ -235,10 +237,15 @@
     "workspace": { "library": ["./types"] }
 }
 </code></pre>
-<p>Generate type definitions with:</p>
-<pre><code class="language-bash">crap-cms typegen
+<p>Generate the server-side Lua type definitions with:</p>
+<pre><code class="language-bash">crap-cms typegen lua
 </code></pre>
-<p>This writes two files: <code>types/crap.lua</code> (API surface types for the <code>crap.*</code> functions) and <code>types/generated.lua</code> (per-collection types derived from your field definitions). Use <code>-l all</code> to generate types for all supported languages.</p>
+<p>This writes two files: <code>types/crap.lua</code> (the <code>crap.*</code> API surface) and <code>types/hooks.lua</code> (per-collection hook/data/doc shapes derived from your field definitions). Under <code>admin.dev_mode = true</code>, <code>crap-cms serve</code> regenerates them on every startup so they stay in sync while you iterate.</p>
+<p>External API consumers (TypeScript, Go, Python, Rust) get their own per-collection types via:</p>
+<pre><code class="language-bash">crap-cms typegen client -l ts          # types/client.ts
+crap-cms typegen client -l ts,go,py    # multiple languages in one pass
+</code></pre>
+<p>See <a href="../cli/flags.html#typegen--generate-typed-definitions"><code>typegen</code></a> for the full subcommand reference.</p>
 
                     </main>
 
@@ -284,11 +291,11 @@
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

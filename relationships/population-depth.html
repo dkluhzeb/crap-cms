@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d82968e4.js";
+            window.path_to_searchindex_js = "../searchindex-f41986e9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-094f01c0.js"></script>
+        <script src="../toc-e21319d4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -239,10 +239,10 @@ grpcurl -plaintext -d '{
 </code></pre>
 <h3 id="lua-api"><a class="header" href="#lua-api">Lua API</a></h3>
 <pre><code class="language-lua">-- Find with depth
-local result = crap.collections.find("posts", { depth = 1 })
+local result = crap.collections.posts.find({ depth = 1 })
 
 -- FindByID with depth
-local post = crap.collections.find_by_id("posts", id, { depth = 2 })
+local post = crap.collections.posts.find_by_id(id, { depth = 2 })
 </code></pre>
 <h2 id="circular-reference-protection"><a class="header" href="#circular-reference-protection">Circular Reference Protection</a></h2>
 <p>The population algorithm tracks visited <code>(collection, id)</code> pairs. If a document has already been visited in the current recursion path, it’s kept as a plain ID string instead of being populated again.</p>
@@ -337,11 +337,11 @@ max_age_secs = 60        # Optional: periodic full cache clear (default: 0 = off
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d82968e4.js";
+            window.path_to_searchindex_js = "../searchindex-f41986e9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-094f01c0.js"></script>
+        <script src="../toc-e21319d4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -186,8 +186,9 @@
 <tr><th>Namespace</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>crap.collections</code></td><td>Collection definition and CRUD operations</td></tr>
-<tr><td><code>crap.globals</code></td><td>Global definition and get/update operations</td></tr>
+<tr><td><code>crap.collections</code></td><td>Collection definition, CRUD operations, and per-collection typing factories (<code>crap.collections.&lt;slug&gt;.{hook,field_hook,condition,access,auth_strategy,row_label}</code>)</td></tr>
+<tr><td><code>crap.globals</code></td><td>Global definition, get/update, and per-global typing factories</td></tr>
+<tr><td><code>crap.any</code></td><td>Cross-collection typing factories — <code>crap.any.{collection_hook,field_hook,access,auth_strategy,job_handler,row_label,display_condition}</code></td></tr>
 <tr><td><code>crap.fields</code></td><td>Field factory functions (<code>crap.fields.text()</code>, etc.)</td></tr>
 <tr><td><code>crap.hooks</code></td><td>Global hook registration</td></tr>
 <tr><td><code>crap.jobs</code></td><td>Job definition</td></tr>
@@ -205,8 +206,61 @@
 </tbody>
 </table>
 </div>
+<h2 id="typed-hook-factories"><a class="header" href="#typed-hook-factories">Typed hook factories</a></h2>
+<p>Every callable a Lua user writes — collection hooks, field hooks,
+access functions, auth strategies, job handlers, row labels, display
+conditions — should be wrapped in a <strong>typing factory</strong> so the editor
+can infer the parameter types of the function body.</p>
+<pre><code class="language-lua">-- Per-collection: ctx narrows to crap.hook.Posts
+return crap.collections.posts.hook(function(context)
+    -- context.data.title, context.operation, etc. all typed
+    return context
+end)
+
+-- Per-collection per-field: value narrows to the field's type
+return crap.collections.posts.field_hook("title", function(value, context)
+    -- value: string (from posts.title's text field)
+    return value:lower()
+end)
+
+-- Cross-collection generic (hook that runs on multiple collections)
+return crap.any.field_hook(function(value, context)
+    -- value: any, context: crap.FieldHookContext
+    return value
+end)
+
+-- Access function (uniform context across all collections)
+return crap.any.access(function(context)
+    return context.user ~= nil
+end)
+</code></pre>
+<p>The factories are pure pass-throughs at runtime (<code>f(fn) = fn</code>); they
+exist solely so LuaLS can propagate the typed parameter slot into
+your function body’s locals. Requires <code>"type.inferParamType": true</code>
+in your <code>.luarc.json</code> — included in the <code>init</code> scaffold by default.</p>
+<p>See <a href="collections.html"><code>crap.collections</code></a> and <a href="globals.html"><code>crap.globals</code></a>
+for the full per-slug factory surface; <a href="typing-factories.html"><code>crap.any</code></a>
+for the cross-collection helpers.</p>
+<h2 id="two-ways-to-address-a-collection"><a class="header" href="#two-ways-to-address-a-collection">Two ways to address a collection</a></h2>
+<p>Every defined collection is reachable in two forms:</p>
+<ul>
+<li><strong>Per-collection accessor (recommended for static slugs):</strong>
+<code>crap.collections.&lt;slug&gt;.find(query)</code>, <code>crap.collections.&lt;slug&gt;.create(data)</code>,
+…  Slug is bound, return values fully typed for editor autocomplete.</li>
+<li><strong>Slug-keyed dispatch (required for dynamic slugs):</strong>
+<code>crap.collections.find(slug, query)</code>, <code>crap.collections.create(slug, data)</code>,
+…  Same semantics, slug passed at call time. Use when the collection
+varies at runtime (auth strategies, generic plugins, migration loops).</li>
+</ul>
+<p>Globals follow the same pattern: <code>crap.globals.&lt;slug&gt;.{get,update}(...)</code>
+versus <code>crap.globals.{get,update}(slug, ...)</code>.</p>
+<p>See <a href="collections.html"><code>crap.collections</code></a> and <a href="globals.html"><code>crap.globals</code></a>
+for the full surface of each accessor.</p>
 <h2 id="crud-availability"><a class="header" href="#crud-availability">CRUD Availability</a></h2>
-<p>CRUD functions (<code>crap.collections.find</code>, <code>.create</code>, <code>.update</code>, <code>.delete</code>, <code>crap.globals.get</code>, <code>.update</code>) are <strong>only available inside hooks with transaction context</strong>:</p>
+<p>CRUD functions (whether called as <code>crap.collections.&lt;slug&gt;.find(...)</code> or
+<code>crap.collections.find(slug, ...)</code>, and <code>crap.globals.&lt;slug&gt;.{get,update}(...)</code>
+or the slug-keyed equivalents) are <strong>only available inside hooks with
+transaction context</strong>:</p>
 <ul>
 <li><code>before_validate</code> hooks — Yes</li>
 <li><code>before_change</code> hooks — Yes</li>
@@ -273,11 +327,11 @@ with transaction context (before_change, before_delete, etc.)
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

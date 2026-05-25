@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d82968e4.js";
+            window.path_to_searchindex_js = "../searchindex-f41986e9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-094f01c0.js"></script>
+        <script src="../toc-e21319d4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -211,7 +211,7 @@
 <h2 id="sorting"><a class="header" href="#sorting">Sorting</a></h2>
 <p>Prefix a field name with <code>-</code> for descending order. When <code>order_by</code> is omitted, results are sorted by <code>created_at DESC</code> (newest first) for collections with timestamps, or <code>id ASC</code> otherwise. When sorting by a non-id field, an <code>id</code> tiebreaker is always appended for stable ordering.</p>
 <p><strong>Lua:</strong></p>
-<pre><code class="language-lua">crap.collections.find("posts", { order_by = "-created_at" })
+<pre><code class="language-lua">crap.collections.posts.find({ order_by = "-created_at" })
 </code></pre>
 <p><strong>gRPC:</strong></p>
 <pre><code class="language-bash">grpcurl -plaintext -d '{
@@ -222,7 +222,7 @@
 <h2 id="pagination"><a class="header" href="#pagination">Pagination</a></h2>
 <p>Use <code>limit</code> and <code>page</code> for pagination. The response includes a nested <code>pagination</code> object with total count and page info.</p>
 <p><strong>Lua:</strong></p>
-<pre><code class="language-lua">local result = crap.collections.find("posts", {
+<pre><code class="language-lua">local result = crap.collections.posts.find({
     limit = 10,
     page = 3,
 })
@@ -249,7 +249,7 @@
 <p><code>after_cursor</code>/<code>before_cursor</code> and <code>page</code> are mutually exclusive. <code>after_cursor</code> and <code>before_cursor</code> are also mutually exclusive with each other.</p>
 <p><strong>Lua:</strong></p>
 <pre><code class="language-lua">-- First page
-local result = crap.collections.find("posts", {
+local result = crap.collections.posts.find({
     order_by = "-created_at",
     limit = 10,
 })
@@ -259,14 +259,14 @@ local result = crap.collections.find("posts", {
 -- result.pagination.endCursor    = "eyJpZCI6Inh5ejc4OSJ9"  (cursor of last doc)
 
 -- Next page (forward)
-local page2 = crap.collections.find("posts", {
+local page2 = crap.collections.posts.find({
     order_by = "-created_at",
     limit = 10,
     after_cursor = result.pagination.endCursor,
 })
 
 -- Previous page (backward)
-local page1_again = crap.collections.find("posts", {
+local page1_again = crap.collections.posts.find({
     order_by = "-created_at",
     limit = 10,
     before_cursor = page2.pagination.startCursor,
@@ -301,7 +301,7 @@ grpcurl -plaintext -d '{
 <h2 id="combining-filters"><a class="header" href="#combining-filters">Combining Filters</a></h2>
 <p>Multiple filters are combined with AND:</p>
 <p><strong>Lua:</strong></p>
-<pre><code class="language-lua">crap.collections.find("posts", {
+<pre><code class="language-lua">crap.collections.posts.find({
     where = {
         status = "published",
         created_at = { greater_than = "2024-01-01" },
@@ -323,7 +323,7 @@ grpcurl -plaintext -d '{
 <p>Use the <code>or</code> key to combine groups of conditions with OR logic. Each element in the <code>or</code> array is an object whose fields are AND-ed together. Multiple <code>or</code> groups are joined with OR.</p>
 <p><strong>Lua:</strong></p>
 <pre><code class="language-lua">-- title contains "hello" OR category = "news"
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         ["or"] = {
             { title = { contains = "hello" } },
@@ -333,7 +333,7 @@ crap.collections.find("posts", {
 })
 
 -- status = "published" AND (title contains "hello" OR title contains "world")
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         status = "published",
         ["or"] = {
@@ -344,7 +344,7 @@ crap.collections.find("posts", {
 })
 
 -- Multi-condition groups: (status = "published" AND title contains "hello") OR (status = "draft")
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         ["or"] = {
             { status = "published", title = { contains = "hello" } },
@@ -371,12 +371,12 @@ grpcurl -plaintext -d '{
 <p>Use <code>select</code> to specify which fields to return. Reduces data transfer and skips relationship hydration/population for non-selected fields. The <code>id</code>, <code>created_at</code>, and <code>updated_at</code> fields are always included.</p>
 <p><strong>Lua:</strong></p>
 <pre><code class="language-lua">-- Return only title and status
-crap.collections.find("posts", {
+crap.collections.posts.find({
     select = { "title", "status" },
 })
 
 -- Works with find_by_id too
-crap.collections.find_by_id("posts", id, {
+crap.collections.posts.find_by_id(id, {
     select = { "title", "status" },
 })
 </code></pre>
@@ -407,13 +407,13 @@ grpcurl -plaintext -d '{
 <p>Collections with <code>versions = { drafts = true }</code> automatically filter by <code>_status = 'published'</code> on <code>Find</code> queries. Use the <code>draft</code> parameter to change this behavior.</p>
 <p><strong>Lua:</strong></p>
 <pre><code class="language-lua">-- Default: only published documents
-local published = crap.collections.find("articles", {})
+local published = crap.collections.articles.find({})
 
 -- Include drafts
-local all = crap.collections.find("articles", { draft = true })
+local all = crap.collections.articles.find({ draft = true })
 
 -- FindByID: get the latest version (may be a draft)
-local latest = crap.collections.find_by_id("articles", id, { draft = true })
+local latest = crap.collections.articles.find_by_id(id, { draft = true })
 </code></pre>
 <p><strong>gRPC:</strong></p>
 <pre><code class="language-bash"># Default: only published
@@ -435,7 +435,7 @@ grpcurl -plaintext -d '{"collection": "articles", "id": "abc123", "draft": true}
 <h3 id="group-fields"><a class="header" href="#group-fields">Group Fields</a></h3>
 <p>Group sub-fields can be filtered using dot notation. Internally, <code>seo.meta_title</code> is converted to <code>seo__meta_title</code> (the flat column name). The double-underscore syntax also continues to work.</p>
 <p><strong>Lua:</strong></p>
-<pre><code class="language-lua">crap.collections.find("pages", {
+<pre><code class="language-lua">crap.collections.pages.find({
     where = {
         ["seo.meta_title"] = { contains = "SEO" },
     },
@@ -451,7 +451,7 @@ grpcurl -plaintext -d '{"collection": "articles", "id": "abc123", "draft": true}
 <p>Filter by sub-field values in array rows. Uses an <code>EXISTS</code> subquery against the array join table. Returns parent documents that have <strong>at least one</strong> array row matching the condition.</p>
 <p><strong>Lua:</strong></p>
 <pre><code class="language-lua">-- Find products where any variant has color "red"
-crap.collections.find("products", {
+crap.collections.products.find({
     where = {
         ["variants.color"] = "red",
     },
@@ -459,7 +459,7 @@ crap.collections.find("products", {
 
 -- Group-in-array: filter by a group sub-field within array rows
 -- (uses json_extract on the JSON column in the join table)
-crap.collections.find("products", {
+crap.collections.products.find({
     where = {
         ["variants.dimensions.width"] = "10",
     },
@@ -469,21 +469,21 @@ crap.collections.find("products", {
 <p>Filter by field values inside block rows. Uses <code>json_extract</code> on the block <code>data</code> column. Returns parent documents that have <strong>at least one</strong> block row matching.</p>
 <p><strong>Lua:</strong></p>
 <pre><code class="language-lua">-- Find posts where any content block has body containing "hello"
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         ["content.body"] = { contains = "hello" },
     },
 })
 
 -- Filter by block type
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         ["content._block_type"] = "image",
     },
 })
 
 -- Group-in-block: filter by a group sub-field within block data
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         ["content.meta.author"] = "Alice",
     },
@@ -493,7 +493,7 @@ crap.collections.find("posts", {
 <p>Filter by related document IDs. Uses an <code>EXISTS</code> subquery against the relationship join table.</p>
 <p><strong>Lua:</strong></p>
 <pre><code class="language-lua">-- Find posts that have tag "tag-123"
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         ["tags.id"] = "tag-123",
     },
@@ -502,7 +502,7 @@ crap.collections.find("posts", {
 <h3 id="combining-nested-and-regular-filters"><a class="header" href="#combining-nested-and-regular-filters">Combining Nested and Regular Filters</a></h3>
 <p>Nested field filters can be freely combined with regular column filters and OR groups:</p>
 <p><strong>Lua:</strong></p>
-<pre><code class="language-lua">crap.collections.find("products", {
+<pre><code class="language-lua">crap.collections.products.find({
     where = {
         status = "published",
         ["variants.color"] = "red",
@@ -517,7 +517,7 @@ crap.collections.find("posts", {
 <h2 id="full-text-search"><a class="header" href="#full-text-search">Full-Text Search</a></h2>
 <p>Use the <code>search</code> parameter for fast full-text search powered by SQLite FTS5. This searches across all text-like fields (text, textarea, richtext, email, code) or the fields specified in <code>list_searchable_fields</code> in the collection’s admin config.</p>
 <p><strong>Lua:</strong></p>
-<pre><code class="language-lua">local result = crap.collections.find("posts", {
+<pre><code class="language-lua">local result = crap.collections.posts.find({
     search = "hello world",
     limit = 10,
 })
@@ -604,11 +604,11 @@ crap.collections.find("posts", {
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d82968e4.js";
+            window.path_to_searchindex_js = "../searchindex-f41986e9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-094f01c0.js"></script>
+        <script src="../toc-e21319d4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,7 +180,12 @@
                         <h1 id="crapglobals"><a class="header" href="#crapglobals">crap.globals</a></h1>
 <p>Global (singleton document) definition and runtime operations.</p>
 <h2 id="crapglobalsdefineslug-config"><a class="header" href="#crapglobalsdefineslug-config">crap.globals.define(slug, config)</a></h2>
-<p>Define a new global. Call this in global definition files (<code>globals/*.lua</code>).</p>
+<p>Define a new global. <strong>Init-only:</strong> call this from <code>globals/*.lua</code>,
+<code>init.lua</code>, or any file loaded by <code>require</code> from those — i.e. while
+the <code>InitPhase</code> marker is set on the VM. Runtime calls error with:</p>
+<blockquote>
+<p><code>crap.globals.define must be called from a definition file or init.lua. To change a registered global, edit the file and restart the process.</code></p>
+</blockquote>
 <pre><code class="language-lua">crap.globals.define("site_settings", {
     labels = { singular = "Site Settings" },
     fields = {
@@ -192,90 +197,75 @@
 <p>See <a href="../globals/overview.html">Globals</a> for the full config reference.</p>
 <h2 id="crapglobalsconfiggetslug"><a class="header" href="#crapglobalsconfiggetslug">crap.globals.config.get(slug)</a></h2>
 <p>Get a global’s current definition as a Lua table. The returned table is round-trip
-compatible with <code>define()</code> — you can modify it and pass it back.</p>
+compatible with <code>define()</code> — you can modify it and pass it back, <strong>inside init</strong>.</p>
 <p>Returns <code>nil</code> if the global doesn’t exist.</p>
-<pre><code class="language-lua">local def = crap.globals.config.get("site_settings")
+<pre><code class="language-lua">-- inside a definition file or init.lua
+local def = crap.globals.config.get("site_settings")
 if def then
     def.fields[#def.fields + 1] = crap.fields.textarea({ name = "footer_text" })
     crap.globals.define("site_settings", def)
 end
 </code></pre>
 <h2 id="crapglobalsconfiglist"><a class="header" href="#crapglobalsconfiglist">crap.globals.config.list()</a></h2>
-<p>Get all registered globals as a slug-keyed table. Iterate with <code>pairs()</code>.</p>
-<pre><code class="language-lua">for slug, def in pairs(crap.globals.config.list()) do
+<p>Get all registered globals as a slug-keyed table. Iterate with
+<code>pairs()</code>. The realistic bulk-modify pattern runs from <code>init.lua</code> (or
+a file it <code>require</code>s) where the strict guard on <code>define</code> doesn’t fire.</p>
+<pre><code class="language-lua">-- inside init.lua / a plugin loaded by init.lua
+for slug, def in pairs(crap.globals.config.list()) do
     -- Add a "last_updated_by" field to every global
     def.fields[#def.fields + 1] = crap.fields.text({ name = "last_updated_by" })
     crap.globals.define(slug, def)
 end
 </code></pre>
 <p>See <a href="../plugins/overview.html">Plugins</a> for patterns using these functions.</p>
-<h2 id="crapglobalsgetslug-opts"><a class="header" href="#crapglobalsgetslug-opts">crap.globals.get(slug, opts?)</a></h2>
-<p>Get a global’s current value. Returns a document table.</p>
-<p><strong>Only available inside hooks with transaction context.</strong></p>
-<h3 id="parameters"><a class="header" href="#parameters">Parameters</a></h3>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Parameter</th><th>Type</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>slug</code></td><td>string</td><td>Global slug</td></tr>
-<tr><td><code>opts</code></td><td>table (optional)</td><td>Options table</td></tr>
-</tbody>
-</table>
-</div>
-<h3 id="options"><a class="header" href="#options">Options</a></h3>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Key</th><th>Type</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>locale</code></td><td>string</td><td>Locale code (e.g., <code>"en"</code>, <code>"de"</code>). Fetches locale-specific field values. If omitted, returns the default locale data.</td></tr>
-</tbody>
-</table>
-</div>
-<pre><code class="language-lua">local settings = crap.globals.get("site_settings")
+<h2 id="runtime-operations--crapglobalsslug"><a class="header" href="#runtime-operations--crapglobalsslug">Runtime operations — <code>crap.globals.&lt;slug&gt;</code></a></h2>
+<p>Every global registered via <code>define()</code> gets a typed accessor at
+<code>crap.globals.&lt;slug&gt;</code> with <code>get</code> / <code>update</code> methods. The slug is
+bound; return values are typed as the per-global document class.</p>
+<p>Both operations are <strong>only available inside hooks with transaction
+context</strong>.</p>
+<blockquote>
+<p>For the rare dynamic-slug case (you don’t know the slug until
+runtime — e.g. iterating <code>crap.globals.config.list()</code>), call the
+slug-keyed dispatch: <code>crap.globals.get(slug, opts?)</code> /
+<code>crap.globals.update(slug, data, opts?)</code>. Same semantics, slug as
+the first arg.</p>
+</blockquote>
+<h3 id="crapglobalssluggetopts"><a class="header" href="#crapglobalssluggetopts"><code>crap.globals.&lt;slug&gt;.get(opts?)</code></a></h3>
+<p>Get a global’s current value. Returns the typed document.</p>
+<p><strong>Options:</strong> <code>locale</code> (string) — locale code (e.g. <code>"en"</code>, <code>"de"</code>).
+Fetches locale-specific field values; omit for default locale.</p>
+<pre><code class="language-lua">local settings = crap.globals.site_settings.get()
 print(settings.site_name)  -- "My Site"
 print(settings.id)         -- always "default"
 
 -- Fetch German locale data
-local settings_de = crap.globals.get("site_settings", { locale = "de" })
+local settings_de = crap.globals.site_settings.get({ locale = "de" })
 </code></pre>
-<h2 id="crapglobalsupdateslug-data-opts"><a class="header" href="#crapglobalsupdateslug-data-opts">crap.globals.update(slug, data, opts?)</a></h2>
-<p>Update a global’s value. Returns the updated document.</p>
-<p><strong>Only available inside hooks with transaction context.</strong></p>
-<h3 id="parameters-1"><a class="header" href="#parameters-1">Parameters</a></h3>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Parameter</th><th>Type</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>slug</code></td><td>string</td><td>Global slug</td></tr>
-<tr><td><code>data</code></td><td>table</td><td>Fields to update</td></tr>
-<tr><td><code>opts</code></td><td>table (optional)</td><td>Options table</td></tr>
-</tbody>
-</table>
-</div>
-<h3 id="options-1"><a class="header" href="#options-1">Options</a></h3>
+<h3 id="crapglobalsslugupdatedata-opts"><a class="header" href="#crapglobalsslugupdatedata-opts"><code>crap.globals.&lt;slug&gt;.update(data, opts?)</code></a></h3>
+<p>Update a global’s value. <code>data</code> is a partial payload — only the
+fields being changed need to be present. Returns the updated typed
+document.</p>
+<p><strong>Options:</strong></p>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>Key</th><th>Type</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>locale</code></td><td>string</td><td>Locale code (e.g., <code>"en"</code>, <code>"de"</code>). Updates locale-specific field values. If omitted, updates the default locale data.</td></tr>
+<tr><td><code>locale</code></td><td>string</td><td>Locale code. Updates locale-specific field values; omit for default locale.</td></tr>
+<tr><td><code>overrideAccess</code></td><td>boolean</td><td>Bypass the global’s <code>access.update</code> check (default <code>false</code>).</td></tr>
+<tr><td><code>hooks</code></td><td>boolean</td><td>Run lifecycle hooks (default <code>true</code>). Set <code>false</code> for seeding/migrations.</td></tr>
 </tbody>
 </table>
 </div>
-<pre><code class="language-lua">local settings = crap.globals.update("site_settings", {
+<pre><code class="language-lua">local settings = crap.globals.site_settings.update({
     site_name = "New Site Name",
     tagline = "A new beginning",
 })
 
 -- Update German locale data
-crap.globals.update("site_settings", {
+crap.globals.site_settings.update({
     site_name = "Neuer Seitenname",
 }, { locale = "de" })
 </code></pre>
@@ -288,7 +278,7 @@ crap.globals.update("site_settings", {
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../lua-api/hooks.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../lua-api/typing-factories.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -302,7 +292,7 @@ crap.globals.update("site_settings", {
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../lua-api/hooks.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../lua-api/typing-factories.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -324,11 +314,11 @@ crap.globals.update("site_settings", {
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d82968e4.js";
+            window.path_to_searchindex_js = "../searchindex-f41986e9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-094f01c0.js"></script>
+        <script src="../toc-e21319d4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -757,27 +757,41 @@ crap-cms export -c posts -o posts.json
 crap-cms import backup.json -c posts
 </code></pre>
 <h3 id="typegen--generate-typed-definitions"><a class="header" href="#typegen--generate-typed-definitions"><code>typegen</code> — Generate typed definitions</a></h3>
-<pre><code class="language-bash">crap-cms typegen [-l &lt;LANG&gt;] [-o &lt;DIR&gt;] [--proto &lt;MODULE_PATH&gt;]
+<p>Three subcommands, one per artifact / audience:</p>
+<pre><code class="language-bash">crap-cms typegen lua    [-o &lt;DIR&gt;]
+crap-cms typegen client -l &lt;LANG[,LANG...]&gt; [-o &lt;DIR&gt;]
+crap-cms typegen proto  -m &lt;MODULE_PATH&gt;    [-o &lt;DIR&gt;]
 </code></pre>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Flag</th><th>Short</th><th>Default</th><th>Description</th></tr>
+<tr><th>Subcommand</th><th>Writes</th><th>Audience</th></tr>
 </thead>
 <tbody>
-<tr><td><code>--lang</code></td><td><code>-l</code></td><td><code>lua</code></td><td>Output language: <code>lua</code>, <code>ts</code>, <code>go</code>, <code>py</code>, <code>rs</code>, <code>all</code></td></tr>
-<tr><td><code>--output</code></td><td><code>-o</code></td><td><code>&lt;config&gt;/types/</code></td><td>Output directory for generated files</td></tr>
-<tr><td><code>--proto</code></td><td>—</td><td>—</td><td>(Rust only) Generate <code>From&lt;proto::Document&gt;</code> conversions alongside <code>generated.rs</code>. The value is the Rust module path to the prost-generated proto types (e.g. <code>"crate::proto"</code>). Writes <code>generated_proto.rs</code> next to <code>generated.rs</code>.</td></tr>
+<tr><td><code>lua</code></td><td><code>types/crap.lua</code> (API surface) + <code>types/hooks.lua</code> (per-collection hook narrowings)</td><td>Server-side Lua hook / access / job authors</td></tr>
+<tr><td><code>client</code></td><td><code>types/client.&lt;ext&gt;</code> per requested language (<code>ts</code>, <code>go</code>, <code>py</code>, <code>rs</code>)</td><td>External gRPC / REST API consumers</td></tr>
+<tr><td><code>proto</code></td><td><code>types/proto.rs</code></td><td>Rust gRPC servers wanting <code>From&lt;proto::Document&gt;</code> conversions</td></tr>
 </tbody>
 </table>
 </div>
-<pre><code class="language-bash">crap-cms typegen
-crap-cms typegen -l all
-crap-cms typegen -l ts -o ./client/src/types
-
-# Rust + proto conversions
-crap-cms typegen -l rs --proto "crate::proto"
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Short</th><th>Default</th><th>Subcommand</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--lang</code></td><td><code>-l</code></td><td>—</td><td><code>client</code></td><td>Comma list of client languages (<code>ts</code>, <code>go</code>, <code>py</code>, <code>rs</code>). Required.</td></tr>
+<tr><td><code>--module</code></td><td><code>-m</code></td><td>—</td><td><code>proto</code></td><td>Rust module path to the prost-generated proto types (e.g. <code>"crate::proto"</code>). Required.</td></tr>
+<tr><td><code>--output</code></td><td><code>-o</code></td><td><code>&lt;config&gt;/types/</code></td><td>all</td><td>Output directory.</td></tr>
+</tbody>
+</table>
+</div>
+<pre><code class="language-bash">crap-cms typegen lua                            # types/crap.lua + types/hooks.lua
+crap-cms typegen client -l ts                   # types/client.ts
+crap-cms typegen client -l ts,go,py -o ./shared # multiple langs, custom dir
+crap-cms typegen proto -m "crate::proto"        # types/proto.rs
 </code></pre>
+<p>Running <code>crap-cms typegen</code> with no subcommand prints help. Under <code>admin.dev_mode = true</code>, the <code>serve</code> command auto-regenerates <code>crap.lua</code> + <code>hooks.lua</code> on startup so hook authors don’t have to remember <code>typegen lua</code> after editing collections — production startups skip this.</p>
 <h3 id="proto--export-proto-file"><a class="header" href="#proto--export-proto-file"><code>proto</code> — Export proto file</a></h3>
 <pre><code class="language-bash">crap-cms proto [-o &lt;PATH&gt;]
 </code></pre>
@@ -1295,11 +1309,11 @@ eval "$(crap-cms update completions bash)"  # source directly
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

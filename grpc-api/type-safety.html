@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d82968e4.js";
+            window.path_to_searchindex_js = "../searchindex-f41986e9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-094f01c0.js"></script>
+        <script src="../toc-e21319d4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,25 +181,28 @@
 <p>The gRPC API uses <code>google.protobuf.Struct</code> for document fields — a generic JSON object with no schema at the proto level. This is a deliberate design choice: Lua files define schemas, the proto stays stable, and the binary never needs recompiling when you add a field.</p>
 <p>But <code>Struct</code> means your gRPC client sees <code>fields</code> as an untyped map. This page explains how to get type safety back.</p>
 <h2 id="the-two-layer-architecture"><a class="header" href="#the-two-layer-architecture">The Two-Layer Architecture</a></h2>
-<pre><code>┌──────────────────────────────────────────────────┐
-│  Lua definitions (source of truth)               │
-│  collections/posts.lua → fields, types, options  │
-└────────────┬─────────────────────┬───────────────┘
-             │                     │
-    ┌────────▼────────┐   ┌───────▼────────────┐
-    │  DescribeCollection │   │  crap-cms typegen     │
-    │  (runtime, gRPC)    │   │  (build-time, Lua)   │
-    └────────┬────────┘   └───────┬────────────┘
-             │                     │
-    ┌────────▼────────┐   ┌───────▼────────────┐
-    │  Client codegen │   │  types/crap.lua     │
-    │  TS/Go/Python   │   │  types/generated.lua│
-    │  typed wrappers │   │  (IDE types for     │
-    │                 │   │   hooks &amp; init.lua) │
-    └─────────────────┘   └────────────────────┘
+<pre><code>┌──────────────────────────────────────────────────────────┐
+│  Lua definitions (source of truth)                       │
+│  collections/posts.lua → fields, types, options          │
+└──────────┬────────────────┬────────────────┬─────────────┘
+           │                │                │
+    ┌──────▼──────┐  ┌──────▼──────────┐  ┌──▼─────────────┐
+    │ Describe-   │  │ crap-cms typegen│  │ crap-cms typegen│
+    │ Collection  │  │ client -l X     │  │ lua            │
+    │ (runtime,   │  │ (build-time)    │  │ (build-time)   │
+    │  gRPC)      │  │                 │  │                │
+    └──────┬──────┘  └──────┬──────────┘  └──┬─────────────┘
+           │                │                │
+    ┌──────▼──────┐  ┌──────▼──────────┐  ┌──▼─────────────┐
+    │ Generic     │  │ types/client.X  │  │ types/crap.lua │
+    │ Document    │  │ (TS/Go/Py/Rs    │  │ types/hooks.lua│
+    │ message     │  │ typed shapes    │  │ (IDE types for │
+    │             │  │ for API clients)│  │ hooks/init.lua)│
+    └─────────────┘  └─────────────────┘  └────────────────┘
 </code></pre>
 <p><strong>Layer 1: Runtime schema discovery</strong> — the <code>DescribeCollection</code> RPC returns the full field schema. gRPC clients call it at startup or build time to generate typed wrappers.</p>
-<p><strong>Layer 2: Lua typegen</strong> — the <code>crap-cms typegen</code> command writes <code>types/crap.lua</code> (API surface types) and <code>types/generated.lua</code> (per-collection types) with LuaLS annotations. This gives you autocompletion and type checking inside hooks and init.lua.</p>
+<p><strong>Layer 2: Server-side Lua typegen</strong> — <code>crap-cms typegen lua</code> writes <code>types/crap.lua</code> (the <code>crap.*</code> API surface) and <code>types/hooks.lua</code> (per-collection hook/data/doc shapes) with LuaLS annotations. This gives you autocompletion and type checking inside hooks and init.lua. Under <code>admin.dev_mode = true</code>, <code>crap-cms serve</code> regenerates them on every startup.</p>
+<p><strong>Layer 3: Client-side consumer typegen</strong> — <code>crap-cms typegen client -l &lt;lang&gt;</code> writes <code>types/client.&lt;ext&gt;</code> with typed per-collection shapes for external API consumers (TypeScript, Go, Python, Rust).</p>
 <h2 id="describecollection"><a class="header" href="#describecollection">DescribeCollection</a></h2>
 <p>The <code>DescribeCollection</code> RPC returns the full schema for any collection or global:</p>
 <pre><code class="language-bash">grpcurl -plaintext -d '{"slug": "posts"}' \
@@ -405,10 +408,13 @@ def document_to_post(doc) -&gt; Post:
 <h2 id="lua-typegen-for-hooks"><a class="header" href="#lua-typegen-for-hooks">Lua Typegen (for Hooks)</a></h2>
 <p>The gRPC type safety story above is for <strong>external clients</strong>. For <strong>Lua hooks and init.lua</strong>, the built-in typegen provides IDE-level type safety.</p>
 <h3 id="generate-types"><a class="header" href="#generate-types">Generate Types</a></h3>
-<p>Types are auto-generated on every server startup. You can also generate them explicitly:</p>
-<pre><code class="language-bash">crap-cms typegen
+<p>Under <code>admin.dev_mode = true</code>, server-side Lua types are auto-regenerated on every <code>crap-cms serve</code> startup. In production (or to refresh after a binary upgrade), regenerate explicitly:</p>
+<pre><code class="language-bash">crap-cms typegen lua
 </code></pre>
-<p>This writes <code>&lt;config_dir&gt;/types/generated.lua</code> with LuaLS annotations derived from your Lua collection definitions. Use <code>-l all</code> to generate types for all supported languages (Lua, TypeScript, Go, Python, Rust).</p>
+<p>This writes <code>&lt;config_dir&gt;/types/crap.lua</code> (the <code>crap.*</code> API surface, copied from the binary) and <code>&lt;config_dir&gt;/types/hooks.lua</code> (per-collection hook/data/doc shapes derived from your collection definitions) with LuaLS annotations.</p>
+<p>For external API consumers (TypeScript, Go, Python, Rust), use the <code>client</code> subcommand:</p>
+<pre><code class="language-bash">crap-cms typegen client -l ts,go,py,rs
+</code></pre>
 <h3 id="what-gets-generated"><a class="header" href="#what-gets-generated">What Gets Generated</a></h3>
 <p>For each collection, typegen emits:</p>
 <div class="table-wrapper">
@@ -430,7 +436,7 @@ def document_to_post(doc) -&gt; Post:
 <p>For globals: <code>crap.global_data.*</code>, <code>crap.global_doc.*</code>, <code>crap.hook.global_*</code>.</p>
 <p>For array fields: <code>crap.array_row.*</code> with the sub-field types.</p>
 <p>Select fields become union types: <code>"draft" | "published" | "archived"</code>.</p>
-<p>Function overloads are generated so <code>crap.collections.find("posts", ...)</code> returns <code>crap.find_result.Posts</code> instead of the generic <code>crap.FindResult</code>.</p>
+<p>Function overloads are generated so <code>crap.collections.posts.find(...)</code> returns <code>crap.find_result.Posts</code> instead of the generic <code>crap.FindResult</code>.</p>
 <h3 id="ide-setup"><a class="header" href="#ide-setup">IDE Setup</a></h3>
 <p>Add a <code>.luarc.json</code> in your config directory:</p>
 <pre><code class="language-json">{
@@ -521,11 +527,11 @@ def document_to_post(doc) -&gt; Post:
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

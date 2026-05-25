@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d82968e4.js";
+            window.path_to_searchindex_js = "../searchindex-f41986e9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-094f01c0.js"></script>
+        <script src="../toc-e21319d4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -190,6 +190,13 @@ registered collection or global.</li>
 </ol>
 <p>This works because <code>crap.collections.define()</code> and <code>crap.globals.define()</code> overwrite —
 calling either twice for the same slug replaces the first definition with the second.</p>
+<p><strong>All <code>crap.*.define</code> calls are init-only.</strong> They must run while the
+VM is in init phase: definition files, <code>init.lua</code>, and any file
+loaded by <code>require</code> from those. Calling <code>define</code> from a runtime hook
+(during a request) is rejected with a clear error pointing back to
+<code>init.lua</code>. The plugin pattern below works because plugins are
+<code>require</code>-d from <code>init.lua</code> and run with the init-phase marker still
+set — the strict guard never fires for legitimate plugin code.</p>
 <h2 id="load-order"><a class="header" href="#load-order">Load Order</a></h2>
 <p>Files are loaded in this fixed order at server start:</p>
 <ol>
@@ -399,11 +406,11 @@ require("plugins.seo_defaults").install() -- sets default values on seo fields
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

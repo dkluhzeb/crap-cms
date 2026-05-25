@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d82968e4.js";
+            window.path_to_searchindex_js = "../searchindex-f41986e9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-094f01c0.js"></script>
+        <script src="../toc-e21319d4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -216,7 +216,7 @@
 </blockquote>
 <h2 id="examples"><a class="header" href="#examples">Examples</a></h2>
 <pre><code class="language-lua">-- Published posts containing "hello"
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         status = "published",
         title = { contains = "hello" },
@@ -224,28 +224,28 @@ crap.collections.find("posts", {
 })
 
 -- Posts created after a date
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         created_at = { greater_than = "2024-01-01" },
     },
 })
 
 -- Posts with specific statuses
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         status = { ["in"] = { "draft", "published" } },
     },
 })
 
 -- Posts without a category
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         category = { not_exists = true },
     },
 })
 
 -- Posts with wildcard title match
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         title = { like = "Hello%" },
     },
@@ -253,7 +253,7 @@ crap.collections.find("posts", {
 </code></pre>
 <h2 id="multiple-filters"><a class="header" href="#multiple-filters">Multiple Filters</a></h2>
 <p>Multiple filters are combined with AND:</p>
-<pre><code class="language-lua">crap.collections.find("posts", {
+<pre><code class="language-lua">crap.collections.posts.find({
     where = {
         status = "published",
         created_at = { greater_than = "2024-01-01" },
@@ -265,7 +265,7 @@ crap.collections.find("posts", {
 <h2 id="or-groups"><a class="header" href="#or-groups">OR Groups</a></h2>
 <p>Use the <code>["or"]</code> key to combine groups of conditions with OR logic. Each element is a table of AND-ed conditions:</p>
 <pre><code class="language-lua">-- title contains "hello" OR category = "news"
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         ["or"] = {
             { title = { contains = "hello" } },
@@ -277,7 +277,7 @@ crap.collections.find("posts", {
 </code></pre>
 <p>OR can combine with top-level AND filters:</p>
 <pre><code class="language-lua">-- status = "published" AND (title contains "hello" OR title contains "world")
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         status = "published",
         ["or"] = {
@@ -290,7 +290,7 @@ crap.collections.find("posts", {
 </code></pre>
 <p>Each OR element can have multiple fields (AND-ed within the group):</p>
 <pre><code class="language-lua">-- (status = "published" AND title contains "hello") OR (status = "draft")
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = {
         ["or"] = {
             { status = "published", title = { contains = "hello" } },
@@ -306,27 +306,27 @@ crap.collections.find("posts", {
 <h2 id="nested-field-filters-dot-notation"><a class="header" href="#nested-field-filters-dot-notation">Nested Field Filters (Dot Notation)</a></h2>
 <p>Filter on sub-fields of group, array, blocks, and has-many relationship fields using dot notation:</p>
 <pre><code class="language-lua">-- Group sub-field: seo.meta_title → seo__meta_title column
-crap.collections.find("pages", {
+crap.collections.pages.find({
     where = { ["seo.meta_title"] = { contains = "SEO" } },
 })
 
 -- Array sub-field: find products with any variant color "red"
-crap.collections.find("products", {
+crap.collections.products.find({
     where = { ["variants.color"] = "red" },
 })
 
 -- Block sub-field: find posts with any content block containing "hello"
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = { ["content.body"] = { contains = "hello" } },
 })
 
 -- Block type filter
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = { ["content._block_type"] = "image" },
 })
 
 -- Has-many relationship: find posts with a specific tag
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = { ["tags.id"] = "tag-123" },
 })
 </code></pre>
@@ -353,17 +353,17 @@ bind as TEXT regardless of the field type.</p>
 </table>
 </div>
 <pre><code class="language-lua">-- Number field — bound as REAL, comparison is numeric
-crap.collections.find("products", {
+crap.collections.products.find({
     where = { price = { greater_than = 9.99 } },
 })
 
 -- Checkbox field — bound as INTEGER 1
-crap.collections.find("posts", {
+crap.collections.posts.find({
     where = { published = true },
 })
 
 -- Text-only operator on a number field still binds as TEXT
-crap.collections.find("products", {
+crap.collections.products.find({
     where = { sku = { contains = "42" } },
 })
 </code></pre>
@@ -412,11 +412,11 @@ crap.collections.find("products", {
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

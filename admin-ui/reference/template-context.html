@@ -15,8 +15,8 @@
         <link rel="icon" href="../../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../../css/general-2459343d.css">
-        <link rel="stylesheet" href="../../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-d82968e4.js";
+            window.path_to_searchindex_js = "../../searchindex-f41986e9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../../toc-094f01c0.js"></script>
+        <script src="../../toc-e21319d4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,7 +180,7 @@
                         <!--
   AUTO-GENERATED — do not edit by hand.
   Source of truth: typed page-context structs in `src/admin/context/page/`.
-  Regenerate with: `UPDATE_SCHEMA_DOC=1 cargo test template_context_doc_is_in_sync`
+  Regenerate with: `cargo xtask gen-template-doc`
 -->
 <h1 id="admin-template-context-reference"><a class="header" href="#admin-template-context-reference">Admin template context reference</a></h1>
 <p>Every admin page renders a typed Rust struct serialized to JSON, runs it through the optional <code>before_render</code> Lua hook, and hands it to Handlebars. This file lists every page, its <code>page.type</code> discriminant, the template it renders, and the fields the template can rely on.</p>
@@ -200,7 +200,7 @@
 <p><strong><code>_locale</code></strong> (string)</p>
 </li>
 <li>
-<p><strong><code>available_locales</code></strong> (Vec<string>)</string></p>
+<p><strong><code>available_locales</code></strong> (Vec&lt;string&gt;)</p>
 </li>
 <li>
 <p><strong><code>title</code></strong> (string)</p>
@@ -209,10 +209,10 @@
 <p><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</p>
 </li>
 <li>
-<p><strong><code>error</code></strong> (Option<string>) <em>(optional)</em> — Error key (e.g., <code>"error_invalid_credentials"</code>) — present after a failed login post.</string></p>
+<p><strong><code>error</code></strong> (Option&lt;string&gt;) <em>(optional)</em> — Error key (e.g., <code>"error_invalid_credentials"</code>) — present after a failed login post.</p>
 </li>
 <li>
-<p><strong><code>email</code></strong> (Option<string>) <em>(optional)</em> — Pre-fills the email field after a failed login.</string></p>
+<p><strong><code>email</code></strong> (Option&lt;string&gt;) <em>(optional)</em> — Pre-fills the email field after a failed login.</p>
 </li>
 <li>
 <p><strong><code>collections</code></strong> (Vec&lt;<a href="#authcollection">AuthCollection</a>&gt;)</p>
@@ -227,7 +227,7 @@
 <p><strong><code>show_forgot_password</code></strong> (boolean)</p>
 </li>
 <li>
-<p><strong><code>success</code></strong> (Option<string>) <em>(optional)</em> — Whitelisted success-message key shown after redirect from logout / email verification / password reset. Always emitted (as <code>null</code> when absent) to preserve the original <code>Option</code>-as-null contract.</string></p>
+<p><strong><code>success</code></strong> (Option&lt;string&gt;) <em>(optional)</em> — Whitelisted success-message key shown after redirect from logout / email verification / password reset. Always emitted (as <code>null</code> when absent) to preserve the original <code>Option</code>-as-null contract.</p>
 </li>
 </ul>
 <h2 id="mfa-challenge-page"><a class="header" href="#mfa-challenge-page">MFA challenge page</a></h2>
@@ -245,7 +245,7 @@
 <p><strong><code>_locale</code></strong> (string)</p>
 </li>
 <li>
-<p><strong><code>available_locales</code></strong> (Vec<string>)</string></p>
+<p><strong><code>available_locales</code></strong> (Vec&lt;string&gt;)</p>
 </li>
 <li>
 <p><strong><code>title</code></strong> (string)</p>
@@ -254,7 +254,7 @@
 <p><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</p>
 </li>
 <li>
-<p><strong><code>error</code></strong> (Option<string>) <em>(optional)</em></string></p>
+<p><strong><code>error</code></strong> (Option&lt;string&gt;) <em>(optional)</em></p>
 </li>
 </ul>
 <h2 id="forgot-password-page"><a class="header" href="#forgot-password-page">Forgot password page</a></h2>
@@ -272,7 +272,7 @@
 <p><strong><code>_locale</code></strong> (string)</p>
 </li>
 <li>
-<p><strong><code>available_locales</code></strong> (Vec<string>)</string></p>
+<p><strong><code>available_locales</code></strong> (Vec&lt;string&gt;)</p>
 </li>
 <li>
 <p><strong><code>title</code></strong> (string)</p>
@@ -305,7 +305,7 @@
 <p><strong><code>_locale</code></strong> (string)</p>
 </li>
 <li>
-<p><strong><code>available_locales</code></strong> (Vec<string>)</string></p>
+<p><strong><code>available_locales</code></strong> (Vec&lt;string&gt;)</p>
 </li>
 <li>
 <p><strong><code>title</code></strong> (string)</p>
@@ -314,10 +314,10 @@
 <p><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</p>
 </li>
 <li>
-<p><strong><code>token</code></strong> (Option<string>) <em>(optional)</em> — Token from the URL — present only when valid. Absent when the link is bad / expired (in which case <code>error</code> is set instead).</string></p>
+<p><strong><code>token</code></strong> (Option&lt;string&gt;) <em>(optional)</em> — Token from the URL — present only when valid. Absent when the link is bad / expired (in which case <code>error</code> is set instead).</p>
 </li>
 <li>
-<p><strong><code>error</code></strong> (Option<string>) <em>(optional)</em></string></p>
+<p><strong><code>error</code></strong> (Option&lt;string&gt;) <em>(optional)</em></p>
 </li>
 </ul>
 <h2 id="error-pages-403--404--500"><a class="header" href="#error-pages-403--404--500">Error pages (403 / 404 / 500)</a></h2>
@@ -341,7 +341,7 @@
 <p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
 </li>
 <li>
-<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+<p><strong><code>available_locales</code></strong> (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).</p>
 </li>
 <li>
 <p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
@@ -353,10 +353,10 @@
 <p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
 </li>
 <li>
-<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+<p><strong><code>has_editor_locales</code></strong> (Option&lt;boolean&gt;) <em>(optional)</em></p>
 </li>
 <li>
-<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+<p><strong><code>editor_locale</code></strong> (Option&lt;string&gt;) <em>(optional)</em></p>
 </li>
 <li>
 <p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
@@ -386,7 +386,7 @@
 <p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
 </li>
 <li>
-<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+<p><strong><code>available_locales</code></strong> (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).</p>
 </li>
 <li>
 <p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
@@ -398,10 +398,10 @@
 <p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
 </li>
 <li>
-<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+<p><strong><code>has_editor_locales</code></strong> (Option&lt;boolean&gt;) <em>(optional)</em></p>
 </li>
 <li>
-<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+<p><strong><code>editor_locale</code></strong> (Option&lt;string&gt;) <em>(optional)</em></p>
 </li>
 <li>
 <p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
@@ -434,7 +434,7 @@
 <p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
 </li>
 <li>
-<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+<p><strong><code>available_locales</code></strong> (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).</p>
 </li>
 <li>
 <p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
@@ -446,10 +446,10 @@
 <p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
 </li>
 <li>
-<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+<p><strong><code>has_editor_locales</code></strong> (Option&lt;boolean&gt;) <em>(optional)</em></p>
 </li>
 <li>
-<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+<p><strong><code>editor_locale</code></strong> (Option&lt;string&gt;) <em>(optional)</em></p>
 </li>
 <li>
 <p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
@@ -479,7 +479,7 @@
 <p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
 </li>
 <li>
-<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+<p><strong><code>available_locales</code></strong> (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).</p>
 </li>
 <li>
 <p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
@@ -491,10 +491,10 @@
 <p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
 </li>
 <li>
-<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+<p><strong><code>has_editor_locales</code></strong> (Option&lt;boolean&gt;) <em>(optional)</em></p>
 </li>
 <li>
-<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+<p><strong><code>editor_locale</code></strong> (Option&lt;string&gt;) <em>(optional)</em></p>
 </li>
 <li>
 <p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
@@ -503,7 +503,10 @@
 <p><strong><code>collection</code></strong> (<a href="#collectioncontext">CollectionContext</a>)</p>
 </li>
 <li>
-<p><strong><code>docs</code></strong> (Vec<any>)</any></p>
+<p><strong><code>perms</code></strong> (<a href="#collectionpermissions">CollectionPermissions</a>)</p>
+</li>
+<li>
+<p><strong><code>docs</code></strong> (Vec&lt;any&gt;)</p>
 </li>
 <li>
 <p><strong><code>pagination</code></strong> (<a href="#paginationcontext">PaginationContext</a>)</p>
@@ -518,28 +521,28 @@
 <p><strong><code>is_trash</code></strong> (boolean)</p>
 </li>
 <li>
-<p><strong><code>search</code></strong> (Option<string>) <em>(optional)</em></string></p>
+<p><strong><code>search</code></strong> (Option&lt;string&gt;) <em>(optional)</em></p>
 </li>
 <li>
-<p><strong><code>sort</code></strong> (Option<string>) <em>(optional)</em></string></p>
+<p><strong><code>sort</code></strong> (Option&lt;string&gt;) <em>(optional)</em></p>
 </li>
 <li>
-<p><strong><code>table_columns</code></strong> (Vec<any>)</any></p>
+<p><strong><code>table_columns</code></strong> (Vec&lt;any&gt;)</p>
 </li>
 <li>
-<p><strong><code>column_options</code></strong> (Vec<any>)</any></p>
+<p><strong><code>column_options</code></strong> (Vec&lt;any&gt;)</p>
 </li>
 <li>
-<p><strong><code>filter_fields</code></strong> (Vec<any>)</any></p>
+<p><strong><code>filter_fields</code></strong> (Vec&lt;any&gt;)</p>
 </li>
 <li>
-<p><strong><code>active_filters</code></strong> (Vec<any>)</any></p>
+<p><strong><code>active_filters</code></strong> (Vec&lt;any&gt;)</p>
 </li>
 <li>
 <p><strong><code>active_filter_count</code></strong> (integer)</p>
 </li>
 <li>
-<p><strong><code>title_sort_url</code></strong> (Option<string>) <em>(optional)</em></string></p>
+<p><strong><code>title_sort_url</code></strong> (Option&lt;string&gt;) <em>(optional)</em></p>
 </li>
 <li>
 <p><strong><code>title_sorted_asc</code></strong> (boolean)</p>
@@ -569,7 +572,7 @@
 <p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
 </li>
 <li>
-<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+<p><strong><code>available_locales</code></strong> (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).</p>
 </li>
 <li>
 <p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
@@ -581,16 +584,19 @@
 <p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
 </li>
 <li>
-<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+<p><strong><code>has_editor_locales</code></strong> (Option&lt;boolean&gt;) <em>(optional)</em></p>
 </li>
 <li>
-<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+<p><strong><code>editor_locale</code></strong> (Option&lt;string&gt;) <em>(optional)</em></p>
 </li>
 <li>
 <p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
 </li>
 <li>
 <p><strong><code>collection</code></strong> (<a href="#collectioncontext">CollectionContext</a>)</p>
+</li>
+<li>
+<p><strong><code>perms</code></strong> (<a href="#collectionpermissions">CollectionPermissions</a>)</p>
 </li>
 <li>
 <p><strong><code>document</code></strong> (<a href="#documentref">DocumentRef</a>)</p>
@@ -611,7 +617,7 @@
 <p><strong><code>has_versions</code></strong> (boolean)</p>
 </li>
 <li>
-<p><strong><code>versions</code></strong> (Vec<any>)</any></p>
+<p><strong><code>versions</code></strong> (Vec&lt;any&gt;)</p>
 </li>
 <li>
 <p><strong><code>has_more_versions</code></strong> (boolean)</p>
@@ -662,7 +668,7 @@
 <p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
 </li>
 <li>
-<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+<p><strong><code>available_locales</code></strong> (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).</p>
 </li>
 <li>
 <p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
@@ -674,16 +680,19 @@
 <p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
 </li>
 <li>
-<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+<p><strong><code>has_editor_locales</code></strong> (Option&lt;boolean&gt;) <em>(optional)</em></p>
 </li>
 <li>
-<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+<p><strong><code>editor_locale</code></strong> (Option&lt;string&gt;) <em>(optional)</em></p>
 </li>
 <li>
 <p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
 </li>
 <li>
 <p><strong><code>collection</code></strong> (<a href="#collectioncontext">CollectionContext</a>)</p>
+</li>
+<li>
+<p><strong><code>perms</code></strong> (<a href="#collectionpermissions">CollectionPermissions</a>)</p>
 </li>
 <li>
 <p><strong><code>fields</code></strong> (Vec&lt;<a href="#fieldcontext">FieldContext</a>&gt;)</p>
@@ -731,7 +740,7 @@
 <p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
 </li>
 <li>
-<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+<p><strong><code>available_locales</code></strong> (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).</p>
 </li>
 <li>
 <p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
@@ -743,16 +752,19 @@
 <p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
 </li>
 <li>
-<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+<p><strong><code>has_editor_locales</code></strong> (Option&lt;boolean&gt;) <em>(optional)</em></p>
 </li>
 <li>
-<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+<p><strong><code>editor_locale</code></strong> (Option&lt;string&gt;) <em>(optional)</em></p>
 </li>
 <li>
 <p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
 </li>
 <li>
 <p><strong><code>collection</code></strong> (<a href="#collectioncontext">CollectionContext</a>)</p>
+</li>
+<li>
+<p><strong><code>perms</code></strong> (<a href="#collectionpermissions">CollectionPermissions</a>)</p>
 </li>
 <li>
 <p><strong><code>document</code></strong> (<a href="#documentref">DocumentRef</a> | null) <em>(optional)</em> — Document stub (with <code>id</code> only) on edit error; absent on create error.</p>
@@ -770,7 +782,7 @@
 <p><strong><code>has_drafts</code></strong> (boolean)</p>
 </li>
 <li>
-<p><strong><code>upload_hidden_fields</code></strong> (Option&lt;Vec<any>&gt;) <em>(optional)</em> — Hidden upload fields preserved from the submitted form (edit-mode upload errors only, so the user keeps their pending file metadata).</any></p>
+<p><strong><code>upload_hidden_fields</code></strong> (Option&lt;Vec&lt;any&gt;&gt;) <em>(optional)</em> — Hidden upload fields preserved from the submitted form (edit-mode upload errors only, so the user keeps their pending file metadata).</p>
 </li>
 </ul>
 <h2 id="collection-delete-confirmation"><a class="header" href="#collection-delete-confirmation">Collection delete confirmation</a></h2>
@@ -794,7 +806,7 @@
 <p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
 </li>
 <li>
-<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+<p><strong><code>available_locales</code></strong> (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).</p>
 </li>
 <li>
 <p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
@@ -806,10 +818,10 @@
 <p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
 </li>
 <li>
-<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+<p><strong><code>has_editor_locales</code></strong> (Option&lt;boolean&gt;) <em>(optional)</em></p>
 </li>
 <li>
-<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+<p><strong><code>editor_locale</code></strong> (Option&lt;string&gt;) <em>(optional)</em></p>
 </li>
 <li>
 <p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
@@ -821,7 +833,7 @@
 <p><strong><code>document_id</code></strong> (string)</p>
 </li>
 <li>
-<p><strong><code>title_value</code></strong> (Option<string>) <em>(optional)</em> — Document title for display. <code>None</code> (serialized as <code>null</code>) when the collection has no title field or the read fell through.</string></p>
+<p><strong><code>title_value</code></strong> (Option&lt;string&gt;) <em>(optional)</em> — Document title for display. <code>None</code> (serialized as <code>null</code>) when the collection has no title field or the read fell through.</p>
 </li>
 <li>
 <p><strong><code>ref_count</code></strong> (integer)</p>
@@ -848,7 +860,7 @@
 <p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
 </li>
 <li>
-<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+<p><strong><code>available_locales</code></strong> (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).</p>
 </li>
 <li>
 <p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
@@ -860,10 +872,10 @@
 <p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
 </li>
 <li>
-<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+<p><strong><code>has_editor_locales</code></strong> (Option&lt;boolean&gt;) <em>(optional)</em></p>
 </li>
 <li>
-<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+<p><strong><code>editor_locale</code></strong> (Option&lt;string&gt;) <em>(optional)</em></p>
 </li>
 <li>
 <p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
@@ -881,7 +893,7 @@
 <p><strong><code>doc_title</code></strong> (string)</p>
 </li>
 <li>
-<p><strong><code>versions</code></strong> (Vec<any>)</any></p>
+<p><strong><code>versions</code></strong> (Vec&lt;any&gt;)</p>
 </li>
 <li>
 <p><strong><code>restore_url_prefix</code></strong> (string)</p>
@@ -908,7 +920,7 @@
 <p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
 </li>
 <li>
-<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+<p><strong><code>available_locales</code></strong> (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).</p>
 </li>
 <li>
 <p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
@@ -920,10 +932,10 @@
 <p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
 </li>
 <li>
-<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+<p><strong><code>has_editor_locales</code></strong> (Option&lt;boolean&gt;) <em>(optional)</em></p>
 </li>
 <li>
-<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+<p><strong><code>editor_locale</code></strong> (Option&lt;string&gt;) <em>(optional)</em></p>
 </li>
 <li>
 <p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
@@ -938,7 +950,7 @@
 <p><strong><code>version_number</code></strong> (any) — Version number being restored (from the version row’s <code>version</code> column).</p>
 </li>
 <li>
-<p><strong><code>missing_relations</code></strong> (Vec<any>) — IDs of relationship references whose targets no longer exist.</any></p>
+<p><strong><code>missing_relations</code></strong> (Vec&lt;any&gt;) — IDs of relationship references whose targets no longer exist.</p>
 </li>
 <li>
 <p><strong><code>restore_url</code></strong> (string)</p>
@@ -968,7 +980,7 @@
 <p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
 </li>
 <li>
-<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+<p><strong><code>available_locales</code></strong> (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).</p>
 </li>
 <li>
 <p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
@@ -980,16 +992,19 @@
 <p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
 </li>
 <li>
-<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+<p><strong><code>has_editor_locales</code></strong> (Option&lt;boolean&gt;) <em>(optional)</em></p>
 </li>
 <li>
-<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+<p><strong><code>editor_locale</code></strong> (Option&lt;string&gt;) <em>(optional)</em></p>
 </li>
 <li>
 <p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
 </li>
 <li>
 <p><strong><code>global</code></strong> (<a href="#globalcontext">GlobalContext</a>)</p>
+</li>
+<li>
+<p><strong><code>perms</code></strong> (<a href="#globalpermissions">GlobalPermissions</a>)</p>
 </li>
 <li>
 <p><strong><code>fields</code></strong> (Vec&lt;<a href="#fieldcontext">FieldContext</a>&gt;)</p>
@@ -1004,7 +1019,7 @@
 <p><strong><code>has_versions</code></strong> (boolean)</p>
 </li>
 <li>
-<p><strong><code>versions</code></strong> (Vec<any>)</any></p>
+<p><strong><code>versions</code></strong> (Vec&lt;any&gt;)</p>
 </li>
 <li>
 <p><strong><code>has_more_versions</code></strong> (boolean)</p>
@@ -1049,7 +1064,7 @@
 <p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
 </li>
 <li>
-<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+<p><strong><code>available_locales</code></strong> (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).</p>
 </li>
 <li>
 <p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
@@ -1061,16 +1076,19 @@
 <p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
 </li>
 <li>
-<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+<p><strong><code>has_editor_locales</code></strong> (Option&lt;boolean&gt;) <em>(optional)</em></p>
 </li>
 <li>
-<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+<p><strong><code>editor_locale</code></strong> (Option&lt;string&gt;) <em>(optional)</em></p>
 </li>
 <li>
 <p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
 </li>
 <li>
 <p><strong><code>global</code></strong> (<a href="#globalcontext">GlobalContext</a>)</p>
+</li>
+<li>
+<p><strong><code>perms</code></strong> (<a href="#globalpermissions">GlobalPermissions</a>)</p>
 </li>
 <li>
 <p><strong><code>fields</code></strong> (Vec&lt;<a href="#fieldcontext">FieldContext</a>&gt;)</p>
@@ -1100,7 +1118,7 @@
 <p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
 </li>
 <li>
-<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+<p><strong><code>available_locales</code></strong> (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).</p>
 </li>
 <li>
 <p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
@@ -1112,10 +1130,10 @@
 <p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
 </li>
 <li>
-<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+<p><strong><code>has_editor_locales</code></strong> (Option&lt;boolean&gt;) <em>(optional)</em></p>
 </li>
 <li>
-<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+<p><strong><code>editor_locale</code></strong> (Option&lt;string&gt;) <em>(optional)</em></p>
 </li>
 <li>
 <p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
@@ -1127,7 +1145,7 @@
 <p><strong><code>pagination</code></strong> (<a href="#paginationcontext">PaginationContext</a>)</p>
 </li>
 <li>
-<p><strong><code>versions</code></strong> (Vec<any>)</any></p>
+<p><strong><code>versions</code></strong> (Vec&lt;any&gt;)</p>
 </li>
 <li>
 <p><strong><code>restore_url_prefix</code></strong> (string)</p>
@@ -1154,7 +1172,7 @@
 <p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
 </li>
 <li>
-<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+<p><strong><code>available_locales</code></strong> (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).</p>
 </li>
 <li>
 <p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
@@ -1166,10 +1184,10 @@
 <p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
 </li>
 <li>
-<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+<p><strong><code>has_editor_locales</code></strong> (Option&lt;boolean&gt;) <em>(optional)</em></p>
 </li>
 <li>
-<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+<p><strong><code>editor_locale</code></strong> (Option&lt;string&gt;) <em>(optional)</em></p>
 </li>
 <li>
 <p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
@@ -1181,7 +1199,7 @@
 <p><strong><code>version_number</code></strong> (any)</p>
 </li>
 <li>
-<p><strong><code>missing_relations</code></strong> (Vec<any>)</any></p>
+<p><strong><code>missing_relations</code></strong> (Vec&lt;any&gt;)</p>
 </li>
 <li>
 <p><strong><code>restore_url</code></strong> (string)</p>
@@ -1199,27 +1217,27 @@
 <li><strong><code>nav</code></strong> (<a href="#navdata">NavData</a>)</li>
 <li><strong><code>user</code></strong> (<a href="#usercontext">UserContext</a> | null) <em>(optional)</em></li>
 <li><strong><code>_locale</code></strong> (string) — Active UI translation locale.</li>
-<li><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></li>
+<li><strong><code>available_locales</code></strong> (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).</li>
 <li><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</li>
 <li><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</li>
 <li><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</li>
-<li><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></li>
-<li><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></li>
+<li><strong><code>has_editor_locales</code></strong> (Option&lt;boolean&gt;) <em>(optional)</em></li>
+<li><strong><code>editor_locale</code></strong> (Option&lt;string&gt;) <em>(optional)</em></li>
 <li><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></li>
 </ul>
 <h3 id="authbasepagecontext"><a class="header" href="#authbasepagecontext">AuthBasePageContext</a></h3>
 <ul>
 <li><strong><code>crap</code></strong> (<a href="#crapmeta">CrapMeta</a>)</li>
 <li><strong><code>_locale</code></strong> (string)</li>
-<li><strong><code>available_locales</code></strong> (Vec<string>)</string></li>
+<li><strong><code>available_locales</code></strong> (Vec&lt;string&gt;)</li>
 <li><strong><code>title</code></strong> (string)</li>
 <li><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</li>
 </ul>
 <h3 id="pagemeta"><a class="header" href="#pagemeta">PageMeta</a></h3>
 <ul>
-<li><strong><code>type</code></strong> (string) — Page-type discriminant. Serialized as a snake_case string literal so templates can branch with <code>{{#if (eq page.type "collection_edit")}}</code>.</li>
+<li><strong><code>type</code></strong> (string) — Page-type discriminant. Serialized as a <code>snake_case</code> string literal so templates can branch with <code>{{#if (eq page.type "collection_edit")}}</code>.</li>
 <li><strong><code>title</code></strong> (string) — Page title or translation key.</li>
-<li><strong><code>title_name</code></strong> (Option<string>) <em>(optional)</em> — Optional interpolation param for <code>{{t page.title name=page.title_name}}</code>.</string></li>
+<li><strong><code>title_name</code></strong> (Option&lt;string&gt;) <em>(optional)</em> — Optional interpolation param for <code>{{t page.title name=page.title_name}}</code>.</li>
 <li><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Breadcrumb trail rendered by <code>partials/breadcrumb.hbs</code>.</li>
 </ul>
 <h3 id="crapmeta"><a class="header" href="#crapmeta">CrapMeta</a></h3>
@@ -1270,22 +1288,17 @@
 <h3 id="breadcrumb"><a class="header" href="#breadcrumb">Breadcrumb</a></h3>
 <ul>
 <li><strong><code>label</code></strong> (string) — The text label to display for the breadcrumb.</li>
-<li><strong><code>url</code></strong> (Option<string>) <em>(optional)</em> — The optional URL to link to. If None, the breadcrumb is the current page.</string></li>
-<li><strong><code>label_name</code></strong> (Option<string>) <em>(optional)</em> — Optional interpolation param for <code>{{t label name=label_name}}</code>.</string></li>
+<li><strong><code>url</code></strong> (Option&lt;string&gt;) <em>(optional)</em> — The optional URL to link to. If None, the breadcrumb is the current page.</li>
+<li><strong><code>label_name</code></strong> (Option&lt;string&gt;) <em>(optional)</em> — Optional interpolation param for <code>{{t label name=label_name}}</code>.</li>
 </ul>
 <h3 id="collectioncontext"><a class="header" href="#collectioncontext">CollectionContext</a></h3>
 <ul>
 <li><strong><code>slug</code></strong> (string)</li>
 <li><strong><code>display_name</code></strong> (string)</li>
 <li><strong><code>singular_name</code></strong> (string)</li>
-<li><strong><code>title_field</code></strong> (Option<string>) <em>(optional)</em></string></li>
+<li><strong><code>title_field</code></strong> (Option&lt;string&gt;) <em>(optional)</em></li>
 <li><strong><code>timestamps</code></strong> (boolean)</li>
-<li><strong><code>is_auth</code></strong> (boolean)</li>
-<li><strong><code>is_upload</code></strong> (boolean)</li>
-<li><strong><code>has_drafts</code></strong> (boolean)</li>
-<li><strong><code>has_versions</code></strong> (boolean)</li>
 <li><strong><code>soft_delete</code></strong> (boolean)</li>
-<li><strong><code>can_permanently_delete</code></strong> (boolean)</li>
 <li><strong><code>admin</code></strong> (<a href="#adminmeta">AdminMeta</a>)</li>
 <li><strong><code>upload</code></strong> (<a href="#uploadmeta">UploadMeta</a> | null) <em>(optional)</em></li>
 <li><strong><code>versions</code></strong> (<a href="#versionsmeta">VersionsMeta</a> | null) <em>(optional)</em></li>
@@ -1304,10 +1317,10 @@
 <h3 id="documentref"><a class="header" href="#documentref">DocumentRef</a></h3>
 <ul>
 <li><strong><code>id</code></strong> (string)</li>
-<li><strong><code>created_at</code></strong> (Option<string>) <em>(optional)</em></string></li>
-<li><strong><code>updated_at</code></strong> (Option<string>) <em>(optional)</em></string></li>
-<li><strong><code>status</code></strong> (Option<string>) <em>(optional)</em></string></li>
-<li><strong><code>data</code></strong> (Option<object>) <em>(optional)</em></object></li>
+<li><strong><code>created_at</code></strong> (Option&lt;string&gt;) <em>(optional)</em></li>
+<li><strong><code>updated_at</code></strong> (Option&lt;string&gt;) <em>(optional)</em></li>
+<li><strong><code>status</code></strong> (Option&lt;string&gt;) <em>(optional)</em></li>
+<li><strong><code>data</code></strong> (<a href="#documentfields">DocumentFields</a> | null) <em>(optional)</em></li>
 </ul>
 <h3 id="paginationcontext"><a class="header" href="#paginationcontext">PaginationContext</a></h3>
 <ul>
@@ -1317,8 +1330,8 @@
 <li><strong><code>has_next</code></strong> (boolean)</li>
 <li><strong><code>prev_url</code></strong> (string)</li>
 <li><strong><code>next_url</code></strong> (string)</li>
-<li><strong><code>page</code></strong> (Option<integer>) <em>(optional)</em> — Page-mode only — current page number (1-indexed).</integer></li>
-<li><strong><code>total_pages</code></strong> (Option<integer>) <em>(optional)</em> — Page-mode only — total page count.</integer></li>
+<li><strong><code>page</code></strong> (Option&lt;integer&gt;) <em>(optional)</em> — Page-mode only — current page number (1-indexed).</li>
+<li><strong><code>total_pages</code></strong> (Option&lt;integer&gt;) <em>(optional)</em> — Page-mode only — total page count.</li>
 </ul>
 <h3 id="fieldcontext"><a class="header" href="#fieldcontext">FieldContext</a></h3>
 <p><em>(No fields.)</em></p>
@@ -1339,7 +1352,7 @@
 <li><strong><code>display_name</code></strong> (string)</li>
 <li><strong><code>singular_name</code></strong> (string)</li>
 <li><strong><code>count</code></strong> (integer)</li>
-<li><strong><code>last_updated</code></strong> (Option<string>) <em>(optional)</em></string></li>
+<li><strong><code>last_updated</code></strong> (Option&lt;string&gt;) <em>(optional)</em></li>
 <li><strong><code>is_auth</code></strong> (boolean)</li>
 <li><strong><code>is_upload</code></strong> (boolean)</li>
 <li><strong><code>has_versions</code></strong> (boolean)</li>
@@ -1348,22 +1361,22 @@
 <ul>
 <li><strong><code>slug</code></strong> (string)</li>
 <li><strong><code>display_name</code></strong> (string)</li>
-<li><strong><code>last_updated</code></strong> (Option<string>) <em>(optional)</em></string></li>
+<li><strong><code>last_updated</code></strong> (Option&lt;string&gt;) <em>(optional)</em></li>
 <li><strong><code>has_versions</code></strong> (boolean)</li>
 </ul>
 <h3 id="uploadformcontext"><a class="header" href="#uploadformcontext">UploadFormContext</a></h3>
 <ul>
-<li><strong><code>accept</code></strong> (Option<string>) <em>(optional)</em> — Comma-joined accept list for the file input — emitted only when the collection declares allowed mime types.</string></li>
-<li><strong><code>focal_x</code></strong> (Option<number>) <em>(optional)</em></number></li>
-<li><strong><code>focal_y</code></strong> (Option<number>) <em>(optional)</em></number></li>
-<li><strong><code>preview</code></strong> (Option<string>) <em>(optional)</em> — Image preview URL when the file is an image.</string></li>
+<li><strong><code>accept</code></strong> (Option&lt;string&gt;) <em>(optional)</em> — Comma-joined accept list for the file input — emitted only when the collection declares allowed mime types.</li>
+<li><strong><code>focal_x</code></strong> (Option&lt;number&gt;) <em>(optional)</em></li>
+<li><strong><code>focal_y</code></strong> (Option&lt;number&gt;) <em>(optional)</em></li>
+<li><strong><code>preview</code></strong> (Option&lt;string&gt;) <em>(optional)</em> — Image preview URL when the file is an image.</li>
 <li><strong><code>info</code></strong> (<a href="#uploadinfo">UploadInfo</a> | null) <em>(optional)</em> — Filename + dimensions/filesize info pill.</li>
 </ul>
 <h3 id="uploadinfo"><a class="header" href="#uploadinfo">UploadInfo</a></h3>
 <ul>
 <li><strong><code>filename</code></strong> (string)</li>
-<li><strong><code>filesize_display</code></strong> (Option<string>) <em>(optional)</em></string></li>
-<li><strong><code>dimensions</code></strong> (Option<string>) <em>(optional)</em></string></li>
+<li><strong><code>filesize_display</code></strong> (Option&lt;string&gt;) <em>(optional)</em></li>
+<li><strong><code>dimensions</code></strong> (Option&lt;string&gt;) <em>(optional)</em></li>
 </ul>
 
                     </main>
@@ -1410,11 +1423,11 @@
 
         <script src="../../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../../mark-09e88c2c.min.js"></script>
-        <script src="../../searcher-c2a407aa.js"></script>
+        <script src="../../searcher-09f2665d.js"></script>
 
         <script src="../../clipboard-1626706a.min.js"></script>
         <script src="../../highlight-abc7f01d.js"></script>
-        <script src="../../book-a0b12cfe.js"></script>
+        <script src="../../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

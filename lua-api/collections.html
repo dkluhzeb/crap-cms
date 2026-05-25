@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d82968e4.js";
+            window.path_to_searchindex_js = "../searchindex-f41986e9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-094f01c0.js"></script>
+        <script src="../toc-e21319d4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,7 +180,18 @@
                         <h1 id="crapcollections"><a class="header" href="#crapcollections">crap.collections</a></h1>
 <p>Collection definition and runtime CRUD operations.</p>
 <h2 id="crapcollectionsdefineslug-config"><a class="header" href="#crapcollectionsdefineslug-config">crap.collections.define(slug, config)</a></h2>
-<p>Define a new collection. Call this in collection definition files (<code>collections/*.lua</code>).</p>
+<p>Define a new collection. <strong>Init-only:</strong> call this from
+<code>collections/*.lua</code>, <code>init.lua</code>, or any file loaded by <code>require</code> from
+those — i.e. while the <code>InitPhase</code> marker is set on the VM. Runtime
+calls (from a hook callback firing during a request) error with:</p>
+<blockquote>
+<p><code>crap.collections.define must be called from a definition file or init.lua. To change a registered collection, edit the file and restart the process.</code></p>
+</blockquote>
+<p>Schema changes need the migration runner and route wiring to re-run,
+which only happens at startup; runtime registration would land in the
+in-memory registry without the matching table, admin route, or
+scheduler enrollment, so the call is rejected outright. (Mirrors the
+behaviour <code>crap.richtext.register_node</code> has had since inception.)</p>
 <pre><code class="language-lua">crap.collections.define("posts", {
     labels = { singular = "Post", plural = "Posts" },
     fields = {
@@ -191,9 +202,10 @@
 <p>See <a href="../collections/definition-schema.html">Collection Definition Schema</a> for all config options.</p>
 <h2 id="crapcollectionsconfiggetslug"><a class="header" href="#crapcollectionsconfiggetslug">crap.collections.config.get(slug)</a></h2>
 <p>Get a collection’s current definition as a Lua table. The returned table is round-trip
-compatible with <code>define()</code> — you can modify it and pass it back.</p>
+compatible with <code>define()</code> — you can modify it and pass it back, <strong>inside init</strong>.</p>
 <p>Returns <code>nil</code> if the collection doesn’t exist.</p>
-<pre><code class="language-lua">local def = crap.collections.config.get("posts")
+<pre><code class="language-lua">-- inside a definition file or init.lua
+local def = crap.collections.config.get("posts")
 if def then
     -- Add a field
     def.fields[#def.fields + 1] = crap.fields.text({ name = "extra" })
@@ -201,8 +213,12 @@ if def then
 end
 </code></pre>
 <h2 id="crapcollectionsconfiglist"><a class="header" href="#crapcollectionsconfiglist">crap.collections.config.list()</a></h2>
-<p>Get all registered collections as a slug-keyed table. Iterate with <code>pairs()</code>.</p>
-<pre><code class="language-lua">for slug, def in pairs(crap.collections.config.list()) do
+<p>Get all registered collections as a slug-keyed table. Iterate with
+<code>pairs()</code>. The realistic plugin pattern — bulk-attach a hook or field
+across every collection — runs from <code>init.lua</code> (or a file it
+<code>require</code>s) where the strict guard on <code>define</code> doesn’t fire.</p>
+<pre><code class="language-lua">-- inside init.lua / a plugin loaded by init.lua
+for slug, def in pairs(crap.collections.config.list()) do
     if def.upload then
         -- Add alt_text to every upload collection
         def.fields[#def.fields + 1] = crap.fields.text({ name = "alt_text" })
@@ -211,104 +227,96 @@ end
 end
 </code></pre>
 <p>See <a href="../plugins/overview.html">Plugins</a> for patterns using these functions.</p>
-<h2 id="crapcollectionsfindcollection-query"><a class="header" href="#crapcollectionsfindcollection-query">crap.collections.find(collection, query?)</a></h2>
-<p>Find documents matching a query. Returns a result table with <code>documents</code> and <code>pagination</code>.</p>
-<p><strong>Only available inside hooks with transaction context.</strong></p>
-<pre><code class="language-lua">local result = crap.collections.find("posts", {
-    where = {
-        status = "published",
-        title = { contains = "hello" },
-    },
+<h2 id="runtime-operations--crapcollectionsslug"><a class="header" href="#runtime-operations--crapcollectionsslug">Runtime operations — <code>crap.collections.&lt;slug&gt;</code></a></h2>
+<p>Every collection registered via <code>define()</code> gets a typed accessor at
+<code>crap.collections.&lt;slug&gt;</code> exposing the full CRUD surface. The slug
+is bound; return values are typed against the per-collection
+<code>crap.doc.X</code> / <code>crap.find_result.X</code> classes — full IDE narrowing
+without <code>---@type</code> ceremony.</p>
+<p>All operations below are <strong>only available inside hooks with
+transaction context</strong>.</p>
+<blockquote>
+<p><strong>Dynamic-slug dispatch.</strong> For the rare case where the slug isn’t
+known until runtime (auth strategies handed <code>context.collection</code>,
+a plugin iterating <code>crap.collections.config.list()</code>, the down-side
+of a migration), the same operations are reachable as
+<code>crap.collections.&lt;method&gt;(slug, ...)</code> — identical semantics, slug
+as the first arg. Use the slug-keyed form only when you genuinely
+don’t have a string literal.</p>
+<p>Slugs that would shadow a method name on <code>crap.collections</code> (e.g.
+a collection literally named <code>"find"</code>) fail startup with a clear
+error. Rename the collection.</p>
+</blockquote>
+<h3 id="crapcollectionsslugfindquery"><a class="header" href="#crapcollectionsslugfindquery"><code>crap.collections.&lt;slug&gt;.find(query?)</code></a></h3>
+<p>Find documents matching a query. Returns a typed result with
+<code>documents</code> (array of <code>crap.doc.&lt;Slug&gt;</code>) and <code>pagination</code>.</p>
+<pre><code class="language-lua">local result = crap.collections.posts.find({
+    where = { status = "published", title = { contains = "hello" } },
     order_by = "-created_at",
     limit = 10,
     page = 1,
     depth = 1,
 })
 
--- result.documents               = array of document tables
--- result.pagination.totalDocs    = total count (before limit/page)
--- result.pagination.limit        = applied limit
--- result.pagination.totalPages   = total pages (offset mode only)
--- result.pagination.page         = current page (offset mode only, 1-based)
--- result.pagination.pageStart    = 1-based index of first doc on this page
--- result.pagination.hasNextPage  = boolean
--- result.pagination.hasPrevPage  = boolean
--- result.pagination.prevPage     = previous page number (nil if first page)
--- result.pagination.nextPage     = next page number (nil if last page)
--- result.pagination.startCursor  = opaque cursor of first doc (cursor mode only)
--- result.pagination.endCursor    = opaque cursor of last doc (cursor mode only)
-
 for _, doc in ipairs(result.documents) do
-    print(doc.id, doc.title)
+    print(doc.id, doc.title)   -- doc: crap.doc.Posts
 end
 </code></pre>
-<h3 id="query-parameters"><a class="header" href="#query-parameters">Query Parameters</a></h3>
+<p><code>result.pagination</code> carries <code>totalDocs</code>, <code>limit</code>, <code>page</code>, <code>totalPages</code>,
+<code>pageStart</code>, <code>hasNextPage</code>, <code>hasPrevPage</code>, <code>prevPage</code>, <code>nextPage</code>,
+<code>startCursor</code>, <code>endCursor</code> (cursor fields only when
+<code>[pagination] mode = "cursor"</code> in <code>crap.toml</code>).</p>
+<p><strong>Query fields:</strong></p>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>where</code></td><td>table</td><td><code>{}</code></td><td>Field filters. See <a href="filter-operators.html">Filter Operators</a>. Supports <code>["or"]</code> key for OR groups.</td></tr>
+<tr><td><code>where</code></td><td>table</td><td><code>{}</code></td><td>Field filters. See <a href="filter-operators.html">Filter Operators</a>. Supports <code>["or"]</code> for OR groups.</td></tr>
 <tr><td><code>order_by</code></td><td>string</td><td><code>nil</code></td><td>Sort field. Prefix with <code>-</code> for descending.</td></tr>
 <tr><td><code>limit</code></td><td>integer</td><td><code>nil</code></td><td>Max results to return.</td></tr>
 <tr><td><code>page</code></td><td>integer</td><td><code>1</code></td><td>Page number (1-based). Converted to offset internally.</td></tr>
-<tr><td><code>offset</code></td><td>integer</td><td><code>nil</code></td><td>Number of results to skip (backward compat alias for <code>page</code>).</td></tr>
-<tr><td><code>after_cursor</code></td><td>string</td><td><code>nil</code></td><td>Forward cursor from a previous <code>result.pagination.endCursor</code>. Fetches the page after the cursor position. Mutually exclusive with <code>page</code>/<code>offset</code>/<code>before_cursor</code>. Only effective when <code>[pagination] mode = "cursor"</code> in <code>crap.toml</code>.</td></tr>
-<tr><td><code>before_cursor</code></td><td>string</td><td><code>nil</code></td><td>Backward cursor from a previous <code>result.pagination.startCursor</code>. Fetches the page before the cursor position. Mutually exclusive with <code>page</code>/<code>offset</code>/<code>after_cursor</code>. Only effective when <code>[pagination] mode = "cursor"</code> in <code>crap.toml</code>.</td></tr>
+<tr><td><code>offset</code></td><td>integer</td><td><code>nil</code></td><td>Number of results to skip (alias for <code>page</code>).</td></tr>
+<tr><td><code>after_cursor</code></td><td>string</td><td><code>nil</code></td><td>Forward cursor from a previous <code>result.pagination.endCursor</code>. Mutually exclusive with <code>page</code>/<code>offset</code>/<code>before_cursor</code>. Cursor-mode only.</td></tr>
+<tr><td><code>before_cursor</code></td><td>string</td><td><code>nil</code></td><td>Backward cursor from a previous <code>result.pagination.startCursor</code>. Mutually exclusive with <code>page</code>/<code>offset</code>/<code>after_cursor</code>. Cursor-mode only.</td></tr>
 <tr><td><code>depth</code></td><td>integer</td><td><code>0</code></td><td>Population depth for relationship fields.</td></tr>
-<tr><td><code>select</code></td><td>string[]</td><td><code>nil</code></td><td>Fields to return. <code>nil</code> = all fields. Always includes <code>id</code>. When specified, <code>created_at</code> and <code>updated_at</code> are only included if explicitly listed.</td></tr>
-<tr><td><code>draft</code></td><td>boolean</td><td><code>false</code></td><td>Include draft documents. Only affects versioned collections with <code>drafts = true</code>.</td></tr>
-<tr><td><code>locale</code></td><td>string</td><td><code>nil</code></td><td>Locale code for localized fields (e.g., <code>"en"</code>, <code>"de"</code>).</td></tr>
-<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>false</code></td><td>Bypass access control checks. Set to <code>true</code> to skip collection-level and field-level access for the current user.</td></tr>
-<tr><td><code>search</code></td><td>string</td><td><code>nil</code></td><td>FTS5 full-text search query. Filters results to documents matching this search term.</td></tr>
+<tr><td><code>select</code></td><td>string[]</td><td><code>nil</code></td><td>Fields to return. <code>nil</code> = all fields. Always includes <code>id</code>. When specified, <code>created_at</code>/<code>updated_at</code> are included only if explicitly listed.</td></tr>
+<tr><td><code>draft</code></td><td>boolean</td><td><code>false</code></td><td>Include draft documents (versioned collections with <code>drafts = true</code>).</td></tr>
+<tr><td><code>locale</code></td><td>string</td><td><code>nil</code></td><td>Locale code for localized fields.</td></tr>
+<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>false</code></td><td>Bypass collection-level and field-level access checks.</td></tr>
+<tr><td><code>search</code></td><td>string</td><td><code>nil</code></td><td>FTS5 full-text search query.</td></tr>
 </tbody>
 </table>
 </div>
-<h2 id="crapcollectionsfind_by_idcollection-id-opts"><a class="header" href="#crapcollectionsfind_by_idcollection-id-opts">crap.collections.find_by_id(collection, id, opts?)</a></h2>
-<p>Find a single document by ID. Returns the document table or <code>nil</code>.</p>
-<p><strong>Only available inside hooks with transaction context.</strong></p>
-<pre><code class="language-lua">local doc = crap.collections.find_by_id("posts", "abc123")
+<h3 id="crapcollectionsslugfind_by_idid-opts"><a class="header" href="#crapcollectionsslugfind_by_idid-opts"><code>crap.collections.&lt;slug&gt;.find_by_id(id, opts?)</code></a></h3>
+<p>Find a single document by ID. Returns the typed document or <code>nil</code>.</p>
+<pre><code class="language-lua">local doc = crap.collections.posts.find_by_id("abc123")
 if doc then
     print(doc.title)
 end
 
 -- With population depth
-local doc = crap.collections.find_by_id("posts", "abc123", { depth = 2 })
+local doc = crap.collections.posts.find_by_id("abc123", { depth = 2 })
 
--- With field selection (only return title and status)
-local doc = crap.collections.find_by_id("posts", "abc123", { select = { "title", "status" } })
+-- With field selection
+local doc = crap.collections.posts.find_by_id("abc123", { select = { "title", "status" } })
 </code></pre>
-<h3 id="options"><a class="header" href="#options">Options</a></h3>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>depth</code></td><td>integer</td><td><code>0</code></td><td>Population depth for relationship fields.</td></tr>
-<tr><td><code>select</code></td><td>string[]</td><td><code>nil</code></td><td>Fields to return. <code>nil</code> = all fields. Always includes <code>id</code>.</td></tr>
-<tr><td><code>draft</code></td><td>boolean</td><td><code>false</code></td><td>Return the latest draft version snapshot instead of the published main-table data. Only affects versioned collections with <code>drafts = true</code>.</td></tr>
-<tr><td><code>locale</code></td><td>string</td><td><code>nil</code></td><td>Locale code for localized fields (e.g., <code>"en"</code>, <code>"de"</code>).</td></tr>
-<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>false</code></td><td>Bypass access control checks. Set to <code>true</code> to skip collection-level and field-level access for the current user.</td></tr>
-</tbody>
-</table>
-</div>
-<h2 id="crapcollectionscreatecollection-data-opts"><a class="header" href="#crapcollectionscreatecollection-data-opts">crap.collections.create(collection, data, opts?)</a></h2>
-<p>Create a new document. Returns the created document.</p>
-<p><strong>Only available inside hooks with transaction context.</strong></p>
-<pre><code class="language-lua">local doc = crap.collections.create("posts", {
+<p><strong>Options:</strong> <code>depth</code>, <code>select</code>, <code>draft</code>, <code>locale</code>, <code>overrideAccess</code> — same semantics as <code>find</code>.</p>
+<h3 id="crapcollectionsslugcreatedata-opts"><a class="header" href="#crapcollectionsslugcreatedata-opts"><code>crap.collections.&lt;slug&gt;.create(data, opts?)</code></a></h3>
+<p>Create a new document. Returns the created typed document.</p>
+<pre><code class="language-lua">local doc = crap.collections.posts.create({
     title = "New Post",
     slug = "new-post",
 })
 print(doc.id)  -- auto-generated nanoid
 
 -- Create as draft (versioned collections only)
-local draft = crap.collections.create("articles", {
+local draft = crap.collections.articles.create({
     title = "Work in progress",
 }, { draft = true })
 </code></pre>
-<h3 id="options-1"><a class="header" href="#options-1">Options</a></h3>
+<p><strong>Options:</strong></p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -316,25 +324,33 @@ local draft = crap.collections.create("articles", {
 </thead>
 <tbody>
 <tr><td><code>locale</code></td><td>string</td><td><code>nil</code></td><td>Locale code for localized fields.</td></tr>
-<tr><td><code>draft</code></td><td>boolean</td><td><code>false</code></td><td>Create as draft. Skips required field validation. Only affects versioned collections with <code>drafts = true</code>.</td></tr>
-<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>false</code></td><td>Bypass access control checks. Set to <code>true</code> to skip collection-level and field-level access for the current user.</td></tr>
-<tr><td><code>hooks</code></td><td>boolean</td><td><code>true</code></td><td>Run lifecycle hooks. Set to <code>false</code> to skip all hooks (before_validate, before_change, after_change) and validation. The DB operation still executes.</td></tr>
+<tr><td><code>draft</code></td><td>boolean</td><td><code>false</code></td><td>Create as draft. Skips required-field validation (versioned + <code>drafts = true</code>).</td></tr>
+<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>false</code></td><td>Bypass collection/field access checks.</td></tr>
+<tr><td><code>hooks</code></td><td>boolean</td><td><code>true</code></td><td>Run lifecycle hooks. Set <code>false</code> to skip all hooks and validation; DB write still runs.</td></tr>
 </tbody>
 </table>
 </div>
-<h2 id="crapcollectionsupdatecollection-id-data-opts"><a class="header" href="#crapcollectionsupdatecollection-id-data-opts">crap.collections.update(collection, id, data, opts?)</a></h2>
-<p>Update an existing document. Returns the updated document.</p>
-<p><strong>Only available inside hooks with transaction context.</strong></p>
-<pre><code class="language-lua">local doc = crap.collections.update("posts", "abc123", {
+<h4 id="auth-collections"><a class="header" href="#auth-collections">Auth collections</a></h4>
+<p>For collections with <code>auth = true</code>, the <code>password</code> field is handled
+automatically: on create/update it’s extracted before hooks run,
+hashed with Argon2id, and stored in the hidden <code>_password_hash</code>
+column. Hooks never see the raw password. On update, leaving
+<code>password</code> out (or empty) keeps the current hash. Matches the
+gRPC/admin behavior.</p>
+<h3 id="crapcollectionsslugupdateid-data-opts"><a class="header" href="#crapcollectionsslugupdateid-data-opts"><code>crap.collections.&lt;slug&gt;.update(id, data, opts?)</code></a></h3>
+<p>Update an existing document. <code>data</code> is a partial payload — only the
+fields being changed need to be present. Returns the updated typed
+document.</p>
+<pre><code class="language-lua">local doc = crap.collections.posts.update("abc123", {
     title = "Updated Title",
 })
 
 -- Draft update: saves a version snapshot only, main table unchanged
-crap.collections.update("articles", "abc123", {
+crap.collections.articles.update("abc123", {
     title = "Still editing...",
 }, { draft = true })
 </code></pre>
-<h3 id="options-2"><a class="header" href="#options-2">Options</a></h3>
+<p><strong>Options:</strong></p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -342,49 +358,134 @@ crap.collections.update("articles", "abc123", {
 </thead>
 <tbody>
 <tr><td><code>locale</code></td><td>string</td><td><code>nil</code></td><td>Locale code for localized fields.</td></tr>
-<tr><td><code>draft</code></td><td>boolean</td><td><code>false</code></td><td>Version-only save. Creates a draft version snapshot without modifying the main table. Only affects versioned collections with <code>drafts = true</code>.</td></tr>
-<tr><td><code>unpublish</code></td><td>boolean</td><td><code>false</code></td><td>Set document status to draft and create a draft version snapshot. Ignores the <code>data</code> fields when unpublishing. Only affects versioned collections.</td></tr>
-<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>false</code></td><td>Bypass access control checks. Set to <code>true</code> to skip collection-level and field-level access for the current user.</td></tr>
-<tr><td><code>hooks</code></td><td>boolean</td><td><code>true</code></td><td>Run lifecycle hooks. Set to <code>false</code> to skip all hooks (before_validate, before_change, after_change) and validation. The DB operation still executes.</td></tr>
+<tr><td><code>draft</code></td><td>boolean</td><td><code>false</code></td><td>Version-only save. Creates a draft version snapshot without touching the main table.</td></tr>
+<tr><td><code>unpublish</code></td><td>boolean</td><td><code>false</code></td><td>Set status to <code>draft</code> and create a draft version snapshot. Ignores <code>data</code> when unpublishing. Versioned collections only.</td></tr>
+<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>false</code></td><td>Bypass collection/field access checks.</td></tr>
+<tr><td><code>hooks</code></td><td>boolean</td><td><code>true</code></td><td>Run lifecycle hooks.</td></tr>
 </tbody>
 </table>
 </div>
-<h3 id="auth-collections"><a class="header" href="#auth-collections">Auth Collections</a></h3>
-<p>For collections with <code>auth = true</code>, the <code>password</code> field is automatically handled:</p>
-<ul>
-<li>On <strong>create</strong>, if the data contains a <code>password</code> key, it is extracted before hooks run, hashed with Argon2id, and stored in the hidden <code>_password_hash</code> column. Hooks never see the raw password.</li>
-<li>On <strong>update</strong>, same pattern — if <code>password</code> is present and non-empty, the password is updated. Leave it out or set it to <code>""</code> to keep the current password.</li>
-</ul>
-<p>This matches the behavior of the gRPC API and admin UI.</p>
-<h2 id="crapcollectionsdeletecollection-id-opts"><a class="header" href="#crapcollectionsdeletecollection-id-opts">crap.collections.delete(collection, id, opts?)</a></h2>
-<p>Delete a document. Returns <code>true</code> on success. For collections with <code>soft_delete = true</code>, moves the document to trash by default. For upload collections, associated files are cleaned up on permanent deletion (not on soft delete).</p>
-<p><strong>Only available inside hooks with transaction context.</strong></p>
-<pre><code class="language-lua">-- Soft-delete (moves to trash if collection has soft_delete)
-crap.collections.delete("posts", "abc123")
+<h3 id="crapcollectionsslugdeleteid-opts"><a class="header" href="#crapcollectionsslugdeleteid-opts"><code>crap.collections.&lt;slug&gt;.delete(id, opts?)</code></a></h3>
+<p>Delete a document. Returns <code>true</code> on success. For collections with
+<code>soft_delete = true</code> this moves the document to trash by default;
+upload collections clean up their files on permanent delete (not
+soft delete).</p>
+<pre><code class="language-lua">-- Soft-delete (moves to trash if the collection has soft_delete)
+crap.collections.posts.delete("abc123")
 
 -- Force permanent delete even on soft-delete collections
-crap.collections.delete("posts", "abc123", { forceHardDelete = true })
+crap.collections.posts.delete("abc123", { forceHardDelete = true })
 
 -- Bypass access control for internal operations
-crap.collections.delete("posts", "abc123", { overrideAccess = true })
+crap.collections.posts.delete("abc123", { overrideAccess = true })
 </code></pre>
-<h3 id="options-3"><a class="header" href="#options-3">Options</a></h3>
+<p><strong>Options:</strong></p>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>false</code></td><td>Bypass access control checks. Set to <code>true</code> to skip <code>access.trash</code> (soft delete) or <code>access.delete</code> (permanent delete) checks.</td></tr>
-<tr><td><code>hooks</code></td><td>boolean</td><td><code>true</code></td><td>Run lifecycle hooks. Set to <code>false</code> to skip before_delete and after_delete hooks.</td></tr>
-<tr><td><code>forceHardDelete</code></td><td>boolean</td><td><code>false</code></td><td>Permanently delete even when the collection has <code>soft_delete = true</code>. Requires <code>access.delete</code> permission when <code>overrideAccess = false</code>.</td></tr>
+<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>false</code></td><td>Bypass <code>access.trash</code> (soft) or <code>access.delete</code> (permanent).</td></tr>
+<tr><td><code>hooks</code></td><td>boolean</td><td><code>true</code></td><td>Run <code>before_delete</code> / <code>after_delete</code> hooks.</td></tr>
+<tr><td><code>forceHardDelete</code></td><td>boolean</td><td><code>false</code></td><td>Skip <code>soft_delete</code> and remove the row permanently. Still requires <code>access.delete</code> when <code>overrideAccess = false</code>.</td></tr>
 </tbody>
 </table>
 </div>
-<h2 id="crapcollectionsundeletecollection-id"><a class="header" href="#crapcollectionsundeletecollection-id">crap.collections.undelete(collection, id)</a></h2>
-<p>Undelete a soft-deleted document from trash. Returns <code>true</code> on success. Only works on collections with <code>soft_delete = true</code>. Re-syncs the FTS index after undelete.</p>
-<p><strong>Only available inside hooks with transaction context.</strong></p>
-<pre><code class="language-lua">crap.collections.undelete("posts", "abc123")
+<h3 id="crapcollectionsslugundeleteid-and-others"><a class="header" href="#crapcollectionsslugundeleteid-and-others"><code>crap.collections.&lt;slug&gt;.undelete(id)</code> (and others)</a></h3>
+<p>The accessor also covers <code>unpublish(id, opts?)</code>, <code>validate(data, opts?)</code>,
+<code>count(query?)</code>, <code>create_many(items, opts?)</code>, <code>update_many(query, data, opts?)</code>, <code>delete_many(query, opts?)</code>, <code>list_versions(id, opts?)</code>,
+<code>restore_version(id, version_id, opts?)</code>, and <code>ref_count(id)</code> —
+same shape as the slug-keyed equivalents, slug bound.</p>
+<h2 id="typing-factories--crapcollectionsslughookfield_hookconditionaccess"><a class="header" href="#typing-factories--crapcollectionsslughookfield_hookconditionaccess">Typing factories — <code>crap.collections.&lt;slug&gt;.{hook,field_hook,condition,access,...}</code></a></h2>
+<p>Per-collection <strong>typing helpers</strong> that wrap your function literal
+and let LuaLS infer the parameter types of the body. Pure
+pass-throughs at runtime (<code>f(fn) = fn</code>); the typing comes from the
+factory’s signature. See <a href="typing-factories.html"><code>crap.any</code></a> for the
+cross-collection equivalents.</p>
+<p>Prerequisite: <code>"type.inferParamType": true</code> in <code>.luarc.json</code> (set
+by default in the <code>init</code> scaffold).</p>
+<h3 id="crapcollectionsslughookfn"><a class="header" href="#crapcollectionsslughookfn"><code>crap.collections.&lt;slug&gt;.hook(fn)</code></a></h3>
+<p>Collection lifecycle hook with <code>context</code> narrowed to
+<code>crap.hook.&lt;Pascal&gt;</code>. Use for <code>before_validate</code>, <code>before_change</code>,
+<code>after_change</code>, <code>before_read</code>, <code>after_read</code> — events where the
+runtime ships a typed context.</p>
+<pre><code class="language-lua">-- hooks/inquiries/notify.lua
+return crap.collections.inquiries.hook(function(context)
+    -- context.data is typed crap.data.Inquiries
+    if context.operation == "create" then
+        crap.jobs.queue("notify", { email = context.data.email })
+    end
+    return context
+end)
+</code></pre>
+<p>For <code>before_delete</code> / <code>after_delete</code> / <code>before_broadcast</code> the
+runtime always sends a generic <code>crap.HookContext</code> — use
+<code>crap.any.collection_hook(fn)</code> instead.</p>
+<h3 id="crapcollectionsslugfield_hookfield-fn-and-field_hookfn"><a class="header" href="#crapcollectionsslugfield_hookfield-fn-and-field_hookfn"><code>crap.collections.&lt;slug&gt;.field_hook(field, fn)</code> and <code>field_hook(fn)</code></a></h3>
+<p>Field-level hook. Two forms:</p>
+<pre><code class="language-lua">-- Per-field: value narrows to the field's declared type
+return crap.collections.posts.field_hook("title", function(value, context)
+    -- value: string (posts.title is a text field)
+    return value:lower()
+end)
+
+-- Any field: value is `any`, context still narrowed per-collection
+return crap.collections.posts.field_hook(function(value, context)
+    -- context: crap.field_hook.Posts
+    return value
+end)
+</code></pre>
+<p>The per-field form uses an <code>---@overload</code> per field declared on the
+collection plus a <code>string</code> fallback for dynamic names. <code>value</code>’s
+type matches the field type the typegen emits — string for text /
+textarea / email / date / richtext / code, number for number,
+boolean for checkbox, the literal-string union for select / radio,
+<code>string</code> or <code>string[]</code> for relationship / upload, etc.</p>
+<h3 id="crapcollectionsslugconditionfn"><a class="header" href="#crapcollectionsslugconditionfn"><code>crap.collections.&lt;slug&gt;.condition(fn)</code></a></h3>
+<p>Display condition with <code>data</code> narrowed to <code>crap.data.&lt;Pascal&gt;</code>.</p>
+<pre><code class="language-lua">-- hooks/posts/show_external_url.lua
+return crap.collections.posts.condition(function(data)
+    -- data.post_type narrowed to its select union
+    return { field = "post_type", ["in"] = { "link", "video" } }
+end)
+</code></pre>
+<h3 id="crapcollectionsslugaccessfn"><a class="header" href="#crapcollectionsslugaccessfn"><code>crap.collections.&lt;slug&gt;.access(fn)</code></a></h3>
+<p>Access control function. Same signature as
+<a href="typing-factories.html"><code>crap.any.access(fn)</code></a> — included on the
+per-collection accessor for discoverability via
+<code>crap.collections.&lt;slug&gt;.&lt;TAB&gt;</code>. No per-collection narrowing
+(access context is uniform across collections).</p>
+<pre><code class="language-lua">return crap.collections.users.access(function(context)
+    return context.user ~= nil
+end)
+</code></pre>
+<h3 id="crapcollectionsslugauth_strategyfn"><a class="header" href="#crapcollectionsslugauth_strategyfn"><code>crap.collections.&lt;slug&gt;.auth_strategy(fn)</code></a></h3>
+<p>Custom auth strategy <code>authenticate</code> callback. Same shape as
+<code>crap.any.auth_strategy(fn)</code>; lives on the per-collection accessor
+for discoverability when scaffolding a strategy specifically for
+that collection.</p>
+<h3 id="crapcollectionsslugrow_labelfn"><a class="header" href="#crapcollectionsslugrow_labelfn"><code>crap.collections.&lt;slug&gt;.row_label(fn)</code></a></h3>
+<p>Computed row label for array/blocks fields. Receives the row table
+and returns the display string (or <code>nil</code> to fall back to
+<code>label_field</code>). Per-field narrowing of the row type is a future
+enhancement — today the row is typed as <code>table&lt;string, any&gt;</code>.</p>
+<h2 id="slug-keyed-dispatch-dynamic-case"><a class="header" href="#slug-keyed-dispatch-dynamic-case">Slug-keyed dispatch (dynamic case)</a></h2>
+<p>For the rare case where the slug isn’t known until runtime — auth
+strategies handed <code>context.collection</code>, plugins iterating
+<code>crap.collections.config.list()</code>, migration cleanup loops — use the
+slug-keyed equivalents:</p>
+<pre><code class="language-lua">crap.collections.find(collection, query)
+crap.collections.find_by_id(collection, id, opts)
+crap.collections.create(collection, data, opts)
+-- ... etc
+</code></pre>
+<p>Same semantics, slug as the first arg. Reach for these only when
+you genuinely don’t have a string literal — they don’t narrow.</p>
+<p>Restore a soft-deleted document from trash. Returns <code>true</code> on
+success. Only available on collections with <code>soft_delete = true</code>.
+Re-syncs the FTS index after undelete.</p>
+<pre><code class="language-lua">crap.collections.posts.undelete("abc123")
 </code></pre>
 <h2 id="lifecycle-hooks-in-lua-crud"><a class="header" href="#lifecycle-hooks-in-lua-crud">Lifecycle Hooks in Lua CRUD</a></h2>
 <p>Lua CRUD operations run the <strong>same lifecycle hooks</strong> as the gRPC API and admin UI:</p>
@@ -414,14 +515,14 @@ max_depth = 3   # 0 = never run hooks from Lua CRUD
     if ctx.hook_depth &gt;= 2 then
         return ctx  -- bail early to avoid deep recursion
     end
-    crap.collections.create("audit", { action = ctx.operation })
+    crap.collections.audit.create({ action = ctx.operation })
     return ctx
 end
 </code></pre>
 <h3 id="skipping-hooks"><a class="header" href="#skipping-hooks">Skipping Hooks</a></h3>
 <p>Pass <code>hooks = false</code> to any write CRUD call to skip all lifecycle hooks:</p>
 <pre><code class="language-lua">-- Create without triggering any hooks
-crap.collections.create("logs", { message = "raw insert" }, { hooks = false })
+crap.collections.logs.create({ message = "raw insert" }, { hooks = false })
 </code></pre>
 <h2 id="access-control-in-hooks"><a class="header" href="#access-control-in-hooks">Access Control in Hooks</a></h2>
 <p>By default, all Lua CRUD functions <strong>enforce access control</strong> (<code>overrideAccess = false</code>). This follows the principle of least privilege — if your hook needs to bypass access checks, it must explicitly opt in with <code>overrideAccess = true</code>.</p>
@@ -435,24 +536,24 @@ crap.collections.create("logs", { message = "raw insert" }, { hooks = false })
 <li><strong>Constrained read access</strong> — if a read access function returns a filter table instead of <code>true</code>, those filters are merged into the query (same as the gRPC/admin behavior).</li>
 </ul>
 <pre><code class="language-lua">-- Default: access control is enforced (only shows posts the user can see)
-local result = crap.collections.find("posts", {
+local result = crap.collections.posts.find({
     where = { status = "published" },
 })
 
 -- Bypass access control for internal/admin operations
-local all = crap.collections.find("posts", {
+local all = crap.collections.posts.find({
     overrideAccess = true,
 })
 </code></pre>
 <h2 id="crapcollectionscountcollection-query"><a class="header" href="#crapcollectionscountcollection-query">crap.collections.count(collection, query?)</a></h2>
 <p>Count documents matching a query. Returns an integer count.</p>
 <p><strong>Only available inside hooks with transaction context.</strong></p>
-<pre><code class="language-lua">local n = crap.collections.count("posts")
-local published = crap.collections.count("posts", {
+<pre><code class="language-lua">local n = crap.collections.posts.count()
+local published = crap.collections.posts.count({
     where = { status = "published" },
 })
 </code></pre>
-<h3 id="query-parameters-1"><a class="header" href="#query-parameters-1">Query Parameters</a></h3>
+<h3 id="query-parameters"><a class="header" href="#query-parameters">Query Parameters</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -473,7 +574,7 @@ local published = crap.collections.count("posts", {
 <p>Runs the full per-document lifecycle by default: <code>before_validate</code> → field validation → <code>before_change</code> → DB update → <code>after_change</code> — the same pipeline as single-document <code>update</code>. Set <code>hooks = false</code> in opts to skip hooks and validation for performance on large batch operations.</p>
 <p>Only provided fields are written (partial update). Absent fields are left unchanged — including checkbox fields, which are <strong>not</strong> reset to <code>0</code> as they would be in a full single-document update.</p>
 <p><strong>Only available inside hooks with transaction context.</strong></p>
-<pre><code class="language-lua">local result = crap.collections.update_many("posts", {
+<pre><code class="language-lua">local result = crap.collections.posts.update_many({
     where = { status = "draft" },
 }, {
     status = "published",
@@ -481,7 +582,7 @@ local published = crap.collections.count("posts", {
 print(result.modified)  -- number of updated documents
 
 -- Skip hooks and validation for performance
-local result = crap.collections.update_many("posts", {
+local result = crap.collections.posts.update_many({
     where = { status = "draft" },
 }, {
     status = "published",
@@ -518,18 +619,18 @@ local result = crap.collections.update_many("posts", {
 <p>List version snapshots for a document, newest first. Returns a table with <code>docs</code> (an array of version summaries) and <code>pagination</code> metadata matching the standard pagination shape. Only available on collections with <code>versions</code> enabled.</p>
 <p><strong>Only available inside hooks with transaction context.</strong></p>
 <pre><code class="language-lua">-- List the 10 most recent versions for a document
-local result = crap.collections.list_versions("posts", "abc123", { limit = 10 })
+local result = crap.collections.posts.list_versions("abc123", { limit = 10 })
 for _, v in ipairs(result.docs) do
     print(v.version, v.status, v.created_at, v.latest)
 end
 
 -- Paginate
-local page2 = crap.collections.list_versions("posts", "abc123", { limit = 10, offset = 10 })
+local page2 = crap.collections.posts.list_versions("abc123", { limit = 10, offset = 10 })
 
 -- Internal listing that must ignore collection-level read access (e.g. a migration)
-local all = crap.collections.list_versions("posts", "abc123", { overrideAccess = true })
+local all = crap.collections.posts.list_versions("abc123", { overrideAccess = true })
 </code></pre>
-<h3 id="options-4"><a class="header" href="#options-4">Options</a></h3>
+<h3 id="options"><a class="header" href="#options">Options</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -562,13 +663,13 @@ local all = crap.collections.list_versions("posts", "abc123", { overrideAccess =
 <p>Restore a previous version: copies the snapshot data back onto the parent document and writes a new version row. Returns the restored document. Only available on collections with <code>versions</code> enabled.</p>
 <p><strong>Only available inside hooks with transaction context.</strong></p>
 <pre><code class="language-lua">-- Restore version "v2-abc" of document "post-1"
-local doc = crap.collections.restore_version("posts", "post-1", "v2-abc")
+local doc = crap.collections.posts.restore_version("post-1", "v2-abc")
 print(doc.title)
 
 -- Internal restore bypassing per-user access (e.g. automated rollback job)
-crap.collections.restore_version("posts", "post-1", "v2-abc", { overrideAccess = true })
+crap.collections.posts.restore_version("post-1", "v2-abc", { overrideAccess = true })
 </code></pre>
-<h3 id="options-5"><a class="header" href="#options-5">Options</a></h3>
+<h3 id="options-1"><a class="header" href="#options-1">Options</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -584,19 +685,19 @@ crap.collections.restore_version("posts", "post-1", "v2-abc", { overrideAccess =
 <p><strong>All-or-nothing semantics:</strong> finds all matching documents, checks delete access for each (if <code>overrideAccess = false</code>), and only proceeds if all pass.</p>
 <p>Fires per-document lifecycle hooks (<code>before_delete</code>, <code>after_delete</code>) by default. Set <code>hooks = false</code> in opts to skip for performance on large batch operations.</p>
 <p><strong>Only available inside hooks with transaction context.</strong></p>
-<pre><code class="language-lua">local result = crap.collections.delete_many("posts", {
+<pre><code class="language-lua">local result = crap.collections.posts.delete_many({
     where = { status = "archived" },
 })
 print(result.deleted)  -- number of deleted documents
 print(result.skipped)  -- number skipped due to outstanding references
 
 -- Bypass access control for internal operations
-local result = crap.collections.delete_many("posts", {
+local result = crap.collections.posts.delete_many({
     where = { status = "archived" },
 }, { overrideAccess = true })
 
 -- Skip hooks for performance
-local result = crap.collections.delete_many("posts", {
+local result = crap.collections.posts.delete_many({
     where = { status = "archived" },
 }, { hooks = false })
 </code></pre>
@@ -670,11 +771,11 @@ local result = crap.collections.delete_many("posts", {
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

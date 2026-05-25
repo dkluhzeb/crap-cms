@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d82968e4.js";
+            window.path_to_searchindex_js = "../searchindex-f41986e9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-094f01c0.js"></script>
+        <script src="../toc-e21319d4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -287,20 +287,20 @@ grpcurl -plaintext -d '{
 <h3 id="locale-in-crud-operations"><a class="header" href="#locale-in-crud-operations">Locale in CRUD Operations</a></h3>
 <p>All Lua CRUD functions accept an optional <code>locale</code> parameter:</p>
 <pre><code class="language-lua">-- Find with locale
-local result = crap.collections.find("pages", { locale = "de" })
+local result = crap.collections.pages.find({ locale = "de" })
 
 -- Find by ID with locale
-local doc = crap.collections.find_by_id("pages", id, { locale = "de" })
+local doc = crap.collections.pages.find_by_id(id, { locale = "de" })
 
 -- Create in a specific locale
-crap.collections.create("pages", data, { locale = "de" })
+crap.collections.pages.create(data, { locale = "de" })
 
 -- Update in a specific locale
-crap.collections.update("pages", id, data, { locale = "de" })
+crap.collections.pages.update(id, data, { locale = "de" })
 
 -- Globals
-local settings = crap.globals.get("site_settings", { locale = "de" })
-crap.globals.update("site_settings", data, { locale = "de" })
+local settings = crap.globals.site_settings.get({ locale = "de" })
+crap.globals.site_settings.update(data, { locale = "de" })
 </code></pre>
 <h3 id="locale-configuration-access"><a class="header" href="#locale-configuration-access">Locale Configuration Access</a></h3>
 <pre><code class="language-lua">-- Check if localization is enabled
@@ -430,11 +430,11 @@ end
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Rich Text - Crap CMS</title>
+        <title>crap.any (typing factories) - Crap CMS</title>
 
 
         <!-- Custom HTML head -->
@@ -177,294 +177,132 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="rich-text"><a class="header" href="#rich-text">Rich Text</a></h1>
-<p>Rich text field with a ProseMirror-based WYSIWYG editor. Stored as HTML (default) or
-ProseMirror JSON.</p>
-<h2 id="sqlite-storage"><a class="header" href="#sqlite-storage">SQLite Storage</a></h2>
-<p><code>TEXT</code> column containing HTML content (default) or ProseMirror JSON document.</p>
-<h2 id="definition"><a class="header" href="#definition">Definition</a></h2>
-<pre><code class="language-lua">crap.fields.richtext({
-    name = "content",
-    admin = {
-        placeholder = "Write your content...",
-    },
-})
-</code></pre>
-<h2 id="storage-format"><a class="header" href="#storage-format">Storage Format</a></h2>
-<p>By default, richtext fields store raw HTML. Set <code>admin.format = "json"</code> to store the
-ProseMirror document structure as JSON instead:</p>
-<pre><code class="language-lua">crap.fields.richtext({
-    name = "content",
-    admin = {
-        format = "json",
-    },
-})
-</code></pre>
-<h3 id="html-vs-json"><a class="header" href="#html-vs-json">HTML vs JSON</a></h3>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th></th><th>HTML (default)</th><th>JSON</th></tr>
-</thead>
-<tbody>
-<tr><td>Storage</td><td>Raw HTML string</td><td>ProseMirror <code>doc.toJSON()</code></td></tr>
-<tr><td>Round-trip fidelity</td><td>Loses some structural info</td><td>Lossless</td></tr>
-<tr><td>Programmatic manipulation</td><td>Parse HTML</td><td>Walk JSON tree</td></tr>
-<tr><td>FTS search</td><td>Indexed as-is</td><td>Plain text extracted automatically</td></tr>
-<tr><td>API response</td><td>HTML string</td><td>JSON string</td></tr>
-</tbody>
-</table>
-</div>
-<h3 id="important-notes"><a class="header" href="#important-notes">Important notes</a></h3>
-<ul>
-<li><strong>Changing format does NOT migrate existing data.</strong> If you switch from <code>"html"</code> to
-<code>"json"</code> (or vice versa), existing documents retain their original format. The editor
-will attempt to parse the stored content according to the current format setting.</li>
-<li>The API returns the stored format as-is (HTML string or JSON string).</li>
-<li>Full-text search automatically extracts plain text from JSON-format richtext fields.</li>
-</ul>
-<h2 id="toolbar-configuration"><a class="header" href="#toolbar-configuration">Toolbar Configuration</a></h2>
-<p>By default, all toolbar features are enabled. Use <code>admin.features</code> to limit which
-features are available:</p>
-<pre><code class="language-lua">crap.fields.richtext({
-    name = "content",
-    admin = {
-        features = { "bold", "italic", "heading", "link", "bulletList" },
-    },
-})
-</code></pre>
-<h3 id="available-features"><a class="header" href="#available-features">Available Features</a></h3>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Feature</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>bold</code></td><td>Bold text (Ctrl+B)</td></tr>
-<tr><td><code>italic</code></td><td>Italic text (Ctrl+I)</td></tr>
-<tr><td><code>code</code></td><td>Inline code (Ctrl+`)</td></tr>
-<tr><td><code>link</code></td><td>Hyperlinks</td></tr>
-<tr><td><code>heading</code></td><td>H1, H2, H3 headings</td></tr>
-<tr><td><code>blockquote</code></td><td>Block quotes</td></tr>
-<tr><td><code>orderedList</code></td><td>Numbered lists</td></tr>
-<tr><td><code>bulletList</code></td><td>Bullet lists</td></tr>
-<tr><td><code>codeBlock</code></td><td>Code blocks (```)</td></tr>
-<tr><td><code>horizontalRule</code></td><td>Horizontal rule</td></tr>
-</tbody>
-</table>
-</div>
-<p>When <code>features</code> is omitted or empty, all features are enabled (backward compatible).
-Undo/redo buttons are always available regardless of feature configuration.</p>
-<h2 id="custom-nodes"><a class="header" href="#custom-nodes">Custom Nodes</a></h2>
-<p>Custom ProseMirror nodes let you embed structured components (CTAs, embeds, alerts,
-mentions, etc.) inside richtext content. Register nodes in <code>init.lua</code>, then enable
-them on specific fields via <code>admin.nodes</code>.</p>
-<h3 id="registration"><a class="header" href="#registration">Registration</a></h3>
-<p>Node attributes use the same <code>crap.fields.*</code> factory functions as collection fields.
-Only scalar types are allowed: <code>text</code>, <code>number</code>, <code>textarea</code>, <code>select</code>, <code>radio</code>,
-<code>checkbox</code>, <code>date</code>, <code>email</code>, <code>json</code>, <code>code</code>.</p>
-<pre><code class="language-lua">-- init.lua
-crap.richtext.register_node("cta", {
-    label = "Call to Action",
-    inline = false, -- block-level node
-    attrs = {
-        crap.fields.text({ name = "text", required = true, admin = { label = "Button Text" } }),
-        crap.fields.text({ name = "url", required = true, admin = { label = "URL", placeholder = "https://..." } }),
-        crap.fields.select({ name = "style", admin = { label = "Style" }, options = {
-            { label = "Primary", value = "primary" },
-            { label = "Secondary", value = "secondary" },
-        }}),
-    },
-    searchable_attrs = { "text" },
-    render = function(attrs)
-        return string.format(
-            '&lt;a href="%s" class="btn btn--%s"&gt;%s&lt;/a&gt;',
-            attrs.url, attrs.style or "primary", attrs.text
-        )
-    end,
-})
-</code></pre>
-<h3 id="field-configuration"><a class="header" href="#field-configuration">Field configuration</a></h3>
-<pre><code class="language-lua">crap.fields.richtext({
-    name = "content",
-    admin = {
-        format = "json",
-        nodes = { "cta" },
-        features = { "bold", "italic", "heading", "link", "bulletList" },
-    },
-})
-</code></pre>
-<h3 id="node-spec-options"><a class="header" href="#node-spec-options">Node spec options</a></h3>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Option</th><th>Type</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>label</code></td><td>string</td><td>Display label (defaults to node name)</td></tr>
-<tr><td><code>inline</code></td><td>boolean</td><td>Inline vs block-level (default: false)</td></tr>
-<tr><td><code>attrs</code></td><td>table[]</td><td>Attribute definitions (see below)</td></tr>
-<tr><td><code>searchable_attrs</code></td><td>string[]</td><td>Attr names included in FTS search index</td></tr>
-<tr><td><code>render</code></td><td>function</td><td>Server-side render function: <code>(attrs) -&gt; html</code></td></tr>
-</tbody>
-</table>
-</div>
-<h3 id="allowed-attribute-types"><a class="header" href="#allowed-attribute-types">Allowed attribute types</a></h3>
-<p>Node attrs support all scalar field types. Complex types (<code>array</code>, <code>group</code>, <code>blocks</code>,
-<code>relationship</code>, <code>upload</code>, <code>richtext</code>, <code>row</code>, <code>collapsible</code>, <code>tabs</code>, <code>join</code>) are rejected
-at registration time.</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Type</th><th>Admin Input</th></tr>
-</thead>
-<tbody>
-<tr><td><code>text</code></td><td>Text input</td></tr>
-<tr><td><code>number</code></td><td>Number input</td></tr>
-<tr><td><code>textarea</code></td><td>Multi-line textarea</td></tr>
-<tr><td><code>select</code></td><td>Dropdown with options</td></tr>
-<tr><td><code>radio</code></td><td>Radio button group</td></tr>
-<tr><td><code>checkbox</code></td><td>Checkbox</td></tr>
-<tr><td><code>date</code></td><td>Date picker</td></tr>
-<tr><td><code>email</code></td><td>Email input</td></tr>
-<tr><td><code>json</code></td><td>Monospace textarea</td></tr>
-<tr><td><code>code</code></td><td>Monospace textarea</td></tr>
-</tbody>
-</table>
-</div>
-<h3 id="supported-attribute-features"><a class="header" href="#supported-attribute-features">Supported attribute features</a></h3>
-<p>Node attrs support most field features that make sense in the richtext context.</p>
-<h4 id="admin-display-hints"><a class="header" href="#admin-display-hints">Admin display hints</a></h4>
-<p>These control how attributes appear in the node edit modal:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Feature</th><th>Effect</th></tr>
-</thead>
-<tbody>
-<tr><td><code>admin.hidden</code></td><td>Attribute is not rendered in the modal (value preserved)</td></tr>
-<tr><td><code>admin.readonly</code></td><td>Input is read-only / disabled</td></tr>
-<tr><td><code>admin.width</code></td><td>CSS width on the field container (e.g. <code>"50%"</code>)</td></tr>
-<tr><td><code>admin.step</code></td><td><code>step</code> attribute on number inputs (e.g. <code>"0.01"</code>)</td></tr>
-<tr><td><code>admin.rows</code></td><td>Number of rows for textarea/code/json fields</td></tr>
-<tr><td><code>admin.language</code></td><td>Language label suffix for code fields (e.g. <code>"JSON"</code>)</td></tr>
-<tr><td><code>admin.placeholder</code></td><td>Placeholder text on inputs</td></tr>
-<tr><td><code>admin.description</code></td><td>Help text below the input</td></tr>
-<tr><td><code>min</code> / <code>max</code></td><td>Min/max on number inputs</td></tr>
-<tr><td><code>min_length</code> / <code>max_length</code></td><td>Minlength/maxlength on text/textarea inputs</td></tr>
-<tr><td><code>min_date</code> / <code>max_date</code></td><td>Min/max on date inputs</td></tr>
-<tr><td><code>picker_appearance</code></td><td>Date input type: <code>"dayOnly"</code> (default), <code>"dayAndTime"</code>, <code>"timeOnly"</code>, <code>"monthOnly"</code></td></tr>
-</tbody>
-</table>
-</div>
-<h4 id="server-side-validation"><a class="header" href="#server-side-validation">Server-side validation</a></h4>
-<p>Node attribute values inside richtext content are validated server-side on create/update.
-The following checks run automatically:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Check</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>required</code></td><td>Attribute must have a non-empty value</td></tr>
-<tr><td><code>validate</code></td><td>Custom Lua validation function</td></tr>
-<tr><td><code>min_length</code> / <code>max_length</code></td><td>Text length bounds</td></tr>
-<tr><td><code>min</code> / <code>max</code></td><td>Numeric bounds</td></tr>
-<tr><td><code>min_date</code> / <code>max_date</code></td><td>Date bounds</td></tr>
-<tr><td>email format</td><td>Valid email for <code>email</code> type attrs</td></tr>
-<tr><td>option validity</td><td>Value must be in <code>options</code> for <code>select</code>/<code>radio</code></td></tr>
-</tbody>
-</table>
-</div>
-<p>Validation errors reference the node location: <code>"content[cta#0].url"</code> (first CTA node’s
-<code>url</code> attribute in the <code>content</code> field).</p>
-<h4 id="before_validate-hooks"><a class="header" href="#before_validate-hooks"><code>before_validate</code> hooks</a></h4>
-<p>Node attrs support <code>hooks.before_validate</code> for normalizing values before validation:</p>
-<pre><code class="language-lua">crap.richtext.register_node("cta", {
-    label = "CTA",
-    attrs = {
-        crap.fields.text({
-            name = "url",
-            required = true,
-            hooks = {
-                before_validate = { "hooks.trim_whitespace" },
-            },
-        }),
-    },
-})
-</code></pre>
-<p>The hook receives <code>(value, context)</code> and returns the transformed value. Runs before
-validation checks.</p>
-<h4 id="unsupported-features"><a class="header" href="#unsupported-features">Unsupported features</a></h4>
-<p>These features have no effect on node attributes and will produce a warning at
-registration time:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Feature</th><th>Reason</th></tr>
-</thead>
-<tbody>
-<tr><td><code>hooks.before_change</code></td><td>No per-attr write lifecycle</td></tr>
-<tr><td><code>hooks.after_change</code></td><td>No per-attr write lifecycle</td></tr>
-<tr><td><code>hooks.after_read</code></td><td>No per-attr read lifecycle</td></tr>
-<tr><td><code>access</code> (read/create/update)</td><td>No per-attr access control</td></tr>
-<tr><td><code>unique</code></td><td>No DB column</td></tr>
-<tr><td><code>index</code></td><td>No DB column</td></tr>
-<tr><td><code>localized</code></td><td>Richtext field itself is localized or not</td></tr>
-<tr><td><code>mcp.description</code></td><td>Not exposed as MCP fields</td></tr>
-<tr><td><code>has_many</code></td><td>Doesn’t apply to scalar node attrs</td></tr>
-<tr><td><code>admin.condition</code></td><td>Not yet supported (deferred)</td></tr>
-</tbody>
-</table>
-</div>
-<h3 id="server-side-rendering"><a class="header" href="#server-side-rendering">Server-side rendering</a></h3>
-<p>Use <code>crap.richtext.render(content)</code> in hooks to replace custom nodes with rendered
-HTML. The function auto-detects format (JSON or HTML). Custom nodes with a <code>render</code>
-function produce the function’s output; nodes without one pass through as
-<code>&lt;crap-node&gt;</code> custom elements.</p>
-<pre><code class="language-lua">-- In an after_read hook
-function hooks.render_content(context)
-    local doc = context.doc
-    if doc.content then
-        doc.content = crap.richtext.render(doc.content)
+                        <h1 id="crapany--cross-collection-typing-factories"><a class="header" href="#crapany--cross-collection-typing-factories">crap.any — cross-collection typing factories</a></h1>
+<p><code>crap.any.*</code> is the home for <strong>typing-helper factories</strong> that aren’t
+scoped to a single collection. Each function is a pass-through at
+runtime (<code>f(fn) = fn</code>); its only purpose is to give LuaLS a typed
+parameter slot so <code>Lua.type.inferParamType</code> propagates the right
+<code>value</code> / <code>ctx</code> / <code>data</code> types into your function body’s locals.</p>
+<p>For per-collection narrowing (<code>value</code> typed per field, <code>ctx</code> typed
+per collection) use the per-slug accessors on
+<a href="collections.html"><code>crap.collections.&lt;slug&gt;</code></a> and
+<a href="globals.html"><code>crap.globals.&lt;slug&gt;</code></a>. Reach for <code>crap.any.*</code> when
+the hook spans multiple collections or has nothing to narrow on.</p>
+<h2 id="prerequisites"><a class="header" href="#prerequisites">Prerequisites</a></h2>
+<p>Both pieces are needed for body-level type inference to fire:</p>
+<ol>
+<li><strong><code>Lua.type.inferParamType: true</code></strong> in your <code>.luarc.json</code> (the
+<code>init</code> scaffold sets this by default).</li>
+<li><strong>Wrap the function literal in a factory call.</strong> A bare
+<code>return function(ctx) ... end</code> won’t propagate types — LuaLS
+needs the typed parameter slot from the factory’s signature.</li>
+</ol>
+<p>If your callback’s <code>ctx</code> shows up as <code>any</code> in hover, one of the two
+is missing.</p>
+<h2 id="api-surface"><a class="header" href="#api-surface">API surface</a></h2>
+<h3 id="crapanycollection_hookfn"><a class="header" href="#crapanycollection_hookfn"><code>crap.any.collection_hook(fn)</code></a></h3>
+<p>Wraps a collection lifecycle hook that takes the generic
+<code>crap.HookContext</code>. Use for hooks that fire on multiple collections
+(or for <code>before_delete</code> / <code>after_delete</code> / <code>before_broadcast</code> where
+the runtime always passes a generic context).</p>
+<pre><code class="language-lua">-- hooks/set_published_at.lua — used by posts AND projects
+return crap.any.collection_hook(function(context)
+    if context.data._status == "published" and not context.data.published_at then
+        context.data.published_at = crap.util.date_now()
     end
     return context
-end
+end)
 </code></pre>
-<h3 id="fts-search"><a class="header" href="#fts-search">FTS search</a></h3>
-<p>Custom node attributes listed in <code>searchable_attrs</code> are automatically extracted
-for full-text search when the field uses JSON format.</p>
-<h2 id="resize-behavior"><a class="header" href="#resize-behavior">Resize Behavior</a></h2>
-<p>By default, the richtext editor is vertically resizable (no max-height constraint). Set
-<code>admin.resizable = false</code> to lock it to a fixed height range (200–600px):</p>
-<pre><code class="language-lua">crap.fields.richtext({
-    name = "content",
-    admin = {
-        resizable = false,
-    },
-})
+<p>For collection-specific narrowing, use
+<a href="collections.html"><code>crap.collections.&lt;slug&gt;.hook(fn)</code></a>.</p>
+<h3 id="crapanyfield_hookfn"><a class="header" href="#crapanyfield_hookfn"><code>crap.any.field_hook(fn)</code></a></h3>
+<p>Wraps a field-level hook that takes <code>(value, context)</code> against the
+generic <code>crap.FieldHookContext</code>. <code>value</code> is <code>any</code> in the body; for
+typed <code>value</code> use the per-field overload on
+<a href="collections.html"><code>crap.collections.&lt;slug&gt;.field_hook(field, fn)</code></a>.</p>
+<pre><code class="language-lua">-- hooks/auto_slug.lua — applied to many collections' "slug" field
+return crap.any.field_hook(function(value, context)
+    if value and value ~= "" then return value end
+    local title = context.data and context.data.title
+    return title and crap.util.slugify(title) or value
+end)
 </code></pre>
-<h2 id="admin-rendering"><a class="header" href="#admin-rendering">Admin Rendering</a></h2>
-<p>Renders as a ProseMirror-based rich text editor with a configurable toolbar. When
-custom nodes are configured, an insert button group appears in the toolbar for each
-node type. Nodes display as styled cards (block) or pills (inline) in the editor;
-double-click to edit attributes.</p>
-<h2 id="notes"><a class="header" href="#notes">Notes</a></h2>
-<ul>
-<li>No server-side sanitization is applied — sanitize in hooks if needed</li>
-<li>The toolbar configuration only affects the admin UI; it does not validate or strip content server-side</li>
-<li>Custom node names must be alphanumeric with underscores only</li>
-</ul>
+<h3 id="crapanyaccessfn"><a class="header" href="#crapanyaccessfn"><code>crap.any.access(fn)</code></a></h3>
+<p>Wraps an access control function. <code>context: crap.AccessContext</code>. The
+context type is uniform across collections — there’s no per-collection
+narrowing variant.</p>
+<pre><code class="language-lua">return crap.any.access(function(context)
+    return context.user ~= nil and context.user.role == "admin"
+end)
+</code></pre>
+<p><code>context.user</code> is typed as <code>crap.AuthUser</code> (<code>crap.Document</code> plus an
+<code>[string] any</code> index signature, since a project may have multiple
+auth collections). When you know the auth collection, cast for strict
+typing:</p>
+<pre><code class="language-lua">local user = context.user --[[@as crap.doc.Users]]
+</code></pre>
+<h3 id="crapanyauth_strategyfn"><a class="header" href="#crapanyauth_strategyfn"><code>crap.any.auth_strategy(fn)</code></a></h3>
+<p>Wraps a custom auth strategy’s <code>authenticate</code> callback.
+<code>context: crap.AuthStrategyContext</code> — <code>{ headers, collection }</code>.
+Returns the user document or <code>nil</code>.</p>
+<pre><code class="language-lua">return crap.any.auth_strategy(function(context)
+    local key = context.headers["x-api-key"]
+    if not key then return nil end
+    return crap.collections.find_by_id(context.collection, lookup_user(key))
+end)
+</code></pre>
+<h3 id="crapanyjob_handlerfn"><a class="header" href="#crapanyjob_handlerfn"><code>crap.any.job_handler(fn)</code></a></h3>
+<p>Wraps a background job handler. <code>context: crap.JobHandlerContext</code>
+(<code>{ data, job }</code>).</p>
+<pre><code class="language-lua">M.run = crap.any.job_handler(function(context)
+    crap.log.info("Job attempt " .. context.job.attempt)
+    -- context.data is the payload passed to crap.jobs.queue(...)
+end)
+</code></pre>
+<h3 id="crapanyrow_labelfn"><a class="header" href="#crapanyrow_labelfn"><code>crap.any.row_label(fn)</code></a></h3>
+<p>Wraps a computed row label for array/blocks fields.</p>
+<pre><code class="language-lua">return crap.any.row_label(function(row)
+    return row.heading or row.title or "(untitled)"
+end)
+</code></pre>
+<h3 id="crapanydisplay_conditionfn"><a class="header" href="#crapanydisplay_conditionfn"><code>crap.any.display_condition(fn)</code></a></h3>
+<p>Wraps a display condition that doesn’t need per-collection data
+narrowing. For typed <code>data</code>, use
+<a href="collections.html"><code>crap.collections.&lt;slug&gt;.condition(fn)</code></a>.</p>
+<pre><code class="language-lua">return crap.any.display_condition(function(data)
+    return { field = "kind", equals = "premium" }
+end)
+</code></pre>
+<h2 id="when-to-reach-for-crapany-vs-the-per-slug-accessor"><a class="header" href="#when-to-reach-for-crapany-vs-the-per-slug-accessor">When to reach for <code>crap.any</code> vs the per-slug accessor</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Situation</th><th>Use</th></tr>
+</thead>
+<tbody>
+<tr><td>Hook is specific to one collection’s field</td><td><code>crap.collections.&lt;slug&gt;.field_hook("&lt;field&gt;", fn)</code></td></tr>
+<tr><td>Hook applies to multiple fields of one collection</td><td><code>crap.collections.&lt;slug&gt;.field_hook(fn)</code></td></tr>
+<tr><td>Hook applies to multiple collections</td><td><code>crap.any.field_hook(fn)</code></td></tr>
+<tr><td>Collection hook on a specific collection (typed <code>ctx</code>)</td><td><code>crap.collections.&lt;slug&gt;.hook(fn)</code></td></tr>
+<tr><td>Collection hook used across collections</td><td><code>crap.any.collection_hook(fn)</code></td></tr>
+<tr><td><code>before_delete</code> / <code>after_delete</code> / <code>before_broadcast</code></td><td><code>crap.any.collection_hook(fn)</code> (runtime always sends generic ctx)</td></tr>
+<tr><td>Display condition tied to a collection’s data</td><td><code>crap.collections.&lt;slug&gt;.condition(fn)</code></td></tr>
+<tr><td>Access function (always uniform context)</td><td><code>crap.any.access(fn)</code> or <code>crap.collections.&lt;slug&gt;.access(fn)</code> for discoverability</td></tr>
+<tr><td>Auth strategy</td><td><code>crap.any.auth_strategy(fn)</code> or <code>crap.collections.&lt;slug&gt;.auth_strategy(fn)</code></td></tr>
+<tr><td>Job handler</td><td><code>crap.any.job_handler(fn)</code></td></tr>
+</tbody>
+</table>
+</div>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../fields/textarea.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../lua-api/globals.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../fields/select.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../lua-api/hooks.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -474,11 +312,11 @@ double-click to edit attributes.</p>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../fields/textarea.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../lua-api/globals.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../fields/select.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../lua-api/hooks.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

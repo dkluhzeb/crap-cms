@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d82968e4.js";
+            window.path_to_searchindex_js = "../searchindex-f41986e9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-094f01c0.js"></script>
+        <script src="../toc-e21319d4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -202,42 +202,8 @@ crap.util.slugify("  multiple   spaces  ") -- "multiple-spaces"
 -- e.g., "V1StGXR8_Z5jdHi6B-myT"
 </code></pre>
 <p>| <strong>Returns</strong> | string | Random nanoid |</p>
-<h2 id="craputiljson_encodevalue"><a class="header" href="#craputiljson_encodevalue">crap.util.json_encode(value)</a></h2>
-<p>Encode a Lua value (table, string, number, boolean, nil) as a JSON string.</p>
-<blockquote>
-<p><strong>Tip:</strong> <code>crap.json.encode()</code> and <code>crap.json.decode()</code> are aliases — see <a href="json.html">crap.json</a>.</p>
-</blockquote>
-<pre><code class="language-lua">local json = crap.util.json_encode({ name = "test", count = 42 })
--- '{"count":42,"name":"test"}'
-</code></pre>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Parameter</th><th>Type</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>value</code></td><td>any</td><td>Lua value to encode</td></tr>
-<tr><td><strong>Returns</strong></td><td>string</td><td>JSON string</td></tr>
-</tbody>
-</table>
-</div>
-<h2 id="craputiljson_decodestr"><a class="header" href="#craputiljson_decodestr">crap.util.json_decode(str)</a></h2>
-<p>Decode a JSON string into a Lua value.</p>
-<pre><code class="language-lua">local data = crap.util.json_decode('{"name":"test","count":42}')
-print(data.name)   -- "test"
-print(data.count)  -- 42
-</code></pre>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Parameter</th><th>Type</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>str</code></td><td>string</td><td>JSON string</td></tr>
-<tr><td><strong>Returns</strong></td><td>any</td><td>Decoded Lua value</td></tr>
-</tbody>
-</table>
-</div>
+<h2 id="json-encodedecode"><a class="header" href="#json-encodedecode">JSON encode/decode</a></h2>
+<p>See <a href="json.html">crap.json</a> for <code>crap.json.encode()</code> and <code>crap.json.decode()</code>.</p>
 <h2 id="common-hook-patterns"><a class="header" href="#common-hook-patterns">Common Hook Patterns</a></h2>
 <h3 id="auto-slug-generation"><a class="header" href="#auto-slug-generation">Auto-Slug Generation</a></h3>
 <pre><code class="language-lua">function M.auto_slug(ctx)
@@ -258,7 +224,7 @@ end
 <h3 id="serialize-complex-data"><a class="header" href="#serialize-complex-data">Serialize Complex Data</a></h3>
 <pre><code class="language-lua">function M.store_metadata(ctx)
     if type(ctx.data.metadata) == "table" then
-        ctx.data.metadata = crap.util.json_encode(ctx.data.metadata)
+        ctx.data.metadata = crap.json.encode(ctx.data.metadata)
     end
     return ctx
 end
@@ -400,11 +366,11 @@ local diff = crap.util.date_diff(tomorrow, crap.util.date_timestamp())  -- 86400
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

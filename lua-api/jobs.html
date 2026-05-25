@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d82968e4.js";
+            window.path_to_searchindex_js = "../searchindex-f41986e9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-094f01c0.js"></script>
+        <script src="../toc-e21319d4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,7 +180,19 @@
                         <h1 id="crapjobs"><a class="header" href="#crapjobs">crap.jobs</a></h1>
 <p>Background job definition and queuing.</p>
 <h2 id="crapjobsdefineslug-config"><a class="header" href="#crapjobsdefineslug-config">crap.jobs.define(slug, config)</a></h2>
-<p>Define a background job. Call in <code>init.lua</code> or <code>jobs/*.lua</code> files.</p>
+<p>Define a background job. <strong>Init-only:</strong> call this from <code>jobs/*.lua</code>,
+<code>init.lua</code>, or any file loaded by <code>require</code> from those. The scheduler
+enrolls jobs once at startup; runtime registration would never reach
+the cron or queue worker, so it’s rejected outright:</p>
+<blockquote>
+<p><code>crap.jobs.define must be called from a definition file or init.lua. To change a registered job, edit the file and restart the process.</code></p>
+</blockquote>
+<p>The common “define + handler in one file” layout (top-level
+<code>crap.jobs.define(...)</code> plus <code>function M.run(ctx) ... end</code> returned
+as a module) works fine: <code>init</code> loads each <code>jobs/foo.lua</code> once and
+caches its return value in <code>package.loaded["jobs.foo"]</code>. When the
+dispatcher later does <code>require("jobs.foo")</code> to call the handler, it
+hits the cache and the top-level <code>define</code> does <strong>not</strong> re-run.</p>
 <p><strong>Parameters:</strong></p>
 <ul>
 <li><code>slug</code> (string) — Unique job identifier</li>
@@ -189,7 +201,7 @@
 <li><code>handler</code> (string, required) — Lua function ref (e.g., <code>"jobs.cleanup.run"</code>)</li>
 <li><code>schedule</code> (string, optional) — Cron expression (e.g., <code>"0 3 * * *"</code>)</li>
 <li><code>queue</code> (string, default: <code>"default"</code>) — Queue name</li>
-<li><code>retries</code> (integer, default: 0) — Max retry attempts</li>
+<li><code>retries</code> (integer, optional) — Max retry attempts. When omitted, inherits <code>[jobs.queues.&lt;queue&gt;] retries</code> from <code>crap.toml</code>; if the queue has no entry either, defaults to <code>0</code> (one attempt). Set explicitly (including <code>retries = 0</code>) to override the queue default.</li>
 <li><code>timeout</code> (integer, default: 60) — Seconds before timeout</li>
 <li><code>concurrency</code> (integer, default: 1) — Max concurrent runs</li>
 <li><code>skip_if_running</code> (boolean, default: true) — Skip cron if still running</li>
@@ -206,14 +218,30 @@
     timeout = 120,
 })
 </code></pre>
-<h2 id="crapjobsqueueslug-data"><a class="header" href="#crapjobsqueueslug-data">crap.jobs.queue(slug, data?)</a></h2>
+<h2 id="crapjobsqueueslug-data-opts"><a class="header" href="#crapjobsqueueslug-data-opts">crap.jobs.queue(slug, data?, opts?)</a></h2>
 <p>Queue a job for background execution. Only available inside hooks with transaction context.</p>
 <p><strong>Parameters:</strong></p>
 <ul>
 <li><code>slug</code> (string) — Job slug (must be previously defined)</li>
 <li><code>data</code> (table, optional) — Input data passed to the handler (default: <code>{}</code>)</li>
+<li><code>opts</code> (table, optional) — Per-enqueue options:
+<ul>
+<li><code>priority</code> (integer) — Static scheduling priority. Higher values are
+claimed sooner; negative values run only when the queue is otherwise
+idle. Same-priority jobs claim FIFO. When omitted, falls back to the
+job definition’s <code>priority</code> (or <code>0</code>).</li>
+<li><code>delay</code> (integer seconds <strong>or</strong> duration string <code>"5m"</code> / <code>"30s"</code> /
+<code>"1h"</code> / <code>"7d"</code>) — How long to wait before the job becomes
+claimable. Default <code>0</code> = immediate. Internally sets <code>retry_after = now() + delay</code>; works the same way as exponential-backoff retries.</li>
+<li><code>unique</code> (string) — Dedup key. If another job with the same slug
+is already pending or running with this <code>unique</code> value, returns
+that job’s id instead of inserting a duplicate. Completed/failed
+jobs don’t block re-enqueue (only pending/running are “active”).</li>
 </ul>
-<p><strong>Returns:</strong> <code>string</code> — The queued job run ID.</p>
+</li>
+</ul>
+<p><strong>Returns:</strong> <code>string</code> — The queued job run ID (either freshly inserted
+or, when <code>unique</code> matched, the existing one).</p>
 <p><strong>Example:</strong></p>
 <pre><code class="language-lua">-- In an after_change hook
 local job_id = crap.jobs.queue("send_welcome_email", {
@@ -221,6 +249,36 @@ local job_id = crap.jobs.queue("send_welcome_email", {
     email = ctx.data.email,
 })
 crap.log.info("Queued welcome email job: " .. job_id)
+
+-- High-priority job (e.g. password reset email) jumps the queue.
+crap.jobs.queue("send_password_reset", { user_id = id }, { priority = 10 })
+
+-- Low-priority background work (e.g. analytics rollup) runs only
+-- when the queue is otherwise idle. Note: prefer setting this on
+-- the definition with `priority = -5` so every enqueue site inherits it.
+crap.jobs.queue("analytics_rollup", {}, { priority = -5 })
+
+-- Delayed: send the welcome email 5 minutes after signup so a
+-- newly-created user has time to land on the dashboard first.
+crap.jobs.queue("send_welcome_email", { user_id = id }, { delay = "5m" })
+
+-- Idempotent: only one "rebuild search index for collection X" job
+-- pending at a time. If two writes fire in quick succession, the
+-- second `queue()` returns the first job's id — no duplicate work.
+crap.jobs.queue("reindex_collection", { slug = "posts" }, {
+    unique = "reindex:posts",
+})
+</code></pre>
+<p><strong>Defining a job with a default priority:</strong></p>
+<pre><code class="language-lua">crap.jobs.define("analytics_rollup", {
+    handler = "jobs.analytics.rollup",
+    schedule = "0 3 * * *",     -- nightly
+    priority = -5,              -- yield to user-triggered work
+    timeout = 600,
+})
+
+-- Now every cron-fired run AND every manual `crap.jobs.queue("analytics_rollup")`
+-- inherits priority = -5 unless the queue site explicitly overrides.
 </code></pre>
 <h2 id="handler-function"><a class="header" href="#handler-function">Handler Function</a></h2>
 <p>The handler function receives a context table and has full CRUD access:</p>
@@ -232,7 +290,7 @@ function M.run(ctx)
     -- ctx.job.max_attempts: total attempts allowed
 
     -- Full CRUD access:
-    local result = crap.collections.find("posts", {
+    local result = crap.collections.posts.find({
         where = { status = "expired" }
     })
 
@@ -241,6 +299,225 @@ function M.run(ctx)
 end
 return M
 </code></pre>
+<h2 id="transactions-in-job-handlers"><a class="header" href="#transactions-in-job-handlers">Transactions in job handlers</a></h2>
+<p>Each CRUD call inside a job handler runs in its own short-lived
+<code>BEGIN IMMEDIATE</code> transaction (<strong>pool-mode</strong>). Different from hooks,
+which share the parent operation’s write transaction.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Context</th><th>Transaction model</th></tr>
+</thead>
+<tbody>
+<tr><td>Hook (<code>before_change</code>, <code>after_change</code>, …)</td><td>All CRUD ops share the parent’s write tx. Atomic with the document being created/updated.</td></tr>
+<tr><td>Job handler (default)</td><td>Each CRUD op is its own short-lived <code>BEGIN IMMEDIATE</code> tx (pool-mode). <code>find</code> then <code>update</code> are two distinct atomic writes.</td></tr>
+<tr><td>Inside <code>crap.transaction(fn)</code> (job-only)</td><td>All CRUD ops in <code>fn</code> share one <code>BEGIN IMMEDIATE</code> tx. Used for multi-step atomicity in jobs.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="why-pool-mode-for-jobs"><a class="header" href="#why-pool-mode-for-jobs">Why pool-mode for jobs</a></h3>
+<p>Earlier releases wrapped each job handler in a single outer
+<code>BEGIN DEFERRED</code> transaction shared across all CRUD calls. Long-running
+handlers that did <code>find</code> followed by <code>update</code> (canonical pattern) could
+hit <code>SQLITE_BUSY_SNAPSHOT</code> if any other writer (admin edits, image
+queue, other jobs) committed between the read and the write — SQLite’s
+deadlock-prevention error, <strong>not retried</strong> by <code>busy_timeout</code>. The
+pool-mode model avoids this entirely: each op opens its own
+<code>IMMEDIATE</code> tx, so there’s no snapshot window for a writer to invalidate.</p>
+<h3 id="craptransactionfn--explicit-multi-step-atomicity"><a class="header" href="#craptransactionfn--explicit-multi-step-atomicity"><code>crap.transaction(fn)</code> — explicit multi-step atomicity</a></h3>
+<p>When a job needs multiple CRUD ops to be atomic (e.g., read a counter,
+write it back incremented), wrap them in <code>crap.transaction(fn)</code>:</p>
+<pre><code class="language-lua">local M = {}
+function M.run(ctx)
+    -- Atomic: both ops share one IMMEDIATE tx.
+    crap.transaction(function()
+        local doc = crap.collections.posts.find_by_id(ctx.data.id)
+        crap.collections.posts.update(ctx.data.id, {
+            view_count = doc.view_count + 1,
+        })
+    end)
+end
+return M
+</code></pre>
+<ul>
+<li>Errors raised inside <code>fn</code> roll back the entire block.</li>
+<li>The return value of <code>fn</code> is the return value of <code>crap.transaction</code>.</li>
+<li>Inside a hook (which already has a shared tx), <code>crap.transaction(fn)</code>
+is a pass-through — useful so the same code works in both contexts.</li>
+<li>Calling <code>crap.transaction</code> from outside a job/hook (e.g. <code>init.lua</code>)
+errors with a clear message.</li>
+<li>Nesting <code>crap.transaction(crap.transaction(...))</code> is currently a
+pass-through on the inner call (no <code>SAVEPOINT</code> support yet).</li>
+</ul>
+<h3 id="migration-from-earlier-releases"><a class="header" href="#migration-from-earlier-releases">Migration from earlier releases</a></h3>
+<p>Existing job handlers that depended on implicit cross-CRUD atomicity
+(e.g., a job that does two updates and expects both to roll back on
+error) need to wrap those updates in <code>crap.transaction(fn)</code>:</p>
+<pre><code class="language-lua">-- Before (was implicitly atomic, but SQLITE_BUSY_SNAPSHOT-prone):
+function M.run(ctx)
+    crap.collections.posts.update(id_a, { count = 1 })
+    crap.collections.posts.update(id_b, { count = 2 })
+    -- If a writer commits between the two updates, the second would
+    -- fail. Now both succeed independently (each is its own tx),
+    -- but they're no longer atomic with each other.
+end
+
+-- After (explicit atomicity):
+function M.run(ctx)
+    crap.transaction(function()
+        crap.collections.posts.update(id_a, { count = 1 })
+        crap.collections.posts.update(id_b, { count = 2 })
+    end)
+end
+</code></pre>
+<h3 id="handling-rollbacks-with-pcall"><a class="header" href="#handling-rollbacks-with-pcall">Handling rollbacks with <code>pcall</code></a></h3>
+<p><code>crap.transaction</code> follows Lua’s normal exception model: any error
+inside the block triggers a rollback and the error propagates to the
+caller. There is no <code>on_rollback</code> callback — use Lua’s built-in
+<code>pcall</code> to react to rollbacks:</p>
+<pre><code class="language-lua">function M.run(ctx)
+    local ok, err = pcall(crap.transaction, function()
+        crap.collections.posts.update(ctx.data.id, {
+            balance = doc.balance - amount,
+        })
+        crap.collections.audit_log.create({
+            kind = "transfer",
+            amount = amount,
+        })
+        -- Validate post-conditions; raising here rolls back BOTH writes.
+        if doc.balance - amount &lt; 0 then
+            error("balance would go negative")
+        end
+    end)
+
+    if not ok then
+        crap.log.error("transfer failed, rolled back: " .. tostring(err))
+        -- Re-enqueue, emit a metric, schedule a compensation job, …
+        crap.jobs.queue("send_failure_email", {
+            user_id = ctx.data.user_id,
+            reason = tostring(err),
+        }, { priority = 5 })
+    end
+end
+</code></pre>
+<p>Common patterns:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Goal</th><th>Idiom</th></tr>
+</thead>
+<tbody>
+<tr><td>Re-enqueue the work on failure</td><td><code>if not ok then crap.jobs.queue(ctx.slug, ctx.data) end</code></td></tr>
+<tr><td>Emit a metric on every rollback</td><td><code>if not ok then crap.metrics.inc("tx_rollback") end</code></td></tr>
+<tr><td>Compensate external side-effects</td><td>Run the side-effect inside the <code>if not ok</code> branch (after rollback)</td></tr>
+<tr><td>Stop the job from being marked failed</td><td>Catch with <code>pcall</code> and return success from <code>M.run</code>; the framework will treat it as completed</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="concurrency-model"><a class="header" href="#concurrency-model">Concurrency model</a></h2>
+<p>Three caps stack when the scheduler decides whether to claim a job.
+Strictest applicable cap wins.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Cap</th><th>Scope</th><th>Configured in</th><th>Counts</th></tr>
+</thead>
+<tbody>
+<tr><td><code>[jobs] max_concurrent</code></td><td><strong>Per-server</strong></td><td><code>crap.toml</code></td><td>Total jobs in flight on this scheduler process</td></tr>
+<tr><td><code>[jobs.queues.&lt;name&gt;] concurrency</code></td><td><strong>Cluster-global</strong></td><td><code>crap.toml</code></td><td>Total jobs in queue <code>&lt;name&gt;</code> across the whole DB</td></tr>
+<tr><td><code>JobDefinition::concurrency</code></td><td><strong>Cluster-global</strong></td><td><code>crap.jobs.define({ concurrency = N })</code></td><td>Total jobs of this specific slug across the whole DB</td></tr>
+</tbody>
+</table>
+</div>
+<p>Example: queue <code>emails</code> cap=4, slug <code>send_welcome</code> concurrency=2 →</p>
+<ul>
+<li>At most 4 jobs running in queue <code>emails</code> total across the cluster.</li>
+<li>Of those, at most 2 can be <code>send_welcome</code> specifically.</li>
+<li>The remaining 2 slots can be filled by any other slug routed to <code>emails</code>.</li>
+</ul>
+<p>Queues without an entry in <code>[jobs.queues]</code> are unconstrained beyond
+the global <code>max_concurrent</code>. The scheduler logs a warning at startup
+if <code>[jobs.queues]</code> references a queue name that no defined job uses
+(typo catcher).</p>
+<p><code>[jobs.queues.&lt;name&gt;]</code> also carries two non-concurrency knobs that
+apply to <strong>system jobs</strong> (<code>_system_image_convert</code>, <code>_system_email</code>)
+which lack their own <code>JobDefinition</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>What it sets</th></tr>
+</thead>
+<tbody>
+<tr><td><code>timeout</code></td><td>Per-job wall-clock timeout for system jobs in this queue. User Lua jobs use the timeout on their <code>JobDefinition</code> instead.</td></tr>
+<tr><td><code>retries</code></td><td>Default <code>max_attempts</code> for jobs in this queue (<code>max_attempts = retries + 1</code>). Used by system jobs AND by user Lua jobs that omit <code>retries</code> in <code>crap.jobs.define</code>. Explicit <code>JobDefinition.retries</code> (including <code>retries = 0</code>) overrides the queue default. <code>crap.email.queue{ retries = N }</code> overrides for that one call.</td></tr>
+</tbody>
+</table>
+</div>
+<p>See <a href="../configuration/crap-toml.html#jobsqueues"><code>[jobs.queues]</code></a> in
+the config reference for the full field table, defaults, and merging
+semantics.</p>
+<h2 id="multi-server-semantics"><a class="header" href="#multi-server-semantics">Multi-server semantics</a></h2>
+<p>The CMS supports running multiple scheduler processes against the
+same Postgres database (each binary runs its own scheduler tick
+loop). SQLite is single-process by file-locking, so this section
+applies to Postgres deployments.</p>
+<p><strong>Every concurrency cap is cluster-wide.</strong> Each server’s poll tick
+reads <code>COUNT(*) FROM _crap_jobs WHERE status = 'running'</code> (filtered
+by slug or queue as needed) from the shared DB, so all servers see
+the same running totals and apply the same caps.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Cap / knob</th><th>Mechanism</th></tr>
+</thead>
+<tbody>
+<tr><td><code>[jobs] max_concurrent</code></td><td><code>SELECT COUNT(*) ... WHERE status='running'</code> (no slug filter).</td></tr>
+<tr><td><code>[jobs.queues.&lt;name&gt;] concurrency</code></td><td>Per-queue <code>COUNT(*)</code> via <code>count_running_per_queue</code>.</td></tr>
+<tr><td><code>JobDefinition::concurrency</code></td><td>Per-slug <code>COUNT(*)</code> via <code>count_running_per_slug</code>.</td></tr>
+<tr><td><code>[jobs] priority_decay</code></td><td>Pure SQL ORDER BY — every server orders the same way.</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>What this means in practice:</strong></p>
+<ul>
+<li>Setting <code>max_concurrent = 10</code> on every server caps total in-flight
+jobs at 10 across the entire cluster, not 10 × N. Adding more
+servers does not multiply throughput; it adds load distribution
+and fault tolerance, but the cluster-wide cap holds.</li>
+<li>If servers have <em>different</em> <code>max_concurrent</code> values (e.g.
+staggered rollout), the effective cluster cap converges to the
+<em>highest</em> value across servers. Once cluster running reaches that
+number, even the strictest server sees the cap as reached.</li>
+<li>Per-queue and per-slug caps compose cleanly across servers: an
+<code>emails</code> queue with <code>concurrency = 4</code> will have at most 4 email
+jobs running cluster-wide, regardless of server count.</li>
+</ul>
+<p><strong>Operator guidance:</strong></p>
+<ul>
+<li>Set <code>[jobs] max_concurrent</code> based on the throughput your cluster
+should sustain (not per-server). Tune up if backlogs grow.</li>
+<li>Use <code>[jobs.queues.&lt;name&gt;] concurrency</code> for resource-shared work
+(SMTP pool, image encoder pool, …) — these caps are global.</li>
+<li>Use <code>JobDefinition::concurrency</code> (<code>crap.jobs.define({ concurrency = N })</code>) for “at most N of this specific job type at a time” —
+also global.</li>
+<li><code>priority_decay</code>’s ordering is stable across servers as long as
+their clocks are within a few seconds. Small clock drift may
+cause a different server to win a particular tick’s race, but the
+<em>set</em> of claimed jobs is the same.</li>
+</ul>
+<p><strong>Cap precision under concurrent ticks.</strong> Per-slug caps are enforced
+inside the claim transaction (the running count is part of the
+locked SQL subquery), so they’re exact. Global <code>max_concurrent</code> and
+per-queue caps are checked <em>before</em> the claim transaction starts, so
+two servers ticking within the same millisecond can each claim a
+small batch and briefly push the cluster total over the cap. The
+overshoot is bounded by the number of concurrent ticks × the batch
+size and converges back as soon as one tick completes — Sidekiq, Oban,
+and similar systems behave the same way. Treat these caps as soft.
+If you need precise enforcement (e.g. licensing limits), use a
+per-slug cap.</p>
+<p>The shared coordination point is the database — <code>FOR UPDATE SKIP LOCKED</code> (Postgres) or <code>BEGIN IMMEDIATE</code> (SQLite) ensures no two
+servers claim the same job row.</p>
 
                     </main>
 
@@ -286,11 +563,11 @@ return M
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

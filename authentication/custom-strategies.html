@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d82968e4.js";
+            window.path_to_searchindex_js = "../searchindex-f41986e9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-094f01c0.js"></script>
+        <script src="../toc-e21319d4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,24 +178,40 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="custom-strategies"><a class="header" href="#custom-strategies">Custom Strategies</a></h1>
-<p>Custom auth strategies let you authenticate users via mechanisms other than password login — API keys, LDAP, SSO headers, etc.</p>
+<p>Custom auth strategies let you authenticate users via mechanisms other than password login — API keys, LDAP, SSO headers, etc. They are one variant of the <code>auth.methods</code> list (see <a href="auth-methods.html">Auth Methods</a> for the overall model).</p>
 <h2 id="configuration"><a class="header" href="#configuration">Configuration</a></h2>
 <pre><code class="language-lua">crap.collections.define("users", {
     auth = {
-        strategies = {
-            {
-                name = "api-key",
-                authenticate = "hooks.auth.api_key_check",
-            },
-            {
-                name = "sso",
-                authenticate = "hooks.auth.sso_check",
-            },
-        },
-        -- disable_local = true,  -- optionally disable password login
+        enabled = true,
+        methods = crap.auth.with_defaults({
+            -- API-key strategy: only fires when `x-api-key` header is present.
+            { type = "strategy",
+              name = "api-key",
+              authenticate = "hooks.auth.api_key_check",
+              activates_on = { header = "x-api-key" },
+              surfaces = { "grpc", "admin" } },
+            -- SSO strategy: only fires when the SSO assertion header is present.
+            { type = "strategy",
+              name = "sso",
+              authenticate = "hooks.auth.sso_check",
+              activates_on = { header = "x-sso-assertion" },
+              surfaces = { "admin" } },
+        }),
     },
     -- ...
 })
+</code></pre>
+<p>To disable password login entirely (machine-to-machine collection), omit <code>password_login</code> from the methods list:</p>
+<pre><code class="language-lua">auth = {
+    enabled = true,
+    methods = {
+        { type = "strategy",
+          name = "svc-key",
+          authenticate = "hooks.auth.svc_key",
+          activates_on = { header = "x-service-key" },
+          surfaces = { "grpc" } },
+    },
+}
 </code></pre>
 <h2 id="strategy-properties"><a class="header" href="#strategy-properties">Strategy Properties</a></h2>
 <div class="table-wrapper">
@@ -204,8 +220,11 @@
 <tr><th>Property</th><th>Type</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>name</code></td><td>string</td><td>Strategy name for logging and identification</td></tr>
-<tr><td><code>authenticate</code></td><td>string</td><td>Lua function ref in <code>module.function</code> format</td></tr>
+<tr><td><code>type</code></td><td><code>"strategy"</code></td><td>Discriminator. Required.</td></tr>
+<tr><td><code>name</code></td><td>string</td><td>Strategy name for logging and identification.</td></tr>
+<tr><td><code>authenticate</code></td><td>string</td><td>Lua function ref in <code>module.function</code> format.</td></tr>
+<tr><td><code>activates_on</code></td><td>table</td><td>When the strategy fires: <code>{ header = "x-..." }</code> or <code>{ always = true }</code>. Required.</td></tr>
+<tr><td><code>surfaces</code></td><td>string[]</td><td>Host transports the strategy is allowed on (default: <code>{"admin"}</code>).</td></tr>
 </tbody>
 </table>
 </div>
@@ -251,26 +270,53 @@ return M
 <h2 id="crud-access"><a class="header" href="#crud-access">CRUD Access</a></h2>
 <p>Strategy functions have full CRUD access (via the same TxContext pattern as hooks). They can query the database to look up users.</p>
 <h2 id="execution-order"><a class="header" href="#execution-order">Execution Order</a></h2>
-<p>In admin UI middleware:</p>
+<p>For every request (admin or gRPC):</p>
 <ol>
-<li>JWT cookie check (fast path — always runs first)</li>
-<li>Custom strategies in definition order</li>
-<li>Redirect to <code>/admin/login</code> (if all fail)</li>
+<li>The evaluator walks every registered auth collection’s <code>methods</code> in declaration order.</li>
+<li>For each method, it checks: (a) the surface filter includes the current request’s surface, and (b) the activation discriminator matches (for <code>strategy</code>: the named header is present, or <code>always = true</code>).</li>
+<li>The first method that matches and produces a principal wins.</li>
+<li>If no method matches, the request is anonymous.</li>
 </ol>
+<p>Each strategy is bound to its own activation signal — cross-collection accidental authentication is structurally impossible.</p>
 <h2 id="disabling-password-login"><a class="header" href="#disabling-password-login">Disabling Password Login</a></h2>
-<p>Set <code>disable_local = true</code> to hide the password login form:</p>
+<p>Omit <code>password_login</code> from the methods list:</p>
 <pre><code class="language-lua">auth = {
-    disable_local = true,
-    strategies = {
-        { name = "sso", authenticate = "hooks.auth.sso_check" },
+    enabled = true,
+    methods = {
+        { type = "strategy", name = "sso",
+          authenticate = "hooks.auth.sso_check",
+          activates_on = { header = "x-sso-assertion" },
+          surfaces = { "admin" } },
     },
 }
 </code></pre>
-<p>When <code>disable_local</code> is true:</p>
+<p>When <code>password_login</code> is absent:</p>
 <ul>
-<li>The login form shows a message instead of email/password inputs</li>
-<li>Only custom strategies can authenticate users</li>
-<li>The <code>Login</code> gRPC RPC is effectively disabled for this collection</li>
+<li>The login form shows a message instead of email/password inputs.</li>
+<li>Only the listed strategy methods can authenticate users.</li>
+<li>The <code>Login</code> gRPC RPC for this collection returns <code>INVALID_ARGUMENT</code>.</li>
+</ul>
+<p>Omit <code>bearer</code> similarly to refuse JWT authentication (rarely useful — usually paired with omitting <code>password_login</code> since the JWT can’t be issued without it).</p>
+<h2 id="performance--safety-notes"><a class="header" href="#performance--safety-notes">Performance + safety notes</a></h2>
+<ul>
+<li><strong>No per-call timeout.</strong> Strategy hooks run synchronously inside a
+spawn-blocking pool. mlua doesn’t expose a clean interruption API,
+and abandoning the worker would leak the blocking thread. A hostile
+or buggy strategy can hang the request indefinitely. Keep strategies
+fast (a DB lookup or two, no network calls), and prefer
+header-discriminated activation over <code>always = true</code> so slow code
+only runs when the activating header is present.</li>
+<li><strong>Strategy returns are sanity-checked.</strong> The evaluator refuses any
+returned document with an empty <code>id</code> (would silently break session-
+version lookups downstream) and re-runs <code>is_locked</code> / <code>verify_email</code>
+against the returned doc (so a strategy can’t authenticate a locked
+or unverified user even if the strategy code overlooks the check).</li>
+<li><strong>No session-version on strategy auth.</strong> Bearer / cookie paths
+reject a JWT whose <code>session_version</code> doesn’t match the user’s
+current version; strategies don’t issue a JWT to the client (the
+Claims object is internal-only), so there’s nothing to compare
+against. Lock the user (<code>crap-cms user lock -e ...</code>) to revoke
+strategy access — <code>is_locked</code> is the cross-method kill switch.</li>
 </ul>
 <h2 id="auth-callbacks-oauth2--oidc"><a class="header" href="#auth-callbacks-oauth2--oidc">Auth Callbacks (OAuth2 / OIDC)</a></h2>
 <p>For redirect-based auth flows (OAuth2, OIDC, SAML), use the built-in callback route:</p>
@@ -373,11 +419,11 @@ return M
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

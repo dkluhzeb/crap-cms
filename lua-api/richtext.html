@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d82968e4.js";
+            window.path_to_searchindex_js = "../searchindex-f41986e9.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-094f01c0.js"></script>
+        <script src="../toc-e21319d4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,7 +181,11 @@
 <p>Register custom ProseMirror node types for the rich text editor and render rich text content to HTML.</p>
 <h2 id="functions"><a class="header" href="#functions">Functions</a></h2>
 <h3 id="craprichtextregister_nodename-spec"><a class="header" href="#craprichtextregister_nodename-spec"><code>crap.richtext.register_node(name, spec)</code></a></h3>
-<p>Register a custom rich text node type.</p>
+<p>Register a custom rich text node type. <strong>Init-only:</strong> call from
+<code>init.lua</code> or any file loaded by <code>require</code> from it. Runtime calls
+error because the pool of Lua VMs each holds its own node table —
+registering at runtime would only land in the VM that ran the call,
+fragmenting the set.</p>
 <p><strong>Parameters:</strong></p>
 <ul>
 <li><code>name</code> (string) — Node name (alphanumeric + underscores only).</li>
@@ -328,11 +332,11 @@ fallback. Treat every interpolation as a potential injection vector.</p>
 
         <script src="../elasticlunr-ef4e11c1.min.js"></script>
         <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../book-c22b7243.js"></script>
 
         <!-- Custom JS scripts -->
 

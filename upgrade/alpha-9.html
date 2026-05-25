@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Rich Text - Crap CMS</title>
+        <title>alpha.9 - Crap CMS</title>
 
 
         <!-- Custom HTML head -->
@@ -177,296 +177,291 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="rich-text"><a class="header" href="#rich-text">Rich Text</a></h1>
-<p>Rich text field with a ProseMirror-based WYSIWYG editor. Stored as HTML (default) or
-ProseMirror JSON.</p>
-<h2 id="sqlite-storage"><a class="header" href="#sqlite-storage">SQLite Storage</a></h2>
-<p><code>TEXT</code> column containing HTML content (default) or ProseMirror JSON document.</p>
-<h2 id="definition"><a class="header" href="#definition">Definition</a></h2>
-<pre><code class="language-lua">crap.fields.richtext({
-    name = "content",
-    admin = {
-        placeholder = "Write your content...",
-    },
-})
-</code></pre>
-<h2 id="storage-format"><a class="header" href="#storage-format">Storage Format</a></h2>
-<p>By default, richtext fields store raw HTML. Set <code>admin.format = "json"</code> to store the
-ProseMirror document structure as JSON instead:</p>
-<pre><code class="language-lua">crap.fields.richtext({
-    name = "content",
-    admin = {
-        format = "json",
-    },
-})
-</code></pre>
-<h3 id="html-vs-json"><a class="header" href="#html-vs-json">HTML vs JSON</a></h3>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th></th><th>HTML (default)</th><th>JSON</th></tr>
-</thead>
-<tbody>
-<tr><td>Storage</td><td>Raw HTML string</td><td>ProseMirror <code>doc.toJSON()</code></td></tr>
-<tr><td>Round-trip fidelity</td><td>Loses some structural info</td><td>Lossless</td></tr>
-<tr><td>Programmatic manipulation</td><td>Parse HTML</td><td>Walk JSON tree</td></tr>
-<tr><td>FTS search</td><td>Indexed as-is</td><td>Plain text extracted automatically</td></tr>
-<tr><td>API response</td><td>HTML string</td><td>JSON string</td></tr>
-</tbody>
-</table>
-</div>
-<h3 id="important-notes"><a class="header" href="#important-notes">Important notes</a></h3>
+                        <h1 id="upgrading-to-alpha9"><a class="header" href="#upgrading-to-alpha9">Upgrading to alpha.9</a></h1>
+<p>This guide covers the upgrade path from <code>alpha.8</code> (or earlier) to
+<code>alpha.9</code>. It focuses on operator action items first; opt-in features
+follow.</p>
+<h2 id="tldr"><a class="header" href="#tldr">TL;DR</a></h2>
 <ul>
-<li><strong>Changing format does NOT migrate existing data.</strong> If you switch from <code>"html"</code> to
-<code>"json"</code> (or vice versa), existing documents retain their original format. The editor
-will attempt to parse the stored content according to the current format setting.</li>
-<li>The API returns the stored format as-is (HTML string or JSON string).</li>
-<li>Full-text search automatically extracts plain text from JSON-format richtext fields.</li>
+<li><strong>Replace your binary, restart.</strong> DB schema migrations apply
+automatically (idempotent ALTER + CREATE INDEX IF NOT EXISTS).</li>
+<li><strong>Update <code>crap.toml</code> if you used <code>[jobs] image_concurrency</code></strong> —
+the field was removed; use <code>[jobs.queues.images] concurrency = N</code>
+instead. The framework auto-applies a default of <code>2</code> if you don’t
+set it.</li>
+<li><strong>Update <code>crap.toml</code> if you set <code>[email] queue_*</code></strong> — the four
+<code>queue_retries</code> / <code>queue_name</code> / <code>queue_timeout</code> / <code>queue_concurrency</code>
+fields were removed; use <code>[jobs.queues.email] retries = N</code>,
+<code>timeout = "..."</code>, <code>concurrency = N</code> instead. Defaults are
+identical to alpha.8 (<code>retries = 3</code>, <code>timeout = "30s"</code>,
+<code>concurrency = 5</code>), so you only need to migrate if you customized
+any of them.</li>
+<li><strong>Review multi-step Lua job handlers.</strong> Per-CRUD transactions are
+now opened independently (pool-mode). Wrap multi-write atomic
+sequences in <code>crap.transaction(fn)</code>.</li>
+<li><strong>Audit auth methods</strong> if you use strategy authentication —
+<code>is_locked</code> / <code>verify_email</code> checks now apply uniformly across
+auth surfaces (closed a security gap).</li>
 </ul>
-<h2 id="toolbar-configuration"><a class="header" href="#toolbar-configuration">Toolbar Configuration</a></h2>
-<p>By default, all toolbar features are enabled. Use <code>admin.features</code> to limit which
-features are available:</p>
-<pre><code class="language-lua">crap.fields.richtext({
-    name = "content",
-    admin = {
-        features = { "bold", "italic", "heading", "link", "bulletList" },
-    },
-})
+<h2 id="required-action-items"><a class="header" href="#required-action-items">Required action items</a></h2>
+<h3 id="1-remove-jobs-image_concurrency-from-craptoml"><a class="header" href="#1-remove-jobs-image_concurrency-from-craptoml">1. Remove <code>[jobs] image_concurrency</code> from <code>crap.toml</code></a></h3>
+<p>If present, config load fails with <code>unknown field "image_concurrency"</code>.</p>
+<pre><code class="language-diff">  [jobs]
+  max_concurrent = 10
+- image_concurrency = 4
++
++ [jobs.queues.images]
++ concurrency = 4
 </code></pre>
-<h3 id="available-features"><a class="header" href="#available-features">Available Features</a></h3>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Feature</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>bold</code></td><td>Bold text (Ctrl+B)</td></tr>
-<tr><td><code>italic</code></td><td>Italic text (Ctrl+I)</td></tr>
-<tr><td><code>code</code></td><td>Inline code (Ctrl+`)</td></tr>
-<tr><td><code>link</code></td><td>Hyperlinks</td></tr>
-<tr><td><code>heading</code></td><td>H1, H2, H3 headings</td></tr>
-<tr><td><code>blockquote</code></td><td>Block quotes</td></tr>
-<tr><td><code>orderedList</code></td><td>Numbered lists</td></tr>
-<tr><td><code>bulletList</code></td><td>Bullet lists</td></tr>
-<tr><td><code>codeBlock</code></td><td>Code blocks (```)</td></tr>
-<tr><td><code>horizontalRule</code></td><td>Horizontal rule</td></tr>
-</tbody>
-</table>
-</div>
-<p>When <code>features</code> is omitted or empty, all features are enabled (backward compatible).
-Undo/redo buttons are always available regardless of feature configuration.</p>
-<h2 id="custom-nodes"><a class="header" href="#custom-nodes">Custom Nodes</a></h2>
-<p>Custom ProseMirror nodes let you embed structured components (CTAs, embeds, alerts,
-mentions, etc.) inside richtext content. Register nodes in <code>init.lua</code>, then enable
-them on specific fields via <code>admin.nodes</code>.</p>
-<h3 id="registration"><a class="header" href="#registration">Registration</a></h3>
-<p>Node attributes use the same <code>crap.fields.*</code> factory functions as collection fields.
-Only scalar types are allowed: <code>text</code>, <code>number</code>, <code>textarea</code>, <code>select</code>, <code>radio</code>,
-<code>checkbox</code>, <code>date</code>, <code>email</code>, <code>json</code>, <code>code</code>.</p>
-<pre><code class="language-lua">-- init.lua
-crap.richtext.register_node("cta", {
-    label = "Call to Action",
-    inline = false, -- block-level node
-    attrs = {
-        crap.fields.text({ name = "text", required = true, admin = { label = "Button Text" } }),
-        crap.fields.text({ name = "url", required = true, admin = { label = "URL", placeholder = "https://..." } }),
-        crap.fields.select({ name = "style", admin = { label = "Style" }, options = {
-            { label = "Primary", value = "primary" },
-            { label = "Secondary", value = "secondary" },
-        }}),
-    },
-    searchable_attrs = { "text" },
-    render = function(attrs)
-        return string.format(
-            '&lt;a href="%s" class="btn btn--%s"&gt;%s&lt;/a&gt;',
-            attrs.url, attrs.style or "primary", attrs.text
-        )
-    end,
-})
+<p>If you were happy with the previous default of <code>2</code>, you can omit the
+<code>[jobs.queues.images]</code> block entirely — the framework’s
+<code>apply_queue_defaults</code> auto-applies <code>concurrency = 2</code> to the <code>images</code>
+queue when no operator config is present. The default is documented
+in <code>[jobs.queues]</code>’s “Framework-supplied defaults” section.</p>
+<h3 id="1b-remove-email-queue_-from-craptoml"><a class="header" href="#1b-remove-email-queue_-from-craptoml">1b. Remove <code>[email] queue_*</code> from <code>crap.toml</code></a></h3>
+<p>If present, config load fails with <code>unknown field "queue_retries"</code>
+(or <code>queue_name</code> / <code>queue_timeout</code> / <code>queue_concurrency</code>).
+<code>_system_email</code> now reads the same <code>[jobs.queues.&lt;name&gt;]</code> table as
+<code>_system_image_convert</code> — one config mechanism for every system job.</p>
+<pre><code class="language-diff">  [email]
+  smtp_host = "smtp.example.com"
+- queue_retries = 5
+- queue_timeout = 60
+- queue_concurrency = 8
+- queue_name = "email"
++
++ [jobs.queues.email]
++ retries = 5
++ timeout = "1m"
++ concurrency = 8
 </code></pre>
-<h3 id="field-configuration"><a class="header" href="#field-configuration">Field configuration</a></h3>
-<pre><code class="language-lua">crap.fields.richtext({
-    name = "content",
-    admin = {
-        format = "json",
-        nodes = { "cta" },
-        features = { "bold", "italic", "heading", "link", "bulletList" },
-    },
-})
+<p>If you were on alpha.8 defaults (<code>queue_retries = 3</code>,
+<code>queue_timeout = 30</code>, <code>queue_concurrency = 5</code>), you can omit the
+<code>[jobs.queues.email]</code> block entirely — the framework auto-applies
+those exact values via <code>apply_queue_defaults</code>. Per-call overrides
+still work: <code>crap.email.queue{ retries = N }</code> wins over the queue
+default.</p>
+<p><strong><code>queue_name</code> is dropped without replacement.</strong> <code>_system_email</code>
+now always uses the queue named <code>"email"</code>. If you previously set
+<code>[email] queue_name = "&lt;other&gt;"</code> to route email jobs into a custom
+queue, rename your <code>[jobs.queues.&lt;other&gt;]</code> block to
+<code>[jobs.queues.email]</code>.</p>
+<h3 id="2-review-multi-step-lua-job-handlers"><a class="header" href="#2-review-multi-step-lua-job-handlers">2. Review multi-step Lua job handlers</a></h3>
+<p>Earlier alpha.9 builds wrapped every Lua job handler in a single
+outer <code>BEGIN DEFERRED</code> transaction. That model hit
+<code>SQLITE_BUSY_SNAPSHOT</code> errors when a handler’s read snapshot
+collided with concurrent writers (admin edits, image queue, etc.).</p>
+<p>The fix is <strong>pool-mode</strong>: each Lua CRUD call inside a job handler
+opens its own short-lived <code>BEGIN IMMEDIATE</code> transaction. No more
+snapshot conflicts. But this means multi-step writes in a single
+handler are <em>no longer atomic with each other</em> by default.</p>
+<p>If your handler depends on cross-CRUD atomicity:</p>
+<pre><code class="language-diff">  function M.run(ctx)
++     crap.transaction(function()
+          crap.collections.posts.update(id_a, { count = 1 })
+          crap.collections.posts.update(id_b, { count = 2 })
++     end)
+  end
 </code></pre>
-<h3 id="node-spec-options"><a class="header" href="#node-spec-options">Node spec options</a></h3>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Option</th><th>Type</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>label</code></td><td>string</td><td>Display label (defaults to node name)</td></tr>
-<tr><td><code>inline</code></td><td>boolean</td><td>Inline vs block-level (default: false)</td></tr>
-<tr><td><code>attrs</code></td><td>table[]</td><td>Attribute definitions (see below)</td></tr>
-<tr><td><code>searchable_attrs</code></td><td>string[]</td><td>Attr names included in FTS search index</td></tr>
-<tr><td><code>render</code></td><td>function</td><td>Server-side render function: <code>(attrs) -&gt; html</code></td></tr>
-</tbody>
-</table>
-</div>
-<h3 id="allowed-attribute-types"><a class="header" href="#allowed-attribute-types">Allowed attribute types</a></h3>
-<p>Node attrs support all scalar field types. Complex types (<code>array</code>, <code>group</code>, <code>blocks</code>,
-<code>relationship</code>, <code>upload</code>, <code>richtext</code>, <code>row</code>, <code>collapsible</code>, <code>tabs</code>, <code>join</code>) are rejected
-at registration time.</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Type</th><th>Admin Input</th></tr>
-</thead>
-<tbody>
-<tr><td><code>text</code></td><td>Text input</td></tr>
-<tr><td><code>number</code></td><td>Number input</td></tr>
-<tr><td><code>textarea</code></td><td>Multi-line textarea</td></tr>
-<tr><td><code>select</code></td><td>Dropdown with options</td></tr>
-<tr><td><code>radio</code></td><td>Radio button group</td></tr>
-<tr><td><code>checkbox</code></td><td>Checkbox</td></tr>
-<tr><td><code>date</code></td><td>Date picker</td></tr>
-<tr><td><code>email</code></td><td>Email input</td></tr>
-<tr><td><code>json</code></td><td>Monospace textarea</td></tr>
-<tr><td><code>code</code></td><td>Monospace textarea</td></tr>
-</tbody>
-</table>
-</div>
-<h3 id="supported-attribute-features"><a class="header" href="#supported-attribute-features">Supported attribute features</a></h3>
-<p>Node attrs support most field features that make sense in the richtext context.</p>
-<h4 id="admin-display-hints"><a class="header" href="#admin-display-hints">Admin display hints</a></h4>
-<p>These control how attributes appear in the node edit modal:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Feature</th><th>Effect</th></tr>
-</thead>
-<tbody>
-<tr><td><code>admin.hidden</code></td><td>Attribute is not rendered in the modal (value preserved)</td></tr>
-<tr><td><code>admin.readonly</code></td><td>Input is read-only / disabled</td></tr>
-<tr><td><code>admin.width</code></td><td>CSS width on the field container (e.g. <code>"50%"</code>)</td></tr>
-<tr><td><code>admin.step</code></td><td><code>step</code> attribute on number inputs (e.g. <code>"0.01"</code>)</td></tr>
-<tr><td><code>admin.rows</code></td><td>Number of rows for textarea/code/json fields</td></tr>
-<tr><td><code>admin.language</code></td><td>Language label suffix for code fields (e.g. <code>"JSON"</code>)</td></tr>
-<tr><td><code>admin.placeholder</code></td><td>Placeholder text on inputs</td></tr>
-<tr><td><code>admin.description</code></td><td>Help text below the input</td></tr>
-<tr><td><code>min</code> / <code>max</code></td><td>Min/max on number inputs</td></tr>
-<tr><td><code>min_length</code> / <code>max_length</code></td><td>Minlength/maxlength on text/textarea inputs</td></tr>
-<tr><td><code>min_date</code> / <code>max_date</code></td><td>Min/max on date inputs</td></tr>
-<tr><td><code>picker_appearance</code></td><td>Date input type: <code>"dayOnly"</code> (default), <code>"dayAndTime"</code>, <code>"timeOnly"</code>, <code>"monthOnly"</code></td></tr>
-</tbody>
-</table>
-</div>
-<h4 id="server-side-validation"><a class="header" href="#server-side-validation">Server-side validation</a></h4>
-<p>Node attribute values inside richtext content are validated server-side on create/update.
-The following checks run automatically:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Check</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>required</code></td><td>Attribute must have a non-empty value</td></tr>
-<tr><td><code>validate</code></td><td>Custom Lua validation function</td></tr>
-<tr><td><code>min_length</code> / <code>max_length</code></td><td>Text length bounds</td></tr>
-<tr><td><code>min</code> / <code>max</code></td><td>Numeric bounds</td></tr>
-<tr><td><code>min_date</code> / <code>max_date</code></td><td>Date bounds</td></tr>
-<tr><td>email format</td><td>Valid email for <code>email</code> type attrs</td></tr>
-<tr><td>option validity</td><td>Value must be in <code>options</code> for <code>select</code>/<code>radio</code></td></tr>
-</tbody>
-</table>
-</div>
-<p>Validation errors reference the node location: <code>"content[cta#0].url"</code> (first CTA node’s
-<code>url</code> attribute in the <code>content</code> field).</p>
-<h4 id="before_validate-hooks"><a class="header" href="#before_validate-hooks"><code>before_validate</code> hooks</a></h4>
-<p>Node attrs support <code>hooks.before_validate</code> for normalizing values before validation:</p>
-<pre><code class="language-lua">crap.richtext.register_node("cta", {
-    label = "CTA",
-    attrs = {
-        crap.fields.text({
-            name = "url",
-            required = true,
-            hooks = {
-                before_validate = { "hooks.trim_whitespace" },
-            },
-        }),
-    },
-})
-</code></pre>
-<p>The hook receives <code>(value, context)</code> and returns the transformed value. Runs before
-validation checks.</p>
-<h4 id="unsupported-features"><a class="header" href="#unsupported-features">Unsupported features</a></h4>
-<p>These features have no effect on node attributes and will produce a warning at
-registration time:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Feature</th><th>Reason</th></tr>
-</thead>
-<tbody>
-<tr><td><code>hooks.before_change</code></td><td>No per-attr write lifecycle</td></tr>
-<tr><td><code>hooks.after_change</code></td><td>No per-attr write lifecycle</td></tr>
-<tr><td><code>hooks.after_read</code></td><td>No per-attr read lifecycle</td></tr>
-<tr><td><code>access</code> (read/create/update)</td><td>No per-attr access control</td></tr>
-<tr><td><code>unique</code></td><td>No DB column</td></tr>
-<tr><td><code>index</code></td><td>No DB column</td></tr>
-<tr><td><code>localized</code></td><td>Richtext field itself is localized or not</td></tr>
-<tr><td><code>mcp.description</code></td><td>Not exposed as MCP fields</td></tr>
-<tr><td><code>has_many</code></td><td>Doesn’t apply to scalar node attrs</td></tr>
-<tr><td><code>admin.condition</code></td><td>Not yet supported (deferred)</td></tr>
-</tbody>
-</table>
-</div>
-<h3 id="server-side-rendering"><a class="header" href="#server-side-rendering">Server-side rendering</a></h3>
-<p>Use <code>crap.richtext.render(content)</code> in hooks to replace custom nodes with rendered
-HTML. The function auto-detects format (JSON or HTML). Custom nodes with a <code>render</code>
-function produce the function’s output; nodes without one pass through as
-<code>&lt;crap-node&gt;</code> custom elements.</p>
-<pre><code class="language-lua">-- In an after_read hook
-function hooks.render_content(context)
-    local doc = context.doc
-    if doc.content then
-        doc.content = crap.richtext.render(doc.content)
-    end
-    return context
-end
-</code></pre>
-<h3 id="fts-search"><a class="header" href="#fts-search">FTS search</a></h3>
-<p>Custom node attributes listed in <code>searchable_attrs</code> are automatically extracted
-for full-text search when the field uses JSON format.</p>
-<h2 id="resize-behavior"><a class="header" href="#resize-behavior">Resize Behavior</a></h2>
-<p>By default, the richtext editor is vertically resizable (no max-height constraint). Set
-<code>admin.resizable = false</code> to lock it to a fixed height range (200–600px):</p>
-<pre><code class="language-lua">crap.fields.richtext({
-    name = "content",
-    admin = {
-        resizable = false,
-    },
-})
-</code></pre>
-<h2 id="admin-rendering"><a class="header" href="#admin-rendering">Admin Rendering</a></h2>
-<p>Renders as a ProseMirror-based rich text editor with a configurable toolbar. When
-custom nodes are configured, an insert button group appears in the toolbar for each
-node type. Nodes display as styled cards (block) or pills (inline) in the editor;
-double-click to edit attributes.</p>
-<h2 id="notes"><a class="header" href="#notes">Notes</a></h2>
+<p>Most handlers don’t need this — they do a single CRUD op or write
+to a single document. Inspect handlers that do 2+ writes whose
+mutual rollback you depended on.</p>
+<p>See <a href="../lua-api/jobs.html#transactions-in-job-handlers">Transactions in job handlers</a>
+for the full pattern.</p>
+<h3 id="3-optional-review-hooks-that-used-implicit-cross-step-atomicity"><a class="header" href="#3-optional-review-hooks-that-used-implicit-cross-step-atomicity">3. (Optional) Review hooks that used implicit cross-step atomicity</a></h3>
+<p>The pool-mode shift applies only to <strong>job handlers</strong>, not to hooks.
+Hook code runs inside the parent operation’s write transaction (e.g.
+<code>after_change</code> shares the document-update tx). No changes needed
+for hooks.</p>
+<p>If you’re not sure whether your code is a hook or a job handler —
+hooks are registered via <code>crap.hooks.register(...)</code> or per-collection
+<code>{ hooks = { before_change = ... } }</code>. Jobs are defined via
+<code>crap.jobs.define(...)</code>.</p>
+<h3 id="4-security-review-auth-related"><a class="header" href="#4-security-review-auth-related">4. Security review (auth-related)</a></h3>
+<p>These are bug fixes for security gaps that existed in earlier
+alphas. Review:</p>
 <ul>
-<li>No server-side sanitization is applied — sanitize in hooks if needed</li>
-<li>The toolbar configuration only affects the admin UI; it does not validate or strip content server-side</li>
-<li>Custom node names must be alphanumeric with underscores only</li>
+<li><strong>Strategy-authenticated users now pass <code>is_locked</code> /
+<code>verify_email</code></strong> the same way as bearer / cookie users. If you
+relied on a strategy hook bypassing these checks, that hole is
+closed.</li>
+<li><strong>Logout invalidates all JWTs for the user</strong>, not just the cookie.
+Active sessions across surfaces die on next request, not at JWT
+expiry.</li>
+<li><strong><code>Resolution::Invalid(Unaccepted)</code></strong> for cookies/tokens that
+decode cleanly but whose <code>session_cookie</code> method has been removed
+from the collection’s <code>methods</code>. Browser cookies are cleared on
+redirect to login instead of looping.</li>
+</ul>
+<p>See the <code>### Security</code> section of the alpha.9 entry in
+<code>CHANGELOG.md</code> at the project root for the full context.</p>
+<h2 id="automatic-migrations"><a class="header" href="#automatic-migrations">Automatic migrations</a></h2>
+<p>The following happen on first startup with the new binary. No manual
+SQL required.</p>
+<h3 id="_crap_jobs-schema-additions"><a class="header" href="#_crap_jobs-schema-additions"><code>_crap_jobs</code> schema additions</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Column</th><th>Purpose</th><th>Migration</th></tr>
+</thead>
+<tbody>
+<tr><td><code>priority INTEGER NOT NULL DEFAULT 0</code></td><td>Scheduling priority</td><td><code>ALTER TABLE ADD COLUMN</code></td></tr>
+<tr><td><code>unique_key TEXT</code></td><td>Dedup key for <code>unique</code> option</td><td><code>ALTER TABLE ADD COLUMN</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Plus new indexes: <code>idx_crap_jobs_priority</code> (priority claim ordering)
+and <code>idx_crap_jobs_unique_active</code> (partial unique index for dedup).
+Both created <code>IF NOT EXISTS</code>.</p>
+<h3 id="_crap_image_queue-table-dropped"><a class="header" href="#_crap_image_queue-table-dropped"><code>_crap_image_queue</code> table dropped</a></h3>
+<p>The legacy <code>_crap_image_queue</code> table is drained into <code>_crap_jobs</code> as
+<code>_system_image_convert</code> jobs, then <code>DROP</code>ped. Idempotent — safe on
+re-runs and on installs that never had the table.</p>
+<p><strong>Operator action if you upgraded a pre-fix alpha.9 build</strong> (i.e.
+you saw <code>Job definition '_system_image_convert' not found, marking as failed</code> in the logs before this build): the drained jobs were
+incorrectly marked failed. Reset them with:</p>
+<pre><code class="language-sh">crap-cms images retry --all -y
+</code></pre>
+<p>New uploads on the current build process normally.</p>
+<h2 id="opt-in-features-alpha9"><a class="header" href="#opt-in-features-alpha9">Opt-in features (alpha.9)</a></h2>
+<h3 id="job-priority"><a class="header" href="#job-priority">Job priority</a></h3>
+<pre><code class="language-lua">-- At define time (default for all enqueues of this slug):
+crap.jobs.define("analytics_rollup", {
+    handler = "jobs.analytics.rollup",
+    schedule = "0 3 * * *",
+    priority = -5,         -- run only when queue is otherwise idle
+})
+
+-- Per-enqueue override:
+crap.jobs.queue("send_password_reset", { user_id = id }, { priority = 10 })
+</code></pre>
+<p>CLI: <code>crap-cms jobs trigger &lt;slug&gt; --priority N</code>.
+gRPC: <code>TriggerJobRequest.priority</code> (optional <code>int32</code>).</p>
+<h3 id="job-delay"><a class="header" href="#job-delay">Job delay</a></h3>
+<p>Defer a job’s earliest claim time:</p>
+<pre><code class="language-lua">crap.jobs.queue("send_welcome_email", { user_id = id }, { delay = "5m" })
+-- or integer seconds:
+crap.jobs.queue("send_welcome_email", { user_id = id }, { delay = 300 })
+</code></pre>
+<p>Reuses the existing <code>retry_after</code> column — no new schema. Combines
+with priority and unique.</p>
+<h3 id="unique-jobs-dedup"><a class="header" href="#unique-jobs-dedup">Unique jobs (dedup)</a></h3>
+<p>Don’t queue a duplicate if one is already pending or running:</p>
+<pre><code class="language-lua">local job_id = crap.jobs.queue(
+    "reindex_collection",
+    { slug = "posts" },
+    { unique = "reindex:posts" }
+)
+</code></pre>
+<p>If another <code>reindex_collection</code> job with <code>unique = "reindex:posts"</code>
+is already pending or running, <code>queue()</code> returns that job’s id —
+not a new one. Completed and failed jobs don’t block re-enqueue.</p>
+<h3 id="per-queue-concurrency-timeout-and-retry-defaults"><a class="header" href="#per-queue-concurrency-timeout-and-retry-defaults">Per-queue concurrency, timeout, and retry defaults</a></h3>
+<p>Throttle aggregate work and supply timeout / retry defaults for jobs
+in a queue independent of per-slug caps:</p>
+<pre><code class="language-toml">[jobs.queues]
+emails  = { concurrency = 4, timeout = "1m" }
+images  = { concurrency = 2 }                  # framework defaults: timeout = 5m, retries = 2
+reports = { concurrency = 1, timeout = "30m", retries = 0 }
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>concurrency</code></td><td>Max concurrent runs in this queue. <code>0</code> = unlimited.</td></tr>
+<tr><td><code>timeout</code></td><td>Per-job wall-clock timeout for system jobs (<code>_system_image_convert</code>, <code>_system_email</code>) that lack their own <code>JobDefinition</code>. Accepts seconds or human-readable.</td></tr>
+<tr><td><code>retries</code></td><td>Default <code>max_attempts</code> for jobs in this queue, expressed as <strong>retries</strong> (total attempts = <code>retries + 1</code>). Used by system jobs AND by user Lua jobs that omit <code>retries</code> in <code>crap.jobs.define</code>. Explicit <code>JobDefinition.retries</code> (including <code>retries = 0</code>) overrides the queue default. <code>crap.email.queue{ retries = N }</code> overrides for that one call.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Partial overrides merge field-by-field — supplying only <code>concurrency</code>
+leaves the framework’s <code>timeout</code> / <code>retries</code> defaults intact. The
+framework ships sensible <code>images</code> defaults (<code>concurrency = 2</code>,
+<code>timeout = "5m"</code>, <code>retries = 2</code>); operator config wins on a per-field
+basis.</p>
+<p>Concurrency caps are <strong>cluster-wide</strong> (counted from the shared DB),
+composing with global <code>max_concurrent</code> and per-slug
+<code>JobDefinition::concurrency</code> (strictest wins). See <a href="../lua-api/jobs.html#concurrency-model">Concurrency model</a>
+in <code>jobs.md</code>.</p>
+<blockquote>
+<p><strong>Earlier alpha.9 builds hardcoded the image-convert timeout at
+120s.</strong> Large originals on slow storage hit that ceiling. Upgrade
+and adjust <code>[jobs.queues.images] timeout</code> if your workload needs
+more (the new framework default is <code>5m</code>).</p>
+</blockquote>
+<p><strong>Reach for <code>retries</code>.</strong> Resolution at queue time, strictest-explicit
+wins:</p>
+<ol>
+<li><code>JobDefinition.retries</code> set explicitly in <code>crap.jobs.define</code> (any
+value, including <code>0</code>).</li>
+<li><code>[jobs.queues.&lt;queue&gt;] retries</code> from <code>crap.toml</code> when (1) is
+omitted.</li>
+<li><code>0</code> (one attempt) when neither is set.</li>
+</ol>
+<p>So an operator who writes <code>[jobs.queues.reports] retries = 5</code> and a
+user who registers <code>crap.jobs.define("rollup", { queue = "reports" })</code>
+without retries gets 6 total attempts per rollup — symmetric with how
+system jobs inherit from <code>[jobs.queues.email]</code> /
+<code>[jobs.queues.images]</code>.</p>
+<p><code>crap.email.queue{ retries = N }</code> is the only per-call retry override
+on the Lua surface; <code>crap.jobs.queue</code> for user jobs accepts
+<code>priority</code> / <code>delay</code> / <code>unique</code> (no <code>retries</code>).</p>
+<p><strong>Reach for <code>timeout</code>.</strong> Applies to system jobs only —
+<code>_system_image_convert</code> reads <code>[jobs.queues.images] timeout</code>,
+<code>_system_email</code> reads <code>[jobs.queues.email] timeout</code>. User Lua jobs
+use the <code>timeout</code> declared on their <code>JobDefinition</code> (<code>60</code> if
+omitted).</p>
+<h3 id="priority-decay-aging-based-promotion"><a class="header" href="#priority-decay-aging-based-promotion">Priority decay (aging-based promotion)</a></h3>
+<p>Prevent backlog starvation of low-priority jobs:</p>
+<pre><code class="language-toml">[jobs]
+priority_decay = "1m"  # +1 effective priority per minute waiting
+</code></pre>
+<p>After enough wait time, an old low-priority job overtakes fresh
+higher-priority jobs. <code>0</code> (default) disables decay — pure static
+priority + FIFO.</p>
+<h3 id="craptransactionfn-for-explicit-atomicity"><a class="header" href="#craptransactionfn-for-explicit-atomicity"><code>crap.transaction(fn)</code> for explicit atomicity</a></h3>
+<p>Already covered in <strong>Required action items</strong>. Use this when a job
+handler needs multi-step atomicity in pool-mode.</p>
+<h2 id="notable-changes-non-breaking"><a class="header" href="#notable-changes-non-breaking">Notable changes (non-breaking)</a></h2>
+<ul>
+<li><strong>gRPC</strong>: <code>TriggerJobRequest.priority</code> (optional <code>int32</code>),
+<code>GetJobRunResponse.priority</code> (<code>int32</code>),
+<code>GetJobRunResponse.unique_key</code> (optional <code>string</code>).</li>
+<li><strong>CLI</strong>:
+<ul>
+<li><code>crap-cms jobs trigger &lt;slug&gt; --priority N</code></li>
+<li><code>crap-cms jobs status</code> — new <code>Prio</code> column</li>
+<li><code>crap-cms images list</code> — new <code>Prio</code> column</li>
+<li><code>crap-cms images retry --priority N</code></li>
+</ul>
+</li>
+<li><strong>Image conversion</strong> runs in the unified <code>_crap_jobs</code> queue as
+<code>_system_image_convert</code> system jobs (operator-visible via
+<code>crap-cms jobs status --slug _system_image_convert</code> if needed,
+though <code>crap-cms images list / stats / retry / purge</code> still work
+unchanged).</li>
+<li><strong>Postgres + SQLite job-claim paths unified.</strong> Same observable
+behavior across backends; strict global priority ordering;
+identical per-slug and per-queue cap enforcement.</li>
+</ul>
+<h2 id="reference"><a class="header" href="#reference">Reference</a></h2>
+<ul>
+<li><code>CHANGELOG.md</code> at the project root — the full alpha.9 entry with
+every change, including non-job-related items not covered here.</li>
+<li><a href="../lua-api/jobs.html">Jobs documentation</a></li>
+<li><a href="../configuration/crap-toml.html">crap.toml reference</a></li>
 </ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../fields/textarea.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../deployment/multi-server.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../fields/select.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -474,13 +469,10 @@ double-click to edit attributes.</p>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../fields/textarea.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../deployment/multi-server.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../fields/select.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                    </a>
             </nav>
 
         </div>
