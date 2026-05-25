@@ -83,13 +83,7 @@ pub fn print(tokens: &[Token<'_>]) -> Result<String> {
                 hug_next_close = emit_raw_text(s, &mut out, &mut at_line_start);
             }
 
-            Token::HtmlComment(raw) => {
-                ensure_line_indent(&mut out, &mut at_line_start, depth);
-                emit_verbatim_block(raw, &mut out, depth);
-                newline(&mut out, &mut at_line_start);
-            }
-
-            Token::HbsComment(raw) => {
+            Token::HtmlComment(raw) | Token::HbsComment(raw) => {
                 ensure_line_indent(&mut out, &mut at_line_start, depth);
                 emit_verbatim_block(raw, &mut out, depth);
                 newline(&mut out, &mut at_line_start);
@@ -100,14 +94,14 @@ pub fn print(tokens: &[Token<'_>]) -> Result<String> {
                 attrs_raw,
                 self_closed,
             } => {
-                emit_start_tag(
+                emit_start_tag(EmitStartTag {
                     name,
                     attrs_raw,
-                    *self_closed,
+                    self_closed: *self_closed,
                     depth,
-                    &mut out,
-                    &mut at_line_start,
-                )?;
+                    out: &mut out,
+                    at_line_start: &mut at_line_start,
+                })?;
                 if !self_closed && !is_void(name) {
                     depth += 1;
                 }
@@ -162,48 +156,93 @@ pub fn print(tokens: &[Token<'_>]) -> Result<String> {
 
 /// If `tokens[at]` opens a block whose corresponding close is on the
 /// same source-line and the rendered inline form fits within
-/// LINE_LIMIT, render the full run on one line. Returns
+/// `LINE_LIMIT`, render the full run on one line. Returns
 /// `(rendered_line, tokens_consumed)` or `None` to fall through.
+///
+/// Phased pipeline: validate the opener → find the matching closer in
+/// the token stream → check the body is a single logical line →
+/// emit the inline string → length-check.
 fn try_render_inline(
     tokens: &[Token<'_>],
     at: usize,
     depth: usize,
 ) -> Result<Option<(String, usize)>> {
-    let opener = &tokens[at];
-    // Inline collapse rules:
-    //   - Block helpers (`{{#if}}`, `{{#> partial}}`) never inline.
-    //   - HTML tags with 2+ attributes never inline (rule 3 stacks them).
-    //   - HTML tags with 0-1 plain attributes may inline iff the body
-    //     is a single short text/expression run with no nested
-    //     elements or block helpers.
-    let (need_close_kind, opener_str) = match opener {
-        Token::HtmlStart {
-            name,
-            attrs_raw,
-            self_closed,
-        } if !self_closed && !is_void(name) => {
-            let attrs = parse_attributes(attrs_raw)?;
-            let inline_attr_ok = attrs.len() <= 1
-                && attrs
-                    .iter()
-                    .all(|a| matches!(a, Attr::Plain { .. } | Attr::HbsExpr(_)));
-            if !inline_attr_ok {
-                return Ok(None);
-            }
-            let mut buf = String::with_capacity(name.len() + attrs_raw.len() + 2);
-            buf.push('<');
-            buf.push_str(name);
-            for a in &attrs {
-                buf.push(' ');
-                buf.push_str(&render_attr(a));
-            }
-            buf.push('>');
-            (BlockKind::HtmlEnd(name.clone()), buf)
-        }
-        _ => return Ok(None),
+    let Some((need_close_kind, opener_str)) = inline_eligible_opener(&tokens[at])? else {
+        return Ok(None);
     };
 
-    // Walk forward until we find the matching closer at the same depth.
+    let Some(j) = find_matching_closer(tokens, at, &need_close_kind) else {
+        return Ok(None);
+    };
+
+    if !body_is_single_logical_line(&tokens[at + 1..j]) {
+        return Ok(None);
+    }
+
+    let Some(rendered) = render_inline_body(tokens, at, j, &opener_str)? else {
+        return Ok(None);
+    };
+
+    if rendered.contains('\n') || rendered.len() + depth * INDENT.len() > LINE_LIMIT {
+        return Ok(None);
+    }
+
+    Ok(Some((rendered + "\n", j - at + 1)))
+}
+
+/// Check whether `opener` is an inline-eligible HTML start tag.
+///
+/// Inline collapse rules:
+///   - Block helpers (`{{#if}}`, `{{#> partial}}`) never inline.
+///   - HTML tags with 2+ attributes never inline (rule 3 stacks them).
+///   - HTML tags with 0-1 plain attributes may inline iff the body
+///     is a single short text/expression run with no nested elements
+///     or block helpers.
+///
+/// Returns `Some((close_kind, opener_rendered))` when the opener
+/// passes the gate, `None` otherwise.
+fn inline_eligible_opener(opener: &Token<'_>) -> Result<Option<(BlockKind, String)>> {
+    let Token::HtmlStart {
+        name,
+        attrs_raw,
+        self_closed,
+    } = opener
+    else {
+        return Ok(None);
+    };
+    if *self_closed || is_void(name) {
+        return Ok(None);
+    }
+    let attrs = parse_attributes(attrs_raw)?;
+    let inline_attr_ok = attrs.len() <= 1
+        && attrs
+            .iter()
+            .all(|a| matches!(a, Attr::Plain { .. } | Attr::HbsExpr(_)));
+    if !inline_attr_ok {
+        return Ok(None);
+    }
+
+    let mut buf = String::with_capacity(name.len() + attrs_raw.len() + 2);
+    buf.push('<');
+    buf.push_str(name);
+    for a in &attrs {
+        buf.push(' ');
+        buf.push_str(&render_attr(a));
+    }
+    buf.push('>');
+    Ok(Some((BlockKind::HtmlEnd(name.clone()), buf)))
+}
+
+/// Walk `tokens` forward from `at + 1` with a depth stack until the
+/// closer matching `need_close_kind` lands at depth 1. Returns the
+/// index of the closer token, or `None` when the run can't inline
+/// (unmatched closer, or a top-level `{{else}}` disqualifies the
+/// multi-branch block).
+fn find_matching_closer(
+    tokens: &[Token<'_>],
+    at: usize,
+    need_close_kind: &BlockKind,
+) -> Option<usize> {
     let mut depth_stack: Vec<BlockKind> = vec![need_close_kind.clone()];
     let mut j = at + 1;
     while j < tokens.len() {
@@ -219,7 +258,7 @@ fn try_render_inline(
                 {
                     depth_stack.pop();
                     if depth_stack.is_empty() {
-                        break;
+                        return Some(j);
                     }
                 }
             }
@@ -228,7 +267,7 @@ fn try_render_inline(
                 if matches!(depth_stack.last(), Some(BlockKind::HbsClose)) {
                     depth_stack.pop();
                     if depth_stack.is_empty() {
-                        break;
+                        return Some(j);
                     }
                 }
             }
@@ -237,31 +276,33 @@ fn try_render_inline(
                 if matches!(depth_stack.last(), Some(BlockKind::HbsPartialClose)) {
                     depth_stack.pop();
                     if depth_stack.is_empty() {
-                        break;
+                        return Some(j);
                     }
                 }
             }
             // Inline runs disqualify when an `{{else}}` appears at the
             // outermost level — multi-branch blocks never collapse.
-            Token::HbsElse(_) if depth_stack.len() == 1 => return Ok(None),
+            Token::HbsElse(_) if depth_stack.len() == 1 => return None,
             _ => {}
         }
         j += 1;
     }
-    if j >= tokens.len() {
-        return Ok(None); // unmatched — let the main loop handle errors.
-    }
+    None
+}
 
-    // Check that none of the body tokens introduce structural newlines.
-    // For HTML: a nested block-level start that itself has a body
-    // disqualifies. For text: must not contain `\n` in a way that
-    // suggests the source was multi-line.
-    if !body_is_single_logical_line(&tokens[at + 1..j])? {
-        return Ok(None);
-    }
-
+/// Render the body tokens (`tokens[at + 1..j]`) plus the closer
+/// (`tokens[j]`) into a single string, prefixed with `opener_str`.
+/// Returns `None` if a `RawText` token sneaks through — the
+/// single-logical-line precheck should already catch those, but the
+/// emit phase keeps the guard as a defense in depth.
+fn render_inline_body(
+    tokens: &[Token<'_>],
+    at: usize,
+    j: usize,
+    opener_str: &str,
+) -> Result<Option<String>> {
     let mut buf = String::new();
-    buf.push_str(&opener_str);
+    buf.push_str(opener_str);
     for tok in &tokens[at + 1..j] {
         match tok {
             Token::Text(s) => buf.push_str(&collapse_inline_whitespace(s)),
@@ -271,20 +312,16 @@ fn try_render_inline(
                 self_closed,
             } => buf.push_str(&render_self_or_void_inline(name, attrs_raw, *self_closed)?),
             Token::HtmlEnd { name } => write!(&mut buf, "</{name}>").unwrap(),
-            Token::HtmlComment(raw) => buf.push_str(raw),
-            Token::HbsComment(raw) => buf.push_str(raw),
-            Token::HbsExpr(raw) => buf.push_str(&normalize_mustache(raw)),
-            Token::HbsBlockOpen(raw) => buf.push_str(&normalize_mustache(raw)),
-            Token::HbsBlockClose(raw) => buf.push_str(&normalize_mustache(raw)),
-            Token::HbsElse(raw) => buf.push_str(&normalize_mustache(raw)),
-            Token::HbsPartialOpen(raw) => buf.push_str(&normalize_mustache(raw)),
-            Token::HbsPartialClose(raw) => buf.push_str(&normalize_mustache(raw)),
-            // Unreachable: body_is_single_logical_line bails on RawText
-            // before we get here.
+            Token::HtmlComment(raw) | Token::HbsComment(raw) => buf.push_str(raw),
+            Token::HbsExpr(raw)
+            | Token::HbsBlockOpen(raw)
+            | Token::HbsBlockClose(raw)
+            | Token::HbsElse(raw)
+            | Token::HbsPartialOpen(raw)
+            | Token::HbsPartialClose(raw) => buf.push_str(&normalize_mustache(raw)),
             Token::RawText(_) => return Ok(None),
         }
     }
-    // Append the matching closer (`tokens[j]`).
     match &tokens[j] {
         Token::HtmlEnd { name } => write!(&mut buf, "</{name}>").unwrap(),
         Token::HbsBlockClose(raw) | Token::HbsPartialClose(raw) => {
@@ -292,15 +329,7 @@ fn try_render_inline(
         }
         _ => unreachable!(),
     }
-
-    let rendered = buf.trim_end().to_string();
-    if rendered.contains('\n') {
-        return Ok(None);
-    }
-    if rendered.len() + depth * INDENT.len() > LINE_LIMIT {
-        return Ok(None);
-    }
-    Ok(Some((rendered + "\n", j - at + 1)))
+    Ok(Some(buf.trim_end().to_string()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -310,7 +339,7 @@ enum BlockKind {
     HbsPartialClose,
 }
 
-fn body_is_single_logical_line(body: &[Token<'_>]) -> Result<bool> {
+fn body_is_single_logical_line(body: &[Token<'_>]) -> bool {
     for tok in body {
         match tok {
             // Reject text that has internal blank lines or trailing
@@ -318,11 +347,11 @@ fn body_is_single_logical_line(body: &[Token<'_>]) -> Result<bool> {
             Token::Text(s) if s.contains('\n') => {
                 let trimmed = s.trim();
                 if !trimmed.is_empty() && trimmed.contains('\n') {
-                    return Ok(false);
+                    return false;
                 }
             }
             Token::HtmlComment(s) | Token::HbsComment(s) if s.contains('\n') => {
-                return Ok(false);
+                return false;
             }
             // Nested block-level openers that themselves have bodies
             // disqualify the inline collapse — we only inline atoms
@@ -330,16 +359,18 @@ fn body_is_single_logical_line(body: &[Token<'_>]) -> Result<bool> {
             Token::HtmlStart {
                 name, self_closed, ..
             } if !self_closed && !is_void(name) => {
-                return Ok(false);
+                return false;
             }
-            Token::HbsBlockOpen(_) | Token::HbsPartialOpen(_) => return Ok(false),
-            // RawText body (inside <script>/<style>/<pre>/<textarea>)
-            // is verbatim and never collapses to inline form.
-            Token::RawText(_) => return Ok(false),
+            // Block-open tokens disqualify the inline collapse.
+            // RawText body (inside <script>/<style>/<pre>/<textarea>) is verbatim and never
+            // collapses to inline form.
+            Token::HbsBlockOpen(_) | Token::HbsPartialOpen(_) | Token::RawText(_) => {
+                return false;
+            }
             _ => {}
         }
     }
-    Ok(true)
+    true
 }
 
 fn render_self_or_void_inline(name: &str, attrs_raw: &str, self_closed: bool) -> Result<String> {
@@ -359,17 +390,26 @@ fn render_self_or_void_inline(name: &str, attrs_raw: &str, self_closed: bool) ->
     Ok(out)
 }
 
-fn emit_start_tag(
-    name: &str,
-    attrs_raw: &str,
+/// Inputs to [`emit_start_tag`]. Bundled into a struct so the call
+/// site reads at a glance instead of counting six positional args.
+struct EmitStartTag<'a> {
+    name: &'a str,
+    attrs_raw: &'a str,
     self_closed: bool,
     depth: usize,
-    out: &mut String,
-    at_line_start: &mut bool,
-) -> Result<()> {
-    let attrs = parse_attributes(attrs_raw)?;
-    let void = is_void(name);
-    let close = if self_closed || void { " />" } else { ">" };
+    out: &'a mut String,
+    at_line_start: &'a mut bool,
+}
+
+// `EmitStartTag` holds `&mut` fields (`out`, `at_line_start`) — taking it
+// by value lets the body reborrow them as exclusive references, which a
+// shared `&EmitStartTag` would not allow. The struct IS the parameter
+// list here; clippy's "needless pass by value" doesn't fit this shape.
+#[allow(clippy::needless_pass_by_value)]
+fn emit_start_tag(p: EmitStartTag<'_>) -> Result<()> {
+    let attrs = parse_attributes(p.attrs_raw)?;
+    let void = is_void(p.name);
+    let close = if p.self_closed || void { " />" } else { ">" };
 
     // Inline form: zero or one attribute (no embedded HBS block).
     let inline_eligible = attrs
@@ -377,32 +417,32 @@ fn emit_start_tag(
         .all(|a| matches!(a, Attr::Plain { .. } | Attr::HbsExpr(_)))
         && attrs.len() <= 1;
     if inline_eligible {
-        ensure_line_indent(out, at_line_start, depth);
-        out.push('<');
-        out.push_str(name);
+        ensure_line_indent(p.out, p.at_line_start, p.depth);
+        p.out.push('<');
+        p.out.push_str(p.name);
         for a in &attrs {
-            out.push(' ');
-            out.push_str(&render_attr(a));
+            p.out.push(' ');
+            p.out.push_str(&render_attr(a));
         }
-        out.push_str(close);
-        newline(out, at_line_start);
+        p.out.push_str(close);
+        newline(p.out, p.at_line_start);
         return Ok(());
     }
 
     // Stacked form: one attribute per line, closing `>` on its own line.
-    ensure_line_indent(out, at_line_start, depth);
-    out.push('<');
-    out.push_str(name);
-    let attr_indent = INDENT.repeat(depth + 1);
+    ensure_line_indent(p.out, p.at_line_start, p.depth);
+    p.out.push('<');
+    p.out.push_str(p.name);
+    let attr_indent = INDENT.repeat(p.depth + 1);
     for a in &attrs {
-        out.push('\n');
-        out.push_str(&attr_indent);
-        out.push_str(&render_attr(a));
+        p.out.push('\n');
+        p.out.push_str(&attr_indent);
+        p.out.push_str(&render_attr(a));
     }
-    out.push('\n');
-    out.push_str(&INDENT.repeat(depth));
-    out.push_str(close.trim_start());
-    newline(out, at_line_start);
+    p.out.push('\n');
+    p.out.push_str(&INDENT.repeat(p.depth));
+    p.out.push_str(close.trim_start());
+    newline(p.out, p.at_line_start);
     Ok(())
 }
 
@@ -614,7 +654,7 @@ fn post_process(s: &str) -> String {
     out.push('\n');
     // Strip trailing whitespace per line.
     out.lines()
-        .map(|l| l.trim_end())
+        .map(str::trim_end)
         .collect::<Vec<_>>()
         .join("\n")
         + "\n"
@@ -748,7 +788,7 @@ mod tests {
     #[test]
     fn final_newline_added() {
         let src = "<p>x</p>";
-        assert!(fmt(src).ends_with("\n"));
+        assert!(fmt(src).ends_with('\n'));
         // Don't double up if input already ends with newline.
         assert!(!fmt("<p>x</p>\n").ends_with("\n\n"));
     }

@@ -2,10 +2,27 @@
 //! hydration, globals with join data, cross-collection hook transactions,
 //! and locale-specific updates.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::path::PathBuf;
+use std::sync::Arc;
+
+use serde_json::json;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::SharedRegistry;
+use crap_cms::core::{DocumentFields, Registry, ReqContext};
 use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
@@ -16,7 +33,7 @@ fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
 }
 
-fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
+fn setup_with_db() -> (tempfile::TempDir, DbPool, Arc<Registry>, HookRunner) {
     let config_dir = fixture_dir();
     let config = CrapConfig::test_default();
     let registry = hooks::init_lua(&config_dir, &config).expect("init_lua failed");
@@ -29,7 +46,7 @@ fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("HookRunner::new failed");
@@ -48,7 +65,7 @@ fn setup_custom_db(
     collection_defs: &[(&str, &str)],
     global_defs: &[(&str, &str)],
     locales: Option<Vec<&str>>,
-) -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
+) -> (tempfile::TempDir, DbPool, Arc<Registry>, HookRunner) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let collections_dir = tmp.path().join("collections");
     let globals_dir = tmp.path().join("globals");
@@ -65,7 +82,7 @@ fn setup_custom_db(
 
     let mut config = CrapConfig::test_default();
     if let Some(l) = locales {
-        config.locale.locales = l.iter().map(|s| s.to_string()).collect();
+        config.locale.locales = l.iter().map(std::string::ToString::to_string).collect();
         config.locale.default_locale = l.first().unwrap_or(&"en").to_string();
         config.locale.fallback = true;
     }
@@ -79,7 +96,7 @@ fn setup_custom_db(
 
     let runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("runner");
@@ -90,7 +107,7 @@ fn setup_custom_db(
 fn setup_custom_db_with_hooks(
     collection_defs: &[(&str, &str)],
     hook_files: &[(&str, &str)],
-) -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
+) -> (tempfile::TempDir, DbPool, Arc<Registry>, HookRunner) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let collections_dir = tmp.path().join("collections");
     let hooks_dir = tmp.path().join("hooks");
@@ -115,7 +132,7 @@ fn setup_custom_db_with_hooks(
 
     let runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("runner");
@@ -618,8 +635,6 @@ fn lua_hook_creates_related_document() {
 
 #[test]
 fn lua_hook_error_rolls_back_inner_crud() {
-    use std::collections::HashMap;
-
     use crap_cms::core::collection::Hooks;
     use crap_cms::hooks::lifecycle::{HookContext, HookEvent};
 
@@ -663,9 +678,8 @@ fn lua_hook_error_rolls_back_inner_crud() {
         )],
     );
 
-    let reg = _reg.read().unwrap();
+    let reg = &*_reg;
     let def = reg.get_collection("orders").unwrap().clone();
-    drop(reg);
 
     let hooks = Hooks {
         after_change: vec!["hooks.order_hooks.create_and_error".to_string()],
@@ -675,10 +689,10 @@ fn lua_hook_error_rolls_back_inner_crud() {
     // Create order in a transaction
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = [("item".to_string(), "Widget".to_string())]
+    let data: DocumentFields = [("item".to_string(), json!("Widget"))]
         .iter()
         .cloned()
-        .collect::<HashMap<_, _>>();
+        .collect();
     let doc = crap_cms::db::query::create(&tx, "orders", &def, &data, None).unwrap();
     let doc_id = doc.id.clone();
 
@@ -689,7 +703,7 @@ fn lua_hook_error_rolls_back_inner_crud() {
         data: doc.fields.clone(),
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -705,9 +719,7 @@ fn lua_hook_error_rolls_back_inner_crud() {
     let found = crap_cms::db::query::find_by_id(&conn2, "orders", &def, &doc_id, None).unwrap();
     assert!(found.is_none(), "order should NOT exist after rollback");
 
-    let log_reg = _reg.read().unwrap();
-    let log_def = log_reg.get_collection("logs").unwrap().clone();
-    drop(log_reg);
+    let log_def = _reg.get_collection("logs").unwrap().clone();
 
     let logs = crap_cms::db::query::find(
         &conn2,

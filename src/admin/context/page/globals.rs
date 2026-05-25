@@ -6,7 +6,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::BasePageContext;
-use crate::admin::context::{FieldContext, GlobalContext, LocaleTemplateData, PaginationContext};
+use crate::admin::context::{
+    FieldContext, GlobalContext, GlobalPermissions, LocaleTemplateData, PaginationContext,
+};
 
 /// `/admin/globals/{slug}` edit form context.
 #[derive(Serialize, JsonSchema)]
@@ -15,6 +17,7 @@ pub struct GlobalEditPage {
     pub base: BasePageContext,
 
     pub global: GlobalContext,
+    pub perms: GlobalPermissions,
     pub fields: Vec<FieldContext>,
     pub sidebar_fields: Vec<FieldContext>,
 
@@ -40,6 +43,7 @@ pub struct GlobalFormErrorPage {
     pub base: BasePageContext,
 
     pub global: GlobalContext,
+    pub perms: GlobalPermissions,
     pub fields: Vec<FieldContext>,
     pub sidebar_fields: Vec<FieldContext>,
 }

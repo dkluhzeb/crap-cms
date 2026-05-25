@@ -15,6 +15,11 @@ type Result<T> = std::result::Result<T, ServiceError>;
 ///
 /// Unlike `find_documents`, this skips hooks, hydration, and population.
 /// Used by the admin relationship search API.
+///
+/// # Errors
+///
+/// Returns service-layer errors (access denied) or a backend error if the
+/// find/count queries fail.
 pub fn search_documents(
     ctx: &ServiceContext,
     input: &SearchDocumentsInput,
@@ -22,7 +27,7 @@ pub fn search_documents(
     let resolved = ctx.resolve_conn()?;
     let conn = resolved.as_ref();
     let hooks = ctx.read_hooks()?;
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     let access = hooks.check_access(def.access.read.as_deref(), ctx.user, None, None)?;
 
@@ -75,8 +80,10 @@ pub fn search_documents(
 
     let limit = fq.limit.unwrap_or(total);
 
+    // Saturate doc count for the unreachable case so the > check still works.
+    let docs_count = i64::try_from(docs.len()).unwrap_or(i64::MAX);
     let cursor_has_more = if overfetch {
-        if (docs.len() as i64) > limit {
+        if docs_count > limit {
             if fq.before_cursor.is_some() {
                 docs.remove(0);
             } else {
@@ -107,7 +114,7 @@ pub fn search_documents(
         }
     }
 
-    let pagination = helpers::build_pagination(helpers::PaginationInputs {
+    let pagination = helpers::build_pagination(&helpers::PaginationInputs {
         docs: &docs,
         total,
         fq: &fq,

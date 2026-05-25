@@ -7,7 +7,7 @@
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::config::LocaleConfig;
+use crate::{config::LocaleConfig, typegen::LuaAnnotation};
 
 /// Top-level context contributed by the editor-locale builder.
 #[derive(Serialize, JsonSchema)]
@@ -18,7 +18,8 @@ pub struct EditorLocaleContext {
 }
 
 /// One row in the editor-locale picker dropdown.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.editor_locale_option")]
 pub struct EditorLocaleOption {
     pub value: String,
     pub label: String,

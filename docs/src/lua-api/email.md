@@ -15,11 +15,14 @@ smtp_tls = "starttls"    # "starttls" (default), "tls" (implicit), "none" (plain
 from_address = "noreply@example.com"
 from_name = "My App"
 
-# Queue settings for crap.email.queue()
-queue_retries = 3        # retry count (default: 3)
-queue_name = "email"     # job queue name (default: "email")
-queue_timeout = 30       # per-attempt timeout in seconds (default: 30)
-queue_concurrency = 5    # max concurrent queued emails (default: 5)
+# Background email delivery (queue retries / timeout / concurrency)
+# lives under [jobs.queues.email] — same per-queue mechanism as image
+# conversions. Framework defaults are sane for typical SMTP setups, so
+# you only need this block when you want to tune it.
+[jobs.queues.email]
+retries     = 3          # default: 3 — total attempts = retries + 1
+timeout     = "30s"      # default: 30s — per-attempt wall-clock timeout
+concurrency = 5          # default: 5 — max concurrent emails in flight
 ```
 
 If `smtp_host` is empty with the default `smtp` provider, emails are logged instead of sent (equivalent to `provider = "log"`).
@@ -58,7 +61,7 @@ Requires a transaction context (available in `before_change`, `before_delete`, a
 | `subject` | string | yes | Email subject line |
 | `html` | string | yes | HTML email body |
 | `text` | string | no | Plain text fallback body |
-| `retries` | integer | no | Override retry count from config (default: `email.queue_retries`) |
+| `retries` | integer | no | Override retry count from config (default: `[jobs.queues.email] retries`) |
 
 **Returns:** Job run ID (string).
 

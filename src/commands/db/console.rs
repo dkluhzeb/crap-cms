@@ -11,6 +11,11 @@ use crate::{
 };
 
 /// Open an interactive database console.
+///
+/// # Errors
+///
+/// Returns an error if config loading or pool creation fails, or the
+/// console subprocess exits with a non-zero status.
 #[cfg(not(tarpaulin_include))]
 pub fn console(config_dir: &Path) -> Result<()> {
     let config_dir = config_dir
@@ -37,10 +42,10 @@ pub fn console(config_dir: &Path) -> Result<()> {
                 .context("Failed to launch sqlite3 — is it installed?")?;
 
             if !status.success() {
-                bail!("sqlite3 exited with status {}", status);
+                bail!("sqlite3 exited with status {status}");
             }
         }
-        other => bail!("No interactive console available for '{}' backend", other),
+        other => bail!("No interactive console available for '{other}' backend"),
     }
 
     Ok(())

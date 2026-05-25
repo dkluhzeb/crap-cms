@@ -19,7 +19,7 @@ pub async fn list_collections(
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let user_doc = get_user_doc(&auth_user);
+    let user_doc = get_user_doc(auth_user.as_ref());
 
     let mut collections: Vec<CollectionEntry> = state
         .registry
@@ -41,7 +41,7 @@ pub async fn list_collections(
     let base = BasePageContext::for_handler(
         &state,
         claims_ref,
-        &auth_user,
+        auth_user.as_ref(),
         PageMeta::new(PageType::CollectionList, "collections"),
     )
     .with_editor_locale(editor_locale.as_deref(), &state);

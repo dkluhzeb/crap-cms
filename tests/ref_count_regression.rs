@@ -3,6 +3,20 @@
 //! Each test reproduces a specific bug that was found and fixed. These tests
 //! must not be removed — they prevent silent reintroduction of data corruption.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -50,19 +64,20 @@ fn setup(collections: Vec<CollectionDefinition>) -> TestSetup {
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &collections {
             reg.register_collection(def.clone());
         }
     }
 
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -71,9 +86,8 @@ fn setup(collections: Vec<CollectionDefinition>) -> TestSetup {
 
     let deps = ContentServiceDeps::builder()
         .pool(db_pool.clone())
-        .registry(Registry::snapshot(&registry))
+        .registry(Registry::snapshot(&shared))
         .hook_runner(hook_runner)
-        .jwt_secret(config.auth.secret.clone())
         .config(config.clone())
         .config_dir(tmp.path().to_path_buf())
         .storage(
@@ -98,7 +112,7 @@ fn setup(collections: Vec<CollectionDefinition>) -> TestSetup {
         )))
         .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
         .token_provider(std::sync::Arc::new(
-            crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+            crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
         ))
         .password_provider(std::sync::Arc::new(
             crap_cms::core::auth::Argon2PasswordProvider,
@@ -442,7 +456,7 @@ async fn version_restore_adjusts_ref_counts() {
 // ── Regression: creating a reference to a vanished target must fail ─────
 
 /// If a referenced document has been hard-deleted out from under us (e.g.
-/// by a concurrent process that bypassed the ref_count guard, or a direct
+/// by a concurrent process that bypassed the `ref_count` guard, or a direct
 /// SQL delete), attempting to create a new document referencing it must
 /// fail loudly rather than silently writing a dangling reference.
 #[tokio::test]

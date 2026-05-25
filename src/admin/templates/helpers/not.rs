@@ -14,7 +14,9 @@ impl HelperDef for NotHelper {
         _ctx: &'rc handlebars::Context,
         _rc: &mut RenderContext<'reg, 'rc>,
     ) -> Result<ScopedJson<'rc>, RenderError> {
-        let val = h.param(0).map(|p| p.value()).unwrap_or(&Value::Null);
+        let val = h
+            .param(0)
+            .map_or(&Value::Null, handlebars::PathAndJson::value);
         let truthy = is_truthy(val);
         Ok(ScopedJson::Derived(Value::Bool(!truthy)))
     }

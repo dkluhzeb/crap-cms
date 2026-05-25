@@ -16,6 +16,7 @@ pub struct CustomEmailProvider {
 impl CustomEmailProvider {
     /// Create a new custom email provider.
     /// The Lua state must have `crap._email_send` registered.
+    #[must_use]
     pub fn new(lua: Lua) -> Self {
         Self { lua }
     }
@@ -25,11 +26,11 @@ impl CustomEmailProvider {
             .lua
             .globals()
             .get("crap")
-            .map_err(|e| anyhow::anyhow!("crap global not found: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("crap global not found: {e}"))?;
 
         let send_fn: Function = crap
             .get("_email_send")
-            .map_err(|e| anyhow::anyhow!("crap._email_send not found: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("crap._email_send not found: {e}"))?;
 
         Ok(send_fn)
     }
@@ -48,7 +49,7 @@ impl EmailProvider for CustomEmailProvider {
         }
 
         func.call::<()>(opts)
-            .map_err(|e| anyhow::anyhow!("custom email send error: {:#}", e))
+            .map_err(|e| anyhow::anyhow!("custom email send error: {e:#}"))
     }
 
     fn kind(&self) -> &'static str {
@@ -63,14 +64,14 @@ mod tests {
     fn setup_lua() -> Lua {
         let lua = Lua::new();
         lua.load(
-            r#"
+            r"
             crap = {}
             local sent = {}
             crap._email_send = function(opts)
                 table.insert(sent, opts)
             end
             crap._sent = sent
-            "#,
+            ",
         )
         .exec()
         .expect("Lua setup failed");

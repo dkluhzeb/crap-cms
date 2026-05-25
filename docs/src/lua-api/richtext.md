@@ -6,7 +6,11 @@ Register custom ProseMirror node types for the rich text editor and render rich 
 
 ### `crap.richtext.register_node(name, spec)`
 
-Register a custom rich text node type.
+Register a custom rich text node type. **Init-only:** call from
+`init.lua` or any file loaded by `require` from it. Runtime calls
+error because the pool of Lua VMs each holds its own node table —
+registering at runtime would only land in the VM that ran the call,
+fragmenting the set.
 
 **Parameters:**
 - `name` (string) — Node name (alphanumeric + underscores only).

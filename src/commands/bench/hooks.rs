@@ -2,12 +2,12 @@
 
 use std::time::Instant;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use dialoguer::MultiSelect;
 
 use crate::{
     cli::{self, Table, crap_theme},
-    core::{Registry, SharedRegistry, collection::Hooks},
+    core::{Registry, collection::Hooks},
     db::DbConnection,
     hooks::HookRunner,
 };
@@ -97,7 +97,7 @@ fn select_hooks(
     }
 
     if let Some(include) = cli_hooks {
-        let refs: Vec<&str> = include.split(',').map(|s| s.trim()).collect();
+        let refs: Vec<&str> = include.split(',').map(str::trim).collect();
         let indices: Vec<usize> = all_hooks
             .iter()
             .enumerate()
@@ -113,7 +113,7 @@ fn select_hooks(
     }
 
     if let Some(exclude) = cli_exclude {
-        let refs: Vec<&str> = exclude.split(',').map(|s| s.trim()).collect();
+        let refs: Vec<&str> = exclude.split(',').map(str::trim).collect();
         let indices: Vec<usize> = all_hooks
             .iter()
             .enumerate()
@@ -125,7 +125,7 @@ fn select_hooks(
     }
 
     // Interactive wizard
-    let labels: Vec<String> = all_hooks.iter().map(|h| h.label()).collect();
+    let labels: Vec<String> = all_hooks.iter().map(HookEntry::label).collect();
 
     let selections = MultiSelect::with_theme(&crap_theme())
         .with_prompt("Select hooks to benchmark (space to toggle, enter to confirm)")
@@ -140,8 +140,8 @@ fn select_hooks(
 }
 
 /// Parameters for the hook benchmark.
-pub struct HookBenchParams<'a> {
-    pub registry: &'a SharedRegistry,
+pub(super) struct HookBenchParams<'a> {
+    pub registry: &'a Registry,
     pub runner: &'a HookRunner,
     pub conn: &'a dyn DbConnection,
     pub collection: Option<&'a str>,
@@ -154,12 +154,9 @@ pub struct HookBenchParams<'a> {
 
 /// Run the hook benchmark.
 pub fn run(params: &HookBenchParams) -> Result<()> {
-    let reg = params
-        .registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {e}"))?;
+    let reg = params.registry;
 
-    let all_hooks = collect_hooks(&reg, params.collection);
+    let all_hooks = collect_hooks(reg, params.collection);
 
     if all_hooks.is_empty() {
         cli::dim("No hooks found.");
@@ -190,7 +187,7 @@ pub fn run(params: &HookBenchParams) -> Result<()> {
             helpers::resolve_bench_data(params.conn, &entry.slug, def, params.user_data)?
         } else {
             // Global — use empty data
-            (std::collections::HashMap::new(), DataSource::Synthetic)
+            (crate::core::DocumentFields::new(), DataSource::Synthetic)
         };
 
         // Build a Hooks struct with only this hook

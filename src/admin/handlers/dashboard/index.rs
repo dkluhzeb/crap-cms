@@ -11,19 +11,13 @@ use crate::{
         },
         handlers::shared::{extract_editor_locale, get_user_doc, has_read_access, render_page},
     },
-    core::{
-        Document,
-        auth::{AuthUser, Claims},
-    },
+    core::{AuthUser, Claims, Document},
     db::{BoxedConnection, DbConnection, ops::count_documents, query::helpers::global_table},
 };
 
 /// Fetch the most recent `updated_at` value from a table.
 fn last_updated(conn: &BoxedConnection, table: &str, where_clause: &str) -> Option<String> {
-    let sql = format!(
-        "SELECT MAX(updated_at) AS last_updated FROM \"{}\"{}",
-        table, where_clause
-    );
+    let sql = format!("SELECT MAX(updated_at) AS last_updated FROM \"{table}\"{where_clause}");
 
     conn.query_one(&sql, &[])
         .ok()
@@ -98,18 +92,15 @@ pub async fn index(
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let conn = match state.pool.get() {
-        Ok(c) => c,
-        Err(_) => {
-            return crate::admin::handlers::shared::render_or_error(
-                &state,
-                "errors/500",
-                &serde_json::json!({"message": "Database error"}),
-            );
-        }
+    let Ok(conn) = state.pool.get() else {
+        return crate::admin::handlers::shared::render_or_error(
+            &state,
+            "errors/500",
+            &serde_json::json!({"message": "Database error"}),
+        );
     };
 
-    let user_doc = get_user_doc(&auth_user);
+    let user_doc = get_user_doc(auth_user.as_ref());
     let collection_cards = build_collection_cards(&state, &conn, user_doc);
     let global_cards = build_global_cards(&state, &conn, user_doc);
 
@@ -119,7 +110,7 @@ pub async fn index(
     let base = BasePageContext::for_handler(
         &state,
         claims_ref,
-        &auth_user,
+        auth_user.as_ref(),
         PageMeta::new(PageType::Dashboard, "dashboard"),
     )
     .with_editor_locale(editor_locale.as_deref(), &state);

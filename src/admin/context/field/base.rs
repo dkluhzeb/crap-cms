@@ -6,6 +6,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::core::ConditionExpr;
+
 /// Common keys present on every field context. Variants flatten this into
 /// themselves via `#[serde(flatten)]` so the rendered JSON has no nesting.
 ///
@@ -118,20 +120,115 @@ pub struct ValidationAttrs {
 
 /// Display-condition state injected by
 /// [`apply_display_conditions`](crate::admin::handlers::field_context::apply_display_conditions).
+///
+/// JSON keys keep the `condition_*` prefix for the JS evaluator at
+/// `static/components/conditions.js`; Rust field names drop it because the
+/// struct itself is named `ConditionData`.
 #[derive(Serialize, Deserialize, Default, JsonSchema)]
 pub struct ConditionData {
     /// Initial visibility resolved by the Lua condition function.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub condition_visible: Option<bool>,
+    #[serde(rename = "condition_visible", skip_serializing_if = "Option::is_none")]
+    pub visible: Option<bool>,
 
     /// Server-side function reference (set when the condition function
     /// returns a bool). The client re-asks the server when the form changes.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub condition_ref: Option<String>,
+    #[serde(rename = "condition_ref", skip_serializing_if = "Option::is_none")]
+    pub func_ref: Option<String>,
 
-    /// Client-evaluable condition table (set when the condition function
+    /// Client-evaluable condition expression (set when the condition function
     /// returns a Lua table). The client evaluates this directly without a
-    /// round-trip.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub condition_json: Option<Value>,
+    /// round-trip. Serializes to the same JSON shape the JS evaluator at
+    /// `static/components/conditions.js` expects.
+    #[serde(rename = "condition_json", skip_serializing_if = "Option::is_none")]
+    pub expr: Option<ConditionExpr>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::admin::context::field::{FieldContext, TextField, test_helpers::make_base};
+
+    #[test]
+    fn base_serializes_all_required_keys() {
+        let f = TextField {
+            base: make_base("title"),
+            has_many: None,
+            tags: None,
+        };
+        let v = serde_json::to_value(FieldContext::Text(f)).unwrap();
+        // All base keys present (placeholder/description as null per parity).
+        assert_eq!(v["name"], "title");
+        assert_eq!(v["field_type"], "text");
+        assert_eq!(v["label"], "title");
+        assert_eq!(v["required"], false);
+        assert_eq!(v["value"], "");
+        assert!(v["placeholder"].is_null());
+        assert!(v["description"].is_null());
+        assert_eq!(v["readonly"], false);
+        assert_eq!(v["localized"], false);
+        assert_eq!(v["locale_locked"], false);
+        // Optional keys absent when None.
+        assert!(v.get("position").is_none());
+        assert!(v.get("error").is_none());
+        assert!(v.get("min_length").is_none());
+        assert!(v.get("min").is_none());
+        assert!(v.get("has_min").is_none());
+        assert!(v.get("condition_visible").is_none());
+        // Per-field template binding: absent when the field config didn't
+        // set `admin.template` / `admin.extra`.
+        assert!(v.get("template").is_none(), "template absent by default");
+        assert!(v.get("extra").is_none(), "extra absent when empty");
+    }
+
+    /// `admin.template` / `admin.extra` declared on the field config flatten
+    /// to top-level `template` / `extra` keys in the render context, where
+    /// `RenderFieldHelper` reads `template` to override the default
+    /// `fields/<field_type>` lookup and field templates read `extra.<key>`
+    /// for per-field config.
+    #[test]
+    fn base_template_and_extra_flatten_to_top_level() {
+        let mut b = make_base("rating");
+        b.template = Some("fields/rating".to_string());
+        b.extra
+            .insert("color".to_string(), Value::String("amber".to_string()));
+        b.extra.insert("max_stars".to_string(), Value::from(5_i64));
+
+        let f = TextField {
+            base: b,
+            has_many: None,
+            tags: None,
+        };
+        let v = serde_json::to_value(FieldContext::Text(f)).unwrap();
+        assert_eq!(v["template"], "fields/rating");
+        assert_eq!(v["extra"]["color"], "amber");
+        assert_eq!(v["extra"]["max_stars"], 5);
+    }
+
+    #[test]
+    fn base_optional_keys_emit_when_set() {
+        let mut b = make_base("title");
+        b.position = Some("sidebar".to_string());
+        b.error = Some("required".to_string());
+        b.validation.min_length = Some(3);
+        b.validation.max_length = Some(120);
+        b.validation.min = Some(1.0);
+        b.validation.has_min = Some(true);
+        b.condition.visible = Some(true);
+        b.condition.func_ref = Some("conditions.is_admin".to_string());
+
+        let f = TextField {
+            base: b,
+            has_many: None,
+            tags: None,
+        };
+        let v = serde_json::to_value(FieldContext::Text(f)).unwrap();
+        assert_eq!(v["position"], "sidebar");
+        assert_eq!(v["error"], "required");
+        assert_eq!(v["min_length"], 3);
+        assert_eq!(v["max_length"], 120);
+        assert_eq!(v["min"], 1.0);
+        assert_eq!(v["has_min"], true);
+        assert_eq!(v["condition_visible"], true);
+        assert_eq!(v["condition_ref"], "conditions.is_admin");
+    }
 }

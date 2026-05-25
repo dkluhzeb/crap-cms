@@ -36,7 +36,7 @@ pub struct FindDocumentsInput<'a> {
     pub status_filter: Option<Vec<String>>,
     pub access_constraints: Option<Vec<FilterClause>>,
     /// Whether cursor-based pagination is enabled (from config).
-    /// When true, PaginationResult uses cursor mode; when false, page mode.
+    /// When true, `PaginationResult` uses cursor mode; when false, page mode.
     pub cursor_enabled: bool,
     /// When true, return only soft-deleted documents (trash view). The service
     /// flips `include_deleted = true` and injects `_deleted_at EXISTS`
@@ -51,6 +51,7 @@ pub struct FindDocumentsInput<'a> {
 }
 
 impl<'a> FindDocumentsInput<'a> {
+    #[must_use]
     pub fn builder(query: &'a FindQuery) -> FindDocumentsInputBuilder<'a> {
         FindDocumentsInputBuilder::new(query)
     }
@@ -206,7 +207,7 @@ mod tests {
 
     use super::*;
 
-    use crate::db::query::Singleflight;
+    use crate::db::Singleflight;
 
     /// Regression: `FindDocumentsInput::builder().singleflight(..)` must plumb
     /// the Arc through to the built input so post-processing can share one

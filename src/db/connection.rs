@@ -11,18 +11,31 @@ use super::types::{DbRow, DbValue};
 /// Object-safe database connection trait.
 ///
 /// All query functions accept `&dyn DbConnection`, making them backend-agnostic.
-/// The SQLite implementation lives in `sqlite.rs`.
+/// The `SQLite` implementation lives in `sqlite.rs`.
 pub trait DbConnection {
     /// Execute a statement that modifies data. Returns the number of rows affected.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the SQL is invalid, parameters fail to bind,
+    /// or the database rejects the statement.
     fn execute(&self, sql: &str, params: &[DbValue]) -> Result<usize>;
 
     /// Execute multiple statements as a batch (no parameters).
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if any statement in the batch fails.
     fn execute_batch(&self, sql: &str) -> Result<()>;
 
     /// Execute a DDL statement (CREATE TABLE, ALTER TABLE, etc.).
     /// On Postgres, automatically adjusts `INTEGER` to `BIGINT` since
     /// `DbValue::Integer` is `i64` which tokio-postgres binds to `int8`.
     /// Default: delegates to `execute`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the DDL is invalid or rejected.
     fn execute_ddl(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
         self.execute(sql, params)
     }
@@ -30,32 +43,44 @@ pub trait DbConnection {
     /// Execute a batch DDL statement (no parameters).
     /// Same adjustment as `execute_ddl`.
     /// Default: delegates to `execute_batch`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if any DDL statement in the batch fails.
     fn execute_batch_ddl(&self, sql: &str) -> Result<()> {
         self.execute_batch(sql)
     }
 
     /// Execute a query and return all matching rows.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the query is invalid or execution fails.
     fn query_all(&self, sql: &str, params: &[DbValue]) -> Result<Vec<DbRow>>;
 
     /// Execute a query and return the first row, or `None` if no rows match.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the query is invalid or execution fails.
     fn query_one(&self, sql: &str, params: &[DbValue]) -> Result<Option<DbRow>>;
 
     /// Return the placeholder syntax for parameter `n` (1-based).
     ///
-    /// SQLite: `"?1"`, `"?2"`, ...
-    /// PostgreSQL: `"$1"`, `"$2"`, ...
+    /// `SQLite`: `"?1"`, `"?2"`, ...
+    /// `PostgreSQL`: `"$1"`, `"$2"`, ...
     fn placeholder(&self, n: usize) -> String;
 
     /// Return the SQL expression for the current timestamp.
     ///
-    /// SQLite: `"datetime('now')"`
-    /// PostgreSQL: `"NOW()"`
+    /// `SQLite`: `"datetime('now')"`
+    /// `PostgreSQL`: `"NOW()"`
     fn now_expr(&self) -> &'static str;
 
     /// Return a SQL expression for `max(a, b)` as a scalar (not aggregate).
     ///
-    /// SQLite: `"MAX(a, b)"` (SQLite's `MAX` with 2+ args is scalar)
-    /// PostgreSQL: `"GREATEST(a, b)"`
+    /// `SQLite`: `"MAX(a, b)"` (`SQLite`'s `MAX` with 2+ args is scalar)
+    /// `PostgreSQL`: `"GREATEST(a, b)"`
     fn greatest_expr(&self, a: &str, b: &str) -> String;
 
     /// Return the backend identifier.
@@ -67,28 +92,44 @@ pub trait DbConnection {
     // ── Schema introspection ─────────────────────────────────────────
 
     /// Check whether a table exists in the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the schema-introspection query fails.
     fn table_exists(&self, name: &str) -> Result<bool>;
 
     /// Get the set of column names for a table.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the schema-introspection query fails.
     fn get_table_columns(&self, table: &str) -> Result<HashSet<String>>;
 
     /// Get a mapping of column name to column type for a table.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the schema-introspection query fails.
     fn get_table_column_types(&self, table: &str) -> Result<HashMap<String, String>>;
 
     /// Get index names for a table matching a name prefix.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the schema-introspection query fails.
     fn index_names(&self, table: &str, prefix: &str) -> Result<Vec<String>>;
 
     // ── DDL helpers ──────────────────────────────────────────────────
 
     /// DDL fragment for a timestamp column with `DEFAULT = now()`.
     ///
-    /// SQLite: `"TEXT DEFAULT (datetime('now'))"`
+    /// `SQLite`: `"TEXT DEFAULT (datetime('now'))"`
     /// Postgres: `"TIMESTAMPTZ DEFAULT NOW()"`
     fn timestamp_column_default(&self) -> &'static str;
 
     /// DDL type for a nullable timestamp column (no default).
     ///
-    /// SQLite: `"TEXT"` · Postgres: `"TIMESTAMPTZ"`
+    /// `SQLite`: `"TEXT"` · Postgres: `"TIMESTAMPTZ"`
     fn timestamp_column_type(&self) -> &'static str;
 
     /// SQL column type for a field type.
@@ -99,7 +140,7 @@ pub trait DbConnection {
     /// SQL expression for `now() - N seconds` and the parameter value to bind.
     /// Backend controls both SQL syntax and parameter format.
     ///
-    /// SQLite: `("datetime('now', ?N)", Text("-30 seconds"))`
+    /// `SQLite`: `("datetime('now', ?N)", Text("-30 seconds"))`
     /// Postgres: `("NOW() + $N::interval", Text("-30 seconds"))`
     fn date_offset_expr(&self, seconds: i64, param_pos: usize) -> (String, DbValue);
 
@@ -110,19 +151,19 @@ pub trait DbConnection {
     /// `column`: the SQL expression (e.g. `"data"`, `"j0.value"`).
     /// `field`: the field name without path prefix (e.g. `"body"`).
     ///
-    /// SQLite: `"json_extract(data, '$.body')"`
+    /// `SQLite`: `"json_extract(data, '$.body')"`
     fn json_extract_expr(&self, column: &str, field: &str) -> String;
 
     /// FROM-clause fragment for iterating a JSON array.
     ///
-    /// SQLite: `"json_each(source) AS alias"`
+    /// `SQLite`: `"json_each(source) AS alias"`
     fn json_each_source(&self, source: &str, alias: &str) -> String;
 
     // ── Conflict handling ────────────────────────────────────────────
 
     /// Build a complete INSERT-or-skip SQL statement.
     ///
-    /// SQLite: `INSERT OR IGNORE INTO {table} ({columns}) VALUES ({values})`
+    /// `SQLite`: `INSERT OR IGNORE INTO {table} ({columns}) VALUES ({values})`
     /// Postgres: `INSERT INTO {table} ({columns}) VALUES ({values}) ON CONFLICT DO NOTHING`
     fn build_insert_ignore(&self, table: &str, columns: &str, values: &str) -> String;
 
@@ -130,7 +171,7 @@ pub trait DbConnection {
     /// `columns` are raw names — the backend quotes them as needed.
     /// `key_col` is the conflict target (usually `"id"`).
     ///
-    /// SQLite: `INSERT OR REPLACE INTO {table} ("c1","c2") VALUES ({values})`
+    /// `SQLite`: `INSERT OR REPLACE INTO {table} ("c1","c2") VALUES ({values})`
     /// Postgres: `INSERT INTO {table} ("c1","c2") VALUES ({values})
     ///           ON CONFLICT ("id") DO UPDATE SET "c1"=EXCLUDED."c1", ...`
     fn build_upsert(&self, table: &str, columns: &[&str], values: &str, key_col: &str) -> String;
@@ -147,34 +188,43 @@ pub trait DbConnection {
 
     /// List all user-created table names (excludes system/internal tables).
     ///
-    /// SQLite: queries `sqlite_master` · Postgres: `information_schema.tables`
+    /// `SQLite`: queries `sqlite_master` · Postgres: `information_schema.tables`
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the schema-introspection query fails.
     fn list_user_tables(&self) -> Result<Vec<String>>;
 
     /// Whether `ALTER TABLE ... DROP COLUMN` is supported.
     ///
-    /// SQLite: `true` for version ≥ 3.35.0 · Postgres/MySQL: always `true`
+    /// `SQLite`: `true` for version ≥ 3.35.0 · Postgres/MySQL: always `true`
     fn supports_drop_column(&self) -> bool;
 
     /// Create a consistent backup snapshot of the database at `dest`.
     ///
-    /// SQLite: `VACUUM INTO <dest>` · Postgres: `pg_dump` or equivalent
+    /// `SQLite`: `VACUUM INTO <dest>` · Postgres: `pg_dump` or equivalent
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the backup operation fails or the
+    /// destination path is not writable.
     fn vacuum_into(&self, dest: &std::path::Path) -> Result<()>;
 
     /// File extensions for sidecar files that should be cleaned up on restore.
     ///
-    /// SQLite: `["db-wal", "db-shm"]` · Postgres: `[]`
+    /// `SQLite`: `["db-wal", "db-shm"]` · Postgres: `[]`
     fn sidecar_extensions(&self) -> &[&str];
 
     /// Normalize a timestamp from the backend's native format to ISO 8601.
     /// Already-normalized values pass through unchanged.
     ///
-    /// SQLite: `"2024-01-01 12:00:00"` → `"2024-01-01T12:00:00.000Z"`
+    /// `SQLite`: `"2024-01-01 12:00:00"` → `"2024-01-01T12:00:00.000Z"`
     fn normalize_timestamp(&self, ts: &str) -> String;
 }
 
 /// Private trait for backend connection implementations.
 ///
-/// Each backend (SQLite, PostgreSQL, ...) implements this on its connection
+/// Each backend (`SQLite`, `PostgreSQL`, ...) implements this on its connection
 /// type. Callers never see this — they interact through `BoxedConnection`.
 pub(crate) trait ConnectionInner: DbConnection + Send {
     /// Open a deferred transaction and return it boxed.
@@ -209,12 +259,22 @@ impl BoxedConnection {
     }
 
     /// Open a deferred transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the transaction cannot be started (e.g.
+    /// pool exhausted, connection lost).
     pub fn transaction(&mut self) -> Result<BoxedTransaction<'_>> {
         let tx = self.inner.transaction_boxed()?;
         Ok(BoxedTransaction { inner: tx })
     }
 
     /// Open an IMMEDIATE transaction (write-lock from the start).
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the transaction cannot be started or the
+    /// write lock cannot be acquired.
     pub fn transaction_immediate(&mut self) -> Result<BoxedTransaction<'_>> {
         let tx = self.inner.transaction_immediate_boxed()?;
         Ok(BoxedTransaction { inner: tx })
@@ -335,6 +395,11 @@ pub struct BoxedTransaction<'conn> {
 
 impl BoxedTransaction<'_> {
     /// Commit this transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the commit fails (e.g. constraint
+    /// violation surfaced at commit time, lost connection).
     pub fn commit(self) -> Result<()> {
         self.inner.commit_inner()
     }

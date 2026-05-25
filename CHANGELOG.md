@@ -4,6 +4,3166 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.0-alpha.9] — 2026-05-25
+
+### Security
+
+- **Strategy-authenticated users now pass the same
+  `is_locked` / `verify_email` checks as bearer / cookie
+  authentication.** Previously, a locked or unverified user could
+  re-enter via a strategy hook because the evaluator's strategy
+  branch skipped both checks. Closed.
+- **Logout now bumps `_session_version`.** Cookie clearing alone
+  left the issued JWT valid until exp — a captured token survived
+  logout. The bump invalidates every JWT for that user across all
+  surfaces. Also added to `lock_user` so a locked-out admin's
+  active sessions die on the next request, not at JWT exp.
+- **`Resolution::Invalid(Unaccepted)` for credentials that decode
+  cleanly but aren't accepted anywhere.** Previously, a user with
+  a cookie whose `session_cookie` method had been removed from
+  the collection's `methods` list would get `Anonymous` →
+  redirect to `/admin/login` → browser sends the same cookie →
+  infinite redirect loop. Now the cookie is cleared on the
+  redirect; gRPC returns 401 instead of silently treating the
+  request as unauthenticated.
+
+### Changed
+
+- **Read throughput recovered on the SQL-bound RPCs.** Five
+  targeted fixes, each measured against the post-revert baseline
+  on the same hardware. Numbers are gRPC ghz at concurrency 50
+  unless noted:
+
+  1. **`[database] stmt_cache_capacity` (default 128).** rusqlite's
+     built-in prepared-statement cache holds 16 entries per
+     connection. With more than ~16 distinct SQL strings on the
+     hot path (find + per-doc hydrate joins + auth resolve), the
+     LRU evicted and the next call re-ran `sqlite3_prepare_v2` →
+     the query planner → `SQLite`'s globally-locked allocator.
+     Profiling at c=50 attributed ~53% of CPU to
+     `native_queued_spin_lock_slowpath` inside
+     `sqlite3LockAndPrepare` before the knob was wired. Bumping
+     to 128 drops that to ~5%. (`src/db/pool.rs`,
+     `src/config/server/database.rs`)
+
+  2. **Batched hydrate (`hydrate_documents`).** `post_process_docs`
+     was calling `hydrate_document` once per doc — a classic N+1
+     for has-many relationship fields. The new
+     `hydrate_documents` plural variant issues one
+     `WHERE parent_id IN (…)` SELECT per top-level relationship
+     field across all docs and distributes results in Rust. A
+     `find` returning 10 docs with 3 relationship fields used to
+     do 30 SELECTs; now it does 3. New helpers
+     `find_related_ids_batch`, `find_polymorphic_related_batch`.
+     Non-batched field shapes (Array, Blocks, fields nested in
+     Group/Tabs) still go per-doc; arrays / blocks can be batched
+     the same way later if profiling demands it.
+     (`src/db/query/join/relationships.rs`,
+     `src/db/query/join/hydrate/read.rs`,
+     `src/service/read/post_process.rs`)
+
+  3. **`find_by_ids` switched to batched hydrate.** This is the
+     inner step of `populate` at depth > 0, so a `find_deep @ 50`
+     hits it once per populate level per parent batch. Per-row
+     hydrate was the same N+1 pattern that
+     `post_process_docs` had; the fix mirrors point 2.
+     (`src/db/query/read/find_by_id.rs`)
+
+  4. **Auth evaluator early-outs.** `evaluate` now short-circuits
+     when no collection declares a strategy (the common case),
+     skipping the cross-collection methods walk entirely. The
+     strategy index (`Registry.always_strategies` /
+     `header_strategies`) is precomputed at registry build time
+     so the walk that does run is a HashMap lookup, not an
+     iteration. `check_access` skips Lua-VM acquisition when
+     `access_ref` is `None` — the in-Lua path only reads the
+     `DefaultDeny` flag and returns, so a process-wide bool
+     cached on `HookRunner` short-circuits the round-trip. With
+     pool size 16 and 50 concurrent reads, the prior
+     unconditional `pool.acquire()` was serialising 34 of 50
+     requests on the VM-pool mutex.
+     (`src/service/auth/evaluator.rs`,
+     `src/core/registry.rs`,
+     `src/hooks/lifecycle/runner/access.rs`,
+     `src/hooks/lifecycle/runner/hook_runner.rs`)
+
+  5. **Lazy gRPC metadata header extraction.** Headers were
+     materialised into a `HashMap<String, String>` on every gRPC
+     request whether the auth path needed them or not.
+     `ContentService::metadata_headers` now returns an empty
+     HashMap unless either an `Always`-active strategy exists on
+     this surface (forcing the headers) or at least one of the
+     known strategy-activator header names is actually present
+     in the request metadata. Deployments that use only
+     `password_login` / `bearer` / `session_cookie` (the common
+     case) pay zero per-request cost for the strategy machinery.
+     (`src/api/handlers/content_service.rs`)
+
+  Profiling on a single dev box guided each change; absolute
+  throughput numbers vary too much with system load (kernel
+  version, parallel workload, page-cache state) to be quoted
+  meaningfully without a controlled benchmarking harness, which
+  we do not yet have. `tests/grpc_loadtest.sh` is the local
+  measurement tool used during this work; rerun it on the target
+  hardware for representative numbers. `find_deep` /
+  `find_deep5` at high concurrency remain bottlenecked on
+  response-size-proportional costs (prost `encoded_len` 2-pass
+  on nested `Value` maps, mlua field-hook overhead per populated
+  doc) that no SQL-side fix can attack — those are tracked as
+  follow-up work.
+
+- **`tests/grpc_loadtest.sh` purges orphaned `_versions_<slug>`
+  rows after the `create` scenario.** Production hard-delete
+  cascades version rows via the existing SQLite `ON DELETE
+  CASCADE` (verified by four tests:
+  `db::pool::tests::fk_cascade_fires_on_pooled_connection_delete`,
+  `fk_cascade_visible_across_pool_connections`,
+  `tests/versions.rs::delete_document_cascades_to_versions`, and
+  `bulk_hard_delete_cascades_to_versions_via_service`). This
+  purge exists for the bench environment specifically: pre-Mar-30
+  runs used soft-delete (no `forceHardDelete`) and left tens of
+  thousands of orphaned versions that bloat the SQLite page
+  cache and tank measured throughput on subsequent runs; the
+  purge is gated on `_parent NOT IN (SELECT id FROM posts)` so
+  it only touches genuinely orphaned rows.
+
+- **Unified per-request auth evaluator at
+  `service::auth::evaluate`.** Replaces the legacy split between
+  the admin middleware's cookie-only fast path, the standalone
+  strategy-fallback walker, and the gRPC handler's bearer-only
+  `resolve_auth_user`. The evaluator walks every auth collection's
+  `methods` in declaration order, honors the per-method `surfaces`
+  filter (a Bearer JWT scoped to `admin` is not accepted on gRPC),
+  and honors the `activates_on` discriminator on `strategy`
+  methods (a strategy with `activates_on = { header = "x-api-key" }`
+  fires only when that header is present on the request). The
+  previous "model expressed scoping in types but runtime ignored
+  it" gap is closed — these guarantees are now enforced end-to-end
+  and pinned by e2e tests at `e2e/tests/grpc_methods_evaluator.rs`.
+- `service/auth/` split into one file per concern: `local` (the
+  password-login flow), `tokens` (reset + verification), `account`
+  (lock / verified / session-version), `mfa`, `evaluator`.
+  `service/auth/mod.rs` is now pure module declarations and
+  re-exports (CLAUDE.md compliance).
+- Tweaking a `password_login` method goes through a typed
+  `PasswordLoginBuilder` (`AuthMethod::password_login_builder()
+  .mfa(...).verify_email(...).build()`). The previous
+  panic-on-missing / silent-no-op variants on `Auth` are still
+  available as convenience methods (no-op when no password_login)
+  but the builder is the recommended path for new code — misuse
+  is a compile error rather than a silent miss.
+- `Resolution::Invalid` carries a typed `AuthFailure`
+  (`BadToken`, `Locked`, `StaleSession`, `UserMissing`,
+  `UnknownCollection`, `Lookup`, `Unaccepted`) instead of a
+  free-form string. Callers map each failure to a precise
+  response — gRPC returns `PermissionDenied` for `Locked` and
+  `Unauthenticated` with a specific message for the others; the
+  admin middleware clears the stale session cookie before
+  redirecting to `/admin/login` (except on `Lookup`, which is
+  transient).
+- Strategy hook contract: `ctx.headers` preserves the casing the
+  transport delivered. Activation matching itself is
+  case-insensitive — `activates_on = { header = "x-api-key" }`
+  matches `X-API-Key`, `x-api-key`, etc. Existing Lua hooks that
+  index headers by specific case continue to work.
+- **Upload paths route through `state.token_provider`** instead
+  of calling `auth::validate_token(token, state.jwt_secret)`
+  directly. Removes the silent-mismatch risk if the JWT backend
+  is ever swapped (the test fixture once carried exactly this
+  bug — caught only when a refactor exposed it).
+- **`admin/auth_middleware/` is now a folder split** into
+  `middleware.rs`, `gate.rs`, `pages.rs`, `load_user.rs` — every
+  business-logic file under the 300-line CLAUDE.md soft limit.
+- **`crap-cms status --check` adds two new warnings:**
+  - Auth collection with `password_login` but no `bearer` method
+    (Login issues a JWT no future request can authenticate).
+  - Multiple strategies bound to the same `(header, surface)` pair
+    across collections — `HashMap` iteration order picks the
+    winner non-deterministically.
+- `Activation::Always` now wraps a private `AlwaysMarker` (the
+  inner `always: bool` field is private and constrained to the
+  literal `true`). `Activation::Always { always: false }` is no
+  longer constructible in Rust code; the deserialize-time check
+  was already in place. Wire format unchanged
+  (`{ always = true }`).
+- `is_locked` / `is_verified` on user documents now accept i64,
+  bool, or string-coercible-to-bool ("0"/"1"/"true"/"false"/"yes")
+  values. A strategy hook returning `_locked = "1"` (string) used
+  to silently bypass the lock check.
+
+### Added
+
+- **Job priorities + optional priority decay.** `_crap_jobs` gained a
+  `priority INTEGER NOT NULL DEFAULT 0` column (idempotent ALTER on
+  upgrade; `priority DESC, created_at` index added). Higher values
+  are claimed sooner; same-priority jobs claim FIFO. Two surfaces:
+
+    - **Lua**: `crap.jobs.queue(slug, data, { priority = N })` — an
+      optional third options table. Forward-compatible for future per-
+      enqueue options (`delay`, `unique`, …).
+    - **Config**: `[jobs] priority_decay` (duration; `0` = disabled,
+      default). When set, the claim ORDER BY adds `(now - created_at)
+      / priority_decay` to the effective priority so old low-priority
+      jobs eventually age into being claimable instead of starving
+      forever behind a backlog of higher-priority work. Disabled
+      keeps the index-friendly fast path.
+
+  System jobs default to `priority = 0` (image conversion, email,
+  cron-fired jobs). Image conversion is throttled via the per-queue
+  cap on `images` (`[jobs.queues.images] concurrency = N`, default
+  `2`); other system jobs are unconstrained beyond the global
+  `max_concurrent`.
+
+  CLI surfaces:
+    - `crap-cms jobs trigger <slug> --priority N` queues at a custom
+      priority (negative values allowed; `0` is the default).
+    - `crap-cms jobs status` lists now have a `Prio` column; the
+      single-run detail view shows `Priority` in the kv block.
+    - `crap-cms images list` also shows the `Prio` column.
+    - `crap-cms images retry --priority N` sets the priority on
+      reset jobs, letting operators urgent-bump a specific retry.
+
+  gRPC surface:
+    - `TriggerJobRequest.priority` (optional `int32`, field 3) lets
+      external clients queue at a custom priority. Omitted /
+      `null` → defaults to `0`. Wire-compatible with older clients
+      that don't set the field.
+
+  System-job slugs (`_system_image_convert`, `_system_email`) are
+  now re-exported from a single place (`core::job::system`) for
+  discoverability, with a `SYSTEM_JOB_SLUGS` static slice. The
+  per-subsystem definitions are unchanged.
+
+- **`[jobs] image_concurrency` removed; replaced by per-queue cap.**
+  The dedicated `image_concurrency` knob from earlier in the alpha.9
+  cycle is gone. Image conversion runs in queue `"images"`, so the
+  per-queue mechanism handles it: `[jobs.queues.images] concurrency = N`.
+
+  The framework auto-applies a default of `2` to the `images` queue
+  at config load (`JobsConfig::apply_queue_defaults`) so the
+  conservative behaviour is preserved for operators who don't set
+  the queue config. Explicit operator overrides win.
+
+  ```toml
+  # before (alpha.9 mid-cycle):
+  # [jobs] image_concurrency = 4
+
+  # after:
+  [jobs.queues.images]
+  concurrency = 4
+  ```
+
+  Removes one special case from `JobsConfig` and from
+  `SystemJobConfig` — image conversion is now "just another queue"
+  in the config model.
+
+- **Unified job-claim path across backends.** `claim_pending_jobs`
+  is now a single function with backend-specific SQL fragments
+  (`FOR UPDATE SKIP LOCKED` on Postgres; no clause on SQLite — its
+  `IMMEDIATE` transaction provides equivalent isolation). Both
+  backends now:
+    - Strict global priority ordering (single SELECT ORDER BY priority).
+    - Strict per-slug and per-queue cap enforcement within a tick
+      (the SELECT's locking holds candidate rows for the
+      transaction's duration).
+    - Identical observable behavior — operators reasoning about job
+      claim semantics get one mental model regardless of backend.
+
+  The previous Postgres path iterated DISTINCT slugs and enforced
+  per-slug caps via a subquery; it had hard per-slug enforcement but
+  only approximate cross-slug priority. The unified path trades the
+  "subquery cap" for Rust-side cap checks against locked rows — same
+  guarantee under multi-server load, simpler code, and now
+  cross-slug priority is exact.
+
+- **Per-queue concurrency, timeout, and retry defaults.** New
+  `[jobs.queues.<name>]` table accepts three knobs that apply to every
+  job in a queue, independent of per-slug definitions:
+
+  ```toml
+  [jobs.queues]
+  emails  = { concurrency = 4, timeout = "1m" }
+  images  = { concurrency = 2 }                  # keeps framework timeout + retries defaults
+  reports = { concurrency = 1, timeout = "30m", retries = 0 }
+  ```
+
+  - `concurrency` — aggregate cap on jobs running in this queue
+    (cluster-wide). Composes with global `max_concurrent` and per-slug
+    `JobDefinition::concurrency` — strictest wins.
+  - `timeout` — wall-clock per-job timeout (seconds or human-readable
+    duration). Applies to system jobs (`_system_image_convert`,
+    `_system_email`) that lack their own `JobDefinition`; user Lua
+    jobs use the timeout declared on the definition itself.
+  - `retries` — default `max_attempts` for jobs in this queue
+    (`max_attempts = retries + 1`). Used by system jobs AND by user
+    Lua jobs that omit `retries` in `crap.jobs.define`. Explicit
+    `JobDefinition.retries` (including `retries = 0`) overrides the
+    queue default. `crap.email.queue{ retries = N }` overrides for
+    that one call.
+
+  All three fields are independent `Option<T>` — partial overrides
+  merge with framework defaults instead of zeroing them out. Writing
+  `[jobs.queues.images] concurrency = 4` keeps the framework's
+  `timeout = "5m"` and `retries = 2` for the `images` queue.
+
+  Framework defaults applied at config load:
+  - `images.concurrency = 2` — AVIF / WebP encoders are CPU-bound.
+  - `images.timeout = "5m"` — large originals can spend minutes in
+    libheif on slow disks. Replaces the previously hardcoded 120 s
+    that some operators hit in production.
+  - `images.retries = 2` — three total attempts, matches the historic
+    image-worker default.
+
+  The scheduler logs a warning at startup if `[jobs.queues]`
+  references a queue name that no defined job uses (typo catcher).
+
+  **Reach for `retries`** — resolution at queue time:
+  `JobDefinition.retries` (explicit, including `0`) → queue-level
+  `[jobs.queues.<queue>] retries` → `0` (one attempt). System jobs
+  AND user Lua jobs flow through the same path. So
+  `[jobs.queues.reports] retries = 5` combined with
+  `crap.jobs.define("rollup", { queue = "reports" })` (no retries
+  field) gives 6 attempts per rollup. `crap.email.queue{ retries = N }`
+  is the only per-call override on the Lua surface;
+  `crap.jobs.queue` for user jobs accepts only
+  `priority` / `delay` / `unique`.
+
+  **Reach for `timeout`** — system jobs only.
+  `_system_image_convert` reads `[jobs.queues.images]`,
+  `_system_email` reads `[jobs.queues.email]`. User Lua jobs use
+  `JobDefinition.timeout` (60 if omitted).
+
+- **`JobDefinition.retries` is `Option<u32>` internally.** Required
+  for the symmetric queue-default fallback story above:
+  `None` = "inherit from `[jobs.queues.<queue>] retries`",
+  `Some(N)` = "explicit N retries". The Lua surface is unchanged —
+  `crap.jobs.define { retries = N }` still works exactly as before;
+  omitting it now inherits the queue default instead of silently
+  collapsing to `0`. Read sites resolve through
+  `JobDefinition::effective_max_attempts(queue_retries)` so the
+  resolution rule lives in one place.
+
+- **`[email] queue_*` knobs removed; replaced by `[jobs.queues.email]`.**
+  The dedicated `queue_retries` / `queue_name` / `queue_timeout` /
+  `queue_concurrency` fields on `[email]` are gone — `_system_email`
+  now flows through the same per-queue config mechanism as
+  `_system_image_convert`. One mental model, no duplicate knobs.
+
+  ```toml
+  # before (alpha.8):
+  # [email]
+  # queue_retries = 3
+  # queue_timeout = 30
+  # queue_concurrency = 5
+  # queue_name = "email"
+
+  # after:
+  [jobs.queues.email]
+  retries = 3
+  timeout = "30s"
+  concurrency = 5
+  ```
+
+  The framework auto-applies the same defaults at config load
+  (`retries = 3`, `timeout = "30s"`, `concurrency = 5`), so operators
+  who never touched these fields don't need to do anything.
+
+  `queue_name` is dropped without replacement — `_system_email` now
+  always uses the queue named `"email"`. Operators who relied on
+  routing email jobs to a custom queue should rename their
+  `[jobs.queues.<name>]` block to `[jobs.queues.email]`.
+
+  See [Multi-server semantics](docs/src/lua-api/jobs.md#multi-server-semantics)
+  in `jobs.md` for the full per-server vs cluster-global breakdown of
+  every job-concurrency knob.
+
+- **`JobDefinition.priority`** — define-time default priority. Set
+  on `crap.jobs.define({ priority = -5, ... })` to make every cron
+  firing, gRPC trigger, and Lua `crap.jobs.queue()` of that slug
+  default to the given priority. Per-call values still win when
+  passed explicitly.
+
+- **`crap.jobs.queue` `delay` option** — `{ delay = "5m" }` or
+  `{ delay = 30 }` (integer seconds) defers the job's earliest
+  claim time. Reuses the existing `retry_after` column (same
+  mechanism as exponential-backoff retries) so no new column is
+  needed for delivery scheduling.
+
+- **`crap.jobs.queue` `unique` option** — `{ unique = "reindex:posts" }`
+  dedups against any pending/running job with the same `(slug,
+  unique_key)`. Returns the existing job's id when a duplicate is
+  detected; lets handlers use Lua `crap.jobs.queue` as a
+  fire-and-forget "ensure this work is queued" primitive without
+  building dedup logic at the call site. Added `unique_key TEXT`
+  column to `_crap_jobs` with a partial unique index on `(slug,
+  unique_key) WHERE status IN ('pending', 'running')` —
+  completed/failed runs don't block re-enqueue. Idempotent ALTER on
+  upgrade.
+
+  Rust callers wanting the dedup-or-create distinction get
+  `query::jobs::insert_job_with(conn, &InsertJobOpts)` which
+  returns `InsertedJob::{Created, Existing}`. The simpler positional
+  `insert_job(...)` is unchanged and still preferred for the common
+  case.
+
+### Breaking Changes
+
+- **Image conversion moved into the unified job queue.** The dedicated
+  `_crap_image_queue` table and its bespoke worker are gone. Image
+  conversions now run as `_system_image_convert` system jobs in the
+  same `_crap_jobs` table that powers email and Lua-handler jobs —
+  inheriting heartbeat, retry/backoff (`attempt`/`max_attempts`),
+  stale-recovery, and the global `max_concurrent` + per-slug
+  `job_concurrency` knobs for free.
+
+  One-time migration runs on first startup with the new code: any
+  non-completed rows from `_crap_image_queue` are copied into
+  `_crap_jobs` as system jobs, then the legacy table is dropped.
+  Idempotent — re-running is a no-op.
+
+  CLI surface (`crap-cms images list / stats / retry / purge`) is
+  unchanged; the implementation now reads from `_crap_jobs` filtered
+  by `slug = "_system_image_convert"`.
+
+  The old `[jobs] image_queue_batch_size` field is **removed**;
+  replaced by `[jobs] image_concurrency` (default `2`) which caps the
+  number of AVIF / WebP conversions running at once. Image encoding
+  is CPU-bound, so capping it separately from the global
+  `max_concurrent` prevents a backlog from saturating every core and
+  starving other jobs. The value is injected as a synthetic per-slug
+  entry in the job queue's `job_concurrency` map for
+  `_system_image_convert`.
+
+  Internals (for plugin authors poking at lifecycle internals):
+  `core::upload::enqueue_conversions` now writes to `_crap_jobs` via
+  `core::upload::queue_image_conversion`. The Rust handler lives in
+  `scheduler/runner.rs::execute_system_image_convert`, mirroring
+  `execute_system_email`. `scheduler::execute_job` now takes a
+  `&SharedStorage` parameter (alongside `email_provider`).
+
+- **Lua job handlers run in pool-mode** — each CRUD operation
+  (`crap.collections.X.find` / `update` / `delete` / …) inside a job
+  now opens its own short-lived `BEGIN IMMEDIATE` transaction instead
+  of sharing one outer `BEGIN DEFERRED`. Fixes the
+  `SQLITE_BUSY_SNAPSHOT` failure mode that long-running handlers hit
+  whenever they did `find` followed by `update` and any concurrent
+  writer committed in between (it's a deadlock-prevention error, not
+  retried by `busy_timeout`).
+
+  For multi-step atomicity inside a job, wrap CRUD ops in the new
+  `crap.transaction(function() … end)` helper — it opens a single
+  IMMEDIATE tx for the block, commits on success, rolls back on
+  error. Inside hooks (which already run in the parent write tx),
+  `crap.transaction` is a pass-through.
+
+  Migration: jobs that depended on implicit cross-CRUD atomicity
+  (e.g., update doc A then doc B with an "all-or-nothing" expectation)
+  need to be wrapped:
+
+  ```lua
+  -- Before (implicit atomicity, SQLITE_BUSY_SNAPSHOT-prone):
+  function M.run(ctx)
+      crap.collections.posts.update(id_a, { count = 1 })
+      crap.collections.posts.update(id_b, { count = 2 })
+  end
+
+  -- After (explicit):
+  function M.run(ctx)
+      crap.transaction(function()
+          crap.collections.posts.update(id_a, { count = 1 })
+          crap.collections.posts.update(id_b, { count = 2 })
+      end)
+  end
+  ```
+
+  Hooks are unaffected — they still share the parent's write
+  transaction. Full model documented in
+  `docs/src/lua-api/jobs.md#transactions-in-job-handlers`.
+
+  Internals (for plugin authors poking at lifecycle internals):
+  `HookRunner::run_job_handler` now takes `&DbPool` instead of
+  `&dyn DbConnection`. `TxContextGuard::set_pool` is the new entry
+  point used by job execution; `set` remains for hooks /
+  `crap.transaction` bodies. Every `#[lua_fn]` CRUD declaration
+  carries a new `auto_tx` attribute that routes the user fn through
+  `with_lua_db`, dispatching transparently between hook-mode (shared
+  tx) and job-mode (per-op IMMEDIATE tx).
+
+- **`crap-cms typegen` restructured into three subcommands.** The
+  single `typegen --lang X [--proto M]` shape conflated server-side
+  Lua extensibility types with consumer-side gRPC client types and
+  with the Rust proto-conversion glue — three artifacts for three
+  audiences sharing one verb. Split into:
+  - `crap-cms typegen lua [-o DIR]` — server-side Lua types for
+    hook authors. Writes `types/crap.lua` (API surface) +
+    `types/hooks.lua` (per-collection narrowings). Replaces the
+    implicit `crap.lua` side-effect that fired on every old
+    `typegen` invocation.
+  - `crap-cms typegen client -l <LANG[,LANG...]> [-o DIR]` —
+    per-collection types for external API consumers. `--lang`
+    accepts a comma list of `ts`, `go`, `py`, `rs`. Writes
+    `types/client.<ext>` per language.
+  - `crap-cms typegen proto -m <MODULE_PATH> [-o DIR]` —
+    `From<proto::Document>` impls for Rust gRPC servers. Replaces
+    the old `--proto` flag. Writes `types/proto.rs`.
+
+  Output filenames renamed (the breaking part):
+  - `types/generated.lua` → `types/hooks.lua`
+  - `types/generated.{ts,go,py,rs}` → `types/client.{ts,go,py,rs}`
+  - `types/generated_proto.rs` → `types/proto.rs`
+  - `types/crap.lua` unchanged.
+
+  Migration: replace `crap-cms typegen` (no args) with
+  `crap-cms typegen lua`; replace `crap-cms typegen -l ts` with
+  `crap-cms typegen client -l ts`; replace
+  `crap-cms typegen -l rs --proto crate::proto` with
+  `crap-cms typegen proto -m crate::proto`. Drop any stale
+  `.luarc.json` paths pointing at `generated.lua` — the
+  `Lua.workspace.library = ["./types"]` glob picks up
+  `hooks.lua` automatically. The `--lang all` aggregator is
+  gone; chain explicit invocations instead.
+
+  Auto-regeneration on `crap-cms serve` is now gated on
+  `admin.dev_mode = true`. Production startups no longer write
+  the Lua type files. Run `crap-cms typegen lua` explicitly after
+  a binary upgrade if you haven't enabled `dev_mode`.
+
+- **`crap.schema.get_collection` / `get_global` field shape:** admin
+  hints and join config are now nested objects instead of flat
+  top-level fields, mirroring the write-side `crap.FieldAdmin` /
+  `crap.FieldDefinition.join` shapes. Affects callers reading field
+  metadata from the schema-introspection API.
+  - **Was:** `field.language`, `field.features`, `field.picker`,
+    `field.collection` (for `Join` fields), `field.on`.
+  - **Now:** `field.admin.language`, `field.admin.features`,
+    `field.admin.picker`, `field.join.collection`, `field.join.on`.
+  - Also new: `field.picker_appearance` for `Date` fields (was
+    silently dropped from the schema output before).
+  - Migration: `field.picker` → `field.admin.picker` etc. The
+    nested objects are skipped from the emitted table when empty
+    (no `admin` block on a field with no admin-UI hints, no `join`
+    block on non-`Join` fields).
+
+- **`crap.util.json_encode` / `crap.util.json_decode` removed.** Use
+  `crap.json.encode` / `crap.json.decode` instead. The dual
+  registration was leftover technical debt from an incomplete
+  migration to a dedicated `crap.json` namespace; the old aliases
+  shipped as a back-compat measure that was never actually wound
+  down. Cleaned up while restructuring the Lua API typegen
+  surface — the new derive-driven generation expects a single
+  canonical path per function, and `crap.json.*` is the cleaner
+  location (matches Lua convention like `string.format`,
+  `math.pi`). Migration: search-replace `crap.util.json_encode` →
+  `crap.json.encode` and `crap.util.json_decode` →
+  `crap.json.decode` in your collection definitions and hooks.
+
+- **`auth.strategies`, `auth.disable_local`, `auth.verify_email`,
+  `auth.forgot_password`, `auth.mfa` removed from
+  `CollectionDefinition.auth`.** Replaced by a single ordered
+  `auth.methods` list of typed entries (`password_login`,
+  `bearer`, `session_cookie`, `strategy`). Password-only knobs
+  (`mfa`, `verify_email`, `forgot_password`) move inside the
+  `password_login` method variant. Each non-`password_login`
+  method takes an explicit `surfaces` list (`{"admin"}`,
+  `{"grpc"}`, or both) so per-surface auth is no longer
+  implicit. `strategy` methods declare an `activates_on`
+  discriminator (`{ header = "x-..." }` or `{ always = true }`)
+  so each strategy is bound to its own activation signal — cross-
+  collection accidental authentication is structurally
+  impossible. New Lua helpers `crap.auth.default_methods()` and
+  `crap.auth.with_defaults({...})` make the common cases
+  one-liners. Full model documented in
+  `docs/src/authentication/auth-methods.md`. Migration: rewrite
+  each `auth = { … }` block per the new shape; the shorthand
+  `auth = { enabled = true }` continues to work and populates
+  the default methods.
+
+### Internal
+
+- **Lua typegen: every `--- @class crap.X` and `--- @alias crap.X`
+  block now derives from a real Rust type.** The
+  `src/typegen/lua/doc_structs/` directory is gone — what was a
+  pile of phantom unit-structs and `()`-typed fields used only
+  for documentation has been collapsed into real `Serialize`-
+  or `Deserialize`-able Rust types. Drift between the runtime
+  and the Lua-facing doc is now impossible by construction.
+  Migrations in this pass:
+  - `Document`, `HookContext`, `AccessContext`, `AuthStrategyContext`,
+    `FieldHookContext`, `ValidateContext`, `JobHandlerContext` +
+    `JobInfo`, `DeleteManyResult`, `SchemaCollection` +
+    `SchemaField`, `HttpResponse`, `ValidateResult`,
+    `VersionSummary`, `ListVersionsResult`, `FindResult` — derived
+    on the real struct that the handler constructs and emits via
+    `LuaSerdeExt::to_value(&struct)`.
+  - `Activation` (refactored from `Always(AlwaysMarker)` to a
+    struct variant) + `AuthMethod` — derived via the new
+    `LuaTaggedClass` macro, which emits one
+    `crap.X<VariantName>` class per variant (with the
+    discriminator field as a literal) plus a `--- @alias crap.X`
+    union. Better LuaLS narrowing than the old flat
+    discriminated-union class.
+  - `RichtextNodeSpec` — real Rust struct with hand-written
+    `FromLua` that parses `attrs` into `Vec<FieldDefinition>`
+    eagerly and keeps `render` as `mlua::Function`. The
+    `register_node` handler now takes the typed struct directly.
+  - `FieldWidth` — enum with `Full | Half | Third | Custom(String)`
+    plus `From<String>` / `From<&str>` and serde
+    `Serialize`/`Deserialize` round-trip. Replaces the old
+    `width: Option<String>` field on `FieldAdmin`. `LuaAlias`
+    derive extended for mixed unit + newtype variants — emits
+    `crap.FieldWidth = "full" | "half" | "third" | string`.
+  - `PickerAppearance` — strict 4-variant enum with `FromStr`,
+    serde camelCase. Replaces `picker_appearance: Option<String>`
+    on `FieldDefinition`. Parser warns + drops invalid values
+    (the templates already treated anything not in the four
+    canonical strings as `dayOnly`).
+  - `ValidateFunction` / `FieldHookFn` — relocated to
+    `core::field::definition` as `LuaTypeAlias` decls next to
+    `FieldDefinition.validate` / `FieldHooks`.
+  - `FindQuery`, `CountQuery`, `UpdateManyQuery`,
+    `DeleteManyQuery`, `FilterOperators`, `FilterValue`,
+    `FilterScalar`, `OrCondition` — new typed input structs in
+    `hooks/lua_api/crud/query_input.rs`. The 4 query handlers
+    (`find`, `count`, `update_many`, `delete_many`) accept these
+    via `FromLua` (via `LuaSerdeExt::from_value`); each
+    `into_find_query()` produces the runtime `db::FindQuery`.
+    The old free-form `lua_table_to_find_query` walker is gone.
+  Net result: `cargo xtask gen-lua-types` produces 130 typed
+  blocks, every one of them sourced from a Rust definition that
+  the compiler verifies.
+- **New derives + macro extensions.**
+  - `#[derive(LuaTaggedClass)]` — Rust tagged enum (or
+    `#[serde(untagged)]`) → per-variant `--- @class` + union
+    `--- @alias`. Honors `#[lua(tag = "...")]` and
+    `#[lua(rename_all = "...")]` for the discriminator field +
+    variant naming.
+  - `#[derive(LuaAnnotation)]` supports generic lifetimes —
+    context structs like `AccessContext<'a>` /
+    `AuthStrategyContext<'a>` borrow request-scoped data instead
+    of cloning into owned strings just to satisfy the derive.
+    Stackable with `#[derive(LuaFieldTypeViews)]` on the same
+    struct.
+  - `#[derive(LuaAlias)]` mixed-mode — unit + newtype variants
+    on one enum render as a single-line `"name" | type` union
+    (was a hard error before).
+- **Macro crate restructured.** `crap-cms-macros` now has one
+  file per derive (`lua_annotation.rs`, `lua_alias.rs`,
+  `lua_type_alias.rs`, `lua_field_type_views.rs`,
+  `lua_tagged_class.rs`, `lua_fn.rs`, `lua_table.rs`) plus a
+  `shared.rs` for the type-mapping + field-emission helpers
+  cross-derives use. `lib.rs` collapses to the proc-macro
+  registration shims.
+
+### Fixed
+
+- **Admin `GET /admin/{collections|globals}/.../versions/{id}/restore`
+  returned 500 with "read_hooks not set".** Both `restore_confirm`
+  handlers (collections and globals) built `ServiceContext` without
+  `.read_hooks(...)`, but `find_version_by_id` runs an access check
+  against the collection's `read` access ref and requires hooks to
+  be wired. Now both handlers attach `RunnerReadHooks` and the
+  current user document to the context, matching the version-list
+  handler. Regression test at
+  `tests/admin_collections_versioning.rs::restore_confirm_get_renders_for_existing_version`
+  exercises the exact admin URL pattern. Audited every other admin
+  handler that builds a `ServiceContext` and calls a read-hook-
+  requiring service function — only the two `restore_confirm` files
+  had the defect.
+  (`src/admin/handlers/collections/item/versions/restore_confirm.rs`,
+  `src/admin/handlers/globals/versions/restore_confirm.rs`)
+
+- **Form fields for Groups nested inside `Tabs` / `Row` /
+  `Collapsible` rendered empty even when the DB had values.**
+  `flatten_document_values` only checked top-level field defs when
+  deciding whether to flatten a `Group` object into `parent__child`
+  form keys. A `Group("social")` nested in a `Tabs` (the shape
+  `example/globals/site_settings.lua` uses) was not recognised as a
+  Group, so the loaded `social: { github: ..., twitter: ... }` got
+  stringified as JSON instead of expanded — the form rendered every
+  social URL input empty. Layout wrappers are transparent for
+  column-naming everywhere else in the codebase; this helper was
+  the lone hold-out. Save path was unaffected (form fields already
+  POST with raw `parent__child` names). Regression tests:
+  `flatten_document_values_group_inside_tabs`,
+  `flatten_document_values_group_inside_row`.
+  (`src/admin/handlers/shared/document.rs::flatten_document_values`)
+
+- **Eliminated `SQLITE_BUSY_SNAPSHOT` failure class across the
+  codebase.** The scheduler's image queue was the symptom (see the
+  next entry); the same hazard pattern existed at every site that
+  opened a `conn.transaction()` (deferred) and then did a SELECT
+  followed by an UPDATE/INSERT/DELETE on that same tx. In WAL
+  mode, a DEFERRED transaction takes a snapshot on its first read;
+  if any other writer commits between the SELECT and the write,
+  SQLite returns `SQLITE_BUSY_SNAPSHOT` (primary code 5) — which
+  is **not** retried by the `busy_timeout` handler. Audited every
+  call site and upgraded read-then-write transactions to
+  `conn.transaction_immediate()`:
+  - `src/api/handlers/auth/verify_email.rs` — email-verification
+    token consume (read token → mark verified).
+  - `src/api/handlers/auth/reset_password.rs` — password-reset
+    token consume (read token → write new password hash).
+  - `src/commands/trash.rs` — three sites: `purge`, `restore`,
+    and `empty_trash` all interleave reads (find_by_id, FTS
+    lookups) with writes (DELETE, UPDATE, FTS sync) inside one
+    tx.
+  - Sites kept on `transaction()` (DEFERRED) because they're
+    read-only by design: access-fn evaluation (the four
+    `check_access` paths in `api/handlers` + `admin/handlers`),
+    SSE subscribe resolution, the validation endpoint (always
+    rolled back), and the startup `on_init` hook (serial, no
+    concurrent writers).
+  - One known-deferred site remains by design: `scheduler/runner.
+    rs::execute_job` wraps the Lua handler in a DEFERRED tx so
+    user-defined handlers can do CRUD via the shared tx. Long-
+    running Lua jobs that do read-then-write on the same tx can
+    still hit `SQLITE_BUSY_SNAPSHOT`. A follow-up release moves
+    job handlers to pool-mode (each CRUD op opens its own
+    IMMEDIATE tx) with an explicit `crap.transaction(fn)` helper
+    for users who need multi-step atomicity.
+
+- **Image queue scheduler no longer spams "database is locked"
+  errors and no longer leaves entries stuck in `processing`.** Two
+  related defects in `src/scheduler/loop_runner.rs`, both latent
+  since pre-alpha.1; not regressions of this release.
+  - **`SQLITE_BUSY_SNAPSHOT` from `BEGIN DEFERRED`.** `claim_image_batch`,
+    `record_conversion_success`, and the retention-purge claim all
+    opened transactions via `conn.transaction()` (which expands to
+    `BEGIN DEFERRED`). In WAL mode, a DEFERRED transaction takes a
+    snapshot on its first SELECT, then needs to upgrade to a write
+    lock on first UPDATE — but if any other writer (e.g. the
+    1-Hz `poll_ticker` running `claim_pending_jobs`) committed
+    between the SELECT and the UPDATE, SQLite returns
+    `SQLITE_BUSY_SNAPSHOT` (primary code 5, message "database is
+    locked"). This error is **not** retried by the `busy_timeout`
+    handler — it's a deadlock-prevention signal, fires immediately.
+    Hence the symptom: a 1-Hz error stream perfectly synced with
+    the poll-ticker cadence, even with a 30s busy timeout. All
+    three sites now use `transaction_immediate()`, acquiring the
+    write lock at `BEGIN` so the snapshot upgrade is impossible.
+  - **No single-flight gate on the image worker.** The
+    `image_ticker.tick()` arm unconditionally `tokio::spawn`ed a
+    fresh worker every poll interval (1s by default). When AVIF
+    encoding for one entry took several seconds, ticks 2..N each
+    spawned new workers on top of the in-flight one — multiple
+    concurrent `claim_image_batch` callers contended on the writer
+    slot. Added an `AtomicBool` `image_running` flag: a tick only
+    spawns a worker if no previous one is in flight, and the flag
+    resets on worker completion (success or error). Skipped ticks
+    log at `debug` instead of erroring.
+
+- **Admin UI select fields no longer paint a double focus ring.**
+  `static/styles/parts/forms.css` had two overlapping rules:
+  `:focus` set `outline: none` + a soft `box-shadow` halo plus a
+  primary-coloured border; `:focus-visible` then added a solid
+  `2px` outline at `outline-offset: 1px`. For `<input>` /
+  `<textarea>` the browser doesn't promote mouse focus to
+  `:focus-visible`, so only one rule applied at a time — but
+  `<select>` is special: browsers promote it to `:focus-visible`
+  whenever it returns focus after option selection. Result: the
+  coloured border AND the outline painted together, 1px apart,
+  visually a double ring. Dropped the `:focus-visible` block
+  entirely so the `:focus` treatment (coloured border + soft halo)
+  is the single focus indicator for both mouse and keyboard —
+  still WCAG-strong.
+
+- **Access functions that raise a Lua error now deny access (and
+  log a warning) instead of returning `Status::internal`.**
+  `check_access_with_lua` previously propagated `func.call(...)`'s
+  `Err` as `anyhow::Error`, which `From<anyhow::Error> for
+  ServiceError` wrapped as `Internal` → over gRPC, clients saw
+  `Status::internal("Internal error")` and retried. The function
+  now mirrors its own unexpected-return-type handling: catch the
+  Lua error, log a `warn!` with the function ref + error, return
+  `AccessResult::Denied`. Production clients now see
+  `PERMISSION_DENIED` (correct) and stop retrying.
+  Surfaced by `grpc_hook_errors::access_fn_error_maps_to_permission_denied`.
+
+- **VerifyAccount / UnverifyAccount on a collection without
+  `verify_email = true` now returns `FAILED_PRECONDITION` instead
+  of `INTERNAL`.** The handlers wrap a SQL UPDATE that touches
+  `_verified`, `_verification_token`, and `_verification_token_exp` —
+  columns only provisioned when `auth.verify_email` is enabled.
+  Calling them on a non-verify-email collection failed with "no
+  such column", which `From<anyhow::Error> for ServiceError`
+  mapped to `ServiceError::Internal` → `Status::internal`. The
+  handlers now preflight-check the collection's `auth.verify_email`
+  flag in `validate_verify_email_enabled` and return
+  `FailedPrecondition` — correct per gRPC status-code semantics
+  (server healthy, request well-formed, system state doesn't
+  allow the operation).
+  - `src/api/handlers/auth/account.rs`: new
+    `validate_verify_email_enabled` helper, called from both
+    `verify_account_impl` and `unverify_account_impl` before
+    spawning the blocking task.
+  - Regression test:
+    `grpc_account_admin::verify_account_returns_failed_precondition_without_verify_email`.
+
+- **Update / UpdateMany on a non-existent document id now returns
+  `NOT_FOUND` instead of `INTERNAL`.** `query::update` raised an
+  untyped `anyhow!("Document not found after update")` when the SQL
+  UPDATE matched zero rows; `From<anyhow::Error> for ServiceError`
+  had no way to distinguish it from a real internal error, so it
+  surfaced as `ServiceError::Internal` → `Status::internal` over
+  gRPC. Production clients treat `Internal` as transient and retry
+  on it, so calling Update with a stale id triggered a retry loop
+  instead of failing fast.
+  - `src/db/query/write/update.rs` raises a new typed
+    `DocumentNotFound` error (`pub` from `query::write`) when
+    `conn.execute(UPDATE …)` reports 0 affected rows.
+  - `From<anyhow::Error> for ServiceError` downcasts it and maps
+    to `ServiceError::NotFound` → `Status::not_found`.
+  - Discovered by the new `grpc_errors` test suite; the test
+    `grpc_errors::update_unknown_id_returns_not_found` is the
+    e2e regression net, `query::write::update::tests::update_on_missing_id_returns_typed_document_not_found`
+    is the unit-level pin so future refactors of the query layer
+    can't reintroduce the untyped path.
+
+- **MFA-enabled auth collections now provision `_mfa_code` columns at
+  creation time.** Previously the columns were only added during the
+  ALTER path (which runs on existing tables on schema sync). On a
+  freshly-created auth collection with `mfa = Email`, the migration
+  omitted `_mfa_code` and `_mfa_code_exp`, so `set_mfa_code` failed
+  silently when a user tried to log in and the verification email
+  never got queued. The MFA challenge page would render but no code
+  would ever arrive. Found via the new `html_mfa::mfa_email_full_flow`
+  e2e test added as part of the alpha.9 regression net.
+  (`src/db/migrate/collection/create.rs::collect_system_columns`)
+
+
+### Security
+
+- **`lettre` 0.11.21 → 0.11.22** (RUSTSEC-2026-0141). The advisory
+  flags TLS hostname verification being disabled when using the Boring
+  TLS backend. crap-cms ships with the `tokio1-rustls-tls` feature
+  (rustls backend), so the vulnerable code path is not active in this
+  project — but the upgrade clears the advisory and unblocks
+  `cargo audit` in CI. Cargo.lock-only change; the `lettre = "0.11"`
+  spec already permitted the patch.
+
+### Added
+
+- **e2e regression-net expansion (6 new tests across 3 files).** New
+  test infrastructure: `e2e/src/email.rs` reads queued emails directly
+  from `_crap_jobs` (the scheduler isn't running in tests, so emails
+  sent via `email::queue_email` sit pending). Exposes `CapturedEmail`,
+  `wait_for_queued_email`, `extract_token`, `extract_mfa_code`,
+  `clear_queued_emails`. New tests:
+  - `html_logout::logout_clears_session_cookies` and
+    `logout_redirects_protected_request_to_login` — verifies POST
+    /admin/logout clears `crap_session` and that subsequent
+    unauthenticated requests redirect to login.
+  - `html_password_reset::password_reset_full_flow` and
+    `password_reset_rejects_mismatched_confirmation` — full round-trip
+    through POST /admin/forgot-password → email capture → token
+    extraction → POST /admin/reset-password → login with new
+    password.
+  - `html_mfa::mfa_email_full_flow` and `mfa_wrong_code_rejected` —
+    login → MFA challenge redirect + cookie → email-code capture →
+    POST /admin/mfa with code → session cookie set. The full-flow
+    test caught the `_mfa_code` column migration bug fixed above.
+  - `html_email_verify::verify_email_valid_token_marks_verified` and
+    `verify_email_invalid_token_redirects_to_login` — admin-side
+    consume path: token planted via `query::set_verification_token`,
+    GET /admin/verify-email → user marked verified, login works.
+    (Send-side test moves to a future CLI e2e workstream since
+    email triggers come from `service::create_document`.)
+  - `html_trash::soft_delete_moves_doc_to_trash`,
+    `undelete_restores_doc_to_active_list`, and
+    `empty_trash_purges_all_soft_deleted` — full trash lifecycle on
+    a `soft_delete = true` collection: DELETE → ?trash=1 list →
+    POST /undelete → POST /empty-trash.
+  - `html_delete_refcount::hard_delete_blocked_when_referenced` and
+    `back_references_shows_referring_documents` — verifies a
+    referenced doc cannot be hard-deleted (400 + "Cannot delete:
+    referenced by N document(s)" via the dialog path) and that the
+    back-references endpoint returns metadata identifying the
+    referring collection + field + count.
+  - `html_version_restore::version_restore_reverts_doc_to_snapshot`
+    — create, update (creates a snapshot), POST
+    /admin/collections/{slug}/{id}/versions/{vid}/restore, verify
+    the doc reverts to the snapshotted state.
+  - `html_access_enforcement` (6 tests) — counterpart to the
+    existing `html_access_gating.rs` (which tests UI button
+    visibility). This file verifies the server **actually** rejects
+    forbidden requests when a user crafts them directly (bypassing
+    the hidden UI): `viewer_create_post_returns_403`,
+    `viewer_update_post_returns_403`,
+    `editor_delete_post_returns_403` (admin_only check),
+    `admin_delete_post_succeeds` (positive control),
+    `no_read_access_blocks_item_get` (read-fn returning false hides
+    document data), `unauthenticated_post_returns_unauthorized`
+    (no session → blocked or redirected).
+  - `html_csrf` (3 tests) — POST without `crap_csrf` cookie → 403;
+    POST with mismatched `X-CSRF-Token` → 403; POST with matching
+    cookie+header redirects normally (positive control).
+  - `html_404` (3 tests) — unknown collection list, unknown item id,
+    and unknown global all return 404 (no 5xx, no content leak).
+  - `html_dashboard` (2 tests) — GET /admin renders collection and
+    global cards; unauthenticated GET /admin redirects to login.
+  - `html_sort` (2 tests) — `?sort=title` orders rows asc, `?sort=-title`
+    orders desc; verified by substring positions in the rendered HTML.
+  - `html_custom_page` (2 tests) — Lua-registered custom page via
+    `crap.pages.register` + `templates/pages/{slug}.hbs` renders at
+    `/admin/p/{slug}`; unknown slug returns 404.
+  - `html_search` (3 tests) — GET /admin/api/search/{slug} returns a
+    JSON array; `?limit=N` caps results; unknown slug returns `[]`;
+    `?q=...` filters by FTS match (test populates FTS via `fts_upsert`
+    since `query::create` skips the service-layer side effect).
+  - `html_optimistic_lock` (1 test) — pins the *current*
+    last-write-wins semantics: two sequential POSTs to the same doc
+    both succeed and B's data wins. When optimistic locking ships, the
+    test will fail and force an explicit semantic update.
+  - `html_conditional` (3 tests) — server-side display-condition
+    evaluation. Registers `hooks/conditions/show_when_online.lua`,
+    sets `condition = "hooks.conditions.show_when_online"` on a field,
+    POSTs to `/admin/collections/{slug}/evaluate-conditions` with
+    form state, verifies visible/hidden response. Includes the
+    security gate that unknown condition refs fail open (visible).
+
+- **gRPC e2e regression-net (8 new tests across 5 files, plus
+  `spawn_grpc_server` harness).** The existing `tests/grpc_*.rs`
+  files in the main crate construct `ContentService` directly and
+  call trait methods with `tonic::Request` objects — they cover
+  business-logic correctness per RPC but never cross the network,
+  so the actual `tonic::Server` layer stack (health, reflection,
+  HTTP/2 framing, real `tonic::Channel`) was untested. This bundle
+  adds the missing transport-level coverage.
+  - `e2e/src/grpc.rs::spawn_grpc_server` mirrors
+    `crap_cms::api::server::start` but binds via a caller-owned
+    `TcpListener` on `127.0.0.1:0` so each test gets an ephemeral
+    port. Returns `GrpcTestCtx { pool, registry, config, addr,
+    channel, shutdown, server_handle, … }` — pool + registry for
+    DB seeding, channel for RPCs over real TCP, shutdown for
+    clean teardown.
+  - `grpc_smoke` — proves the full stack works end-to-end
+    over real TCP via a single `Find` on an empty collection.
+  - `grpc_health` (2 tests) — `grpc.health.v1.Health/Check`
+    reports `SERVING` both for the empty-service overall query
+    and the specific `crap.ContentAPI` service. Would catch a
+    regression where `add_service(health_service)` falls out of
+    the layer chain.
+  - `grpc_reflection` — `grpc.reflection.v1.ServerReflection`
+    lists `crap.ContentAPI`. This is what `grpcurl -plaintext
+    HOST:PORT list` consumes; if it regresses, ad-hoc gRPC
+    debugging without local proto files stops working.
+  - `grpc_auth` (3 tests) — Login → use the returned token in
+    a follow-up `Me` request; invalid token returns
+    `UNAUTHENTICATED`; wrong password returns a non-`Internal`
+    error code over the wire (the exact code depends on the
+    handler's mapping; this test pins "not a server bug").
+  - `grpc_subscribe` — opens a server-streaming `Subscribe`
+    on a real `tonic::Channel`, issues a `Create` from a second
+    client multiplexed over the same HTTP/2 connection, and
+    verifies the create event arrives on the streaming connection
+    within 3 seconds. Pins the streaming framing + multi-client
+    HTTP/2 multiplexing that the in-process trait tests can't
+    exercise.
+  - `grpc_metadata_auth` (3 tests) — `ListJobs` requires the
+    Bearer token in `authorization` gRPC metadata (separate path
+    from the `Me`-style token-in-body). Verifies: missing metadata
+    → `UNAUTHENTICATED`; valid Bearer → succeeds; invalid Bearer
+    → `UNAUTHENTICATED` (not `INTERNAL`). Covers the HTTP/2
+    header → `MetadataMap` → `extract_token` chain end-to-end.
+  - `grpc_rate_limit` (2 tests) — `spawn_grpc_server_with_rate_limit`
+    installs `GrpcRateLimitLayer` with a tight budget; bursting
+    past the limit returns `RESOURCE_EXHAUSTED` over the wire,
+    and a high limit doesn't throttle. The layer sits at the
+    `tower::Service` level and is unreachable from the in-process
+    `ContentService` trait tests.
+  - `grpc_crud` (3 tests) — full CRUD round-trip
+    (`Create` → `FindByID` → `Update` → `Find` → `Delete` →
+    `Undelete`) over a real channel, plus `Count` happy paths and
+    `force_hard_delete` semantics on soft-delete collections.
+  - `grpc_bulk` (3 tests) — `CreateMany` / `UpdateMany` /
+    `DeleteMany` over the wire. Pins the `repeated
+    google.protobuf.Struct` framing the in-process tests can't
+    exercise.
+  - `grpc_globals` (2 tests) — `GetGlobal` auto-creates the
+    document on first access; `UpdateGlobal` round-trips through
+    `GetGlobal` and preserves unmodified fields under partial
+    update. Closes a previously-empty surface in the e2e crate.
+  - `grpc_schema` (3 tests) — `ListCollections` returns
+    registered collections + globals with correct flag values
+    (`auth`, `timestamps`); `DescribeCollection` returns field
+    definitions in declaration order; `DescribeCollection` with
+    `is_global = true` resolves globals correctly. Real clients
+    (JS SDK, etc.) depend on this introspection surface.
+  - `grpc_errors` (5 tests) — gRPC `Status` code mapping
+    over the wire: `NOT_FOUND` on unknown collection slug,
+    unknown document id, unknown global slug;
+    `INVALID_ARGUMENT` on missing required field (with field
+    name in message). **Surfaced one real bug**:
+    `update_unknown_id_returns_user_recoverable_error` documents
+    that Update on a missing id currently returns `INTERNAL`
+    (worst-possible mapping — production clients retry on it)
+    instead of `NOT_FOUND`. Test pins the negative invariant for
+    now; tighten to `assert_eq!(status.code(), Code::NotFound)`
+    when the handler is fixed.
+
+  Main-crate surface change: `src/api/rate_limit::GrpcRateLimitLayer`
+  is now `pub` (was `pub(crate)`) and gained `#[must_use]` on
+  `::new`. Required so the e2e harness can install the layer
+  without going through `api::server::start`, which only accepts
+  `addr: &str` and doesn't return the bound port — needed for
+  ephemeral-port-per-test isolation.
+
+  - `grpc_validate` (2 tests) — `Validate` RPC round-trip.
+    Valid data returns `valid=true` and an empty errors map;
+    missing-required-field returns `valid=false` and the offending
+    field name as a key in the `map<string, string> errors`.
+  - `grpc_versions` (2 tests) — `ListVersions` returns one
+    snapshot per create + per update with `latest=true` on the
+    newest; `RestoreVersion` reverts the live document to the
+    chosen snapshot's field values (verified via `FindByID` after
+    restore).
+  - `grpc_password_reset` (3 tests) — full forgot →
+    `wait_for_queued_email_in_pool` → `extract_token` → reset
+    flow over the wire, login with new password succeeds + old
+    password rejected. ForgotPassword always returns success
+    (no email-existence leak). Invalid token → non-Internal
+    error. The pool-based email helpers
+    (`read_queued_emails_from_pool`, `wait_for_queued_email_in_pool`,
+    `find_queued_email_in_pool`) are siblings of the
+    `TestApp`-based originals so harnesses without a `TestApp`
+    (the gRPC ctx, future MCP ctx) can read the queue too.
+  - `grpc_account_admin` (4 tests) — `LockAccount` /
+    `UnlockAccount` round-trip verified via login behavior;
+    `VerifyAccount` / `UnverifyAccount` round-trip on a
+    `verify_email = true` collection; missing-Bearer call returns
+    `UNAUTHENTICATED`. Regression test for the second bug fixed
+    in this changelog
+    (`verify_account_returns_failed_precondition_without_verify_email`).
+  - `grpc_jobs` (3 tests) — `spawn_grpc_server_with_jobs` registers
+    a `JobDefinition` in the registry; `TriggerJob` queues a run
+    (`status = "pending"` since the scheduler isn't running in
+    tests), `GetJobRun` fetches it by id with the input `data_json`
+    round-tripped intact, `ListJobRuns` filtered by slug includes
+    the new run. Unknown job slug → `NOT_FOUND`; unknown run id
+    → `NOT_FOUND`.
+  - `grpc_verify_email` (2 tests) — consume-side flow: plant a
+    verification token via `query::set_verification_token` (what
+    the send-side `service::email::send_verification_email` would
+    do, minus the email rendering), call `VerifyEmail` over the
+    wire, verify `_verified = 1` by attempting login (which a
+    `verify_email = true` collection rejects for unverified users).
+    Invalid token returns a non-`Internal` error.
+
+  Final RPC coverage: all 31 RPCs in `proto/content.proto` now
+  have at least one wire-level test. `spawn_grpc_server` /
+  `spawn_grpc_server_with_jobs` / `spawn_grpc_server_with_rate_limit` /
+  `spawn_grpc_server_with_lua` cover the four setup variants
+  tests need.
+
+  **Cross-cutting concerns** (Lua-driven access, hooks, custom auth)
+  added on top of the RPC coverage. The harness's
+  `spawn_grpc_server_with_lua(collections, globals, &[(path, src)])`
+  writes inline Lua fixtures under `config_dir` before the
+  `HookRunner` builds — same shape as
+  `helpers::setup_app_with_access_files` but accepts any subdir
+  (`access/`, `hooks/`, etc.).
+  - `grpc_access` (5 tests) — `access.read` allow/deny based on
+    `ctx.user`; `access.create`/`update`/`delete` map to
+    `PERMISSION_DENIED` over the wire; `access.never` blocks
+    everyone; constrained-access fn that returns a where-filter
+    `{author_id = ctx.user.id}` for non-admins makes `Find`
+    return only the caller's own rows.
+  - `grpc_field_access` (3 tests) — field with
+    `access.read = "access.admin_only"` is stripped from the
+    response for non-admins (admin still sees it); field with
+    write-denied `access.create`/`access.update` is silently
+    dropped from incoming `data` (Create+Update both).
+  - `grpc_hooks_lifecycle` (5 tests) — field-level
+    `before_change` derives a slug from `name`; collection-level
+    `before_change` stamps a field that survives a `FindByID`
+    round-trip; `before_validate` raising `error(…)` maps to
+    `INVALID_ARGUMENT`; `after_read` adds a computed field
+    visible over the wire; `before_read` runs without breaking
+    `Find`.
+  - `grpc_hook_errors` (3 tests) — Lua `error(…)` from a
+    lifecycle hook → `INVALID_ARGUMENT` (matches
+    `ServiceError::classify` "hook error:" pattern); access fn
+    raising an error → `PERMISSION_DENIED` (regression for the
+    third bug fixed in this changelog); structured
+    `crap.validation_error({field = "msg"})` → `INVALID_ARGUMENT`
+    with the field name in the error message.
+  - `grpc_auth_strategy` (3 tests) — Lua `authenticate` fn that
+    falls back to "first user in collection" rescues a wrong-
+    password Login; nil-returning strategy doesn't rescue; correct
+    password still works alongside the strategy. (gRPC Login
+    passes an empty headers map to strategies — a known
+    limitation; strategies can only authenticate based on
+    collection + DB lookup, not request metadata.)
+
+- **Browser e2e regression-net expansion (6 new tests across 3 files).**
+  Plugs gaps in the alpha.9 P0/P1 browser coverage; each test mounts
+  the relevant web component and exercises its public API.
+  - `browser_session_expiry` (2 tests) — verifies the
+    `<crap-session-dialog>` singleton (`templates/layout/base.hbs`)
+    mounts its shadow `<dialog>`, and that `dialog.show(message,
+    { onStay, onLogout })` opens the dialog with the message text
+    plus both action buttons. Bypasses the 5-minute `crap_session_exp`
+    timer so the test runs in seconds.
+  - `browser_locale_nav` (2 tests) — `<crap-ui-locale-picker>` only
+    renders when `available_locales` is non-empty; verifies it appears
+    with the configured locales (en + de), has one
+    `[data-ui-locale-value=…]` per locale, and the dropdown gains
+    `locale-picker__dropdown--open` after clicking the toggle.
+  - `browser_filter_advanced` (2 tests) — extends existing
+    `browser_list_settings::filter_builder_adds_condition` coverage:
+    clicking "Add" three times produces three condition rows; clicking
+    the per-row `.filter-builder__remove` drops one row back to one.
+
+### Changed
+
+- **Lua typegen template-context emits now mirror every typed Rust
+  `admin::context::*` block.** Previously the generator emitted a small
+  set of flat `crap.template_data_*` stubs that captured a handful of
+  fields per block; the example's `generated.lua` had been hand-edited
+  to add a fuller namespaced hierarchy that got lost on the next
+  regenerate. `src/typegen/lua/render.rs::render_template_data_types`
+  now emits the full hierarchy with every field the Rust context
+  serializes — `crap.template.crap_meta` (including `site_name`),
+  `crap.template.user`, `crap.template.breadcrumb`, `crap.template.page`
+  (with the `type` union built from `PageType::as_str` so new page
+  types appear in autocomplete automatically),
+  `crap.template.{nav_collection, nav_global, custom_page}` plus the
+  parent `crap.template.nav`, `crap.template.{admin_meta, upload_meta,
+  versions_meta, auth_meta, field_admin_meta, field_meta}` for
+  collection sub-shapes, the full `crap.template.collection` and
+  `crap.template.global` with `versions` / `fields_meta` /
+  `can_permanently_delete` / `soft_delete` etc.,
+  `crap.template.document`, and `crap.template.editor_locale_option`.
+  The aggregate `crap.template_ctx` carries every field
+  `BasePageContext` serializes, including `nav` (non-optional),
+  `breadcrumbs`, and `editor_locales`. The `crap.template_data_fn`
+  alias points at `crap.template_ctx` (what `example/init.lua` and
+  customer hook annotations expect). When a Rust typed-context grows a
+  field, update the matching block in `render_template_data_types`
+  rather than hand-editing `generated.lua`.
+
+- **Admin UI now hides action buttons the user isn't allowed to use.**
+  Previously the Create / Trash / Empty-Trash / Delete / per-row
+  delete + restore buttons all rendered regardless of the user's
+  per-collection access; clicking them just hit a 403 (often silently
+  — see next entry). Now each surface checks the user's permissions
+  for that collection / global up front:
+  - `crap-cms` exposes `CollectionPermissions` / `GlobalPermissions`
+    typed structs on collection-list / edit / create / form-error and
+    global-edit page contexts (template field: `{{perms.*}}`). Each
+    set is computed in one shared transaction per page render
+    (collection: `read` / `create` / `update` / `delete` / `trash`;
+    global: `read` / `update`).
+  - `collections/items.hbs`, `items_empty.hbs`, `items_row.hbs`,
+    `edit_sidebar.hbs`, and `globals/edit_sidebar.hbs` wrap their
+    action UI in `{{#if perms.X}}`. The Save / Publish / Save-Draft /
+    Unpublish row on the global edit sidebar gates on `perms.update`;
+    the Delete panel on the collection edit sidebar disappears when
+    the user has neither `trash` nor `delete`; the per-row Trash /
+    Delete / Permanently-Delete / Restore buttons each check the
+    matching flag. Cancel / read-only links stay visible.
+  - The misleading `collection.can_permanently_delete` flag (which
+    was *definition*-level — "is `access.delete` configured at all"
+    — not per-user) is no longer used to gate UI, only to thread the
+    soft-vs-hard mode into the JS confirm dialog.
+- **403 responses now emit `X-Crap-Toast`.** `shared::response::forbidden`
+  carries the access-denied message both in the rendered HTML body
+  (for direct browser navigations) and in the `X-Crap-Toast` header
+  (for htmx submits). htmx doesn't swap 4xx by default, so the
+  client-side toast handler in `static/components/toast.js` picks the
+  message up on `htmx:afterRequest` and surfaces it inline. Without
+  this header htmx form submits to access-denied paths looked
+  silently broken — the server enforced, but the user saw nothing.
+
+- **`crap-cms update` (no subcommand) now surfaces a PATH-vs-store
+  mismatch before the remote check.** Previously the "Already on the
+  latest release" message was computed from the running binary's
+  compile-time version, which silently misled when the user's shell
+  was resolving `crap-cms` to something outside the store (e.g. a
+  `cargo install --path .` dev build at `~/.local/bin/crap-cms`
+  shadowing the store-managed `current` symlink). Now resolves the
+  running binary against the store first: if it's outside the store
+  entirely, suggests `update use --force <version>` to repoint PATH;
+  if it's inside the store but not the active version, suggests
+  `update use <version>`. The remote "already on latest" line still
+  renders, but as a secondary `Remote:` info instead of a success.
+
+- **`crap-cms update use --force` now actually relinks the `$PATH`
+  binary** to point at the store's `current` symlink, instead of
+  re-printing the misalignment warning. Stale symlinks (e.g. an old
+  shim pointing elsewhere) are replaced silently. Regular files
+  (e.g. a `cargo install` build sitting at `~/.local/bin/crap-cms`)
+  prompt for confirmation before replacement, unless `--yes` is also
+  passed. Distro-managed paths (`/usr/bin`, `/opt`, `/nix/store`, …)
+  refuse to relink even with `--force` — those belong to the system
+  package manager. Fixes the "lying flag" papercut where `--force`'s
+  output was identical to the non-force run.
+
+- **`FormData` type unifies admin form input.** New
+  `crate::admin::FormData` (`src/admin/handlers/forms/form_data.rs`)
+  carries the raw `HashMap<String, String>` form bag plus the typed
+  join data (arrays, blocks, has-many relationships) extracted from
+  it. Construction (`FormData::from_raw`) runs
+  `transform_select_has_many` and `extract_join_data_from_form`
+  internally — these were called in a fixed order at every site
+  before; the type now encodes that invariant. Accessors:
+  `raw()` / `raw_mut()` (for in-place upload-metadata injection),
+  `join()`, `take(key)` / `get(key)` (generic meta-key extraction),
+  `take_action()` / `take_locale()` (universal admin meta keys).
+  `From<FormData> for DocumentFields` produces the merged typed
+  payload for `service::WriteInput::builder`. Replaces the duplicated
+  `let mut data = values_from_strings(form_data); data.extend(join_data);`
+  dance that lived in `service::upload`, `admin::handlers::validate`,
+  and three admin write handlers, plus a parallel error-render
+  iterator chain in `globals::update_action::render_validation_error`.
+  The `_blocking` input structs, validation params, and form-error
+  renderers all take a single `FormData` instead of separate
+  `form_data + join_data` pairs.
+- **Spawn-blocking body names harmonized.** Every admin
+  `task::spawn_blocking` body now follows the
+  `<verb>_<noun>_blocking` convention (CLAUDE.md). Renamed
+  `globals::update_action::execute_update` →
+  `update_global_document_blocking`,
+  `globals::edit_form::read_global_document` →
+  `read_global_document_blocking`,
+  `collections::item::edit_form::read_document` →
+  `read_document_blocking`.
+- **`unsafe` surface reduced.** `hooks::lua_api::crud::get_tx_conn`
+  now returns `LuaResult<&dyn DbConnection>` instead of a raw fat
+  pointer; the dereference and its safety argument move into the
+  helper, eliminating 22 `unsafe { &*conn_ptr }` blocks across the
+  Lua CRUD modules. `db::migrate::helpers::column_specs` no longer
+  needs a lifetime-laundering transmute — `db::query::helpers::
+  walk_leaf_fields` is now `for<'a>` over its callback's
+  `&'a FieldDefinition` parameter, so the closure receives the right
+  lifetime without a pointer round-trip. `commands::helpers::
+  send_signal` is now the single `libc::kill` wrapper used by
+  `commands/serve/process.rs`, `commands/work.rs::stop`, and
+  `commands::helpers::is_process_running`.
+
+- **Runtime `crap.<x>.define` error message harmonized.** The
+  previous "for a NEW collection" / "Re-defining an already-registered
+  collection is allowed" branching collapses to a single message:
+  `must be called from a definition file or init.lua. To change a
+  registered <x>, edit the file and restart the process.` Applies to
+  `crap.collections.define`, `crap.globals.define`, `crap.jobs.define`.
+  `crap.richtext.register_node`'s message stays as-is (it was
+  already strict).
+
+- `EmailRenderer::render` is now generic over `T: Serialize`. Built-in
+  templates have typed contexts in `crate::core::email`:
+  `PasswordResetEmailContext`, `VerifyEmailContext`,
+  `MfaCodeEmailContext`. Lua/custom callers using `serde_json::Value`
+  continue to work (`Value` implements `Serialize`).
+- Webhook email provider builds its outgoing payload through typed
+  `WebhookEmailPayload` / `WebhookFrom` structs in
+  `core/email/webhook.rs` instead of an ad-hoc `json!()`.
+- `commands/db/backup.rs` writes and `commands/db/restore.rs` reads
+  the backup `manifest.json` through a shared `BackupManifest` struct
+  instead of ad-hoc `serde_json::Value` lookups.
+- Upload HTTP API JSON responses use typed bodies:
+  `api/upload/helpers.rs` exposes `DocumentBody` and `SuccessBody`,
+  the local `ErrorBody` is constructed by `json_error`, and `json_ok`
+  is now generic over `T: Serialize`.
+- `core/upload/metadata.rs::assemble_sizes_object` builds the nested
+  `sizes` payload through typed `ImageSizeEntry` / `FormatVariant`
+  structs and serializes once at the boundary, replacing layered
+  `Map::new() + insert(Value::String(...))` plumbing.
+- MCP collection tool responses (`find`, `list_versions`, `count`,
+  `create_many`) use small typed wrapper structs that embed
+  `PaginationResult` directly.
+- `mcp::tools::schema::introspection::exec_list_field_types` returns a
+  typed `&[FieldTypeInfo]` constant; the table lives in code instead
+  of a `json!([...])` literal.
+- New `crate::core::ReqContext` newtype around the request-scoped
+  hook-context bag (the per-request scratchpad Lua hooks read/write
+  across the lifecycle). Replaces `HashMap<String, Value>` in
+  `WriteResult`, `AfterChangeInput.req_context`, `DeleteResult.context`,
+  `Upload{Create,Update}Result.req_context`, `HookContext.context`,
+  and the corresponding builders. The newtype derefs to
+  `HashMap<String, Value>` and has `From<HashMap>` / `Into<HashMap>`
+  for transparent boundary conversion. Adds `get_str` / `get_bool` /
+  `get_i64` typed accessors. Builders accept `impl Into<ReqContext>`
+  so existing call sites that already had a `HashMap` keep compiling.
+  No outside-API change — proto/Lua/admin-template surfaces serialize
+  transparently via `#[serde(transparent)]`.
+- New `crate::core::ConditionExpr` typed enum representing the
+  client-evaluable display condition shape emitted by Lua hooks.
+  `DisplayConditionResult::Table` now carries a typed `ConditionExpr`
+  rather than a free-form `serde_json::Value`. The grammar is now an
+  explicit Rust contract: `ConditionExpr = Single(ConditionRow) |
+  All(Vec<ConditionRow>)` with `ConditionOp` operators
+  (`equals`, `not_equals`, `in`, `not_in`, `is_truthy`, `is_falsy`).
+  Wire format unchanged — `untagged` + `flatten` + externally-tagged
+  serde representation matches what `static/components/conditions.js`
+  expects byte-for-byte. The legacy `evaluate_condition_table` free
+  function is gone; condition evaluation is now a method on the typed
+  enum. **Behavior change**: malformed condition tables (missing
+  `field`, unknown operator, non-object/non-array shapes) used to
+  default-to-show silently; they now fail to deserialize and the seam
+  hides the field (fail-closed) with a `warn!` log identifying the
+  offending hook ref.
+- New `crate::db::query::SortValue` enum (`Null` / `Bool` / `Integer` /
+  `Real` / `Text`). Replaces `CursorData.sort_val: serde_json::Value`
+  with a typed payload that mirrors the sortable subset of `DbValue`.
+  `From<&Value>` and `From<&SortValue> for DbValue` keep the existing
+  doc-field → cursor → SQL parameter pipeline intact. Wire-format
+  compatible — `#[serde(untagged)]` reproduces the raw JSON scalar in
+  `sort_val` slot of the cursor token, so existing cursor URLs decode
+  unchanged.
+- MCP `list_collections` and `describe_collection` tool responses are
+  typed: `ListEntry` (untagged collection/global) and
+  `DescribeResponse` (internally-tagged on `type` discriminator) in
+  `mcp/tools/schema/introspection.rs`. Wire format preserved exactly.
+- MCP `cli_reference` command-detail data table is typed: ~500 lines
+  of `json!({...})` replaced with 24 `static CliCommandDetail`
+  constants and supporting structs (`CliOverview`,
+  `CliCommandSummary`, `CliFlag`, `CliArg`, `CliSubcommand`,
+  `CliReferenceError`). Output bytes unchanged — verified with a
+  before/after dump comparison across all 24 commands plus their
+  alias forms.
+- `db::query::populate::helpers::document_to_json` now builds its
+  output through a typed `PopulatedRef` struct with
+  `#[serde(flatten)]` over the document's fields. Replaces the manual
+  `Map::new() + insert(Value::String(...))` chain. Wire format
+  identical (existing tests pass unchanged).
+- `db::query::populate::batch::dispatch::join_key_from_value` replaces
+  an `other.to_string().trim_matches('"')` hack with a typed match
+  over `Value::{String, Number, Bool}`. **Behavior change**: arrays
+  and objects, which previously produced garbage keys like `"[1,2]"`
+  that never matched a parent ID, are now skipped explicitly. Pinned
+  by 6 unit tests in a new pure `join_key_tests` mod.
+- `db::query::join::blocks::split_block_row` extracts the duplicated
+  `_block_type` + `data_json` build pattern from the locale and
+  non-locale `set_block_rows` branches into a single helper.
+- `db::query::fts::prosemirror` adds a typed `ProseMirrorNode<'a>`
+  borrow view over the `{type, text, attrs, content}` shape used by
+  the FTS extractor. Replaces inline `.get(...).and_then(Value::as_*)`
+  chains; pure clarity refactor with no behavior change.
+- `core::validate::FieldError::with_key` is no longer 4-arity. Drop
+  the trailing `params: HashMap<String, String>` argument; chain
+  `.with_param(name, value)` instead. ~30 call sites across
+  `hooks::lifecycle::validation::checks/*`, `recursive.rs`,
+  `richtext_attrs.rs`, `sub_fields/validate.rs` simplified; the
+  `use std::collections::HashMap;` import drops out of 10 leaf check
+  files.
+- `hooks::lifecycle::crud::helpers::ExtractedData` exposes
+  `join_data: HashMap<String, Value>` directly instead of a merged
+  `hook` map that callers re-filtered. Drops the `flat-as-strings +
+  join_data merge → re-filter for non-strings` round-trip from four
+  call sites (`create.rs`, `update.rs`).
+- All five `scaffold/*/generator.rs` Handlebars contexts use typed
+  `#[derive(Serialize)]` structs (`CollectionTemplateContext`,
+  `CrapTomlContext`, `GlobalTemplateContext`, `JobTemplateContext`,
+  plus `CollectionHookContext` / `FieldHookContext` / `AccessHookContext`
+  / `ConditionBooleanContext` / `ConditionTableContext`) instead of
+  ad-hoc `json!({...})`.
+- MCP write tool responses use small typed Serialize structs:
+  `DeletedResponse`, `RestoredResponse`, `DeleteManyResponse`,
+  `UpdateManyResponse`, `WrittenResponse`, `ConfigFileEntry`
+  (`#[serde(rename_all = "snake_case")]` enum `ConfigFileKind`),
+  `NotFoundResponse`. All MCP tool serializations standardized on
+  `to_string_pretty` for LLM-consumer readability.
+- `mcp::tools::schema::introspection::exec_cli_reference` now takes
+  `command: Option<&str>` instead of `&Value`. The three
+  `mcp::tools::schema::config_files::exec_*` signatures take
+  `path: &str` / `content: &str` / `subdir: Option<&str>` instead
+  of `&Value`. The MCP dispatcher extracts those fields once at the
+  call site and surfaces "Missing X argument" errors there.
+- `mcp::resources::collections_schema` and `globals_schema` return
+  typed `BTreeMap<String, CollectionSchemaEntry>` /
+  `BTreeMap<String, GlobalSchemaEntry>` instead of `Map<String, Value>`
+  with hand-rolled `json!({...})` per entry. Inner `schema: Value`
+  stays as JSON Schema (KEEP-PROTO).
+- New shared `crate::commands::export::file::ExportFile` struct
+  (`crap_version`, `exported_at`, `collections: Map<String, Value>`)
+  used by `commands::export::export_cmd` (writer) and
+  `import_cmd` (reader) instead of constructing/destructuring an
+  ad-hoc `Value`. Inner per-document payloads stay `Value` (doc
+  fields).
+
+### Fixed
+
+- Verification email now includes the configured `from_name` in the
+  footer. Previously the only call site
+  (`service::email::send_verification_email`) forgot to pass it and
+  the template silently rendered `Sent by` with a blank trailer
+  because Handlebars strict mode is off. Regression test in
+  `core::email::renderer::tests::verify_email_renders_from_name`.
+
+### Internal
+
+- **Cargo workspace migration.** The repo is now a Cargo workspace
+  with three members at the root: `crap-cms` (main crate, unchanged
+  binary), `crap-cms-e2e` (`e2e/` — end-to-end and HTML integration
+  tests, formerly `tests/e2e/`, now in the canonical Rust layout
+  with shared fixtures in `e2e/src/{browser,helpers,html}.rs` and
+  one integration-test binary per `e2e/tests/<name>.rs`), and
+  `crap-cms-macros` (`macros/` — proc-macro crate, currently an
+  empty stub). New `setup_html_test` / `setup_html_test_with_config`
+  / `setup_html_test_with_access_files` helpers in
+  `e2e/src/helpers.rs` and `setup_browser_test` /
+  `setup_browser_test_with_config` in `e2e/src/browser.rs` collapse
+  the 3-line HTML setup ritual (`setup_app` + `create_test_user` +
+  `make_auth_cookie`) and 7-line browser setup ritual (`spawn_server`
+  + user + cookie + `launch_browser` + `new_page` + `browser_login`)
+  into a single call per test. 117 of 153 e2e tests adopt the new
+  helpers; remaining 36 have setup variations (data injection
+  between auth and browser launch, custom page configuration,
+  role-based users, auth-flow tests) and stay on the underlying
+  primitives. Shared dependency,
+  metadata, and lint configuration moved to `[workspace.package]`,
+  `[workspace.dependencies]`, and `[workspace.lints]` so all current
+  and future members inherit them via `*.workspace = true`. The
+  `browser-tests` feature went away entirely — the e2e crate's own
+  membership boundary is the gate, so an internal feature flag is
+  redundant. `chromiumoxide` is a regular dep of the e2e crate.
+  CI's `check` job now runs
+  `cargo test --workspace --exclude crap-cms-e2e` (the dedicated
+  `e2e` job runs `cargo test -p crap-cms-e2e -- --test-threads=1`).
+  Release/nightly cross-builds
+  pin `-p crap-cms` to skip the test-only e2e crate. The
+  `default-members = [".", "macros"]` setting keeps plain
+  `cargo build` / `cargo test` from root focused on the main crate
+  + macros stub, avoiding accidental chromiumoxide compiles during
+  routine development. New CLAUDE.md `Workspace layout` section
+  documents the structure and how to add future members.
+
+- **Clippy pedantic sweep — `cargo clippy --all-targets` is now clean.**
+  Production code (`--lib --bin`) is held to the strict pedantic set;
+  the only workspace-level allows remain `implicit_hasher` and
+  `struct_excessive_bools` (both pre-existing, both have documented
+  rationale in `Cargo.toml`). Test code is held to a narrower set —
+  pedantic lints that surface as noise without catching real issues in
+  tests (`cast_*`, `match_wildcard_for_single_variants`,
+  `needless_pass_by_value`, `similar_names`, `too_many_lines`,
+  `unreadable_literal`, `used_underscore_binding`,
+  `missing_panics_doc`, `items_after_statements`,
+  `case_sensitive_file_extension_comparisons`) are allowed
+  per-integration-test-file (`#![allow(…)]` on each `tests/*.rs`) and
+  per-`mod tests` block on the lib unit-test modules that have them.
+  Substantive findings (architectural fixes, real bugs, real docs
+  gaps) were applied as code changes rather than allows — e.g. handler
+  splits into thin orchestrators (`list_items`, `edit_form`,
+  `build_router`, `run`), bootstrap + per-server-task helpers in
+  `serve::startup`, a `JoinTarget` bundle in batch populate dispatch,
+  `Default::default()` → typed-constructor calls, and a few targeted
+  patterns (`writeln!` over `push_str(&format!(...))`, `let-else` over
+  `match` + `panic!`, `matches!` over identical-arm match).
+
+- **Stutter-rename pass.** Files whose names repeated their parent
+  directory got their prefixes dropped — the prefix is informative
+  inside the type name (`FieldDefinition`, `AuthConfig`) but
+  redundant inside the path.
+  Renames: `core/auth/auth_user.rs` → `user.rs`,
+  `core/collection/collection_definition.rs` → `definition.rs`,
+  `core/field/{field_admin,field_definition}.rs` →
+  `{admin,definition}.rs`,
+  `core/richtext/richtext_node_def.rs` → `node_def.rs`,
+  `config/auth/auth_config.rs` → `config.rs`,
+  `config/server/server_config.rs` → `config.rs`,
+  `scaffold/collection/collection_options.rs` → `options.rs`,
+  `admin/context/field/field_context.rs` → `context.rs`,
+  `admin/handlers/field_context/enrich/{enrich_ctx,enrich_options,enrich_types}.rs`
+  → `{ctx,options,types}.rs`,
+  `admin/handlers/collections/items/validate/{validate_create,validate_update}.rs`
+  → `{create,update}.rs`,
+  `service/hooks/{read_hooks,write_hooks}.rs` → `{read,write}.rs`.
+  No type names changed. `commands/export/{export_cmd,import_cmd}.rs`
+  were left as-is — `module_inception` clippy fires on
+  `commands/export/export.rs`; renaming those two needs the parent
+  dir restructured first.
+
+- **Keyword-name and unclear-name fixes.**
+  `core/document/type.rs` → `kind.rs` drops the `r#type` keyword
+  workaround in `core/document/mod.rs`. `db/query/fts/prosemirror.rs`
+  → `extract.rs`; the `prosemirror` prefix already lives in the
+  exported function names (`extract_prosemirror_text`, etc.) and the
+  parent `fts/` module supplies the search context.
+  `commands/update/{use_action,where_action}.rs` left as-is — the
+  `_action` suffix there is also a keyword workaround (`use` and
+  `where` are reserved).
+
+- **Registry definition APIs are now strictly init-only at runtime.**
+  `crap.collections.define`, `crap.globals.define`, `crap.jobs.define`,
+  and `crap.richtext.register_node` all reject calls outside the
+  init phase, for both new and existing slugs. Previously
+  `collections`/`globals`/`jobs` allowed existing-slug redefinition at
+  runtime — the test-only artefact that justified that branch
+  (`tests/lua_api_filters.rs` redefine tests evaluating against the
+  runtime VM) has been rewritten to set `InitPhase` before the
+  redefine call. New helper `HookRunner::eval_lua_init_with_conn` +
+  `tests/lua_api_filters.rs::eval_lua_init` mirror the init-time
+  evaluation path. The "documented round-trip pattern" comment in
+  `lua_api/collections.rs` is dropped — real plugin loops over
+  `crap.collections.config.list()` run from `init.lua` (or files it
+  requires) where `InitPhase` is set throughout, so the strict guard
+  never fires for legitimate plugin code. Mirrors the policy
+  `crap.richtext.register_node` has had since inception.
+
+- **`hooks::init::load_lua_dir` now caches into `package.loaded`.**
+  Each `<config_dir>/{collections,globals,jobs}/foo.lua` is evaluated
+  once at boot and its return value (or `true` for files without
+  `return`) is stored at `package.loaded["<dir>.<stem>"]`. The job
+  dispatcher's later `require("jobs.foo")` hits the cache instead of
+  re-evaluating the file's top-level — which is what made the strict
+  guard tractable for `crap.jobs.define`, since handler files
+  conventionally mix `crap.jobs.define(...)` at the top with the
+  handler function in the returned module table.
+
+- **`RegistryRead` trait + crud reads use `Arc<Registry>`.** New
+  `core::RegistryRead` trait abstracts over `SharedRegistry`
+  (locks per call) and `Arc<Registry>` (no lock). `crap.access.*` and
+  `crap.schema.*` registration functions are generic over the trait
+  so init and runtime VMs share one body. The runtime CRUD layer
+  (`hooks::lua_api::crud::*`) was migrated to take `Arc<Registry>`
+  directly — `HookRunnerBuilder` snapshots the populated registry
+  once at construction and hands the snapshot to
+  `register_crud_functions`. CRUD reads from Lua hooks (find,
+  find_by_id, count, etc.) are now lock-free.
+
+- **`commands/cli_types.rs` and `config_resolve.rs` renamed.**
+  `cli_types.rs` → `types.rs` — the `cli_` prefix was dead weight
+  (already inside `commands/`, and the separate top-level `cli/`
+  module owns CLI presentation, not action enums). `config_resolve.rs`
+  → `resolve_config.rs` — verb-first reads as the action it performs
+  (`commands::resolve_config::resolve_config_dir`). Both files have
+  no external callers; only `commands/mod.rs` needed updating
+  (declarations, `pub use` lines, doc comment).
+
+- **`commands/mod.rs` flat-vs-folder rule made explicit.** The
+  doc-comment now codifies what the layout already followed
+  implicitly: single-action subcommand → flat file (`fmt.rs`,
+  `init.rs`, `work.rs`, …); multi-action subcommand → folder
+  (`db/`, `user/`, `make/`, …). Default to a flat file; promote to
+  a folder the first time a second action lands. No file moves.
+
+- **`service/collection/` renamed to `service/collections/`.** All
+  other noun-feature dirs in `service/` (`globals/`, `jobs/`,
+  `versions/`, `hooks/`, `types/`) are plural — `collection/` was
+  the lone singular outlier. "Collections" is the framework's named
+  feature surface, same category as the others. Verbs (`read/`,
+  `write/`, `persist/`) stay singular. Zero blast radius for callers:
+  the file already re-exported every public item at
+  `crate::service::*`, so only `service/mod.rs` saw the change. Two
+  other apparent singular/plural inconsistencies (`admin/handlers/
+  collections/` lone-plural; `db/query/{jobs,versions}/` plural-
+  while-siblings-singular) turned out to be correctly applying the
+  three-way rule (singular for operations + subsystems, plural for
+  named CMS features) — left as-is.
+
+- **`ServiceContext` promoted out of `service/types/`.** Moved
+  `service/types/service_context.rs` (591 lines) to
+  `service/context.rs`. `ServiceContext` is the central runtime
+  context bundle threaded through 129 call sites, not a request /
+  result data class — sitting in `types/` next to 18-line
+  `*_input.rs` files mixed two concerns. The remaining `types/` is
+  now coherent (request shapes, results, queue infra, two domain
+  contexts). Zero blast radius for callers: `crate::service::
+  ServiceContext` was already the canonical import path via
+  `service/mod.rs` re-export, so only `service/mod.rs` and
+  `service/types/mod.rs` saw the change. `Def` enum (the variant
+  selector that lives alongside `ServiceContext`) moved with it.
+  Filename follows the established stutter-rename pattern
+  (`core/auth/auth_user.rs` → `user.rs`): the `service_` prefix is
+  redundant once inside `service/`.
+
+- **`hooks/validate.rs` renamed to `hooks/startup_checks.rs`.**
+  The old name overlapped with `hooks/lifecycle/validation/` (per-write
+  field validation) — different time and scope. The renamed file holds
+  the post-init correctness passes (`validate_hook_references`,
+  `validate_locale_field_collisions`) that walk the registry once at
+  boot. Two call sites in `hooks/init.rs` updated; `hooks/mod.rs` doc
+  comment now contrasts the two modules.
+
+- **`hooks/api/` renamed to `hooks/lua_api/`.** The original `api`
+  name collided in conversation with the top-level `api/` module
+  (gRPC). `lua_api` is what the directory actually is — the surface
+  registered onto every Lua VM as `crap.*`. Touched the directory
+  itself, `hooks/mod.rs` declarations + doc comment, `hooks/init.rs`,
+  and ~20 `hooks::api::*` import sites across `hooks/` and inside
+  `hooks/lua_api/` (siblings used absolute paths). No external
+  callers outside `hooks/`.
+
+- **`hooks/lifecycle/crud/` relocated to `hooks/lua_api/crud/`.**
+  The runtime CRUD surface (`crap.collections.{find,create,update,…}`,
+  `crap.globals.{get,update}`, `crap.jobs.queue`) was historically in
+  `lifecycle/` because it depends on the `TxContext` machinery, but
+  every other `crap.*` registration lived in `lua_api/`. The split
+  was leaky — `lua_api/email.rs` reached into
+  `lifecycle::crud::get_tx_conn` to grab the active transaction. With
+  the move, every `crap.*` registration site lives under one tree;
+  the `email.rs` leak collapses to a sibling import. Internal CRUD
+  files keep their `crate::hooks::lifecycle::{…}` imports for the
+  TxContext / converter / runner types they still need from
+  `lifecycle/`. `register_crud_functions` is now reached at
+  `hooks::lua_api::crud::register_crud_functions`; the one external
+  caller (`HookRunnerBuilder`) was updated. `lua_api/mod.rs` gained
+  an architecture sketch documenting the new layout.
+
+- **`db/{postgres,sqlite}.rs` moved into `db/backend/`.** The `db/`
+  module root used to mix abstractions (`connection.rs`, `pool.rs`,
+  `types.rs`, `ops.rs`, `document.rs`) with the two engine impls.
+  Backends now collect under `db/backend/{postgres,sqlite}.rs` behind
+  a thin `db/backend/mod.rs` that carries the existing
+  `#[cfg(feature = "...")]` gates. `db/mod.rs` declares `pub mod
+  backend` and updates the test-only `pub use sqlite::InMemoryConn`
+  re-export to `pub use backend::sqlite::InMemoryConn`. Internal
+  imports inside the moved files swap `super::{connection,types,pool}`
+  for their re-exported short paths (`crate::db::{DbConnection,
+  DbRow, DbValue, BoxedConnection, DbPool}`); only the non-re-exported
+  `ConnectionInner`, `TransactionInner`, and `PoolBackend` keep their
+  full `crate::db::{connection,pool}::*` paths. Three external call
+  sites updated (`db/pool.rs` ×2, `db/query/filter/operators.rs` ×1).
+  Both `--features sqlite` (default) and `--features postgres` build
+  clean.
+
+- **`helpers.rs` over `shared.rs`.**
+  `commands/templates/shared.rs` → `helpers.rs`; updated three
+  importers and the `mod.rs` doc comment. `hooks/api/parse/shared.rs`
+  was left as-is because it sits next to a separate `helpers.rs`
+  (primitive table getters) and itself holds higher-level definition
+  parsers — merging would push past 800 lines and erase a meaningful
+  split.
+
+- **Inline `use` cleanup, codebase-wide.** CLAUDE.md's "tree-style
+  imports at the top of the file/module. Never use inline `use`
+  statements inside function bodies" rule had drifted in the
+  early-audited modules. Swept 33 violations across 25 files; each
+  inline `use crate::core::Foo;` style import inside a `#[test] fn`
+  body was lifted to the top of the surrounding `mod tests` block
+  (or to the file top for files like the `hooks/lifecycle/validation/
+  sub_fields/tests/*` test modules that are themselves the test
+  scope). Also flattened ~30 nested `core::{... field::{X, Y} ...}`
+  grouped-import patterns that the earlier deep-path sweep missed
+  (the pattern only matched at one level), so any leaf-module
+  re-exported type now lives directly inside the outer `core::{...}`
+  list. 3851 lib tests pass; clippy + fmt clean.
+
+- **Retroactive pass: applied late-playbook axes to the early-audited
+  modules.** The original `core/`, `db/`, `hooks/`, `service/`, `api/`
+  audits ran before axes 25 (`mod.rs` architecture sketch) and 26
+  (workspace-split prep — kill external `crate::module::sub::Foo`
+  imports) crystallised. This pass closes the gap:
+  - **`core/`: 183 external deep-path imports → ~30 namespace-only.**
+    Promoted `Access`, `Hooks`, `IndexDefinition`, `Labels`, `LiveMode`,
+    `LiveSetting`, `VersionsConfig` (from `core::collection`) and
+    `JoinConfig`, `to_title_case` (from `core::field`) and
+    `SharedStorage` (from `core::upload`) to top-level `crate::core::*`
+    re-exports. A Python-script-driven sweep then flattened 129
+    callers' `use crate::core::<sub>::Type` imports to
+    `use crate::core::Type`. Remaining ~30 deep paths are intentional
+    (cache/rate_limit/event/email namespace prefixes carry semantic
+    meaning per CLAUDE.md's exception, plus the few builder
+    direct-construction sites that need a separate caller refactor).
+  - **`db/`: 12 external deep-path imports → 0.** `LocaleContext`,
+    `LocaleMode`, and `Singleflight` were already top-level
+    re-exported; callers were just using the deep `db::query::*` form.
+    Same script flattened them.
+  - **`mod.rs` architecture sketches** added to `core/` (1 → 50
+    lines), `db/` (1 → 45), `hooks/` (1 → 35), `api/` (1 → 30),
+    `service/` (5 → 50). Matches the layout/conventions pattern the
+    later admin/, mcp/, scaffold/, scheduler/, config/, fmt/ audits
+    established.
+  - **`api/`: `start` and `GrpcStartParams` promoted** to
+    `crate::api::*`. The two callers in `commands/serve/startup.rs`
+    were going through `api::server::start` /
+    `api::server::GrpcStartParams::builder()`; now use the flat
+    forms.
+
+- `src/fmt/` code-quality cleanup pass. Inventory was structurally
+  already clean (4 files, 1594 LOC, all under the 1000 soft limit, 0
+  `#[allow]`, 0 `super::super`, 0 manual `Default`, 0 external deep
+  paths). Concrete changes:
+  - **Visibility tightening:** `pub mod printer` and `pub mod
+    tokenizer` demoted to `pub(crate) mod`. The single external
+    consumer (`commands/fmt.rs`) only imports
+    `crate::fmt::format` — neither submodule needs a public
+    surface.
+  - **`emit_start_tag` (6 positional args) refactored to a typed
+    `EmitStartTag<'_>` input struct.** Only >4-arg fn in the
+    module.
+  - **`mod.rs` architecture sketch** expanded from a 5-line `//!`
+    to a 25-line layout/conventions map covering the `tokenize ->
+    print` pipeline and the idempotency invariant.
+  42 fmt unit tests pass; clippy clean.
+
+- `src/config/` code-quality cleanup pass. Inventory was already in
+  good shape on the playbook structural axes (0 `#[allow]`, 0
+  `super::super`, 0 external deep-path imports, 0 wide-arg fns) but
+  three files were "shared.rs"-style multi-type homes. Concrete
+  changes:
+  - **`features.rs` (901 LOC, 17 unrelated types) decomposed into
+    `features/`** with one file per `[<section>]` table in
+    `crap.toml`: `email.rs`, `depth.rs`, `cache.rs`, `pagination.rs`,
+    `mcp.rs`, `upload.rs`, `locale.rs`, `jobs.rs`, `live.rs`,
+    `hooks.rs`, `access.rs`, `logging.rs`, `update.rs`. Genuinely
+    paired enums stay together (`SmtpTls` with `EmailConfig`,
+    `PaginationMode` with `PaginationConfig`, `LogRotation` with
+    `LoggingConfig`). Each file is 21-170 LOC with its own `Default`
+    and colocated tests. `features/mod.rs` re-exports keep the flat
+    `config::*` API unchanged.
+  - **`types.rs` (1162 LOC, over the 1000 soft limit) split**: the
+    `CrapConfig` struct + `load` / `test_default` / `validate`
+    orchestrator + version check + path helpers + permission warnings
+    stay in a slimmed `types.rs` (512 LOC). The 14 per-section
+    `validate_*` methods (with their ~30 colocated tests) move to a
+    new `validate.rs` (648 LOC) as additional `impl CrapConfig`
+    blocks. The orchestrator still calls them by name; visibility is
+    `pub(super)` since they're never invoked outside the
+    orchestrator.
+  - **`server.rs` (707 LOC, 5 types) decomposed into `server/`**:
+    `server_config.rs` (`ServerConfig` + paired `CompressionMode`),
+    `database.rs` (`DatabaseConfig`), `admin.rs` (`AdminConfig`),
+    `csp.rs` (`CspConfig` + the header-builder logic + 7 dedicated
+    tests). `CspConfig` is reachable via `AdminConfig::csp` but no
+    external caller imports it by name -- kept private to the
+    `server::admin` module.
+  - **`auth.rs` (423 LOC, 3 types) decomposed into `auth/`**:
+    `auth_config.rs` (`AuthConfig` + paired
+    `SessionCookieSameSite`), `password_policy.rs` (`PasswordPolicy`
+    with its standalone `validate()` and 12 strength tests).
+  - **`mod.rs` architecture sketch** expanded from a one-line `//!`
+    to a 30-line layout/conventions map covering submodule layout,
+    secret-newtype wrappers, default-impl conventions, and the
+    `#[serde(deny_unknown_fields)]` policy on every section.
+  217 config tests pass; clippy clean. Net file count: 11 -> 30.
+
+- `src/scheduler/` code-quality cleanup pass. Inventory was already in
+  good shape (4 files, 1688 LOC, 0 `#[allow]`, 0 `super::super`,
+  0 manual `Default` impls, 0 external deep-path imports). Concrete
+  changes:
+  - **Pure-ceremony `SchedulerParamsBuilder` deleted** in favour of
+    plain struct-literal construction. The builder existed to wrap a
+    7-arg `new()` plus three optional setters, but both call sites
+    (`crap-cms work` and `serve`'s startup) supplied every field
+    anyway -- the "optional" defaults were never used. `SchedulerParams`
+    fields are now `pub`; both call sites construct it via
+    `SchedulerParams { pool, hook_runner, registry, … }`. The builder
+    type and its top-level re-export are gone.
+  - **Wide-arg helpers refactored to typed `*Input<'_>` structs.**
+    Three helpers crossed the >4-arg threshold:
+      - `run_periodic_purges` (7 args -> `PurgeTickInput<'_>`)
+      - `purge_collection` (6 args -> `PurgeCollectionInput<'_>`)
+      - `spawn_job_execution` (6 args -> `SpawnJobInput<'_>`)
+    Call sites now read at a glance instead of counting positional
+    arguments.
+  - **Visibility tightened.** `RETENTION_PURGE_SLUG` and
+    `claim_retention_purge_tick` were `pub` but only used inside
+    `scheduler/` (loop_runner + runner's own tests). Demoted to
+    `pub(super)` and dropped from the `scheduler::*` re-export
+    block. The remaining re-exports (`start`, `execute_job`,
+    `check_cron_schedules`, `purge_soft_deleted`,
+    `recover_stale_jobs`, `SchedulerParams`) all have ≥1 external
+    consumer (call sites in `commands/work.rs`, `commands/serve/
+    startup.rs`, `tests/scheduler.rs`, `tests/db_soft_delete.rs`).
+  - **`mod.rs` architecture sketch** expanded from a one-line `//!`
+    to a 25-line layout/conventions map matching the admin/, mcp/,
+    commands/, scaffold/ pattern.
+  39 scheduler tests pass (32 unit + 7 integration); clippy clean.
+
+- `src/scaffold/` code-quality cleanup pass. Concrete changes:
+  - **Seven inline templates moved to template files.** The module
+    already had a Handlebars registry in `render.rs` and per-submodule
+    `templates/` folders for `collection/`, `global/`, `hook/`, `init/`,
+    `job/`, `migration/` — but six generators still inlined their
+    templates as Rust raw-string `format!()` calls. Moved to dedicated
+    files and registered:
+      - `component/templates/component.js.hbs` (Web Component skeleton)
+      - `theme/templates/theme.css.hbs` (CSS theme catalogue)
+      - `node/templates/node.lua.hbs` (richtext node registration)
+      - `field/templates/field.hbs.hbs` (per-field admin template)
+      - `field/templates/plugin.lua.hbs` (Lua plugin wrapper)
+      - `page/templates/page.hbs.hbs` (custom admin page)
+      - `slot/templates/slot.hbs.hbs` (slot widget)
+    Each generator now serializes a small context struct and calls
+    `render::render("<name>", &ctx)?` instead of carrying ~50 lines of
+    inline `format!(r#"..."#)` literal. The three `.hbs`-output
+    templates (page, slot, field's hbs) use Handlebars's `\{{...}}`
+    backslash escape to emit literal `{{...}}` sequences in the
+    produced file. **Net:** −267 LOC of inline template Rust code,
+    +7 hbs files where syntax highlighters work and the template can
+    be edited without Rust recompilation.
+  - **`super::super::` deep path resolved.** `blueprint/apply.rs`
+    reached `super::super::init::LUA_API_TYPES`. Replaced with a
+    top-of-file `use crate::scaffold::init::LUA_API_TYPES;`.
+  - **Manual `Default` collapsed to `#[derive(Default)]`.**
+    `CollectionOptions` had a hand-rolled `new()` (five `false` bools)
+    plus a `Default` impl forwarding to `new()`. All callers already
+    used `default()` or struct literals. `InitOptions::default` kept
+    its manual impl — its defaults are non-trivial (`admin_port:
+    3000`, `grpc_port: 50051`, …).
+  - **5-arg `templates_extract` → named-field params struct.** New
+    `TemplatesExtractParams<'_>`, re-exported at `scaffold::*` for the
+    one external caller. Test block grew a small `extract_one(tmp,
+    path, force)` helper that compresses six nearly-identical test
+    calls into one-liners.
+  - **`collection/types.rs` (5 unrelated types in one file) split**
+    into per-concept files: `field_types.rs` (`VALID_FIELD_TYPES` +
+    `CONTAINER_TYPES` consts), `collection_options.rs`
+    (`CollectionOptions`), `stubs.rs` (`FieldStub` + `FieldStubBuilder`
+    + `BlockStub` + `TabStub` — kept together because the three stub
+    types form a mutually-referential hierarchy via `FieldStub.fields`
+    / `.blocks` / `.tabs`).
+  - **Duplicated container-type list deduped.** `wizard.rs` carried a
+    private `WIZARD_CONTAINER_TYPES = &["group", "array", "row",
+    "collapsible"]` const identical to `collection::CONTAINER_TYPES`.
+    Wizard now imports the canonical list.
+  - **Submodule visibility tightened (12 of 17 modules).** `mod.rs`
+    declared all 17 submodules `pub mod` even though the module's
+    public API is the flat `scaffold::*` re-export block underneath.
+    Demoted to `pub(crate) mod`. The lone external deep-path import
+    (`commands::templates::shared` reaching
+    `scaffold::templates::EMBEDDED_*`) was rewritten via a new
+    `pub(crate) use self::templates::{EMBEDDED_STATIC,
+    EMBEDDED_TEMPLATES};` re-export.
+  - **`type_specific_stub` demoted from `pub` to private** (used only
+    inside `writer.rs`); dropped from the `pub use writer::{...}`
+    re-export. Same demotion for `KNOWN_SLOTS` (used only inside
+    `slot/generator.rs`).
+  - **Duplicated overwrite-guard pattern lifted** to a tiny
+    `scaffold/guards.rs::refuse_file_overwrite(path, force)` helper.
+    Eleven sites across the `make_*` generators that wrote
+    `if file_path.exists() && !opts.force { bail!("File '{}' already
+    exists -- use --force to overwrite", path.display()); }` now call
+    the helper instead. A typo in the message at one site can no
+    longer drift; future scaffold subcommands share the same
+    behaviour by default.
+  - **ASCII-only scaffolded output.** Swept all non-ASCII characters
+    (`—`, `…`, `─`, `→`) out of every `.hbs` / `.tpl` / `.lua`
+    template and the `.rs` files that scaffold them — `--`, `...`,
+    `=`, `->` respectively. The generated files (`make page`,
+    `make slot`, `make field`, `make theme`, `make component`,
+    `make node`, `make collection`, …) and the operator-facing CLI
+    error messages are now ASCII-only, predictable across terminals
+    that don't render UTF-8 reliably.
+  - **Magic-string path segments centralized** in a new
+    `scaffold/paths.rs`. Eighteen `.join("collections")` /
+    `.join("globals")` / `.join("templates").join("pages")` /
+    `.join("static").join("components")` etc. site across 11
+    generators replaced with named helpers (`paths::collections_dir`,
+    `paths::templates_pages_dir`, `paths::static_components_dir`, …).
+    The same module also owns the `INIT_SUBDIRS` list — single source
+    of truth shared by `init` (which creates the directories) and
+    every `make_*` generator (which writes into them). A typo at one
+    site can no longer silently break the contract.
+  - **`scaffold/mod.rs` architecture sketch** — top-of-module doc
+    expanded from a one-liner to a 30-line layout map covering
+    submodule conventions (template rendering via `render::*`, slug
+    validation rules, why submodules are `pub(crate)`).
+
+  All 207 scaffold tests pass; clippy clean.
+
+- `src/cli/` code-quality cleanup pass. Tiny module (5 files,
+  437 LOC), structurally already clean. The one real fix:
+  `output.rs` privately resolved the
+  `CRAP_NO_UNICODE=1` / `CRAP_FORCE_UNICODE=1` /
+  `console::Term::wants_emoji()` cascade for its glyphs, but
+  the other two rendering surfaces (`spinner.rs`, `theme.rs`)
+  hard-coded the Unicode glyphs (`"✓"`, `"⚠"`, `"✗"`) without
+  the fallback. Lifted the resolver to a new `cli/glyphs.rs`
+  module with named accessors (`success()`, `warning()`,
+  `error()`, `info()`, `prompt()`, `bar()`); each returns the
+  Unicode form when the terminal supports it and the ASCII
+  fallback otherwise. `output`, `spinner`, and `theme` now
+  call through. **Net effect:** `CRAP_NO_UNICODE=1` now
+  uniformly forces ASCII across every CLI surface (spinner
+  finish messages, dialoguer prompt prefixes, banner glyphs);
+  previously only plain-text output respected it. All 20 cli
+  tests pass; clippy clean.
+
+- `src/typegen/` code-quality cleanup pass. Module was
+  structurally clean to begin with; two files crossed the
+  1000-line soft limit (`mod.rs` at 505 LOC and `lua.rs` at
+  1146 LOC) and the per-language generators carried duplicated
+  boilerplate. Concrete work:
+  - `mod.rs` split into four siblings:
+    - `language.rs` — `Language` enum + `from_name`/
+      `file_extension`/`all`/`label` accessors + 6 colocated
+      tests.
+    - `helpers.rs` — `to_pascal_case`, `is_optional`,
+      `rel_has_many`, `sorted_*_slugs`, `SubTypeKind`,
+      `SubTypeField`, `collect_sub_type_fields` + 17 colocated
+      tests. `to_pascal_case` re-exported `pub(crate)` at the
+      typegen root for cross-module callers
+      (`scaffold::{job,hook}::generator`).
+    - `dispatch.rs` — file-output entry points (`generate`,
+      `generate_lang`, `generate_proto_conversion`) + the
+      private `render` per-language match dispatch + the
+      `LUA_API_TYPES` const.
+    - Resulting `mod.rs`: 40 LOC of declarations + re-exports +
+      30-line architecture doc.
+  - `lua.rs` (1146 LOC, the only language file over the 1000
+    soft limit; the other 5 are 742-914 LOC) split into a
+    `lua/` folder:
+    - `lua/mod.rs` — declarations + `pub(super) use render`
+      + shared `#[cfg(test)] pub(super) mod test_helpers`
+      (`text_field`, `select_field`, `checkbox_field`).
+    - `lua/render.rs` (760 LOC) — top-level `render` entry +
+      `render_template_data_types` + `render_collection` +
+      `render_global` + `render_find_overloads` + 17 colocated
+      render-level tests.
+    - `lua/field.rs` (343 LOC) — `write_field` +
+      `field_to_lua_type` + 22 colocated field-level tests.
+    - 1 duplicate test (`to_pascal_case_basic`) dropped — the
+      same coverage exists in `helpers.rs`.
+  - Per-language sub-files (`typescript.rs`, `go.rs`,
+    `python.rs`, `rust_types.rs`, `rust_proto.rs`) updated to
+    `use super::helpers::{…}` (the helpers' new home) instead
+    of going back through `crate::typegen::{…}`.
+  - **Centralized 196 sites of duplicated boilerplate.** Every
+    per-language generator had repeated calls of the shape
+    `writeln!(out, …).expect("write to String")`. `rust_proto.rs`
+    already had a private `w!` macro for this; the other five
+    files did not. Lifted that macro to `helpers.rs` (two arms:
+    `w!(out)` for blank lines, `w!(out, fmt, args…)` for
+    formatted) and converted all 196 sites in `typescript.rs`,
+    `go.rs`, `python.rs`, `rust_types.rs`, `lua/render.rs`,
+    `lua/field.rs`. The macro brings `std::fmt::Write` into a
+    local block scope so callers no longer need their own
+    `use std::fmt::Write;` — deleted from 7 files. **Net:**
+    −196 boilerplate lines, +1 shared macro.
+  All 175 typegen tests pass; clippy + full lib suite clean.
+
+- `src/commands/` code-quality cleanup pass. Module was in
+  good shape to start with; one file crossed the 1000-line
+  soft limit and visibility had drifted. Concrete work:
+  - `templates.rs` (1079 LOC, 7 public actions + ~10 helpers
+    + 11 colocated tests) split into a folder per the
+    "one file per `crap-cms templates <action>` subcommand"
+    rubric the user articulated: `templates/{list,extract,
+    status,layout,diff,shared}.rs` plus `mod.rs` (re-exports).
+    `status.rs` keeps the `customization_counts` /
+    `CustomizationCounts` API that `commands::status::display`
+    consumes, alongside the `Drift` enum and overlay walker.
+    `layout.rs` carries the 23 `EXACT_LAYOUT_MOVES` entries
+    plus `LayoutKind` + `LayoutEntry` + classifier helpers.
+    `diff.rs` keeps `print_unified_diff` and its tests.
+    `shared.rs` holds `split_kind`, `lookup_embedded`, and
+    `CRATE_VERSION` — used by both `status.rs` and `diff.rs`.
+    Each destination got the colocated tests that exercise
+    its own functions: 4 to `status.rs`, 5 to `layout.rs`,
+    2 to `diff.rs`. Largest resulting file is `layout.rs` at
+    563 LOC (the layout move tables dominate).
+  - Visibility tightening. Sweep across the eight subcommand
+    subdirs found 54 `pub fn` / `pub struct` / `pub enum`
+    items with no external callers outside their own subdir;
+    demoted to `pub(super)`. Four `pub use` re-exports in
+    `make/mod.rs`, `db/mod.rs`, `user/mod.rs` pointed at these
+    newly-private items but were themselves never imported
+    externally — deleted along with the demotion. Items
+    affected: `try_load_registry`, `find_orphan_columns`,
+    `user_verify`, `user_unverify`. Also deleted the unused
+    `cache_path` fn in `update/mod.rs` (its doc comment said
+    "Exposed for tests" but no test ever referenced it).
+  - Closure-to-fn-pointer polish: 4 sites in `user/modify.rs`
+    converted from `.map_err(|e| e.into_anyhow())` to
+    `.map_err(ServiceError::into_anyhow)`, matching the
+    api/ + mcp/ passes.
+  - Five wide-arg fns refactored to named-field parameter
+    structs (a named-field struct reads at a glance; counting
+    to position 5 in a positional call does not):
+      - `user_create` (7 args → `UserCreateParams`)
+      - `user_change_password` (7 → `UserChangePasswordParams`)
+      - `user_delete` (6 → `UserDeleteParams`)
+      - `run_purge` (6 → `PurgeParams`, private to trash.rs)
+      - `write_backup_manifest` (6 → `WriteManifestParams`,
+        private to db/backup.rs)
+    Both call sites in `init.rs` and the ~10 sites in
+    `tests/cli_commands*.rs` updated to struct-literal
+    construction.
+  - Promoted user-management entry points (`user_create`,
+    `user_change_password`, `user_delete`, `user_list`,
+    `user_lock`, `user_unlock` and their `*Params` structs)
+    to top-level `commands::*` re-exports. Test files that
+    previously wrote `commands::user::user_create(commands::
+    user::UserCreateParams { … })` now write the flat form.
+  - Tightened import paths across `commands/`:
+    `chrono::Local::now()` → `Local::now()` (db/backup.rs);
+    `chrono::Utc::now()` → `Utc::now()` (serve/startup.rs);
+    `crate::commands::update::cache::*` → `update::cache::*`
+    via a top-of-file `commands::update` import
+    (serve/startup.rs); `std::sync::OnceLock::new()` →
+    `OnceLock::new()` (3 sites);
+    `std::collections::BTreeMap` → `BTreeMap`. `serde_json::*`
+    and `tokio::*` paths intentionally stay qualified — the
+    prefix carries semantic meaning (`serde_json::to_string`
+    reads as "JSON serialize", `tokio::spawn` as "async
+    runtime spawn") and CLAUDE.md explicitly exempts these.
+  Additionally: `commands/mod.rs` got a 30-line architecture
+  sketch (layout, entry-point convention, cross-cutting
+  helpers, visibility convention) matching the admin/ + mcp/
+  module-doc pattern.
+
+- `src/mcp/` code-quality cleanup pass.
+  - **Structural cleanup.** All 7 `#[allow(clippy::too_many_arguments)]`
+    escapes scattered across `tools/collection/{write/{create,
+    update, delete, delete_many, update_many}, versions}.rs` and
+    `tools/dispatch.rs::execute_tool` resolved at the root cause.
+    New `tools/exec_ctx.rs` defines a single
+    `ToolExecCtx<'a> { registry, pool, runner, config,
+    event_transport, invalidation_transport, cache }` bundle that
+    every CRUD-style `exec_*` fn now takes as its third argument
+    (after the per-call `args` and `slug`). Each tool fn went
+    from 6–9 positional params to a flat `(args, slug, ctx)`
+    signature. The existing `UnpublishParams` ad-hoc struct
+    collapsed into the same shape and was deleted along with its
+    re-export. `dispatch::execute_tool` now constructs nothing
+    inline — it pattern-matches `ToolOp` and dispatches each
+    branch with `(args, slug, ctx)`. The two callers of
+    `execute_tool` (`mcp::server` and the test sites in
+    `tools/dispatch.rs`'s colocated `mod tests`) build the
+    `ToolExecCtx` once via a shared `make_exec_ctx` helper.
+    File splits to bring `tools/schema/introspection.rs` (1472
+    LOC) under the 1000-LOC soft limit: split into four
+    sibling files by purpose — `field_types.rs`,
+    `list_collections.rs`, `describe_collection.rs`, and
+    `cli_reference.rs`. The CLI-reference file then split
+    further: types + dispatch fn stay in `cli_reference.rs`
+    (~240 LOC), the 23 `CLI_DETAIL_*` static command
+    descriptions live in a sibling `cli_details.rs` (~945 LOC)
+    so each file individually clears the soft limit. Test
+    colocation: the monolithic `tools/tests.rs` (922 LOC, 64
+    tests) deleted; tests redistributed into per-tool
+    `#[cfg(test)] mod tests` blocks beside the function they
+    exercise — 24 tests to `dispatch.rs`, 18 to
+    `collection/helpers.rs` (parse_where_filters + doc_to_json),
+    10 to `schema/config_files.rs`, 5 to
+    `schema/describe_collection.rs`, 3 each to
+    `schema/list_collections.rs` and `schema/cli_reference.rs`,
+    1 to `schema/field_types.rs`. Shared fixtures
+    (`make_registry`, `make_exec_ctx`) extracted to a new
+    `tools/test_helpers.rs` reachable by every colocated test
+    block.
+  - **Pattern parity with admin/ and api/.** Most of those
+    patterns were already absent here — mcp tools are sync, so
+    no `spawn_blocking` antipatterns; no `if let Some(...) {
+    builder.x(Some(x)) }` redundant wrappers at builder call
+    sites; no `match registry.get(slug)` fallthroughs to
+    convert; no `.map_err(|e| { error!(...); X })`
+    log/transform mixes. Four `.map_err(|e| e.into_anyhow())`
+    closures (in `find.rs`, `find_by_id.rs`, `count.rs`,
+    `globals/get.rs`) converted to function-pointer form
+    `.map_err(ServiceError::into_anyhow)` for parity.
+  - **Visibility + dead code.** Every `pub mod` under `mcp/`
+    (protocol, resources, schema,
+    server, stdio, tools) demoted to `pub(crate) mod` after
+    confirming via grep that no external callers reach in.
+    Top-level re-exports added for the actual external API
+    surface: `McpServer` (already exported), `run_stdio` (now
+    `mcp::run_stdio` — `commands/mcp.rs` updated from
+    `mcp::stdio::run_stdio`), and the JSON-RPC types used by
+    `admin::mcp_handler` (`JsonRpcRequest`, `JsonRpcResponse`,
+    `JsonRpcError`, plus the `INTERNAL_ERROR` /
+    `INVALID_REQUEST` / `PARSE_ERROR` constants —
+    `admin::mcp_handler` updated from `mcp::protocol::*` to
+    `mcp::*`). Crate-internal `tools` re-exports trimmed to
+    just the three names actually consumed (`execute_tool`,
+    `generate_tools`, `should_include`); `ParsedTool`, `ToolOp`,
+    `parse_tool_name` were exposed but never imported outside
+    of `mcp::tools` itself, so they're back to module-private.
+    Dead code: `protocol::ToolResultContent` struct (defined
+    but never constructed) deleted. `InitializeParams` /
+    `ClientInfo` flagged with dead-field warnings —
+    investigated against the MCP spec to decide the right
+    treatment. The `initialize` request mandates
+    `protocolVersion`, `capabilities`, `clientInfo.name` per
+    spec, but the server is only obligated to *echo back* its
+    own version+capabilities — not to act on the client's
+    declared ones. To make the fields genuinely live (no
+    `#[allow(dead_code)]` shortcuts), `handle_initialize` now
+    emits a single diagnostic `info!` line on each handshake:
+    `MCP initialize: client=<name>/<version>
+    protocol=<version> capabilities=<json>`. This gives
+    operators visibility into which integrations connect with
+    which protocol/feature flags, and incidentally makes every
+    spec-modeled field a production read.
+  - **Per-call audit trail.** The 10 `info!("MCP <op> ...")`
+    lines on write tools were already deliberate — MCP is the
+    one transport whose caller is a model, so "what did Claude
+    do to my data" is a real operational question that justifies
+    layered success logging here (api/ has none, admin/ has one).
+    The lines used to be unstructured and didn't say *which*
+    client made the call. Plumbed the
+    client identity through: new
+    `McpServer::client_name: OnceLock<String>` populated by
+    `handle_initialize` from `params.client_info.name`, and
+    new `McpServer::transport_label: &'static str` set at
+    construction by each transport runner — `(stdio)` for
+    the long-lived stdio process, `(http)` for the
+    per-request HTTP handler, `(test)` for unit tests. Parens
+    on the fallback labels disambiguate them from a real
+    client that happens to be named "stdio". `handle_tools_call`
+    resolves an `audit_label()` (client name when known,
+    transport label otherwise) and passes it through
+    `ToolExecCtx::client_label`. Every audit `info!` now ends
+    with `[client=<label>]`. Stdio sees the actual client name
+    after `initialize`; HTTP shows `(http)` until session-id
+    tracking lands (separate work — `Mcp-Session-Id` header
+    +  `AdminState`-level session map). The
+    `exec_write_config_file` static tool also takes
+    `client_label` directly since its dispatch path doesn't go
+    through `ToolExecCtx`.
+
+- `src/admin/` code-quality cleanup, first pass: test
+  colocation. The three monolithic sibling-file test
+  modules (`context/field/tests.rs` 626 LOC,
+  `handlers/field_context/builder/tests.rs` 1133 LOC,
+  `handlers/field_context/enrich/tests.rs` 1854 LOC) are gone.
+  Each test is now in a `#[cfg(test)] mod tests` block at the
+  bottom of the source file that owns the function it exercises:
+  - `context/field/tests.rs` → split by variant family across
+    `base.rs` (3 base-data tests + the shared `make_base()`
+    fixture in a new `test_helpers.rs`), `scalars.rs` (12 tests
+    for text/textarea/number/code/richtext/date/select/checkbox),
+    `refs.rs` (5 tests for relationship/upload/join),
+    `composites.rs` (8 tests for group/collapsible/row/tabs/
+    array/blocks), and `mod.rs` (the enum-tagging test).
+  - `handlers/field_context/builder/tests.rs` → 36
+    `build_field_contexts_*` tests moved into
+    `builder/context.rs` (alongside the production fn);
+    `safe_template_id_*`, `split_sidebar_fields_*`, and
+    `count_errors_*` tests joined the existing
+    `field_context/helpers.rs` test module. Shared fixtures
+    (`make_field`, `fields_from_json`, the `Vec<Value>`-returning
+    `build_value_contexts` wrapper) live in a new
+    `field_context/test_helpers.rs`. The 4 `split_sidebar_fields`
+    tests now exercise the production fn through
+    `fields_from_json` instead of a parallel Value-based partition
+    impl that the old test file kept as scaffolding (`#[allow(
+    dead_code)] split_sidebar_field_contexts` deleted).
+  - `handlers/field_context/enrich/tests.rs` → 30
+    `enriched_sub_field_*` + `enrich_nested_fields_*` tests moved
+    into `enrich/nested.rs`; 5 `enrich_field_contexts_*` /
+    `*_transparent_names` tests into `enrich/enrichment.rs` (with
+    the two tests that inlined `make_test_state` rewritten to
+    call the shared helper, ~110 LOC each → 1 line); 7
+    `enrich_richtext_*` tests + the `make_cta_registry` fixture
+    into `enrich/enrich_types.rs`; the 3
+    `collect_node_attr_errors_*` tests joined the
+    `field_context/helpers.rs` test module (where the production
+    fn lives). `enrich/test_helpers.rs` houses the
+    sqlite-feature-gated wrappers (`build_enriched_sub_field_value`,
+    `enrich_field_contexts_values`, `enrich_nested_fields_values`,
+    `enrich_richtext_value`, `make_test_state`) — same gating the
+    monolithic file had. The duplicated
+    `max_depth_prevents_infinite_recursion` test (one copy in
+    each of the two old test files) is now a single test in
+    `builder/context.rs`.
+- Test-file file-size soft limit deliberately broken on
+  `enrich/nested.rs` (1518 LOC after split). Per CLAUDE.md the
+  1000-line cap is a soft limit; respecting it would have meant
+  either keeping a sibling `tests.rs` indirection or fragmenting
+  `nested.rs` into smaller per-test-topic source files for no
+  source-readability gain. Strict colocation — function visible
+  alongside its tests — won the trade. Other files stay under
+  1000 LOC even with their tests folded in.
+- `src/admin/` cleanup, second pass: structural cleanup. All five
+  `#[allow(...)]` escapes resolved at root cause:
+  - `mod.rs::AdminState` `dead_code` allow was a stale legacy
+    blanket; every field is read.
+  - `templates/helpers/translation.rs::TranslationHelper`
+    `dead_code` allow was stale — the struct is constructed at
+    `helpers::register_helpers` and its field is read in
+    `call_inner`.
+  - `handlers/collections/items/empty_trash.rs::empty_trash`
+    `clippy::too_many_arguments` (10 args) replaced with
+    `EmptyTrashInput<'_>` typed input struct.
+  - The remaining two were on test files that no longer exist
+    (deleted in the test-colocation pass).
+- `enrich/` builders colocated with their structs, and the
+  three-struct `enrich/context.rs` decomposed: `enrich_options.rs`
+  holds `EnrichOptions` + `EnrichOptionsBuilder`; `sub_field_opts.rs`
+  holds `SubFieldOpts` + `SubFieldOptsBuilder`; `enrich_ctx.rs`
+  holds the module-internal `EnrichCtx`. The orphaned
+  `enrich_options_builder.rs` / `sub_field_opts_builder.rs` /
+  `context.rs` files are gone. Builders dropped from the module's
+  re-export surface (callers reach them via `Type::builder()`).
+- `EnrichOptionsBuilder::doc_id` now takes `Option<&'a str>`
+  to match the existing `Option<&...>` setters on the same
+  builder. The one call site that did
+  `if let Some(id) = p.doc_id { enrich_opts = enrich_opts.doc_id(id); }`
+  collapses to `enrich_opts.doc_id(p.doc_id)`.
+- A `super::super::MAX_FIELD_DEPTH` chain in
+  `enrich/field_types.rs` rewritten to use the existing
+  field_context-level import. Zero `super::super::` chains
+  remain in `src/admin/`.
+- Visibility tightening. At `admin/mod.rs`:
+  `csp_nonce` demoted from `pub mod` to `mod` (the `pub use
+  csp_nonce::{...}` re-exports cover the public surface);
+  `context` and `server_builder` demoted to `pub(crate) mod`. At
+  `admin/handlers/mod.rs`: ten of eleven submodules demoted to
+  `pub(crate) mod` (`forms` stays `pub` because it has cross-crate
+  consumers). Stale re-exports dropped: `AdminMeta`, `AuthMeta`,
+  `UploadMeta`, `FieldAdminMeta`, `LocaleTemplateOption`,
+  `NavCollection`, `NavGlobal` from `context/mod.rs` (only
+  internal `schema_doc.rs` referenced the last three, and it now
+  reaches them via deep path); `PaginationParams` /
+  `SearchQuery` re-exports from `handlers/collections/mod.rs`.
+- Genuine dead code deleted: `PageMeta::with_breadcrumbs`
+  + its test (handlers use `BasePageContext::with_breadcrumbs`
+  which writes both `self.breadcrumbs` and `self.page.breadcrumbs`
+  — the `PageMeta`-level helper was redundant and never called
+  from production code); `FieldContext::field_type_str` (zero
+  callers); `MfaQuery` struct + `Query<MfaQuery>` extractor in
+  `mfa_page` (collection slug travels through the
+  `crap_mfa_pending` JWT cookie, not via the URL query string —
+  full flow trace verified). `FieldContext::to_value` gated to
+  `#[cfg(test)]` because only test code uses it.
+- Workspace-split prep: the only two cross-module
+  imports into `admin` (`api::upload` and `service::upload`
+  pulling `parse_multipart_form` and `extract_join_data_from_form`
+  from `admin::handlers::forms`) are now top-level `crate::admin::Foo`
+  imports via a `pub(crate) use handlers::{...}` re-export at
+  `admin/mod.rs`. Zero `crate::admin::<sub>::*` deep paths from
+  outside `src/admin/`. Promotion stays `pub(crate)` since both
+  callers live in this crate; a future workspace split flips it
+  to `pub`.
+- `src/admin/` cleanup, third pass: additional improvements:
+  - **Cookie-name constants**: 16 raw `"crap_session"` /
+    `"crap_session_exp"` / `"crap_mfa_pending"` / `"crap_csrf"` /
+    `"crap_editor_locale"` literals across `auth/session.rs`,
+    `auth/mfa.rs`, `auth_middleware.rs`, `server.rs`,
+    `uploads/serve.rs`, and `shared/locale.rs` hoisted to
+    `pub(in crate::admin) const`s in `auth/session.rs`. A typo at
+    one site can no longer silently break auth — every cookie
+    write and read goes through the same constant.
+  - **`service_error_to_admin_response` + `task_join_error_response`**
+    helpers added to `handlers::shared::response`. The
+    `ServiceError` variant matching that 4 admin handlers
+    (`globals/edit_form`, `collections/items/list`,
+    `collections/item/edit_form`, plus more) duplicated inline
+    now collapses to a one-liner. The 403/500 page rendering and
+    the `error!` log of underlying details live in one place.
+    Mirrors the JSON-returning `service_error_to_response` that
+    `api/upload` already uses; the two are domain-shaped (HTML
+    vs JSON) so they stay separate functions.
+  - **`paths::*` migration completion**: the existing
+    `handlers::shared::paths` helpers covered ~36% of admin URL
+    construction; raw `format!("/admin/...")` and string literals
+    handled the rest. New helpers (`paths::LOGIN`,
+    `paths::COLLECTIONS_ROOT`, `paths::login_with_success(key)`,
+    `paths::collection_item_versions_page(slug, id, page)`,
+    `paths::collection_item_version_restore(slug, id, version_id)`)
+    + ~12 call-site rewrites bring the migration to ~95%. The
+    remaining literals are all axum route definitions in
+    `server.rs` (route patterns, not URL builders) and test
+    fixtures.
+  - **`registry.get_collection` let-else conversion**: 14 sites
+    used `match state.registry.get_collection(&slug) { Some(d) =>
+    d.clone(), None => return X }`. Converted to
+    `let Some(def) = state.registry.get_collection(&slug).cloned()
+    else { return X };` (Rust 1.65+ let-else, idiomatic).
+    4-line block → 3-line block, happy path no longer indented
+    inside a match arm. CLAUDE.md "Prefer early returns over
+    nesting" applied uniformly.
+  - **`AdminState::mcp_server` helper**: the 8-field manual splat
+    in `mcp_handler::mcp_http_handler` (`pool: state.pool.clone()`,
+    `registry: state.registry.clone()`, …) collapsed to
+    `state.mcp_server()`. Mirrors `AdminState::email_context()`
+    from the service/ pass; a future workspace split won't have
+    to re-derive the same plumbing.
+  - **Spawn-blocking body extraction**: 8 `spawn_blocking(move ||
+    { … })` closures with multi-statement bodies (build
+    `ServiceContext`, call service fn, sometimes do follow-up
+    work) extracted to named `*_blocking` functions per CLAUDE.md.
+    Each gets a typed `*BlockingInput` struct bundling the owned
+    captures: `RestoreVersionInput`, `RestoreGlobalVersionInput`,
+    `UndeleteInput`, `UpdateBlockingInput`, `CreateBlockingInput`,
+    `DeleteBlockingInput`, plus the simpler
+    `check_admin_access_blocking`,
+    `check_upload_access_blocking`,
+    `verify_credentials_blocking`,
+    `verify_mfa_blocking`,
+    `run_auth_strategy_blocking`. Closure bodies are now
+    single-fn-call shaped throughout `src/admin/`.
+  - **`admin/mod.rs` architecture sketch**: top-of-module doc
+    expanded from one line to a short architecture map covering
+    the submodule layout, cross-module conventions (cookies,
+    URLs, error response, spawn-blocking), and `AdminState`
+    plumbing. Anchors newcomers without forcing them to
+    reverse-engineer the layout.
+- `src/api/` code-quality cleanup pass. Module started in good
+  shape (zero `super::super`, zero deep-path imports from
+  outside, zero manual `Default` impls, all files under 1000
+  LOC). Concrete changes:
+  - **Structural cleanup.** Sole `#[allow(dead_code)]` on
+    `ContentService` removed by tracing the one truly-dead
+    `jwt_secret` field through the data flow: it was set by both
+    `ContentServiceDeps` and `GrpcStartParams` but never read.
+    The actual JWT operations all flow through `token_provider`
+    (a `SharedTokenProvider` constructed externally from the same
+    secret), so the duplicate field was vestigial. Removed from
+    `ContentService`, `ContentServiceDeps`,
+    `ContentServiceDepsBuilder` (field + setter), `GrpcStartParams`,
+    `GrpcStartParamsBuilder`, plus the 23 `.jwt_secret(...)`
+    setter calls scattered across 14 integration tests in
+    `tests/`. Builder colocation: `ContentServiceDeps` +
+    `ContentServiceDepsBuilder` collapsed into a new
+    `handlers/content_service_deps.rs` (the struct previously
+    lived in `handlers/mod.rs`, violating CLAUDE.md's
+    "mod.rs files should contain no business logic"); the
+    builder's old `handlers/deps_builder.rs` deleted.
+    `GrpcStartParams` + `GrpcStartParamsBuilder` collapsed into
+    `server.rs`; `server_builder.rs` deleted. Top-level
+    `pub use server_builder::GrpcStartParamsBuilder` re-export in
+    `api/mod.rs` removed (builders are reached via
+    `Type::builder()`, not separate import). `pub mod
+    rate_limit` demoted to `pub(crate) mod` (no external
+    consumers).
+  - **Pattern parity with the `admin/` cleanup.** Four
+    `match registry.get_collection(&slug) { Some(d) => d.clone(),
+    None => return X }` sites converted to
+    `let Some(def) = ....cloned() else { return X };` (Rust 1.65+
+    let-else). Twenty-one `spawn_blocking(move || { … })`
+    closures with multi-statement bodies extracted to named
+    `*_blocking` functions taking typed `*BlockingInput` structs
+    bundling the owned captures, per CLAUDE.md's "the closure
+    should be a single function call" rule. Per-site structs:
+    `TriggerJobBlockingInput`, `ListJobRunsBlockingInput`,
+    `GetJobRunBlockingInput`, `CountBlockingInput`,
+    `FindBlockingInput`, `FindByIdBlockingInput`,
+    `ListVersionsBlockingInput`, `RestoreVersionBlockingInput`,
+    `CreateBlockingInput`, `UpdateBlockingInput`,
+    `DeleteBlockingInput`, `UndeleteBlockingInput`,
+    `UnpublishBlockingInput`, `ValidateBlockingInput`,
+    `CreateManyBlockingInput`, `UpdateManyBlockingInput`,
+    `DeleteManyBlockingInput`, `GetGlobalBlockingInput`,
+    `UpdateGlobalBlockingInput`, `MeBlockingInput`,
+    `LoginBlockingInput`, `VerifyEmailBlockingInput`,
+    `ResetPasswordBlockingInput`, `UploadCreateBlockingInput`,
+    `UploadUpdateBlockingInput`, `UploadDeleteBlockingInput`,
+    `ResolveSubscribeAccessBlockingInput`. The four
+    `account.rs` action sites (`lock`/`unlock`/`verify`/
+    `unverify`) DRY'd via a single `account_action_blocking`
+    helper that takes a `fn(&ServiceContext, &str) ->
+    Result<(), ServiceError>` action pointer + a shared
+    `AccountActionBlockingInput`, plus an
+    `account_action_input` constructor method that toggles
+    `invalidation_transport` for the lock-only flow.
+  - **gRPC error mapping** — nothing new to add. The existing
+    `From<ServiceError> for Status` impl in
+    `handlers/collection/error_mapping.rs` already covers every
+    variant with the right gRPC status code (regression tests
+    pin the `UniqueViolation`→`AlreadyExists` and
+    `InvalidToken`→`Unauthenticated` mappings). All 23
+    `Status::from(ServiceError::classify(...))` /
+    `Status::from(e.reclassify(...))` call sites use this impl
+    — no inline matching to consolidate.
+  - **Builder Option-symmetry.** `account_action_blocking` had
+    one residual
+    `if let Some(transport) = input.invalidation_transport
+    { builder = builder.invalidation_transport(Some(transport)); }`
+    from the lock-only special case. Since
+    `ServiceContextBuilder::invalidation_transport` already
+    takes `Option<SharedInvalidationTransport>`, the wrapper was
+    redundant — flattened to `.invalidation_transport(input
+    .invalidation_transport)` in the build chain. The other 11
+    `.invalidation_transport(Some(...))` / `.cache(Some(...))` /
+    `.event_transport(Some(...))` call sites in the codebase
+    were verified to source from non-Option values where the
+    `Some(_)` wrap is intentional, not a violation.
+  - **gRPC blocking-fn return types.** `reset_password.rs` /
+    `verify_email.rs` /
+    `me.rs` / `login.rs` blocking fns previously returned
+    `Result<_, anyhow::Error>` and the call site did the work
+    of converting to `Status` via a second `.map_err(|e| {
+    error!(...); Status::internal(...) })` after the
+    JoinError-to-Status `.map_err(...)?`. Each blocking fn now
+    returns `Result<_, Status>` directly — `pool.get()` /
+    `conn.transaction()` / `tx.commit()` failures map to
+    `Status::internal` inline (with `inspect_err` for the
+    log side-effect, `map_err` only for the type transform),
+    and `ServiceError`-returning service calls map via
+    `.map_err(Status::from)` so they pick up the proper variant
+    from `error_mapping::From<ServiceError> for Status` instead
+    of being collapsed to a generic 500 (incidental fix:
+    `verify_email` and `update_global_document` used to surface
+    every `ServiceError` as 500 internal — they now map to
+    their semantic gRPC variant). Call sites use the standard
+    `??` pattern matching the rest of the api/ tree.
+  - **`inspect_err` / `map_err` separation, codebase-wide.**
+    Logging is a side effect and shouldn't live inside the
+    closure that transforms the error type. Twenty additional
+    sites across api/ + admin/ + commands/
+    were converted from `.map_err(|e| { error!("...", e);
+    SomeReturnError })` to `.inspect_err(|e| error!("...", e))
+    .map_err(|_| SomeReturnError)`. Files touched:
+    `api/handlers/{auth/login, jobs/{trigger,get_run,list_runs,
+    list}, globals/{get,update}, collection/versions/{list,
+    restore}, content_service, subscribe}.rs`,
+    `admin/handlers/shared/access.rs`, and
+    `commands/serve/startup.rs` (where the closure was a no-op
+    `|e| { error!(...); e }` — collapsed to `.inspect_err(...)?`
+    with no map_err at all).
+
+- Continued the alpha.8 admin-context typing work into the rest of
+  the app: audited every non-admin `serde_json::Value` /
+  `HashMap<String, Value>` usage and typed the cases with a
+  compile-time shape — email template contexts, webhook payload,
+  backup manifest, upload HTTP API responses, image-sizes nested
+  structure, MCP collection tool responses, MCP field-type table.
+  The remainder is genuinely dynamic — user document fields, the
+  gRPC proto bridge, JSON-RPC envelopes, JSON Schema output,
+  user-supplied filter/validation values, the Lua hook context bag —
+  and stays as `Value`.
+- `core/` module restructured for colocation. Every struct that has a
+  builder now lives in a single file with its builder and tests next
+  to it (claims, document, version_snapshot, field_admin,
+  field_definition, collection_definition, global_definition,
+  job/definition, richtext_node_def). The orphaned `*_builder.rs`
+  pair-files are gone. `JobRunBuilder` moved from `job/definition.rs`
+  into `job/run.rs` next to `JobRun`. No public-API change.
+- `core/collection/shared.rs` (269 LOC, 9 types) decomposed into
+  per-concept files: `access.rs`, `hooks.rs`, `admin_config.rs`,
+  `labels.rs` (also home to the `resolve_label` helper, with new
+  unit tests), `mcp_config.rs`, `versions_config.rs`, `live.rs`
+  (`LiveSetting` + `LiveMode`), `index_definition.rs`. `shared.rs`
+  is gone.
+- `core::` top-level re-export surface tightened for consistency.
+  `GlobalDefinition`, `RichtextNodeDef`, `JobDefinition`, `JobRun`,
+  `JobStatus`, `JobLabels`, `FieldAccess`, `FieldHooks`,
+  `McpFieldConfig`, `FieldError`, and `ValidationError` now reachable
+  as `crate::core::*` without going through their submodule. Builders
+  remain `pub` and continue to be reached via `Type::builder()`.
+- Removed every `#[allow(...)]` escape hatch from `core/`. The
+  remaining warnings the audit surfaced were addressed at the source
+  (typed param structs replacing `unused_variables` markers in
+  `core/rate_limit/factory.rs`, dead code that turned out to be live,
+  fields that were actually used in 5+ places).
+- Replaced four panic-on-missing-required builders with plain structs
+  + struct-literal construction since the builders' only value was
+  ceremony: `UploadedFile`, `ProcessedUpload`, `QueuedConversion`,
+  `SizeResult`. Builders that aid DX (chained construction with
+  defaults) are kept.
+- `queue_email` reduced from 7 → 3 args via `EmailJobData` payload
+  struct (`to`, `subject`, `html`, `text`) and `EmailConfig` for
+  retry/queue-name policy. Per-call `retries` override flows through
+  the captured `EmailConfig` clone in the Lua hook layer without
+  changing the function signature.
+- `save_resized_image` reduced from 7 → 2 args via
+  `SaveResizedImageInput` builder.
+- `core/event/mod.rs` (376 LOC) split into `types.rs`, `receiver.rs`,
+  `transport.rs`, and `sequence.rs`. `mod.rs` is now 35 lines of
+  declarations + re-exports.
+- Qualified-path cleanup in `core/`: no more `super::super::*`
+  chains, no `crate::core::field::FieldTab`-style re-export
+  re-traversals, no inline `use` statements inside function bodies.
+  All imports use the shortest available path per CLAUDE.md.
+- Typed `serde_json::Value` write pipeline end-to-end. Previously,
+  scalar write data was stringified at every entry point
+  (`prost_struct_to_hashmap` for gRPC, form parsers for admin) and
+  re-parsed back into `DbValue` at the DB layer — losing precision
+  for typed numeric inputs (gRPC `int64` rounded through `f64`) and
+  conflating `null` with empty string. Now typed values flow from
+  every entry boundary (`prost_struct_to_json_map` for gRPC,
+  `service::values_from_strings` adapter at the form/admin boundary,
+  Lua's already-typed bridge, MCP's `extract_data_from_args`) all
+  the way through `WriteInput`, `service::persist::*`,
+  `query::create`/`update`/`update_global`, `set_array_rows`, and
+  `coerce_json_value`. The dead `prost_struct_to_hashmap` shim is
+  deleted.
+- `core::db::query::coerce_json_value` rewritten to dispatch on
+  `field_type` first (was: dispatch on `Value` variant first). The
+  old shape produced `Integer(1)` for a `Bool(true)` reaching a
+  `Text` field — the typed-pipeline rework caught this; covered by
+  16 cross-type tests in `core::db::query::helpers::tests`. The
+  function is now live (called from every typed write); its
+  `#[allow(dead_code)]` is gone.
+- `WriteInput.data` and `WriteInput.join_data` merged into a single
+  `data: DocumentFields` field. The split was historical — `data` was
+  stringified columns, `join_data` was typed arrays/blocks/has-many.
+  Now both flow through one typed map; the internal dispatch by
+  `field.field_type` (column vs join table) happens inside
+  `query::create`/`save_join_table_data`.
+  `service::persist::create`/`persist_update`/`persist_bulk_update`
+  signatures simplified — single `data` arg replaces the
+  `(final_data, hook_data)` pair. `build_hook_data` helper deleted
+  (the merge it performed is now upstream). `strip_denied_fields`
+  reduced from `(denied, &mut data, join_data) -> Cow<...>` to
+  `(denied, &mut data)` — pure mutation, no return.
+- New `crate::core::DocumentFields` newtype around the
+  `HashMap<String, Value>` shape that user-defined document fields
+  travel through. Distinct at the type level from the
+  identically-shaped `ReqContext` (per-request hook scratchpad), so
+  the two can no longer be mixed up at boundaries even though they
+  serialize the same way. Replaces `HashMap<String, Value>` in
+  `Document.fields`, `WriteInput.data`, `HookContext.data`,
+  `MutationEvent.data` / `MutationEventInput.data` /
+  `PendingEvent.data`, `DocumentRef.data`, the `query::create` /
+  `query::update` / `update_global` write APIs, the persist layer
+  (`persist_create` / `persist_update` / `persist_version`),
+  collection bulk service ops (`CreateManyItem.data`, `update_many`,
+  `delete` via empty payload), the read-write hook runner
+  (`PublishEventInput.data`, `run_before_broadcast`,
+  `fire_before_read`, `apply_after_read_for_event`,
+  `check_access`/`check_live_setting`), the reference-count helpers
+  (`ref_count::after_create_from_data`, `data_touches_refs`,
+  `lock_ref_targets_from_data`, `compute_refs_from_data`), the
+  version-snapshot extractor (`extract_snapshot_data`,
+  `collect_join_data_from_snapshot`), the join-save writer
+  (`save_join_table_data`), the upload helpers
+  (`delete_upload_files`, `publish_upload_event`), the admin
+  `validate` handler (`ValidateRequest.data`,
+  `flatten_document_values`), `extract_join_data_from_form`, the
+  `field_context::enrich/*` doc-field params, the API
+  `extract_auth_password` helper, the bench helpers
+  (`resolve_bench_data` return, `to_string_map`,
+  `randomize_unique_fields`, `generate_synthetic_data`), the
+  in-memory `FilterClause` evaluator
+  (`filter::memory::matches_constraints` /
+  `matches_filter`, used by SSE + gRPC Subscribe), the after-read
+  field-hook execution path (`run_field_hooks_inner` /
+  `run_field_hooks_recursive` / `run_single_field_hook` /
+  `call_field_hook_ref`), and the populate-cache view
+  (`PopulatedRef.fields`). Derives `Default`, `Serialize`,
+  `Deserialize`, and `JsonSchema` with `#[serde(transparent)]` +
+  `#[schemars(transparent)]` so wire format and OpenAPI/MCP schemas
+  are byte-identical to the prior `HashMap`. Implements `Deref` /
+  `DerefMut` to `HashMap<String, Value>`, `From<HashMap>` /
+  `Into<HashMap>`, `IntoIterator` / `FromIterator` / `Extend`, plus
+  `get_str` / `get_bool` / `get_i64` / `get_f64` typed accessors.
+  Builders accept `impl Into<DocumentFields>` so existing call sites
+  that already had a `HashMap` keep compiling. Sites that are
+  semantically *not* document fields — richtext node attrs (Prosemirror
+  `data-attrs`), array/blocks sub-rows in join tables, the generic
+  `lua_table_to_json_map` Lua→JSON adapter, the generic
+  `hashmap_to_lua` marshaller (called for both `DocumentFields` and
+  `ReqContext` via Deref), the protobuf wire-format
+  `prost_struct_to_json_map` boundary, and the 3-context
+  `run_validate_function_inner` validator helper (richtext / sub-row
+  / doc) — stay as `HashMap` to preserve their genuine shape
+  ambiguity.
+- `core::db::query::helpers::extract_snapshot_data` returns
+  `DocumentFields` (was `String`). Version-restore path preserves
+  typed precision now. `snapshot_val_to_string` helper deleted —
+  was only used to flatten typed snapshot values into strings before
+  reparse.
+- `service::types::values_from_strings(map: HashMap<String, String>)
+  -> HashMap<String, Value>` is the canonical boundary adapter for
+  the form-input path (HTML forms genuinely produce strings; this
+  wraps each value in `Value::String`). Lives in
+  `service/types/write_input.rs` next to `WriteInput`.
+- Removed every `#[allow(...)]` escape hatch from `db/`. The two
+  `too_many_arguments` markers in `db/query/filter/resolve.rs` are
+  gone: `resolve_array_filter`, `resolve_blocks_filter`, and
+  `resolve_relationship_filter` now share a single typed
+  `SubFilterCtx<'_>` input struct built once in `resolve_filter`.
+  The 8-arg `entry()` test helper in `db/query/images.rs` is replaced
+  with a `default_entry()` returning `NewImageEntry<'static>`, with
+  per-test overrides via struct-update syntax. The
+  `cfg_attr(not(feature = "postgres"), allow(dead_code))` on
+  `DbPool::from_backend` is replaced with a real `cfg(feature =
+  "postgres")` since the function only compiles for that backend.
+  The stale `cfg_attr(not(test), allow(dead_code))` on
+  `rebuild_junction_table_for_polymorphic` is gone — the function is
+  reached from `sync_relationship_table` in production builds, the
+  marker was a leftover.
+- Qualified-path cleanup in `db/`: every `super::super::` chain (16
+  occurrences across `migrate/collection/`, `query/populate/single/`,
+  `query/populate/batch/`, `query/join/hydrate/`) replaced with the
+  shortest available `crate::db::*` path per CLAUDE.md. Inline `use`
+  statements inside fn bodies (test helpers in `migrate/global.rs`,
+  `migrate/collection/alter.rs`, `query/auth/password.rs`,
+  `query/fts/sync.rs`, `query/read/find.rs`, `query/read/count.rs`,
+  `query/validation.rs`, `query/join/hydrate/{mod,save,locale,group}.rs`,
+  `query/populate/batch/dispatch.rs`) lifted to the `mod tests`
+  preamble. No public-API change.
+- `db/query/ref_count.rs` (1939 LOC) split into a `ref_count/`
+  module with one concept per file: `outgoing_ref.rs` (the
+  `OutgoingRef` newtype + `push_ref` helper), `api.rs` (public
+  orchestrators — `get_ref_count`, `after_create`,
+  `after_create_from_data`, `after_update`, `before_hard_delete`,
+  `snapshot_outgoing_refs`, `data_touches_refs`,
+  `lock_ref_targets_from_data`), `read.rs` (DB read path —
+  `read_outgoing_refs` + `collect_*` helpers), `compute.rs`
+  (data-driven path — `compute_refs_from_data` + helpers),
+  `delta.rs` (`to_delta_map` + `apply_deltas` + `find_missing_ids`).
+  `mod.rs` is declarations + re-exports only — no business logic.
+  Tests live next to the functions they exercise (api.rs holds the
+  orchestrator integration tests + `after_create_from_data` tests;
+  delta.rs holds the delta-map and apply-deltas tests; read.rs
+  holds the lone direct read test). Shared test fixtures
+  (`setup_db`, `no_locale`, `insert_doc`, etc.) live in
+  `test_helpers.rs`. Largest split file is 928 LOC (api.rs incl.
+  ~640 LOC of tests); all others well under the soft 1000-line
+  limit.
+- `db/query/read/find.rs` (1889 LOC) split into a `read/find/`
+  module: `runner.rs` (the public `find` entrypoint plus the
+  small SELECT/limit/map helpers — `build_select`, `apply_fts`,
+  `apply_soft_delete`, `apply_limit_offset`, `map_rows`),
+  `cursor.rs` (`SortInfo` + `apply_cursor_keyset` +
+  `inner_keyset_clause`), `sort.rs` (`resolve_sort` +
+  `apply_order_by` + `is_valid_sort_column`). `mod.rs` is
+  declarations + `pub use runner::find;` only. Tests live next to
+  the functions they exercise: cursor pagination tests in
+  cursor.rs (14), sort-validation tests in sort.rs (7), basic
+  find / soft-delete / drafts / edge-case tests in runner.rs
+  (14). Shared `test_def` and `setup_db` fixtures in
+  `test_helpers.rs`. Largest split file is 831 LOC (runner.rs).
+- `db/migrate/helpers/join_tables.rs` (1360 LOC) split into a
+  `join_tables/` module by table type: `orchestrator.rs`
+  (`sync_join_tables` + the recursive walker that dispatches each
+  field to the per-type sync helper), `relationship.rs` (junction
+  tables for has-many relationships, including the polymorphic
+  rebuild path with its 8 tests), `array.rs` (array join tables
+  with create/alter helpers and 13 tests), `blocks.rs` (blocks
+  tables with create / locale-column-add and 8 tests). `mod.rs`
+  is declarations + the `pub(in crate::db::migrate)` re-export of
+  `sync_join_tables` only. The previously `pub(super)`
+  `rebuild_junction_table_for_polymorphic` is now private — its
+  tests live in the same file. Largest split file is 513 LOC
+  (relationship.rs).
+- `db/query/jobs.rs` (1281 LOC) split into a `jobs/` module by
+  operation type: `lifecycle.rs` (insert/complete/fail with retry
+  backoff, heartbeat, mark-stale + 9 tests), `claim.rs`
+  (`claim_pending_jobs` with sqlite + postgres backends +
+  `parse_job_row` + 5 tests), `query.rs` (read-only queries:
+  count_*, list_*, get_*, last_*, find_stale_jobs + the wide
+  `row_to_job_run` parser + 9 tests), `bulk.rs`
+  (`cancel_pending_jobs` + `purge_old_jobs` + 2 tests),
+  `cron.rs` (`try_claim_cron_window`). `mod.rs` is declarations
+  + `pub use` re-exports only. Shared `setup_db` test fixture in
+  `test_helpers.rs`. Largest split file is 452 LOC (query.rs).
+- `db/query/filter/resolve.rs` (1278 LOC) split into a
+  `filter/resolve/` module by responsibility: `types.rs`
+  (`ResolvedFilter` + `SubqueryCondition` + `BlockWalkResult`
+  filter shapes), `lookup.rs` (`find_field_recursive` +
+  `lookup_column_field_type` + group-path walker — shared
+  field-tree traversal), `normalize.rs`
+  (`normalize_filter_fields` rewriting Group dot-notation to
+  flat `__`-joined column names + 8 tests), `path.rs`
+  (`resolve_filter` + `SubFilterCtx` + per-type resolvers for
+  Array/Blocks/Relationship + 14 tests), `blocks.rs`
+  (`walk_block_fields` + `build_block_type_expr` +
+  `build_json_each_source` for JSON-extract path building + 13
+  tests). `mod.rs` is declarations + re-exports only. Shared
+  test fixtures (`make_field`/`make_array_field`/etc.,
+  `test_conn`) in `test_helpers.rs`. The previously
+  filter-private types are now `pub(in crate::db::query::filter)`
+  so the WHERE-clause builder still sees them. Largest split
+  file is 471 LOC (path.rs).
+- `db/query/read/back_references.rs` (1092 LOC) split into a
+  `read/back_references/` module by scan target: `types.rs`
+  (`BackReference` result + `BackRefScan` invariant context),
+  `scan.rs` (the public `find_back_references` orchestrator +
+  `scan_fields` recursive walker + `scan_relationship` +
+  `query_has_one`/`query_has_many` + 12 integration tests),
+  `sub_fields.rs` (`scan_array_sub_fields` + `scan_blocks` for
+  the join-table scanners + 3 tests), `helpers.rs` (`query_ids`
+  + `query_ids_simple`/`_simple_params` self-ref-filtering
+  helpers + the cross-module `field_display_label` shared with
+  `missing_relations`). `mod.rs` is declarations + re-exports
+  only. Shared test fixtures in `test_helpers.rs`.
+  `field_display_label` is now `pub(in crate::db::query::read)`
+  so the missing-relations sibling continues to import it via
+  `use super::back_references::field_display_label`. Largest
+  split file is 636 LOC (scan.rs).
+- `db/query/fts/sync.rs` (1007 LOC) split into a `fts/sync/`
+  module by operation phase: `helpers.rs`
+  (`get_fts_table_columns` introspection, shared between
+  migration and runtime upsert), `migration.rs`
+  (`sync_fts_table` + `bulk_populate_fast` /
+  `bulk_populate_slow` for the migration-time
+  drop-and-rebuild path + 8 tests), `upsert.rs` (per-document
+  `fts_upsert` / `fts_upsert_with_registry` +
+  `resolve_logical_columns` + `extract_field_texts` + Postgres
+  vs SQLite upsert backends + 10 tests), `delete.rs`
+  (`fts_delete` + 2 tests). `mod.rs` is declarations +
+  `pub use` re-exports only. Shared test fixtures
+  (`setup_db`, `simple_def`, `text_field`, `localized_text_field`,
+  `insert_post`, `locale_config_en_de`) live in
+  `test_helpers.rs`. Largest split file is 469 LOC
+  (migration.rs).
+- Removed pure-ceremony `AlterCtxBuilder` in
+  `db/migrate/collection/alter.rs` (3 panic-on-missing
+  required fields, single call site) — replaced with plain
+  struct-literal construction of `AlterCtx`. Builders that
+  exist solely to enforce required fields lose to plain
+  struct literals when the struct is constructed in one
+  place.
+- `crate::db::PaginationResult` and `crate::db::Singleflight`
+  promoted to top-level `db::*` re-exports (each used twice or
+  more externally through the longer `db::query::` path). The
+  five external call sites in admin/, service/types/, and test
+  modules updated to the short path.
+- `db/migrate/backfill_ref_counts.rs` argument-count cleanup:
+  introduced `BackfillCtx { conn, locale_config }` invariant
+  context threaded through every
+  helper. `backfill_has_one` shrinks from 7 args to 4 (now
+  takes `&FieldDefinition` and extracts `default_collection`/
+  `is_polymorphic`/`is_localized` internally). `backfill_has_many`
+  takes `&RelationshipConfig` instead of separate `default_collection
+  + is_polymorphic`. `backfill_column_refs` likewise takes
+  `&RelationshipConfig`. All private helpers now ≤ 4 args.
+- `validate_find_pagination` privatized — it had a public
+  `pub use` re-export but zero external callers; only
+  `PaginationCtx::validate` invoked it. The shorter
+  `PaginationCtx::validate(req_limit, req_page,
+  req_after_cursor, req_before_cursor)` is the single public
+  entrypoint.
+- Final `super::super::*` chain pass: 10 chains in the
+  `read/find/{cursor,sort,runner}.rs`,
+  `read/back_references/{scan,sub_fields}.rs`,
+  `filter/resolve/{path,blocks}.rs`, and
+  `fts/sync/{migration,upsert,delete}.rs` test modules
+  introduced by my own splits all converted to the
+  `crate::db::query::*::test_helpers` form for consistency
+  with the earlier ref_count split. Zero `super::super::`
+  paths now anywhere in `src/db/`.
+- `src/service/` code-quality cleanup pass.
+  Already-clean axes (zero `#[allow(...)]`, zero
+  `super::super::` chains, zero inline-use in fn bodies, all
+  files < 1000 LOC, builders colocated with types, no `>4`-arg
+  fns) verified untouched. Active changes:
+  - `service/types/service_context.rs` (702 LOC, 7 types)
+    split into `email_context.rs` (`EmailContext`),
+    `pending_event.rs` (`PendingEvent` + `EventQueue` +
+    `flush_queue`), `pending_verification.rs`
+    (`PendingVerification` + `VerificationQueue` +
+    `flush_verification_queue`), and a slimmed
+    `service_context.rs` (614 LOC, holds `Def` +
+    `ServiceContext` + `ServiceContextBuilder` +
+    `ResolvedConn`).
+  - Dead `crate::service::ReadOptions` /
+    `ReadOptionsBuilder` (zero call sites, never constructed
+    or passed as a parameter) and the entire `read/options.rs`
+    file deleted.
+  - Optional-setter symmetry fix:
+    `PersistOptionsBuilder.locale_config` takes
+    `Option<&'a LocaleConfig>` (was `&'a LocaleConfig`),
+    matching the `Option<&...>` shape on the other
+    optional-attachment methods on the same builder. The two
+    callers in `service/write/{create,update}.rs` lost their
+    `if let Some(lctx) = ...` wrappers in favor of inline
+    `.locale_config(input.locale_ctx.map(|c| &c.config))`.
+  - `*Builder` types (`WriteInputBuilder`,
+    `ServiceContextBuilder`, `PersistOptionsBuilder`,
+    `Find{ById,Documents}InputBuilder`,
+    `CountDocumentsInputBuilder`, `LuaReadHooksBuilder`,
+    `LuaWriteHooksBuilder`) dropped from
+    `crate::service::*` re-exports. Builders are accessed via
+    `Type::builder()`; no external caller imported them by
+    name.
+  - Visibility tightening across `service/`.
+    Modules `document_info`, `helpers`, `hooks`,
+    `user_settings`, `write`, `read` demoted from `pub mod`
+    to `pub(crate) mod` (zero deep-path external users —
+    one `service::read::{validate_*}` call site in
+    `api/handlers/collection/filter_builder.rs` rewritten
+    to use the existing top-level re-export). Functions
+    only used inside `service/` demoted to `pub(crate)` at
+    their definition: `delete_document_in_conn`,
+    `update_document_in_conn`, `update_many_single_in_conn`,
+    `persist_bulk_update`, `unpublish_with_snapshot`,
+    `send_verification_email`, plus the `DeleteResult`
+    return type that they expose. The matching
+    `pub(crate) use` re-exports from `service/mod.rs` follow
+    suit. `undelete_document_in_conn` and
+    `unpublish_document_in_conn` go further — only called
+    inside their own files, so they become plain `fn`. The
+    stale `pub use` re-exports for them in
+    `collection/mod.rs` are deleted.
+  - Additional cleanup:
+    1. `ServiceContext::flush_event_queue` deleted — defined
+       and documented but never called; all 9 callers use the
+       free `flush_queue(ctx, &queue)` function instead.
+       (Clippy doesn't catch this kind of dead `pub fn`
+       because it's reachable from a `pub` parent and could be
+       used by downstream crates.)
+    2. New `EmailContext::send_verification(pool, slug,
+       doc_id, email)` method dedups two identical 7-arg
+       `send_verification_email` calls (one in
+       `ServiceContext::maybe_send_verification`, one in
+       `flush_verification_queue`).
+    3. New `ContentService::email_context()` helper in
+       `api/handlers/content_service.rs` and
+       `AdminState::email_context()` in `admin/mod.rs`
+       collapse three identical 3-clone `EmailContext { ... }`
+       construction sites (gRPC `create` + `create_many`,
+       admin `create_action`).
+    4. `_core` suffix on transaction-agnostic functions
+       renamed to `_in_conn` (more self-documenting:
+       "operates on the connection in `ctx`"):
+       `create_document_core` → `create_document_in_conn`,
+       `update_document_core` → `update_document_in_conn`,
+       `delete_document_core` → `delete_document_in_conn`,
+       `update_many_single_core` → `update_many_single_in_conn`,
+       `update_global_core` → `update_global_in_conn`,
+       and the (now-private) `undelete_document_in_conn` /
+       `unpublish_document_in_conn`. Doc comments and bench
+       caller updated.
+    5. Panic-on-wrong-variant accessors converted to
+       `Result<&_, ServiceError>`:
+       `ServiceContext::collection_def()` /
+       `global_def()` / `fields()` now return
+       `Result<&CollectionDefinition, _>` /
+       `Result<&GlobalDefinition, _>` /
+       `Result<&[FieldDefinition], _>` so misuse surfaces as
+       `ServiceError::Internal` instead of crashing the
+       process. All 46 call sites across `service/` updated
+       to propagate with `?`; the two `post_process` helpers
+       (which return `()`) use `let Ok(def) = ... else {
+       return };` to skip cleanly when the wrong def variant
+       is wired up.
+- `src/hooks/` code-quality cleanup pass.
+  Initial state: 28k LOC, 108 files, 6 files >1000 LOC.
+  Final: 5327 tests pass, 0 failed; clippy clean. Active
+  changes:
+  - Removed every `#[allow(...)]` escape hatch — 4 of 5 at
+    the root cause: stale `dead_code` on `HookEvent` (every
+    variant is in use), `unreachable_code` in the
+    `HookDepthGuard` test (rewrote the closure to a block
+    scope so the early return doesn't have a dead `Ok(())`
+    after it), `dead_code` on `validate_timezone` deleted
+    (function + tests; only used by its own tests). The 5th
+    (`clippy::too_many_arguments` on
+    `run_field_hooks_with_conn`) disappeared as a side effect
+    of the walker refactor below. Also dropped
+    `clippy::only_used_in_recursion` by deleting the unused
+    `lua: &Lua` param from `lua_to_json` / `lua_to_json_inner`
+    and propagating the deletion through 5 helper fns + ~22
+    call sites.
+  - Eliminated all `super::super::` chains: 5 in
+    `api/{fields,email}.rs`, `api/serializers/{auth,upload}.rs`,
+    `api/parse/relationship.rs` rewritten to `crate::hooks::*`.
+  - Deep-path import scan turned up 4 hits in test modules —
+    fixed by promoting `DisplayConditionResult` to a top-level
+    `hooks::*` re-export (`HookRunner` was already there) and
+    rewriting the 4 callers to the short path.
+  - Wide-arg fns refactored to typed structs or the walker
+    pattern:
+    - `validate_nested_rows` / `validate_leaf_sub_field`
+      (5 args each) bundle `(sf, qualified)` into a
+      `SubFieldCall<'_>` struct.
+    - `polymorphic::check_one` (5 args): drop the redundant
+      `rc: &RelationshipConfig` param — re-extracted from
+      `field.relationship.as_ref()` inside the function. Now
+      4 args.
+    - `register_collection_functions` /
+      `register_global_functions` (5 args): bundle the three
+      `&'a SharedRegistry / &'a LocaleConfig /
+      &'a PaginationConfig` refs into a `CrudRegisterCtx<'a>`
+      struct.
+    - `globals_update_inner` (6 args): bundle `slug, data_table,
+      opts` into `GlobalsUpdateInput`. Now 4 args.
+    - `run_field_hooks` (6 args) / `run_field_hooks_with_conn`
+      (8 args including `&self`) /
+      `run_field_hooks_inner` (6 args) /
+      `run_field_hooks_recursive` (7 args) /
+      `run_single_field_hook` (7 args): full walker refactor.
+      `FieldHooksCall<'a>` bundles `(fields, event, collection,
+      operation)`; `FieldWriteCtx` extends with
+      `infra: Option<LuaCrudInfra>`; the recursive helpers
+      become methods on a `FieldHookWalker<'a>` struct that
+      holds `(lua, call)`. Public methods now take
+      `(&mut data, &call)` or `(&mut data, &call, wctx)` —
+      ≤ 4 args + receiver throughout.
+    - `validate_fields_recursive` (7 args) /
+      `validate_scalar_field` (7 args): replaced with a
+      `ValidationWalker<'a>` struct holding `(lua, data, ctx)`
+      with `walk()` and `scalar()` methods (≤ 4 args +
+      receiver). Public callers construct the walker
+      explicitly:
+      `ValidationWalker::new(lua, data, ctx).walk(fields, "", false, &mut errors)`.
+  - File-size splits — six files exceeded the 1000-line soft
+    limit:
+    - `lifecycle/execution.rs` (1132) → `execution/`:
+      `mod.rs` (declarations + re-exports only),
+      `runtime.rs` (315 LOC, generic hook execution),
+      `after_read.rs` (151), `broadcast.rs` (95),
+      `display.rs` (148), `field_hooks.rs` (479).
+      Tests redistributed to live with the code they
+      exercise.
+    - `lifecycle/validation/recursive.rs` (1151) →
+      `recursive/` with `dispatch.rs` + `scalar.rs` (the
+      walker + its scalar method in a separate `impl` block).
+      Tests split by topic (layout-dispatch tests in
+      `dispatch.rs`, scalar/locale/richtext tests in
+      `scalar.rs`).
+    - `lifecycle/validation/richtext_attrs.rs` (1284) →
+      `richtext_attrs/` with `extract.rs` (122 — node
+      extraction from JSON + HTML), `validate.rs` (924 —
+      `RichtextValidationCtx` + per-attr checks + tests),
+      `before_validate.rs` (256 — before_validate transform
+      pipeline).
+    - `lifecycle/access.rs` (1249) → `access/` with
+      `collection.rs` (478 — collection-level hook +
+      `parse_access_constraints`), `field.rs` (672 —
+      field-level read/write checks + recursive helpers),
+      `test_helpers.rs` (125 — shared `setup_lua` /
+      `make_field` / `make_user_doc` fixtures, factored out
+      so both collection.rs and field.rs tests can use them
+      without duplication).
+    - `api/parse/fields.rs` (1068) → `fields/` with
+      `constraints.rs` (173 — `Constraints` struct + numeric
+      / length / default-value / date-config parsers),
+      `single.rs` (861 — `parse_single_field` orchestrator
+      + sub-parsers + tests), `top.rs` (38 —
+      `parse_fields` entry + duplicate-name check).
+    - `lifecycle/validation/sub_fields/tests.rs` (1436 — pure
+      tests file) → `sub_fields/tests/` with `basic.rs`
+      (Array+Blocks fundamentals), `containers.rs`
+      (single-container-in-array), `nesting.rs` (multi-level
+      nesting + richtext), `value_constraints.rs` (drafts +
+      length/numeric/email/select bounds). Each under 470
+      LOC.
+    - All `mod.rs` files post-split contain only `mod`
+      declarations and `pub(crate) use` re-exports; zero
+      business logic lives in `mod.rs` per CLAUDE.md.
+  - Stale re-exports dropped: `pub use validate::
+    {validate_hook_references, validate_locale_field_collisions}`
+    from `hooks/mod.rs` — both functions are only called from
+    `init.rs` via `super::validate::*`, so the top-level
+    re-export was dead.
+  - Dropped the unused `lua: &Lua` param
+    from `parse_field_admin`, `lua_table_to_json_map`,
+    `lua_table_to_auth_user`, `read_context_back`,
+    `json_encode`, `parse_item`, `extract_data`,
+    `read_hook_result` — none used `lua` for anything other
+    than pre-cascade forwarding to `lua_to_json`. ~10 fn
+    signatures + 30+ call sites simplified.
+  - Additional cleanup: 4 `mod.rs` files in `hooks/` had
+    business logic in violation of CLAUDE.md "mod.rs files
+    should contain no business logic." Extracted:
+    `lifecycle/validation/mod.rs` (117 LOC) — `ValidationCtx`
+    + builder to `context.rs`, `validate_fields_inner` to
+    `runner.rs`. `api/mod.rs` — `VmLabel` to `vm_label.rs`.
+    `lifecycle/runner/mod.rs` — `HookRunner` struct + impl
+    to `hook_runner.rs`. `lifecycle/crud/mod.rs` —
+    `get_tx_conn` helper + its test to `tx_conn.rs`. All
+    four `mod.rs` files now contain only `mod` declarations
+    and `pub use` re-exports.
+  - Additional cleanup: deduped the 5-line `is_empty = match
+    value { None | Null | empty-String => true, ... }`
+    pattern repeated in three validators (recursive scalar,
+    sub_fields, richtext_attrs). Extracted to
+    `validation::is_empty_value(value: Option<&Value>) ->
+    bool` in `runner.rs` with
+    `pub(in crate::hooks::lifecycle::validation)` visibility
+    so the three callers can `use ...::is_empty_value`
+    instead of carrying the same match arm three times.
+
+- **`types/crap.lua` is now generated from Rust source.** A
+  `cargo xtask gen-lua-types` task in the new `xtask` workspace
+  member assembles the file from one renderer per section
+  (`src/typegen/lua/static_file.rs`), interleaving short static
+  block files in `src/typegen/lua/blocks/` with derive- and
+  macro-emitted output. The CI `check` job and the pre-commit
+  hook both run `cargo xtask gen-lua-types --check` to keep the
+  on-disk file in sync. Three new derives in `crap-cms-macros`
+  drive the generation:
+  - `#[derive(LuaAnnotation)]` for `--- @class` blocks (struct
+    fields, with `#[lua(rename / ty / optional / skip /
+    extends / rename_all)]` overrides; also auto-flattens
+    nested struct fields marked `#[lua(flatten)]` via the
+    companion `LuaFieldBlock` trait).
+  - `#[derive(LuaAlias)]` for `--- @alias` blocks (enums —
+    unit-only variants emit literal unions like `"a" | "b"`;
+    single-payload variants emit type unions like
+    `string | table<string, string>`; mixed is a derive error).
+  - `#[derive(LuaFieldTypeViews)]` for `FieldDefinition`'s
+    polymorphic per-type config classes (`crap.TextField`,
+    `crap.NumberField`, etc.) driven by `#[lua(view_class =
+    "...")]` on the variants of the discriminator enum
+    (`FieldType`), with `#[lua(applies_to = "text, textarea")]`
+    on each shared field selecting which views it appears in.
+  Plus `#[lua_fn(path = "crap.X.Y", returns_doc = "...")]`
+  attribute macro and `lua_table!` function-like macro that
+  together register a Lua-side function table at a given path
+  AND emit the corresponding `--- @param … function crap.X.Y(…)`
+  doc block. Each `#[lua(doc = "…")]` per-param attribute drives
+  the rendered `--- @param` description, so the Rust source is
+  the single source of truth for the function's typed signature
+  and docs. All 17 files under `src/hooks/lua_api/`, all 14 CRUD
+  fns under `src/hooks/lua_api/crud/`, all enum aliases, and
+  every Rust-backed struct in the Lua surface are now derive-
+  driven. Pure-Lua helpers in
+  `src/hooks/lua_api/util_helpers.lua` carry
+  `-- @typegen-start … -- @typegen-end` sentinel regions; a
+  small extractor at `src/typegen/lua/sentinel_extract.rs`
+  parses each annotated `function util.<name>(<args>)` and its
+  preceding `---` doc block into the static file, so the docs
+  live next to the implementation. New docs surface for three
+  previously-undocumented runtime functions
+  (`crap.collections.unpublish`, `undelete`, `validate`) plus
+  the bulk/versions result classes. The proc-macro auto-emits
+  `#[allow(clippy::needless_pass_by_value,
+  clippy::unnecessary_wraps, clippy::used_underscore_binding,
+  clippy::trivially_copy_pass_by_ref)]` on each generated
+  wrapper — these lints fire structurally from mlua's
+  `FromLuaMulti` (owned param requirement) and the wrapper
+  closure's `LuaResult<T>` return type, scoped to the macro's
+  footprint so app code stays allow-free. Existing
+  `cargo xtask gen-lua-types` is idempotent — re-running on a
+  clean tree changes nothing; running after a Rust-side edit
+  emits the diff that needs to be committed.
+
+- **Typed `opts` structs at the CRUD boundary.** Every scalar
+  options table for the Lua CRUD API
+  (`crap.collections.{find_by_id, create, update, delete,
+  unpublish, undelete, validate, list_versions, restore_version,
+  create_many, update_many, delete_many}` and
+  `crap.globals.{get, update}`) is now a Rust struct deriving
+  `serde::Deserialize` + `LuaAnnotation`, decoded via mlua's
+  `LuaSerdeExt::from_value` at the function boundary instead of
+  N keyed `opts.get::<T>("key")` calls per fn body. The three
+  bulk variants reuse the single-op `CreateOptions` /
+  `UpdateOptions` / `DeleteOptions` structs since their per-doc
+  semantics are identical. `crap.email.send` /
+  `crap.email.queue` now take a typed `EmailOptions`, and
+  `crap.http.request` takes a typed `HttpRequest` — the
+  `HashMap<String, String>` headers field uses
+  `#[lua(ty = "table<string, string>")]` to bridge to the Lua
+  side (no automatic mapping for `HashMap<...>` in
+  `LuaAnnotation`). `crap.jobs.define` now takes a typed
+  `JobDefinitionConfig` — the `parse_job_definition` parser
+  consumes the typed struct directly instead of reading keys
+  off a raw mlua table, and the matching
+  `--- @class crap.JobDefinitionConfig` block emits from the
+  derive instead of from the hand-written
+  `24a_jobs_helper_classes.lua` prose file. `JobLabels` (in
+  `core/job/labels.rs`) gained `Serialize`/`Deserialize` derives
+  so it can ride along as a nested optional field. This collapses what used to be two parallel
+  definitions — a hand-written `--- @class crap.XOptions` block
+  in a prose file plus untyped Rust extraction — into a single
+  Rust struct that emits the Lua class docs via the same derive
+  that drives every other LuaLS type. Surfaced one drift: the
+  `overrideAccess` flag on `crap.globals.get` was being read
+  from Rust but missing from the Lua docs; it's now documented
+  end-to-end. The `where`-shaped query opts
+  (`CountQuery`, `FindQuery`, `UpdateManyQuery`,
+  `DeleteManyQuery`) still go through the hand-written
+  `lua_table_to_find_query` decoder — typing them requires
+  typing the filter-clause parser itself, which is a separate
+  workstream.
+
+- **`lua_table!` macro auto-emits the section header.** A new
+  optional `header: "..."` attribute on `lua_table!` makes the
+  generated `render_X_lua` emit the `-- ── crap.X ─...─`
+  divider + `--- <doc>` prose + `--- @class crap.X` +
+  `crap.X = {}` block before the function declarations. Divider
+  widths normalize to a uniform 64 visual columns (replacing the
+  62/63/64/66 mix the hand-written intro files had drifted to).
+  16 namespace-stub `.lua` block files deleted as part of this:
+  log, json, util, auth, access, env, http, email, config,
+  locale, crypto, schema, jobs, pages, template_data,
+  collections, globals, hooks. Each affected
+  `static_file::render_crap_X` shrinks to one or two lines —
+  the generated render fn carries everything that used to live
+  in `Nx_crap_X_intro.lua`. New helper
+  `format_lua_section_header(out, path, doc)` in
+  `src/typegen/lua/fn_render.rs` is the format owner;
+  `lua_table!` calls it from its emitted code. The remaining
+  `include_str!` calls in `static_file.rs` (~23) cover
+  genuine hand-written content — section transitions between
+  Rust-derived classes, hand-written class blocks like
+  `crap.HookContext`, `crap.RichtextNodeSpec`, the
+  FindQuery-shaped CRUD opts, and output types like
+  `crap.HttpResponse` / `crap.SchemaCollection` that aren't yet
+  backed by `LuaAnnotation`-deriving structs. `crap.pages` also
+  picked up a typed `PageOptions` Rust struct during this round
+  (deriving `Deserialize` + `LuaAnnotation`).
+
+- **Doc-only `LuaAnnotation` structs for context / result / output
+  types.** New `src/typegen/lua/doc_structs.rs` holds Rust structs
+  that exist solely to drive `--- @class crap.X` emission — no
+  `Serialize` / `Deserialize` / `FromLua`, no runtime use. The
+  matching Lua tables are still built ad-hoc by Rust handlers, but
+  the doc lives next to the Rust code rather than in parallel
+  hand-written `.lua` blocks. 14 types covered: hook & access
+  context (`HookContext`, `AccessContext`, `AuthStrategyContext`,
+  `FieldHookContext`, `ValidateContext`); CRUD result types
+  (`ValidateResult`, `UpdateManyResult`, `DeleteManyResult`,
+  `CreateManyResult`, `VersionSummary`, `ListVersionsResult`,
+  `FindResult`); schema-introspection output (`SchemaCollection`,
+  `SchemaField`); HTTP output (`HttpResponse`); job-handler
+  context (`JobHandlerContext`, `JobInfo`). All section-divider
+  block files (`-- ── Field Types ──` etc.) dropped — LuaLS
+  doesn't consume the cosmetic dividers, and they were the bulk
+  of the remaining `include_str!` calls. The remaining 14
+  `include_str!`s in `static_file.rs` cover content that doesn't
+  yet have a clean derive shape: the file header, `Document` /
+  `FilterValue` / `FilterOperators` / `OrCondition` / `FindQuery`
+  (recursive filter shapes), `CountQuery` / `UpdateManyQuery` /
+  `DeleteManyQuery` (depend on the filter shape), `FieldDefinition`
+  (the catch-all union), `Activation` / `AuthMethod` (tagged enum
+  with per-variant fields), `RichtextNodeSpec` (function-typed
+  field), and a handful of factory / sub-namespace intros.
+
+- **Zero hand-written `.lua` block files.** The `blocks/`
+  directory under `src/typegen/lua/` is gone entirely. Every
+  class / alias / function block in `types/crap.lua` is now
+  emitted by a Rust derive or a `lua_table!`-generated render
+  fn. New machinery added in this round:
+  - `LuaTypeAlias` proc-macro derive (on unit structs) for
+    callable / literal-target `--- @alias` blocks. Used for
+    `crap.ValidateFunction`, `crap.FieldHookFn`,
+    `crap.FilterValue`.
+  - `#[lua(extra_field = "[K] V")]` struct-level attr on
+    `LuaAnnotation` emits a trailing `--- @field [K] V` line.
+    Used for `crap.Document`'s `[string] any` index signature.
+  - `LuaAnnotation` and `LuaFieldTypeViews` containers now
+    accept each other's struct-level attrs as ignored
+    optionals, so the same struct (e.g. `FieldDefinition`) can
+    stack both derives.
+  - Additional doc-only structs in
+    `src/typegen/lua/doc_structs.rs`: `FieldWidth`,
+    `PickerAppearance` (string aliases), `ValidateFunction`,
+    `FieldHookFn` (function aliases), `Activation`,
+    `AuthMethod` (discriminated-union doc class), `Document`,
+    `FilterOperators`, `FilterValue`, `OrCondition`,
+    `FindQuery`, `CountQuery`, `UpdateManyQuery`,
+    `DeleteManyQuery` (query / filter types),
+    `RichtextNodeSpec` (richtext input).
+  - `crap.FieldDefinition` catch-all class: the existing Rust
+    `FieldDefinition` struct now stacks
+    `#[derive(LuaAnnotation, LuaFieldTypeViews)]` so the same
+    source drives both the per-type subclass family
+    (`crap.TextField` etc.) and the union catch-all.
+    `crap.JoinConfig` is now emitted (was declared but never
+    rendered).
+  - The `crap` global banner moved from `00_header.lua` to an
+    inline `HEADER: &str` constant in `static_file.rs`.
+
+- **Typegen housekeeping: macro crate split + doc-structs split +
+  dedup.** Three follow-on refactors after the static-file pipeline
+  landed:
+  - `macros/src/lib.rs` (~1700 lines) split into per-derive
+    modules: `shared.rs`, `lua_annotation.rs`, `lua_alias.rs`,
+    `lua_type_alias.rs`, `lua_field_type_views.rs`, `lua_fn.rs`,
+    `lua_table.rs`. `lib.rs` is now the thin entry point — proc-macro
+    registration + crate doc only. Each derive's container struct,
+    helpers, and codegen live in their own file.
+  - `src/typegen/lua/doc_structs.rs` (600+ lines) split into
+    `doc_structs/{auth,aliases,context,query,result,misc}.rs` so
+    each domain (auth method shape, filter/query, hook context,
+    CRUD result, etc.) is navigable on its own. `mod.rs` re-exports
+    everything.
+  - Dedup: `CreateManyResult` and `UpdateManyResult` previously
+    existed both in `src/service/collections/` (real Rust types
+    used by the bulk service) and as doc-only copies in
+    `doc_structs.rs`. `LuaAnnotation` now derives on the real Rust
+    structs directly; the doc-only copies are gone.
+    `crap.HookContext` does the same — `hooks::lifecycle::HookContext`
+    now derives `LuaAnnotation` with `#[lua(ty = "...")]` overrides
+    on the `DocumentFields` / `ReqContext` / `Option<Document>`
+    fields, plus the new `extra_field` attr injects `hook_depth`
+    (which isn't on the Rust struct — it's populated at
+    `to_lua_table` time from `HookDepth` app-data). The remaining
+    doc-only types are those whose Lua user-facing shape genuinely
+    diverges from the Rust runtime representation (`Activation`,
+    `AuthMethod`: Rust-idiomatic tagged enums vs Lua flat
+    discriminated-union; `Document` /  `FindQuery`: denormalized
+    Lua view vs `DocumentFields` / `FilterClause` Rust internals;
+    etc.). Each doc-only submodule's docstring explains the
+    divergence so a future contributor knows when to derive on a
+    real type vs add a doc-only.
+  - Stale `Phase 1-7` comments removed from `typegen/lua/{mod,
+    annotation, fn_spec, fn_render, ensure_table}.rs` and
+    `macros/src/lib.rs`. The migration is done; the comments
+    described work that's already in `git log`.
+
 ## [0.1.0-alpha.8] — 2026-05-03
 
 ### Breaking Changes

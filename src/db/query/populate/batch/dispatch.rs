@@ -5,23 +5,56 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 use crate::core::cache::CacheBackend;
-use crate::core::{Document, FieldType, field::flatten_array_sub_fields, upload};
+use crate::core::{
+    CollectionDefinition, Document, FieldDefinition, FieldType,
+    field::{JoinConfig, flatten_array_sub_fields},
+    upload,
+};
 use crate::db::query::populate::{
     PopulateContext, PopulateCtx, PopulateOpts, Singleflight, document_to_json,
 };
+
+/// The full triple needed to populate a single join field: the field
+/// definition itself, its parsed [`JoinConfig`], and the resolved target
+/// collection definition. Always constructed together at the
+/// `populate_join_fields` loop site — bundling them keeps the helper
+/// signatures under clippy's `too_many_arguments` threshold and the
+/// call sites readable.
+struct JoinTarget<'a> {
+    field: &'a FieldDefinition,
+    config: &'a JoinConfig,
+    target_def: &'a CollectionDefinition,
+}
 use crate::db::{
     AccessResult, Filter, FilterClause, FilterOp, FindQuery,
     query::{hydrate_document, read},
 };
 
-use super::super::single::{nested, populate_relationships_cached};
+use crate::db::query::populate::single::{nested, populate_relationships_cached};
+
 use super::{nonpoly, poly};
+
+/// Coerce a doc-field `Value` to the string form used as a join-key bucket
+/// label. Strings, numbers, and bools all become valid scalar keys; missing
+/// values, arrays, and objects are non-scalar and cannot identify a single
+/// parent row, so they are dropped.
+///
+/// Replaces an earlier `other.to_string().trim_matches('"')` hack that
+/// silently produced garbage (e.g. `"[1,2]"`) for non-scalar inputs.
+fn join_key_from_value(v: Option<&Value>) -> Option<String> {
+    match v? {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
+    }
+}
 
 /// Batch-populate relationship fields across a slice of documents.
 ///
 /// Collects all referenced IDs across all documents per field, batch-fetches them
 /// with a single query per target collection, then distributes the results back.
-pub fn populate_relationships_batch_cached(
+pub(crate) fn populate_relationships_batch_cached(
     ctx: &PopulateContext<'_>,
     docs: &mut [Document],
     opts: &PopulateOpts<'_>,
@@ -42,6 +75,10 @@ pub fn populate_relationships_batch_cached(
 /// Callers in the service layer pass the process-wide
 /// [`SharedPopulateSingleflight`](crate::db::query::SharedPopulateSingleflight)
 /// here. Internal callers keep using the fresh-per-call variant above.
+///
+/// # Errors
+///
+/// Returns a backend error if any relationship-target lookup fails.
 pub fn populate_relationships_batch_cached_with_singleflight(
     ctx: &PopulateContext<'_>,
     docs: &mut [Document],
@@ -96,9 +133,8 @@ fn populate_flat_relationships(
             continue;
         }
 
-        let rel = match &field.relationship {
-            Some(rc) => rc,
-            None => continue,
+        let Some(rel) = &field.relationship else {
+            continue;
         };
 
         let effective_depth = match rel.max_depth {
@@ -195,167 +231,257 @@ fn populate_join_fields(
     cache: &dyn CacheBackend,
     visited: &HashSet<(String, String)>,
 ) -> Result<()> {
-    let has_join_fields = ctx.def.fields.iter().any(|f| {
-        f.field_type == FieldType::Join
-            && f.join.is_some()
-            && opts
-                .select
-                .is_none_or(|sel| sel.iter().any(|s| s == &f.name))
-    });
-
-    if !has_join_fields || opts.depth <= 0 || docs.is_empty() {
+    if opts.depth <= 0 || docs.is_empty() {
         return Ok(());
     }
 
     for field in &ctx.def.fields {
-        if field.field_type != FieldType::Join {
+        if !is_eligible_join_field(field, opts.select) {
             continue;
         }
-
-        if let Some(sel) = opts.select
-            && !sel.iter().any(|s| s == &field.name)
-        {
+        let Some(config) = &field.join else { continue };
+        let Some(target_def) = ctx.registry.get_collection(&config.collection).cloned() else {
             continue;
-        }
-
-        let jc = match &field.join {
-            Some(jc) => jc,
-            None => continue,
         };
 
-        let target_def = match ctx.registry.get_collection(&jc.collection) {
-            Some(d) => d.clone(),
-            None => continue,
+        let target = JoinTarget {
+            field,
+            config,
+            target_def: &target_def,
         };
-
-        // Build a shared filter clause for the field — access check runs once
-        // per field, not once per parent doc. Denied → every parent gets [];
-        // Constrained → extra filters merge into the batched query.
-        let mut shared_filters: Vec<FilterClause> = Vec::new();
-        let mut denied_all = false;
-
-        if let Some(check) = opts.join_access {
-            match check.check(target_def.access.read.as_deref(), opts.user)? {
-                AccessResult::Denied => denied_all = true,
-                AccessResult::Constrained(extra) => shared_filters.extend(extra),
-                AccessResult::Allowed => {}
-            }
-        }
-
-        if denied_all {
-            for doc in docs.iter_mut() {
-                doc.fields
-                    .insert(field.name.clone(), Value::Array(Vec::new()));
-            }
-            continue;
-        }
-
-        // Collect unique parent ids. Order-preserving so output is deterministic.
-        let mut parent_ids: Vec<String> = Vec::with_capacity(docs.len());
-        let mut seen_ids: HashSet<String> = HashSet::new();
-        for doc in docs.iter() {
-            let id = doc.id.to_string();
-            if seen_ids.insert(id.clone()) {
-                parent_ids.push(id);
-            }
-        }
-
-        let mut filters = shared_filters;
-        filters.push(FilterClause::Single(Filter {
-            field: jc.on.clone(),
-            op: FilterOp::In(parent_ids),
-        }));
-        let fq = FindQuery::builder().filters(filters).build();
-
-        let matched_docs =
-            match read::find(ctx.conn, &jc.collection, &target_def, &fq, opts.locale_ctx) {
-                Ok(docs) => docs,
-                Err(_) => {
-                    for doc in docs.iter_mut() {
-                        doc.fields
-                            .insert(field.name.clone(), Value::Array(Vec::new()));
-                    }
-                    continue;
-                }
-            };
-
-        // Hydrate + populate each matched doc once (not per-parent). Nested
-        // populates recurse at depth-1.
-        let mut prepared: Vec<Document> = Vec::with_capacity(matched_docs.len());
-        let mut nested_visited = visited.clone();
-        for mut matched_doc in matched_docs {
-            hydrate_document(
-                ctx.conn,
-                &jc.collection,
-                &target_def.fields,
-                &mut matched_doc,
-                None,
-                opts.locale_ctx,
-            )?;
-
-            if let Some(ref uc) = target_def.upload
-                && uc.enabled
-            {
-                upload::assemble_sizes_object(&mut matched_doc, uc);
-            }
-
-            populate_relationships_cached(
-                &PopulateContext {
-                    conn: ctx.conn,
-                    registry: ctx.registry,
-                    collection_slug: &jc.collection,
-                    def: &target_def,
-                },
-                &mut matched_doc,
-                &mut nested_visited,
-                &PopulateOpts {
-                    depth: opts.depth - 1,
-                    select: None,
-                    locale_ctx: opts.locale_ctx,
-                    join_access: opts.join_access,
-                    user: opts.user,
-                },
-                cache,
-            )?;
-
-            prepared.push(matched_doc);
-        }
-
-        // Bucket matched docs by their `on` field value so we can emit one
-        // array per parent. A single matched doc only belongs to one parent
-        // (the `on` column is a scalar foreign-key field).
-        let mut buckets: HashMap<String, Vec<Value>> = HashMap::new();
-        for matched_doc in &prepared {
-            let key = match matched_doc.fields.get(&jc.on) {
-                Some(Value::String(s)) => s.clone(),
-                Some(other) => other.to_string().trim_matches('"').to_string(),
-                None => continue,
-            };
-            buckets
-                .entry(key)
-                .or_default()
-                .push(document_to_json(matched_doc, &jc.collection));
-        }
-
-        for doc in docs.iter_mut() {
-            let arr = buckets.remove(&doc.id.to_string()).unwrap_or_default();
-            doc.fields.insert(field.name.clone(), Value::Array(arr));
-        }
+        populate_single_join_field(ctx, docs, opts, cache, visited, &target)?;
     }
 
     Ok(())
 }
 
-#[cfg(all(test, feature = "sqlite"))]
-mod tests {
+/// Is this field a `Join` field that the caller wants populated (i.e. either
+/// no `select` filter, or `select` lists this field name)?
+fn is_eligible_join_field(field: &FieldDefinition, select: Option<&[String]>) -> bool {
+    field.field_type == FieldType::Join
+        && field.join.is_some()
+        && select.is_none_or(|sel| sel.iter().any(|s| s == &field.name))
+}
+
+/// Populate one join field across every parent doc in the batch.
+///
+/// Pipeline: access check → collect parent ids → batched `IN` query →
+/// hydrate + recursive populate each matched doc → bucket by `on` value →
+/// assign one array per parent.
+fn populate_single_join_field(
+    ctx: &PopulateContext<'_>,
+    docs: &mut [Document],
+    opts: &PopulateOpts<'_>,
+    cache: &dyn CacheBackend,
+    visited: &HashSet<(String, String)>,
+    target: &JoinTarget<'_>,
+) -> Result<()> {
+    // Build a shared filter clause for the field — access check runs once
+    // per field, not once per parent doc. Denied → every parent gets [];
+    // Constrained → extra filters merge into the batched query.
+    let Some(shared_filters) = resolve_join_access(opts, target.target_def)? else {
+        assign_empty_array(docs, &target.field.name);
+        return Ok(());
+    };
+
+    // Collect unique parent ids. Order-preserving so output is deterministic.
+    let mut parent_ids: Vec<String> = Vec::with_capacity(docs.len());
+    let mut seen_ids: HashSet<String> = HashSet::new();
+    for doc in docs.iter() {
+        let id = doc.id.to_string();
+        if seen_ids.insert(id.clone()) {
+            parent_ids.push(id);
+        }
+    }
+
+    let mut filters = shared_filters;
+    filters.push(FilterClause::Single(Filter {
+        field: target.config.on.clone(),
+        op: FilterOp::In(parent_ids),
+    }));
+    let fq = FindQuery::builder().filters(filters).build();
+
+    let Ok(matched_docs) = read::find(
+        ctx.conn,
+        &target.config.collection,
+        target.target_def,
+        &fq,
+        opts.locale_ctx,
+    ) else {
+        assign_empty_array(docs, &target.field.name);
+        return Ok(());
+    };
+
+    let prepared = prepare_join_children(ctx, opts, cache, visited, target, matched_docs)?;
+
+    // Bucket matched docs by their `on` field value so we can emit one
+    // array per parent. A single matched doc only belongs to one parent
+    // (the `on` column is a scalar foreign-key field).
+    let mut buckets: HashMap<String, Vec<Value>> = HashMap::new();
+    for matched_doc in &prepared {
+        let Some(key) = join_key_from_value(matched_doc.fields.get(&target.config.on)) else {
+            continue;
+        };
+        buckets
+            .entry(key)
+            .or_default()
+            .push(document_to_json(matched_doc, &target.config.collection));
+    }
+
+    for doc in docs.iter_mut() {
+        let arr = buckets.remove(&doc.id.to_string()).unwrap_or_default();
+        doc.fields
+            .insert(target.field.name.clone(), Value::Array(arr));
+    }
+
+    Ok(())
+}
+
+/// Run the join-access hook once per field. Returns `None` when access is
+/// denied (caller fills `[]` for every parent), `Some(extra_filters)`
+/// otherwise (possibly empty).
+fn resolve_join_access(
+    opts: &PopulateOpts<'_>,
+    target_def: &CollectionDefinition,
+) -> Result<Option<Vec<FilterClause>>> {
+    let Some(check) = opts.join_access else {
+        return Ok(Some(Vec::new()));
+    };
+    match check.check(target_def.access.read.as_deref(), opts.user)? {
+        AccessResult::Denied => Ok(None),
+        AccessResult::Constrained(extra) => Ok(Some(extra)),
+        AccessResult::Allowed => Ok(Some(Vec::new())),
+    }
+}
+
+/// Hydrate + recursively populate each matched join child, at depth-1.
+fn prepare_join_children(
+    ctx: &PopulateContext<'_>,
+    opts: &PopulateOpts<'_>,
+    cache: &dyn CacheBackend,
+    visited: &HashSet<(String, String)>,
+    target: &JoinTarget<'_>,
+    matched_docs: Vec<Document>,
+) -> Result<Vec<Document>> {
+    let mut prepared: Vec<Document> = Vec::with_capacity(matched_docs.len());
+    let mut nested_visited = visited.clone();
+    for mut matched_doc in matched_docs {
+        hydrate_document(
+            ctx.conn,
+            &target.config.collection,
+            &target.target_def.fields,
+            &mut matched_doc,
+            None,
+            opts.locale_ctx,
+        )?;
+
+        if let Some(ref uc) = target.target_def.upload
+            && uc.enabled
+        {
+            upload::assemble_sizes_object(&mut matched_doc, uc);
+        }
+
+        populate_relationships_cached(
+            &PopulateContext {
+                conn: ctx.conn,
+                registry: ctx.registry,
+                collection_slug: &target.config.collection,
+                def: target.target_def,
+            },
+            &mut matched_doc,
+            &mut nested_visited,
+            &PopulateOpts {
+                depth: opts.depth - 1,
+                select: None,
+                locale_ctx: opts.locale_ctx,
+                join_access: opts.join_access,
+                user: opts.user,
+            },
+            cache,
+        )?;
+
+        prepared.push(matched_doc);
+    }
+    Ok(prepared)
+}
+
+/// Write `[]` to `field_name` on every parent doc — used on access-denied
+/// or query failure, so callers always get a value-typed array (never a
+/// missing key) for join fields.
+fn assign_empty_array(docs: &mut [Document], field_name: &str) {
+    for doc in docs.iter_mut() {
+        doc.fields
+            .insert(field_name.to_string(), Value::Array(Vec::new()));
+    }
+}
+
+#[cfg(test)]
+mod join_key_tests {
     use serde_json::json;
 
-    use super::super::super::test_helpers::{
-        make_authors_def_with_join, make_posts_def_for_join, setup_join_db,
-    };
+    use super::join_key_from_value;
+
+    #[test]
+    fn string_passes_through() {
+        assert_eq!(
+            join_key_from_value(Some(&json!("abc"))),
+            Some("abc".to_string())
+        );
+    }
+
+    #[test]
+    fn integer_stringifies_without_quotes() {
+        assert_eq!(
+            join_key_from_value(Some(&json!(42))),
+            Some("42".to_string())
+        );
+    }
+
+    #[test]
+    fn float_stringifies_without_quotes() {
+        // Note: this exists mainly to pin behavior; floats as join keys are
+        // a usage smell, but we mirror what the legacy code produced.
+        let key = join_key_from_value(Some(&json!(1.5)));
+        assert_eq!(key.as_deref(), Some("1.5"));
+    }
+
+    #[test]
+    fn bool_stringifies() {
+        assert_eq!(
+            join_key_from_value(Some(&json!(true))),
+            Some("true".to_string())
+        );
+    }
+
+    /// Regression: arrays and objects are not scalar join keys. The earlier
+    /// `other.to_string().trim_matches('"')` produced strings like `"[1,2]"`
+    /// that would never match a parent ID. Skip them instead.
+    #[test]
+    fn array_and_object_are_rejected() {
+        assert_eq!(join_key_from_value(Some(&json!([1, 2]))), None);
+        assert_eq!(join_key_from_value(Some(&json!({"k": "v"}))), None);
+    }
+
+    #[test]
+    fn null_and_missing_are_rejected() {
+        assert_eq!(join_key_from_value(Some(&json!(null))), None);
+        assert_eq!(join_key_from_value(None), None);
+    }
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod tests {
+    use anyhow::Result as AnyResult;
+    use serde_json::json;
+
     use super::*;
     use crate::core::Registry;
     use crate::core::cache::NoneCache;
+    use crate::db::AccessResult;
+    use crate::db::query::populate::JoinAccessCheck;
+    use crate::db::query::populate::test_helpers::{
+        make_authors_def_with_join, make_posts_def_for_join, setup_join_db,
+    };
 
     /// Regression for the join-field N+1: batch populate across N parent docs
     /// must produce correct per-parent buckets. Before this change, the code
@@ -488,10 +614,6 @@ mod tests {
     /// leave every parent with an empty array, not an unfiltered fetch.
     #[test]
     fn batch_join_field_denies_for_all_parents_when_target_read_denied() {
-        use crate::db::AccessResult;
-        use crate::db::query::populate::JoinAccessCheck;
-        use anyhow::Result as AnyResult;
-
         struct DenyAll;
         impl JoinAccessCheck for DenyAll {
             fn check(&self, _: Option<&str>, _: Option<&Document>) -> AnyResult<AccessResult> {

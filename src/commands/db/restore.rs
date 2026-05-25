@@ -3,15 +3,20 @@
 use std::{fs, path::Path, process};
 
 use anyhow::{Context as _, Result, bail};
-use serde_json::Value;
 
 use crate::{
     cli::{self, Spinner},
+    commands::db::manifest::BackupManifest,
     config::CrapConfig,
     db::{DbConnection, pool},
 };
 
 /// Handle the `restore` subcommand — replace database and optionally uploads from a backup.
+///
+/// # Errors
+///
+/// Returns an error if the backup directory is invalid, config loading
+/// fails, or any of the restore filesystem operations fails.
 #[cfg(not(tarpaulin_include))]
 pub fn restore(
     config_dir: &Path,
@@ -70,40 +75,17 @@ fn read_and_display_manifest(backup_dir: &Path) -> Result<()> {
     let manifest_str = fs::read_to_string(backup_dir.join("manifest.json"))
         .context("Failed to read manifest.json")?;
 
-    let manifest: Value =
+    let manifest: BackupManifest =
         serde_json::from_str(&manifest_str).context("Failed to parse manifest.json")?;
 
     cli::header("Restoring from backup");
 
-    cli::kv(
-        "Version",
-        manifest
-            .get("crap_version")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown"),
-    );
+    cli::kv("Version", &manifest.crap_version);
+    cli::kv("Timestamp", &manifest.timestamp);
+    cli::kv("DB size", &format!("{} bytes", manifest.db_size));
 
-    cli::kv(
-        "Timestamp",
-        manifest
-            .get("timestamp")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown"),
-    );
-
-    cli::kv(
-        "DB size",
-        &format!(
-            "{} bytes",
-            manifest
-                .get("db_size")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0)
-        ),
-    );
-
-    if let Some(size) = manifest.get("uploads_size").and_then(|v| v.as_u64()) {
-        cli::kv("Uploads", &format!("{} bytes", size));
+    if let Some(size) = manifest.uploads_size {
+        cli::kv("Uploads", &format!("{size} bytes"));
     }
 
     Ok(())
@@ -167,7 +149,7 @@ fn restore_uploads(config_dir: &Path, backup_dir: &Path) {
 
     match status {
         Ok(s) if s.success() => spin.finish_success("Uploads restored"),
-        Ok(s) => spin.finish_warning(&format!("tar exited with status {}", s)),
-        Err(e) => spin.finish_warning(&format!("tar not found or failed: {}. Skipping.", e)),
+        Ok(s) => spin.finish_warning(&format!("tar exited with status {s}")),
+        Err(e) => spin.finish_warning(&format!("tar not found or failed: {e}. Skipping.")),
     }
 }

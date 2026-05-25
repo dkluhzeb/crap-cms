@@ -1,25 +1,23 @@
 //! `jobs` command — manage background jobs.
 
+use std::path::Path;
+
 use anyhow::{Context as _, Result, anyhow};
 use serde_json::Value;
-use std::path::Path;
 
 use crate::{
     cli::{self, Table},
     commands::{JobsAction, helpers::init_stack},
-    config::{CrapConfig, parse_duration_string},
-    core::{SharedRegistry, job::JobStatus},
+    config::{CrapConfig, JobsConfig, parse_duration_string},
+    core::{Registry, job::JobStatus},
     db::{DbPool, pool, query},
 };
 
 /// List all defined jobs with recent run status summary.
-fn run_list(registry: &SharedRegistry, pool: &DbPool) -> Result<()> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
+fn run_list(registry: &Registry, pool: &DbPool) -> Result<()> {
     let conn = pool.get().context("Failed to get DB connection")?;
 
-    if reg.jobs.is_empty() {
+    if registry.jobs.is_empty() {
         cli::info("No jobs defined.");
 
         return Ok(());
@@ -27,11 +25,11 @@ fn run_list(registry: &SharedRegistry, pool: &DbPool) -> Result<()> {
 
     let mut table = Table::new(vec!["Job", "Schedule", "Queue", "Recent Runs"]);
 
-    let mut slugs: Vec<_> = reg.jobs.keys().collect();
+    let mut slugs: Vec<_> = registry.jobs.keys().collect();
     slugs.sort();
 
     for slug in slugs {
-        let def = &reg.jobs[slug];
+        let def = &registry.jobs[slug];
         let schedule = def.schedule.as_deref().unwrap_or("-").to_string();
         let recent = query::jobs::list_job_runs(&conn, Some(slug), None, 5, 0).unwrap_or_default();
 
@@ -57,19 +55,19 @@ fn run_list(registry: &SharedRegistry, pool: &DbPool) -> Result<()> {
             let mut parts = Vec::new();
 
             if completed > 0 {
-                parts.push(format!("{}ok", completed));
+                parts.push(format!("{completed}ok"));
             }
 
             if failed > 0 {
-                parts.push(format!("{}fail", failed));
+                parts.push(format!("{failed}fail"));
             }
 
             if pending > 0 {
-                parts.push(format!("{}pend", pending));
+                parts.push(format!("{pending}pend"));
             }
 
             if running > 0 {
-                parts.push(format!("{}run", running));
+                parts.push(format!("{running}run"));
             }
 
             parts.join("/")
@@ -84,17 +82,18 @@ fn run_list(registry: &SharedRegistry, pool: &DbPool) -> Result<()> {
 }
 
 /// Show status for a single job run or list recent runs.
-fn run_status(pool: &DbPool, id: Option<String>, slug: Option<String>, limit: i64) -> Result<()> {
+fn run_status(pool: &DbPool, id: Option<&str>, slug: Option<&str>, limit: i64) -> Result<()> {
     let conn = pool.get().context("Failed to get DB connection")?;
 
     if let Some(run_id) = id {
-        let run = query::jobs::get_job_run(&conn, &run_id)?
-            .ok_or_else(|| anyhow!("Job run '{}' not found", run_id))?;
+        let run = query::jobs::get_job_run(&conn, run_id)?
+            .ok_or_else(|| anyhow!("Job run '{run_id}' not found"))?;
 
         cli::kv("ID", &run.id);
         cli::kv("Job", &run.slug);
         cli::kv("Status", run.status.as_str());
         cli::kv("Queue", &run.queue);
+        cli::kv("Priority", &run.priority.to_string());
         cli::kv("Attempt", &format!("{}/{}", run.attempt, run.max_attempts));
         cli::kv("Scheduled", run.scheduled_by.as_deref().unwrap_or("-"));
         cli::kv("Created", run.created_at.as_deref().unwrap_or("-"));
@@ -106,14 +105,14 @@ fn run_status(pool: &DbPool, id: Option<String>, slug: Option<String>, limit: i6
         }
 
         if let Some(ref result) = run.result {
-            cli::kv("Result", &result.to_string());
+            cli::kv("Result", &result.clone());
         }
 
         if let Some(ref error) = run.error {
-            cli::kv("Error", &error.to_string());
+            cli::kv("Error", &error.clone());
         }
     } else {
-        let runs = query::jobs::list_job_runs(&conn, slug.as_deref(), None, limit, 0)?;
+        let runs = query::jobs::list_job_runs(&conn, slug, None, limit, 0)?;
 
         if runs.is_empty() {
             cli::info("No job runs found.");
@@ -121,10 +120,13 @@ fn run_status(pool: &DbPool, id: Option<String>, slug: Option<String>, limit: i6
             return Ok(());
         }
 
-        let mut table = Table::new(vec!["ID", "Job", "Status", "Attempt", "Error", "Created"]);
+        let mut table = Table::new(vec![
+            "ID", "Job", "Status", "Prio", "Attempt", "Error", "Created",
+        ]);
 
         for run in &runs {
             let attempt = format!("{}/{}", run.attempt, run.max_attempts);
+            let priority = run.priority.to_string();
             let error = run
                 .error
                 .as_deref()
@@ -142,6 +144,7 @@ fn run_status(pool: &DbPool, id: Option<String>, slug: Option<String>, limit: i6
                 &run.id,
                 &run.slug,
                 run.status.as_str(),
+                &priority,
                 &attempt,
                 &error,
                 run.created_at.as_deref().unwrap_or("-"),
@@ -156,13 +159,10 @@ fn run_status(pool: &DbPool, id: Option<String>, slug: Option<String>, limit: i6
 }
 
 /// Check job system health: stale, failed, pending, never-completed.
-fn run_healthcheck(cfg: &CrapConfig, registry: &SharedRegistry, pool: &DbPool) -> Result<()> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
+fn run_healthcheck(cfg: &CrapConfig, registry: &Registry, pool: &DbPool) -> Result<()> {
     let conn = pool.get().context("Failed to get DB connection")?;
 
-    let defined_count = reg.jobs.len();
+    let defined_count = registry.jobs.len();
 
     // Stale jobs: running but heartbeat expired (heartbeat_interval * 3)
     let stale_threshold = cfg.jobs.heartbeat_interval * 3;
@@ -177,7 +177,7 @@ fn run_healthcheck(cfg: &CrapConfig, registry: &SharedRegistry, pool: &DbPool) -
 
     // Check for scheduled jobs with no recent runs
     let mut no_recent_runs = Vec::new();
-    for (slug, def) in &reg.jobs {
+    for (slug, def) in &registry.jobs {
         if def.schedule.is_some() {
             let last = query::jobs::last_completed_run(&conn, slug)?;
 
@@ -228,22 +228,26 @@ fn run_healthcheck(cfg: &CrapConfig, registry: &SharedRegistry, pool: &DbPool) -
 /// Trigger a job manually by slug, queuing it for the scheduler.
 #[cfg(not(tarpaulin_include))]
 fn run_trigger(
-    registry: &SharedRegistry,
+    registry: &Registry,
     pool: &DbPool,
+    jobs_config: &JobsConfig,
     slug: &str,
-    data: Option<String>,
+    data: Option<&str>,
+    priority: Option<i32>,
 ) -> Result<()> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
-    let job_def = reg
+    let job_def = registry
         .get_job(slug)
-        .ok_or_else(|| anyhow!("Job '{}' not defined", slug))?;
+        .ok_or_else(|| anyhow!("Job '{slug}' not defined"))?;
 
-    let data_json = data.as_deref().unwrap_or("{}");
+    let data_json = data.unwrap_or("{}");
 
     serde_json::from_str::<Value>(data_json).context("Invalid JSON data")?;
+
+    let effective_priority = priority.unwrap_or(job_def.priority);
+    let queue_retries = jobs_config
+        .queues
+        .get(&job_def.queue)
+        .and_then(|q| q.retries);
 
     let conn = pool.get().context("Failed to get DB connection")?;
     let job_run = query::jobs::insert_job(
@@ -251,8 +255,9 @@ fn run_trigger(
         slug,
         data_json,
         "cli",
-        job_def.retries + 1,
+        job_def.effective_max_attempts(queue_retries),
         &job_def.queue,
+        effective_priority,
     )?;
 
     cli::success(&format!("Queued job '{}' (run {})", slug, job_run.id));
@@ -274,8 +279,8 @@ fn run_cancel(config_dir: &Path, slug: Option<String>) -> Result<()> {
     let deleted = query::jobs::cancel_pending_jobs(&conn, slug.as_deref())?;
 
     match slug {
-        Some(s) => cli::success(&format!("Cancelled {} pending '{}' job(s)", deleted, s)),
-        None => cli::success(&format!("Cancelled {} pending job(s)", deleted)),
+        Some(s) => cli::success(&format!("Cancelled {deleted} pending '{s}' job(s)")),
+        None => cli::success(&format!("Cancelled {deleted} pending job(s)")),
     }
 
     Ok(())
@@ -293,20 +298,24 @@ fn run_purge(config_dir: &Path, older_than: &str) -> Result<()> {
 
     let secs = parse_duration_string(older_than).ok_or_else(|| {
         anyhow!(
-            "Invalid duration '{}'. Use format like '7d' (days), '24h' (hours), '30m' (minutes), '60s' (seconds)",
-            older_than
+            "Invalid duration '{older_than}'. Use format like '7d' (days), '24h' (hours), '30m' (minutes), '60s' (seconds)"
         )
     })?;
 
     let conn = pool.get().context("Failed to get DB connection")?;
     let deleted = query::jobs::purge_old_jobs(&conn, secs)?;
 
-    cli::success(&format!("Purged {} old job run(s)", deleted));
+    cli::success(&format!("Purged {deleted} old job run(s)"));
 
     Ok(())
 }
 
 /// Handle the `jobs` subcommand — dispatches to the appropriate action handler.
+///
+/// # Errors
+///
+/// Returns an error if config loading, pool creation, or the dispatched
+/// action fails.
 #[cfg(not(tarpaulin_include))]
 pub fn run(config_dir: &Path, action: JobsAction) -> Result<()> {
     match action {
@@ -314,13 +323,24 @@ pub fn run(config_dir: &Path, action: JobsAction) -> Result<()> {
             let (_cfg, registry, pool) = init_stack(config_dir)?;
             run_list(&registry, &pool)
         }
-        JobsAction::Trigger { slug, data } => {
-            let (_cfg, registry, pool) = init_stack(config_dir)?;
-            run_trigger(&registry, &pool, &slug, data)
+        JobsAction::Trigger {
+            slug,
+            data,
+            priority,
+        } => {
+            let (cfg, registry, pool) = init_stack(config_dir)?;
+            run_trigger(
+                &registry,
+                &pool,
+                &cfg.jobs,
+                &slug,
+                data.as_deref(),
+                priority,
+            )
         }
         JobsAction::Status { id, slug, limit } => {
             let (_cfg, _registry, pool) = init_stack(config_dir)?;
-            run_status(&pool, id, slug, limit)
+            run_status(&pool, id.as_deref(), slug.as_deref(), limit)
         }
         JobsAction::Cancel { slug } => run_cancel(config_dir, slug),
         JobsAction::Purge { older_than } => run_purge(config_dir, &older_than),

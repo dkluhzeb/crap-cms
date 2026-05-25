@@ -1,24 +1,25 @@
 //! `bench create` — time a full document create cycle (rolled back).
 
-use std::{collections::HashMap, time::Instant};
+use std::time::Instant;
 
 use anyhow::{Result, anyhow};
 use dialoguer::Confirm;
-use serde_json::Value;
+
+use crate::service::values_from_strings;
 
 use crate::{
     cli::{self, crap_theme},
-    core::SharedRegistry,
+    core::Registry,
     db::DbPool,
     hooks::HookRunner,
-    service::{RunnerWriteHooks, ServiceContext, WriteInput, create_document_core},
+    service::{RunnerWriteHooks, ServiceContext, WriteInput, create_document_in_conn},
 };
 
 use super::helpers::{self, format_duration, timing_stats};
 
 /// Parameters for the create benchmark.
-pub struct CreateBenchParams<'a> {
-    pub registry: &'a SharedRegistry,
+pub(super) struct CreateBenchParams<'a> {
+    pub registry: &'a Registry,
     pub pool: &'a DbPool,
     pub runner: &'a HookRunner,
     pub slug: &'a str,
@@ -30,10 +31,7 @@ pub struct CreateBenchParams<'a> {
 
 /// Run create benchmarks for a collection.
 pub fn run(params: &CreateBenchParams) -> Result<()> {
-    let reg = params
-        .registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {e}"))?;
+    let reg = params.registry;
 
     let slug = params.slug;
 
@@ -64,8 +62,6 @@ pub fn run(params: &CreateBenchParams) -> Result<()> {
     let conn = params.pool.get()?;
     let (data, source) = helpers::resolve_bench_data(&conn, slug, def, params.user_data)?;
     drop(conn);
-
-    let join_data: HashMap<String, Value> = HashMap::new();
 
     cli::kv("Iterations", &params.iterations.to_string());
     cli::kv("Data source", source.label());
@@ -102,10 +98,10 @@ pub fn run(params: &CreateBenchParams) -> Result<()> {
             .override_access(true)
             .build();
 
-        let input = WriteInput::builder(data_str, &join_data).build();
+        let input = WriteInput::builder(values_from_strings(data_str)).build();
 
         let start = Instant::now();
-        let result = create_document_core(&ctx, input);
+        let result = create_document_in_conn(&ctx, input);
         let elapsed = start.elapsed();
 
         durations.push(elapsed);

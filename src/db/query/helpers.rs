@@ -17,6 +17,7 @@ use super::sanitize_locale;
 ///
 /// - `None` → `default_limit`
 /// - `Some(v)` → clamped to `[1, max_limit]`
+#[must_use]
 pub fn apply_pagination_limits(requested: Option<i64>, default_limit: i64, max_limit: i64) -> i64 {
     match requested {
         None => default_limit,
@@ -33,7 +34,7 @@ pub fn apply_pagination_limits(requested: Option<i64>, default_limit: i64, max_l
 /// - Time only (`14:30`) → passthrough
 /// - Month only (`2026-01`) → passthrough
 /// - Anything else → passthrough (validation catches garbage)
-pub fn normalize_date_value(value: &str) -> String {
+pub(crate) fn normalize_date_value(value: &str) -> String {
     // Time only: HH:MM or HH:MM:SS
     if value.len() <= 8 && value.contains(':') && !value.contains('T') {
         return value.to_string();
@@ -83,10 +84,10 @@ pub fn normalize_date_value(value: &str) -> String {
 /// Normalize a date value using a specific IANA timezone.
 /// The input is treated as local time in the given timezone, then converted to UTC.
 /// If the input already has a timezone offset (RFC 3339), it is converted directly.
-pub fn normalize_date_with_timezone(value: &str, tz_str: &str) -> Result<String> {
+fn normalize_date_with_timezone(value: &str, tz_str: &str) -> Result<String> {
     let tz: Tz = tz_str
         .parse()
-        .map_err(|_| anyhow!("Invalid timezone: {}", tz_str))?;
+        .map_err(|_| anyhow!("Invalid timezone: {tz_str}"))?;
 
     let trimmed = value.trim();
 
@@ -96,12 +97,12 @@ pub fn normalize_date_with_timezone(value: &str, tz_str: &str) -> Result<String>
     {
         let local_noon = date
             .and_hms_opt(12, 0, 0)
-            .ok_or_else(|| anyhow!("Failed to construct noon time for {}", trimmed))?;
+            .ok_or_else(|| anyhow!("Failed to construct noon time for {trimmed}"))?;
 
         let utc = tz
             .from_local_datetime(&local_noon)
             .earliest()
-            .ok_or_else(|| anyhow!("Invalid local time for {} in {}", trimmed, tz_str))?
+            .ok_or_else(|| anyhow!("Invalid local time for {trimmed} in {tz_str}"))?
             .with_timezone(&Utc);
 
         return Ok(utc.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
@@ -115,7 +116,7 @@ pub fn normalize_date_with_timezone(value: &str, tz_str: &str) -> Result<String>
             let utc = tz
                 .from_local_datetime(&naive)
                 .earliest()
-                .ok_or_else(|| anyhow!("Invalid local time for {} in {}", trimmed, tz_str))?
+                .ok_or_else(|| anyhow!("Invalid local time for {trimmed} in {tz_str}"))?
                 .with_timezone(&Utc);
 
             return Ok(utc.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
@@ -174,6 +175,20 @@ pub(crate) fn validate_no_null_byte(
     Ok(())
 }
 
+/// Value-aware null-byte guard: only checks string-typed values. Non-string
+/// JSON values (Number, Bool, Null, Array, Object) cannot carry null bytes.
+pub(crate) fn validate_no_null_byte_json(
+    field_type: &FieldType,
+    field_name: &str,
+    value: &Value,
+) -> Result<()> {
+    if let Some(s) = value.as_str() {
+        validate_no_null_byte(field_type, field_name, s)?;
+    }
+
+    Ok(())
+}
+
 /// Coerce a form string value to the appropriate database type.
 pub(crate) fn coerce_value(field_type: &FieldType, value: &str) -> DbValue {
     if value.is_empty() && *field_type != FieldType::Checkbox {
@@ -182,38 +197,45 @@ pub(crate) fn coerce_value(field_type: &FieldType, value: &str) -> DbValue {
 
     match field_type {
         FieldType::Checkbox => {
-            DbValue::Integer(matches!(value, "on" | "true" | "1" | "yes") as i64)
+            DbValue::Integer(i64::from(matches!(value, "on" | "true" | "1" | "yes")))
         }
         FieldType::Number => value
             .parse::<f64>()
             .ok()
             .filter(|f| f.is_finite())
-            .map(DbValue::Real)
-            .unwrap_or(DbValue::Null),
+            .map_or(DbValue::Null, DbValue::Real),
         FieldType::Date => DbValue::Text(normalize_date_value(value)),
         _ => DbValue::Text(value.to_string()),
     }
 }
 
-/// Coerce a `serde_json::Value` to the appropriate database type, preserving
-/// numeric precision. Unlike [`coerce_value`] (which takes `&str`), this
-/// operates on typed JSON values directly — important for backends like
-/// Postgres that require typed parameters.
-#[allow(dead_code)]
+/// Coerce a typed `serde_json::Value` to the appropriate database type.
+///
+/// Takes a fast path for inputs whose precision would be lost by
+/// stringification + reparse:
+/// - `Number` field × `Value::Number` → `Real` directly (skip parse).
+/// - `Checkbox` field × `Value::Bool` → `Integer(0|1)` directly (skip
+///   `"on"`/`"true"` string match).
+///
+/// For all other combinations falls through to stringify + `coerce_value`,
+/// which holds the canonical per-field-type semantics (empty-string ⇒ Null,
+/// date normalization, checkbox truthy-string match, number parse). This
+/// keeps cross-type coercion correct: e.g. `Bool(true)` to a `Text` field
+/// becomes `Text("true")`, not `Integer(1)`.
 pub(crate) fn coerce_json_value(field_type: &FieldType, val: &Value) -> DbValue {
+    match (field_type, val) {
+        (FieldType::Number, Value::Number(n)) => return DbValue::Real(n.as_f64().unwrap_or(0.0)),
+        (FieldType::Checkbox, Value::Bool(b)) => return DbValue::Integer(i64::from(*b)),
+        _ => {}
+    }
+
     match val {
         Value::Null => DbValue::Null,
-        Value::Bool(b) => DbValue::Integer(if *b { 1 } else { 0 }),
-        Value::Number(n) => match field_type {
-            FieldType::Number => DbValue::Real(n.as_f64().unwrap_or(0.0)),
-            _ => n
-                .as_i64()
-                .map(DbValue::Integer)
-                .unwrap_or_else(|| DbValue::Real(n.as_f64().unwrap_or(0.0))),
-        },
         Value::String(s) => coerce_value(field_type, s),
-        Value::Array(arr) => DbValue::Text(Value::Array(arr.clone()).to_string()),
-        Value::Object(obj) => DbValue::Text(Value::Object(obj.clone()).to_string()),
+        Value::Bool(b) => coerce_value(field_type, &b.to_string()),
+        Value::Number(n) => coerce_value(field_type, &n.to_string()),
+        Value::Array(arr) => coerce_value(field_type, &Value::Array(arr.clone()).to_string()),
+        Value::Object(obj) => coerce_value(field_type, &Value::Object(obj.clone()).to_string()),
     }
 }
 
@@ -233,8 +255,24 @@ pub(crate) fn coerce_date_value(field_type: &FieldType, value: &str, tz: Option<
     }
 
     normalize_date_with_timezone(value, tz)
-        .map(DbValue::Text)
-        .unwrap_or_else(|_| coerce_value(field_type, value))
+        .map_or_else(|_| coerce_value(field_type, value), DbValue::Text)
+}
+
+/// Value-aware date+tz coercion. Date inputs flow as `Value::String` (the
+/// admin form, gRPC `string` proto field, and Lua all serialize date input
+/// as a string), so the typed path delegates to [`coerce_date_value`] when
+/// the value is a string and falls back to plain [`coerce_json_value`]
+/// otherwise.
+pub(crate) fn coerce_date_value_json(
+    field_type: &FieldType,
+    value: &Value,
+    tz: Option<&str>,
+) -> DbValue {
+    let Some(s) = value.as_str() else {
+        return coerce_json_value(field_type, value);
+    };
+
+    coerce_date_value(field_type, s, tz)
 }
 
 /// Build a prefixed name: `"prefix__name"` or just `"name"` when prefix is empty.
@@ -244,7 +282,7 @@ pub(crate) fn prefixed_name(prefix: &str, name: &str) -> String {
     if prefix.is_empty() {
         name.to_string()
     } else {
-        format!("{}__{}", prefix, name)
+        format!("{prefix}__{name}")
     }
 }
 
@@ -254,14 +292,14 @@ pub(crate) fn prefixed_name(prefix: &str, name: &str) -> String {
 /// Row/Collapsible (passthrough), and Tabs (per-tab recursion).
 /// The visitor receives `(field, prefix, inherited_localized)` and decides
 /// what to do — including whether to skip non-parent-column fields.
-pub(crate) fn walk_leaf_fields<F>(
-    fields: &[FieldDefinition],
+pub(crate) fn walk_leaf_fields<'a, F>(
+    fields: &'a [FieldDefinition],
     prefix: &str,
     inherited_localized: bool,
     visit: &mut F,
 ) -> Result<()>
 where
-    F: FnMut(&FieldDefinition, &str, bool) -> Result<()>,
+    F: FnMut(&'a FieldDefinition, &str, bool) -> Result<()>,
 {
     for field in fields {
         match field.field_type {
@@ -413,8 +451,7 @@ mod tests {
             assert_eq!(
                 coerce_value(&FieldType::Checkbox, input),
                 DbValue::Integer(1),
-                "Expected Integer(1) for checkbox input '{}'",
-                input
+                "Expected Integer(1) for checkbox input '{input}'"
             );
         }
     }
@@ -425,8 +462,7 @@ mod tests {
             assert_eq!(
                 coerce_value(&FieldType::Checkbox, input),
                 DbValue::Integer(0),
-                "Expected Integer(0) for checkbox input '{}'",
-                input
+                "Expected Integer(0) for checkbox input '{input}'"
             );
         }
     }
@@ -507,108 +543,6 @@ mod tests {
             DbValue::Text("2026-03-15T12:00:00.000Z".into())
         );
     }
-
-    // ── apply_pagination_limits tests ──────────────────────────────────
-
-    // ── coerce_json_value tests ──────────────────────────────────────
-
-    #[test]
-    fn coerce_json_null() {
-        assert_eq!(
-            coerce_json_value(&FieldType::Text, &Value::Null),
-            DbValue::Null
-        );
-    }
-
-    #[test]
-    fn coerce_json_bool_true() {
-        assert_eq!(
-            coerce_json_value(&FieldType::Checkbox, &Value::Bool(true)),
-            DbValue::Integer(1)
-        );
-    }
-
-    #[test]
-    fn coerce_json_bool_false() {
-        assert_eq!(
-            coerce_json_value(&FieldType::Checkbox, &Value::Bool(false)),
-            DbValue::Integer(0)
-        );
-    }
-
-    #[test]
-    fn coerce_json_number_as_real_for_number_field() {
-        let val = json!(42.5);
-        assert_eq!(
-            coerce_json_value(&FieldType::Number, &val),
-            DbValue::Real(42.5)
-        );
-    }
-
-    #[test]
-    fn coerce_json_integer_for_number_field() {
-        let val = json!(42);
-        // Number field always yields Real
-        assert_eq!(
-            coerce_json_value(&FieldType::Number, &val),
-            DbValue::Real(42.0)
-        );
-    }
-
-    #[test]
-    fn coerce_json_integer_for_non_number_field() {
-        let val = json!(42);
-        // Non-number field: integer stays as Integer
-        assert_eq!(
-            coerce_json_value(&FieldType::Text, &val),
-            DbValue::Integer(42)
-        );
-    }
-
-    #[test]
-    fn coerce_json_float_for_non_number_field() {
-        let val = json!(3.15);
-        // Non-number field, but value has no i64 representation: falls back to Real
-        assert_eq!(
-            coerce_json_value(&FieldType::Text, &val),
-            DbValue::Real(3.15)
-        );
-    }
-
-    #[test]
-    fn coerce_json_string_delegates_to_coerce_value() {
-        let val = json!("hello");
-        assert_eq!(
-            coerce_json_value(&FieldType::Text, &val),
-            DbValue::Text("hello".into())
-        );
-    }
-
-    #[test]
-    fn coerce_json_string_empty_is_null() {
-        let val = json!("");
-        assert_eq!(coerce_json_value(&FieldType::Text, &val), DbValue::Null);
-    }
-
-    #[test]
-    fn coerce_json_array_to_text() {
-        let val = json!([1, 2, 3]);
-        assert_eq!(
-            coerce_json_value(&FieldType::Text, &val),
-            DbValue::Text("[1,2,3]".into())
-        );
-    }
-
-    #[test]
-    fn coerce_json_object_to_text() {
-        let val = json!({"key": "value"});
-        assert_eq!(
-            coerce_json_value(&FieldType::Text, &val),
-            DbValue::Text(r#"{"key":"value"}"#.into())
-        );
-    }
-
-    // ── apply_pagination_limits tests ──────────────────────────────────
 
     // ── normalize_date_with_timezone tests ───────────────────────────
 
@@ -710,5 +644,158 @@ mod tests {
     #[test]
     fn pagination_limits_passthrough() {
         assert_eq!(apply_pagination_limits(Some(50), 100, 1000), 50);
+    }
+
+    // ── coerce_json_value tests ──────────────────────────────────────
+
+    #[test]
+    fn coerce_json_null_is_null_for_any_field() {
+        for ft in [
+            FieldType::Text,
+            FieldType::Number,
+            FieldType::Checkbox,
+            FieldType::Date,
+        ] {
+            assert_eq!(coerce_json_value(&ft, &Value::Null), DbValue::Null);
+        }
+    }
+
+    // Checkbox field — fast path for typed Bool, string fallback for str input.
+    #[test]
+    fn coerce_json_checkbox_bool_true() {
+        assert_eq!(
+            coerce_json_value(&FieldType::Checkbox, &Value::Bool(true)),
+            DbValue::Integer(1)
+        );
+    }
+
+    #[test]
+    fn coerce_json_checkbox_bool_false() {
+        assert_eq!(
+            coerce_json_value(&FieldType::Checkbox, &Value::Bool(false)),
+            DbValue::Integer(0)
+        );
+    }
+
+    #[test]
+    fn coerce_json_checkbox_string_truthy() {
+        assert_eq!(
+            coerce_json_value(&FieldType::Checkbox, &json!("on")),
+            DbValue::Integer(1)
+        );
+        assert_eq!(
+            coerce_json_value(&FieldType::Checkbox, &json!("true")),
+            DbValue::Integer(1)
+        );
+    }
+
+    // Number field — fast path for typed Number preserves precision.
+    #[test]
+    fn coerce_json_number_typed_preserves_real() {
+        assert_eq!(
+            coerce_json_value(&FieldType::Number, &json!(42.5)),
+            DbValue::Real(42.5)
+        );
+    }
+
+    #[test]
+    fn coerce_json_number_integer_typed_yields_real() {
+        // Number field always yields Real, even for integer input.
+        assert_eq!(
+            coerce_json_value(&FieldType::Number, &json!(42)),
+            DbValue::Real(42.0)
+        );
+    }
+
+    #[test]
+    fn coerce_json_number_string_parses() {
+        assert_eq!(
+            coerce_json_value(&FieldType::Number, &json!("42.5")),
+            DbValue::Real(42.5)
+        );
+    }
+
+    #[test]
+    fn coerce_json_number_bool_is_null() {
+        // Bool isn't a valid number — stringification path goes through
+        // coerce_value("true") → parse fail → Null.
+        assert_eq!(
+            coerce_json_value(&FieldType::Number, &Value::Bool(true)),
+            DbValue::Null
+        );
+    }
+
+    // Text-storing fields — stringify and route through coerce_value.
+    #[test]
+    fn coerce_json_text_bool_stringifies() {
+        // Regression: Bool to a Text field must produce Text("true"),
+        // not Integer(1) — the original variant-first dispatch had this bug.
+        assert_eq!(
+            coerce_json_value(&FieldType::Text, &Value::Bool(true)),
+            DbValue::Text("true".into())
+        );
+    }
+
+    #[test]
+    fn coerce_json_text_number_stringifies() {
+        // Regression: Number to a Text field must produce Text("42"),
+        // not Integer(42).
+        assert_eq!(
+            coerce_json_value(&FieldType::Text, &json!(42)),
+            DbValue::Text("42".into())
+        );
+    }
+
+    #[test]
+    fn coerce_json_text_string_passes_through() {
+        assert_eq!(
+            coerce_json_value(&FieldType::Text, &json!("hello")),
+            DbValue::Text("hello".into())
+        );
+    }
+
+    #[test]
+    fn coerce_json_text_empty_string_is_null() {
+        assert_eq!(
+            coerce_json_value(&FieldType::Text, &json!("")),
+            DbValue::Null
+        );
+    }
+
+    #[test]
+    fn coerce_json_text_array_to_json_text() {
+        assert_eq!(
+            coerce_json_value(&FieldType::Text, &json!([1, 2, 3])),
+            DbValue::Text("[1,2,3]".into())
+        );
+    }
+
+    #[test]
+    fn coerce_json_text_object_to_json_text() {
+        assert_eq!(
+            coerce_json_value(&FieldType::Text, &json!({"key": "value"})),
+            DbValue::Text(r#"{"key":"value"}"#.into())
+        );
+    }
+
+    #[test]
+    fn coerce_json_json_field_object_passes_through() {
+        // A Json field stores serialized JSON in a TEXT column; an Object
+        // input round-trips as the JSON string.
+        assert_eq!(
+            coerce_json_value(&FieldType::Json, &json!({"a": 1})),
+            DbValue::Text(r#"{"a":1}"#.into())
+        );
+    }
+
+    // Date field — string input gets normalized; non-string input goes to Null.
+    #[test]
+    fn coerce_json_date_string_is_normalized() {
+        // Day-only input lands at noon UTC (matches `coerce_value` /
+        // `normalize_date_value` semantics — see tests above).
+        assert_eq!(
+            coerce_json_value(&FieldType::Date, &json!("2024-01-15")),
+            DbValue::Text("2024-01-15T12:00:00.000Z".into())
+        );
     }
 }

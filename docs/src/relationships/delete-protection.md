@@ -63,7 +63,7 @@ Cannot delete '<id>' from '<collection>': referenced by N document(s)
 local ok, err = pcall(crap.collections.delete, "media", "m1")
 
 -- Bulk delete: skips referenced documents and reports the count
-local result = crap.collections.delete_many("media", {
+local result = crap.collections.media.delete_many({
     where = { status = { equals = "unused" } }
 })
 -- result.deleted = documents actually deleted
@@ -75,7 +75,7 @@ local result = crap.collections.delete_many("media", {
 The `forceHardDelete` option bypasses the ref count check. This is used internally for **Empty Trash** operations and can be used in Lua hooks:
 
 ```lua
-crap.collections.delete("media", "m1", {
+crap.collections.media.delete("m1", {
     forceHardDelete = true  -- skips ref count check
 })
 ```

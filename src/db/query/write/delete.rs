@@ -5,6 +5,10 @@ use anyhow::{Context as _, Result, bail};
 use crate::db::{DbConnection, DbValue};
 
 /// Delete a document by ID. Returns `true` if a row was deleted, `false` if not found.
+///
+/// # Errors
+///
+/// Returns a backend error if the DELETE fails.
 pub fn delete(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
     let sql = format!(
         "DELETE FROM \"{}\" WHERE id = {}",
@@ -13,13 +17,17 @@ pub fn delete(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
     );
     let affected = conn
         .execute(&sql, &[DbValue::Text(id.to_string())])
-        .with_context(|| format!("Failed to delete document {} from '{}'", id, slug))?;
+        .with_context(|| format!("Failed to delete document {id} from '{slug}'"))?;
 
     Ok(affected > 0)
 }
 
 /// Soft-delete a document by setting `_deleted_at` to the current timestamp.
 /// Returns `true` if a row was updated, `false` if not found or already deleted.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
 pub fn soft_delete(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
     let sql = format!(
         "UPDATE \"{}\" SET _deleted_at = {} WHERE id = {} AND _deleted_at IS NULL",
@@ -29,7 +37,7 @@ pub fn soft_delete(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool
     );
     let affected = conn
         .execute(&sql, &[DbValue::Text(id.to_string())])
-        .with_context(|| format!("Failed to soft-delete {} from '{}'", id, slug))?;
+        .with_context(|| format!("Failed to soft-delete {id} from '{slug}'"))?;
 
     Ok(affected > 0)
 }
@@ -39,6 +47,11 @@ pub fn soft_delete(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool
 ///
 /// If restoring would violate a unique constraint (because another active document
 /// now has the same value), returns a descriptive error instead of a raw DB error.
+///
+/// # Errors
+///
+/// Returns a descriptive error if the restore would violate a unique
+/// constraint, or a backend error otherwise.
 pub fn restore(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
     let sql = format!(
         "UPDATE \"{}\" SET _deleted_at = NULL WHERE id = {} AND _deleted_at IS NOT NULL",
@@ -53,25 +66,23 @@ pub fn restore(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
 
             if msg.contains("UNIQUE constraint failed") || msg.contains("unique constraint") {
                 bail!(
-                    "Cannot restore document '{}' in '{}': a unique field value \
-                     is already in use by another active document",
-                    id,
-                    slug
+                    "Cannot restore document '{id}' in '{slug}': a unique field value \
+                     is already in use by another active document"
                 );
             }
 
-            Err(e).with_context(|| format!("Failed to restore {} in '{}'", id, slug))
+            Err(e).with_context(|| format!("Failed to restore {id} in '{slug}'"))
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use tempfile::TempDir;
 
     use super::*;
     use crate::config::CrapConfig;
+    use crate::core::DocumentFields;
     use crate::core::collection::*;
     use crate::core::field::*;
     use crate::db::{BoxedConnection, DbValue, pool, query::write::create};
@@ -107,7 +118,7 @@ mod tests {
     fn delete_basic() {
         let (_dir, conn) = setup_db();
         let def = test_def();
-        let data = HashMap::new();
+        let data = DocumentFields::new();
 
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         let id = doc.id.clone();
@@ -157,7 +168,7 @@ mod tests {
     fn soft_delete_sets_deleted_at() {
         let (_dir, conn) = setup_soft_delete_db();
         let def = test_def();
-        let data = HashMap::new();
+        let data = DocumentFields::new();
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         let id = doc.id.clone();
 
@@ -183,7 +194,7 @@ mod tests {
     fn soft_delete_returns_false_for_already_deleted() {
         let (_dir, conn) = setup_soft_delete_db();
         let def = test_def();
-        let data = HashMap::new();
+        let data = DocumentFields::new();
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         let id = doc.id.clone();
 
@@ -199,7 +210,7 @@ mod tests {
     fn restore_clears_deleted_at() {
         let (_dir, conn) = setup_soft_delete_db();
         let def = test_def();
-        let data = HashMap::new();
+        let data = DocumentFields::new();
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         let id = doc.id.clone();
 
@@ -224,7 +235,7 @@ mod tests {
     fn restore_returns_false_for_non_deleted_doc() {
         let (_dir, conn) = setup_soft_delete_db();
         let def = test_def();
-        let data = HashMap::new();
+        let data = DocumentFields::new();
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
 
         let result = restore(&conn, "posts", &doc.id).unwrap();

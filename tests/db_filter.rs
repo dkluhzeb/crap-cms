@@ -1,6 +1,21 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::collections::HashMap;
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
+use crap_cms::core::DocumentFields;
 use crap_cms::core::Registry;
 use crap_cms::core::collection::{CollectionDefinition, Labels};
 use crap_cms::core::field::{
@@ -56,7 +71,12 @@ fn seed_posts() -> (
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     // Status values: "" means pass empty string → coerce_value converts to NULL.
     // Omitting the field entirely would use the column DEFAULT ('draft'), not NULL.
@@ -69,9 +89,9 @@ fn seed_posts() -> (
     ];
 
     for (title, status) in &rows {
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), title.to_string());
-        data.insert("status".to_string(), status.to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!(title));
+        data.insert("status".to_string(), json!(status));
         let mut conn = pool.get().expect("DB connection");
         let tx = conn.transaction().expect("Start transaction");
         query::create(&tx, "posts", &def, &data, None).expect("Create failed");
@@ -440,13 +460,18 @@ fn contains_filter_escapes_percent() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     // Create two documents: one with "50% off" and one with "100 items"
     let titles = vec!["50% off", "100 items"];
     for title in &titles {
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), title.to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!(title));
         let mut conn = pool.get().expect("DB connection");
         let tx = conn.transaction().expect("Start transaction");
         query::create(&tx, "posts", &def, &data, None).expect("Create failed");
@@ -478,13 +503,18 @@ fn contains_filter_escapes_underscore() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     // Create two documents: "a_b" and "axb"
     let titles = vec!["a_b", "axb"];
     for title in &titles {
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), title.to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!(title));
         let mut conn = pool.get().expect("DB connection");
         let tx = conn.transaction().expect("Start transaction");
         query::create(&tx, "posts", &def, &data, None).expect("Create failed");
@@ -541,8 +571,7 @@ fn validate_query_fields_rejects_invalid_filter() {
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("nonexistent_field"),
-        "Error should mention the invalid field name, got: {}",
-        err_msg
+        "Error should mention the invalid field name, got: {err_msg}"
     );
 }
 
@@ -557,8 +586,7 @@ fn validate_query_fields_rejects_invalid_order() {
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("nonexistent_field"),
-        "Error should mention the invalid field name, got: {}",
-        err_msg
+        "Error should mention the invalid field name, got: {err_msg}"
     );
 }
 
@@ -638,7 +666,12 @@ fn setup_filterable() -> (
         reg.register_collection(def.clone());
         reg.register_collection(tags_def);
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
     (_tmp, pool, def)
 }
 
@@ -652,24 +685,21 @@ fn seed_filterable_products(
     // Product 1: "Widget" with red variant, text block, tagged "sale"
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let mut data1 = HashMap::new();
-    data1.insert("name".to_string(), "Widget".to_string());
-    data1.insert("seo__meta_title".to_string(), "Buy Widget".to_string());
-    data1.insert(
-        "seo__meta_description".to_string(),
-        "Best widget".to_string(),
-    );
+    let mut data1 = DocumentFields::new();
+    data1.insert("name".to_string(), json!("Widget"));
+    data1.insert("seo__meta_title".to_string(), json!("Buy Widget"));
+    data1.insert("seo__meta_description".to_string(), json!("Best widget"));
     let doc1 = query::create(&tx, "products", def, &data1, None).unwrap();
     let id1 = doc1.id.to_string();
 
     // Array rows for product 1
     let rows1 = vec![HashMap::from([
-        ("sku".to_string(), "W-001".to_string()),
-        ("color".to_string(), "red".to_string()),
-        ("size".to_string(), "large".to_string()),
+        ("sku".to_string(), json!("W-001")),
+        ("color".to_string(), json!("red")),
+        ("size".to_string(), json!("large")),
         (
             "dimensions".to_string(),
-            r#"{"width":"10","height":"20"}"#.to_string(),
+            json!(r#"{"width":"10","height":"20"}"#),
         ),
     ])];
     query::set_array_rows(
@@ -706,23 +736,20 @@ fn seed_filterable_products(
     // Product 2: "Gadget" with blue variant, section block, tagged "new"
     let mut conn2 = pool.get().unwrap();
     let tx2 = conn2.transaction().unwrap();
-    let mut data2 = HashMap::new();
-    data2.insert("name".to_string(), "Gadget".to_string());
-    data2.insert("seo__meta_title".to_string(), "Buy Gadget".to_string());
-    data2.insert(
-        "seo__meta_description".to_string(),
-        "Cool gadget".to_string(),
-    );
+    let mut data2 = DocumentFields::new();
+    data2.insert("name".to_string(), json!("Gadget"));
+    data2.insert("seo__meta_title".to_string(), json!("Buy Gadget"));
+    data2.insert("seo__meta_description".to_string(), json!("Cool gadget"));
     let doc2 = query::create(&tx2, "products", def, &data2, None).unwrap();
     let id2 = doc2.id.to_string();
 
     let rows2 = vec![HashMap::from([
-        ("sku".to_string(), "G-001".to_string()),
-        ("color".to_string(), "blue".to_string()),
-        ("size".to_string(), "small".to_string()),
+        ("sku".to_string(), json!("G-001")),
+        ("color".to_string(), json!("blue")),
+        ("size".to_string(), json!("small")),
         (
             "dimensions".to_string(),
-            r#"{"width":"5","height":"15"}"#.to_string(),
+            json!(r#"{"width":"5","height":"15"}"#),
         ),
     ])];
     query::set_array_rows(
@@ -1037,10 +1064,10 @@ fn filter_array_group_subfield() {
 /// Regression for the `DbValue::Text` bug on numeric comparisons.
 ///
 /// Before the fix, `gt`/`lt`/`gte`/`lte` on a `Number` field bound the
-/// operand as `DbValue::Text(v)`, and SQLite's implicit text→number
+/// operand as `DbValue::Text(v)`, and `SQLite`'s implicit text→number
 /// coercion papered over the mismatch. This test populates a table with
 /// actual numeric values and asserts the filter returns the right rows
-/// when bound correctly — it stays green on SQLite but also guards the
+/// when bound correctly — it stays green on `SQLite` but also guards the
 /// contract for backends (e.g. Postgres) that don't silently coerce.
 #[test]
 fn numeric_greater_than_with_actual_integers_in_db() {
@@ -1063,7 +1090,12 @@ fn numeric_greater_than_with_actual_integers_in_db() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("sync");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("sync");
 
     let rows: Vec<(&str, &str)> = vec![
         ("one", "1"),
@@ -1072,9 +1104,9 @@ fn numeric_greater_than_with_actual_integers_in_db() {
         ("thousand", "1000"),
     ];
     for (label, val) in &rows {
-        let mut data = HashMap::new();
-        data.insert("label".to_string(), label.to_string());
-        data.insert("value".to_string(), val.to_string());
+        let mut data = DocumentFields::new();
+        data.insert("label".to_string(), json!(label));
+        data.insert("value".to_string(), json!(val));
         let mut conn = pool.get().expect("conn");
         let tx = conn.transaction().expect("tx");
         query::create(&tx, "scores", &def, &data, None).expect("create");
@@ -1094,7 +1126,7 @@ fn numeric_greater_than_with_actual_integers_in_db() {
         .build();
     let docs = ops::find_documents(&pool, "scores", &def, &q, None).expect("find");
     let labels: Vec<_> = docs.iter().filter_map(|d| d.get_str("label")).collect();
-    assert_eq!(labels.len(), 2, "expected 2 rows > 50, got {:?}", labels);
+    assert_eq!(labels.len(), 2, "expected 2 rows > 50, got {labels:?}");
     assert!(labels.contains(&"hundred"));
     assert!(labels.contains(&"thousand"));
 
@@ -1107,7 +1139,7 @@ fn numeric_greater_than_with_actual_integers_in_db() {
         .build();
     let docs2 = ops::find_documents(&pool, "scores", &def, &q2, None).expect("find");
     let labels2: Vec<_> = docs2.iter().filter_map(|d| d.get_str("label")).collect();
-    assert_eq!(labels2.len(), 2, "expected 2 rows < 50, got {:?}", labels2);
+    assert_eq!(labels2.len(), 2, "expected 2 rows < 50, got {labels2:?}");
     assert!(labels2.contains(&"one"));
     assert!(labels2.contains(&"ten"));
 
@@ -1169,7 +1201,7 @@ fn filter_localized_field_in_array_routes_to_locale_column() {
     }
 
     let locale_config = locale_config_en_de();
-    migrate::sync_all(&pool, &registry, &locale_config).expect("sync");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &locale_config).expect("sync");
 
     let links_field = def.fields.iter().find(|f| f.name == "links").unwrap();
 
@@ -1178,29 +1210,29 @@ fn filter_localized_field_in_array_routes_to_locale_column() {
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
 
-    let mut data_a = HashMap::new();
-    data_a.insert("slug_field".to_string(), "a".to_string());
+    let mut data_a = DocumentFields::new();
+    data_a.insert("slug_field".to_string(), json!("a"));
     let doc_a = query::create(&tx, "l10n_articles", &def, &data_a, None).expect("create a");
 
-    let mut data_b = HashMap::new();
-    data_b.insert("slug_field".to_string(), "b".to_string());
+    let mut data_b = DocumentFields::new();
+    data_b.insert("slug_field".to_string(), json!("b"));
     let doc_b = query::create(&tx, "l10n_articles", &def, &data_b, None).expect("create b");
 
     let a_en = vec![HashMap::from([
-        ("url".to_string(), "https://a-en".to_string()),
-        ("label".to_string(), "Shared".to_string()),
+        ("url".to_string(), json!("https://a-en")),
+        ("label".to_string(), json!("Shared")),
     ])];
     let a_de = vec![HashMap::from([
-        ("url".to_string(), "https://a-de".to_string()),
-        ("label".to_string(), "A-German-Only".to_string()),
+        ("url".to_string(), json!("https://a-de")),
+        ("label".to_string(), json!("A-German-Only")),
     ])];
     let b_en = vec![HashMap::from([
-        ("url".to_string(), "https://b-en".to_string()),
-        ("label".to_string(), "B-English-Only".to_string()),
+        ("url".to_string(), json!("https://b-en")),
+        ("label".to_string(), json!("B-English-Only")),
     ])];
     let b_de = vec![HashMap::from([
-        ("url".to_string(), "https://b-de".to_string()),
-        ("label".to_string(), "Shared".to_string()),
+        ("url".to_string(), json!("https://b-de")),
+        ("label".to_string(), json!("Shared")),
     ])];
 
     query::set_array_rows(
@@ -1297,36 +1329,36 @@ fn seed_l10n_articles_fixture() -> (
     }
 
     let locale_config = locale_config_en_de();
-    migrate::sync_all(&pool, &registry, &locale_config).expect("sync");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &locale_config).expect("sync");
 
     let links_field = def.fields.iter().find(|f| f.name == "links").unwrap();
 
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
 
-    let mut data_a = HashMap::new();
-    data_a.insert("slug_field".to_string(), "a".to_string());
+    let mut data_a = DocumentFields::new();
+    data_a.insert("slug_field".to_string(), json!("a"));
     let doc_a = query::create(&tx, "l10n_articles", &def, &data_a, None).expect("create a");
 
-    let mut data_b = HashMap::new();
-    data_b.insert("slug_field".to_string(), "b".to_string());
+    let mut data_b = DocumentFields::new();
+    data_b.insert("slug_field".to_string(), json!("b"));
     let doc_b = query::create(&tx, "l10n_articles", &def, &data_b, None).expect("create b");
 
     let a_en = vec![HashMap::from([
-        ("url".to_string(), "https://a-en".to_string()),
-        ("label".to_string(), "Shared".to_string()),
+        ("url".to_string(), json!("https://a-en")),
+        ("label".to_string(), json!("Shared")),
     ])];
     let a_de = vec![HashMap::from([
-        ("url".to_string(), "https://a-de".to_string()),
-        ("label".to_string(), "A-German-Only".to_string()),
+        ("url".to_string(), json!("https://a-de")),
+        ("label".to_string(), json!("A-German-Only")),
     ])];
     let b_en = vec![HashMap::from([
-        ("url".to_string(), "https://b-en".to_string()),
-        ("label".to_string(), "B-English-Only".to_string()),
+        ("url".to_string(), json!("https://b-en")),
+        ("label".to_string(), json!("B-English-Only")),
     ])];
     let b_de = vec![HashMap::from([
-        ("url".to_string(), "https://b-de".to_string()),
-        ("label".to_string(), "Shared".to_string()),
+        ("url".to_string(), json!("https://b-de")),
+        ("label".to_string(), json!("Shared")),
     ])];
 
     let seed_rows = [
@@ -1382,10 +1414,10 @@ fn filter_localized_field_in_array_with_all_locale_matches_any() {
         ops::find_documents(&pool, "l10n_articles", &def, &q, Some(&all_ctx)).expect("find all");
 
     let mut ids: Vec<&str> = docs.iter().map(|d| d.id.as_ref()).collect();
-    ids.sort();
+    ids.sort_unstable();
 
     let mut expected = vec![doc_a_id.as_str(), doc_b_id.as_str()];
-    expected.sort();
+    expected.sort_unstable();
 
     assert_eq!(
         ids, expected,

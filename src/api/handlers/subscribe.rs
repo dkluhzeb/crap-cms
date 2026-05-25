@@ -19,17 +19,17 @@ use tracing::{error, warn};
 use crate::{
     api::{
         content,
-        handlers::{ContentService, convert::json_to_prost_value},
+        handlers::{ContentService, proto::json_to_prost_value},
     },
     core::{
-        Document, FieldDefinition, Registry,
-        collection::LiveMode,
-        event::{
-            EventOperation, EventReceiver, EventTarget, InvalidationReceiver, MutationEvent,
-            RecvError,
-        },
+        Document, EventReceiver, FieldDefinition, LiveMode, MutationEvent, Registry,
+        SharedTokenProvider,
+        event::{EventOperation, EventTarget, InvalidationReceiver, RecvError},
     },
-    db::{AccessResult, DbConnection, FilterClause, query::filter::memory::matches_constraints},
+    db::{
+        AccessResult, DbConnection, DbPool, FilterClause,
+        query::filter::memory::matches_constraints,
+    },
     hooks::HookRunner,
 };
 
@@ -237,7 +237,7 @@ struct SubscribeAccess {
     constraints: HashMap<String, Vec<FilterClause>>,
     /// Per-collection event delivery mode.
     modes: HashMap<String, LiveMode>,
-    /// The subscriber's user document (for per-user after_read hooks).
+    /// The subscriber's user document (for per-user `after_read` hooks).
     user_doc: Option<Document>,
 }
 
@@ -289,7 +289,7 @@ async fn handle_event(
     }
 }
 
-/// Handle an invalidation signal. Sends a terminal PermissionDenied before
+/// Handle an invalidation signal. Sends a terminal `PermissionDenied` before
 /// closing if the signal targets this subscriber.
 async fn handle_invalidation(
     tx: &mpsc::Sender<OutboundItem>,
@@ -388,18 +388,19 @@ impl ContentService {
             .ok_or_else(|| Status::unavailable("Live updates disabled"))?;
 
         let token = Self::extract_token(&metadata);
+        let headers = self.metadata_headers(&metadata);
 
         let requested_ops: HashSet<String> = if req.operations.is_empty() {
             ["create", "update", "delete"]
                 .iter()
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
                 .collect()
         } else {
             req.operations.into_iter().collect()
         };
 
         let access = self
-            .resolve_subscribe_access(token, req.collections, req.globals)
+            .resolve_subscribe_access(token, headers, req.collections, req.globals)
             .await?;
 
         if access.allowed_collections.is_empty() && access.allowed_globals.is_empty() {
@@ -420,7 +421,7 @@ impl ContentService {
             access,
             requested_ops,
             hook_runner: self.hook_runner.clone(),
-            registry: self.registry.clone(),
+            registry: Arc::clone(&self.registry),
         };
 
         spawn_pump(
@@ -450,105 +451,147 @@ impl ContentService {
     async fn resolve_subscribe_access(
         &self,
         token: Option<String>,
+        headers: HashMap<String, String>,
         collections_req: Vec<String>,
         globals_req: Vec<String>,
     ) -> Result<SubscribeAccess, Status> {
-        let pool = self.pool.clone();
-        let token_provider = self.token_provider.clone();
-        let registry = self.registry.clone();
-        let hook_runner = self.hook_runner.clone();
+        let input = ResolveSubscribeAccessBlockingInput {
+            pool: self.pool.clone(),
+            token_provider: self.token_provider.clone(),
+            registry: Arc::clone(&self.registry),
+            hook_runner: self.hook_runner.clone(),
+            token,
+            headers,
+            collections_req,
+            globals_req,
+        };
 
-        task::spawn_blocking(move || {
-            let mut conn = pool.get().map_err(|e| {
-                error!("Subscribe pool error: {}", e);
-
-                Status::internal("Internal error")
-            })?;
-
-            let auth_user =
-                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
-            let user_doc = auth_user.as_ref().map(|u| &u.user_doc);
-
-            let tx = conn.transaction().map_err(|e| {
-                error!("Subscribe tx error: {}", e);
-
-                Status::internal("Internal error")
-            })?;
-
-            let mut col_state = AccessState::new();
-            let mut global_state = AccessState::new();
-
-            let target_collections: Vec<String> = if collections_req.is_empty() {
-                registry.collections.keys().map(|s| s.to_string()).collect()
-            } else {
-                collections_req
-            };
-
-            for slug in &target_collections {
-                if let Some(def) = registry.get_collection(slug) {
-                    resolve_single_slug(
-                        slug,
-                        &SlugAccess {
-                            access_ref: def.access.read.clone(),
-                            fields: def.fields.clone(),
-                            live_mode: def.live_mode,
-                        },
-                        user_doc,
-                        &hook_runner,
-                        &tx,
-                        &mut col_state,
-                    );
-                }
-            }
-
-            let target_globals: Vec<String> = if globals_req.is_empty() {
-                registry.globals.keys().map(|s| s.to_string()).collect()
-            } else {
-                globals_req
-            };
-
-            for slug in &target_globals {
-                if let Some(def) = registry.get_global(slug) {
-                    resolve_single_slug(
-                        slug,
-                        &SlugAccess {
-                            access_ref: def.access.read.clone(),
-                            fields: def.fields.clone(),
-                            live_mode: def.live_mode,
-                        },
-                        user_doc,
-                        &hook_runner,
-                        &tx,
-                        &mut global_state,
-                    );
-                }
-            }
-
-            if let Err(e) = tx.commit() {
-                warn!("tx commit failed: {e}");
-            }
-
-            // Merge denied_fields, constraints, and modes (globals share the same maps)
-            let mut denied_fields = col_state.denied_fields;
-            denied_fields.extend(global_state.denied_fields);
-            let mut constraints = col_state.constraints;
-            constraints.extend(global_state.constraints);
-            let mut modes = col_state.modes;
-            modes.extend(global_state.modes);
-
-            Ok(SubscribeAccess {
-                allowed_collections: col_state.allowed,
-                allowed_globals: global_state.allowed,
-                denied_fields,
-                modes,
-                constraints,
-                user_doc: auth_user.map(|au| au.user_doc),
-            })
-        })
-        .await
-        .inspect_err(|e| error!("Subscribe task error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))?
+        task::spawn_blocking(move || resolve_subscribe_access_blocking(input))
+            .await
+            .inspect_err(|e| error!("Subscribe task error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))?
     }
+}
+
+/// Owned bundle for the `resolve_subscribe_access` spawn-blocking body.
+struct ResolveSubscribeAccessBlockingInput {
+    pool: DbPool,
+    token_provider: SharedTokenProvider,
+    registry: Arc<Registry>,
+    hook_runner: HookRunner,
+    headers: HashMap<String, String>,
+    token: Option<String>,
+    collections_req: Vec<String>,
+    globals_req: Vec<String>,
+}
+
+/// Walk every requested collection + global, run their `access.read` hook (if
+/// configured) under a single transaction, and return the merged access
+/// outcome (allowed slugs, denied fields, hook-supplied filter constraints,
+/// per-slug live-mode).
+fn resolve_subscribe_access_blocking(
+    input: ResolveSubscribeAccessBlockingInput,
+) -> Result<SubscribeAccess, Status> {
+    let mut conn = input
+        .pool
+        .get()
+        .inspect_err(|e| error!("Subscribe pool error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))?;
+
+    let auth_user = ContentService::resolve_auth_user(
+        input.token.as_deref(),
+        &input.headers,
+        &*input.token_provider,
+        &input.hook_runner,
+        &input.registry,
+        &conn,
+    )?;
+    let user_doc = auth_user.as_ref().map(|u| &u.user_doc);
+
+    let tx = conn
+        .transaction()
+        .inspect_err(|e| error!("Subscribe tx error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))?;
+
+    let mut col_state = AccessState::new();
+    let mut global_state = AccessState::new();
+
+    let target_collections: Vec<String> = if input.collections_req.is_empty() {
+        input
+            .registry
+            .collections
+            .keys()
+            .map(std::string::ToString::to_string)
+            .collect()
+    } else {
+        input.collections_req
+    };
+
+    for slug in &target_collections {
+        if let Some(def) = input.registry.get_collection(slug) {
+            resolve_single_slug(
+                slug,
+                &SlugAccess {
+                    access_ref: def.access.read.clone(),
+                    fields: def.fields.clone(),
+                    live_mode: def.live_mode,
+                },
+                user_doc,
+                &input.hook_runner,
+                &tx,
+                &mut col_state,
+            );
+        }
+    }
+
+    let target_globals: Vec<String> = if input.globals_req.is_empty() {
+        input
+            .registry
+            .globals
+            .keys()
+            .map(std::string::ToString::to_string)
+            .collect()
+    } else {
+        input.globals_req
+    };
+
+    for slug in &target_globals {
+        if let Some(def) = input.registry.get_global(slug) {
+            resolve_single_slug(
+                slug,
+                &SlugAccess {
+                    access_ref: def.access.read.clone(),
+                    fields: def.fields.clone(),
+                    live_mode: def.live_mode,
+                },
+                user_doc,
+                &input.hook_runner,
+                &tx,
+                &mut global_state,
+            );
+        }
+    }
+
+    if let Err(e) = tx.commit() {
+        warn!("tx commit failed: {e}");
+    }
+
+    // Merge denied_fields, constraints, and modes (globals share the same maps)
+    let mut denied_fields = col_state.denied_fields;
+    denied_fields.extend(global_state.denied_fields);
+    let mut constraints = col_state.constraints;
+    constraints.extend(global_state.constraints);
+    let mut modes = col_state.modes;
+    modes.extend(global_state.modes);
+
+    Ok(SubscribeAccess {
+        allowed_collections: col_state.allowed,
+        allowed_globals: global_state.allowed,
+        denied_fields,
+        modes,
+        constraints,
+        user_doc: auth_user.map(|au| au.user_doc),
+    })
 }
 
 #[cfg(test)]

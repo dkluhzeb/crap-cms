@@ -1,4 +1,4 @@
-//! `init` command — scaffold a new config directory.
+//! `init` command -- scaffold a new config directory.
 
 mod generator;
 

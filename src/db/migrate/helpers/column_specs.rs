@@ -17,7 +17,7 @@ use super::introspection::{get_table_columns, sanitize_locale};
 /// A column specification derived from a field definition.
 /// Used by migration code to generate CREATE TABLE / ALTER TABLE statements.
 pub(in crate::db::migrate) struct ColumnSpec<'a> {
-    /// The column name (e.g., "title", "social__github")
+    /// The column name (e.g., "title", "`social__github`")
     pub col_name: String,
     /// The field definition this column comes from (used for type, constraints)
     pub field: &'a FieldDefinition,
@@ -36,21 +36,15 @@ pub(in crate::db::migrate) fn collect_column_specs<'a>(
     let mut specs = Vec::new();
 
     // walk_leaf_fields is infallible here — the closure never errors.
-    // SAFETY: walk_leaf_fields only passes references derived from its `fields`
-    // parameter, which has lifetime `'a`. The closure's anonymous field lifetime
-    // is actually `'a`, but the compiler can't prove it through the mutable
-    // closure boundary (invariance of `&mut Vec<ColumnSpec<'a>>`). We re-derive
-    // the `'a` lifetime via a pointer round-trip.
     let _ = walk_leaf_fields(
         fields,
         "",
         false,
-        &mut |field, prefix, inherited_localized| {
+        &mut |field: &'a FieldDefinition, prefix, inherited_localized| {
             if !field.has_parent_column() {
                 return Ok(());
             }
 
-            let field: &'a FieldDefinition = unsafe { &*(field as *const FieldDefinition) };
             let col_name = prefixed_name(prefix, &field.name);
 
             let is_localized =
@@ -107,7 +101,7 @@ pub(in crate::db::migrate) fn ensure_locale_column(
         );
         info!("Adding _locale column to {}", table_name);
         conn.execute_ddl(&sql, &[])
-            .with_context(|| format!("Failed to add _locale to {}", table_name))?;
+            .with_context(|| format!("Failed to add _locale to {table_name}"))?;
     }
 
     Ok(())
@@ -116,7 +110,7 @@ pub(in crate::db::migrate) fn ensure_locale_column(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{FieldDefinition, FieldTab, FieldType};
+    use crate::core::{FieldDefinition, FieldTab, FieldType};
     use crate::db::migrate::collection::test_helpers::*;
 
     #[test]
@@ -245,7 +239,7 @@ mod tests {
         let fields = vec![
             FieldDefinition::builder("snippet", FieldType::Code)
                 .admin(
-                    crate::core::field::FieldAdmin::builder()
+                    crate::core::FieldAdmin::builder()
                         .languages(vec!["javascript".to_string(), "python".to_string()])
                         .build(),
                 )
@@ -264,7 +258,7 @@ mod tests {
         let fields = vec![
             FieldDefinition::builder("snippet", FieldType::Code)
                 .admin(
-                    crate::core::field::FieldAdmin::builder()
+                    crate::core::FieldAdmin::builder()
                         .language("javascript")
                         .build(),
                 )
@@ -282,7 +276,7 @@ mod tests {
                 .fields(vec![
                     FieldDefinition::builder("example", FieldType::Code)
                         .admin(
-                            crate::core::field::FieldAdmin::builder()
+                            crate::core::FieldAdmin::builder()
                                 .languages(vec!["javascript".to_string()])
                                 .build(),
                         )

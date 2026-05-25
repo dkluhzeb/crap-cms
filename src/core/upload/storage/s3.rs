@@ -1,4 +1,4 @@
-//! S3-compatible storage backend (AWS S3, MinIO, Cloudflare R2, etc.).
+//! S3-compatible storage backend (AWS S3, `MinIO`, Cloudflare R2, etc.).
 //!
 //! Enabled via `--features s3-storage`.
 
@@ -104,9 +104,7 @@ impl StorageBackend for S3Storage {
                     Ok(false)
                 } else {
                     Err(anyhow::anyhow!(
-                        "S3 exists check failed for '{}': {}",
-                        full_key,
-                        err_str
+                        "S3 exists check failed for '{full_key}': {err_str}"
                     ))
                 }
             }
@@ -258,14 +256,13 @@ mod tests {
     /// 301 redirects / signature-mismatch errors at first use with
     /// no startup hint. Must now bail with a clear diagnostic.
     #[test]
-    fn create_s3_storage_rejects_unparseable_region() {
+    fn create_s3_storage_rejects_unparsable_region() {
         let cfg = s3_config_with_region("eu-west-1-typo");
         let result = create_s3_storage(&cfg);
-        let err = match result {
-            Ok(_) => panic!("expected error for unparseable region"),
-            Err(e) => e,
+        let Err(err) = result else {
+            panic!("expected error for unparsable region");
         };
-        let msg = format!("{:#}", err);
+        let msg = format!("{err:#}");
         assert!(
             msg.contains("eu-west-1-typo") || msg.contains("not a recognized"),
             "expected region diagnostic, got: {msg}"

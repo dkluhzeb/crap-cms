@@ -1,10 +1,30 @@
 //! Helper functions for the populate subsystem.
 
 use anyhow::Result;
-use serde_json::{Map, Value};
+use serde::Serialize;
+use serde_json::Value;
 
-use crate::core::{Document, cache::CacheBackend};
+use crate::core::{Document, DocumentFields, cache::CacheBackend};
 use crate::db::query::populate::Singleflight;
+
+/// The shape `document_to_json` emits — a populated relationship reference
+/// embedded in a parent document's `fields`. `id` and `collection` are the
+/// envelope; the document's user-defined fields flatten alongside them.
+///
+/// Wire-format equivalent to the previous manual `Map::new() + insert` loop —
+/// `#[serde(flatten)]` over `DocumentFields` (transparent over `HashMap`)
+/// reproduces the same key set in the same order.
+#[derive(Serialize)]
+struct PopulatedRef<'a> {
+    id: &'a str,
+    collection: &'a str,
+    #[serde(flatten)]
+    fields: &'a DocumentFields,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created_at: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<&'a str>,
+}
 
 /// Try to get a cached document from the cache backend.
 pub(super) fn cache_get_doc(cache: &dyn CacheBackend, key: &str) -> Result<Option<Document>> {
@@ -89,30 +109,33 @@ pub(crate) fn parse_poly_ref(s: &str) -> Option<(String, String)> {
 
 /// Convert a Document into a JSON Value for embedding in a parent's fields.
 pub(crate) fn document_to_json(doc: &Document, collection: &str) -> Value {
-    let mut map = Map::new();
+    let id = doc.id.as_ref();
+    let populated = PopulatedRef {
+        id,
+        collection,
+        fields: &doc.fields,
+        created_at: doc.created_at.as_deref(),
+        updated_at: doc.updated_at.as_deref(),
+    };
 
-    map.insert("id".to_string(), Value::String(doc.id.to_string()));
-    map.insert(
-        "collection".to_string(),
-        Value::String(collection.to_string()),
-    );
-
-    for (k, v) in &doc.fields {
-        map.insert(k.clone(), v.clone());
-    }
-
-    if let Some(ref ts) = doc.created_at {
-        map.insert("created_at".to_string(), Value::String(ts.clone()));
-    }
-
-    if let Some(ref ts) = doc.updated_at {
-        map.insert("updated_at".to_string(), Value::String(ts.clone()));
-    }
-
-    Value::Object(map)
+    serde_json::to_value(&populated).expect("PopulatedRef serializes")
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use serde_json::json;
     use std::sync::{
@@ -273,7 +296,10 @@ mod tests {
             obj.get("title").and_then(|v| v.as_str()),
             Some("Hello World")
         );
-        assert_eq!(obj.get("count").and_then(|v| v.as_i64()), Some(42));
+        assert_eq!(
+            obj.get("count").and_then(serde_json::Value::as_i64),
+            Some(42)
+        );
         assert_eq!(
             obj.get("created_at").and_then(|v| v.as_str()),
             Some("2024-01-01T00:00:00Z")
@@ -331,7 +357,10 @@ mod tests {
         // Verify deep structure is preserved
         let data = obj.get("data").unwrap();
         let meta = data.get("meta").expect("meta should exist");
-        assert_eq!(meta.get("score").and_then(|v| v.as_f64()), Some(9.5));
+        assert_eq!(
+            meta.get("score").and_then(serde_json::Value::as_f64),
+            Some(9.5)
+        );
         let keywords = meta
             .get("keywords")
             .and_then(|v| v.as_array())

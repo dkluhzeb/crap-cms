@@ -3,7 +3,7 @@
 use serde_json::Value;
 use std::collections::HashMap;
 
-use crate::core::field::{FieldDefinition, FieldType};
+use crate::core::{DocumentFields, FieldDefinition, FieldType};
 
 use super::composite::parse_composite_form_data;
 
@@ -12,8 +12,8 @@ use super::composite::parse_composite_form_data;
 pub(crate) fn extract_join_data_from_form(
     form: &HashMap<String, String>,
     field_defs: &[FieldDefinition],
-) -> HashMap<String, Value> {
-    let mut join_data = HashMap::new();
+) -> DocumentFields {
+    let mut join_data = DocumentFields::new();
 
     extract_join_data_recursive(form, field_defs, "", &mut join_data);
 
@@ -27,7 +27,7 @@ fn extract_join_data_recursive(
     form: &HashMap<String, String>,
     field_defs: &[FieldDefinition],
     prefix: &str,
-    join_data: &mut HashMap<String, Value>,
+    join_data: &mut DocumentFields,
 ) {
     for field in field_defs {
         let full_name = if prefix.is_empty() {
@@ -75,8 +75,7 @@ fn extract_join_data_recursive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{FieldDefinition, FieldTab, FieldType};
-
+    use crate::core::{FieldDefinition, FieldTab, FieldType};
     fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
         FieldDefinition::builder(name, ft).build()
     }

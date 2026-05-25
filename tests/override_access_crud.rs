@@ -1,8 +1,23 @@
-use std::collections::HashMap;
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::Document;
+use crap_cms::core::DocumentFields;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
@@ -15,7 +30,7 @@ fn fixture_dir() -> PathBuf {
 fn setup() -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    crap_cms::core::SharedRegistry,
+    std::sync::Arc<crap_cms::core::Registry>,
     HookRunner,
 ) {
     let config_dir = fixture_dir();
@@ -28,7 +43,7 @@ fn setup() -> (
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .unwrap();
@@ -46,11 +61,9 @@ fn make_user(id: &str, role: &str) -> Document {
 /// Seed items: two owned by "editor-1", one by "other-1", all with notes.
 fn seed_items(
     pool: &crap_cms::db::DbPool,
-    registry: &crap_cms::core::SharedRegistry,
+    registry: &std::sync::Arc<crap_cms::core::Registry>,
 ) -> Vec<String> {
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("items").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("items").unwrap().clone();
 
     let rows = vec![
         ("Item A", "editor-1", "draft", "secret-a"),
@@ -60,7 +73,7 @@ fn seed_items(
 
     let mut ids = Vec::new();
     for (title, owner, status, notes) in rows {
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("title".into(), title.into());
         data.insert("owner".into(), owner.into());
         data.insert("status".into(), status.into());
@@ -167,8 +180,7 @@ fn find_override_access_false_anonymous_denied() {
     let err = result.unwrap_err().to_string();
     assert!(
         err.contains("access denied") || err.contains("Read access denied"),
-        "error should mention access denied, got: {}",
-        err
+        "error should mention access denied, got: {err}"
     );
 }
 
@@ -375,8 +387,7 @@ fn create_override_access_false_anonymous_denied() {
     let err = result.unwrap_err().to_string();
     assert!(
         err.contains("access denied") || err.contains("Create access denied"),
-        "error should mention access denied, got: {}",
-        err
+        "error should mention access denied, got: {err}"
     );
 }
 
@@ -608,8 +619,7 @@ fn delete_override_access_false_editor_denied() {
     let err = result.unwrap_err().to_string();
     assert!(
         err.contains("access denied") || err.contains("Delete access denied"),
-        "error should mention access denied, got: {}",
-        err
+        "error should mention access denied, got: {err}"
     );
 }
 

@@ -7,11 +7,7 @@
 --- If your logic can be expressed as a simple comparison, prefer
 --- returning a condition table instead (evaluated client-side, instant):
 ---   return { field = "{{field_name}}", equals = "value" }
----
----@param data {{data_type}} Current form field values.
----@return boolean
-
-return function(data)
+return {{{factory_expr}}}function(data)
     local val = data.{{field_name}} or ""
     return val ~= nil and val ~= ""
-end
+end)

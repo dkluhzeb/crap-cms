@@ -1,4 +1,4 @@
-//! `make global` command — generate global Lua files.
+//! `make global` command -- generate global Lua files.
 
 mod generator;
 

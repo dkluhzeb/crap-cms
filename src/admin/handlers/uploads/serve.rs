@@ -21,15 +21,29 @@ use std::path;
 use crate::{
     admin::{
         AdminState,
+        handlers::auth::SESSION_COOKIE,
         server::{extract_cookie, load_auth_user},
     },
-    core::{AuthUser, auth::validate_token},
-    db::AccessResult,
+    core::{AuthUser, Document},
+    db::{AccessResult, DbPool},
+    hooks::HookRunner,
 };
 
 /// Check if a path segment contains traversal characters.
 fn has_path_traversal(segment: &str) -> bool {
     segment.contains("..") || segment.contains('/') || segment.contains('\\')
+}
+
+/// Blocking body for [`check_upload_access`]'s `spawn_blocking` call. Pulls a
+/// pool connection and runs the configured collection-level read access hook.
+fn check_upload_access_blocking(
+    pool: &DbPool,
+    hook_runner: &HookRunner,
+    func_ref: &str,
+    user_doc: Option<&Document>,
+) -> Result<AccessResult, anyhow::Error> {
+    let conn = pool.get()?;
+    hook_runner.check_access(Some(func_ref), user_doc, None, None, &conn)
 }
 
 /// Check collection read access, returning the cache policy to use.
@@ -53,14 +67,13 @@ async fn check_upload_access(
     let hook_runner = state.hook_runner.clone();
 
     let access = task::spawn_blocking(move || {
-        let conn = pool.get()?;
-        hook_runner.check_access(Some(&func_ref), user_doc.as_ref(), None, None, &conn)
+        check_upload_access_blocking(&pool, &hook_runner, &func_ref, user_doc.as_ref())
     })
     .await;
 
     let allowed = matches!(
         access,
-        Ok(Ok(AccessResult::Allowed)) | Ok(Ok(AccessResult::Constrained(_)))
+        Ok(Ok(AccessResult::Allowed | AccessResult::Constrained(_)))
     );
 
     if allowed {
@@ -110,8 +123,12 @@ pub async fn serve_upload(
 }
 
 /// Try to authenticate from a raw token string (cookie value or Bearer token).
+/// Routes through `state.token_provider` (not the free `validate_token`
+/// function) so a future swap of the JWT backend / signing key flows
+/// here automatically — the older `jwt_secret`-direct form silently
+/// 401'd everything in that scenario.
 fn auth_from_token(token: &str, state: &AdminState) -> Option<AuthUser> {
-    let claims = validate_token(token, state.jwt_secret.as_ref()).ok()?;
+    let claims = state.token_provider.validate_token(token).ok()?;
     load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale)
 }
 
@@ -122,7 +139,7 @@ fn extract_auth_user(request: &Request<Body>, state: &AdminState) -> Option<Auth
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if let Some(token) = extract_cookie(cookie_header, "crap_session")
+    if let Some(token) = extract_cookie(cookie_header, SESSION_COOKIE)
         && let Some(user) = auth_from_token(token, state)
     {
         return Some(user);
@@ -157,7 +174,7 @@ async fn serve_file(
 
     // Content negotiation: try serving a more efficient format variant
     for (variant_name, variant_mime) in negotiate_variants(filename, accepts_avif, accepts_webp) {
-        let variant_key = format!("{}/{}", collection_slug, variant_name);
+        let variant_key = format!("{collection_slug}/{variant_name}");
 
         if let Some(local_path) = storage.local_path(&variant_key) {
             if local_path.exists() {
@@ -172,7 +189,7 @@ async fn serve_file(
     }
 
     // Serve the original file
-    let original_key = format!("{}/{}", collection_slug, filename);
+    let original_key = format!("{collection_slug}/{filename}");
 
     let requested_mime = mime_guess::from_path(filename)
         .first_or_octet_stream()
@@ -217,15 +234,15 @@ fn negotiate_variants(
 
     let mut variants = Vec::new();
     if accepts_avif {
-        variants.push((format!("{}.avif", stem), "image/avif"));
+        variants.push((format!("{stem}.avif"), "image/avif"));
     }
     if accepts_webp {
-        variants.push((format!("{}.webp", stem), "image/webp"));
+        variants.push((format!("{stem}.webp"), "image/webp"));
     }
     variants
 }
 
-/// Conditional headers extracted from the original request, forwarded to ServeFile.
+/// Conditional headers extracted from the original request, forwarded to `ServeFile`.
 struct ConditionalHeaders {
     range: Option<HeaderValue>,
     if_none_match: Option<HeaderValue>,
@@ -300,7 +317,7 @@ fn apply_response_headers(response: &mut Response, cache_control: &str, mime: &s
 }
 
 /// Serve a file via `tower_http::services::ServeFile` with custom headers.
-/// Provides Range, ETag, Last-Modified, and conditional GET support for free.
+/// Provides Range, `ETag`, Last-Modified, and conditional GET support for free.
 async fn serve_with_headers(
     path: &path::Path,
     request: Request<Body>,

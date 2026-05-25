@@ -2,12 +2,13 @@
 
 use anyhow::{Context as _, Result, anyhow};
 use dialoguer::{Input, Password};
+use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::{
     cli::{self, crap_theme},
     config::PasswordPolicy,
-    core::SharedRegistry,
+    core::{DocumentFields, Registry},
     db::{DbPool, query},
     hooks::lifecycle::is_valid_email_format,
 };
@@ -22,47 +23,63 @@ fn validate_email_input(email: &str) -> Result<()> {
     }
 
     Err(anyhow!(
-        "invalid email address '{}': must contain '@', non-empty local and domain parts, and a dot in the domain",
-        email
+        "invalid email address '{email}': must contain '@', non-empty local and domain parts, and a dot in the domain"
     ))
 }
 
-/// Create a new user in an auth collection.
-#[cfg(not(tarpaulin_include))]
-pub fn user_create(
-    pool: &DbPool,
-    registry: &SharedRegistry,
-    collection: &str,
-    email: Option<String>,
-    password: Option<String>,
-    fields: Vec<(String, String)>,
-    password_policy: &PasswordPolicy,
-) -> Result<()> {
-    let def = load_auth_collection(registry, collection)?;
+/// Args for [`user_create`]. Bundles the dispatch-time inputs from
+/// the `UserAction::Create` clap variant alongside the runtime
+/// pool/registry handles and the configured password policy.
+pub struct UserCreateParams<'a> {
+    pub pool: &'a DbPool,
+    pub registry: &'a Registry,
+    pub collection: &'a str,
+    pub email: Option<String>,
+    pub password: Option<String>,
+    pub fields: Vec<(String, String)>,
+    pub password_policy: &'a PasswordPolicy,
+}
 
-    let email = resolve_email(email)?;
+/// Create a new user in an auth collection.
+///
+/// # Errors
+///
+/// Returns an error if the collection isn't an auth collection, email or
+/// password validation fails, the password fails policy, or the DB write
+/// fails.
+#[cfg(not(tarpaulin_include))]
+pub fn user_create(p: UserCreateParams<'_>) -> Result<()> {
+    let def = load_auth_collection(p.registry, p.collection)?;
+
+    let email = resolve_email(p.email)?;
     validate_email_input(&email)?;
 
-    let password = resolve_password(password)?;
+    let password = resolve_password(p.password)?;
 
-    password_policy.validate(&password)?;
+    p.password_policy.validate(&password)?;
 
-    let mut data: HashMap<String, String> = fields.into_iter().collect();
+    let mut data: HashMap<String, String> = p.fields.into_iter().collect();
     data.insert("email".to_string(), email);
 
     prompt_required_fields(&def, &mut data)?;
 
-    let mut conn = pool.get().context("Failed to get database connection")?;
+    let typed_data: DocumentFields = data
+        .into_iter()
+        .map(|(k, v)| (k, Value::String(v)))
+        .collect();
+
+    let mut conn = p.pool.get().context("Failed to get database connection")?;
     let tx = conn.transaction().context("Failed to begin transaction")?;
 
-    let doc = query::create(&tx, collection, &def, &data, None).context("Failed to create user")?;
+    let doc = query::create(&tx, p.collection, &def, &typed_data, None)
+        .context("Failed to create user")?;
 
-    query::update_password(&tx, collection, &doc.id, &password)
+    query::update_password(&tx, p.collection, &doc.id, &password)
         .context("Failed to set password")?;
 
     tx.commit().context("Failed to commit transaction")?;
 
-    cli::success(&format!("Created user {} in '{}'", doc.id, collection));
+    cli::success(&format!("Created user {} in '{}'", doc.id, p.collection));
 
     Ok(())
 }

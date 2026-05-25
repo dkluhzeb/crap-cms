@@ -19,8 +19,11 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::Serialize;
 
+use crate::typegen::LuaAnnotation;
+
 /// Sidebar metadata declared from Lua via `crap.pages.register`.
-#[derive(Clone, Debug, Default, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Default, Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.custom_page")]
 pub struct CustomPage {
     /// Slug — the URL segment and the filename stem.
     pub slug: String,
@@ -70,21 +73,25 @@ impl CustomPageRegistry {
     /// without a registration still routes (template existence is enough);
     /// this only tells you whether `crap.pages.register` was called for
     /// it.
+    #[must_use]
     pub fn is_registered(&self, slug: &str) -> bool {
         self.pages.contains_key(slug)
     }
 
     /// Look up a registered page by slug.
+    #[must_use]
     pub fn get(&self, slug: &str) -> Option<&CustomPage> {
         self.pages.get(slug)
     }
 
     /// All pages with a sidebar `label` set, ordered by slug.
+    #[must_use]
     pub fn nav_entries(&self) -> Vec<&CustomPage> {
         self.pages.values().filter(|p| p.label.is_some()).collect()
     }
 
     /// All registered pages, ordered by slug.
+    #[must_use]
     pub fn all(&self) -> Vec<&CustomPage> {
         self.pages.values().collect()
     }
@@ -94,6 +101,7 @@ impl CustomPageRegistry {
 /// or odd Handlebars template names. Used by both the registration
 /// (rejects bad slugs at register-time) and the route handler (rejects
 /// bad URLs).
+#[must_use]
 pub fn is_valid_slug(s: &str) -> bool {
     !s.is_empty()
         && s.chars()

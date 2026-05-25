@@ -3,8 +3,9 @@
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap};
 
-use crate::core::field::{FieldDefinition, FieldType, flatten_array_sub_fields};
+use crate::core::{FieldDefinition, FieldType};
 
+use crate::core::field::flatten_array_sub_fields;
 /// Collect form entries into indexed rows, splitting each key into sub-key + value.
 fn collect_indexed_rows(
     form: &HashMap<String, String>,
@@ -25,7 +26,7 @@ fn collect_indexed_rows(
             let entry_key = if tail.is_empty() {
                 sub_key.to_string()
             } else {
-                format!("{}{}", sub_key, tail)
+                format!("{sub_key}{tail}")
             };
 
             rows.entry(idx)
@@ -67,23 +68,21 @@ fn resolve_nested_key(
     flat_defs: &[&FieldDefinition],
 ) -> Value {
     let sf_def = flat_defs.iter().find(|sf| sf.name == base_key).copied();
-    let nested_sub_defs = sf_def.map(|sf| sf.fields.as_slice()).unwrap_or(&[]);
+    let nested_sub_defs = sf_def.map_or(&[][..], |sf| sf.fields.as_slice());
 
     let sub_form: HashMap<String, String> = nested_entries
         .iter()
-        .map(|(rest, value)| (format!("{}{}", base_key, rest), value.clone()))
+        .map(|(rest, value)| (format!("{base_key}{rest}"), value.clone()))
         .collect();
 
     let nested_rows = parse_composite_form_data(&sub_form, base_key, nested_sub_defs);
 
-    let is_single_object = sf_def
-        .map(|sf| {
-            matches!(
-                sf.field_type,
-                FieldType::Group | FieldType::Row | FieldType::Collapsible | FieldType::Tabs
-            )
-        })
-        .unwrap_or(false);
+    let is_single_object = sf_def.is_some_and(|sf| {
+        matches!(
+            sf.field_type,
+            FieldType::Group | FieldType::Row | FieldType::Collapsible | FieldType::Tabs
+        )
+    });
 
     if is_single_object {
         nested_rows
@@ -107,7 +106,7 @@ pub(crate) fn parse_composite_form_data(
     field_name: &str,
     sub_field_defs: &[FieldDefinition],
 ) -> Vec<Value> {
-    let prefix = format!("{}[", field_name);
+    let prefix = format!("{field_name}[");
     let rows = collect_indexed_rows(form, &prefix);
     let flat_defs = flatten_array_sub_fields(sub_field_defs);
 
@@ -128,8 +127,7 @@ pub(crate) fn parse_composite_form_data(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{FieldDefinition, FieldTab, FieldType};
-
+    use crate::core::{FieldDefinition, FieldTab, FieldType};
     fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
         FieldDefinition::builder(name, ft).build()
     }
@@ -276,8 +274,7 @@ mod tests {
         let meta = &result[0]["meta"];
         assert!(
             meta.is_object(),
-            "Group should be parsed as object, got: {:?}",
-            meta
+            "Group should be parsed as object, got: {meta:?}"
         );
         assert_eq!(meta["author"], "Alice");
         assert_eq!(meta["date"], "2026-01-01");

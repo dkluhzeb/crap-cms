@@ -21,7 +21,7 @@ fn client() -> Result<reqwest::blocking::Client> {
 
 /// Single release as returned by the GitHub API.
 #[derive(Debug, Clone, Deserialize)]
-pub struct Release {
+pub(super) struct Release {
     pub tag_name: String,
     #[serde(default)]
     pub prerelease: bool,
@@ -31,7 +31,7 @@ pub struct Release {
 
 /// Fetch all published releases. Includes pre-releases so our alpha tags
 /// show up. Drafts are filtered out (they're not publicly downloadable).
-pub fn list_releases(repo: &str) -> Result<Vec<Release>> {
+pub(super) fn list_releases(repo: &str) -> Result<Vec<Release>> {
     let url = format!("https://api.github.com/repos/{repo}/releases");
     let resp = client()?
         .get(&url)
@@ -46,7 +46,7 @@ pub fn list_releases(repo: &str) -> Result<Vec<Release>> {
 
 /// Return the latest release tag — first non-draft release in the API's
 /// order (which matches what `install.sh` already does).
-pub fn latest_tag(repo: &str) -> Result<String> {
+pub(super) fn latest_tag(repo: &str) -> Result<String> {
     let releases = list_releases(repo)?;
     releases
         .into_iter()
@@ -56,7 +56,7 @@ pub fn latest_tag(repo: &str) -> Result<String> {
 }
 
 /// Download a specific asset from a specific release tag into `dest`.
-pub fn download_asset(repo: &str, tag: &str, asset: &str, dest: &Path) -> Result<()> {
+pub(super) fn download_asset(repo: &str, tag: &str, asset: &str, dest: &Path) -> Result<()> {
     let url = format!("https://github.com/{repo}/releases/download/{tag}/{asset}");
     let mut resp = client()?
         .get(&url)
@@ -72,7 +72,7 @@ pub fn download_asset(repo: &str, tag: &str, asset: &str, dest: &Path) -> Result
 }
 
 /// Fetch `SHA256SUMS` as text.
-pub fn fetch_sha256sums(repo: &str, tag: &str) -> Result<String> {
+pub(super) fn fetch_sha256sums(repo: &str, tag: &str) -> Result<String> {
     let url = format!("https://github.com/{repo}/releases/download/{tag}/SHA256SUMS");
     let resp = client()?
         .get(&url)

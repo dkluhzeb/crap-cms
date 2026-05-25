@@ -2,7 +2,21 @@
 //! filters, filter operators, unique constraints, custom validators,
 //! field-level hooks, and collection-level hooks.
 //!
-//! Uses ContentService directly (no network) via ContentApi trait.
+//! Uses `ContentService` directly (no network) via `ContentApi` trait.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -89,9 +103,9 @@ fn setup_service(
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &collections {
             reg.register_collection(def.clone());
         }
@@ -100,11 +114,12 @@ fn setup_service(
         }
     }
 
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -114,9 +129,8 @@ fn setup_service(
     let service = ContentService::new(
         ContentServiceDeps::builder()
             .pool(db_pool.clone())
-            .registry(Registry::snapshot(&registry))
+            .registry(Registry::snapshot(&shared))
             .hook_runner(hook_runner)
-            .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
             .storage(
@@ -141,7 +155,7 @@ fn setup_service(
             ))
             .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
             .token_provider(std::sync::Arc::new(
-                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+                crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
             ))
             .password_provider(std::sync::Arc::new(
                 crap_cms::core::auth::Argon2PasswordProvider,
@@ -550,15 +564,16 @@ return M
     def.fields = vec![name_f, score_f];
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         reg.register_collection(def);
     }
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -566,9 +581,8 @@ return M
     let service = ContentService::new(
         ContentServiceDeps::builder()
             .pool(db_pool.clone())
-            .registry(Registry::snapshot(&registry))
+            .registry(Registry::snapshot(&shared))
             .hook_runner(hook_runner)
-            .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
             .storage(
@@ -593,7 +607,7 @@ return M
             ))
             .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
             .token_provider(std::sync::Arc::new(
-                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+                crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
             ))
             .password_provider(std::sync::Arc::new(
                 crap_cms::core::auth::Argon2PasswordProvider,
@@ -690,15 +704,16 @@ return M
     def.fields = vec![name_f, slug_f];
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         reg.register_collection(def);
     }
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -706,9 +721,8 @@ return M
     let service = ContentService::new(
         ContentServiceDeps::builder()
             .pool(db_pool.clone())
-            .registry(Registry::snapshot(&registry))
+            .registry(Registry::snapshot(&shared))
             .hook_runner(hook_runner)
-            .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
             .storage(
@@ -733,7 +747,7 @@ return M
             ))
             .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
             .token_provider(std::sync::Arc::new(
-                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+                crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
             ))
             .password_provider(std::sync::Arc::new(
                 crap_cms::core::auth::Argon2PasswordProvider,
@@ -777,14 +791,14 @@ async fn field_level_after_read_hook() {
 
     std::fs::write(
         hooks_dir.join("transform.lua"),
-        r#"
+        r"
 local M = {}
 function M.uppercase_on_read(value, ctx)
     if value then return value:upper() end
     return value
 end
 return M
-        "#,
+        ",
     )
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
@@ -811,15 +825,16 @@ return M
     def.fields = vec![name_f];
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         reg.register_collection(def);
     }
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -827,9 +842,8 @@ return M
     let service = ContentService::new(
         ContentServiceDeps::builder()
             .pool(db_pool.clone())
-            .registry(Registry::snapshot(&registry))
+            .registry(Registry::snapshot(&shared))
             .hook_runner(hook_runner)
-            .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
             .storage(
@@ -854,7 +868,7 @@ return M
             ))
             .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
             .token_provider(std::sync::Arc::new(
-                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+                crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
             ))
             .password_provider(std::sync::Arc::new(
                 crap_cms::core::auth::Argon2PasswordProvider,
@@ -943,15 +957,16 @@ return M
     def.hooks.after_read = vec!["hooks.note_hooks.add_computed".to_string()];
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         reg.register_collection(def);
     }
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -959,9 +974,8 @@ return M
     let service = ContentService::new(
         ContentServiceDeps::builder()
             .pool(db_pool.clone())
-            .registry(Registry::snapshot(&registry))
+            .registry(Registry::snapshot(&shared))
             .hook_runner(hook_runner)
-            .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
             .storage(
@@ -986,7 +1000,7 @@ return M
             ))
             .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
             .token_provider(std::sync::Arc::new(
-                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+                crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
             ))
             .password_provider(std::sync::Arc::new(
                 crap_cms::core::auth::Argon2PasswordProvider,
@@ -1068,15 +1082,16 @@ return M
     def.hooks.before_validate = vec!["hooks.moderator.reject_forbidden".to_string()];
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         reg.register_collection(def);
     }
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -1084,9 +1099,8 @@ return M
     let service = ContentService::new(
         ContentServiceDeps::builder()
             .pool(db_pool.clone())
-            .registry(Registry::snapshot(&registry))
+            .registry(Registry::snapshot(&shared))
             .hook_runner(hook_runner)
-            .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
             .storage(
@@ -1111,7 +1125,7 @@ return M
             ))
             .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
             .token_provider(std::sync::Arc::new(
-                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+                crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
             ))
             .password_provider(std::sync::Arc::new(
                 crap_cms::core::auth::Argon2PasswordProvider,
@@ -1226,17 +1240,14 @@ async fn find_depth_0_returns_id_only() {
             );
         }
         other => {
-            panic!(
-                "At depth=0, category should be a StringValue (ID), got: {:?}",
-                other
-            );
+            panic!("At depth=0, category should be a StringValue (ID), got: {other:?}");
         }
     }
 }
 
 /// Regression: user-supplied `where` clauses that target system columns
 /// (field paths starting with `_`) must be rejected at parse time with an
-/// InvalidArgument status. System columns (`_status`, `_deleted_at`, ...) are
+/// `InvalidArgument` status. System columns (`_status`, `_deleted_at`, ...) are
 /// engine-internal — the supported entry points are the typed flags
 /// `trash = true` / `draft = true`.
 #[tokio::test]

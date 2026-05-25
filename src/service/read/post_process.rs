@@ -1,5 +1,5 @@
 //! Shared post-processing for read operations (populate, upload sizes,
-//! select stripping, field-level access, after_read hooks).
+//! select stripping, field-level access, `after_read` hooks).
 
 use std::{collections::HashSet, mem};
 
@@ -11,10 +11,7 @@ use crate::{
         cache::{CacheBackend, NoneCache},
         upload,
     },
-    db::{
-        DbConnection, LocaleContext,
-        query::{self, SharedPopulateSingleflight, Singleflight},
-    },
+    db::{DbConnection, LocaleContext, SharedPopulateSingleflight, Singleflight, query},
     hooks::lifecycle::AfterReadCtx,
     service::{ServiceContext, helpers, hooks::ReadHooksJoinGuard},
 };
@@ -34,7 +31,7 @@ pub(crate) trait PostProcessOpts {
     fn singleflight(&self) -> Option<&SharedPopulateSingleflight>;
 }
 
-/// Post-process a single document (skip hydration -- used by find_by_id where
+/// Post-process a single document (skip hydration -- used by `find_by_id` where
 /// `ops::find_by_id_full` already handled hydration).
 pub(crate) fn post_process_single(
     ctx: &ServiceContext,
@@ -43,11 +40,12 @@ pub(crate) fn post_process_single(
     opts: &impl PostProcessOpts,
     operation: &str,
 ) {
-    let hooks = match ctx.read_hooks {
-        Some(h) => h,
-        None => return,
+    let Some(hooks) = ctx.read_hooks else {
+        return;
     };
-    let def = ctx.collection_def();
+    let Ok(def) = ctx.collection_def() else {
+        return;
+    };
     let slug = ctx.slug;
     let user = ctx.user;
 
@@ -78,13 +76,13 @@ pub(crate) fn post_process_single(
         // provided one so concurrent populates across requests dedup cache
         // misses. Otherwise fall back to a fresh per-call singleflight.
         let fallback_sf: Singleflight<Option<Document>>;
-        let singleflight: &Singleflight<Option<Document>> = match effective_singleflight {
-            Some(arc) => arc.as_ref(),
-            None => {
+        let singleflight: &Singleflight<Option<Document>> =
+            if let Some(arc) = effective_singleflight {
+                arc.as_ref()
+            } else {
                 fallback_sf = Singleflight::new();
                 &fallback_sf
-            }
-        };
+            };
 
         let pop_result = if let Some(cache) = effective_cache {
             query::populate_relationships_cached_with_singleflight(
@@ -136,39 +134,43 @@ pub(crate) fn post_process_single(
     };
 
     // Swap in a placeholder, run hooks, swap back
-    let placeholder = Document::new("".to_string());
+    let placeholder = Document::new(String::new());
     let owned = mem::replace(doc, placeholder);
     *doc = hooks.after_read_one(&ar_ctx, owned);
 }
 
 /// Shared post-processing for find: hydrate, populate, upload sizes,
-/// select stripping, field-level access stripping, and after_read hooks.
+/// select stripping, field-level access stripping, and `after_read` hooks.
 pub(crate) fn post_process_docs(
     ctx: &ServiceContext,
     conn: &dyn DbConnection,
     docs: &mut Vec<Document>,
     opts: &impl PostProcessOpts,
 ) {
-    let hooks = match ctx.read_hooks {
-        Some(h) => h,
-        None => return,
+    let Some(hooks) = ctx.read_hooks else {
+        return;
     };
-    let def = ctx.collection_def();
+    let Ok(def) = ctx.collection_def() else {
+        return;
+    };
     let slug = ctx.slug;
     let user = ctx.user;
 
     if opts.hydrate() {
-        for doc in docs.iter_mut() {
-            if let Err(e) = query::hydrate_document(
-                conn,
-                slug,
-                &def.fields,
-                doc,
-                opts.select(),
-                opts.locale_ctx(),
-            ) {
-                warn!("hydrate error for {slug}/{}: {e:#}", doc.id);
-            }
+        // Batched plural-doc hydrate: one `WHERE parent_id IN (…)`
+        // SELECT per top-level has-many relationship field instead of
+        // one per (doc, field). Non-batched field shapes (Array,
+        // Blocks, fields nested in Group/Tabs) still go per-doc
+        // inside `hydrate_documents`.
+        if let Err(e) = query::hydrate_documents(
+            conn,
+            slug,
+            &def.fields,
+            docs.as_mut_slice(),
+            opts.select(),
+            opts.locale_ctx(),
+        ) {
+            warn!("hydrate error for {slug}: {e:#}");
         }
     }
 
@@ -194,13 +196,13 @@ pub(crate) fn post_process_docs(
         let (effective_cache, effective_singleflight) = effective_populate_state(ctx, opts);
 
         let fallback_sf;
-        let singleflight: &Singleflight<Option<Document>> = match effective_singleflight {
-            Some(arc) => arc.as_ref(),
-            None => {
+        let singleflight: &Singleflight<Option<Document>> =
+            if let Some(arc) = effective_singleflight {
+                arc.as_ref()
+            } else {
                 fallback_sf = Singleflight::new();
                 &fallback_sf
-            }
-        };
+            };
 
         let pop_result = if let Some(cache) = effective_cache {
             query::populate_relationships_batch_cached_with_singleflight(
@@ -273,7 +275,7 @@ pub(crate) fn post_process_docs(
 /// into another user's populate lookup, because a subsequent cache hit does
 /// not re-run the access check that decided the original fetch was allowed.
 /// Zeroing both is a single-chokepoint rule that covers every populate entry
-/// point (find, find_by_id).
+/// point (find, `find_by_id`).
 ///
 /// Override-access fetches are still deduplicated *within* their own call via
 /// the fresh per-call singleflight created by `populate_relationships_*`.
@@ -367,7 +369,7 @@ mod tests {
         );
     }
 
-    /// Without override_access, the caller's cache + singleflight are passed
+    /// Without `override_access`, the caller's cache + singleflight are passed
     /// through unchanged so normal requests still benefit from cross-request
     /// dedup and the shared populate cache.
     #[test]
@@ -389,13 +391,13 @@ mod tests {
             "cache should be threaded through"
         );
         assert!(
-            effective_sf.map(|s| Arc::ptr_eq(s, &sf)).unwrap_or(false),
+            effective_sf.is_some_and(|s| Arc::ptr_eq(s, &sf)),
             "singleflight should be the caller's Arc"
         );
     }
 
     /// When the caller doesn't provide a cache/singleflight at all, the
-    /// effective state is `None` regardless of override_access.
+    /// effective state is `None` regardless of `override_access`.
     #[test]
     fn no_cache_and_no_singleflight_stays_none() {
         let def = CollectionDefinition::new("posts");

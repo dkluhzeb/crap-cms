@@ -1,12 +1,22 @@
-//! `make component` — scaffold a custom Web Component JS file at
+//! `make component` -- scaffold a custom Web Component JS file at
 //! `<config_dir>/static/components/<tag>.js`. Prints the one-line
 //! `import './<tag>.js';` to add to `custom.js` for registration.
 
 use std::{fs, path::Path};
 
 use anyhow::{Context as _, Result, bail};
+use serde::Serialize;
 
-use crate::cli;
+use crate::{
+    cli,
+    scaffold::{guards::refuse_file_overwrite, paths, render},
+};
+
+#[derive(Serialize)]
+struct ComponentCtx<'a> {
+    tag: &'a str,
+    class_name: String,
+}
 
 /// Options for `make_component`.
 pub struct MakeComponentOptions<'a> {
@@ -17,21 +27,21 @@ pub struct MakeComponentOptions<'a> {
 }
 
 /// Scaffold the JS file.
+///
+/// # Errors
+///
+/// Returns an error if the tag is invalid, the file already exists without
+/// `--force`, or writing the file fails.
 pub fn make_component(opts: &MakeComponentOptions) -> Result<()> {
     validate_tag(opts.tag)?;
 
-    let dir = opts.config_dir.join("static").join("components");
+    let dir = paths::static_components_dir(opts.config_dir);
     fs::create_dir_all(&dir).context("Failed to create static/components/ directory")?;
 
     let file_path = dir.join(format!("{}.js", opts.tag));
-    if file_path.exists() && !opts.force {
-        bail!(
-            "File '{}' already exists — use --force to overwrite",
-            file_path.display()
-        );
-    }
+    refuse_file_overwrite(&file_path, opts.force)?;
 
-    let js = render_component_js(opts.tag);
+    let js = render_component_js(opts.tag)?;
     fs::write(&file_path, &js)
         .with_context(|| format!("Failed to write {}", file_path.display()))?;
 
@@ -53,118 +63,39 @@ fn validate_tag(tag: &str) -> Result<()> {
         bail!("tag must not be empty");
     }
     if !tag.contains('-') {
-        bail!(
-            "tag '{}' is invalid — custom elements must contain a hyphen (e.g. 'my-widget')",
-            tag
-        );
+        bail!("tag '{tag}' is invalid -- custom elements must contain a hyphen (e.g. 'my-widget')");
     }
     if tag.starts_with('-') || tag.ends_with('-') {
-        bail!("tag '{}' must not start or end with a hyphen", tag);
+        bail!("tag '{tag}' must not start or end with a hyphen");
     }
     if tag.contains("--") {
-        bail!("tag '{}' must not contain consecutive hyphens", tag);
+        bail!("tag '{tag}' must not contain consecutive hyphens");
     }
     if !tag.chars().next().unwrap().is_ascii_lowercase() {
-        bail!("tag '{}' must start with an ASCII lowercase letter", tag);
+        bail!("tag '{tag}' must start with an ASCII lowercase letter");
     }
     for c in tag.chars() {
         let ok = c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-';
         if !ok {
             bail!(
-                "tag '{}' contains invalid character '{}' (lowercase letters / digits / `-` only)",
-                tag,
-                c
+                "tag '{tag}' contains invalid character '{c}' (lowercase letters / digits / `-` only)"
             );
         }
     }
     Ok(())
 }
 
-fn render_component_js(tag: &str) -> String {
-    let class_name = tag_to_class_name(tag);
-    format!(
-        r#"/**
- * <{tag}> — custom Web Component.
- *
- * Registered via `<config_dir>/static/components/custom.js` (which
- * `index.js` auto-imports). Form-associated by default so the value
- * participates in native form submission and validation; remove
- * `static formAssociated = true` and the `setFormValue` call if you
- * don't need form integration.
- *
- * Styling uses constructable stylesheets (`adoptedStyleSheets`) and
- * DOM is built with the `h()` helper — both pierce the strict CSP
- * without needing `'unsafe-inline'`.
- *
- * @module {tag}
- * @stability stable
- */
-
-import {{ css }} from './_internal/css.js';
-import {{ h }} from './_internal/h.js';
-
-const sheet = css`
-  :host {{ display: inline-block; }}
-  .container {{ padding: var(--space-sm, 0.5rem); }}
-`;
-
-class {class_name} extends HTMLElement {{
-  static formAssociated = true;
-  static observedAttributes = ['value'];
-
-  constructor() {{
-    super();
-    /** @type {{ElementInternals}} */
-    this._internals = this.attachInternals();
-    this.attachShadow({{ mode: 'open' }});
-    this.shadowRoot.adoptedStyleSheets = [sheet];
-
-    this._value = h('span', {{ part: 'value' }});
-    this.shadowRoot.append(
-      h('div', {{ class: 'container', part: 'container' }}, this._value),
-    );
-  }}
-
-  connectedCallback() {{
-    this._render();
-  }}
-
-  attributeChangedCallback(name, _old, value) {{
-    if (name === 'value') {{
-      this._internals.setFormValue(value ?? '');
-      this._render();
-    }}
-  }}
-
-  /** Public getter/setter for `.value`, mirrored to the attribute. */
-  get value() {{
-    return this.getAttribute('value') ?? '';
-  }}
-  set value(v) {{
-    this.setAttribute('value', v);
-  }}
-
-  _render() {{
-    if (!this._value) return;
-    this._value.textContent = this.value || '(empty)';
-  }}
-
-  /** Dispatch `crap:change` so <crap-dirty-form> picks up edits. */
-  _emitChange() {{
-    this.dispatchEvent(new Event('crap:change', {{ bubbles: true, composed: true }}));
-  }}
-}}
-
-if (!customElements.get('{tag}')) {{
-  customElements.define('{tag}', {class_name});
-}}
-"#,
-        tag = tag,
-        class_name = class_name,
+fn render_component_js(tag: &str) -> Result<String> {
+    render::render(
+        "component",
+        &ComponentCtx {
+            tag,
+            class_name: tag_to_class_name(tag),
+        },
     )
 }
 
-/// Convert `my-widget` → `MyWidget`.
+/// Convert `my-widget` -> `MyWidget`.
 fn tag_to_class_name(tag: &str) -> String {
     tag.split('-')
         .map(|s| {
@@ -173,8 +104,7 @@ fn tag_to_class_name(tag: &str) -> String {
                 c.to_ascii_uppercase().to_string() + chars.as_str()
             })
         })
-        .collect::<Vec<_>>()
-        .join("")
+        .collect::<String>()
 }
 
 #[cfg(test)]
@@ -198,8 +128,8 @@ mod tests {
         assert!(body.contains("static formAssociated = true"));
     }
 
-    /// Regression: the previous scaffold shipped `shadowRoot.innerHTML = …`
-    /// with an inline `<style>` block — the exact pattern that alpha.8
+    /// Regression: the previous scaffold shipped `shadowRoot.innerHTML = ...`
+    /// with an inline `<style>` block -- the exact pattern that alpha.8
     /// migrated all built-in components away from. Lock the scaffold in
     /// to the new constructable-stylesheet + `h()` pattern so new
     /// components don't drift back.

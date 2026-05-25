@@ -22,7 +22,7 @@ pub(in crate::admin::handlers::collections) fn thumbnail_url(
                 .and_then(|v| v.get(thumb_name))
                 .and_then(|v| v.get("url"))
                 .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
         })
-        .or_else(|| doc.get_str("url").map(|s| s.to_string()))
+        .or_else(|| doc.get_str("url").map(std::string::ToString::to_string))
 }

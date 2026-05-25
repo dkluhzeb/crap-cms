@@ -22,6 +22,7 @@ use crate::{
         handlers::shared::has_read_access,
     },
     core::auth::{AuthUser, Claims},
+    typegen::LuaAnnotation,
 };
 
 /// Common fields present on every authenticated admin page.
@@ -65,6 +66,45 @@ pub struct BasePageContext {
     pub editor_locales: Option<Vec<EditorLocaleOption>>,
 }
 
+impl LuaAnnotation for BasePageContext {
+    /// The aggregate template context — references every other Lua class
+    /// emitted by [`render_template_data_types`]. Per-page extra fields
+    /// (e.g. `collection_cards`, `versions`) aren't enumerated here; the
+    /// generated file points readers at the per-page reference docs.
+    ///
+    /// Hand-written: the annotation injects fields (`collection`, `global`,
+    /// `document`) that don't live on the struct, plus a trailing comment
+    /// block. The derive can't reproduce that shape, so this impl stays
+    /// manual.
+    ///
+    /// [`render_template_data_types`]: crate::typegen::lua::render
+    const CLASS_NAME: &'static str = "crap.template_ctx";
+
+    fn render_lua_annotation(out: &mut String) {
+        out.push_str("---@class crap.template_ctx\n");
+        out.push_str("---@field crap crap.template.crap_meta\n");
+        out.push_str("---@field _locale string\n");
+        out.push_str("---@field available_locales string[]\n");
+        out.push_str("---@field title string\n");
+        out.push_str("---@field page crap.template.page\n");
+        out.push_str("---@field nav crap.template.nav\n");
+        out.push_str("---@field breadcrumbs? crap.template.breadcrumb[]\n");
+        out.push_str("---@field user? crap.template.user\n");
+        out.push_str("---@field collection? crap.template.collection\n");
+        out.push_str("---@field global? crap.template.global\n");
+        out.push_str("---@field document? crap.template.document\n");
+        out.push_str("---@field has_editor_locales? boolean\n");
+        out.push_str("---@field editor_locale? string\n");
+        out.push_str("---@field editor_locales? crap.template.editor_locale_option[]\n");
+        out.push_str(
+            "-- For page-specific fields beyond the bases (e.g. `collection_cards`, `versions`),\n",
+        );
+        out.push_str(
+            "-- see docs/src/admin-ui/template-context.md or the generated reference.\n\n",
+        );
+    }
+}
+
 /// Minimal base for unauthenticated pages (login / forgot / reset / MFA).
 /// Omits `nav` and `user`.
 #[derive(Serialize, JsonSchema)]
@@ -92,15 +132,15 @@ impl BasePageContext {
     pub fn for_handler(
         state: &AdminState,
         claims: Option<&Claims>,
-        auth_user: &Option<Extension<AuthUser>>,
+        auth_user: Option<&Extension<AuthUser>>,
         page: PageMeta,
     ) -> Self {
         let user = claims.map(UserContext::from_claims);
-        let locale = auth_user
-            .as_ref()
-            .map(|Extension(au)| au.ui_locale.clone())
-            .unwrap_or_else(|| state.config.locale.default_locale.clone());
-        let user_doc = auth_user.as_ref().map(|Extension(au)| &au.user_doc);
+        let locale = auth_user.map_or_else(
+            || state.config.locale.default_locale.clone(),
+            |Extension(au)| au.ui_locale.clone(),
+        );
+        let user_doc = auth_user.map(|Extension(au)| &au.user_doc);
 
         let mut nav = NavData::from_state(state);
         filter_nav_in_place(&mut nav, state, user_doc);
@@ -131,7 +171,7 @@ impl BasePageContext {
     /// Attach a breadcrumb trail (writes both `page.breadcrumbs` and the
     /// top-level mirror).
     pub fn with_breadcrumbs(mut self, breadcrumbs: Vec<Breadcrumb>) -> Self {
-        self.breadcrumbs = breadcrumbs.clone();
+        self.breadcrumbs.clone_from(&breadcrumbs);
         self.page.breadcrumbs = breadcrumbs;
         self
     }

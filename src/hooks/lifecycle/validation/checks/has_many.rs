@@ -1,11 +1,9 @@
-use std::collections::HashMap;
-
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
 
-/// Validate individual values within a has_many JSON array.
-/// Checks count bounds (min_rows/max_rows) for all has_many field types
+/// Validate individual values within a `has_many` JSON array.
+/// Checks count bounds (`min_rows/max_rows`) for all `has_many` field types
 /// and per-element constraints for Text/Number.
 pub(crate) fn check_has_many_elements(
     field: &FieldDefinition,
@@ -48,7 +46,7 @@ pub(crate) fn check_has_many_elements(
     }
 }
 
-/// Validate a single text value against min_length/max_length constraints.
+/// Validate a single text value against `min_length/max_length` constraints.
 fn check_text_value_length(
     field: &FieldDefinition,
     data_key: &str,
@@ -60,37 +58,37 @@ fn check_text_value_length(
     if let Some(min_len) = field.min_length
         && char_count < min_len
     {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!(
-                "{}: '{}' must be at least {} characters",
-                field.name, v, min_len
-            ),
-            "validation.has_many_min_length",
-            HashMap::from([
-                ("field".to_string(), field.name.clone()),
-                ("value".to_string(), v.to_string()),
-                ("min".to_string(), min_len.to_string()),
-            ]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!(
+                    "{}: '{}' must be at least {} characters",
+                    field.name, v, min_len
+                ),
+                "validation.has_many_min_length",
+            )
+            .with_param("field", field.name.clone())
+            .with_param("value", v.to_string())
+            .with_param("min", min_len.to_string()),
+        );
     }
 
     if let Some(max_len) = field.max_length
         && char_count > max_len
     {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!(
-                "{}: '{}' must be at most {} characters",
-                field.name, v, max_len
-            ),
-            "validation.has_many_max_length",
-            HashMap::from([
-                ("field".to_string(), field.name.clone()),
-                ("value".to_string(), v.to_string()),
-                ("max".to_string(), max_len.to_string()),
-            ]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!(
+                    "{}: '{}' must be at most {} characters",
+                    field.name, v, max_len
+                ),
+                "validation.has_many_max_length",
+            )
+            .with_param("field", field.name.clone())
+            .with_param("value", v.to_string())
+            .with_param("max", max_len.to_string()),
+        );
     }
 }
 
@@ -108,35 +106,35 @@ fn check_number_value_bounds(
     if let Some(min_val) = field.min
         && num < min_val
     {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!("{}: {} must be at least {}", field.name, v, min_val),
-            "validation.has_many_min_value",
-            HashMap::from([
-                ("field".to_string(), field.name.clone()),
-                ("value".to_string(), v.to_string()),
-                ("min".to_string(), min_val.to_string()),
-            ]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{}: {} must be at least {}", field.name, v, min_val),
+                "validation.has_many_min_value",
+            )
+            .with_param("field", field.name.clone())
+            .with_param("value", v.to_string())
+            .with_param("min", min_val.to_string()),
+        );
     }
 
     if let Some(max_val) = field.max
         && num > max_val
     {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!("{}: {} must be at most {}", field.name, v, max_val),
-            "validation.has_many_max_value",
-            HashMap::from([
-                ("field".to_string(), field.name.clone()),
-                ("value".to_string(), v.to_string()),
-                ("max".to_string(), max_val.to_string()),
-            ]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{}: {} must be at most {}", field.name, v, max_val),
+                "validation.has_many_max_value",
+            )
+            .with_param("field", field.name.clone())
+            .with_param("value", v.to_string())
+            .with_param("max", max_val.to_string()),
+        );
     }
 }
 
-/// Shared min_rows/max_rows validation for all has_many field types.
+/// Shared `min_rows/max_rows` validation for all `has_many` field types.
 fn check_count_bounds(
     field: &FieldDefinition,
     data_key: &str,
@@ -146,38 +144,38 @@ fn check_count_bounds(
     if let Some(min_rows) = field.min_rows
         && count < min_rows
     {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!("{} must have at least {} values", field.name, min_rows),
-            "validation.has_many_min_rows",
-            HashMap::from([
-                ("field".to_string(), field.name.clone()),
-                ("min".to_string(), min_rows.to_string()),
-            ]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} must have at least {} values", field.name, min_rows),
+                "validation.has_many_min_rows",
+            )
+            .with_param("field", field.name.clone())
+            .with_param("min", min_rows.to_string()),
+        );
     }
 
     if let Some(max_rows) = field.max_rows
         && count > max_rows
     {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!("{} must have at most {} values", field.name, max_rows),
-            "validation.has_many_max_rows",
-            HashMap::from([
-                ("field".to_string(), field.name.clone()),
-                ("max".to_string(), max_rows.to_string()),
-            ]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} must have at most {} values", field.name, max_rows),
+                "validation.has_many_max_rows",
+            )
+            .with_param("field", field.name.clone())
+            .with_param("max", max_rows.to_string()),
+        );
     }
 }
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
-    use crate::core::field::{FieldDefinition, FieldType, LocalizedString, SelectOption};
+    use crate::core::DocumentFields;
+    use crate::core::{FieldDefinition, FieldType, LocalizedString, SelectOption};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
-    use std::collections::HashMap;
 
     #[test]
     fn test_validate_has_many_select_valid() {
@@ -194,7 +192,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["red","blue"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -220,7 +218,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["red","invalid"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -251,7 +249,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!("[]"));
         let result = validate_fields_inner(
             &lua,
@@ -276,7 +274,7 @@ mod tests {
                 .has_many(true)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["rust","lua","python"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -299,7 +297,7 @@ mod tests {
                 .min_length(3)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["rust","ab"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -327,7 +325,7 @@ mod tests {
                 .max_rows(2)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["a","b","c"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -354,7 +352,7 @@ mod tests {
                 .has_many(true)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("scores".to_string(), json!(r#"["10","20","30"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -377,7 +375,7 @@ mod tests {
                 .max(50.0)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("scores".to_string(), json!(r#"["10","75"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -401,7 +399,7 @@ mod tests {
                 .required(true)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!("[]"));
         let result = validate_fields_inner(
             &lua,
@@ -425,7 +423,7 @@ mod tests {
                 .required(true)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["rust"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -448,7 +446,7 @@ mod tests {
                 .max_length(10)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["abcdefgh","abcdefgh"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -474,7 +472,7 @@ mod tests {
                 .min_rows(3)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["a","b"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -501,7 +499,7 @@ mod tests {
                 .min_rows(2)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("scores".to_string(), json!(r#"["10"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -528,7 +526,7 @@ mod tests {
                 .min(5.0)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("scores".to_string(), json!(r#"["10","2"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -555,7 +553,7 @@ mod tests {
                 .max_length(3)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["ab","toolong"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -574,7 +572,7 @@ mod tests {
         );
     }
 
-    /// Regression: has_many validation must report ALL invalid values, not just the first.
+    /// Regression: `has_many` validation must report ALL invalid values, not just the first.
     /// Previously, `break` after the first error caused subsequent violations to be hidden.
     #[test]
     fn test_has_many_reports_all_invalid_values() {
@@ -590,7 +588,7 @@ mod tests {
                 .min_length(5)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["ab","cd","ef"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -608,7 +606,7 @@ mod tests {
         );
     }
 
-    /// Regression: has_many number validation must report ALL out-of-bounds values.
+    /// Regression: `has_many` number validation must report ALL out-of-bounds values.
     #[test]
     fn test_has_many_number_reports_all_invalid_values() {
         let lua = mlua::Lua::new();
@@ -622,7 +620,7 @@ mod tests {
                 .max(10.0)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("scores".to_string(), json!(r#"["20","30"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -640,7 +638,7 @@ mod tests {
         );
     }
 
-    /// Regression: has_many length validation must count characters, not bytes.
+    /// Regression: `has_many` length validation must count characters, not bytes.
     /// Multibyte UTF-8 characters (emoji, CJK, accented) were overcounted with `.len()`.
     #[test]
     fn test_has_many_text_length_counts_chars_not_bytes() {
@@ -656,7 +654,7 @@ mod tests {
                 .max_length(4)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["café"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -673,7 +671,7 @@ mod tests {
                 .min_length(2)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["你好"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -684,9 +682,9 @@ mod tests {
         assert!(result.is_ok(), "你好 is 2 chars — should pass min_length=2");
     }
 
-    /// Regression: has_many Select must enforce min_rows/max_rows bounds.
-    /// Previously, check_has_many_elements only handled Text/Number, so
-    /// Select/Radio has_many fields silently bypassed row count validation.
+    /// Regression: `has_many` Select must enforce `min_rows/max_rows` bounds.
+    /// Previously, `check_has_many_elements` only handled Text/Number, so
+    /// Select/Radio `has_many` fields silently bypassed row count validation.
     #[test]
     fn test_has_many_select_min_rows_fails() {
         let lua = mlua::Lua::new();
@@ -704,7 +702,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["a"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -719,7 +717,7 @@ mod tests {
         assert!(result.unwrap_err().errors[0].message.contains("at least 2"));
     }
 
-    /// Regression: has_many Select must enforce max_rows bounds.
+    /// Regression: `has_many` Select must enforce `max_rows` bounds.
     #[test]
     fn test_has_many_select_max_rows_fails() {
         let lua = mlua::Lua::new();
@@ -737,7 +735,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["a","b","c"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -752,7 +750,7 @@ mod tests {
         assert!(result.unwrap_err().errors[0].message.contains("at most 2"));
     }
 
-    /// Regression: has_many Radio must enforce min_rows bounds.
+    /// Regression: `has_many` Radio must enforce `min_rows` bounds.
     #[test]
     fn test_has_many_radio_min_rows_fails() {
         let lua = mlua::Lua::new();
@@ -770,7 +768,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("sizes".to_string(), json!(r#"["s"]"#));
         let result = validate_fields_inner(
             &lua,

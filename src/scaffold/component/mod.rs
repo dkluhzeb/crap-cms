@@ -1,4 +1,4 @@
-//! `make component` — scaffold a custom Web Component file.
+//! `make component` -- scaffold a custom Web Component file.
 
 mod generator;
 

@@ -1,7 +1,6 @@
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
-use std::collections::HashMap;
 
 /// Validate email format (only if non-empty).
 pub(crate) fn check_email_format(
@@ -18,12 +17,14 @@ pub(crate) fn check_email_format(
     if let Some(Value::String(s)) = value
         && !is_valid_email_format(s)
     {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!("{} is not a valid email address", field.name),
-            "validation.email",
-            HashMap::from([("field".to_string(), field.name.clone())]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} is not a valid email address", field.name),
+                "validation.email",
+            )
+            .with_param("field", field.name.clone()),
+        );
     }
 }
 
@@ -56,9 +57,9 @@ pub fn is_valid_email_format(value: &str) -> bool {
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
+    use crate::core::DocumentFields;
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
-    use std::collections::HashMap;
 
     #[test]
     fn test_validate_email_format_valid() {
@@ -67,7 +68,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT)")
             .unwrap();
         let fields = vec![FieldDefinition::builder("email", FieldType::Email).build()];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("email".to_string(), json!("user@example.com"));
         let result = validate_fields_inner(
             &lua,
@@ -85,7 +86,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT)")
             .unwrap();
         let fields = vec![FieldDefinition::builder("email", FieldType::Email).build()];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("email".to_string(), json!("not-an-email"));
         let result = validate_fields_inner(
             &lua,
@@ -108,7 +109,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT)")
             .unwrap();
         let fields = vec![FieldDefinition::builder("email", FieldType::Email).build()];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("email".to_string(), json!("user@"));
         let result = validate_fields_inner(
             &lua,
@@ -126,7 +127,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT)")
             .unwrap();
         let fields = vec![FieldDefinition::builder("email", FieldType::Email).build()];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("email".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,

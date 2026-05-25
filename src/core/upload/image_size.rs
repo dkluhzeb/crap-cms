@@ -3,14 +3,21 @@
 use serde::{Deserialize, Serialize};
 
 use crate::core::upload::ImageFit;
+use crate::typegen::lua::LuaAnnotation;
 
 /// A named image resize target (e.g. "thumbnail" at 200x200).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, LuaAnnotation)]
+#[lua(class = "crap.ImageSize")]
 pub struct ImageSize {
+    /// Size name (e.g., "thumbnail", "card").
     pub name: String,
+    /// Target width in pixels.
     pub width: u32,
+    /// Target height in pixels.
     pub height: u32,
+    /// Resize fit mode (default: "cover").
     #[serde(default)]
+    #[lua(ty = "crap.ImageFit", optional)]
     pub fit: ImageFit,
 }
 
@@ -43,22 +50,30 @@ impl ImageSizeBuilder {
         }
     }
 
+    #[must_use]
     pub fn width(mut self, w: u32) -> Self {
         self.width = Some(w);
         self
     }
 
+    #[must_use]
     pub fn height(mut self, h: u32) -> Self {
         self.height = Some(h);
         self
     }
 
+    #[must_use]
     pub fn fit(mut self, f: ImageFit) -> Self {
         self.fit = f;
         self
     }
 
     /// Build the final [`ImageSize`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `width` or `height` was not set on the builder.
+    #[must_use]
     pub fn build(self) -> ImageSize {
         ImageSize {
             name: self.name,
@@ -98,12 +113,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "ImageSizeBuilder: width is required")]
     fn panics_without_width() {
-        ImageSizeBuilder::new("thumb").height(100).build();
+        let _ = ImageSizeBuilder::new("thumb").height(100).build();
     }
 
     #[test]
     #[should_panic(expected = "ImageSizeBuilder: height is required")]
     fn panics_without_height() {
-        ImageSizeBuilder::new("thumb").width(100).build();
+        let _ = ImageSizeBuilder::new("thumb").width(100).build();
     }
 }

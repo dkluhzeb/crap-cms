@@ -1,0 +1,19 @@
+[package]
+name = "xtask"
+description = "Workspace task runner — Lua typegen regeneration + checks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+crap-cms = { path = ".." }
+clap.workspace = true
+similar.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

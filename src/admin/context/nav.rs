@@ -7,21 +7,27 @@
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::admin::{AdminState, custom_pages::CustomPage};
+use crate::{
+    admin::{AdminState, custom_pages::CustomPage},
+    typegen::LuaAnnotation,
+};
 
 /// Top-level nav data exposed at `{{nav.*}}`.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.nav")]
 pub struct NavData {
     pub collections: Vec<NavCollection>,
     pub globals: Vec<NavGlobal>,
     /// Filesystem-routed custom admin pages registered via
     /// `crap.pages.register`. Only entries with a `label` set appear here.
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[lua(optional)]
     pub custom_pages: Vec<CustomPage>,
 }
 
 /// One sidebar entry for a collection.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.nav_collection")]
 pub struct NavCollection {
     pub slug: String,
     pub display_name: String,
@@ -30,7 +36,8 @@ pub struct NavCollection {
 }
 
 /// One sidebar entry for a global.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.nav_global")]
 pub struct NavGlobal {
     pub slug: String,
     pub display_name: String,

@@ -11,6 +11,14 @@ pub struct QueueJobInput<'a> {
     pub job_def: &'a JobDefinition,
     pub data: Option<&'a str>,
     pub scheduled_by: &'a str,
+    /// Static scheduling priority; higher = sooner. `0` = standard FIFO.
+    pub priority: i32,
+    /// Queue-level retries default (`[jobs.queues.<queue>] retries`),
+    /// used as the fallback when `job_def.retries` is `None`. Pass
+    /// `None` if the caller has no `JobsConfig` access — the
+    /// definition's explicit retries still applies; the fallback is
+    /// `0` (one attempt).
+    pub queue_retries: Option<u32>,
 }
 
 /// Queue a new job run, enforcing access control if configured.
@@ -18,6 +26,11 @@ pub struct QueueJobInput<'a> {
 /// If `job_def.access` is set, the runner's Lua VM checks whether the given
 /// `user` is allowed to trigger this job. Returns `ServiceError::AccessDenied`
 /// when the check denies access.
+///
+/// # Errors
+///
+/// Returns `AccessDenied` when the access hook denies, or a backend error if
+/// the access check or INSERT fails.
 pub fn queue_job(ctx: &ServiceContext, input: &QueueJobInput) -> Result<JobRun, ServiceError> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
@@ -47,8 +60,9 @@ pub fn queue_job(ctx: &ServiceContext, input: &QueueJobInput) -> Result<JobRun, 
         ctx.slug,
         input.data.unwrap_or("{}"),
         input.scheduled_by,
-        input.job_def.retries + 1,
+        input.job_def.effective_max_attempts(input.queue_retries),
         &input.job_def.queue,
+        input.priority,
     )
     .map_err(ServiceError::Internal)?;
 

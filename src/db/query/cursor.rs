@@ -10,7 +10,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::core::Document;
+use crate::{core::Document, db::DbValue};
 
 /// Sort direction for ORDER BY clauses and cursor pagination.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -24,6 +24,7 @@ pub enum SortDirection {
 
 impl SortDirection {
     /// SQL keyword for this direction.
+    #[must_use]
     pub fn as_sql(&self) -> &'static str {
         match self {
             Self::Asc => "ASC",
@@ -32,6 +33,7 @@ impl SortDirection {
     }
 
     /// Return the opposite direction.
+    #[must_use]
     pub fn flip(&self) -> Self {
         match self {
             Self::Asc => Self::Desc,
@@ -61,6 +63,66 @@ impl FromStr for SortDirection {
 /// The engine used for cursor encoding — URL-safe base64 without padding.
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
+/// Typed cursor sort value. Mirrors the sortable subset of [`DbValue`] —
+/// `Blob` is excluded because columns of that kind are never sorted on.
+///
+/// Serializes untagged so the wire format matches what previous releases
+/// emitted (raw JSON scalar in the `sort_val` slot of the cursor JSON);
+/// existing pre-typed cursor URLs decode without churn.
+///
+/// Variant order matters for `untagged` deserialization — `Bool` is tried
+/// before `Integer` so JSON `true`/`false` doesn't get accidentally
+/// coerced; `Integer` before `Real` so `42` round-trips to `Integer(42)`
+/// and only fractional numbers fall through to `Real`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SortValue {
+    #[default]
+    Null,
+    Bool(bool),
+    Integer(i64),
+    Real(f64),
+    Text(String),
+}
+
+impl From<&Value> for SortValue {
+    fn from(v: &Value) -> Self {
+        match v {
+            Value::Null => Self::Null,
+            Value::Bool(b) => Self::Bool(*b),
+            Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Self::Integer(i)
+                } else if let Some(f) = n.as_f64() {
+                    Self::Real(f)
+                } else {
+                    // Out-of-range / NaN — degrade to text to preserve
+                    // legacy behavior (the previous Value path stringified).
+                    Self::Text(n.to_string())
+                }
+            }
+            Value::String(s) => Self::Text(s.clone()),
+            // Arrays/objects can't be sorted on at the SQL layer; the
+            // previous Value path stringified them via `Value::to_string`.
+            other => Self::Text(other.to_string()),
+        }
+    }
+}
+
+impl From<&SortValue> for DbValue {
+    fn from(v: &SortValue) -> Self {
+        match v {
+            SortValue::Null => DbValue::Null,
+            // Booleans land in SQLite as INTEGER 0/1 — same coercion the
+            // ORM applies for boolean column writes.
+            SortValue::Bool(b) => DbValue::Integer(i64::from(*b)),
+            SortValue::Integer(i) => DbValue::Integer(*i),
+            SortValue::Real(f) => DbValue::Real(*f),
+            SortValue::Text(s) => DbValue::Text(s.clone()),
+        }
+    }
+}
+
 /// Predicate gating the composite `_status`-aware cursor ordering.
 ///
 /// When this returns true the `find` SQL prepends `_status DIR` to the
@@ -74,7 +136,7 @@ const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL
 /// the two sides disagree the keyset references a column the ORDER BY
 /// doesn't tiebreak on, and prev/next stops being symmetric. Sharing
 /// one predicate keeps them locked together.
-pub fn cursor_status_active(has_drafts: bool, sort_col: &str) -> bool {
+pub(crate) fn cursor_status_active(has_drafts: bool, sort_col: &str) -> bool {
     has_drafts && sort_col != "_status"
 }
 
@@ -91,7 +153,7 @@ pub fn cursor_status_active(has_drafts: bool, sort_col: &str) -> bool {
 pub struct CursorData {
     pub sort_col: String,
     pub sort_dir: SortDirection,
-    pub sort_val: Value,
+    pub sort_val: SortValue,
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_val: Option<String>,
@@ -99,6 +161,11 @@ pub struct CursorData {
 
 impl CursorData {
     /// Encode cursor data to a base64url string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if JSON serialization fails (should not happen with
+    /// the well-formed `CursorData` shape).
     pub fn encode(&self) -> Result<String> {
         let json = serde_json::to_string(self)?;
 
@@ -106,14 +173,18 @@ impl CursorData {
     }
 
     /// Decode a base64url string into cursor data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input is not valid base64url, not valid
+    /// UTF-8 JSON, or missing required fields (`sort_col`, `id`).
     pub fn decode(s: &str) -> Result<Self> {
         let bytes = B64
             .decode(s.as_bytes())
-            .map_err(|e| anyhow!("Invalid cursor encoding: {}", e))?;
-        let json_str =
-            str::from_utf8(&bytes).map_err(|e| anyhow!("Invalid cursor UTF-8: {}", e))?;
+            .map_err(|e| anyhow!("Invalid cursor encoding: {e}"))?;
+        let json_str = str::from_utf8(&bytes).map_err(|e| anyhow!("Invalid cursor UTF-8: {e}"))?;
         let data: CursorData =
-            serde_json::from_str(json_str).map_err(|e| anyhow!("Invalid cursor JSON: {}", e))?;
+            serde_json::from_str(json_str).map_err(|e| anyhow!("Invalid cursor JSON: {e}"))?;
 
         if data.sort_col.is_empty() || data.id.is_empty() {
             bail!("Cursor missing required fields");
@@ -135,7 +206,7 @@ impl CursorData {
 /// composite `(_status, sort_col, id)` order. The caller (`find_documents`
 /// / `find_globals`) passes this consistently with what
 /// `apply_order_by` does for the same query.
-pub fn build_cursors(
+pub(crate) fn build_cursors(
     docs: &[Document],
     sort_col: &str,
     sort_dir: SortDirection,
@@ -159,18 +230,18 @@ fn cursor_from_doc(
     with_status: bool,
 ) -> Option<String> {
     let sort_val = match sort_col {
-        "id" => Value::String(doc.id.to_string()),
+        "id" => SortValue::Text(doc.id.to_string()),
         "created_at" => doc
             .created_at
             .as_ref()
-            .map(|v| Value::String(v.clone()))
-            .unwrap_or(Value::Null),
+            .map(|v| SortValue::Text(v.clone()))
+            .unwrap_or_default(),
         "updated_at" => doc
             .updated_at
             .as_ref()
-            .map(|v| Value::String(v.clone()))
-            .unwrap_or(Value::Null),
-        col => doc.fields.get(col).cloned().unwrap_or(Value::Null),
+            .map(|v| SortValue::Text(v.clone()))
+            .unwrap_or_default(),
+        col => doc.fields.get(col).map(SortValue::from).unwrap_or_default(),
     };
 
     let status_val = if with_status {
@@ -218,7 +289,7 @@ mod tests {
         let cursor = CursorData {
             sort_col: "created_at".to_string(),
             sort_dir: SortDirection::Desc,
-            sort_val: json!("2024-06-01T12:00:00"),
+            sort_val: SortValue::Text("2024-06-01T12:00:00".to_string()),
             id: "abc123".to_string(),
             ..Default::default()
         };
@@ -276,7 +347,7 @@ mod tests {
     fn build_cursors_both_when_results_exist() {
         let docs: Vec<Document> = (0..3)
             .map(|i| {
-                let mut d = Document::new(format!("id{}", i));
+                let mut d = Document::new(format!("id{i}"));
                 d.fields
                     .insert("title".to_string(), json!(format!("Post {}", i)));
                 d.created_at = Some(format!("2024-0{}-01", i + 1));
@@ -331,13 +402,13 @@ mod tests {
         let cursor = CursorData {
             sort_col: "title".to_string(),
             sort_dir: SortDirection::Asc,
-            sort_val: Value::Null,
+            sort_val: SortValue::Null,
             id: "abc".to_string(),
             ..Default::default()
         };
         let encoded = cursor.encode().unwrap();
         let decoded = CursorData::decode(&encoded).unwrap();
-        assert_eq!(decoded.sort_val, Value::Null);
+        assert_eq!(decoded.sort_val, SortValue::Null);
     }
 
     #[test]
@@ -379,7 +450,7 @@ mod tests {
         assert_eq!(decoded_start.sort_col, "updated_at");
         assert_eq!(
             decoded_start.sort_val,
-            Value::String("2024-06-15".to_string())
+            SortValue::Text("2024-06-15".to_string())
         );
         assert_eq!(decoded_end.sort_col, "updated_at");
     }
@@ -389,7 +460,7 @@ mod tests {
         let docs = vec![Document::new("doc1".to_string())];
         let (start, _end) = build_cursors(&docs, "updated_at", SortDirection::Asc, false);
         let decoded = CursorData::decode(&start.unwrap()).unwrap();
-        assert_eq!(decoded.sort_val, Value::Null);
+        assert_eq!(decoded.sort_val, SortValue::Null);
     }
 
     #[test]
@@ -397,7 +468,7 @@ mod tests {
         let docs = vec![Document::new("doc2".to_string())];
         let (start, _end) = build_cursors(&docs, "created_at", SortDirection::Asc, false);
         let decoded = CursorData::decode(&start.unwrap()).unwrap();
-        assert_eq!(decoded.sort_val, Value::Null);
+        assert_eq!(decoded.sort_val, SortValue::Null);
     }
 
     #[test]
@@ -406,7 +477,7 @@ mod tests {
         let (start, _end) = build_cursors(&docs, "id", SortDirection::Asc, false);
         let decoded = CursorData::decode(&start.unwrap()).unwrap();
         assert_eq!(decoded.sort_col, "id");
-        assert_eq!(decoded.sort_val, Value::String("the-id".to_string()));
+        assert_eq!(decoded.sort_val, SortValue::Text("the-id".to_string()));
     }
 
     #[test]
@@ -417,7 +488,7 @@ mod tests {
         let (start, _end) = build_cursors(&docs, "score", SortDirection::Asc, false);
         let decoded = CursorData::decode(&start.unwrap()).unwrap();
         assert_eq!(decoded.sort_col, "score");
-        assert_eq!(decoded.sort_val, json!(42));
+        assert_eq!(decoded.sort_val, SortValue::Integer(42));
     }
 
     #[test]
@@ -425,6 +496,33 @@ mod tests {
         let docs = vec![Document::new("doc4".to_string())];
         let (start, _end) = build_cursors(&docs, "nonexistent", SortDirection::Asc, false);
         let decoded = CursorData::decode(&start.unwrap()).unwrap();
-        assert_eq!(decoded.sort_val, Value::Null);
+        assert_eq!(decoded.sort_val, SortValue::Null);
+    }
+
+    #[test]
+    fn from_value_picks_integer_over_real_for_whole_numbers() {
+        assert_eq!(SortValue::from(&json!(42)), SortValue::Integer(42));
+        assert_eq!(SortValue::from(&json!(0.5)), SortValue::Real(0.5));
+    }
+
+    #[test]
+    fn from_value_falls_through_to_text_for_arrays_objects() {
+        let arr = SortValue::from(&json!(["a", "b"]));
+        assert!(matches!(arr, SortValue::Text(_)));
+        let obj = SortValue::from(&json!({"k": "v"}));
+        assert!(matches!(obj, SortValue::Text(_)));
+    }
+
+    #[test]
+    fn db_value_conversion_matches_legacy() {
+        assert_eq!(DbValue::from(&SortValue::Null), DbValue::Null);
+        assert_eq!(DbValue::from(&SortValue::Integer(7)), DbValue::Integer(7));
+        assert_eq!(DbValue::from(&SortValue::Real(1.5)), DbValue::Real(1.5));
+        assert_eq!(
+            DbValue::from(&SortValue::Text("abc".into())),
+            DbValue::Text("abc".into())
+        );
+        assert_eq!(DbValue::from(&SortValue::Bool(true)), DbValue::Integer(1));
+        assert_eq!(DbValue::from(&SortValue::Bool(false)), DbValue::Integer(0));
     }
 }

@@ -5,9 +5,9 @@ use std::time::Instant;
 use anyhow::{Result, anyhow};
 
 use crate::{
-    api::handlers::convert::parse_where_json,
+    api::handlers::proto::parse_where_json,
     cli::{self, Table},
-    core::{CollectionDefinition, SharedRegistry},
+    core::{CollectionDefinition, Registry},
     db::{
         DbConnection, DbValue, FindQuery,
         query::{
@@ -21,16 +21,12 @@ use super::helpers::format_duration;
 
 /// Run query benchmarks on all (or filtered) collections.
 pub fn run(
-    registry: &SharedRegistry,
+    registry: &Registry,
     conn: &dyn DbConnection,
     collection: Option<&str>,
     explain: bool,
     where_clause: Option<&str>,
 ) -> Result<()> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {e}"))?;
-
     let filters = match where_clause {
         Some(json_str) => {
             let parsed = parse_where_json(json_str).map_err(|e| anyhow!("Invalid --where: {e}"))?;
@@ -46,7 +42,7 @@ pub fn run(
     let mut table = Table::new(vec!["Collection", "Rows", "Time", "Read hooks"]);
     let mut explain_output: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
 
-    let mut slugs: Vec<_> = reg.collections.keys().collect();
+    let mut slugs: Vec<_> = registry.collections.keys().collect();
     slugs.sort();
 
     for slug in slugs {
@@ -56,7 +52,7 @@ pub fn run(
             continue;
         }
 
-        let def = &reg.collections[slug];
+        let def = &registry.collections[slug];
 
         let find_query = match &filters {
             Some(f) => FindQuery::builder()
@@ -70,7 +66,7 @@ pub fn run(
         let result = query::find(conn, slug, def, &find_query, None);
         let elapsed = start.elapsed();
 
-        let row_count = result.as_ref().map(|docs| docs.len()).unwrap_or(0);
+        let row_count = result.as_ref().map_or(0, std::vec::Vec::len);
         let read_hooks = collect_read_hooks(def);
         let hook_summary = if read_hooks.is_empty() {
             "-".to_string()
@@ -154,7 +150,7 @@ fn run_explain(
     Ok(lines)
 }
 
-/// Collect read-path hooks for a collection (access.read, before_read, after_read).
+/// Collect read-path hooks for a collection (access.read, `before_read`, `after_read`).
 fn collect_read_hooks(def: &CollectionDefinition) -> Vec<String> {
     let mut hooks = Vec::new();
 

@@ -37,8 +37,10 @@ my-project/
 ├── uploads/               # Uploaded files (auto-created per collection)
 │   └── media/
 └── types/                 # Auto-generated type definitions (see `typegen`)
-    ├── crap.lua           # API surface types (crap.* functions)
-    └── generated.lua      # Per-collection types (data, doc, hook, filters)
+    ├── crap.lua           # API surface (crap.* functions, hook context, …)
+    ├── hooks.lua          # Per-collection hook types (data, doc, filters)
+    ├── client.<ext>       # Per-collection types for API clients (ts, go, py, rs)
+    └── proto.rs           # (optional) `From<proto::Document>` impls for Rust gRPC
 ```
 
 The `access/`, `jobs/`, `plugins/`, `migrations/`, `templates/`, and `static/` directories are created empty by `crap-cms init` — populate them as needed. The `translations/` directory is not scaffolded; create it yourself when you want to override admin UI strings (see [Localization](../locale/overview.md)).
@@ -71,10 +73,19 @@ Create a `.luarc.json` in your config directory for IDE autocompletion:
 }
 ```
 
-Generate type definitions with:
+Generate the server-side Lua type definitions with:
 
 ```bash
-crap-cms typegen
+crap-cms typegen lua
 ```
 
-This writes two files: `types/crap.lua` (API surface types for the `crap.*` functions) and `types/generated.lua` (per-collection types derived from your field definitions). Use `-l all` to generate types for all supported languages.
+This writes two files: `types/crap.lua` (the `crap.*` API surface) and `types/hooks.lua` (per-collection hook/data/doc shapes derived from your field definitions). Under `admin.dev_mode = true`, `crap-cms serve` regenerates them on every startup so they stay in sync while you iterate.
+
+External API consumers (TypeScript, Go, Python, Rust) get their own per-collection types via:
+
+```bash
+crap-cms typegen client -l ts          # types/client.ts
+crap-cms typegen client -l ts,go,py    # multiple languages in one pass
+```
+
+See [`typegen`](../cli/flags.md#typegen--generate-typed-definitions) for the full subcommand reference.

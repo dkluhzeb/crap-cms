@@ -1,4 +1,4 @@
-//! Read operations: find, find_by_id, count, select filtering.
+//! Read operations: find, `find_by_id`, count, select filtering.
 
 mod back_references;
 mod count;
@@ -13,4 +13,4 @@ pub use find::find;
 pub(crate) use find_by_id::find_by_id_raw;
 pub use find_by_id::{find_by_id, find_by_id_unfiltered, find_by_ids};
 pub use missing_relations::{MissingRelation, find_missing_relations};
-pub use select::{apply_select_filter, apply_select_to_document};
+pub use select::apply_select_to_document;

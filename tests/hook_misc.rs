@@ -1,15 +1,29 @@
 //! Miscellaneous hook tests for crap-cms hook lifecycle.
 //!
-//! Tests for: hook_ctx_to_string_map, evaluate_condition_table,
-//! call_row_label, call_display_condition, run_before_render,
-//! run_system_hooks, run_hooks (no conn), run_migration, run_job_handler,
-//! and related standalone lifecycle tests.
+//! Tests for: `hook_ctx_to_string_map`, `call_row_label`, `call_display_condition`,
+//! `run_before_render`, `run_system_hooks`, `run_hooks` (no conn), `run_migration`,
+//! `run_job_handler`, and related standalone lifecycle tests.
 
-use std::collections::HashMap;
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::field::{FieldDefinition, FieldType};
+use crap_cms::core::DocumentFields;
+use crap_cms::core::{ConditionExpr, ConditionOp, ReqContext};
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::{HookContext, HookEvent, HookRunner};
@@ -22,7 +36,7 @@ fn fixture_dir() -> PathBuf {
 fn setup() -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    crap_cms::core::SharedRegistry,
+    std::sync::Arc<crap_cms::core::Registry>,
     HookRunner,
 ) {
     let config_dir = fixture_dir();
@@ -37,7 +51,7 @@ fn setup() -> (
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("Failed to create HookRunner");
@@ -47,15 +61,13 @@ fn setup() -> (
 #[allow(dead_code)]
 fn create_article(
     pool: &crap_cms::db::DbPool,
-    registry: &crap_cms::core::SharedRegistry,
-    data: &HashMap<String, String>,
+    registry: &std::sync::Arc<crap_cms::core::Registry>,
+    data: &DocumentFields,
 ) -> crap_cms::core::Document {
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("articles")
         .expect("articles not found")
         .clone();
-    drop(reg);
 
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
@@ -64,288 +76,19 @@ fn create_article(
     doc
 }
 
-fn make_field(name: &str, field_type: FieldType) -> FieldDefinition {
-    FieldDefinition::builder(name, field_type).build()
-}
-
-// ── 6K. HookContext::to_string_map ──────────────────────────────────────────
-
-#[test]
-fn to_string_map_basic() {
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), json!("Hello"));
-    data.insert("count".to_string(), json!(42));
-
-    let ctx = HookContext::builder("test", "create").data(data).build();
-
-    let fields = vec![
-        make_field("title", FieldType::Text),
-        make_field("count", FieldType::Number),
-    ];
-
-    let map = ctx.to_string_map(&fields);
-    assert_eq!(map.get("title").unwrap(), "Hello");
-    assert_eq!(map.get("count").unwrap(), "42");
-}
-
-#[test]
-fn to_string_map_flattens_groups() {
-    let mut data = HashMap::new();
-    let mut seo = serde_json::Map::new();
-    seo.insert("meta_title".to_string(), json!("SEO Title"));
-    seo.insert("meta_desc".to_string(), json!("Description"));
-    data.insert("seo".to_string(), serde_json::Value::Object(seo));
-    data.insert("title".to_string(), json!("Normal Title"));
-
-    let ctx = HookContext::builder("test", "create").data(data).build();
-
-    let fields = vec![
-        make_field("title", FieldType::Text),
-        FieldDefinition::builder("seo", FieldType::Group)
-            .fields(vec![
-                make_field("meta_title", FieldType::Text),
-                make_field("meta_desc", FieldType::Text),
-            ])
-            .build(),
-    ];
-
-    let map = ctx.to_string_map(&fields);
-    assert_eq!(map.get("title").unwrap(), "Normal Title");
-    assert_eq!(map.get("seo__meta_title").unwrap(), "SEO Title");
-    assert_eq!(map.get("seo__meta_desc").unwrap(), "Description");
-    assert!(
-        !map.contains_key("seo"),
-        "Group key itself should not be in the map"
-    );
-}
-
-#[test]
-fn to_string_map_group_as_string_falls_through() {
-    // When group value is already a string (e.g. from form data), it should be kept as-is
-    let mut data = HashMap::new();
-    data.insert("seo".to_string(), json!("already-a-string"));
-
-    let ctx = HookContext::builder("test", "create").data(data).build();
-
-    let fields = vec![
-        FieldDefinition::builder("seo", FieldType::Group)
-            .fields(vec![make_field("meta_title", FieldType::Text)])
-            .build(),
-    ];
-
-    let map = ctx.to_string_map(&fields);
-    // When not an object, falls through to string insertion
-    assert_eq!(map.get("seo").unwrap(), "already-a-string");
-}
+// ── 6K. HookContext::to_value_map ──────────────────────────────────────────
+//
+// Unit tests live in `src/hooks/lifecycle/context/hook_context.rs` —
+// the integration-test duplicates were removed in alpha.9 when
+// `to_string_map` was replaced by `to_value_map`. The unit tests
+// already cover all the cases that lived here (typed values flowing
+// through, group flattening, non-object groups, nested groups).
 
 // ── 6L. evaluate_condition_table ─────────────────────────────────────────────
-
-#[test]
-fn evaluate_condition_equals() {
-    let data = json!({"status": "published"});
-    let condition = json!({"field": "status", "equals": "published"});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &condition, &data
-    ));
-
-    let condition = json!({"field": "status", "equals": "draft"});
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &condition, &data
-    ));
-}
-
-#[test]
-fn evaluate_condition_not_equals() {
-    let data = json!({"status": "published"});
-    let condition = json!({"field": "status", "not_equals": "draft"});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &condition, &data
-    ));
-
-    let condition = json!({"field": "status", "not_equals": "published"});
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &condition, &data
-    ));
-}
-
-#[test]
-fn evaluate_condition_in() {
-    let data = json!({"status": "published"});
-    let condition = json!({"field": "status", "in": ["published", "draft"]});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &condition, &data
-    ));
-
-    let condition = json!({"field": "status", "in": ["archived", "deleted"]});
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &condition, &data
-    ));
-}
-
-#[test]
-fn evaluate_condition_not_in() {
-    let data = json!({"status": "published"});
-    let condition = json!({"field": "status", "not_in": ["draft", "archived"]});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &condition, &data
-    ));
-
-    let condition = json!({"field": "status", "not_in": ["published", "draft"]});
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &condition, &data
-    ));
-}
-
-#[test]
-fn evaluate_condition_is_truthy() {
-    let data = json!({"active": true, "name": "test", "empty": "", "flag": false, "nothing": null});
-
-    let cond = json!({"field": "active", "is_truthy": true});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    let cond = json!({"field": "name", "is_truthy": true});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    let cond = json!({"field": "empty", "is_truthy": true});
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    let cond = json!({"field": "flag", "is_truthy": true});
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    let cond = json!({"field": "nothing", "is_truthy": true});
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-}
-
-#[test]
-fn evaluate_condition_is_falsy() {
-    let data = json!({"active": false, "name": ""});
-
-    let cond = json!({"field": "active", "is_falsy": true});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    let cond = json!({"field": "name", "is_falsy": true});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    let cond = json!({"field": "missing", "is_falsy": true});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-}
-
-#[test]
-fn evaluate_condition_array_means_and() {
-    let data = json!({"status": "published", "role": "admin"});
-
-    // All conditions true => true
-    let conditions = json!([
-        {"field": "status", "equals": "published"},
-        {"field": "role", "equals": "admin"}
-    ]);
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &conditions,
-        &data
-    ));
-
-    // One false => false
-    let conditions = json!([
-        {"field": "status", "equals": "published"},
-        {"field": "role", "equals": "editor"}
-    ]);
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &conditions,
-        &data
-    ));
-}
-
-#[test]
-fn evaluate_condition_unknown_operator_shows() {
-    let data = json!({"x": 1});
-    let cond = json!({"field": "x", "unknown_op": "whatever"});
-    // Unknown operator defaults to true (show field)
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-}
-
-#[test]
-fn evaluate_condition_non_object_non_array() {
-    let data = json!({"x": 1});
-    // Non-object, non-array condition defaults to true
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &json!("string"),
-        &data
-    ));
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &json!(42),
-        &data
-    ));
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &json!(true),
-        &data
-    ));
-}
-
-#[test]
-fn evaluate_condition_is_truthy_with_numbers_arrays_objects() {
-    let data = json!({
-        "count": 42,
-        "zero": 0,
-        "items": [1, 2],
-        "meta": {"key": "val"},
-        "empty_arr": [],
-        "empty_obj": {}
-    });
-
-    // Non-zero numbers are truthy
-    let cond = json!({"field": "count", "is_truthy": true});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    // Zero is falsy
-    let cond = json!({"field": "zero", "is_truthy": true});
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    // Non-empty arrays are truthy
-    let cond = json!({"field": "items", "is_truthy": true});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    // Non-empty objects are truthy
-    let cond = json!({"field": "meta", "is_truthy": true});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    // Empty arrays are falsy
-    let cond = json!({"field": "empty_arr", "is_truthy": true});
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    // Empty objects are falsy
-    let cond = json!({"field": "empty_obj", "is_truthy": true});
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-}
+//
+// Removed in alpha.9. The `evaluate_condition_table` free function was
+// replaced by typed [`crap_cms::core::ConditionExpr::evaluate`]; the grammar
+// is now exercised directly as unit tests inside `core::condition::tests`.
 
 // ── 6M. call_row_label ───────────────────────────────────────────────────────
 
@@ -390,7 +133,7 @@ fn call_display_condition_bool_true() {
     assert!(result.is_some());
     match result.unwrap() {
         crap_cms::hooks::lifecycle::DisplayConditionResult::Bool(b) => assert!(b),
-        other => panic!("Expected Bool(true), got {:?}", other),
+        other => panic!("Expected Bool(true), got {other:?}"),
     }
 }
 
@@ -403,7 +146,7 @@ fn call_display_condition_bool_false() {
     assert!(result.is_some());
     match result.unwrap() {
         crap_cms::hooks::lifecycle::DisplayConditionResult::Bool(b) => assert!(!b),
-        other => panic!("Expected Bool(false), got {:?}", other),
+        other => panic!("Expected Bool(false), got {other:?}"),
     }
 }
 
@@ -417,16 +160,14 @@ fn call_display_condition_table() {
     match result.unwrap() {
         crap_cms::hooks::lifecycle::DisplayConditionResult::Table { condition, visible } => {
             assert!(visible, "status=published should be visible");
-            assert_eq!(
-                condition.get("field").and_then(|v| v.as_str()),
-                Some("status")
-            );
-            assert_eq!(
-                condition.get("equals").and_then(|v| v.as_str()),
-                Some("published")
-            );
+            let row = match &condition {
+                ConditionExpr::Single(row) => row,
+                ConditionExpr::All(_) => panic!("expected single row, got AND"),
+            };
+            assert_eq!(row.field, "status");
+            assert!(matches!(&row.op, ConditionOp::Equals(v) if v == &json!("published")));
         }
-        other => panic!("Expected Table, got {:?}", other),
+        other => panic!("Expected Table, got {other:?}"),
     }
 }
 
@@ -444,7 +185,7 @@ fn call_display_condition_table_not_visible() {
                 "status=draft should not be visible when condition says equals=published"
             );
         }
-        other => panic!("Expected Table, got {:?}", other),
+        other => panic!("Expected Table, got {other:?}"),
     }
 }
 
@@ -506,11 +247,9 @@ fn run_system_hooks_with_invalid_ref_fails() {
 #[test]
 fn run_hooks_no_conn_fires_collection_and_registered() {
     let (_tmp, _pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Test"));
 
     let ctx = HookContext {
@@ -519,7 +258,7 @@ fn run_hooks_no_conn_fires_collection_and_registered() {
         data,
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -579,9 +318,7 @@ fn run_migration_executes_lua_file() {
     tx.commit().unwrap();
 
     // Verify the migration ran by checking the article was created
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let count =
         crap_cms::db::ops::count_documents(&pool, "articles", &def, &[], None).expect("count");
@@ -596,11 +333,11 @@ fn run_migration_invalid_direction_fails() {
     let migration_path = migration_dir.path().join("002_test.lua");
     std::fs::write(
         &migration_path,
-        r#"
+        r"
         local M = {}
         function M.up() end
         return M
-    "#,
+    ",
     )
     .expect("write migration");
 
@@ -618,9 +355,6 @@ fn run_migration_invalid_direction_fails() {
 fn run_job_handler_with_valid_function() {
     let (_tmp, pool, _registry, runner) = setup();
 
-    // Add a simple job handler Lua function
-    let conn = pool.get().expect("DB connection");
-
     // We can test using eval_lua_with_conn to define a function, then call run_job_handler.
     // But run_job_handler resolves a function ref, so we need to write it to a Lua file.
     // Instead, let's use the field_hooks module which is already loaded.
@@ -634,7 +368,7 @@ fn run_job_handler_with_valid_function() {
         r#"{"key": "value"}"#,
         1,
         3,
-        &conn,
+        &pool,
     );
     assert!(
         result.is_ok(),
@@ -646,9 +380,8 @@ fn run_job_handler_with_valid_function() {
 #[test]
 fn run_job_handler_invalid_ref_fails() {
     let (_tmp, pool, _registry, runner) = setup();
-    let conn = pool.get().expect("DB connection");
 
-    let result = runner.run_job_handler("hooks.nonexistent.handler", "test-job", "{}", 1, 3, &conn);
+    let result = runner.run_job_handler("hooks.nonexistent.handler", "test-job", "{}", 1, 3, &pool);
     assert!(result.is_err(), "Invalid handler ref should fail");
 }
 
@@ -794,7 +527,7 @@ fn run_migration_up_standalone() {
 
     let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("HookRunner::new");
@@ -823,8 +556,7 @@ fn run_migration_up_standalone() {
         .expect("migration up should succeed");
 
     // Verify the document was created
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").expect("articles");
+    let def = registry.get_collection("articles").expect("articles");
     let docs = crap_cms::db::ops::find_documents(
         &pool,
         "articles",
@@ -855,13 +587,13 @@ fn run_job_handler_with_return_value() {
     ).unwrap();
     std::fs::write(
         jobs_dir.join("test_job.lua"),
-        r#"
+        r"
         local M = {}
         function M.run(ctx)
             return { processed = true, slug = ctx.job.slug, data_value = ctx.data.key }
         end
         return M
-    "#,
+    ",
     )
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
@@ -881,7 +613,6 @@ fn run_job_handler_with_return_value() {
         .build()
         .expect("HookRunner::new");
 
-    let conn = pool.get().expect("conn");
     let result = runner
         .run_job_handler(
             "jobs.test_job.run",
@@ -889,7 +620,7 @@ fn run_job_handler_with_return_value() {
             r#"{"key": "hello"}"#,
             1,
             3,
-            &conn,
+            &pool,
         )
         .expect("run_job_handler failed");
 
@@ -897,7 +628,9 @@ fn run_job_handler_with_return_value() {
     let result_json: serde_json::Value =
         serde_json::from_str(&result.unwrap()).expect("parse JSON");
     assert_eq!(
-        result_json.get("processed").and_then(|v| v.as_bool()),
+        result_json
+            .get("processed")
+            .and_then(serde_json::Value::as_bool),
         Some(true)
     );
     assert_eq!(
@@ -923,13 +656,13 @@ fn run_job_handler_nil_return() {
     ).unwrap();
     std::fs::write(
         jobs_dir.join("void_job.lua"),
-        r#"
+        r"
         local M = {}
         function M.run(ctx)
             -- do nothing, return nil
         end
         return M
-    "#,
+    ",
     )
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
@@ -948,9 +681,8 @@ fn run_job_handler_nil_return() {
         .build()
         .expect("HookRunner::new");
 
-    let conn = pool.get().expect("conn");
     let result = runner
-        .run_job_handler("jobs.void_job.run", "void-job", "{}", 1, 1, &conn)
+        .run_job_handler("jobs.void_job.run", "void-job", "{}", 1, 1, &pool)
         .expect("run_job_handler failed");
 
     assert!(result.is_none(), "Job returning nil should give None");
@@ -1033,7 +765,7 @@ fn call_display_condition_standalone_bool() {
     let result = runner.call_display_condition("hooks.conditions.show_if_published", &form_data);
     match result {
         Some(crap_cms::hooks::lifecycle::DisplayConditionResult::Bool(b)) => assert!(b),
-        other => panic!("Expected Bool(true), got {:?}", other),
+        other => panic!("Expected Bool(true), got {other:?}"),
     }
 
     let form_data_draft = json!({ "status": "draft" });
@@ -1041,7 +773,7 @@ fn call_display_condition_standalone_bool() {
         runner.call_display_condition("hooks.conditions.show_if_published", &form_data_draft);
     match result {
         Some(crap_cms::hooks::lifecycle::DisplayConditionResult::Bool(b)) => assert!(!b),
-        other => panic!("Expected Bool(false), got {:?}", other),
+        other => panic!("Expected Bool(false), got {other:?}"),
     }
 }
 
@@ -1083,15 +815,13 @@ fn call_display_condition_standalone_table() {
     match result {
         Some(crap_cms::hooks::lifecycle::DisplayConditionResult::Table { condition, visible }) => {
             assert!(visible, "status=published should match the condition");
-            assert_eq!(
-                condition.get("field").and_then(|v| v.as_str()),
-                Some("status")
-            );
-            assert_eq!(
-                condition.get("equals").and_then(|v| v.as_str()),
-                Some("published")
-            );
+            let row = match &condition {
+                ConditionExpr::Single(row) => row,
+                ConditionExpr::All(_) => panic!("expected single row, got AND"),
+            };
+            assert_eq!(row.field, "status");
+            assert!(matches!(&row.op, ConditionOp::Equals(v) if v == &json!("published")));
         }
-        other => panic!("Expected Table result, got {:?}", other),
+        other => panic!("Expected Table result, got {other:?}"),
     }
 }

@@ -1,21 +1,23 @@
 //! Shared helpers for user management commands.
 
+use std::collections::HashMap;
+
 use anyhow::{Context as _, Result, anyhow, bail};
 use dialoguer::Select;
 use serde_json::Value;
-use std::collections::HashMap;
 
 use crate::{
     cli::{self, crap_theme},
-    core::{CollectionDefinition, Document, SharedRegistry, field::FieldType},
+    core::{CollectionDefinition, Document, Registry, field::FieldType},
     db::{BoxedConnection, DbPool, query},
 };
 
+use crate::core::collection::Auth;
 #[cfg(not(tarpaulin_include))]
 use dialoguer::Input;
 
 /// Extract the email field from a user document, defaulting to "unknown".
-pub fn get_user_email(doc: &Document) -> &str {
+pub(super) fn get_user_email(doc: &Document) -> &str {
     doc.fields
         .get("email")
         .and_then(|v| v.as_str())
@@ -24,34 +26,26 @@ pub fn get_user_email(doc: &Document) -> &str {
 
 /// Load and validate an auth collection definition from the registry.
 /// Returns the cloned definition (lock is released before returning).
-pub fn load_auth_collection(
-    registry: &SharedRegistry,
+pub(super) fn load_auth_collection(
+    registry: &Registry,
     collection: &str,
 ) -> Result<CollectionDefinition> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
-    let def = reg
+    let def = registry
         .get_collection(collection)
-        .ok_or_else(|| anyhow!("Collection '{}' not found", collection))?;
+        .ok_or_else(|| anyhow!("Collection '{collection}' not found"))?;
 
     if !def.is_auth_collection() {
-        bail!(
-            "Collection '{}' is not an auth collection (auth must be enabled)",
-            collection
-        );
+        bail!("Collection '{collection}' is not an auth collection (auth must be enabled)");
     }
 
     Ok(def.clone())
 }
 
 /// Check that the collection has email verification enabled.
-pub fn require_verify_email(def: &CollectionDefinition, collection: &str) -> Result<()> {
-    if !def.auth.as_ref().map(|a| a.verify_email).unwrap_or(false) {
+pub(super) fn require_verify_email(def: &CollectionDefinition, collection: &str) -> Result<()> {
+    if !def.auth.as_ref().is_some_and(Auth::requires_verify_email) {
         bail!(
-            "Collection '{}' does not have email verification enabled (verify_email must be true)",
-            collection
+            "Collection '{collection}' does not have email verification enabled (verify_email must be true)"
         );
     }
 
@@ -59,11 +53,11 @@ pub fn require_verify_email(def: &CollectionDefinition, collection: &str) -> Res
 }
 
 /// Resolve a user by --email or --id. Returns (def, document).
-/// Untestable: interactive fallback uses dialoguer::Select for user selection.
+/// Untestable: interactive fallback uses `dialoguer::Select` for user selection.
 #[cfg(not(tarpaulin_include))]
-pub fn resolve_user(
+pub(super) fn resolve_user(
     pool: &DbPool,
-    registry: &SharedRegistry,
+    registry: &Registry,
     collection: &str,
     email: Option<String>,
     id: Option<String>,
@@ -73,14 +67,14 @@ pub fn resolve_user(
 
     if let Some(email) = email {
         let doc = query::find_by_email(&conn, collection, &def, &email)?
-            .ok_or_else(|| anyhow!("No user found with email '{}' in '{}'", email, collection))?;
+            .ok_or_else(|| anyhow!("No user found with email '{email}' in '{collection}'"))?;
 
         return Ok((def, doc));
     }
 
     if let Some(id) = id {
         let doc = query::find_by_id(&conn, collection, &def, &id, None)?
-            .ok_or_else(|| anyhow!("No user found with id '{}' in '{}'", id, collection))?;
+            .ok_or_else(|| anyhow!("No user found with id '{id}' in '{collection}'"))?;
 
         return Ok((def, doc));
     }
@@ -100,7 +94,7 @@ fn select_user_interactive(
     let users = query::find(conn, collection, def, &find_query, None)?;
 
     if users.is_empty() {
-        bail!("No users in '{}'", collection);
+        bail!("No users in '{collection}'");
     }
 
     let labels: Vec<String> = users
@@ -137,7 +131,7 @@ fn select_user_interactive(
 }
 
 /// Convert a JSON default value to a string.
-pub fn default_value_string(val: &Value) -> String {
+pub(super) fn default_value_string(val: &Value) -> String {
     match val {
         Value::String(s) => s.clone(),
         other => other.to_string(),
@@ -147,7 +141,7 @@ pub fn default_value_string(val: &Value) -> String {
 /// Prompt for required fields not already present in the data map.
 /// Skips email (handled separately) and checkboxes (absent = false).
 #[cfg(not(tarpaulin_include))]
-pub fn prompt_required_fields(
+pub(super) fn prompt_required_fields(
     def: &CollectionDefinition,
     data: &mut HashMap<String, String>,
 ) -> Result<()> {

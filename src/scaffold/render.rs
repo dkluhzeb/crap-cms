@@ -72,11 +72,53 @@ fn registry() -> &'static Handlebars<'static> {
             include_str!("migration/templates/migration.lua.tpl"),
         );
 
+        // Component / theme / node
+        reg(
+            &mut hbs,
+            "component",
+            include_str!("component/templates/component.js.hbs"),
+        );
+        reg(
+            &mut hbs,
+            "theme",
+            include_str!("theme/templates/theme.css.hbs"),
+        );
+        reg(
+            &mut hbs,
+            "node",
+            include_str!("node/templates/node.lua.hbs"),
+        );
+
+        // Field (template + Lua plugin)
+        reg(
+            &mut hbs,
+            "field_template",
+            include_str!("field/templates/field.hbs.hbs"),
+        );
+        reg(
+            &mut hbs,
+            "field_plugin",
+            include_str!("field/templates/plugin.lua.hbs"),
+        );
+
+        // Page / slot -- produce .hbs files; templates use \{{ to escape
+        // expressions that should appear literally in the output.
+        reg(
+            &mut hbs,
+            "page",
+            include_str!("page/templates/page.hbs.hbs"),
+        );
+        reg(
+            &mut hbs,
+            "slot",
+            include_str!("slot/templates/slot.hbs.hbs"),
+        );
+
         hbs
     })
 }
 
-/// Register a compiled-in template. Panics on parse errors — these templates are
+/// Register a compiled-in template. Panics on parse errors -- these templates are
 /// embedded via `include_str!` and a parse failure is a developer bug, not a
 /// runtime condition (analogous to `Regex::new("literal").unwrap()`).
 fn reg(hbs: &mut Handlebars, name: &str, content: &str) {

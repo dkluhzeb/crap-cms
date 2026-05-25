@@ -16,6 +16,7 @@ pub struct PaginationCtx {
 }
 
 impl PaginationCtx {
+    #[must_use]
     pub fn new(default_limit: i64, max_limit: i64, cursor_enabled: bool) -> Self {
         Self {
             default_limit,
@@ -25,6 +26,12 @@ impl PaginationCtx {
     }
 
     /// Validate per-request pagination parameters against this context.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error message string when pagination parameters are
+    /// invalid (negative limit, page combined with cursor, cursor mode
+    /// disabled but used, …).
     pub fn validate(
         &self,
         req_limit: Option<i64>,
@@ -47,20 +54,21 @@ impl PaginationCtx {
 /// Validated pagination parameters for a Find query.
 #[derive(Debug)]
 pub struct FindPagination {
-    /// Clamped limit (always >= 1, <= max_limit).
+    /// Clamped limit (always >= 1, <= `max_limit`).
     pub limit: i64,
     /// Byte offset for page-based pagination (0 when using cursors).
     pub offset: i64,
     /// Resolved page number (>= 1).
     pub page: i64,
-    /// Forward cursor (mutually exclusive with before_cursor and page).
+    /// Forward cursor (mutually exclusive with `before_cursor` and page).
     pub after_cursor: Option<CursorData>,
-    /// Backward cursor (mutually exclusive with after_cursor and page).
+    /// Backward cursor (mutually exclusive with `after_cursor` and page).
     pub before_cursor: Option<CursorData>,
 }
 
 impl FindPagination {
     /// Returns true if either cursor is set.
+    #[must_use]
     pub fn has_cursor(&self) -> bool {
         self.after_cursor.is_some() || self.before_cursor.is_some()
     }
@@ -70,7 +78,11 @@ impl FindPagination {
 ///
 /// Returns `Err(String)` for invalid combinations (e.g., cursor + page,
 /// both after and before cursors). Callers wrap in their own error type.
-pub fn validate_find_pagination(
+///
+/// Private — external callers route through [`PaginationCtx::validate`]
+/// to avoid duplicating the (`default_limit`, `max_limit`, `cursor_enabled`)
+/// triple at every call site.
+fn validate_find_pagination(
     req_limit: Option<i64>,
     req_page: Option<i64>,
     req_after_cursor: Option<&str>,
@@ -133,7 +145,7 @@ pub fn validate_find_pagination(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::query::cursor::SortDirection;
+    use crate::db::query::cursor::{SortDirection, SortValue};
 
     #[test]
     fn basic_page_limit_defaults() {
@@ -292,7 +304,7 @@ mod tests {
         let data = CursorData {
             sort_col: "created_at".to_string(),
             sort_dir: SortDirection::Asc,
-            sort_val: serde_json::Value::String("2024-01-01".to_string()),
+            sort_val: SortValue::Text("2024-01-01".to_string()),
             id: "doc-123".to_string(),
             ..Default::default()
         };

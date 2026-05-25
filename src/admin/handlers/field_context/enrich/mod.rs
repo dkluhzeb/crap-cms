@@ -1,21 +1,20 @@
 //! DB-access enrichment for field contexts (relationship options, array rows, upload thumbnails).
 
 mod children;
-mod context;
-mod enrich_options_builder;
-mod enrich_types;
+mod ctx;
 mod enrichment;
 mod field_types;
 mod nested;
-mod sub_field_opts_builder;
+mod options;
+mod sub_field_opts;
+mod types;
 
-pub use context::{EnrichOptions, SubFieldOpts};
-pub use enrich_options_builder::EnrichOptionsBuilder;
 pub use enrichment::{enrich_field_contexts, enrich_polymorphic_selected};
 pub use nested::{build_enriched_sub_field_context, enrich_nested_fields};
-pub use sub_field_opts_builder::SubFieldOptsBuilder;
+pub use options::EnrichOptions;
+pub use sub_field_opts::SubFieldOpts;
 
-pub(super) use context::EnrichCtx;
+pub(super) use ctx::EnrichCtx;
 
 #[cfg(all(test, feature = "sqlite"))]
-mod tests;
+mod test_helpers;

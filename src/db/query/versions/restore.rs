@@ -2,11 +2,13 @@
 
 use anyhow::{Context as _, Result, anyhow};
 use serde_json::{Map, Value};
-use std::collections::HashMap;
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, Document, FieldDefinition, collection::GlobalDefinition},
+    core::{
+        CollectionDefinition, Document, DocumentFields, FieldDefinition,
+        collection::GlobalDefinition,
+    },
     db::{
         DbConnection, DbValue,
         query::{
@@ -40,6 +42,11 @@ fn default_locale_ctx(locale_config: &LocaleConfig) -> Option<LocaleContext> {
 /// specially: ALL locale columns are cleared, then the snapshot value is written to
 /// the default locale column. This ensures stale translations from later edits don't
 /// persist after restoring an older version.
+///
+/// # Errors
+///
+/// Returns an error if the snapshot is not a JSON object, or a backend error
+/// if the UPDATE / join-table sync / version creation fails.
 pub fn restore_version(
     conn: &dyn DbConnection,
     slug: &str,
@@ -66,7 +73,7 @@ pub fn restore_version(
     restore_locale_and_join_data(conn, slug, parent_id, &def.fields, obj, locale_config)?;
 
     // Adjust ref counts based on before/after diff
-    ref_count::after_update(conn, slug, parent_id, &def.fields, locale_config, old_refs)?;
+    ref_count::after_update(conn, slug, parent_id, &def.fields, locale_config, &old_refs)?;
 
     // Update status and create a new version for the restore
     set_document_status(conn, slug, parent_id, status)?;
@@ -77,6 +84,11 @@ pub fn restore_version(
 
 /// Restore a version snapshot back to a global's main table.
 /// Group fields use expanded `field__subfield` sub-columns (same as collections).
+///
+/// # Errors
+///
+/// Returns an error if the snapshot is not a JSON object, or a backend error
+/// if the UPDATE / join-table sync / version creation fails.
 pub fn restore_global_version(
     conn: &dyn DbConnection,
     slug: &str,
@@ -109,7 +121,7 @@ pub fn restore_global_version(
         "default",
         &def.fields,
         locale_config,
-        old_refs,
+        &old_refs,
     )?;
 
     // Update status and create a new version for the restore
@@ -159,7 +171,7 @@ fn restore_locale_and_join_data(
     }
 
     // Restore join table data from snapshot
-    let mut join_data: HashMap<String, Value> = HashMap::new();
+    let mut join_data = DocumentFields::new();
     collect_join_data_from_snapshot(fields, obj, &mut join_data);
 
     if !join_data.is_empty() {
@@ -242,7 +254,7 @@ fn restore_locale_columns(
             match snapshot_val {
                 Some(Value::String(s)) => Some(DbValue::Text(s.clone())),
                 Some(Value::Number(n)) => Some(DbValue::Text(n.to_string())),
-                Some(Value::Bool(b)) => Some(DbValue::Integer(if *b { 1 } else { 0 })),
+                Some(Value::Bool(b)) => Some(DbValue::Integer(i64::from(*b))),
                 _ => None,
             }
         } else {
@@ -267,11 +279,7 @@ mod tests {
 
     use super::*;
     use crate::config::{CrapConfig, LocaleConfig};
-    use crate::core::{
-        FieldType,
-        collection::{CollectionDefinition, VersionsConfig},
-        field::{FieldDefinition, FieldTab},
-    };
+    use crate::core::{CollectionDefinition, FieldDefinition, FieldTab, FieldType, VersionsConfig};
     use crate::db::{BoxedConnection, pool, query::versions::crud::count_versions};
     use tempfile::TempDir;
 

@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use anyhow::{Context as _, Result, anyhow, bail};
+use anyhow::{Context as _, Result, bail};
 
 use crate::{
     cli,
@@ -21,6 +21,11 @@ use crate::{
 ///
 /// By default runs in dry-run mode (report only). Pass `confirm = true` to actually
 /// drop orphan columns.
+///
+/// # Errors
+///
+/// Returns an error if config loading, Lua init, pool creation, schema
+/// inspection, or column drops fail.
 #[cfg(not(tarpaulin_include))]
 pub fn cleanup(config_dir: &Path, confirm: bool) -> Result<()> {
     let config_dir = config_dir
@@ -33,12 +38,8 @@ pub fn cleanup(config_dir: &Path, confirm: bool) -> Result<()> {
 
     migrate::sync_all(&pool, &registry, &cfg.locale).context("Failed to sync database schema")?;
 
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
     let conn = pool.get().context("Failed to get database connection")?;
-    let orphans = find_orphan_columns(&conn as &dyn DbConnection, &reg, &cfg.locale)?;
+    let orphans = find_orphan_columns(&conn as &dyn DbConnection, &registry, &cfg.locale)?;
 
     if orphans.is_empty() {
         cli::success("No orphan columns found. All columns match Lua definitions.");
@@ -63,14 +64,14 @@ fn display_orphans(orphans: &[(String, Vec<String>)]) {
 
     for (table, cols) in orphans {
         for col in cols {
-            cli::dim(&format!("  {}.{}", table, col));
+            cli::dim(&format!("  {table}.{col}"));
         }
     }
 
     let total: usize = orphans.iter().map(|(_, cols)| cols.len()).sum();
 
     println!();
-    cli::info(&format!("{} orphan column(s) found.", total));
+    cli::info(&format!("{total} orphan column(s) found."));
 }
 
 /// Drop the identified orphan columns from the database.
@@ -86,28 +87,28 @@ fn drop_orphan_columns(conn: &dyn DbConnection, orphans: &[(String, Vec<String>)
 
     for (table, cols) in orphans {
         for col in cols {
-            let sql = format!("ALTER TABLE \"{}\" DROP COLUMN \"{}\"", table, col);
+            let sql = format!("ALTER TABLE \"{table}\" DROP COLUMN \"{col}\"");
 
             conn.execute(&sql, &[])
-                .with_context(|| format!("Failed to drop column {}.{}", table, col))?;
+                .with_context(|| format!("Failed to drop column {table}.{col}"))?;
 
-            cli::success(&format!("Dropped: {}.{}", table, col));
+            cli::success(&format!("Dropped: {table}.{col}"));
             total += 1;
         }
     }
 
-    cli::success(&format!("{} column(s) dropped.", total));
+    cli::success(&format!("{total} column(s) dropped."));
 
     Ok(())
 }
 
 /// Find orphan columns across all collection tables.
 ///
-/// Returns a vec of (table_name, vec_of_orphan_column_names).
+/// Returns a vec of (`table_name`, `vec_of_orphan_column_names`).
 /// System columns (`_`-prefixed, `id`, `created_at`, `updated_at`) are excluded.
 /// Plugin columns are NOT orphans because plugins run during `init_lua` and their
 /// fields are included in the registry definitions.
-pub fn find_orphan_columns(
+pub(super) fn find_orphan_columns(
     conn: &dyn DbConnection,
     reg: &Registry,
     locale_config: &LocaleConfig,
@@ -146,10 +147,7 @@ pub fn find_orphan_columns(
 mod tests {
     use super::*;
     use crate::{
-        core::{
-            collection::CollectionDefinition,
-            field::{FieldDefinition, FieldType},
-        },
+        core::{FieldDefinition, FieldType, collection::CollectionDefinition},
         db::{BoxedConnection, pool},
     };
     use tempfile::TempDir;
@@ -333,7 +331,7 @@ mod tests {
                 "posts",
                 vec![
                     FieldDefinition::builder("layout", FieldType::Tabs)
-                        .tabs(vec![crate::core::field::FieldTab::new(
+                        .tabs(vec![crate::core::FieldTab::new(
                             "Content",
                             vec![
                                 FieldDefinition::builder("row", FieldType::Row)
@@ -354,8 +352,7 @@ mod tests {
         let orphans = find_orphan_columns(&conn, &reg, &no_locale()).unwrap();
         assert!(
             orphans.is_empty(),
-            "nested Group→Row→Tabs columns should not be orphans: {:?}",
-            orphans
+            "nested Group→Row→Tabs columns should not be orphans: {orphans:?}"
         );
     }
 }

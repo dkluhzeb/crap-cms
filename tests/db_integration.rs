@@ -1,11 +1,24 @@
-use std::collections::HashMap;
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
 
 use crap_cms::config::CrapConfig;
+use crap_cms::core::DocumentFields;
 use crap_cms::core::Registry;
 use crap_cms::core::collection::{Auth, CollectionDefinition, GlobalDefinition, Labels};
 use crap_cms::core::field::{FieldDefinition, FieldType, LocalizedString};
 use crap_cms::db::{migrate, ops, pool, query};
-use serde_json::json;
+use serde_json::{Value, json};
 
 fn make_posts_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -50,13 +63,17 @@ fn full_crud_cycle() {
     }
 
     // Sync schema
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale)
-        .expect("Failed to sync schema");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Failed to sync schema");
 
     // Create
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Hello World".to_string());
-    data.insert("status".to_string(), "published".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Hello World"));
+    data.insert("status".to_string(), json!("published"));
 
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
@@ -81,9 +98,9 @@ fn full_crud_cycle() {
     assert_eq!(all.len(), 1);
 
     // Update
-    let mut update_data = HashMap::new();
-    update_data.insert("title".to_string(), "Updated Title".to_string());
-    update_data.insert("status".to_string(), "draft".to_string());
+    let mut update_data = DocumentFields::new();
+    update_data.insert("title".to_string(), json!("Updated Title"));
+    update_data.insert("status".to_string(), json!("draft"));
 
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
@@ -115,7 +132,12 @@ fn sync_schema_adds_columns() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("First sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("First sync failed");
 
     // Add a field
     def.fields
@@ -124,12 +146,17 @@ fn sync_schema_adds_columns() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Second sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Second sync failed");
 
     // Verify we can use the new column
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Test".to_string());
-    data.insert("body".to_string(), "Some body text".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Test"));
+    data.insert("body".to_string(), json!("Some body text"));
 
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
@@ -150,11 +177,16 @@ fn sync_schema_adds_timestamp_columns_to_existing_table() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("First sync");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("First sync");
 
     // Insert a row (no timestamp columns exist)
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Old post".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Old post"));
     {
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
@@ -168,8 +200,12 @@ fn sync_schema_adds_timestamp_columns_to_existing_table() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale)
-        .expect("Second sync with timestamps");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Second sync with timestamps");
 
     // Verify we can query (the bug: SELECT ... created_at, updated_at would fail)
     let find_query = query::FindQuery::default();
@@ -181,13 +217,13 @@ fn sync_schema_adds_timestamp_columns_to_existing_table() {
 
     // Existing row has NULL timestamps (added via ALTER TABLE with no default)
     assert!(docs[0].created_at.is_none());
+    drop(conn);
 
     // New rows get timestamps set by the query layer
-    drop(conn);
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let mut data2 = HashMap::new();
-    data2.insert("title".to_string(), "New post".to_string());
+    let mut data2 = DocumentFields::new();
+    data2.insert("title".to_string(), json!("New post"));
     let new_doc = query::create(&tx, "posts", &def, &data2, None).expect("Create with timestamps");
     tx.commit().unwrap();
     assert!(new_doc.created_at.is_some());
@@ -202,12 +238,17 @@ fn count_documents() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     // Insert 3 documents
     for i in 0..3 {
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), format!("Post {}", i));
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), Value::String(format!("Post {i}")));
         let mut conn = pool.get().expect("DB connection");
         let tx = conn.transaction().expect("Start transaction");
         query::create(&tx, "posts", &def, &data, None).expect("Create failed");
@@ -227,7 +268,12 @@ fn filter_rejects_invalid_field_name() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     let find_query = query::FindQuery::builder()
         .filters(vec![query::FilterClause::Single(query::Filter {
@@ -255,7 +301,12 @@ fn order_by_rejects_invalid_field_name() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     let find_query = query::FindQuery::builder()
         .order_by(Some("nonexistent".to_string()))
@@ -280,7 +331,12 @@ fn sql_injection_in_filter_field_blocked() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     let find_query = query::FindQuery::builder()
         .filters(vec![query::FilterClause::Single(query::Filter {
@@ -294,8 +350,7 @@ fn sql_injection_in_filter_field_blocked() {
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("Invalid field"),
-        "Expected invalid field error, got: {}",
-        err_msg
+        "Expected invalid field error, got: {err_msg}"
     );
 }
 
@@ -315,7 +370,12 @@ fn seed_posts() -> (
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     // Status values: "" means pass empty string → coerce_value converts to NULL.
     // Omitting the field entirely would use the column DEFAULT ('draft'), not NULL.
@@ -328,9 +388,9 @@ fn seed_posts() -> (
     ];
 
     for (title, status) in &rows {
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), title.to_string());
-        data.insert("status".to_string(), status.to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!(title));
+        data.insert("status".to_string(), json!(status));
         let mut conn = pool.get().expect("DB connection");
         let tx = conn.transaction().expect("Start transaction");
         query::create(&tx, "posts", &def, &data, None).expect("Create failed");
@@ -361,11 +421,7 @@ fn make_users_def() -> CollectionDefinition {
         ..Default::default()
     };
     def.fields = vec![email, name];
-    def.auth = Some(Auth {
-        enabled: true,
-        verify_email: true,
-        ..Auth::default()
-    });
+    def.auth = Some(Auth::enabled().map_password_login(|b| b.verify_email(true)));
     def
 }
 
@@ -381,12 +437,17 @@ fn setup_auth_collection() -> (
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     // Insert a test user
-    let mut data = HashMap::new();
-    data.insert("email".to_string(), "alice@example.com".to_string());
-    data.insert("name".to_string(), "Alice".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("email".to_string(), json!("alice@example.com"));
+    data.insert("name".to_string(), json!("Alice"));
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
     query::create(&tx, "users", &def, &data, None).expect("Create user failed");
@@ -626,7 +687,12 @@ fn setup_global() -> (tempfile::TempDir, crap_cms::db::DbPool, GlobalDefinition)
         let mut reg = registry.write().unwrap();
         reg.register_global(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
     (_tmp, pool, def)
 }
 
@@ -657,9 +723,9 @@ fn update_global_and_read_back() {
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
 
-    let mut data = HashMap::new();
-    data.insert("site_name".to_string(), "My CMS".to_string());
-    data.insert("tagline".to_string(), "The best CMS".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("site_name".to_string(), json!("My CMS"));
+    data.insert("tagline".to_string(), json!("The best CMS"));
     let doc = query::update_global(&tx, "site_settings", &def, &data, None)
         .expect("Update global failed");
     tx.commit().expect("Commit");
@@ -682,9 +748,9 @@ fn update_global_preserves_unset_fields() {
     {
         let mut conn = pool.get().expect("DB connection");
         let tx = conn.transaction().expect("Start transaction");
-        let mut data = HashMap::new();
-        data.insert("site_name".to_string(), "Original Name".to_string());
-        data.insert("tagline".to_string(), "Original Tagline".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("site_name".to_string(), json!("Original Name"));
+        data.insert("tagline".to_string(), json!("Original Tagline"));
         query::update_global(&tx, "site_settings", &def, &data, None).expect("Update failed");
         tx.commit().expect("Commit");
     }
@@ -693,8 +759,8 @@ fn update_global_preserves_unset_fields() {
     {
         let mut conn = pool.get().expect("DB connection");
         let tx = conn.transaction().expect("Start transaction");
-        let mut data = HashMap::new();
-        data.insert("site_name".to_string(), "New Name".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("site_name".to_string(), json!("New Name"));
         query::update_global(&tx, "site_settings", &def, &data, None).expect("Update failed");
         tx.commit().expect("Commit");
     }
@@ -725,11 +791,16 @@ fn coerce_checkbox_values() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync");
 
     // "on" → 1
-    let mut data = HashMap::new();
-    data.insert("active".to_string(), "on".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("active".to_string(), json!("on"));
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
     let doc = query::create(&tx, "forms", &def, &data, None).expect("Create");
@@ -737,8 +808,8 @@ fn coerce_checkbox_values() {
     assert_eq!(doc.get("active").unwrap().as_i64(), Some(1));
 
     // "false" → 0
-    let mut data = HashMap::new();
-    data.insert("active".to_string(), "false".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("active".to_string(), json!("false"));
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
     let doc = query::create(&tx, "forms", &def, &data, None).expect("Create");
@@ -757,10 +828,15 @@ fn coerce_number_valid() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync");
 
-    let mut data = HashMap::new();
-    data.insert("score".to_string(), "42.5".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("score".to_string(), json!("42.5"));
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
     let doc = query::create(&tx, "metrics", &def, &data, None).expect("Create");

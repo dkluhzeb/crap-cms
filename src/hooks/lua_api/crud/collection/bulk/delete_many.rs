@@ -1,0 +1,252 @@
+//! Registration of `crap.collections.delete_many` Lua function.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use anyhow::Result;
+use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    config::LocaleConfig,
+    core::{CollectionDefinition, Registry, upload},
+    db::{FilterClause, FindQuery, LocaleContext, query::filter::normalize_filter_fields},
+    hooks::{
+        lifecycle::LuaStorage,
+        lua_api::crud::{
+            collection::write::delete::DeleteOptions,
+            filter::convert_where_clause,
+            get_tx_conn,
+            helpers::{
+                EnforceAccessParams, check_hook_depth, enforce_access, hook_invalidation_transport,
+                hook_lua_infra, hook_ui_locale, hook_user, resolve_collection,
+            },
+        },
+    },
+    service::{self, DeleteManyOptions, LuaWriteHooks, ServiceContext, validate_user_filters},
+    typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
+};
+
+/// Query passed to `crap.collections.delete_many(collection, query, opts?)`.
+#[derive(Debug, Default, Deserialize, LuaAnnotation)]
+#[serde(default, deny_unknown_fields)]
+#[lua(class = "crap.DeleteManyQuery")]
+pub(crate) struct DeleteManyQueryInput {
+    #[serde(rename = "where")]
+    #[lua(
+        rename = "where",
+        ty = "table<string, crap.FilterValue | crap.OrCondition[]>",
+        optional
+    )]
+    pub(crate) where_: Option<HashMap<String, serde_json::Value>>,
+    /// Locale code for localized fields.
+    #[lua(optional)]
+    pub(crate) locale: Option<String>,
+    /// Skip access control checks (default: `true`).
+    #[serde(rename = "overrideAccess")]
+    #[lua(rename = "overrideAccess", optional)]
+    pub(crate) override_access: Option<bool>,
+}
+
+impl FromLua for DeleteManyQueryInput {
+    fn from_lua(value: Value, lua: &Lua) -> LuaResult<Self> {
+        match value {
+            Value::Nil => Ok(Self::default()),
+            other => lua.from_value(other),
+        }
+    }
+}
+
+impl DeleteManyQueryInput {
+    pub(crate) fn into_find_query(self) -> LuaResult<FindQuery> {
+        let filters = match self.where_ {
+            Some(w) => convert_where_clause(w)?,
+            None => Vec::new(),
+        };
+        Ok(FindQuery::builder().filters(filters).build())
+    }
+}
+
+/// Result of `crap.collections.delete_many(...)`. `deleted` is the sum
+/// of `hard_deleted + soft_deleted` from
+/// `service::collections::DeleteManyResult` — the Lua user doesn't care
+/// about that distinction.
+#[derive(Serialize, LuaAnnotation)]
+#[lua(class = "crap.DeleteManyResult")]
+pub(crate) struct DeleteManyResult {
+    /// Number of documents deleted (hard + soft).
+    pub(crate) deleted: i64,
+    /// Number of documents skipped because they had incoming references.
+    pub(crate) skipped: i64,
+}
+
+/// State threaded into `crap.collections.delete_many`.
+pub(crate) struct CollectionsDeleteManyState {
+    pub(crate) registry: Arc<Registry>,
+    pub(crate) locale_config: LocaleConfig,
+}
+
+/// Delete multiple documents matching a query. All-or-nothing: checks
+/// delete access for every matched document first; if any fails, returns
+/// an error and nothing is modified. Does NOT fire per-document hooks.
+/// Referenced documents are skipped (counted in `skipped`), not errored.
+/// Inside hooks, runs within the parent operation's transaction.
+#[lua_fn(
+    path = "crap.collections.delete_many",
+    returns = "crap.DeleteManyResult",
+    auto_tx
+)]
+fn collections_delete_many(
+    state: &CollectionsDeleteManyState,
+    lua: &Lua,
+    #[lua(doc = "Collection slug.")] collection: String,
+    #[lua(ty = "crap.DeleteManyQuery", doc = "Query to match documents.")]
+    query: DeleteManyQueryInput,
+    #[lua(ty = "crap.DeleteOptions", doc = "Optional options.")] opts: Option<DeleteOptions>,
+) -> LuaResult<Table> {
+    let opts = opts.unwrap_or_default();
+    let reg = &state.registry;
+    let lc = &state.locale_config;
+
+    let conn = get_tx_conn(lua)?;
+
+    let user = hook_user(lua);
+    let ui_locale = hook_ui_locale(lua);
+    let lua_infra = hook_lua_infra(lua);
+    let def = resolve_collection(reg, &collection)?;
+    let soft_delete = def.soft_delete && !opts.force_hard_delete;
+
+    let (filters, _locale_ctx) = build_delete_filters(
+        lua,
+        &def,
+        &collection,
+        soft_delete,
+        opts.override_access,
+        lc,
+        query,
+    )?;
+
+    let (hooks_enabled, _guard) = check_hook_depth(lua, opts.hooks, &collection, "delete_many");
+
+    let write_hooks = LuaWriteHooks::builder(lua)
+        .user(user.as_ref())
+        .ui_locale(ui_locale.as_deref())
+        .override_access(opts.override_access)
+        .registry(Some(reg.as_ref()))
+        .hooks_enabled(hooks_enabled)
+        .build();
+
+    let mut service_def = def.clone();
+    if opts.force_hard_delete {
+        service_def.soft_delete = false;
+    }
+
+    let invalidation_transport = hook_invalidation_transport(lua);
+
+    let ctx = ServiceContext::collection(&collection, &service_def)
+        .conn(conn)
+        .write_hooks(&write_hooks)
+        .user(user.as_ref())
+        .override_access(opts.override_access)
+        .invalidation_transport(invalidation_transport)
+        .lua_infra(lua_infra.as_ref())
+        .build();
+
+    let delete_opts = DeleteManyOptions {
+        run_hooks: hooks_enabled,
+        ..Default::default()
+    };
+
+    let svc_result = service::delete_many(&ctx, &filters, lc, &delete_opts)
+        .map_err(|e| RuntimeError(format!("{e}")))?;
+
+    if !service_def.soft_delete
+        && let Some(lua_storage) = lua.app_data_ref::<LuaStorage>()
+    {
+        for fields in &svc_result.upload_fields_to_clean {
+            upload::delete_upload_files(&*lua_storage.0, fields);
+        }
+    }
+
+    let result = DeleteManyResult {
+        deleted: svc_result.hard_deleted + svc_result.soft_deleted,
+        skipped: svc_result.skipped,
+    };
+
+    let Value::Table(tbl) = lua.to_value(&result)? else {
+        return Err(RuntimeError(
+            "DeleteManyResult did not serialize to a table".into(),
+        ));
+    };
+    Ok(tbl)
+}
+
+lua_table! {
+    name: crap_collections_delete_many,
+    path: "crap.collections",
+    state: CollectionsDeleteManyState,
+    fns: [collections_delete_many],
+}
+
+/// Register `crap.collections.delete_many(collection, query, opts?)`. Parent
+/// `crap.collections` must already exist.
+#[cfg(not(tarpaulin_include))]
+pub(crate) fn register_delete_many(
+    lua: &Lua,
+    _table: &Table,
+    registry: Arc<Registry>,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
+    register_crap_collections_delete_many(
+        lua,
+        CollectionsDeleteManyState {
+            registry,
+            locale_config: locale_config.clone(),
+        },
+    )?;
+    Ok(())
+}
+
+/// Resolve the access function for delete operations.
+fn resolve_delete_access(def: &CollectionDefinition, soft_delete: bool) -> Option<&str> {
+    if soft_delete {
+        def.access.resolve_trash()
+    } else {
+        def.access.delete.as_deref()
+    }
+}
+
+/// Build filters for the bulk delete query, enforcing access constraints.
+fn build_delete_filters(
+    lua: &Lua,
+    def: &CollectionDefinition,
+    collection: &str,
+    soft_delete: bool,
+    override_access: bool,
+    lc: &LocaleConfig,
+    query: DeleteManyQueryInput,
+) -> LuaResult<(Vec<FilterClause>, Option<LocaleContext>)> {
+    let locale_ctx = LocaleContext::from_locale_string(query.locale.as_deref(), lc)
+        .map_err(|e| RuntimeError(e.to_string()))?;
+
+    let mut find_query = query.into_find_query()?;
+    normalize_filter_fields(&mut find_query.filters, &def.fields);
+    validate_user_filters(&find_query.filters).map_err(|e| RuntimeError(format!("{e}")))?;
+
+    let access_ref = resolve_delete_access(def, soft_delete);
+
+    enforce_access(
+        lua,
+        &EnforceAccessParams {
+            slug: collection,
+            override_access,
+            access_fn: access_ref,
+            id: None,
+            deny_msg: "Delete access denied",
+            injecting_status: false,
+        },
+        &mut find_query.filters,
+    )?;
+
+    Ok((find_query.filters, locale_ctx))
+}

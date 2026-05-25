@@ -53,10 +53,15 @@ fn build_col_def(
     field: &crate::core::FieldDefinition,
     db_kind: &str,
 ) -> String {
-    let mut col = format!("{} {}", col_name, col_type);
+    let mut col = format!("{col_name} {col_type}");
 
     if !companion_text {
-        append_default_value_for(&mut col, &field.default_value, &field.field_type, db_kind);
+        append_default_value_for(
+            &mut col,
+            field.default_value.as_ref(),
+            &field.field_type,
+            db_kind,
+        );
     }
 
     col
@@ -113,7 +118,7 @@ fn create_global_table(
     info!("Creating global table: {}", table_name);
 
     conn.execute_ddl(&sql, &[])
-        .with_context(|| format!("Failed to create table {}", table_name))?;
+        .with_context(|| format!("Failed to create table {table_name}"))?;
 
     conn.execute(
         &conn.build_insert_ignore(table_name, "id", "'default'"),
@@ -212,12 +217,12 @@ fn add_column_if_missing(
     }
 
     let col_def = build_col_def(col_name, col_type, companion_text, field, conn.kind());
-    let sql = format!("ALTER TABLE \"{}\" ADD COLUMN {}", table_name, col_def);
+    let sql = format!("ALTER TABLE \"{table_name}\" ADD COLUMN {col_def}");
 
     info!("Adding column to {}: {}", table_name, col_name);
 
     conn.execute_ddl(&sql, &[])
-        .with_context(|| format!("Failed to add column {} to {}", col_name, table_name))?;
+        .with_context(|| format!("Failed to add column {col_name} to {table_name}"))?;
 
     Ok(())
 }
@@ -235,15 +240,12 @@ fn add_system_column(
         return Ok(());
     }
 
-    let sql = format!(
-        "ALTER TABLE \"{}\" ADD COLUMN {} {}",
-        table_name, col_name, col_def
-    );
+    let sql = format!("ALTER TABLE \"{table_name}\" ADD COLUMN {col_name} {col_def}");
 
     info!("Adding {} column to {}", col_name, table_name);
 
     conn.execute_ddl(&sql, &[])
-        .with_context(|| format!("Failed to add {} to {}", col_name, table_name))?;
+        .with_context(|| format!("Failed to add {col_name} to {table_name}"))?;
 
     Ok(())
 }
@@ -252,7 +254,7 @@ fn add_system_column(
 mod tests {
     use super::*;
     use crate::core::collection::*;
-    use crate::core::field::{FieldDefinition, FieldType};
+    use crate::core::{FieldDefinition, FieldTab, FieldType};
     use crate::db::migrate::collection::test_helpers::*;
 
     fn simple_global(slug: &str, fields: Vec<FieldDefinition>) -> GlobalDefinition {
@@ -465,7 +467,6 @@ mod tests {
 
     #[test]
     fn global_table_tabs_promotes_flat() {
-        use crate::core::field::FieldTab;
         let def = simple_global(
             "settings",
             vec![
@@ -485,7 +486,6 @@ mod tests {
 
     #[test]
     fn global_table_tabs_with_group_creates_prefixed_columns() {
-        use crate::core::field::FieldTab;
         let def = simple_global(
             "settings",
             vec![
@@ -528,7 +528,6 @@ mod tests {
 
     #[test]
     fn global_table_alter_adds_tabs_with_group() {
-        use crate::core::field::FieldTab;
         let def1 = simple_global("settings", vec![text_field("name")]);
         let def2 = simple_global(
             "settings",
@@ -554,7 +553,6 @@ mod tests {
 
     #[test]
     fn global_deeply_nested_layout() {
-        use crate::core::field::FieldTab;
         let def = simple_global(
             "settings",
             vec![
@@ -601,7 +599,6 @@ mod tests {
 
     #[test]
     fn global_group_containing_tabs() {
-        use crate::core::field::FieldTab;
         let def = simple_global(
             "settings",
             vec![
@@ -624,7 +621,6 @@ mod tests {
 
     #[test]
     fn global_group_tabs_group_three_levels() {
-        use crate::core::field::FieldTab;
         let def = simple_global(
             "settings",
             vec![

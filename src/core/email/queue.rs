@@ -13,6 +13,12 @@ use super::validation::validate_no_crlf;
 /// System job slug for queued emails.
 pub const SYSTEM_EMAIL_JOB: &str = "_system_email";
 
+/// Queue name for `_system_email` jobs. Operators configure aggregate
+/// behaviour (concurrency, timeout, retries) via `[jobs.queues.email]`
+/// in `crap.toml`; the framework supplies sensible defaults via
+/// `JobsConfig::apply_queue_defaults`.
+pub const SYSTEM_EMAIL_QUEUE: &str = "email";
+
 /// Data payload for a queued email job.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EmailJobData {
@@ -25,28 +31,28 @@ pub struct EmailJobData {
 
 /// Queue an email for async delivery via the job system.
 ///
-/// The email will be processed by the scheduler with retries on failure.
+/// `max_attempts` is the total number of attempts (including the
+/// initial one). Callers should compute it from the operator's
+/// `[jobs.queues.email] retries` setting via
+/// [`crate::config::JobsConfig::system_email_max_attempts`]; per-call
+/// Lua overrides (`crap.email.queue{ retries = N }`) compute
+/// `N + 1` directly.
+///
 /// Returns the job run ID.
+///
+/// # Errors
+///
+/// Returns an error if `to` or `subject` contain CRLF (header injection),
+/// or if serializing/inserting the job fails.
 pub fn queue_email(
     conn: &dyn DbConnection,
-    to: &str,
-    subject: &str,
-    html: &str,
-    text: Option<&str>,
+    data: &EmailJobData,
     max_attempts: u32,
-    queue: &str,
 ) -> Result<String> {
-    validate_no_crlf("to", to)?;
-    validate_no_crlf("subject", subject)?;
+    validate_no_crlf("to", &data.to)?;
+    validate_no_crlf("subject", &data.subject)?;
 
-    let data = EmailJobData {
-        to: to.to_string(),
-        subject: subject.to_string(),
-        html: html.to_string(),
-        text: text.map(|s| s.to_string()),
-    };
-
-    let data_json = serde_json::to_string(&data)?;
+    let data_json = serde_json::to_string(data)?;
 
     let job = query::jobs::insert_job(
         conn,
@@ -54,13 +60,14 @@ pub fn queue_email(
         &data_json,
         "system",
         max_attempts,
-        queue,
+        SYSTEM_EMAIL_QUEUE,
+        0,
     )?;
 
     tracing::debug!(
         "Queued email to {} (subject: \"{}\") as job {}",
-        to,
-        subject,
+        data.to,
+        data.subject,
         job.id
     );
 

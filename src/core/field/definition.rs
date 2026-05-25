@@ -1,0 +1,951 @@
+//! Complete definition of a single field within a collection.
+
+use crate::core::{
+    BlockDefinition, FieldAdmin, FieldTab, FieldType, RelationshipConfig, SelectOption,
+    field::JoinConfig,
+};
+use crate::typegen::lua::{LuaAlias, LuaAnnotation, LuaFieldTypeViews, LuaTypeAlias};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+/// `date` field appearance + storage format.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, LuaAlias)]
+#[serde(rename_all = "camelCase")]
+#[lua(alias = "crap.PickerAppearance", rename_all = "camelCase")]
+pub enum PickerAppearance {
+    /// Date picker, stored as `YYYY-MM-DDT12:00:00.000Z`.
+    DayOnly,
+    /// Datetime-local picker, stored as full ISO 8601 UTC.
+    DayAndTime,
+    /// Time picker, stored as `HH:MM`.
+    TimeOnly,
+    /// Month picker, stored as `YYYY-MM`.
+    MonthOnly,
+}
+
+impl PickerAppearance {
+    /// Return the canonical camelCase Lua-side string for this variant.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::DayOnly => "dayOnly",
+            Self::DayAndTime => "dayAndTime",
+            Self::TimeOnly => "timeOnly",
+            Self::MonthOnly => "monthOnly",
+        }
+    }
+}
+
+/// Unrecognized `picker_appearance` string. Callers (the parser) typically
+/// log a warning and treat the field as if no value was set, falling back
+/// to the default (`DayOnly`).
+#[derive(Debug)]
+pub struct UnknownPickerAppearance(pub String);
+
+impl std::fmt::Display for UnknownPickerAppearance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "unknown picker_appearance '{}' (valid: dayOnly, dayAndTime, timeOnly, monthOnly)",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for UnknownPickerAppearance {}
+
+impl std::str::FromStr for PickerAppearance {
+    type Err = UnknownPickerAppearance;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "dayOnly" => Ok(Self::DayOnly),
+            "dayAndTime" => Ok(Self::DayAndTime),
+            "timeOnly" => Ok(Self::TimeOnly),
+            "monthOnly" => Ok(Self::MonthOnly),
+            _ => Err(UnknownPickerAppearance(s.to_string())),
+        }
+    }
+}
+
+/// Custom validation function type.
+/// Return `nil` (or `true`) if valid; return a string error message if invalid.
+/// Used by `crap.FieldDefinition.validate` (a Lua function ref like
+/// `"validators.foo"` that resolves to a function of this shape).
+#[derive(LuaTypeAlias)]
+#[lua(
+    alias = "crap.ValidateFunction",
+    target = "fun(value: any, context: crap.ValidateContext): string?"
+)]
+pub struct ValidateFunction;
+
+/// Field hook function type.
+/// Receives the field value and a context table; returns the (possibly
+/// modified) value. Used by every `crap.FieldHooks` slot — the Lua
+/// function ref stored there must resolve to a function of this shape.
+#[derive(LuaTypeAlias)]
+#[lua(
+    alias = "crap.FieldHookFn",
+    target = "fun(value: any, context: crap.FieldHookContext): any"
+)]
+pub struct FieldHookFn;
+
+/// Lua function references for field-level access control (read/create/update).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, LuaAnnotation)]
+#[lua(class = "crap.FieldAccess")]
+pub struct FieldAccess {
+    /// Hook ref for field read access control.
+    #[serde(default)]
+    pub read: Option<String>,
+    /// Hook ref for field create access control.
+    #[serde(default)]
+    pub create: Option<String>,
+    /// Hook ref for field update access control.
+    #[serde(default)]
+    pub update: Option<String>,
+}
+
+/// Lua function references for field-level lifecycle hooks.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, LuaAnnotation)]
+#[lua(class = "crap.FieldHooks")]
+pub struct FieldHooks {
+    /// Hook refs to run before field validation (value normalizers).
+    #[serde(default)]
+    #[lua(optional)]
+    pub before_validate: Vec<String>,
+    /// Hook refs to run after validation, before write.
+    #[serde(default)]
+    #[lua(optional)]
+    pub before_change: Vec<String>,
+    /// Hook refs to run after create/update write.
+    #[serde(default)]
+    #[lua(optional)]
+    pub after_change: Vec<String>,
+    /// Hook refs to run after read, before response.
+    #[serde(default)]
+    #[lua(optional)]
+    pub after_read: Vec<String>,
+}
+
+/// Complete definition of a single field within a collection.
+/// Use the per-type factory classes (`crap.fields.text(...)`,
+/// `crap.fields.select(...)`, etc.) for precise per-type
+/// autocompletion; this catch-all class lists every option the system
+/// understands.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, LuaFieldTypeViews, LuaAnnotation)]
+#[lua(base = "crap.BaseField", discriminator = FieldType, class = "crap.FieldDefinition")]
+pub struct FieldDefinition {
+    /// Column name (required).
+    pub name: String,
+    /// Field type (required).
+    #[serde(rename = "type")]
+    #[lua(skip)]
+    pub field_type: FieldType,
+    /// Validation: must have a value (default: false).
+    #[serde(default)]
+    #[lua(optional)]
+    pub required: bool,
+    /// Unique constraint (default: false).
+    #[serde(default)]
+    #[lua(optional)]
+    pub unique: bool,
+    /// Create a B-tree index on this column (default: false). Skipped when unique=true.
+    #[serde(default)]
+    #[lua(optional)]
+    pub index: bool,
+    /// Lua function ref called as `crap.ValidateFunction`.
+    #[serde(default)]
+    #[lua(optional)]
+    pub validate: Option<String>,
+    /// Default value on create.
+    #[serde(default)]
+    #[lua(ty = "any", optional)]
+    pub default_value: Option<Value>,
+    /// Option list (required).
+    #[serde(default)]
+    #[lua(applies_to = "select, radio", optional)]
+    pub options: Vec<SelectOption>,
+    /// Admin UI display options.
+    #[serde(default)]
+    #[lua(optional)]
+    pub admin: FieldAdmin,
+    /// Per-field lifecycle hooks.
+    #[serde(default)]
+    #[lua(optional)]
+    pub hooks: FieldHooks,
+    /// Field-level access control (read/create/update).
+    #[serde(default)]
+    #[lua(optional)]
+    pub access: FieldAccess,
+    /// MCP tool schema options.
+    #[serde(default)]
+    #[lua(optional)]
+    pub mcp: McpFieldConfig,
+    /// Target collection and cardinality.
+    #[serde(default)]
+    #[lua(applies_to = "relationship, upload", optional)]
+    pub relationship: Option<RelationshipConfig>,
+    /// Sub-field definitions (required). For row/collapsible: promoted to parent level (no prefix).
+    #[serde(default)]
+    #[lua(
+        applies_to = "array, group, row, collapsible",
+        ty = "crap.FieldDefinition[]",
+        optional
+    )]
+    pub fields: Vec<FieldDefinition>,
+    /// Block type definitions (required).
+    #[serde(default)]
+    #[lua(applies_to = "blocks", optional)]
+    pub blocks: Vec<BlockDefinition>,
+    /// Tab definitions (required). Each tab has a label and fields.
+    #[serde(default)]
+    #[lua(applies_to = "tabs", optional)]
+    pub tabs: Vec<FieldTab>,
+    /// Per-locale values (default: false).
+    #[serde(default)]
+    #[lua(optional)]
+    pub localized: bool,
+    /// Input type: "dayOnly" (default), "dayAndTime", "timeOnly", "monthOnly".
+    #[serde(default)]
+    #[lua(applies_to = "date", ty = "crap.PickerAppearance", optional)]
+    pub picker_appearance: Option<PickerAppearance>,
+    /// Minimum rows. Validated on create/update.
+    #[serde(default)]
+    #[lua(applies_to = "array, blocks", optional)]
+    pub min_rows: Option<usize>,
+    /// Maximum rows. Admin disables "Add" at max.
+    #[serde(default)]
+    #[lua(applies_to = "array, blocks", optional)]
+    pub max_rows: Option<usize>,
+    /// Minimum string length. Validated server-side + HTML minlength.
+    #[serde(default)]
+    #[lua(applies_to = "text, textarea", optional)]
+    pub min_length: Option<usize>,
+    /// Maximum string length. Validated server-side + HTML maxlength.
+    #[serde(default)]
+    #[lua(applies_to = "text, textarea", optional)]
+    pub max_length: Option<usize>,
+    /// Minimum value. Validated server-side + HTML min attr.
+    #[serde(default)]
+    #[lua(applies_to = "number", optional)]
+    pub min: Option<f64>,
+    /// Maximum value. Validated server-side + HTML max attr.
+    #[serde(default)]
+    #[lua(applies_to = "number", optional)]
+    pub max: Option<f64>,
+    /// Multi-value tag input. Stored as JSON array in TEXT column (text/number) or multi-select dropdown (select).
+    #[serde(default)]
+    #[lua(applies_to = "text, number, select", optional)]
+    pub has_many: bool,
+    /// Minimum date (ISO "YYYY-MM-DD").
+    #[serde(default)]
+    #[lua(applies_to = "date", optional)]
+    pub min_date: Option<String>,
+    /// Maximum date (ISO "YYYY-MM-DD").
+    #[serde(default)]
+    #[lua(applies_to = "date", optional)]
+    pub max_date: Option<String>,
+    /// Store an IANA timezone alongside the value. Requires `picker_appearance = "dayAndTime"` (ignored with a warning otherwise). Creates a companion `{field}_tz` column.
+    #[serde(default)]
+    #[lua(applies_to = "date", optional)]
+    pub timezone: bool,
+    /// IANA zone used as the admin form default (e.g. "`America/New_York`"). Only applies when `timezone = true`.
+    #[serde(default)]
+    #[lua(applies_to = "date", optional)]
+    pub default_timezone: Option<String>,
+    /// Target collection slug (required). Field on target collection that references this document (required).
+    //
+    // `flatten` inlines `JoinConfig`'s fields (`collection`, `on`)
+    // directly onto `crap.JoinField` instead of emitting a single
+    // `--- @field join? crap.JoinConfig` line — matches the Lua surface
+    // where they're top-level on the join field config.
+    #[serde(default)]
+    #[lua(applies_to = "join", flatten)]
+    pub join: Option<JoinConfig>,
+    /// Strip from all read responses (gRPC/Lua/MCP/admin/REST) and skip in the admin form. For admin-form-only hiding (value still returned in API), use `admin.hidden` instead. Default: false.
+    #[serde(default)]
+    #[lua(optional)]
+    pub hidden: bool,
+}
+
+impl FieldDefinition {
+    /// Create a new `FieldDefinitionBuilder` with the given name and type.
+    pub fn builder(name: impl Into<String>, field_type: FieldType) -> FieldDefinitionBuilder {
+        FieldDefinitionBuilder::new(name, field_type)
+    }
+
+    /// Whether this field has a column on the parent table.
+    /// False for Array, Group, Row, Blocks, and has-many Relationship (they use join tables or prefixed/promoted columns).
+    #[must_use]
+    pub fn has_parent_column(&self) -> bool {
+        match self.field_type {
+            // Array uses a join table; Group prefixes sub-field columns; Row/Collapsible/Tabs
+            // promote sub-fields to parent level (no prefix); Blocks uses a join table; Join is
+            // a virtual field with no column.
+            FieldType::Array
+            | FieldType::Group
+            | FieldType::Row
+            | FieldType::Collapsible
+            | FieldType::Tabs
+            | FieldType::Blocks
+            | FieldType::Join => false,
+            FieldType::Relationship | FieldType::Upload => {
+                match &self.relationship {
+                    Some(rc) => !rc.has_many,
+                    None => true, // default to has-one
+                }
+            }
+            _ => true,
+        }
+    }
+}
+
+/// Convert a `snake_case` identifier to Title Case.
+///
+/// Examples: `"my_field"` → `"My Field"`, `"site_settings"` → `"Site Settings"`.
+/// Used to auto-generate human-readable labels from field and collection names.
+#[must_use]
+pub fn to_title_case(s: &str) -> String {
+    s.split('_')
+        .filter(|w| !w.is_empty())
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Recursively flatten layout wrappers (Row, Collapsible, Tabs) to extract leaf fields.
+/// Used by Array join table DDL, read, write, and form parsing — layout wrappers are
+/// transparent inside arrays, so their children should be promoted as individual columns.
+#[must_use]
+pub fn flatten_array_sub_fields(fields: &[FieldDefinition]) -> Vec<&FieldDefinition> {
+    let mut result = Vec::new();
+    for f in fields {
+        match f.field_type {
+            FieldType::Row | FieldType::Collapsible => {
+                result.extend(flatten_array_sub_fields(&f.fields));
+            }
+            FieldType::Tabs => {
+                for tab in &f.tabs {
+                    result.extend(flatten_array_sub_fields(&tab.fields));
+                }
+            }
+            _ => result.push(f),
+        }
+    }
+    result
+}
+
+/// MCP-specific configuration for a field.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, LuaAnnotation)]
+#[serde(default)]
+#[lua(class = "crap.McpFieldConfig")]
+pub struct McpFieldConfig {
+    /// Description shown in MCP tool JSON Schema for this field.
+    pub description: Option<String>,
+}
+
+/// Builder for [`FieldDefinition`].
+///
+/// `name` and `field_type` are taken in `new()`. All other fields default via
+/// [`FieldDefinition::default()`].
+pub struct FieldDefinitionBuilder {
+    inner: FieldDefinition,
+}
+
+impl FieldDefinitionBuilder {
+    /// Create a new `FieldDefinitionBuilder` with the given name and type.
+    pub fn new(name: impl Into<String>, field_type: FieldType) -> Self {
+        Self {
+            inner: FieldDefinition {
+                name: name.into(),
+                field_type,
+                ..Default::default()
+            },
+        }
+    }
+
+    /// Set whether the field is required.
+    #[must_use]
+    pub fn required(mut self, v: bool) -> Self {
+        self.inner.required = v;
+        self
+    }
+
+    /// Set whether the field must be unique.
+    #[must_use]
+    pub fn unique(mut self, v: bool) -> Self {
+        self.inner.unique = v;
+        self
+    }
+
+    /// Set whether to create a database index for this field.
+    #[must_use]
+    pub fn index(mut self, v: bool) -> Self {
+        self.inner.index = v;
+        self
+    }
+
+    /// Set the name of the Lua validation function.
+    #[must_use]
+    pub fn validate(mut self, v: impl Into<String>) -> Self {
+        self.inner.validate = Some(v.into());
+        self
+    }
+
+    /// Set the default value for this field.
+    #[must_use]
+    pub fn default_value(mut self, v: Value) -> Self {
+        self.inner.default_value = Some(v);
+        self
+    }
+
+    /// Set the options for Select or Radio fields.
+    #[must_use]
+    pub fn options(mut self, v: Vec<SelectOption>) -> Self {
+        self.inner.options = v;
+        self
+    }
+
+    /// Set the admin UI configuration for this field.
+    #[must_use]
+    pub fn admin(mut self, v: FieldAdmin) -> Self {
+        self.inner.admin = v;
+        self
+    }
+
+    /// Set the lifecycle hooks for this field.
+    #[must_use]
+    pub fn hooks(mut self, v: FieldHooks) -> Self {
+        self.inner.hooks = v;
+        self
+    }
+
+    /// Set the access control rules for this field.
+    #[must_use]
+    pub fn access(mut self, v: FieldAccess) -> Self {
+        self.inner.access = v;
+        self
+    }
+
+    /// Set the MCP-specific configuration for this field.
+    #[must_use]
+    pub fn mcp(mut self, v: McpFieldConfig) -> Self {
+        self.inner.mcp = v;
+        self
+    }
+
+    /// Set the relationship configuration for this field.
+    #[must_use]
+    pub fn relationship(mut self, v: RelationshipConfig) -> Self {
+        self.inner.relationship = Some(v);
+        self
+    }
+
+    /// Set the sub-fields for Group or Array types.
+    #[must_use]
+    pub fn fields(mut self, v: Vec<FieldDefinition>) -> Self {
+        self.inner.fields = v;
+        self
+    }
+
+    /// Set the block definitions for Blocks types.
+    #[must_use]
+    pub fn blocks(mut self, v: Vec<BlockDefinition>) -> Self {
+        self.inner.blocks = v;
+        self
+    }
+
+    /// Set the tab definitions for Tabs types.
+    #[must_use]
+    pub fn tabs(mut self, v: Vec<FieldTab>) -> Self {
+        self.inner.tabs = v;
+        self
+    }
+
+    /// Set whether this field is localized.
+    #[must_use]
+    pub fn localized(mut self, v: bool) -> Self {
+        self.inner.localized = v;
+        self
+    }
+
+    /// Set the picker appearance for date fields.
+    #[must_use]
+    pub fn picker_appearance(mut self, v: PickerAppearance) -> Self {
+        self.inner.picker_appearance = Some(v);
+        self
+    }
+
+    /// Set the minimum number of rows for Array or Blocks.
+    #[must_use]
+    pub fn min_rows(mut self, v: usize) -> Self {
+        self.inner.min_rows = Some(v);
+        self
+    }
+
+    /// Set the maximum number of rows for Array or Blocks.
+    #[must_use]
+    pub fn max_rows(mut self, v: usize) -> Self {
+        self.inner.max_rows = Some(v);
+        self
+    }
+
+    /// Set the minimum string length for text fields.
+    #[must_use]
+    pub fn min_length(mut self, v: usize) -> Self {
+        self.inner.min_length = Some(v);
+        self
+    }
+
+    /// Set the maximum string length for text fields.
+    #[must_use]
+    pub fn max_length(mut self, v: usize) -> Self {
+        self.inner.max_length = Some(v);
+        self
+    }
+
+    /// Set the minimum numeric value.
+    #[must_use]
+    pub fn min(mut self, v: f64) -> Self {
+        self.inner.min = Some(v);
+        self
+    }
+
+    /// Set the maximum numeric value.
+    #[must_use]
+    pub fn max(mut self, v: f64) -> Self {
+        self.inner.max = Some(v);
+        self
+    }
+
+    /// Set whether this field allows multiple values.
+    #[must_use]
+    pub fn has_many(mut self, v: bool) -> Self {
+        self.inner.has_many = v;
+        self
+    }
+
+    /// Set the minimum date value.
+    #[must_use]
+    pub fn min_date(mut self, v: impl Into<String>) -> Self {
+        self.inner.min_date = Some(v.into());
+        self
+    }
+
+    /// Set the maximum date value.
+    #[must_use]
+    pub fn max_date(mut self, v: impl Into<String>) -> Self {
+        self.inner.max_date = Some(v.into());
+        self
+    }
+
+    /// Set whether to store an IANA timezone alongside the date value.
+    #[must_use]
+    pub fn timezone(mut self, v: bool) -> Self {
+        self.inner.timezone = v;
+        self
+    }
+
+    /// Set the default IANA timezone for the admin UI dropdown.
+    #[must_use]
+    pub fn default_timezone(mut self, v: impl Into<String>) -> Self {
+        self.inner.default_timezone = Some(v.into());
+        self
+    }
+
+    /// Set the join configuration for virtual reverse-relationship fields.
+    #[must_use]
+    pub fn join(mut self, v: JoinConfig) -> Self {
+        self.inner.join = Some(v);
+        self
+    }
+
+    /// Set whether this field is stripped from all read responses (API-hidden).
+    /// See [`FieldDefinition::hidden`] for full semantics.
+    #[must_use]
+    pub fn hidden(mut self, v: bool) -> Self {
+        self.inner.hidden = v;
+        self
+    }
+
+    /// Build the final `FieldDefinition` instance.
+    #[must_use]
+    pub fn build(self) -> FieldDefinition {
+        self.inner
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::LocalizedString;
+    use std::str::FromStr;
+
+    // ── PickerAppearance FromStr + as_str ───────────────────────────
+
+    #[test]
+    fn picker_appearance_from_str_each_variant() {
+        assert!(matches!(
+            PickerAppearance::from_str("dayOnly"),
+            Ok(PickerAppearance::DayOnly)
+        ));
+        assert!(matches!(
+            PickerAppearance::from_str("dayAndTime"),
+            Ok(PickerAppearance::DayAndTime)
+        ));
+        assert!(matches!(
+            PickerAppearance::from_str("timeOnly"),
+            Ok(PickerAppearance::TimeOnly)
+        ));
+        assert!(matches!(
+            PickerAppearance::from_str("monthOnly"),
+            Ok(PickerAppearance::MonthOnly)
+        ));
+    }
+
+    #[test]
+    fn picker_appearance_from_str_rejects_unknown_with_named_error() {
+        let err = PickerAppearance::from_str("datetime").unwrap_err();
+        assert!(err.to_string().contains("datetime"));
+        assert!(err.to_string().contains("dayOnly"));
+    }
+
+    #[test]
+    fn picker_appearance_as_str_is_canonical_camel_case() {
+        assert_eq!(PickerAppearance::DayOnly.as_str(), "dayOnly");
+        assert_eq!(PickerAppearance::DayAndTime.as_str(), "dayAndTime");
+        assert_eq!(PickerAppearance::TimeOnly.as_str(), "timeOnly");
+        assert_eq!(PickerAppearance::MonthOnly.as_str(), "monthOnly");
+    }
+
+    #[test]
+    fn picker_appearance_serde_round_trip() {
+        let pa = PickerAppearance::DayAndTime;
+        let json = serde_json::to_string(&pa).unwrap();
+        assert_eq!(json, "\"dayAndTime\"");
+        let back: PickerAppearance = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, PickerAppearance::DayAndTime));
+    }
+
+    #[test]
+    fn has_parent_column_scalar_types() {
+        for ft in [
+            FieldType::Text,
+            FieldType::Number,
+            FieldType::Textarea,
+            FieldType::Select,
+            FieldType::Checkbox,
+            FieldType::Date,
+            FieldType::Email,
+            FieldType::Json,
+            FieldType::Richtext,
+            FieldType::Upload,
+        ] {
+            let f = FieldDefinition {
+                field_type: ft.clone(),
+                ..Default::default()
+            };
+            assert!(f.has_parent_column(), "{ft:?} should have parent column");
+        }
+    }
+
+    #[test]
+    fn has_parent_column_array_false() {
+        let f = FieldDefinition {
+            field_type: FieldType::Array,
+            ..Default::default()
+        };
+        assert!(!f.has_parent_column());
+    }
+
+    #[test]
+    fn has_parent_column_group_false() {
+        let f = FieldDefinition {
+            field_type: FieldType::Group,
+            ..Default::default()
+        };
+        assert!(!f.has_parent_column());
+    }
+
+    #[test]
+    fn has_parent_column_blocks_false() {
+        let f = FieldDefinition {
+            field_type: FieldType::Blocks,
+            ..Default::default()
+        };
+        assert!(!f.has_parent_column());
+    }
+
+    #[test]
+    fn has_parent_column_row_false() {
+        let f = FieldDefinition {
+            field_type: FieldType::Row,
+            ..Default::default()
+        };
+        assert!(!f.has_parent_column(), "Row should not have parent column");
+    }
+
+    #[test]
+    fn has_parent_column_collapsible_false() {
+        let f = FieldDefinition {
+            field_type: FieldType::Collapsible,
+            ..Default::default()
+        };
+        assert!(
+            !f.has_parent_column(),
+            "Collapsible should not have parent column"
+        );
+    }
+
+    #[test]
+    fn has_parent_column_tabs_false() {
+        let f = FieldDefinition {
+            field_type: FieldType::Tabs,
+            ..Default::default()
+        };
+        assert!(!f.has_parent_column(), "Tabs should not have parent column");
+    }
+
+    #[test]
+    fn has_parent_column_relationship_has_one() {
+        let f = FieldDefinition {
+            field_type: FieldType::Relationship,
+            relationship: Some(RelationshipConfig::new("posts", false)),
+            ..Default::default()
+        };
+        assert!(
+            f.has_parent_column(),
+            "has-one relationship should have parent column"
+        );
+    }
+
+    #[test]
+    fn has_parent_column_relationship_has_many() {
+        let f = FieldDefinition {
+            field_type: FieldType::Relationship,
+            relationship: Some(RelationshipConfig::new("tags", true)),
+            ..Default::default()
+        };
+        assert!(
+            !f.has_parent_column(),
+            "has-many relationship should not have parent column"
+        );
+    }
+
+    #[test]
+    fn has_parent_column_relationship_no_config() {
+        let f = FieldDefinition {
+            field_type: FieldType::Relationship,
+            relationship: None,
+            ..Default::default()
+        };
+        assert!(
+            f.has_parent_column(),
+            "relationship with no config defaults to has-one"
+        );
+    }
+
+    #[test]
+    fn has_parent_column_upload_has_many_false() {
+        let f = FieldDefinition {
+            field_type: FieldType::Upload,
+            relationship: Some(RelationshipConfig::new("media", true)),
+            ..Default::default()
+        };
+        assert!(
+            !f.has_parent_column(),
+            "has-many upload should not have parent column"
+        );
+    }
+
+    #[test]
+    fn has_parent_column_upload_has_one_true() {
+        let f = FieldDefinition {
+            field_type: FieldType::Upload,
+            relationship: Some(RelationshipConfig::new("media", false)),
+            ..Default::default()
+        };
+        assert!(
+            f.has_parent_column(),
+            "has-one upload should have parent column"
+        );
+    }
+
+    #[test]
+    fn field_definition_default() {
+        let f = FieldDefinition::default();
+        assert_eq!(f.name, "");
+        assert_eq!(f.field_type, FieldType::Text);
+        assert!(!f.required);
+        assert!(!f.unique);
+        assert!(!f.index);
+        assert!(!f.localized);
+        assert!(f.validate.is_none());
+        assert!(f.default_value.is_none());
+        assert!(f.options.is_empty());
+        assert!(f.relationship.is_none());
+        assert!(f.fields.is_empty());
+        assert!(f.blocks.is_empty());
+        assert!(f.tabs.is_empty());
+        assert!(f.min_rows.is_none());
+        assert!(f.max_rows.is_none());
+        assert!(f.min_length.is_none());
+        assert!(f.max_length.is_none());
+        assert!(f.min.is_none());
+        assert!(f.max.is_none());
+    }
+
+    fn text_field(name: &str) -> FieldDefinition {
+        FieldDefinition {
+            name: name.to_string(),
+            field_type: FieldType::Text,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn flatten_array_sub_fields_basic() {
+        let fields = vec![
+            text_field("title"),
+            FieldDefinition {
+                name: "layout".to_string(),
+                field_type: FieldType::Row,
+                fields: vec![text_field("slug"), text_field("author")],
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "settings".to_string(),
+                field_type: FieldType::Tabs,
+                tabs: vec![
+                    FieldTab::new("General", vec![text_field("color")]),
+                    FieldTab::new("Advanced", vec![text_field("cache")]),
+                ],
+                ..Default::default()
+            },
+        ];
+        let flat = flatten_array_sub_fields(&fields);
+        let names: Vec<&str> = flat.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["title", "slug", "author", "color", "cache"]);
+    }
+
+    #[test]
+    fn flatten_array_sub_fields_nested() {
+        let fields = vec![FieldDefinition {
+            name: "layout".to_string(),
+            field_type: FieldType::Tabs,
+            tabs: vec![FieldTab::new(
+                "Tab",
+                vec![FieldDefinition {
+                    name: "row".to_string(),
+                    field_type: FieldType::Row,
+                    fields: vec![text_field("a"), text_field("b")],
+                    ..Default::default()
+                }],
+            )],
+            ..Default::default()
+        }];
+        let flat = flatten_array_sub_fields(&fields);
+        let names: Vec<&str> = flat.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn flatten_array_sub_fields_empty() {
+        let flat = flatten_array_sub_fields(&[]);
+        assert!(flat.is_empty());
+    }
+
+    #[test]
+    fn flatten_array_sub_fields_collapsible() {
+        let fields = vec![FieldDefinition {
+            name: "advanced".to_string(),
+            field_type: FieldType::Collapsible,
+            fields: vec![text_field("x"), text_field("y")],
+            ..Default::default()
+        }];
+        let flat = flatten_array_sub_fields(&fields);
+        let names: Vec<&str> = flat.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["x", "y"]);
+    }
+
+    #[test]
+    fn to_title_case_single_word() {
+        assert_eq!(to_title_case("posts"), "Posts");
+    }
+
+    #[test]
+    fn to_title_case_multi_word() {
+        assert_eq!(to_title_case("site_settings"), "Site Settings");
+    }
+
+    #[test]
+    fn to_title_case_three_words() {
+        assert_eq!(to_title_case("my_cool_thing"), "My Cool Thing");
+    }
+
+    #[test]
+    fn to_title_case_empty() {
+        assert_eq!(to_title_case(""), "");
+    }
+
+    #[test]
+    fn to_title_case_double_underscore() {
+        assert_eq!(to_title_case("seo__title"), "Seo Title");
+    }
+
+    #[test]
+    fn builds_field_definition_with_defaults() {
+        let fd = FieldDefinitionBuilder::new("title", FieldType::Text).build();
+        assert_eq!(fd.name, "title");
+        assert_eq!(fd.field_type, FieldType::Text);
+        assert!(!fd.required);
+        assert!(!fd.unique);
+        assert!(fd.options.is_empty());
+        assert!(fd.relationship.is_none());
+        assert!(fd.fields.is_empty());
+    }
+
+    #[test]
+    fn builds_field_definition_with_overrides() {
+        let fd = FieldDefinitionBuilder::new("email", FieldType::Email)
+            .required(true)
+            .unique(true)
+            .index(true)
+            .max_length(255)
+            .build();
+        assert_eq!(fd.name, "email");
+        assert_eq!(fd.field_type, FieldType::Email);
+        assert!(fd.required);
+        assert!(fd.unique);
+        assert!(fd.index);
+        assert_eq!(fd.max_length, Some(255));
+    }
+
+    #[test]
+    fn builds_field_definition_with_relationship() {
+        let fd = FieldDefinitionBuilder::new("author", FieldType::Relationship)
+            .relationship(RelationshipConfig::new("users", false))
+            .build();
+        assert!(fd.relationship.is_some());
+        assert_eq!(fd.relationship.unwrap().collection, "users");
+    }
+
+    #[test]
+    fn builds_field_definition_with_has_many() {
+        let fd = FieldDefinitionBuilder::new("tags", FieldType::Select)
+            .has_many(true)
+            .options(vec![
+                SelectOption::new(LocalizedString::Plain("A".into()), "a"),
+                SelectOption::new(LocalizedString::Plain("B".into()), "b"),
+            ])
+            .build();
+        assert!(fd.has_many);
+        assert_eq!(fd.options.len(), 2);
+    }
+}

@@ -3,15 +3,13 @@
 use std::collections::HashMap;
 
 use axum::{Extension, response::Response};
-use serde_json::Value;
 use tokio::task;
 use tracing::error;
 
 use crate::{
     admin::AdminState,
     core::{
-        auth::AuthUser,
-        collection::CollectionDefinition,
+        AuthUser, CollectionDefinition, DocumentFields,
         upload::{
             CleanupGuard, QueuedConversion, UploadedFile, inject_upload_metadata, process_upload,
         },
@@ -25,7 +23,7 @@ use super::{render_edit_upload_error, render_upload_error};
 pub(in crate::admin::handlers::collections) struct UploadResult {
     pub queued_conversions: Vec<QueuedConversion>,
     pub guard: CleanupGuard,
-    pub old_doc_fields: Option<HashMap<String, Value>>,
+    pub old_doc_fields: Option<DocumentFields>,
 }
 
 /// Parameters for upload processing.
@@ -35,10 +33,10 @@ pub(in crate::admin::handlers::collections) struct UploadParams<'a> {
     pub slug: &'a str,
     pub doc_id: Option<&'a str>,
     pub locale_ctx: Option<&'a LocaleContext>,
-    pub auth_user: &'a Option<Extension<AuthUser>>,
+    pub auth_user: Option<&'a Extension<AuthUser>>,
 }
 
-/// Process a file upload in a blocking task, injecting metadata into form_data.
+/// Process a file upload in a blocking task, injecting metadata into `form_data`.
 ///
 /// For updates (`doc_id = Some`), also loads the old document's fields so the
 /// caller can clean up old files after a successful write. For creates (`doc_id = None`),
@@ -71,7 +69,7 @@ pub(in crate::admin::handlers::collections) async fn process_collection_upload(
     let global_max = p.state.config.upload.max_file_size;
 
     let result = task::spawn_blocking(move || {
-        process_upload(file, &upload_config, storage, &slug_owned, global_max)
+        process_upload(&file, &upload_config, &storage, &slug_owned, global_max)
     })
     .await;
 
@@ -116,7 +114,7 @@ fn render_error(
     def: &CollectionDefinition,
     form_data: &HashMap<String, String>,
     doc_id: Option<&str>,
-    auth_user: &Option<Extension<AuthUser>>,
+    auth_user: Option<&Extension<AuthUser>>,
     err_msg: &str,
 ) -> Response {
     if let Some(id) = doc_id {

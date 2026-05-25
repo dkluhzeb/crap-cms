@@ -1,13 +1,67 @@
-//! `make hook` — generate hook Lua files.
+//! `make hook` -- generate hook Lua files.
 
 use std::{fs, path::Path};
 
 use anyhow::{Context as _, Result, bail};
-use serde_json::json;
+use serde::Serialize;
 
-use crate::{cli, scaffold::render::render, typegen::to_pascal_case};
+use crate::{
+    cli,
+    scaffold::{guards::refuse_file_overwrite, paths, render::render},
+};
 
-// ── Types ────────────────────────────────────────────────────────────────
+/// Handlebars context for the `hook_collection` template.
+#[derive(Serialize)]
+struct CollectionHookContext<'a> {
+    position: &'a str,
+    collection: &'a str,
+    /// Full factory-call prefix up to the function literal, e.g.
+    /// `crap.collections.posts.hook(` (typed),
+    /// `crap.globals.settings.hook(` (global typed), or
+    /// `crap.any.collection_hook(` (generic, used for
+    /// `before_delete`/`after_delete`/`before_broadcast` where the
+    /// runtime ships a `crap.HookContext` regardless of collection).
+    factory_expr: String,
+}
+
+/// Handlebars context for the `hook_field` template.
+#[derive(Serialize)]
+struct FieldHookContext<'a> {
+    position: &'a str,
+    collection: &'a str,
+    field: &'a str,
+    /// Factory prefix — `crap.collections.posts.field_hook("title", `
+    /// when the field is known (narrows `value` per field) or
+    /// `crap.collections.posts.field_hook(` for the any-field form.
+    factory_expr: String,
+}
+
+/// Handlebars context for the `hook_access` template.
+#[derive(Serialize)]
+struct AccessHookContext<'a> {
+    position: &'a str,
+    collection: &'a str,
+}
+
+/// Handlebars context for the `hook_condition_boolean` template.
+#[derive(Serialize)]
+struct ConditionBooleanContext<'a> {
+    collection: &'a str,
+    field_name: &'a str,
+    /// `crap.collections.<slug>.condition(` /
+    /// `crap.globals.<slug>.condition(`.
+    factory_expr: String,
+}
+
+/// Handlebars context for the `hook_condition_table` template.
+#[derive(Serialize)]
+struct ConditionTableContext<'a> {
+    collection: &'a str,
+    factory_expr: String,
+    body: String,
+}
+
+// == Types ================================================================
 
 /// Hook type for the `make hook` command.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -20,6 +74,7 @@ pub enum HookType {
 
 impl HookType {
     /// Parse from string (CLI input).
+    #[must_use]
     pub fn from_name(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "collection" => Some(Self::Collection),
@@ -31,6 +86,7 @@ impl HookType {
     }
 
     /// Valid lifecycle positions for this hook type.
+    #[must_use]
     pub fn valid_positions(&self) -> &'static [&'static str] {
         match self {
             Self::Collection => &[
@@ -55,6 +111,7 @@ impl HookType {
     }
 
     /// Human-readable label.
+    #[must_use]
     pub fn label(&self) -> &'static str {
         match self {
             Self::Collection => "collection",
@@ -65,7 +122,7 @@ impl HookType {
     }
 }
 
-/// Options for `make_hook()`. Fully resolved — no prompts.
+/// Options for `make_hook()`. Fully resolved -- no prompts.
 pub struct MakeHookOptions<'a> {
     pub config_dir: &'a Path,
     pub name: &'a str,
@@ -88,25 +145,20 @@ pub struct ConditionFieldInfo {
     pub select_options: Vec<String>,
 }
 
-// ── Template rendering ───────────────────────────────────────────────────
+// == Template rendering ===================================================
 
-/// Resolve the typed context annotation for collection/field hooks.
-fn hook_context_type(collection: &str, is_global: bool, prefix: &str) -> String {
+/// Build the factory-call prefix for a per-collection / per-global
+/// typing helper — e.g. `crap.collections.posts.hook(` or
+/// `crap.globals.site_settings.condition(`. The `method` is the
+/// accessor method name (`hook`, `field_hook`, `condition`, …) and
+/// `is_global` switches between the `crap.collections` and
+/// `crap.globals` namespaces. The result is a string that, when
+/// followed by `function(...)`, opens the factory wrapper.
+fn factory_expr(collection: &str, is_global: bool, method: &str) -> String {
     if is_global {
-        format!("crap.{prefix}.global_{collection}")
+        format!("crap.globals.{collection}.{method}(")
     } else {
-        format!("crap.{prefix}.{}", to_pascal_case(collection))
-    }
-}
-
-/// Return the typed data annotation for condition hooks.
-fn condition_data_type(collection: &str, is_global: bool) -> String {
-    let pascal = to_pascal_case(collection);
-
-    if is_global {
-        format!("crap.global_data.{pascal}")
-    } else {
-        format!("crap.data.{pascal}")
+        format!("crap.collections.{collection}.{method}(")
     }
 }
 
@@ -123,37 +175,56 @@ fn render_hook_lua(opts: &MakeHookOptions) -> Result<String> {
 
 /// Render a collection hook.
 fn render_collection_hook(opts: &MakeHookOptions) -> Result<String> {
+    // `before_delete` / `after_delete` / `before_broadcast` receive a
+    // generic `crap.HookContext` because the runtime doesn't know which
+    // collection's typed shape applies (delete carries only `{ id =
+    // "..." }`; broadcast may run cross-collection). For those use
+    // the generic `crap.any.collection_hook` factory; otherwise the
+    // per-collection accessor narrows `ctx` per collection.
     let is_generic = matches!(
         opts.position,
         "before_delete" | "after_delete" | "before_broadcast"
     );
-
-    let context_type = if is_generic {
-        "crap.HookContext".to_string()
+    let factory_expr = if is_generic {
+        "crap.any.collection_hook(".to_string()
     } else {
-        hook_context_type(opts.collection, opts.is_global, "hook")
+        factory_expr(opts.collection, opts.is_global, "hook")
     };
 
     render(
         "hook_collection",
-        &json!({
-            "position": opts.position,
-            "collection": opts.collection,
-            "context_type": context_type,
-        }),
+        &CollectionHookContext {
+            position: opts.position,
+            collection: opts.collection,
+            factory_expr,
+        },
     )
 }
 
 /// Render a field hook.
 fn render_field_hook(opts: &MakeHookOptions) -> Result<String> {
+    // Two factory shapes:
+    //   - field known →
+    //     `crap.collections.posts.field_hook("title", ` — narrows
+    //     `value` to the field's declared type via the per-field
+    //     overload.
+    //   - field unknown (cross-field within a collection) →
+    //     `crap.collections.posts.field_hook(` — single-arg form,
+    //     `value` typed as `any`, `ctx` still typed per-collection.
+    let base = factory_expr(opts.collection, opts.is_global, "field_hook");
+    let expr = match opts.field {
+        Some(name) => format!("{base}\"{name}\", "),
+        None => base,
+    };
+
     render(
         "hook_field",
-        &json!({
-            "position": opts.position,
-            "collection": opts.collection,
-            "field": opts.field.unwrap_or("?"),
-            "context_type": hook_context_type(opts.collection, opts.is_global, "field_hook"),
-        }),
+        &FieldHookContext {
+            position: opts.position,
+            collection: opts.collection,
+            field: opts.field.unwrap_or("?"),
+            factory_expr: expr,
+        },
     )
 }
 
@@ -161,10 +232,10 @@ fn render_field_hook(opts: &MakeHookOptions) -> Result<String> {
 fn render_access_hook(opts: &MakeHookOptions) -> Result<String> {
     render(
         "hook_access",
-        &json!({
-            "position": opts.position,
-            "collection": opts.collection,
-        }),
+        &AccessHookContext {
+            position: opts.position,
+            collection: opts.collection,
+        },
     )
 }
 
@@ -173,16 +244,15 @@ fn render_condition_boolean(opts: &MakeHookOptions) -> Result<String> {
     let field_name = opts
         .condition_field
         .as_ref()
-        .map(|cf| cf.name.as_str())
-        .unwrap_or("field_name");
+        .map_or("field_name", |cf| cf.name.as_str());
 
     render(
         "hook_condition_boolean",
-        &json!({
-            "collection": opts.collection,
-            "field_name": field_name,
-            "data_type": condition_data_type(opts.collection, opts.is_global),
-        }),
+        &ConditionBooleanContext {
+            collection: opts.collection,
+            field_name,
+            factory_expr: factory_expr(opts.collection, opts.is_global, "condition"),
+        },
     )
 }
 
@@ -195,14 +265,11 @@ fn condition_table_body(cf: &ConditionFieldInfo) -> String {
                 cf.name, cf.select_options[0]
             )
         }
-        "checkbox" => format!(
-            r#"    return {{ field = "{}", is_truthy = true }}"#,
-            cf.name
-        ),
         "number" => format!(
             r#"    return {{ field = "{}", not_equals = "0" }}"#,
             cf.name
         ),
+        // "checkbox" and anything else fall back to the truthy form.
         _ => format!(
             r#"    return {{ field = "{}", is_truthy = true }}"#,
             cf.name
@@ -220,15 +287,15 @@ fn render_condition_table(opts: &MakeHookOptions) -> Result<String> {
 
     render(
         "hook_condition_table",
-        &json!({
-            "collection": opts.collection,
-            "data_type": condition_data_type(opts.collection, opts.is_global),
-            "body": body,
-        }),
+        &ConditionTableContext {
+            collection: opts.collection,
+            factory_expr: factory_expr(opts.collection, opts.is_global, "condition"),
+            body,
+        },
     )
 }
 
-// ── Validation ───────────────────────────────────────────────────────────
+// == Validation ===========================================================
 
 /// Validate all inputs before generating the hook file.
 fn validate_inputs(opts: &MakeHookOptions) -> Result<()> {
@@ -236,14 +303,14 @@ fn validate_inputs(opts: &MakeHookOptions) -> Result<()> {
 
     if opts.name.is_empty() || !opts.name.chars().all(|c| c.is_alphanumeric() || c == '_') {
         bail!(
-            "Invalid hook name '{}' — use alphanumeric characters and underscores only",
+            "Invalid hook name '{}' -- use alphanumeric characters and underscores only",
             opts.name
         );
     }
 
     if !opts.hook_type.valid_positions().contains(&opts.position) {
         bail!(
-            "Invalid position '{}' for {} hook — valid: {}",
+            "Invalid position '{}' for {} hook -- valid: {}",
             opts.position,
             opts.hook_type.label(),
             opts.hook_type.valid_positions().join(", ")
@@ -257,28 +324,28 @@ fn validate_inputs(opts: &MakeHookOptions) -> Result<()> {
     Ok(())
 }
 
-// ── Public entry point ───────────────────────────────────────────────────
+// == Public entry point ===================================================
 
 /// Generate a hook file at `<config_dir>/hooks/<collection>/<name>.lua`.
+///
+/// # Errors
+///
+/// Returns an error if any input is invalid, the file already exists without
+/// `--force`, or writing fails.
 pub fn make_hook(opts: &MakeHookOptions) -> Result<()> {
     validate_inputs(opts)?;
 
     let (hooks_dir, file_path) = if opts.hook_type == HookType::Access {
-        let dir = opts.config_dir.join("access");
+        let dir = paths::access_dir(opts.config_dir);
         (dir.clone(), dir.join(format!("{}.lua", opts.name)))
     } else {
-        let dir = opts.config_dir.join("hooks").join(opts.collection);
+        let dir = paths::collection_hooks_dir(opts.config_dir, opts.collection);
         (dir.clone(), dir.join(format!("{}.lua", opts.name)))
     };
 
     fs::create_dir_all(&hooks_dir).context("Failed to create hook subdirectory")?;
 
-    if file_path.exists() && !opts.force {
-        bail!(
-            "File '{}' already exists — use --force to overwrite",
-            file_path.display()
-        );
-    }
+    refuse_file_overwrite(&file_path, opts.force)?;
 
     let lua = render_hook_lua(opts)?;
 
@@ -314,8 +381,7 @@ fn integration_hint(opts: &MakeHookOptions, hook_ref: &str) -> String {
             opts.position, hook_ref
         ),
         HookType::Condition => format!(
-            "Add to your field definition:\n  admin = {{\n      condition = \"{}\",\n  }},",
-            hook_ref
+            "Add to your field definition:\n  admin = {{\n      condition = \"{hook_ref}\",\n  }},"
         ),
     }
 }
@@ -349,7 +415,7 @@ mod tests {
         }
     }
 
-    // ── HookType tests ──────────────────────────────────────────────────
+    // == HookType tests ==================================================
 
     #[test]
     fn hook_type_from_str() {
@@ -392,7 +458,7 @@ mod tests {
         assert!(HookType::Condition.valid_positions().contains(&"table"));
     }
 
-    // ── Validation ──────────────────────────────────────────────────────
+    // == Validation ======================================================
 
     #[test]
     fn invalid_collection_slug() {
@@ -470,7 +536,7 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("--field"));
     }
 
-    // ── Overwrite ───────────────────────────────────────────────────────
+    // == Overwrite =======================================================
 
     #[test]
     fn refuses_overwrite() {
@@ -520,7 +586,7 @@ mod tests {
         );
     }
 
-    // ── Collection hooks ────────────────────────────────────────────────
+    // == Collection hooks ================================================
 
     #[test]
     fn collection_hook() {
@@ -537,9 +603,12 @@ mod tests {
         .unwrap();
         let content = fs::read_to_string(tmp.path().join("hooks/posts/auto_slug.lua")).unwrap();
         assert!(content.contains("before_change hook for posts"));
-        assert!(content.contains("crap.hook.Posts"));
+        assert!(content.contains("crap.collections.posts.hook("));
+        assert!(!content.contains("crap.any.collection_hook"));
         assert!(!content.contains("crap.HookContext"));
-        assert!(content.contains("return function(context)"));
+        // Factory wraps the function literal — the open is on the same
+        // line as `return crap.collections.posts.hook(`.
+        assert!(content.contains("function(context)"));
     }
 
     #[test]
@@ -556,7 +625,7 @@ mod tests {
         ))
         .unwrap();
         let content = fs::read_to_string(tmp.path().join("hooks/blog_posts/validate.lua")).unwrap();
-        assert!(content.contains("crap.hook.BlogPosts"));
+        assert!(content.contains("crap.collections.blog_posts.hook("));
     }
 
     #[test]
@@ -575,7 +644,7 @@ mod tests {
         make_hook(&opts).unwrap();
         let content =
             fs::read_to_string(tmp.path().join("hooks/site_settings/on_change.lua")).unwrap();
-        assert!(content.contains("crap.hook.global_site_settings"));
+        assert!(content.contains("crap.globals.site_settings.hook("));
     }
 
     #[test]
@@ -592,8 +661,8 @@ mod tests {
         ))
         .unwrap();
         let content = fs::read_to_string(tmp.path().join("hooks/posts/cleanup.lua")).unwrap();
-        assert!(content.contains("crap.HookContext"));
-        assert!(!content.contains("crap.hook.Posts"));
+        assert!(content.contains("crap.any.collection_hook("));
+        assert!(!content.contains("crap.collections.posts.hook("));
     }
 
     #[test]
@@ -610,7 +679,7 @@ mod tests {
         ))
         .unwrap();
         let content = fs::read_to_string(tmp.path().join("hooks/posts/notify.lua")).unwrap();
-        assert!(content.contains("crap.HookContext"));
+        assert!(content.contains("crap.any.collection_hook("));
     }
 
     #[test]
@@ -627,7 +696,7 @@ mod tests {
         ))
         .unwrap();
         let content = fs::read_to_string(tmp.path().join("hooks/posts/filter_event.lua")).unwrap();
-        assert!(content.contains("crap.HookContext"));
+        assert!(content.contains("crap.any.collection_hook("));
     }
 
     #[test]
@@ -644,10 +713,10 @@ mod tests {
         ))
         .unwrap();
         let content = fs::read_to_string(tmp.path().join("hooks/posts/filter.lua")).unwrap();
-        assert!(content.contains("crap.hook.Posts"));
+        assert!(content.contains("crap.collections.posts.hook("));
     }
 
-    // ── Field hooks ─────────────────────────────────────────────────────
+    // == Field hooks =====================================================
 
     #[test]
     fn field_hook() {
@@ -664,8 +733,11 @@ mod tests {
         .unwrap();
         let content = fs::read_to_string(tmp.path().join("hooks/posts/normalize.lua")).unwrap();
         assert!(content.contains("before_validate field hook for posts.title"));
-        assert!(content.contains("crap.field_hook.Posts"));
-        assert!(content.contains("return function(value, context)"));
+        assert!(content.contains("crap.collections.posts.field_hook(\"title\", "));
+        assert!(
+            content.contains("return function(value, context)")
+                || content.contains(", function(value, context)")
+        );
     }
 
     #[test]
@@ -684,10 +756,10 @@ mod tests {
         make_hook(&opts).unwrap();
         let content =
             fs::read_to_string(tmp.path().join("hooks/site_settings/sanitize.lua")).unwrap();
-        assert!(content.contains("crap.field_hook.global_site_settings"));
+        assert!(content.contains("crap.globals.site_settings.field_hook(\"tagline\", "));
     }
 
-    // ── Access hooks ────────────────────────────────────────────────────
+    // == Access hooks ====================================================
 
     #[test]
     fn access_hook() {
@@ -706,10 +778,10 @@ mod tests {
         assert!(file_path.exists());
         let content = fs::read_to_string(&file_path).unwrap();
         assert!(content.contains("read access control for posts"));
-        assert!(content.contains("crap.AccessContext"));
+        assert!(content.contains("crap.any.access("));
     }
 
-    // ── Condition hooks ─────────────────────────────────────────────────
+    // == Condition hooks =================================================
 
     #[test]
     fn condition_generic() {
@@ -726,7 +798,7 @@ mod tests {
         .unwrap();
         let content = fs::read_to_string(tmp.path().join("hooks/posts/show_url.lua")).unwrap();
         assert!(content.contains("Display condition for posts (client-evaluated)"));
-        assert!(content.contains("@param data crap.data.Posts"));
+        assert!(content.contains("crap.collections.posts.condition("));
         assert!(content.contains("field_name"));
     }
 
@@ -798,7 +870,7 @@ mod tests {
         make_hook(&opts).unwrap();
         let content = fs::read_to_string(tmp.path().join("hooks/posts/show_premium.lua")).unwrap();
         assert!(content.contains("Display condition for posts (server-evaluated)"));
-        assert!(content.contains("@param data crap.data.Posts"));
+        assert!(content.contains("crap.collections.posts.condition("));
         assert!(content.contains("data.status"));
     }
 
@@ -835,6 +907,6 @@ mod tests {
         make_hook(&opts).unwrap();
         let content =
             fs::read_to_string(tmp.path().join("hooks/site_settings/show_if.lua")).unwrap();
-        assert!(content.contains("@param data crap.global_data.SiteSettings"));
+        assert!(content.contains("crap.globals.site_settings.condition("));
     }
 }

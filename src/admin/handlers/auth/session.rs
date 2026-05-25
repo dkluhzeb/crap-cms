@@ -5,6 +5,22 @@ use tracing::warn;
 
 use crate::{admin::AdminState, config::SessionCookieSameSite};
 
+/// Session JWT cookie name.
+pub(in crate::admin) const SESSION_COOKIE: &str = "crap_session";
+
+/// Visible session-expiry companion cookie name (read by the JS layer to
+/// drive proactive refresh).
+pub(in crate::admin) const SESSION_EXP_COOKIE: &str = "crap_session_exp";
+
+/// MFA pending JWT cookie name.
+pub(in crate::admin) const MFA_PENDING_COOKIE: &str = "crap_mfa_pending";
+
+/// CSRF token cookie name.
+pub(in crate::admin) const CSRF_COOKIE: &str = "crap_csrf";
+
+/// Per-user editor locale cookie name.
+pub(in crate::admin) const EDITOR_LOCALE_COOKIE: &str = "crap_editor_locale";
+
 /// MFA pending cookie expiry in seconds (5 minutes).
 const MFA_PENDING_EXPIRY: u64 = 300;
 
@@ -47,7 +63,7 @@ pub(in crate::admin::handlers) struct CookieBuilder<'a> {
     same_site: &'static str,
 }
 
-impl<'a> CookieBuilder<'a> {
+impl CookieBuilder<'_> {
     pub fn max_age(mut self, seconds: u64) -> Self {
         self.max_age = seconds;
         self
@@ -82,7 +98,7 @@ impl<'a> CookieBuilder<'a> {
 /// Resolve the configured `SameSite` attribute for the session cookie, honoring the
 /// `[auth] session_cookie_samesite` config key. `None` is reserved and falls back to
 /// `Lax` (see [`SessionCookieSameSite`] docs).
-pub(in crate::admin::handlers) fn session_same_site(state: &AdminState) -> &'static str {
+pub(in crate::admin) fn session_same_site(state: &AdminState) -> &'static str {
     if state.config.auth.session_cookie_samesite == SessionCookieSameSite::None {
         warn!(
             "[auth] session_cookie_samesite = \"none\" is reserved for future use; \
@@ -106,12 +122,12 @@ pub(in crate::admin::handlers) fn session_cookies(
     same_site: &'static str,
 ) -> Vec<String> {
     vec![
-        Cookie::builder("crap_session", token)
+        Cookie::builder(SESSION_COOKIE, token)
             .max_age(expiry)
             .same_site(same_site)
             .build(dev_mode)
             .to_string(),
-        Cookie::builder("crap_session_exp", &exp.to_string())
+        Cookie::builder(SESSION_EXP_COOKIE, &exp.to_string())
             .max_age(expiry)
             .http_only(false)
             .same_site(same_site)
@@ -122,7 +138,7 @@ pub(in crate::admin::handlers) fn session_cookies(
 
 /// Build a `Set-Cookie` header value for the MFA pending token.
 pub(in crate::admin::handlers) fn mfa_pending_cookie(token: &str, dev_mode: bool) -> String {
-    Cookie::builder("crap_mfa_pending", token)
+    Cookie::builder(MFA_PENDING_COOKIE, token)
         .max_age(MFA_PENDING_EXPIRY)
         .build(dev_mode)
         .to_string()
@@ -130,13 +146,13 @@ pub(in crate::admin::handlers) fn mfa_pending_cookie(token: &str, dev_mode: bool
 
 /// Build a `Set-Cookie` header value that clears the MFA pending cookie.
 pub(in crate::admin::handlers) fn clear_mfa_pending_cookie(dev_mode: bool) -> String {
-    Cookie::builder("crap_mfa_pending", "")
+    Cookie::builder(MFA_PENDING_COOKIE, "")
         .build(dev_mode)
         .to_string()
 }
 
 /// Append `Set-Cookie` headers to an existing response.
-pub(in crate::admin::handlers) fn append_cookies(response: &mut Response, cookies: &[String]) {
+pub(in crate::admin) fn append_cookies(response: &mut Response, cookies: &[String]) {
     for cookie in cookies {
         response.headers_mut().append(
             SET_COOKIE,
@@ -149,16 +165,16 @@ pub(in crate::admin::handlers) fn append_cookies(response: &mut Response, cookie
 ///
 /// `same_site` must match the attribute used when the cookie was set — browsers treat
 /// a differing `SameSite` as a different cookie and the clear would silently no-op.
-pub(in crate::admin::handlers) fn clear_session_cookies(
+pub(in crate::admin) fn clear_session_cookies(
     dev_mode: bool,
     same_site: &'static str,
 ) -> Vec<String> {
     vec![
-        Cookie::builder("crap_session", "")
+        Cookie::builder(SESSION_COOKIE, "")
             .same_site(same_site)
             .build(dev_mode)
             .to_string(),
-        Cookie::builder("crap_session_exp", "")
+        Cookie::builder(SESSION_EXP_COOKIE, "")
             .http_only(false)
             .same_site(same_site)
             .build(dev_mode)
@@ -167,6 +183,20 @@ pub(in crate::admin::handlers) fn clear_session_cookies(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::*;
 

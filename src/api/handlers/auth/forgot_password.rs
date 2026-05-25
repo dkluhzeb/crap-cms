@@ -1,14 +1,17 @@
 //! Forgot password handler — generate reset token and queue email.
 
-use serde_json::json;
 use tokio::task;
-use tonic::{Request, Response, Status};
+use tonic::{Request, Response};
 use tracing::error;
 
+use crate::core::collection::Auth;
 use crate::{
     api::{content, handlers::ContentService},
     config::{EmailConfig, ServerConfig},
-    core::{CollectionDefinition, email, email::EmailRenderer},
+    core::{
+        CollectionDefinition, email,
+        email::{EmailRenderer, PasswordResetEmailContext},
+    },
     db::DbPool,
     service::{ServiceContext, auth::generate_reset_token},
 };
@@ -17,39 +20,35 @@ use crate::{
 impl ContentService {
     /// Initiate a password reset flow -- generates a token and sends a reset email.
     /// Always returns success to prevent leaking user existence.
-    pub(in crate::api::handlers) async fn forgot_password_impl(
+    pub(in crate::api::handlers) fn forgot_password_impl(
         &self,
         request: Request<content::ForgotPasswordRequest>,
-    ) -> Result<Response<content::ForgotPasswordResponse>, Status> {
+    ) -> Response<content::ForgotPasswordResponse> {
         let ip = request
             .remote_addr()
-            .map(|a| a.ip().to_string())
-            .unwrap_or_else(|| "unknown".to_string());
+            .map_or_else(|| "unknown".to_string(), |a| a.ip().to_string());
         let req = request.into_inner();
+
+        let ok_response = Response::new(content::ForgotPasswordResponse { success: true });
 
         if self.forgot_password_limiter.is_blocked(&req.email)
             || self.ip_forgot_password_limiter.is_blocked(&ip)
         {
-            return Ok(Response::new(content::ForgotPasswordResponse {
-                success: true,
-            }));
+            return ok_response;
         }
 
         self.forgot_password_limiter.record_failure(&req.email);
         self.ip_forgot_password_limiter.record_failure(&ip);
 
-        let ok_response = Response::new(content::ForgotPasswordResponse { success: true });
-
-        let def = match self.get_collection_def(&req.collection) {
-            Ok(d) => d,
-            Err(_) => return Ok(ok_response),
+        let Ok(def) = self.get_collection_def(&req.collection) else {
+            return ok_response;
         };
 
         if !def.is_auth_collection()
-            || !def.auth.as_ref().is_some_and(|a| a.forgot_password)
-            || def.auth.as_ref().is_some_and(|a| a.disable_local)
+            || !def.auth.as_ref().is_some_and(Auth::forgot_password_enabled)
+            || !def.auth.as_ref().is_some_and(Auth::password_login_enabled)
         {
-            return Ok(ok_response);
+            return ok_response;
         }
 
         let pool = self.pool.clone();
@@ -60,6 +59,7 @@ impl ContentService {
         let email_renderer = self.email_renderer.clone();
         let server_config = self.server_config.clone();
         let reset_expiry = self.reset_token_expiry;
+        let email_max_attempts = self.email_max_attempts;
 
         task::spawn_blocking(move || {
             send_reset_email(&ResetEmailCtx {
@@ -71,12 +71,11 @@ impl ContentService {
                 email_renderer: &email_renderer,
                 server_config: &server_config,
                 reset_expiry,
+                email_max_attempts,
             });
         });
 
-        Ok(Response::new(content::ForgotPasswordResponse {
-            success: true,
-        }))
+        Response::new(content::ForgotPasswordResponse { success: true })
     }
 }
 
@@ -90,6 +89,7 @@ struct ResetEmailCtx<'a> {
     email_renderer: &'a EmailRenderer,
     server_config: &'a ServerConfig,
     reset_expiry: u64,
+    email_max_attempts: u32,
 }
 
 /// Generate a reset token, store it, and queue the reset email.
@@ -127,15 +127,15 @@ fn send_reset_email(ctx: &ResetEmailCtx) {
         }
     });
 
-    let reset_url = format!("{}/admin/reset-password?token={}", base_url, token);
+    let reset_url = format!("{base_url}/admin/reset-password?token={token}");
 
     let html = match ctx.email_renderer.render(
         "password_reset",
-        &json!({
-            "reset_url": reset_url,
-            "expiry_minutes": ctx.reset_expiry / 60,
-            "from_name": ctx.email_config.from_name,
-        }),
+        &PasswordResetEmailContext {
+            reset_url: &reset_url,
+            expiry_minutes: ctx.reset_expiry / 60,
+            from_name: &ctx.email_config.from_name,
+        },
     ) {
         Ok(h) => h,
         Err(e) => {
@@ -146,12 +146,13 @@ fn send_reset_email(ctx: &ResetEmailCtx) {
 
     if let Err(e) = email::queue_email(
         &conn,
-        ctx.user_email,
-        "Reset your password",
-        &html,
-        None,
-        ctx.email_config.queue_retries + 1,
-        &ctx.email_config.queue_name,
+        &email::EmailJobData {
+            to: ctx.user_email.to_string(),
+            subject: "Reset your password".to_string(),
+            html,
+            text: None,
+        },
+        ctx.email_max_attempts,
     ) {
         error!("Failed to queue reset email: {}", e);
     }

@@ -1,7 +1,8 @@
---- Row label function for project content blocks.
----@param data table<string, any>
----@return string
-return function(data)
+--- Row label function for projects content blocks. Lives on the
+--- per-collection accessor for discoverability — the row table
+--- shape is generic (`table<string, any>`) because content blocks
+--- can hold any block type.
+return crap.collections.projects.row_label(function(data)
   local block_type = data._block_type or "block"
   local label = data.heading or data.title or data.caption or ""
 
@@ -15,4 +16,4 @@ return function(data)
   end
 
   return string.format("%s: %s", block_type, label)
-end
+end)

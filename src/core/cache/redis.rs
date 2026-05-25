@@ -6,7 +6,7 @@
 use std::sync::Mutex;
 
 use anyhow::{Context, Result, anyhow};
-use redis::{Client, Commands};
+use redis::{Client, Commands, Connection};
 
 use crate::core::cache::CacheBackend;
 
@@ -20,7 +20,7 @@ use crate::core::cache::CacheBackend;
 /// the next operation.
 pub struct RedisCache {
     client: Client,
-    conn: Mutex<redis::Connection>,
+    conn: Mutex<Connection>,
     prefix: String,
     ttl_secs: u64,
 }
@@ -65,7 +65,7 @@ impl RedisCache {
         let mut guard = self
             .conn
             .lock()
-            .map_err(|e| anyhow!("Redis mutex poisoned: {}", e))?;
+            .map_err(|e| anyhow!("Redis mutex poisoned: {e}"))?;
 
         // Try the operation first
         match f(&mut guard) {

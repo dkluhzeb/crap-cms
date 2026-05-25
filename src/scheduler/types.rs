@@ -1,105 +1,54 @@
-//! Scheduler types — parameters, builder, and internal config structs.
+//! Scheduler types -- parameters and internal config structs.
 
-use crate::config::LocaleConfig;
+use std::{collections::HashMap, sync::Arc};
+
+use tokio_util::sync::CancellationToken;
+
 use crate::{
-    config::JobsConfig,
-    core::{SharedRegistry, email::SharedEmailProvider, upload::SharedStorage},
+    config::{JobsConfig, LocaleConfig},
+    core::{Registry, SharedEmailProvider, SharedStorage},
     db::DbPool,
     hooks::HookRunner,
 };
-use tokio_util::sync::CancellationToken;
 
-/// Parameters for starting the scheduler.
+/// Parameters for starting the scheduler. Constructed via plain
+/// struct literal at the call site -- both callers (`crap-cms work`
+/// and `serve`'s startup) supply every field, so a builder added no
+/// real DX over the literal form.
+///
+/// Email-job timeout / retries / concurrency are NOT here — they flow
+/// through `JobsConfig::queues["email"]` (resolved by
+/// `apply_queue_defaults` at load time, same path as image jobs).
 pub struct SchedulerParams {
-    pub(super) pool: DbPool,
-    pub(super) hook_runner: HookRunner,
-    pub(super) registry: SharedRegistry,
-    pub(super) config: JobsConfig,
-    pub(super) shutdown: CancellationToken,
-    pub(super) storage: SharedStorage,
-    pub(super) locale_config: LocaleConfig,
-    pub(super) email_provider: Option<SharedEmailProvider>,
-    pub(super) email_queue_timeout: u64,
-    pub(super) email_queue_concurrency: u32,
+    pub pool: DbPool,
+    pub hook_runner: HookRunner,
+    pub registry: Arc<Registry>,
+    pub config: JobsConfig,
+    pub shutdown: CancellationToken,
+    pub storage: SharedStorage,
+    pub locale_config: LocaleConfig,
+    pub email_provider: Option<SharedEmailProvider>,
 }
 
-/// Builder for [`SchedulerParams`].
-pub struct SchedulerParamsBuilder {
-    pool: DbPool,
-    hook_runner: HookRunner,
-    registry: SharedRegistry,
-    config: JobsConfig,
-    shutdown: CancellationToken,
-    storage: SharedStorage,
-    locale_config: LocaleConfig,
-    email_provider: Option<SharedEmailProvider>,
-    email_queue_timeout: u64,
-    email_queue_concurrency: u32,
-}
-
-impl SchedulerParamsBuilder {
-    /// Create a new builder with required parameters.
-    pub fn new(
-        pool: DbPool,
-        hook_runner: HookRunner,
-        registry: SharedRegistry,
-        config: JobsConfig,
-        shutdown: CancellationToken,
-        storage: SharedStorage,
-        locale_config: LocaleConfig,
-    ) -> Self {
-        Self {
-            pool,
-            hook_runner,
-            registry,
-            config,
-            shutdown,
-            storage,
-            locale_config,
-            email_provider: None,
-            email_queue_timeout: 30,
-            email_queue_concurrency: 5,
-        }
-    }
-
-    /// Set the email provider for system email jobs.
-    pub fn email_provider(mut self, provider: SharedEmailProvider) -> Self {
-        self.email_provider = Some(provider);
-        self
-    }
-
-    /// Set the timeout for email queue processing.
-    pub fn email_queue_timeout(mut self, timeout: u64) -> Self {
-        self.email_queue_timeout = timeout;
-        self
-    }
-
-    /// Set the concurrency limit for email queue processing.
-    pub fn email_queue_concurrency(mut self, concurrency: u32) -> Self {
-        self.email_queue_concurrency = concurrency;
-        self
-    }
-
-    /// Build the scheduler parameters.
-    pub fn build(self) -> SchedulerParams {
-        SchedulerParams {
-            pool: self.pool,
-            hook_runner: self.hook_runner,
-            registry: self.registry,
-            config: self.config,
-            shutdown: self.shutdown,
-            storage: self.storage,
-            locale_config: self.locale_config,
-            email_provider: self.email_provider,
-            email_queue_timeout: self.email_queue_timeout,
-            email_queue_concurrency: self.email_queue_concurrency,
-        }
-    }
-}
-
-/// Email queue config passed to the poll loop.
-pub(super) struct EmailQueueConfig {
-    pub provider: Option<SharedEmailProvider>,
-    pub timeout: u64,
-    pub concurrency: u32,
+/// Per-tick system-job config — the parts the poll loop reads from
+/// `JobsConfig` but doesn't carry on `JobDefinition`. Currently:
+/// image conversion concurrency + priority-decay aging. Future system
+/// jobs (email retention sweeps etc.) land here.
+pub(super) struct SystemJobConfig {
+    pub priority_decay: u64,
+    /// Per-queue aggregate concurrency caps, sourced from
+    /// `[jobs.queues.<name>] concurrency = N` plus framework defaults
+    /// applied by `JobsConfig::apply_queue_defaults` (currently just
+    /// `images = { concurrency = 2 }`). Operator overrides win;
+    /// queues without entries are unconstrained beyond the global
+    /// `max_concurrent` and per-slug caps.
+    pub queue_concurrency: HashMap<String, u32>,
+    /// Per-queue timeouts in seconds, sourced from
+    /// `[jobs.queues.<name>] timeout = "..."`. Used by
+    /// `resolve_job_def` for system jobs that have no
+    /// `JobDefinition::timeout`; user jobs keep their declared
+    /// per-job timeout. Queues without an entry fall back to a
+    /// hardcoded default in the scheduler.
+    pub queue_timeouts: HashMap<String, u64>,
+    pub storage: SharedStorage,
 }

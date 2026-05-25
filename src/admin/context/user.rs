@@ -3,10 +3,11 @@
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::core::auth::Claims;
+use crate::{core::Claims, typegen::LuaAnnotation};
 
 /// Identifying data about the currently authenticated user.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.user")]
 pub struct UserContext {
     pub email: String,
     pub id: String,

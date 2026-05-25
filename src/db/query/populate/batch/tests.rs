@@ -2,10 +2,7 @@ use rusqlite::Connection;
 use serde_json::json;
 
 use crate::core::cache::NoneCache;
-use crate::core::{
-    Document, Registry,
-    field::{FieldType, RelationshipConfig},
-};
+use crate::core::{Document, FieldType, Registry, RelationshipConfig};
 use crate::db::query::populate::{
     PopulateContext, PopulateOpts, populate_relationships_batch,
     populate_relationships_batch_cached, test_helpers::*,

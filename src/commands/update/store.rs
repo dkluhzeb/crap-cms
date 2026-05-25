@@ -13,6 +13,8 @@
 //! the single atomic swap point for `crap-cms update use <version>`.
 
 use anyhow::{Context, Result, bail};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -26,34 +28,47 @@ pub struct Store {
 
 impl Store {
     /// The default store: `$XDG_DATA_HOME/crap-cms/` (or `~/.local/share/crap-cms/`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if neither `$XDG_DATA_HOME` nor `$HOME` is set.
     pub fn default_for_user() -> Result<Self> {
         let data_home = xdg_data_home().context("resolving $XDG_DATA_HOME / $HOME")?;
         Ok(Self::at(data_home.join("crap-cms")))
     }
 
     /// Build a store rooted at an explicit path (tests).
+    #[must_use]
     pub fn at(root: PathBuf) -> Self {
         Self { root }
     }
 
+    #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
     }
 
+    #[must_use]
     pub fn versions_dir(&self) -> PathBuf {
         self.root.join("versions")
     }
 
+    #[must_use]
     pub fn version_path(&self, version: &str) -> PathBuf {
         self.versions_dir().join(version).join(binary_filename())
     }
 
     /// Path of the `current` symlink.
+    #[must_use]
     pub fn current_link(&self) -> PathBuf {
         self.root.join("current")
     }
 
     /// List installed versions (directory names under `versions/`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reading the versions directory fails.
     pub fn installed(&self) -> Result<Vec<String>> {
         let dir = self.versions_dir();
         if !dir.exists() {
@@ -73,6 +88,7 @@ impl Store {
     }
 
     /// Return the version name currently pointed at by `current`, if any.
+    #[must_use]
     pub fn active_version(&self) -> Option<String> {
         let link = self.current_link();
         let target = fs::read_link(&link).ok()?;
@@ -85,6 +101,11 @@ impl Store {
     ///
     /// On success the file is executable. Moves rather than copies when the
     /// source is on the same filesystem, so callers can pass a tempfile path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if creating the destination directory, moving/copying
+    /// the binary, or setting executable permissions fails.
     pub fn install_binary(&self, version: &str, src_path: &Path) -> Result<PathBuf> {
         let dest_dir = self.versions_dir().join(version);
         fs::create_dir_all(&dest_dir)
@@ -111,6 +132,11 @@ impl Store {
     ///
     /// Uses symlink-then-rename so the swap is atomic: readers of `current`
     /// either see the old target or the new target, never a missing file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the target version isn't installed, or if any of
+    /// the filesystem operations (mkdir, symlink, rename) fails.
     pub fn switch_to(&self, version: &str) -> Result<()> {
         let target = self.version_path(version);
         if !target.exists() {
@@ -141,6 +167,11 @@ impl Store {
     }
 
     /// Remove a version from the store. Refuses if it is the active one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the version is currently active or if removing
+    /// the version directory fails.
     pub fn uninstall(&self, version: &str) -> Result<()> {
         if self.active_version().as_deref() == Some(version) {
             bail!(
@@ -156,6 +187,7 @@ impl Store {
     }
 
     /// Does the given path live inside this store's versions tree?
+    #[must_use]
     pub fn owns_path(&self, path: &Path) -> bool {
         let versions_canonical = self.versions_dir().canonicalize().ok();
         let path_canonical = path.canonicalize().ok();
@@ -179,7 +211,7 @@ fn xdg_data_home() -> Option<PathBuf> {
 }
 
 /// Binary filename inside a version directory (includes `.exe` on Windows).
-pub fn binary_filename() -> &'static str {
+pub(super) fn binary_filename() -> &'static str {
     if cfg!(windows) {
         "crap-cms.exe"
     } else {
@@ -199,7 +231,6 @@ fn make_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
 
 #[cfg(unix)]
 fn set_executable(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
     let mut perms = fs::metadata(path)?.permissions();
     perms.set_mode(0o755);
     fs::set_permissions(path, perms)?;

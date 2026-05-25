@@ -1,7 +1,7 @@
 <!--
   AUTO-GENERATED — do not edit by hand.
   Source of truth: typed page-context structs in `src/admin/context/page/`.
-  Regenerate with: `UPDATE_SCHEMA_DOC=1 cargo test template_context_doc_is_in_sync`
+  Regenerate with: `cargo xtask gen-template-doc`
 -->
 
 # Admin template context reference
@@ -17,16 +17,16 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 
 - **`crap`** ([CrapMeta](#crapmeta))
 - **`_locale`** (string)
-- **`available_locales`** (Vec<string>)
+- **`available_locales`** (Vec&lt;string&gt;)
 - **`title`** (string)
 - **`page`** ([PageMeta](#pagemeta))
-- **`error`** (Option<string>) _(optional)_ — Error key (e.g., `"error_invalid_credentials"`) — present after a failed login post.
-- **`email`** (Option<string>) _(optional)_ — Pre-fills the email field after a failed login.
-- **`collections`** (Vec<[AuthCollection](#authcollection)>)
+- **`error`** (Option&lt;string&gt;) _(optional)_ — Error key (e.g., `"error_invalid_credentials"`) — present after a failed login post.
+- **`email`** (Option&lt;string&gt;) _(optional)_ — Pre-fills the email field after a failed login.
+- **`collections`** (Vec&lt;[AuthCollection](#authcollection)&gt;)
 - **`show_collection_picker`** (boolean)
 - **`disable_local`** (boolean)
 - **`show_forgot_password`** (boolean)
-- **`success`** (Option<string>) _(optional)_ — Whitelisted success-message key shown after redirect from logout / email verification / password reset. Always emitted (as `null` when absent) to preserve the original `Option`-as-null contract.
+- **`success`** (Option&lt;string&gt;) _(optional)_ — Whitelisted success-message key shown after redirect from logout / email verification / password reset. Always emitted (as `null` when absent) to preserve the original `Option`-as-null contract.
 
 ## MFA challenge page
 
@@ -35,10 +35,10 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 
 - **`crap`** ([CrapMeta](#crapmeta))
 - **`_locale`** (string)
-- **`available_locales`** (Vec<string>)
+- **`available_locales`** (Vec&lt;string&gt;)
 - **`title`** (string)
 - **`page`** ([PageMeta](#pagemeta))
-- **`error`** (Option<string>) _(optional)_
+- **`error`** (Option&lt;string&gt;) _(optional)_
 
 ## Forgot password page
 
@@ -47,11 +47,11 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 
 - **`crap`** ([CrapMeta](#crapmeta))
 - **`_locale`** (string)
-- **`available_locales`** (Vec<string>)
+- **`available_locales`** (Vec&lt;string&gt;)
 - **`title`** (string)
 - **`page`** ([PageMeta](#pagemeta))
 - **`success`** (boolean)
-- **`collections`** (Vec<[AuthCollection](#authcollection)>)
+- **`collections`** (Vec&lt;[AuthCollection](#authcollection)&gt;)
 - **`show_collection_picker`** (boolean)
 
 ## Reset password page
@@ -61,11 +61,11 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 
 - **`crap`** ([CrapMeta](#crapmeta))
 - **`_locale`** (string)
-- **`available_locales`** (Vec<string>)
+- **`available_locales`** (Vec&lt;string&gt;)
 - **`title`** (string)
 - **`page`** ([PageMeta](#pagemeta))
-- **`token`** (Option<string>) _(optional)_ — Token from the URL — present only when valid. Absent when the link is bad / expired (in which case `error` is set instead).
-- **`error`** (Option<string>) _(optional)_
+- **`token`** (Option&lt;string&gt;) _(optional)_ — Token from the URL — present only when valid. Absent when the link is bad / expired (in which case `error` is set instead).
+- **`error`** (Option&lt;string&gt;) _(optional)_
 
 ## Error pages (403 / 404 / 500)
 
@@ -76,13 +76,13 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`nav`** ([NavData](#navdata))
 - **`user`** ([UserContext](#usercontext) \| null) _(optional)_
 - **`_locale`** (string) — Active UI translation locale.
-- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`available_locales`** (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).
 - **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
 - **`page`** ([PageMeta](#pagemeta))
-- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
-- **`has_editor_locales`** (Option<boolean>) _(optional)_
-- **`editor_locale`** (Option<string>) _(optional)_
-- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`breadcrumbs`** (Vec&lt;[Breadcrumb](#breadcrumb)&gt;) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option&lt;boolean&gt;) _(optional)_
+- **`editor_locale`** (Option&lt;string&gt;) _(optional)_
+- **`editor_locales`** (Option&lt;Vec&lt;[EditorLocaleOption](#editorlocaleoption)&gt;&gt;) _(optional)_
 - **`message`** (string) — User-facing error message body.
 
 ## Dashboard
@@ -94,15 +94,15 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`nav`** ([NavData](#navdata))
 - **`user`** ([UserContext](#usercontext) \| null) _(optional)_
 - **`_locale`** (string) — Active UI translation locale.
-- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`available_locales`** (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).
 - **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
 - **`page`** ([PageMeta](#pagemeta))
-- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
-- **`has_editor_locales`** (Option<boolean>) _(optional)_
-- **`editor_locale`** (Option<string>) _(optional)_
-- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
-- **`collection_cards`** (Vec<[CollectionCard](#collectioncard)>)
-- **`global_cards`** (Vec<[GlobalCard](#globalcard)>)
+- **`breadcrumbs`** (Vec&lt;[Breadcrumb](#breadcrumb)&gt;) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option&lt;boolean&gt;) _(optional)_
+- **`editor_locale`** (Option&lt;string&gt;) _(optional)_
+- **`editor_locales`** (Option&lt;Vec&lt;[EditorLocaleOption](#editorlocaleoption)&gt;&gt;) _(optional)_
+- **`collection_cards`** (Vec&lt;[CollectionCard](#collectioncard)&gt;)
+- **`global_cards`** (Vec&lt;[GlobalCard](#globalcard)&gt;)
 
 ## Collection list
 
@@ -113,14 +113,14 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`nav`** ([NavData](#navdata))
 - **`user`** ([UserContext](#usercontext) \| null) _(optional)_
 - **`_locale`** (string) — Active UI translation locale.
-- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`available_locales`** (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).
 - **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
 - **`page`** ([PageMeta](#pagemeta))
-- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
-- **`has_editor_locales`** (Option<boolean>) _(optional)_
-- **`editor_locale`** (Option<string>) _(optional)_
-- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
-- **`collections`** (Vec<[CollectionEntry](#collectionentry)>)
+- **`breadcrumbs`** (Vec&lt;[Breadcrumb](#breadcrumb)&gt;) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option&lt;boolean&gt;) _(optional)_
+- **`editor_locale`** (Option&lt;string&gt;) _(optional)_
+- **`editor_locales`** (Option&lt;Vec&lt;[EditorLocaleOption](#editorlocaleoption)&gt;&gt;) _(optional)_
+- **`collections`** (Vec&lt;[CollectionEntry](#collectionentry)&gt;)
 
 ## Collection items list
 
@@ -131,27 +131,28 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`nav`** ([NavData](#navdata))
 - **`user`** ([UserContext](#usercontext) \| null) _(optional)_
 - **`_locale`** (string) — Active UI translation locale.
-- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`available_locales`** (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).
 - **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
 - **`page`** ([PageMeta](#pagemeta))
-- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
-- **`has_editor_locales`** (Option<boolean>) _(optional)_
-- **`editor_locale`** (Option<string>) _(optional)_
-- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`breadcrumbs`** (Vec&lt;[Breadcrumb](#breadcrumb)&gt;) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option&lt;boolean&gt;) _(optional)_
+- **`editor_locale`** (Option&lt;string&gt;) _(optional)_
+- **`editor_locales`** (Option&lt;Vec&lt;[EditorLocaleOption](#editorlocaleoption)&gt;&gt;) _(optional)_
 - **`collection`** ([CollectionContext](#collectioncontext))
-- **`docs`** (Vec<any>)
+- **`perms`** ([CollectionPermissions](#collectionpermissions))
+- **`docs`** (Vec&lt;any&gt;)
 - **`pagination`** ([PaginationContext](#paginationcontext))
 - **`has_drafts`** (boolean)
 - **`has_soft_delete`** (boolean)
 - **`is_trash`** (boolean)
-- **`search`** (Option<string>) _(optional)_
-- **`sort`** (Option<string>) _(optional)_
-- **`table_columns`** (Vec<any>)
-- **`column_options`** (Vec<any>)
-- **`filter_fields`** (Vec<any>)
-- **`active_filters`** (Vec<any>)
+- **`search`** (Option&lt;string&gt;) _(optional)_
+- **`sort`** (Option&lt;string&gt;) _(optional)_
+- **`table_columns`** (Vec&lt;any&gt;)
+- **`column_options`** (Vec&lt;any&gt;)
+- **`filter_fields`** (Vec&lt;any&gt;)
+- **`active_filters`** (Vec&lt;any&gt;)
 - **`active_filter_count`** (integer)
-- **`title_sort_url`** (Option<string>) _(optional)_
+- **`title_sort_url`** (Option&lt;string&gt;) _(optional)_
 - **`title_sorted_asc`** (boolean)
 - **`title_sorted_desc`** (boolean)
 
@@ -164,21 +165,22 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`nav`** ([NavData](#navdata))
 - **`user`** ([UserContext](#usercontext) \| null) _(optional)_
 - **`_locale`** (string) — Active UI translation locale.
-- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`available_locales`** (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).
 - **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
 - **`page`** ([PageMeta](#pagemeta))
-- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
-- **`has_editor_locales`** (Option<boolean>) _(optional)_
-- **`editor_locale`** (Option<string>) _(optional)_
-- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`breadcrumbs`** (Vec&lt;[Breadcrumb](#breadcrumb)&gt;) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option&lt;boolean&gt;) _(optional)_
+- **`editor_locale`** (Option&lt;string&gt;) _(optional)_
+- **`editor_locales`** (Option&lt;Vec&lt;[EditorLocaleOption](#editorlocaleoption)&gt;&gt;) _(optional)_
 - **`collection`** ([CollectionContext](#collectioncontext))
+- **`perms`** ([CollectionPermissions](#collectionpermissions))
 - **`document`** ([DocumentRef](#documentref))
-- **`fields`** (Vec<[FieldContext](#fieldcontext)>)
-- **`sidebar_fields`** (Vec<[FieldContext](#fieldcontext)>)
+- **`fields`** (Vec&lt;[FieldContext](#fieldcontext)&gt;)
+- **`sidebar_fields`** (Vec&lt;[FieldContext](#fieldcontext)&gt;)
 - **`editing`** (boolean)
 - **`has_drafts`** (boolean)
 - **`has_versions`** (boolean)
-- **`versions`** (Vec<any>)
+- **`versions`** (Vec&lt;any&gt;)
 - **`has_more_versions`** (boolean)
 - **`restore_url_prefix`** (string)
 - **`versions_url`** (string)
@@ -186,7 +188,7 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`ref_count`** (integer)
 - **`has_locales`** (boolean) _(optional)_
 - **`current_locale`** (string) _(optional)_
-- **`locales`** (Vec<[LocaleTemplateOption](#localetemplateoption)>) _(optional)_
+- **`locales`** (Vec&lt;[LocaleTemplateOption](#localetemplateoption)&gt;) _(optional)_
 - **`upload`** ([UploadFormContext](#uploadformcontext) \| null) _(optional)_ — Upload preview block — present only on upload collections.
 
 ## Collection create form
@@ -198,21 +200,22 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`nav`** ([NavData](#navdata))
 - **`user`** ([UserContext](#usercontext) \| null) _(optional)_
 - **`_locale`** (string) — Active UI translation locale.
-- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`available_locales`** (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).
 - **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
 - **`page`** ([PageMeta](#pagemeta))
-- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
-- **`has_editor_locales`** (Option<boolean>) _(optional)_
-- **`editor_locale`** (Option<string>) _(optional)_
-- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`breadcrumbs`** (Vec&lt;[Breadcrumb](#breadcrumb)&gt;) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option&lt;boolean&gt;) _(optional)_
+- **`editor_locale`** (Option&lt;string&gt;) _(optional)_
+- **`editor_locales`** (Option&lt;Vec&lt;[EditorLocaleOption](#editorlocaleoption)&gt;&gt;) _(optional)_
 - **`collection`** ([CollectionContext](#collectioncontext))
-- **`fields`** (Vec<[FieldContext](#fieldcontext)>)
-- **`sidebar_fields`** (Vec<[FieldContext](#fieldcontext)>)
+- **`perms`** ([CollectionPermissions](#collectionpermissions))
+- **`fields`** (Vec&lt;[FieldContext](#fieldcontext)&gt;)
+- **`sidebar_fields`** (Vec&lt;[FieldContext](#fieldcontext)&gt;)
 - **`editing`** (boolean)
 - **`has_drafts`** (boolean)
 - **`has_locales`** (boolean) _(optional)_
 - **`current_locale`** (string) _(optional)_
-- **`locales`** (Vec<[LocaleTemplateOption](#localetemplateoption)>) _(optional)_
+- **`locales`** (Vec&lt;[LocaleTemplateOption](#localetemplateoption)&gt;) _(optional)_
 - **`upload`** ([UploadFormContext](#uploadformcontext) \| null) _(optional)_
 
 ## Collection form-error re-render
@@ -224,20 +227,21 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`nav`** ([NavData](#navdata))
 - **`user`** ([UserContext](#usercontext) \| null) _(optional)_
 - **`_locale`** (string) — Active UI translation locale.
-- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`available_locales`** (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).
 - **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
 - **`page`** ([PageMeta](#pagemeta))
-- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
-- **`has_editor_locales`** (Option<boolean>) _(optional)_
-- **`editor_locale`** (Option<string>) _(optional)_
-- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`breadcrumbs`** (Vec&lt;[Breadcrumb](#breadcrumb)&gt;) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option&lt;boolean&gt;) _(optional)_
+- **`editor_locale`** (Option&lt;string&gt;) _(optional)_
+- **`editor_locales`** (Option&lt;Vec&lt;[EditorLocaleOption](#editorlocaleoption)&gt;&gt;) _(optional)_
 - **`collection`** ([CollectionContext](#collectioncontext))
+- **`perms`** ([CollectionPermissions](#collectionpermissions))
 - **`document`** ([DocumentRef](#documentref) \| null) _(optional)_ — Document stub (with `id` only) on edit error; absent on create error.
-- **`fields`** (Vec<[FieldContext](#fieldcontext)>)
-- **`sidebar_fields`** (Vec<[FieldContext](#fieldcontext)>)
+- **`fields`** (Vec&lt;[FieldContext](#fieldcontext)&gt;)
+- **`sidebar_fields`** (Vec&lt;[FieldContext](#fieldcontext)&gt;)
 - **`editing`** (boolean)
 - **`has_drafts`** (boolean)
-- **`upload_hidden_fields`** (Option<Vec<any>>) _(optional)_ — Hidden upload fields preserved from the submitted form (edit-mode upload errors only, so the user keeps their pending file metadata).
+- **`upload_hidden_fields`** (Option&lt;Vec&lt;any&gt;&gt;) _(optional)_ — Hidden upload fields preserved from the submitted form (edit-mode upload errors only, so the user keeps their pending file metadata).
 
 ## Collection delete confirmation
 
@@ -248,16 +252,16 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`nav`** ([NavData](#navdata))
 - **`user`** ([UserContext](#usercontext) \| null) _(optional)_
 - **`_locale`** (string) — Active UI translation locale.
-- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`available_locales`** (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).
 - **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
 - **`page`** ([PageMeta](#pagemeta))
-- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
-- **`has_editor_locales`** (Option<boolean>) _(optional)_
-- **`editor_locale`** (Option<string>) _(optional)_
-- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`breadcrumbs`** (Vec&lt;[Breadcrumb](#breadcrumb)&gt;) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option&lt;boolean&gt;) _(optional)_
+- **`editor_locale`** (Option&lt;string&gt;) _(optional)_
+- **`editor_locales`** (Option&lt;Vec&lt;[EditorLocaleOption](#editorlocaleoption)&gt;&gt;) _(optional)_
 - **`collection`** ([CollectionContext](#collectioncontext))
 - **`document_id`** (string)
-- **`title_value`** (Option<string>) _(optional)_ — Document title for display. `None` (serialized as `null`) when the collection has no title field or the read fell through.
+- **`title_value`** (Option&lt;string&gt;) _(optional)_ — Document title for display. `None` (serialized as `null`) when the collection has no title field or the read fell through.
 - **`ref_count`** (integer)
 
 ## Collection versions list
@@ -269,18 +273,18 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`nav`** ([NavData](#navdata))
 - **`user`** ([UserContext](#usercontext) \| null) _(optional)_
 - **`_locale`** (string) — Active UI translation locale.
-- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`available_locales`** (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).
 - **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
 - **`page`** ([PageMeta](#pagemeta))
-- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
-- **`has_editor_locales`** (Option<boolean>) _(optional)_
-- **`editor_locale`** (Option<string>) _(optional)_
-- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`breadcrumbs`** (Vec&lt;[Breadcrumb](#breadcrumb)&gt;) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option&lt;boolean&gt;) _(optional)_
+- **`editor_locale`** (Option&lt;string&gt;) _(optional)_
+- **`editor_locales`** (Option&lt;Vec&lt;[EditorLocaleOption](#editorlocaleoption)&gt;&gt;) _(optional)_
 - **`collection`** ([CollectionContext](#collectioncontext))
 - **`document`** ([DocumentRef](#documentref))
 - **`pagination`** ([PaginationContext](#paginationcontext))
 - **`doc_title`** (string)
-- **`versions`** (Vec<any>)
+- **`versions`** (Vec&lt;any&gt;)
 - **`restore_url_prefix`** (string)
 
 ## Collection restore confirmation
@@ -292,17 +296,17 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`nav`** ([NavData](#navdata))
 - **`user`** ([UserContext](#usercontext) \| null) _(optional)_
 - **`_locale`** (string) — Active UI translation locale.
-- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`available_locales`** (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).
 - **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
 - **`page`** ([PageMeta](#pagemeta))
-- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
-- **`has_editor_locales`** (Option<boolean>) _(optional)_
-- **`editor_locale`** (Option<string>) _(optional)_
-- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`breadcrumbs`** (Vec&lt;[Breadcrumb](#breadcrumb)&gt;) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option&lt;boolean&gt;) _(optional)_
+- **`editor_locale`** (Option&lt;string&gt;) _(optional)_
+- **`editor_locales`** (Option&lt;Vec&lt;[EditorLocaleOption](#editorlocaleoption)&gt;&gt;) _(optional)_
 - **`collection`** ([CollectionContext](#collectioncontext))
 - **`document`** ([DocumentRef](#documentref))
 - **`version_number`** (any) — Version number being restored (from the version row's `version` column).
-- **`missing_relations`** (Vec<any>) — IDs of relationship references whose targets no longer exist.
+- **`missing_relations`** (Vec&lt;any&gt;) — IDs of relationship references whose targets no longer exist.
 - **`restore_url`** (string)
 - **`back_url`** (string)
 
@@ -315,26 +319,27 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`nav`** ([NavData](#navdata))
 - **`user`** ([UserContext](#usercontext) \| null) _(optional)_
 - **`_locale`** (string) — Active UI translation locale.
-- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`available_locales`** (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).
 - **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
 - **`page`** ([PageMeta](#pagemeta))
-- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
-- **`has_editor_locales`** (Option<boolean>) _(optional)_
-- **`editor_locale`** (Option<string>) _(optional)_
-- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`breadcrumbs`** (Vec&lt;[Breadcrumb](#breadcrumb)&gt;) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option&lt;boolean&gt;) _(optional)_
+- **`editor_locale`** (Option&lt;string&gt;) _(optional)_
+- **`editor_locales`** (Option&lt;Vec&lt;[EditorLocaleOption](#editorlocaleoption)&gt;&gt;) _(optional)_
 - **`global`** ([GlobalContext](#globalcontext))
-- **`fields`** (Vec<[FieldContext](#fieldcontext)>)
-- **`sidebar_fields`** (Vec<[FieldContext](#fieldcontext)>)
+- **`perms`** ([GlobalPermissions](#globalpermissions))
+- **`fields`** (Vec&lt;[FieldContext](#fieldcontext)&gt;)
+- **`sidebar_fields`** (Vec&lt;[FieldContext](#fieldcontext)&gt;)
 - **`has_drafts`** (boolean)
 - **`has_versions`** (boolean)
-- **`versions`** (Vec<any>)
+- **`versions`** (Vec&lt;any&gt;)
 - **`has_more_versions`** (boolean)
 - **`restore_url_prefix`** (string)
 - **`versions_url`** (string)
 - **`doc_status`** (string)
 - **`has_locales`** (boolean) _(optional)_
 - **`current_locale`** (string) _(optional)_
-- **`locales`** (Vec<[LocaleTemplateOption](#localetemplateoption)>) _(optional)_
+- **`locales`** (Vec&lt;[LocaleTemplateOption](#localetemplateoption)&gt;) _(optional)_
 
 ## Global form-error re-render
 
@@ -345,16 +350,17 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`nav`** ([NavData](#navdata))
 - **`user`** ([UserContext](#usercontext) \| null) _(optional)_
 - **`_locale`** (string) — Active UI translation locale.
-- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`available_locales`** (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).
 - **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
 - **`page`** ([PageMeta](#pagemeta))
-- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
-- **`has_editor_locales`** (Option<boolean>) _(optional)_
-- **`editor_locale`** (Option<string>) _(optional)_
-- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`breadcrumbs`** (Vec&lt;[Breadcrumb](#breadcrumb)&gt;) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option&lt;boolean&gt;) _(optional)_
+- **`editor_locale`** (Option&lt;string&gt;) _(optional)_
+- **`editor_locales`** (Option&lt;Vec&lt;[EditorLocaleOption](#editorlocaleoption)&gt;&gt;) _(optional)_
 - **`global`** ([GlobalContext](#globalcontext))
-- **`fields`** (Vec<[FieldContext](#fieldcontext)>)
-- **`sidebar_fields`** (Vec<[FieldContext](#fieldcontext)>)
+- **`perms`** ([GlobalPermissions](#globalpermissions))
+- **`fields`** (Vec&lt;[FieldContext](#fieldcontext)&gt;)
+- **`sidebar_fields`** (Vec&lt;[FieldContext](#fieldcontext)&gt;)
 
 ## Global versions list
 
@@ -365,16 +371,16 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`nav`** ([NavData](#navdata))
 - **`user`** ([UserContext](#usercontext) \| null) _(optional)_
 - **`_locale`** (string) — Active UI translation locale.
-- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`available_locales`** (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).
 - **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
 - **`page`** ([PageMeta](#pagemeta))
-- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
-- **`has_editor_locales`** (Option<boolean>) _(optional)_
-- **`editor_locale`** (Option<string>) _(optional)_
-- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`breadcrumbs`** (Vec&lt;[Breadcrumb](#breadcrumb)&gt;) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option&lt;boolean&gt;) _(optional)_
+- **`editor_locale`** (Option&lt;string&gt;) _(optional)_
+- **`editor_locales`** (Option&lt;Vec&lt;[EditorLocaleOption](#editorlocaleoption)&gt;&gt;) _(optional)_
 - **`global`** ([GlobalContext](#globalcontext))
 - **`pagination`** ([PaginationContext](#paginationcontext))
-- **`versions`** (Vec<any>)
+- **`versions`** (Vec&lt;any&gt;)
 - **`restore_url_prefix`** (string)
 
 ## Global restore confirmation
@@ -386,16 +392,16 @@ Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `
 - **`nav`** ([NavData](#navdata))
 - **`user`** ([UserContext](#usercontext) \| null) _(optional)_
 - **`_locale`** (string) — Active UI translation locale.
-- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`available_locales`** (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).
 - **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
 - **`page`** ([PageMeta](#pagemeta))
-- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
-- **`has_editor_locales`** (Option<boolean>) _(optional)_
-- **`editor_locale`** (Option<string>) _(optional)_
-- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`breadcrumbs`** (Vec&lt;[Breadcrumb](#breadcrumb)&gt;) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option&lt;boolean&gt;) _(optional)_
+- **`editor_locale`** (Option&lt;string&gt;) _(optional)_
+- **`editor_locales`** (Option&lt;Vec&lt;[EditorLocaleOption](#editorlocaleoption)&gt;&gt;) _(optional)_
 - **`global`** ([GlobalContext](#globalcontext))
 - **`version_number`** (any)
-- **`missing_relations`** (Vec<any>)
+- **`missing_relations`** (Vec&lt;any&gt;)
 - **`restore_url`** (string)
 - **`back_url`** (string)
 
@@ -412,28 +418,28 @@ Every page above flattens [BasePageContext](#basepagecontext) (or [AuthBasePageC
 - **`nav`** ([NavData](#navdata))
 - **`user`** ([UserContext](#usercontext) \| null) _(optional)_
 - **`_locale`** (string) — Active UI translation locale.
-- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`available_locales`** (Vec&lt;string&gt;) — Available UI translation locales (for the locale picker).
 - **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
 - **`page`** ([PageMeta](#pagemeta))
-- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
-- **`has_editor_locales`** (Option<boolean>) _(optional)_
-- **`editor_locale`** (Option<string>) _(optional)_
-- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`breadcrumbs`** (Vec&lt;[Breadcrumb](#breadcrumb)&gt;) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option&lt;boolean&gt;) _(optional)_
+- **`editor_locale`** (Option&lt;string&gt;) _(optional)_
+- **`editor_locales`** (Option&lt;Vec&lt;[EditorLocaleOption](#editorlocaleoption)&gt;&gt;) _(optional)_
 
 ### AuthBasePageContext
 
 - **`crap`** ([CrapMeta](#crapmeta))
 - **`_locale`** (string)
-- **`available_locales`** (Vec<string>)
+- **`available_locales`** (Vec&lt;string&gt;)
 - **`title`** (string)
 - **`page`** ([PageMeta](#pagemeta))
 
 ### PageMeta
 
-- **`type`** (string) — Page-type discriminant. Serialized as a snake_case string literal so templates can branch with `{{#if (eq page.type "collection_edit")}}`.
+- **`type`** (string) — Page-type discriminant. Serialized as a `snake_case` string literal so templates can branch with `{{#if (eq page.type "collection_edit")}}`.
 - **`title`** (string) — Page title or translation key.
-- **`title_name`** (Option<string>) _(optional)_ — Optional interpolation param for `{{t page.title name=page.title_name}}`.
-- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Breadcrumb trail rendered by `partials/breadcrumb.hbs`.
+- **`title_name`** (Option&lt;string&gt;) _(optional)_ — Optional interpolation param for `{{t page.title name=page.title_name}}`.
+- **`breadcrumbs`** (Vec&lt;[Breadcrumb](#breadcrumb)&gt;) — Breadcrumb trail rendered by `partials/breadcrumb.hbs`.
 
 ### CrapMeta
 
@@ -446,9 +452,9 @@ Every page above flattens [BasePageContext](#basepagecontext) (or [AuthBasePageC
 
 ### NavData
 
-- **`collections`** (Vec<[NavCollection](#navcollection)>)
-- **`globals`** (Vec<[NavGlobal](#navglobal)>)
-- **`custom_pages`** (Vec<[CustomPage](#custompage)>) — Filesystem-routed custom admin pages registered via `crap.pages.register`. Only entries with a `label` set appear here.
+- **`collections`** (Vec&lt;[NavCollection](#navcollection)&gt;)
+- **`globals`** (Vec&lt;[NavGlobal](#navglobal)&gt;)
+- **`custom_pages`** (Vec&lt;[CustomPage](#custompage)&gt;) — Filesystem-routed custom admin pages registered via `crap.pages.register`. Only entries with a `label` set appear here.
 
 ### NavCollection
 
@@ -483,27 +489,22 @@ Every page above flattens [BasePageContext](#basepagecontext) (or [AuthBasePageC
 ### Breadcrumb
 
 - **`label`** (string) — The text label to display for the breadcrumb.
-- **`url`** (Option<string>) _(optional)_ — The optional URL to link to. If None, the breadcrumb is the current page.
-- **`label_name`** (Option<string>) _(optional)_ — Optional interpolation param for `{{t label name=label_name}}`.
+- **`url`** (Option&lt;string&gt;) _(optional)_ — The optional URL to link to. If None, the breadcrumb is the current page.
+- **`label_name`** (Option&lt;string&gt;) _(optional)_ — Optional interpolation param for `{{t label name=label_name}}`.
 
 ### CollectionContext
 
 - **`slug`** (string)
 - **`display_name`** (string)
 - **`singular_name`** (string)
-- **`title_field`** (Option<string>) _(optional)_
+- **`title_field`** (Option&lt;string&gt;) _(optional)_
 - **`timestamps`** (boolean)
-- **`is_auth`** (boolean)
-- **`is_upload`** (boolean)
-- **`has_drafts`** (boolean)
-- **`has_versions`** (boolean)
 - **`soft_delete`** (boolean)
-- **`can_permanently_delete`** (boolean)
 - **`admin`** ([AdminMeta](#adminmeta))
 - **`upload`** ([UploadMeta](#uploadmeta) \| null) _(optional)_
 - **`versions`** ([VersionsMeta](#versionsmeta) \| null) _(optional)_
 - **`auth`** ([AuthMeta](#authmeta) \| null) _(optional)_
-- **`fields_meta`** (Vec<[FieldMeta](#fieldmeta)>)
+- **`fields_meta`** (Vec&lt;[FieldMeta](#fieldmeta)&gt;)
 
 ### GlobalContext
 
@@ -512,15 +513,15 @@ Every page above flattens [BasePageContext](#basepagecontext) (or [AuthBasePageC
 - **`has_drafts`** (boolean)
 - **`has_versions`** (boolean)
 - **`versions`** ([VersionsMeta](#versionsmeta) \| null) _(optional)_
-- **`fields_meta`** (Vec<[FieldMeta](#fieldmeta)>)
+- **`fields_meta`** (Vec&lt;[FieldMeta](#fieldmeta)&gt;)
 
 ### DocumentRef
 
 - **`id`** (string)
-- **`created_at`** (Option<string>) _(optional)_
-- **`updated_at`** (Option<string>) _(optional)_
-- **`status`** (Option<string>) _(optional)_
-- **`data`** (Option<Object>) _(optional)_
+- **`created_at`** (Option&lt;string&gt;) _(optional)_
+- **`updated_at`** (Option&lt;string&gt;) _(optional)_
+- **`status`** (Option&lt;string&gt;) _(optional)_
+- **`data`** ([DocumentFields](#documentfields) \| null) _(optional)_
 
 ### PaginationContext
 
@@ -530,8 +531,8 @@ Every page above flattens [BasePageContext](#basepagecontext) (or [AuthBasePageC
 - **`has_next`** (boolean)
 - **`prev_url`** (string)
 - **`next_url`** (string)
-- **`page`** (Option<integer>) _(optional)_ — Page-mode only — current page number (1-indexed).
-- **`total_pages`** (Option<integer>) _(optional)_ — Page-mode only — total page count.
+- **`page`** (Option&lt;integer&gt;) _(optional)_ — Page-mode only — current page number (1-indexed).
+- **`total_pages`** (Option&lt;integer&gt;) _(optional)_ — Page-mode only — total page count.
 
 ### FieldContext
 
@@ -554,7 +555,7 @@ _(No fields.)_
 - **`display_name`** (string)
 - **`singular_name`** (string)
 - **`count`** (integer)
-- **`last_updated`** (Option<string>) _(optional)_
+- **`last_updated`** (Option&lt;string&gt;) _(optional)_
 - **`is_auth`** (boolean)
 - **`is_upload`** (boolean)
 - **`has_versions`** (boolean)
@@ -563,20 +564,20 @@ _(No fields.)_
 
 - **`slug`** (string)
 - **`display_name`** (string)
-- **`last_updated`** (Option<string>) _(optional)_
+- **`last_updated`** (Option&lt;string&gt;) _(optional)_
 - **`has_versions`** (boolean)
 
 ### UploadFormContext
 
-- **`accept`** (Option<string>) _(optional)_ — Comma-joined accept list for the file input — emitted only when the collection declares allowed mime types.
-- **`focal_x`** (Option<number>) _(optional)_
-- **`focal_y`** (Option<number>) _(optional)_
-- **`preview`** (Option<string>) _(optional)_ — Image preview URL when the file is an image.
+- **`accept`** (Option&lt;string&gt;) _(optional)_ — Comma-joined accept list for the file input — emitted only when the collection declares allowed mime types.
+- **`focal_x`** (Option&lt;number&gt;) _(optional)_
+- **`focal_y`** (Option&lt;number&gt;) _(optional)_
+- **`preview`** (Option&lt;string&gt;) _(optional)_ — Image preview URL when the file is an image.
 - **`info`** ([UploadInfo](#uploadinfo) \| null) _(optional)_ — Filename + dimensions/filesize info pill.
 
 ### UploadInfo
 
 - **`filename`** (string)
-- **`filesize_display`** (Option<string>) _(optional)_
-- **`dimensions`** (Option<string>) _(optional)_
+- **`filesize_display`** (Option&lt;string&gt;) _(optional)_
+- **`dimensions`** (Option&lt;string&gt;) _(optional)_
 

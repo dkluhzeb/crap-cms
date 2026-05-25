@@ -1,22 +1,38 @@
-//! HookRunner methods for job execution and arbitrary Lua evaluation.
+//! `HookRunner` methods for job execution and arbitrary Lua evaluation.
 
 use anyhow::{Result, anyhow};
-use mlua::Value;
+use mlua::{LuaSerdeExt as _, Value};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::{
     core::Document,
-    db::DbConnection,
+    db::{DbConnection, DbPool},
     hooks::{
-        HookRunner, api,
-        lifecycle::{execution::resolve_hook_function, types::TxContextGuard},
+        HookRunner,
+        lifecycle::{InitPhase, execution::resolve_hook_function, types::TxContextGuard},
+        lua_api,
     },
 };
 
 impl HookRunner {
-    /// Execute a job handler function with CRUD access via TxContext.
-    /// The handler receives a context table `{ data, job = { slug, attempt, max_attempts, queued_at } }`.
-    /// Returns the handler's return value as JSON string (or None if nil).
+    /// Execute a job handler function in **pool-mode**: no outer
+    /// transaction is opened. Each Lua CRUD call inside the handler
+    /// opens its own short-lived IMMEDIATE transaction via
+    /// `with_lua_db` (wired by the `#[lua_fn(auto_tx)]` attribute).
+    ///
+    /// The handler receives a context table
+    /// `{ data, job = { slug, attempt, max_attempts, queued_at } }`.
+    /// Returns the handler's return value as a JSON string (or `None`
+    /// for nil).
+    ///
+    /// For multi-step atomicity, user code wraps a block in
+    /// `crap.transaction(function() ... end)` which temporarily swaps
+    /// the pool context for a single shared tx context.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if VM acquisition, handler resolution, the handler
+    /// call itself, or return-value serialization fails.
     pub fn run_job_handler(
         &self,
         handler_ref: &str,
@@ -24,38 +40,37 @@ impl HookRunner {
         data_json: &str,
         attempt: u32,
         max_attempts: u32,
-        conn: &dyn DbConnection,
+        pool: &DbPool,
     ) -> Result<Option<String>> {
         let lua = self.pool.acquire()?;
-        let _guard = TxContextGuard::set(&lua, conn, None, None, None);
+        let _guard = TxContextGuard::set_pool(&lua, pool.clone(), None, None, None);
 
-        // Build context table
-        let ctx = lua.create_table()?;
-
-        // Parse data JSON into Lua table
+        // Build context from a typed Rust struct so the Lua shape is
+        // the single source of truth (see
+        // `hooks::lifecycle::JobHandlerContext`).
         let data_value: JsonValue =
             serde_json::from_str(data_json).unwrap_or(JsonValue::Object(JsonMap::new()));
-        let data_lua = api::json_to_lua(&lua, &data_value)?;
-        ctx.set("data", data_lua)?;
-
-        // Job metadata
-        let job_meta = lua.create_table()?;
-        job_meta.set("slug", slug)?;
-        job_meta.set("attempt", attempt)?;
-        job_meta.set("max_attempts", max_attempts)?;
-        ctx.set("job", job_meta)?;
+        let ctx = crate::hooks::lifecycle::JobHandlerContext {
+            data: &data_value,
+            job: crate::hooks::lifecycle::JobInfo {
+                slug,
+                attempt,
+                max_attempts,
+            },
+        };
+        let ctx_value = lua.to_value(&ctx)?;
 
         // Resolve the handler function (e.g., "jobs.cleanup.run")
         let func = resolve_hook_function(&lua, handler_ref)?;
 
         // Call handler(ctx)
-        let return_val: Value = func.call(ctx)?;
+        let return_val: Value = func.call(ctx_value)?;
 
         // Convert return value to JSON
         match return_val {
             Value::Nil => Ok(None),
             other => {
-                let json_val = api::lua_to_json(&lua, &other)?;
+                let json_val = lua_api::lua_to_json(&other)?;
 
                 Ok(Some(serde_json::to_string(&json_val)?))
             }
@@ -64,6 +79,10 @@ impl HookRunner {
 
     /// Execute arbitrary Lua code within a transaction + user context.
     /// Used by integration tests for CRUD closure testing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if VM acquisition or Lua evaluation fails.
     pub fn eval_lua_with_conn(
         &self,
         code: &str,
@@ -73,8 +92,31 @@ impl HookRunner {
         let lua = self.pool.acquire()?;
         let _guard = TxContextGuard::set(&lua, conn, user.cloned(), None, None);
 
-        lua.load(code)
-            .eval::<String>()
-            .map_err(|e| anyhow!("{}", e))
+        lua.load(code).eval::<String>().map_err(|e| anyhow!("{e}"))
+    }
+
+    /// Like [`eval_lua_with_conn`] but with [`InitPhase`] set on the VM,
+    /// mirroring the state during `init.lua` and definition-file loading.
+    /// Used by integration tests that exercise definition-file APIs
+    /// (`crap.collections.define`, `crap.globals.define`,
+    /// `crap.jobs.define`, `crap.richtext.register_node`) which are
+    /// init-only at runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if VM acquisition or Lua evaluation fails.
+    pub fn eval_lua_init_with_conn(
+        &self,
+        code: &str,
+        conn: &dyn DbConnection,
+        user: Option<&Document>,
+    ) -> Result<String> {
+        let lua = self.pool.acquire()?;
+        let _guard = TxContextGuard::set(&lua, conn, user.cloned(), None, None);
+
+        lua.set_app_data(InitPhase);
+        let r = lua.load(code).eval::<String>().map_err(|e| anyhow!("{e}"));
+        lua.remove_app_data::<InitPhase>();
+        r
     }
 }

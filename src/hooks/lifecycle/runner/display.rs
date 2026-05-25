@@ -1,4 +1,4 @@
-//! HookRunner methods for display conditions and rendering.
+//! `HookRunner` methods for display conditions and rendering.
 
 use std::collections::HashMap;
 
@@ -9,14 +9,15 @@ use tracing::warn;
 use crate::{
     admin::custom_pages::CustomPage,
     hooks::{
-        HookRunner, api,
-        api::pages::PAGES_KEY,
+        HookRunner,
         lifecycle::{
             execution::{
                 call_display_condition_with_lua, has_registered_hooks, resolve_hook_function,
             },
             types::DisplayConditionResult,
         },
+        lua_api,
+        lua_api::pages::PAGES_KEY,
     },
 };
 
@@ -24,10 +25,11 @@ impl HookRunner {
     /// Call a Lua function to compute a row label for an array/blocks row.
     /// Returns None if the function errors or returns nil.
     /// No CRUD access — pure formatting function.
+    #[must_use]
     pub fn call_row_label(&self, func_ref: &str, row_data: &JsonValue) -> Option<String> {
         let lua = self.pool.acquire().ok()?;
         let func = resolve_hook_function(&lua, func_ref).ok()?;
-        let row_lua = api::json_to_lua(&lua, row_data).ok()?;
+        let row_lua = lua_api::json_to_lua(&lua, row_data).ok()?;
 
         match func.call::<Value>(row_lua) {
             Ok(Value::String(s)) => s.to_str().ok().map(|s| s.to_string()),
@@ -39,6 +41,7 @@ impl HookRunner {
     /// Returns `DisplayConditionResult::Bool(visible)` or
     /// `DisplayConditionResult::Table { condition, visible }` depending on what Lua returns.
     /// No CRUD access — pure evaluation function.
+    #[must_use]
     pub fn call_display_condition(
         &self,
         func_ref: &str,
@@ -49,7 +52,8 @@ impl HookRunner {
     }
 
     /// Evaluate display conditions for multiple fields using a single VM acquisition.
-    /// Returns a map from func_ref to the evaluation result.
+    /// Returns a map from `func_ref` to the evaluation result.
+    #[must_use]
     pub fn call_display_conditions_batch(
         &self,
         conditions: &[(&str, &JsonValue)],
@@ -57,9 +61,8 @@ impl HookRunner {
         if conditions.is_empty() {
             return HashMap::new();
         }
-        let lua = match self.pool.acquire() {
-            Ok(l) => l,
-            Err(_) => return HashMap::new(),
+        let Ok(lua) = self.pool.acquire() else {
+            return HashMap::new();
         };
         let mut results = HashMap::new();
 
@@ -90,14 +93,14 @@ impl HookRunner {
         let lua = self.pool.acquire().ok()?;
 
         let table: Table = lua
-            .named_registry_value(crate::hooks::api::template_data::TEMPLATE_DATA_KEY)
+            .named_registry_value(crate::hooks::lua_api::template_data::TEMPLATE_DATA_KEY)
             .ok()?;
         let func: Function = match table.get(name) {
             Ok(f) => f,
             Err(_) => return None,
         };
 
-        let ctx_lua = match api::json_to_lua(&lua, page_ctx) {
+        let ctx_lua = match lua_api::json_to_lua(&lua, page_ctx) {
             Ok(v) => v,
             Err(e) => {
                 warn!("crap.template_data['{name}']: failed to convert context to Lua: {e}");
@@ -106,7 +109,7 @@ impl HookRunner {
         };
 
         match func.call::<Value>(ctx_lua) {
-            Ok(v) => match api::lua_to_json(&lua, &v) {
+            Ok(v) => match lua_api::lua_to_json(&v) {
                 Ok(json) => Some(json),
                 Err(e) => {
                     warn!("crap.template_data['{name}']: result is not JSON-encodable: {e}");
@@ -126,6 +129,7 @@ impl HookRunner {
     ///
     /// Returns an empty Vec if Lua isn't available or no pages are
     /// registered.
+    #[must_use]
     pub fn extract_custom_pages(&self) -> Vec<CustomPage> {
         let Ok(lua) = self.pool.acquire() else {
             return Vec::new();
@@ -195,7 +199,7 @@ fn execute_render_hooks(lua: &Lua, mut context: JsonValue) -> JsonValue {
             Err(_) => continue,
         };
 
-        let ctx_lua = match api::json_to_lua(lua, &context) {
+        let ctx_lua = match lua_api::json_to_lua(lua, &context) {
             Ok(v) => v,
             Err(e) => {
                 warn!("before_render: failed to convert context to Lua: {e}");
@@ -205,7 +209,7 @@ fn execute_render_hooks(lua: &Lua, mut context: JsonValue) -> JsonValue {
         };
 
         match func.call::<Value>(ctx_lua) {
-            Ok(Value::Table(tbl)) => match api::lua_to_json(lua, &Value::Table(tbl)) {
+            Ok(Value::Table(tbl)) => match lua_api::lua_to_json(&Value::Table(tbl)) {
                 Ok(new_ctx) => context = new_ctx,
                 Err(e) => {
                     warn!("before_render: failed to convert Lua result to JSON: {e}");

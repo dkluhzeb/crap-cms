@@ -5,27 +5,27 @@ use serde::Serialize;
 
 use crate::{
     admin::context::FieldMeta,
-    core::{
-        CollectionDefinition,
-        collection::{Auth, VersionsConfig},
-        upload::CollectionUpload,
-    },
+    core::{CollectionDefinition, VersionsConfig, collection::Auth, upload::CollectionUpload},
+    typegen::LuaAnnotation,
 };
 
 /// Top-level collection metadata exposed to templates.
-#[derive(Serialize, JsonSchema)]
+///
+/// Capability bits (`is_auth`, `is_upload`, `has_versions`, `has_drafts`)
+/// are intentionally NOT separate fields — templates derive them from the
+/// presence of the corresponding `Option<*Meta>` sub-struct (and the
+/// `drafts` flag inside `versions`). Single source of truth: if `auth`
+/// is `None`, the collection isn't auth-enabled; if `versions.drafts` is
+/// false, drafts aren't on.
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.collection")]
 pub struct CollectionContext {
     pub slug: String,
     pub display_name: String,
     pub singular_name: String,
     pub title_field: Option<String>,
     pub timestamps: bool,
-    pub is_auth: bool,
-    pub is_upload: bool,
-    pub has_drafts: bool,
-    pub has_versions: bool,
     pub soft_delete: bool,
-    pub can_permanently_delete: bool,
     pub admin: AdminMeta,
     pub upload: Option<UploadMeta>,
     pub versions: Option<VersionsMeta>,
@@ -34,7 +34,8 @@ pub struct CollectionContext {
 }
 
 /// Admin-presentation metadata pulled from `def.admin`.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.admin_meta")]
 pub struct AdminMeta {
     pub use_as_title: Option<String>,
     pub default_sort: Option<String>,
@@ -43,7 +44,8 @@ pub struct AdminMeta {
 }
 
 /// Upload-collection metadata. Only present when `def.upload` is set.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.upload_meta")]
 pub struct UploadMeta {
     pub enabled: bool,
     pub mime_types: Vec<String>,
@@ -52,14 +54,16 @@ pub struct UploadMeta {
 }
 
 /// Versioning metadata. Only present when `def.versions` is set.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.versions_meta")]
 pub struct VersionsMeta {
     pub drafts: bool,
     pub max_versions: u32,
 }
 
 /// Auth-collection metadata. Only present when `def.auth` is set.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.auth_meta")]
 pub struct AuthMeta {
     pub enabled: bool,
     pub disable_local: bool,
@@ -75,12 +79,7 @@ impl CollectionContext {
             singular_name: def.singular_name().to_string(),
             title_field: def.title_field().map(str::to_string),
             timestamps: def.timestamps,
-            is_auth: def.is_auth_collection(),
-            is_upload: def.is_upload_collection(),
-            has_drafts: def.has_drafts(),
-            has_versions: def.has_versions(),
             soft_delete: def.soft_delete,
-            can_permanently_delete: def.access.delete.is_some(),
             admin: AdminMeta::from_def(def),
             upload: def.upload.as_ref().map(UploadMeta::from_def),
             versions: def.versions.as_ref().map(VersionsMeta::from_def),
@@ -125,8 +124,12 @@ impl AuthMeta {
     fn from_def(a: &Auth) -> Self {
         Self {
             enabled: a.enabled,
-            disable_local: a.disable_local,
-            verify_email: a.verify_email,
+            // View-model name kept (template-facing) — `disable_local` is the
+            // historical Handlebars context key surfaced as `{{#if disable_local}}`
+            // in `templates/auth/login.hbs`. Internally we compute it as the
+            // negation of `password_login_enabled`.
+            disable_local: !a.password_login_enabled(),
+            verify_email: a.requires_verify_email(),
         }
     }
 }
@@ -159,10 +162,9 @@ mod tests {
         assert_eq!(v["display_name"], "Posts");
         assert_eq!(v["singular_name"], "Post");
         assert_eq!(v["timestamps"], true);
-        assert_eq!(v["is_auth"], false);
-        assert_eq!(v["is_upload"], false);
-        assert_eq!(v["has_drafts"], false);
-        assert_eq!(v["has_versions"], false);
+        assert!(v["auth"].is_null());
+        assert!(v["upload"].is_null());
+        assert!(v["versions"].is_null());
         assert_eq!(v["soft_delete"], false);
         let meta = v["fields_meta"].as_array().unwrap();
         assert_eq!(meta.len(), 1);
@@ -175,21 +177,6 @@ mod tests {
         def.soft_delete = true;
         let v = serde_json::to_value(CollectionContext::from_def(&def)).unwrap();
         assert_eq!(v["soft_delete"], true);
-    }
-
-    #[test]
-    fn from_def_can_permanently_delete_true() {
-        let mut def = CollectionDefinition::new("pages");
-        def.access.delete = Some("access.admin_only".to_string());
-        let v = serde_json::to_value(CollectionContext::from_def(&def)).unwrap();
-        assert_eq!(v["can_permanently_delete"], true);
-    }
-
-    #[test]
-    fn from_def_can_permanently_delete_false() {
-        let def = CollectionDefinition::new("pages");
-        let v = serde_json::to_value(CollectionContext::from_def(&def)).unwrap();
-        assert_eq!(v["can_permanently_delete"], false);
     }
 
     #[test]

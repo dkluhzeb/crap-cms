@@ -1,6 +1,8 @@
 //! Document hydration — populates join-table fields (arrays, blocks, relationships)
 //! into documents after the main row query.
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 use serde_json::Value;
 
@@ -8,7 +10,10 @@ use super::{
     super::{
         arrays::find_array_rows,
         blocks::find_block_rows,
-        relationships::{find_polymorphic_related, find_related_ids},
+        relationships::{
+            find_polymorphic_related, find_polymorphic_related_batch, find_related_ids,
+            find_related_ids_batch,
+        },
     },
     group::reconstruct_group_fields,
     locale,
@@ -38,7 +43,7 @@ fn hydrate_relationship(
 
         let json_items: Vec<Value> = items
             .into_iter()
-            .map(|(col, id)| Value::String(format!("{}/{}", col, id)))
+            .map(|(col, id)| Value::String(format!("{col}/{id}")))
             .collect();
 
         Ok(Value::Array(json_items))
@@ -209,10 +214,163 @@ fn hydrate_group_join_fields(
     Ok(())
 }
 
+/// Batched hydrate for a single has-many relationship field across
+/// every doc in `docs`. Issues one `IN (…)` SELECT instead of one
+/// SELECT per doc, then distributes results back. Preserves the
+/// locale-fallback semantics of the per-doc path by running a second
+/// batched query against the fallback locale for only the parents
+/// that came back empty.
+fn hydrate_relationship_batch(
+    conn: &dyn DbConnection,
+    slug: &str,
+    field_name: &str,
+    rc: &RelationshipConfig,
+    docs: &mut [Document],
+    locale_ref: Option<&str>,
+    fallback_ref: Option<&str>,
+) -> Result<()> {
+    let parent_ids: Vec<&str> = docs.iter().map(|d| d.id.as_ref()).collect();
+
+    if rc.is_polymorphic() {
+        let mut grouped =
+            find_polymorphic_related_batch(conn, slug, field_name, &parent_ids, locale_ref)?;
+        if let Some(fb) = fallback_ref {
+            let missing: Vec<&str> = parent_ids
+                .iter()
+                .filter(|id| !grouped.contains_key(**id))
+                .copied()
+                .collect();
+            if !missing.is_empty() {
+                let fb_grouped =
+                    find_polymorphic_related_batch(conn, slug, field_name, &missing, Some(fb))?;
+                grouped.extend(fb_grouped);
+            }
+        }
+        for doc in docs.iter_mut() {
+            let items = grouped.remove(doc.id.as_ref()).unwrap_or_default();
+            let json_items: Vec<Value> = items
+                .into_iter()
+                .map(|(col, id)| Value::String(format!("{col}/{id}")))
+                .collect();
+            doc.fields
+                .insert(field_name.to_string(), Value::Array(json_items));
+        }
+    } else {
+        let mut grouped: HashMap<String, Vec<String>> =
+            find_related_ids_batch(conn, slug, field_name, &parent_ids, locale_ref)?;
+        if let Some(fb) = fallback_ref {
+            let missing: Vec<&str> = parent_ids
+                .iter()
+                .filter(|id| !grouped.contains_key(**id))
+                .copied()
+                .collect();
+            if !missing.is_empty() {
+                let fb_grouped =
+                    find_related_ids_batch(conn, slug, field_name, &missing, Some(fb))?;
+                grouped.extend(fb_grouped);
+            }
+        }
+        for doc in docs.iter_mut() {
+            let ids = grouped.remove(doc.id.as_ref()).unwrap_or_default();
+            let json_ids: Vec<Value> = ids.into_iter().map(Value::String).collect();
+            doc.fields
+                .insert(field_name.to_string(), Value::Array(json_ids));
+        }
+    }
+
+    Ok(())
+}
+
+/// Batched hydrate over a list of documents.
+///
+/// For top-level has-many relationship fields (the common case on
+/// list endpoints — `posts.tags`, `posts.categories`, …), issues one
+/// `WHERE parent_id IN (…)` SELECT per field instead of one per
+/// (doc, field) pair. A `find` returning 10 docs with 3 relationship
+/// fields previously did 30 SELECTs; this batches it to 3.
+///
+/// Non-batched field shapes (`Array`, `Blocks`, and relationship
+/// fields nested inside `Group`/`Tabs`/`Row`/`Collapsible`) fall
+/// through to the per-doc [`hydrate_document`] path. Arrays and
+/// blocks could be batched with the same pattern; relationship
+/// fields inside groups would need a recursive group-aware
+/// batched walk. Neither is implemented yet — `hydrate_documents`
+/// is purposefully scoped to the field shape that dominated the
+/// `find @ 50` profile.
+///
+/// # Errors
+///
+/// Returns a backend error if any of the join-table queries fails.
+pub fn hydrate_documents(
+    conn: &dyn DbConnection,
+    slug: &str,
+    fields: &[FieldDefinition],
+    docs: &mut [Document],
+    select: Option<&[String]>,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<()> {
+    if docs.is_empty() {
+        return Ok(());
+    }
+
+    for field in fields {
+        if let Some(sel) = select
+            && !sel.iter().any(|s| s == &field.name)
+        {
+            continue;
+        }
+
+        let locale = locale::resolve_join_locale(field, locale_ctx);
+        let fallback_locale = locale::resolve_join_fallback_locale(field, locale_ctx);
+
+        match field.field_type {
+            FieldType::Relationship | FieldType::Upload => {
+                if let Some(ref rc) = field.relationship
+                    && rc.has_many
+                {
+                    hydrate_relationship_batch(
+                        conn,
+                        slug,
+                        &field.name,
+                        rc,
+                        docs,
+                        locale.as_deref(),
+                        fallback_locale.as_deref(),
+                    )?;
+                }
+            }
+            FieldType::Row | FieldType::Collapsible => {
+                hydrate_documents(conn, slug, &field.fields, docs, select, locale_ctx)?;
+            }
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    hydrate_documents(conn, slug, &tab.fields, docs, select, locale_ctx)?;
+                }
+            }
+            FieldType::Array | FieldType::Blocks | FieldType::Group => {
+                // Not batched yet — delegate to the per-doc path for
+                // these shapes. We pass a single-element field slice
+                // so only this field is processed per doc.
+                let single = std::slice::from_ref(field);
+                for doc in docs.iter_mut() {
+                    hydrate_document(conn, slug, single, doc, select, locale_ctx)?;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
 /// Hydrate a document with join table data (has-many relationships and arrays).
 /// Populates `doc.fields` with JSON arrays for each join-table field.
 /// If `select` is provided, skip hydrating fields not in the select list.
 /// When `locale_ctx` is provided, localized join fields are filtered by locale.
+///
+/// # Errors
+///
+/// Returns a backend error if any of the join-table queries fails.
 pub fn hydrate_document(
     conn: &dyn DbConnection,
     slug: &str,

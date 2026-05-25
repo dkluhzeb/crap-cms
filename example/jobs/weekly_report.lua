@@ -1,14 +1,12 @@
 --- Cron job: weekly content report logged to stdout.
 local M = {}
 
----@param context crap.JobHandlerContext
-function M.run(context)
-  ---@type crap.find_result.Posts
-  local posts = crap.collections.find("posts", { limit = 0, overrideAccess = true })
-  ---@type crap.find_result.Projects
-  local projects = crap.collections.find("projects", { limit = 0, overrideAccess = true })
-  ---@type crap.find_result.Inquiries
-  local inquiries = crap.collections.find("inquiries", {
+M.run = crap.any.job_handler(function(_context)
+  -- Per-collection accessors give full return-type narrowing and
+  -- per-column `where` autocomplete without any `---@type` ceremony.
+  local posts = crap.collections.posts.find({ limit = 0, overrideAccess = true })
+  local projects = crap.collections.projects.find({ limit = 0, overrideAccess = true })
+  local inquiries = crap.collections.inquiries.find({
     where = { status = "new" },
     limit = 0,
     overrideAccess = true,
@@ -22,11 +20,14 @@ function M.run(context)
       inquiries and inquiries.pagination.totalDocs or 0
     )
   )
-end
+end)
 
 crap.jobs.define("weekly_report", {
   handler = "jobs.weekly_report.run",
   schedule = "0 9 * * 1",
+  -- Low priority — read-only aggregation that can wait if the queue
+  -- is busy. See `cleanup_archived.lua` for the rationale.
+  priority = -5,
   labels = { singular = "Weekly Report" },
 })
 

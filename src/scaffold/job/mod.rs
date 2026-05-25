@@ -1,4 +1,4 @@
-//! `make job` command — generate job Lua files.
+//! `make job` command -- generate job Lua files.
 
 mod generator;
 

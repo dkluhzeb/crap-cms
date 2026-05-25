@@ -1,19 +1,26 @@
 //! `mcp` command — start the MCP stdio server.
 
+use std::{
+    path::Path,
+    sync::{Arc, OnceLock},
+};
+
 use anyhow::{Context as _, Result};
-use std::path::Path;
 use tracing::info;
 
 use crate::{
     config::CrapConfig,
-    core::Registry,
     db::{migrate, pool},
-    hooks,
-    hooks::HookRunner,
+    hooks::{self, HookRunner},
     mcp,
 };
 
 /// Start the MCP server in stdio mode.
+///
+/// # Errors
+///
+/// Returns an error if config loading, Lua init, pool creation, schema sync,
+/// or the MCP server hits an unrecoverable runtime error.
 #[cfg(not(tarpaulin_include))] // async server startup, requires interactive stdio
 pub async fn run(config_dir: &Path) -> Result<()> {
     let config_dir = config_dir
@@ -24,7 +31,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
 
     if let Some(warning) = cfg.check_version() {
-        eprintln!("Warning: {}", warning);
+        eprintln!("Warning: {warning}");
     }
 
     let registry = hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
@@ -35,17 +42,15 @@ pub async fn run(config_dir: &Path) -> Result<()> {
 
     let hook_runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&cfg)
         .build()?;
-
-    let registry_snapshot = Registry::snapshot(&registry);
 
     info!("MCP server starting (stdio mode)");
 
     let server = mcp::McpServer {
         pool,
-        registry: registry_snapshot,
+        registry,
         runner: hook_runner,
         config: cfg,
         config_dir,
@@ -53,9 +58,11 @@ pub async fn run(config_dir: &Path) -> Result<()> {
         event_transport: None,
         invalidation_transport: None,
         cache: None,
+        client_name: OnceLock::new(),
+        transport_label: "(stdio)",
     };
 
-    mcp::stdio::run_stdio(server).await;
+    mcp::run_stdio(server).await;
 
     Ok(())
 }

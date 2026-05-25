@@ -20,6 +20,7 @@ impl S3SecretKey {
     }
 
     /// Returns `true` if the secret key is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }

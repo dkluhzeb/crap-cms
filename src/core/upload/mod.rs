@@ -8,6 +8,7 @@ mod image_size;
 mod metadata;
 pub mod process;
 mod processed_upload;
+mod queue;
 mod queued_conversion;
 mod resize;
 mod size_result;
@@ -23,10 +24,14 @@ pub use metadata::{
     assemble_sizes_object, delete_upload_files, enqueue_conversions, inject_upload_metadata,
 };
 pub use process::{CleanupGuard, process_upload};
-pub use processed_upload::{ProcessedUpload, ProcessedUploadBuilder};
-pub use queued_conversion::{QueuedConversion, QueuedConversionBuilder};
+pub use processed_upload::ProcessedUpload;
+pub use queue::{
+    FALLBACK_MAX_ATTEMPTS, IMAGE_CONVERT_QUEUE, ImageConvertJobData, SYSTEM_IMAGE_CONVERT_JOB,
+    delete_image_jobs_for_document, queue_image_conversion,
+};
+pub use queued_conversion::QueuedConversion;
 pub use resize::process_image_entry_with_storage;
-pub use size_result::{SizeResult, SizeResultBuilder};
+pub use size_result::SizeResult;
 pub use storage::{SharedStorage, StorageBackend, create_storage};
-pub use uploaded_file::{UploadedFile, UploadedFileBuilder};
+pub use uploaded_file::UploadedFile;
 pub use validate::format_filesize;

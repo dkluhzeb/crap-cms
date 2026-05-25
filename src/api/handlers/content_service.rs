@@ -6,7 +6,6 @@ use std::{
     sync::{Arc, atomic::AtomicUsize},
 };
 
-use serde_json::Value;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, metadata::MetadataMap};
 use tracing::error;
@@ -18,35 +17,60 @@ use crate::{
     },
     config::{EmailConfig, LocaleConfig, PasswordPolicy, ServerConfig},
     core::{
-        AuthUser, CollectionDefinition, JwtSecret, Registry,
-        auth::{SharedPasswordProvider, SharedTokenProvider, TokenProvider},
-        cache::SharedCache,
-        collection::GlobalDefinition,
-        email::EmailRenderer,
-        event::{InProcessInvalidationBus, SharedEventTransport, SharedInvalidationTransport},
-        rate_limit::LoginRateLimiter,
-        upload::SharedStorage,
+        AuthUser, CollectionDefinition, DocumentFields, GlobalDefinition, Registry, SharedCache,
+        SharedEventTransport, SharedInvalidationTransport, SharedPasswordProvider, SharedStorage,
+        SharedTokenProvider, auth::TokenProvider, collection::Surface, email::EmailRenderer,
+        event::InProcessInvalidationBus, rate_limit::LoginRateLimiter,
     },
     db::{
-        AccessResult, BoxedConnection, DbConnection, DbPool,
-        query::{self, SharedPopulateSingleflight, Singleflight},
+        AccessResult, BoxedConnection, DbConnection, DbPool, SharedPopulateSingleflight,
+        Singleflight, query,
     },
     hooks::HookRunner,
-    service::{self, ServiceContext},
+    service::{
+        self, EmailContext,
+        auth::{AuthFailure, AuthRequest, EvaluateDeps, Resolution},
+    },
 };
 
-/// Implements the gRPC ContentAPI service (Find, Create, Update, Delete, Login, etc.).
-#[allow(dead_code)]
+/// Implements the gRPC `ContentAPI` service (Find, Create, Update, Delete, Login, etc.).
 pub struct ContentService {
     pub(in crate::api::handlers) pool: DbPool,
     pub(in crate::api::handlers) registry: Arc<Registry>,
     pub(in crate::api::handlers) hook_runner: HookRunner,
-    pub(in crate::api::handlers) jwt_secret: JwtSecret,
     pub(in crate::api::handlers) default_depth: i32,
     pub(in crate::api::handlers) max_depth: i32,
     pub(in crate::api::handlers) email_config: EmailConfig,
     pub(in crate::api::handlers) email_renderer: Arc<EmailRenderer>,
     pub(in crate::api::handlers) server_config: ServerConfig,
+    pub(in crate::api::handlers) email_max_attempts: u32,
+    /// `[jobs.queues.<name>] retries` snapshot, used by gRPC
+    /// `TriggerJob` to compute the effective `max_attempts` for jobs
+    /// defined without an explicit `retries` field. Only populated for
+    /// queues whose `retries` is `Some`.
+    pub(in crate::api::handlers) queue_retries: HashMap<String, u32>,
+    /// Cached `registry.has_any_strategy()` result. Lets per-request
+    /// helpers like [`metadata_headers`](Self::metadata_headers)
+    /// short-circuit work that only the strategy evaluator consumes —
+    /// for the common deployment with no strategy methods configured,
+    /// we skip materialising the gRPC metadata into a `HashMap` on
+    /// every request, eliminating the per-request allocation churn
+    /// that dominated the profile.
+    pub(in crate::api::handlers) has_strategies: bool,
+    /// Whether any `Activation::Always` strategy exists for this
+    /// surface. When true, every anonymous request needs the full
+    /// metadata `HashMap` materialised because the strategy fires
+    /// unconditionally; when false, the `HashMap` is only built when a
+    /// header-activated strategy's discriminator is actually present
+    /// in the request.
+    pub(in crate::api::handlers) has_always_strategy: bool,
+    /// Lowercased set of header names that any header-activated
+    /// strategy fires on. Used by [`metadata_headers`] to pre-scan
+    /// the gRPC `MetadataMap` for a match before allocating the
+    /// full `HashMap` — anonymous requests on a deployment whose
+    /// only strategy is gated by `x-api-key` pay zero per-request
+    /// allocation when no `x-api-key` is on the wire.
+    pub(in crate::api::handlers) wanted_strategy_headers: std::collections::HashSet<String>,
     pub(in crate::api::handlers) event_transport: Option<SharedEventTransport>,
     pub(in crate::api::handlers) locale_config: LocaleConfig,
     pub(in crate::api::handlers) storage: SharedStorage,
@@ -61,7 +85,7 @@ pub struct ContentService {
     /// The password provider for hashing and verification.
     pub(in crate::api::handlers) password_provider: SharedPasswordProvider,
     /// Shared cross-request cache for populated relationship documents.
-    /// Uses NoneCache when caching is disabled. Cleared on any write operation.
+    /// Uses `NoneCache` when caching is disabled. Cleared on any write operation.
     pub(in crate::api::handlers) cache: SharedCache,
     pub(in crate::api::handlers) pagination_ctx: query::PaginationCtx,
     /// Cached backend identifier (e.g. `"sqlite"`, `"postgres"`), set once at startup.
@@ -84,8 +108,20 @@ pub struct ContentService {
 /// Pure helper methods — testable without I/O dependencies.
 impl ContentService {
     /// Get a clone of the shared cache handle (for periodic clearing).
+    #[must_use]
     pub fn cache_handle(&self) -> SharedCache {
         self.cache.clone()
+    }
+
+    /// Bundle the email config + renderer + server config into an
+    /// `EmailContext` for verification email flows.
+    pub(in crate::api::handlers) fn email_context(&self) -> EmailContext {
+        EmailContext {
+            email_config: self.email_config.clone(),
+            email_renderer: self.email_renderer.clone(),
+            server_config: self.server_config.clone(),
+            email_max_attempts: self.email_max_attempts,
+        }
     }
 
     pub(in crate::api::handlers) fn get_collection_def(
@@ -95,7 +131,7 @@ impl ContentService {
         self.registry
             .get_collection(slug)
             .cloned()
-            .ok_or_else(|| Status::not_found(format!("Collection '{}' not found", slug)))
+            .ok_or_else(|| Status::not_found(format!("Collection '{slug}' not found")))
     }
 
     pub(in crate::api::handlers) fn get_global_def(
@@ -105,7 +141,7 @@ impl ContentService {
         self.registry
             .get_global(slug)
             .cloned()
-            .ok_or_else(|| Status::not_found(format!("Global '{}' not found", slug)))
+            .ok_or_else(|| Status::not_found(format!("Global '{slug}' not found")))
     }
 
     /// Extract Bearer token string from gRPC metadata (pure, no I/O).
@@ -115,7 +151,71 @@ impl ContentService {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
+    }
+
+    /// Snapshot ASCII gRPC metadata into a plain `HashMap` for the
+    /// unified auth evaluator and for passing as `ctx.headers` to Lua
+    /// strategy hooks. Keys keep their original (gRPC-normalized,
+    /// lowercase) casing; case-insensitive matching is the evaluator's
+    /// job inside `activation_matches`. Binary metadata is skipped
+    /// silently — strategies that need it would need a dedicated
+    /// channel.
+    pub(in crate::api::handlers) fn extract_metadata_headers(
+        metadata: &MetadataMap,
+    ) -> HashMap<String, String> {
+        let mut out = HashMap::with_capacity(metadata.len());
+        for entry in metadata.iter() {
+            if let tonic::metadata::KeyAndValueRef::Ascii(name, value) = entry
+                && let Ok(v) = value.to_str()
+            {
+                out.insert(name.as_str().to_string(), v.to_string());
+            }
+        }
+        out
+    }
+
+    /// Per-request wrapper around [`extract_metadata_headers`] that
+    /// only materialises the `HashMap` when a strategy is actually
+    /// going to consume it.
+    ///
+    /// Decision order:
+    /// 1. No strategy methods configured at all → return empty
+    ///    immediately (deployments that use only `password_login` /
+    ///    `bearer` / `session_cookie` pay nothing).
+    /// 2. An `Activation::Always` strategy exists for this surface
+    ///    → materialise; the strategy fires unconditionally and
+    ///    needs the headers.
+    /// 3. Otherwise → pre-scan the `MetadataMap` for any
+    ///    header-activated strategy's discriminator. Materialise
+    ///    only if one is present; return empty if none match.
+    ///
+    /// For the typical deployment with a single `x-api-key`-gated
+    /// strategy, anonymous traffic that doesn't send `x-api-key`
+    /// pays zero per-request allocation here — was the dominant
+    /// allocation source on the read hot path before this fix.
+    pub(in crate::api::handlers) fn metadata_headers(
+        &self,
+        metadata: &MetadataMap,
+    ) -> HashMap<String, String> {
+        if !self.has_strategies {
+            return HashMap::new();
+        }
+        if self.has_always_strategy {
+            return Self::extract_metadata_headers(metadata);
+        }
+        let any_wanted = metadata.iter().any(|entry| {
+            matches!(
+                entry,
+                tonic::metadata::KeyAndValueRef::Ascii(name, _)
+                    if self.wanted_strategy_headers.contains(name.as_str())
+            )
+        });
+        if any_wanted {
+            Self::extract_metadata_headers(metadata)
+        } else {
+            HashMap::new()
+        }
     }
 }
 
@@ -124,6 +224,7 @@ impl ContentService {
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
     /// Create a new gRPC content service with all dependencies.
+    #[must_use]
     pub fn new(deps: ContentServiceDeps) -> Self {
         let default_depth = deps.config.depth.default_depth;
         let max_depth = deps.config.depth.max_depth;
@@ -143,13 +244,37 @@ impl ContentService {
             .populate_singleflight
             .unwrap_or_else(|| Arc::new(Singleflight::new()));
 
+        let has_strategies = deps.registry.has_any_strategy();
+        let has_always_strategy = deps
+            .registry
+            .always_strategies
+            .get(&Surface::Grpc)
+            .is_some_and(|v| !v.is_empty());
+        let wanted_strategy_headers: std::collections::HashSet<String> = deps
+            .registry
+            .header_strategies
+            .keys()
+            .filter(|(_, surface)| *surface == Surface::Grpc)
+            .map(|(header, _)| header.clone())
+            .collect();
+
         Self {
+            has_strategies,
+            has_always_strategy,
+            wanted_strategy_headers,
             pool: deps.pool,
             registry: deps.registry,
             hook_runner: deps.hook_runner,
-            jwt_secret: deps.jwt_secret,
             default_depth,
             max_depth,
+            email_max_attempts: deps.config.jobs.system_email_max_attempts(),
+            queue_retries: deps
+                .config
+                .jobs
+                .queues
+                .iter()
+                .filter_map(|(name, q)| q.retries.map(|r| (name.clone(), r)))
+                .collect(),
             email_config: deps.config.email,
             email_renderer: deps.email_renderer,
             server_config: deps.config.server,
@@ -175,50 +300,61 @@ impl ContentService {
         }
     }
 
-    /// Resolve an auth user from a token using an existing connection.
+    /// Resolve a request's principal via the unified auth evaluator.
     ///
-    /// Returns `Ok(None)` when no token is present (anonymous), `Ok(Some(user))`
-    /// for a valid token, or `Err(Status::unauthenticated)` for an invalid/expired token.
+    /// Returns `Ok(None)` when no method matched (anonymous request),
+    /// `Ok(Some(user))` when a method authenticated the request, or
+    /// `Err(Status::unauthenticated)` when a credential was supplied
+    /// but invalid (bad signature, stale session, revoked user).
     ///
-    /// Pure data lookup — safe to call inside `spawn_blocking`.
+    /// Honors per-method `surfaces` and `activates_on`: a strategy
+    /// only fires when its activation discriminator matches the
+    /// current request, and a Bearer JWT is only accepted on
+    /// surfaces the issuing collection explicitly listed.
+    ///
+    /// Pure data lookup (Lua may fire if a strategy matches) — safe
+    /// to call inside `spawn_blocking`.
     pub(in crate::api::handlers) fn resolve_auth_user(
-        token: Option<String>,
+        bearer: Option<&str>,
+        headers: &HashMap<String, String>,
         token_provider: &dyn TokenProvider,
+        hook_runner: &HookRunner,
         registry: &Registry,
         conn: &dyn DbConnection,
     ) -> Result<Option<AuthUser>, Status> {
-        let token = match token {
-            Some(t) => t,
-            None => return Ok(None),
+        let request = AuthRequest {
+            surface: Surface::Grpc,
+            bearer_token: bearer,
+            session_cookie_token: None,
+            headers,
         };
-        let claims = token_provider
-            .validate_token(&token)
-            .map_err(|_| Status::unauthenticated("Invalid or expired token"))?;
-        let def = match registry.get_collection(&claims.collection) {
-            Some(d) => d.clone(),
-            None => return Err(Status::unauthenticated("Auth collection no longer exists")),
+        let deps = EvaluateDeps {
+            registry,
+            token_provider,
+            hook_runner,
+            conn,
         };
-        // Auth infrastructure — direct query for user lookup, not a user-facing read.
-        let doc = match query::find_by_id(conn, &claims.collection, &def, &claims.sub, None) {
-            Ok(Some(d)) => d,
-            Ok(None) => return Err(Status::unauthenticated("User no longer exists")),
-            Err(_) => return Err(Status::unauthenticated("User lookup failed")),
-        };
-
-        // Reject tokens with stale session version (password was changed).
-        // On DB error, reject the token — do not silently default to 0 which
-        // would let stale tokens through during transient failures.
-        let ctx = ServiceContext::slug_only(&claims.collection)
-            .conn(conn)
-            .build();
-        let db_session_version = service::auth::get_session_version(&ctx, &claims.sub)
-            .map_err(|_| Status::unauthenticated("Session version lookup failed"))?;
-
-        if claims.session_version != db_session_version {
-            return Err(Status::unauthenticated("Session invalidated"));
+        match service::auth::evaluate(&request, &deps) {
+            Resolution::Authenticated(auth) => Ok(Some(auth.user)),
+            Resolution::Anonymous => Ok(None),
+            // Precise per-failure messages so callers see why their
+            // token was rejected. None expose user-existence — `Locked`
+            // and `StaleSession` only surface when the bearer already
+            // proved knowledge of a valid signed token for that user.
+            Resolution::Invalid(failure) => Err(match failure {
+                AuthFailure::Locked => Status::permission_denied("Account locked"),
+                AuthFailure::StaleSession => Status::unauthenticated("Session invalidated"),
+                AuthFailure::UserMissing => Status::unauthenticated("User no longer exists"),
+                AuthFailure::UnknownCollection => {
+                    Status::unauthenticated("Auth collection no longer exists")
+                }
+                AuthFailure::Lookup => Status::unavailable("User lookup failed"),
+                AuthFailure::BadToken => Status::unauthenticated("Invalid or expired token"),
+                AuthFailure::Unaccepted => {
+                    Status::unauthenticated("Credential not accepted on this surface")
+                }
+            }),
         }
-
-        Ok(Some(AuthUser::new(claims, doc)))
     }
 
     /// Check collection-level access using an existing connection.
@@ -226,31 +362,25 @@ impl ContentService {
     /// Free-standing helper — safe to call inside `spawn_blocking`.
     pub(in crate::api::handlers) fn check_access_blocking(
         access_ref: Option<&str>,
-        auth_user: &Option<AuthUser>,
+        auth_user: Option<&AuthUser>,
         id: Option<&str>,
-        data: Option<&HashMap<String, Value>>,
+        data: Option<&DocumentFields>,
         hook_runner: &HookRunner,
         conn: &mut BoxedConnection,
     ) -> Result<AccessResult, Status> {
-        let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-        let tx = conn.transaction().map_err(|e| {
-            error!("Access check tx error: {}", e);
-
-            Status::internal("Internal error")
-        })?;
+        let user_doc = auth_user.map(|au| &au.user_doc);
+        let tx = conn
+            .transaction()
+            .inspect_err(|e| error!("Access check tx error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))?;
         let result = hook_runner
             .check_access(access_ref, user_doc, id, data, &tx)
-            .map_err(|e| {
-                error!("Access check error: {}", e);
+            .inspect_err(|e| error!("Access check error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))?;
 
-                Status::internal("Internal error")
-            })?;
-
-        tx.commit().map_err(|e| {
-            error!("Access check commit error: {}", e);
-
-            Status::internal("Internal error")
-        })?;
+        tx.commit()
+            .inspect_err(|e| error!("Access check commit error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))?;
         Ok(result)
     }
 }
@@ -355,7 +485,7 @@ impl ContentApi for ContentService {
         &self,
         request: Request<content::ForgotPasswordRequest>,
     ) -> Result<Response<content::ForgotPasswordResponse>, Status> {
-        self.forgot_password_impl(request).await
+        Ok(self.forgot_password_impl(request))
     }
 
     async fn reset_password(
@@ -376,14 +506,14 @@ impl ContentApi for ContentService {
         &self,
         request: Request<content::ListCollectionsRequest>,
     ) -> Result<Response<content::ListCollectionsResponse>, Status> {
-        self.list_collections_impl(request).await
+        Ok(self.list_collections_impl(request))
     }
 
     async fn describe_collection(
         &self,
         request: Request<content::DescribeCollectionRequest>,
     ) -> Result<Response<content::DescribeCollectionResponse>, Status> {
-        self.describe_collection_impl(request).await
+        self.describe_collection_impl(request)
     }
 
     type SubscribeStream =

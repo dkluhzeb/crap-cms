@@ -1,4 +1,4 @@
-//! Error mapping: ServiceError → tonic::Status.
+//! Error mapping: `ServiceError` → `tonic::Status`.
 
 use tonic::Status;
 use tracing::{error, warn};
@@ -53,6 +53,7 @@ impl From<ServiceError> for Status {
 
 #[cfg(test)]
 mod tests {
+    use crate::core::{FieldError, ValidationError};
     use anyhow::anyhow;
     use tonic::Code;
 
@@ -88,7 +89,6 @@ mod tests {
 
     #[test]
     fn service_error_validation_to_invalid_argument() {
-        use crate::core::validate::{FieldError, ValidationError};
         let ve = ValidationError::new(vec![FieldError::new("title", "required")]);
         let se = ServiceError::Validation(ve);
         let status = Status::from(se);

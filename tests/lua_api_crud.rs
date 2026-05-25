@@ -1,10 +1,25 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::SharedRegistry;
+use crap_cms::core::Registry;
 use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
+use std::sync::Arc;
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
@@ -37,10 +52,10 @@ fn eval_lua(runner: &HookRunner, code: &str) -> String {
 
 // ── Helper: setup with real DB tables ────────────────────────────────────────
 
-/// Set up a HookRunner with a real synced database (tables created from Lua definitions).
+/// Set up a `HookRunner` with a real synced database (tables created from Lua definitions).
 /// Returns (tempdir, pool, registry, runner). The tempdir must be kept alive for the DB.
 #[allow(dead_code)]
-fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
+fn setup_with_db() -> (tempfile::TempDir, DbPool, Arc<Registry>, HookRunner) {
     let config_dir = fixture_dir();
     let config = CrapConfig::test_default();
     let registry = hooks::init_lua(&config_dir, &config).expect("init_lua failed");
@@ -54,7 +69,7 @@ fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("HookRunner::new failed");
@@ -404,7 +419,7 @@ fn lua_find_by_id_with_depth() {
 fn setup_versioned_db() -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    SharedRegistry,
+    Arc<Registry>,
     HookRunner,
 ) {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -440,7 +455,7 @@ crap.collections.define("articles", {
 
     let runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("runner");

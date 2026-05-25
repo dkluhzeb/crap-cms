@@ -54,9 +54,8 @@ pub(super) fn substitute_env_vars(input: &str) -> Result<String> {
         } else {
             let val = env::var(inner).with_context(|| {
                 format!(
-                    "Environment variable '{}' referenced in crap.toml is not set \
-                     (use ${{{}:-default}} for a fallback)",
-                    inner, inner
+                    "Environment variable '{inner}' referenced in crap.toml is not set \
+                     (use ${{{inner}:-default}} for a fallback)"
                 )
             })?;
 

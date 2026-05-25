@@ -11,19 +11,49 @@ use crate::{
         AdminState,
         handlers::shared::{get_user_doc, htmx_redirect, paths, redirect_response},
     },
-    core::auth::AuthUser,
-    service::{ServiceContext, restore_global_version},
+    config::LocaleConfig,
+    core::{AuthUser, Document, GlobalDefinition, SharedCache, SharedEventTransport},
+    db::DbPool,
+    hooks::HookRunner,
+    service::{ServiceContext, ServiceError, restore_global_version},
 };
 
-/// POST /admin/globals/{slug}/versions/{version_id}/restore
+/// Owned inputs for the spawn-blocking restore body.
+struct RestoreGlobalVersionInput {
+    pool: DbPool,
+    runner: HookRunner,
+    slug: String,
+    def: GlobalDefinition,
+    user_doc: Option<Document>,
+    event_transport: Option<SharedEventTransport>,
+    cache: Option<SharedCache>,
+    version_id: String,
+    locale_config: LocaleConfig,
+}
+
+/// Build the service context and run the global version-restore service call.
+fn restore_global_version_blocking(
+    input: RestoreGlobalVersionInput,
+) -> Result<Document, ServiceError> {
+    let ctx = ServiceContext::global(&input.slug, &input.def)
+        .pool(&input.pool)
+        .runner(&input.runner)
+        .user(input.user_doc.as_ref())
+        .event_transport(input.event_transport)
+        .cache(input.cache)
+        .build();
+
+    restore_global_version(&ctx, &input.version_id, &input.locale_config)
+}
+
+/// `POST /admin/globals/{slug}/versions/{version_id}/restore`
 pub async fn restore_version(
     State(state): State<AdminState>,
     Path((slug, version_id)): Path<(String, String)>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let def = match state.registry.get_global(&slug) {
-        Some(d) => d.clone(),
-        None => return redirect_response("/admin"),
+    let Some(def) = state.registry.get_global(&slug).cloned() else {
+        return redirect_response(paths::DASHBOARD);
     };
 
     if !def.has_versions() {
@@ -31,25 +61,19 @@ pub async fn restore_version(
     }
 
     let redirect = paths::global(&slug);
-    let pool = state.pool.clone();
-    let runner = state.hook_runner.clone();
-    let locale_config = state.config.locale.clone();
-    let user_doc = get_user_doc(&auth_user).cloned();
-    let event_transport = state.event_transport.clone();
-    let cache = state.cache.clone();
+    let input = RestoreGlobalVersionInput {
+        pool: state.pool.clone(),
+        runner: state.hook_runner.clone(),
+        slug,
+        def,
+        user_doc: get_user_doc(auth_user.as_ref()).cloned(),
+        event_transport: state.event_transport.clone(),
+        cache: state.cache.clone(),
+        version_id,
+        locale_config: state.config.locale.clone(),
+    };
 
-    let result = task::spawn_blocking(move || {
-        let ctx = ServiceContext::global(&slug, &def)
-            .pool(&pool)
-            .runner(&runner)
-            .user(user_doc.as_ref())
-            .event_transport(event_transport)
-            .cache(cache)
-            .build();
-
-        restore_global_version(&ctx, &version_id, &locale_config)
-    })
-    .await;
+    let result = task::spawn_blocking(move || restore_global_version_blocking(input)).await;
 
     match result {
         Ok(Ok(_)) => htmx_redirect(&redirect),

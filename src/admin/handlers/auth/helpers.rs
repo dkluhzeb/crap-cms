@@ -12,6 +12,7 @@ use axum::{
 use chrono::Utc;
 use ipnet::IpNet;
 
+use crate::core::collection::Auth;
 use crate::{
     admin::{
         AdminState,
@@ -72,8 +73,7 @@ pub(in crate::admin::handlers) fn client_ip(
         // which an attacker could vary per-request to bypass rate limiting.
         return first
             .parse::<IpAddr>()
-            .map(|ip| ip.to_string())
-            .unwrap_or_else(|_| peer_ip.to_string());
+            .map_or_else(|_| peer_ip.to_string(), |ip| ip.to_string());
     }
 
     peer_ip.to_string()
@@ -92,7 +92,7 @@ fn ip_is_trusted(ip: IpAddr, trusted: &[String]) -> bool {
 
         match entry.parse::<IpNet>() {
             Ok(net) => net.contains(&ip),
-            Err(_) => entry.parse::<IpAddr>().map(|a| a == ip).unwrap_or(false),
+            Err(_) => entry.parse::<IpAddr>().is_ok_and(|a| a == ip),
         }
     })
 }
@@ -119,7 +119,9 @@ pub(in crate::admin::handlers) fn login_error(
     render_page(state, "auth/login", &ctx)
 }
 
-/// Check if all auth collections have disable_local = true.
+/// Check if every auth collection has password-login turned off
+/// (used by the login page to decide whether to render the
+/// email/password inputs at all).
 pub(in crate::admin::handlers) fn all_disable_local(state: &AdminState) -> bool {
     let auth_collections: Vec<_> = state
         .registry
@@ -134,7 +136,7 @@ pub(in crate::admin::handlers) fn all_disable_local(state: &AdminState) -> bool 
 
     auth_collections
         .iter()
-        .all(|def| def.auth.as_ref().map(|a| a.disable_local).unwrap_or(false))
+        .all(|def| !def.auth.as_ref().is_some_and(Auth::password_login_enabled))
 }
 
 /// Check if "forgot password?" link should show on login page.
@@ -148,7 +150,7 @@ pub(in crate::admin::handlers) fn show_forgot_password(state: &AdminState) -> bo
         .collections
         .values()
         .filter(|def| def.is_auth_collection())
-        .any(|def| def.auth.as_ref().is_some_and(|a| a.forgot_password))
+        .any(|def| def.auth.as_ref().is_some_and(Auth::forgot_password_enabled))
 }
 
 pub(in crate::admin::handlers) fn get_auth_collections(state: &AdminState) -> Vec<AuthCollection> {
@@ -243,16 +245,16 @@ pub(in crate::admin::handlers) fn create_session_token(
 
     let claims = ClaimsBuilder::new(user_id, Slug::new(collection))
         .email(email)
-        .exp((Utc::now().timestamp().max(0) as u64).saturating_add(expiry))
+        .exp((Utc::now().timestamp().max(0).cast_unsigned()).saturating_add(expiry))
         .auth_time(auth_time)
         .session_version(session_version)
         .build()
-        .map_err(|e| format!("Claims build error: {}", e))?;
+        .map_err(|e| format!("Claims build error: {e}"))?;
 
     let token = state
         .token_provider
         .create_token(&claims)
-        .map_err(|e| format!("Token creation error: {}", e))?;
+        .map_err(|e| format!("Token creation error: {e}"))?;
 
     Ok(SessionToken {
         token,
@@ -297,7 +299,10 @@ mod tests {
     fn trust_proxies(entries: &[&str]) -> ServerConfig {
         ServerConfig {
             trust_proxy: true,
-            trusted_proxies: entries.iter().map(|s| s.to_string()).collect(),
+            trusted_proxies: entries
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
             ..ServerConfig::default()
         }
     }

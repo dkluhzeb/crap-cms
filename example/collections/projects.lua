@@ -67,7 +67,7 @@ crap.collections.define("projects", {
           picker_appearance = "dayOnly",
           admin = {
             width = "half",
-            condition = { field = "status", condition = "not_equals", value = "planning" },
+            condition = "hooks.conditions.show_end_date",
           },
         }),
       },

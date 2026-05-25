@@ -29,7 +29,7 @@ pub fn count_errors_in_field_contexts(fields: &[FieldContext]) -> usize {
     fields
         .iter()
         .map(|fc| {
-            let mut count = if fc.base().error.is_some() { 1 } else { 0 };
+            let mut count = usize::from(fc.base().error.is_some());
 
             count += match fc {
                 FieldContext::Group(gf) | FieldContext::Collapsible(gf) => {
@@ -41,24 +41,16 @@ pub fn count_errors_in_field_contexts(fields: &[FieldContext]) -> usize {
                     .iter()
                     .map(|tp| count_errors_in_field_contexts(&tp.sub_fields))
                     .sum(),
-                FieldContext::Array(af) => af
-                    .rows
-                    .as_ref()
-                    .map(|rs| {
-                        rs.iter()
-                            .map(|r| count_errors_in_field_contexts(&r.sub_fields))
-                            .sum()
-                    })
-                    .unwrap_or(0),
-                FieldContext::Blocks(bf) => bf
-                    .rows
-                    .as_ref()
-                    .map(|rs| {
-                        rs.iter()
-                            .map(|r| count_errors_in_field_contexts(&r.sub_fields))
-                            .sum()
-                    })
-                    .unwrap_or(0),
+                FieldContext::Array(af) => af.rows.as_ref().map_or(0, |rs| {
+                    rs.iter()
+                        .map(|r| count_errors_in_field_contexts(&r.sub_fields))
+                        .sum()
+                }),
+                FieldContext::Blocks(bf) => bf.rows.as_ref().map_or(0, |rs| {
+                    rs.iter()
+                        .map(|r| count_errors_in_field_contexts(&r.sub_fields))
+                        .sum()
+                }),
                 _ => 0,
             };
 
@@ -73,7 +65,7 @@ pub fn collect_node_attr_errors(
     errors: &HashMap<String, String>,
     field_name: &str,
 ) -> Option<String> {
-    let prefix = format!("{}[", field_name);
+    let prefix = format!("{field_name}[");
 
     let msgs: Vec<&str> = errors
         .iter()
@@ -216,15 +208,15 @@ fn apply_single_condition(
 
     match result {
         DisplayConditionResult::Bool(visible) => {
-            condition.condition_visible = Some(*visible);
-            condition.condition_ref = Some(cond_ref.clone());
+            condition.visible = Some(*visible);
+            condition.func_ref = Some(cond_ref.clone());
         }
         DisplayConditionResult::Table {
             condition: cond,
             visible,
         } => {
-            condition.condition_visible = Some(*visible);
-            condition.condition_json = Some(cond.clone());
+            condition.visible = Some(*visible);
+            condition.expr = Some(cond.clone());
         }
     }
 }
@@ -397,5 +389,210 @@ mod tests {
             c0.languages.as_deref(),
             Some(&["javascript".to_string(), "python".to_string()][..])
         );
+    }
+
+    // ── safe_template_id ──────────────────────────────────────────────
+
+    #[test]
+    fn safe_template_id_simple_name() {
+        assert_eq!(safe_template_id("items"), "items");
+    }
+
+    #[test]
+    fn safe_template_id_with_brackets() {
+        assert_eq!(safe_template_id("content[0][items]"), "content-0-items");
+    }
+
+    #[test]
+    fn safe_template_id_nested_index_placeholder() {
+        assert_eq!(
+            safe_template_id("content[__INDEX__][items]"),
+            "content-__INDEX__-items"
+        );
+    }
+
+    // ── split_sidebar_fields ──────────────────────────────────────────
+
+    use crate::admin::handlers::field_context::test_helpers::fields_from_json;
+
+    #[test]
+    fn split_sidebar_fields_separates_by_position() {
+        let fields = fields_from_json(vec![
+            json!({"name": "title", "field_type": "text"}),
+            json!({"name": "slug", "field_type": "text", "position": "sidebar"}),
+            json!({"name": "body", "field_type": "richtext"}),
+            json!({"name": "status", "field_type": "select", "position": "sidebar"}),
+        ]);
+        let (main, sidebar) = split_sidebar_fields(fields);
+        assert_eq!(main.len(), 2);
+        assert_eq!(sidebar.len(), 2);
+        assert_eq!(main[0].base().name, "title");
+        assert_eq!(main[1].base().name, "body");
+        assert_eq!(sidebar[0].base().name, "slug");
+        assert_eq!(sidebar[1].base().name, "status");
+    }
+
+    #[test]
+    fn split_sidebar_fields_no_sidebar() {
+        let fields = fields_from_json(vec![
+            json!({"name": "title", "field_type": "text"}),
+            json!({"name": "body", "field_type": "richtext"}),
+        ]);
+        let (main, sidebar) = split_sidebar_fields(fields);
+        assert_eq!(main.len(), 2);
+        assert!(sidebar.is_empty());
+    }
+
+    #[test]
+    fn split_sidebar_fields_all_sidebar() {
+        let fields = fields_from_json(vec![
+            json!({"name": "a", "field_type": "text", "position": "sidebar"}),
+            json!({"name": "b", "field_type": "text", "position": "sidebar"}),
+        ]);
+        let (main, sidebar) = split_sidebar_fields(fields);
+        assert!(main.is_empty());
+        assert_eq!(sidebar.len(), 2);
+    }
+
+    #[test]
+    fn split_sidebar_fields_empty() {
+        let (main, sidebar) = split_sidebar_fields(vec![]);
+        assert!(main.is_empty());
+        assert!(sidebar.is_empty());
+    }
+
+    // ── count_errors_in_field_contexts ────────────────────────────────
+
+    #[test]
+    fn count_errors_empty_fields() {
+        assert_eq!(count_errors_in_field_contexts(&[]), 0);
+    }
+
+    #[test]
+    fn count_errors_no_errors() {
+        let fields = fields_from_json(vec![
+            json!({"field_type": "text", "name": "title", "value": "hello"}),
+            json!({"field_type": "text", "name": "body", "value": "world"}),
+        ]);
+        assert_eq!(count_errors_in_field_contexts(&fields), 0);
+    }
+
+    #[test]
+    fn count_errors_direct_errors() {
+        let fields = fields_from_json(vec![
+            json!({"field_type": "text", "name": "title", "error": "Required"}),
+            json!({"field_type": "text", "name": "body", "value": "ok"}),
+            json!({"field_type": "text", "name": "email", "error": "Invalid email"}),
+        ]);
+        assert_eq!(count_errors_in_field_contexts(&fields), 2);
+    }
+
+    #[test]
+    fn count_errors_nested_in_sub_fields() {
+        let fields = fields_from_json(vec![json!({
+            "field_type": "group",
+            "name": "group1",
+            "sub_fields": [
+                {"field_type": "text", "name": "nested1", "error": "Too short"},
+                {"field_type": "text", "name": "nested2", "value": "ok"},
+            ]
+        })]);
+        assert_eq!(count_errors_in_field_contexts(&fields), 1);
+    }
+
+    #[test]
+    fn count_errors_nested_in_tabs() {
+        let fields = fields_from_json(vec![json!({
+            "field_type": "tabs",
+            "name": "settings",
+            "tabs": [
+                {
+                    "label": "General",
+                    "sub_fields": [
+                        {"field_type": "text", "name": "f1", "error": "Required"},
+                        {"field_type": "text", "name": "f2", "error": "Too long"},
+                    ]
+                },
+                {
+                    "label": "Advanced",
+                    "sub_fields": [
+                        {"field_type": "text", "name": "f3", "value": "ok"},
+                    ]
+                }
+            ]
+        })]);
+        assert_eq!(count_errors_in_field_contexts(&fields), 2);
+    }
+
+    #[test]
+    fn count_errors_nested_in_array_rows() {
+        let fields = fields_from_json(vec![json!({
+            "field_type": "array",
+            "name": "items",
+            "rows": [
+                {
+                    "index": 0,
+                    "sub_fields": [
+                        {"field_type": "text", "name": "items[0][title]", "error": "Required"},
+                    ]
+                },
+                {
+                    "index": 1,
+                    "sub_fields": [
+                        {"field_type": "text", "name": "items[1][title]", "value": "ok"},
+                    ]
+                }
+            ]
+        })]);
+        assert_eq!(count_errors_in_field_contexts(&fields), 1);
+    }
+
+    #[test]
+    fn count_errors_null_error_not_counted() {
+        let fields = fields_from_json(vec![
+            json!({"field_type": "text", "name": "title", "error": null}),
+        ]);
+        assert_eq!(count_errors_in_field_contexts(&fields), 0);
+    }
+
+    // ── collect_node_attr_errors ──────────────────────────────────────
+
+    #[test]
+    fn collect_node_attr_errors_finds_matching() {
+        let mut errors = HashMap::new();
+        errors.insert(
+            "content[cta#0].text".to_string(),
+            "Text is required".to_string(),
+        );
+        errors.insert(
+            "content[cta#0].url".to_string(),
+            "URL is required".to_string(),
+        );
+
+        let result = collect_node_attr_errors(&errors, "content");
+        assert!(result.is_some());
+        let msg = result.unwrap();
+        assert!(msg.contains("Text is required"));
+        assert!(msg.contains("URL is required"));
+    }
+
+    #[test]
+    fn collect_node_attr_errors_ignores_unrelated() {
+        let mut errors = HashMap::new();
+        errors.insert(
+            "other_field[cta#0].text".to_string(),
+            "Text is required".to_string(),
+        );
+        errors.insert("content".to_string(), "Field error".to_string());
+
+        let result = collect_node_attr_errors(&errors, "content");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn collect_node_attr_errors_empty() {
+        let errors = HashMap::new();
+        let result = collect_node_attr_errors(&errors, "content");
+        assert!(result.is_none());
     }
 }

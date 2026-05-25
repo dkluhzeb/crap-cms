@@ -3,6 +3,7 @@
 //! Used in multi-server deployments where app servers run `serve --no-scheduler`
 //! and one or more dedicated workers run `work`.
 
+use std::sync::Arc;
 use std::{path::Path, process};
 #[cfg(unix)]
 use std::{
@@ -19,20 +20,25 @@ use tracing::info;
 use tracing::{debug, warn};
 
 #[cfg(unix)]
-use crate::commands::helpers::{is_process_running, read_pid};
+use crate::commands::helpers::{is_process_running, read_pid, send_signal};
 use crate::{
     cli,
     commands::helpers::{self, load_and_validate_config, run_on_init_hooks, spawn_shutdown_signal},
     core::{email::create_email_provider, upload::create_storage},
     db::{migrate, pool},
     hooks::{self, HookRunner},
-    scheduler::{self, SchedulerParamsBuilder},
+    scheduler::{self, SchedulerParams},
 };
 
 /// Worker PID filename (separate from server's crap.pid).
 const PID_FILENAME: &str = "crap-worker.pid";
 
 /// Stop a running detached worker.
+///
+/// # Errors
+///
+/// Returns an error if no PID file is found, the process can't be signalled,
+/// or the worker fails to exit after `SIGTERM` and `SIGKILL`.
 #[cfg(unix)]
 pub fn stop(config_dir: &Path) -> Result<()> {
     let pid = read_pid(config_dir, PID_FILENAME).context(
@@ -43,18 +49,10 @@ pub fn stop(config_dir: &Path) -> Result<()> {
     if !is_process_running(pid) {
         helpers::remove_pid_file(config_dir, PID_FILENAME);
 
-        bail!(
-            "Worker process {} is not running (stale PID file removed)",
-            pid
-        );
+        bail!("Worker process {pid} is not running (stale PID file removed)");
     }
 
-    unsafe {
-        libc::kill(
-            i32::try_from(pid).context("PID out of range")?,
-            libc::SIGTERM,
-        )
-    };
+    send_signal(pid, libc::SIGTERM)?;
 
     let deadline = Instant::now() + Duration::from_secs(10);
 
@@ -74,12 +72,7 @@ pub fn stop(config_dir: &Path) -> Result<()> {
         "Worker {pid} did not stop within 10s, sending SIGKILL"
     ));
 
-    unsafe {
-        libc::kill(
-            i32::try_from(pid).context("PID out of range")?,
-            libc::SIGKILL,
-        )
-    };
+    let _ = send_signal(pid, libc::SIGKILL);
 
     sleep(Duration::from_millis(500));
 
@@ -91,10 +84,15 @@ pub fn stop(config_dir: &Path) -> Result<()> {
 }
 
 /// Restart a running detached worker.
+///
+/// # Errors
+///
+/// Returns an error if the detach step fails (the stop step's error is
+/// non-fatal: a stale PID file is cleaned up and `detach` proceeds).
 #[cfg(unix)]
 pub fn restart(
     config_dir: &Path,
-    queues: Option<Vec<String>>,
+    queues: Option<&[String]>,
     concurrency: Option<usize>,
     no_cron: bool,
 ) -> Result<()> {
@@ -112,15 +110,18 @@ pub fn restart(
 }
 
 /// Show status of a detached worker.
+///
+/// # Errors
+///
+/// Currently infallible (returns `Ok(())` for all observed states). The
+/// `Result` return type is preserved for parity with sibling commands and
+/// because PID-file IO could plausibly fail in the future.
 #[cfg(unix)]
 pub fn status(config_dir: &Path) -> Result<()> {
-    let pid = match read_pid(config_dir, PID_FILENAME) {
-        Some(pid) => pid,
-        None => {
-            cli::info("Worker not running (no PID file)");
+    let Some(pid) = read_pid(config_dir, PID_FILENAME) else {
+        cli::info("Worker not running (no PID file)");
 
-            return Ok(());
-        }
+        return Ok(());
     };
 
     if !is_process_running(pid) {
@@ -137,10 +138,15 @@ pub fn status(config_dir: &Path) -> Result<()> {
 }
 
 /// Re-exec the current binary as a detached background worker process.
+///
+/// # Errors
+///
+/// Returns an error if the current executable path can't be determined or
+/// the child process fails to spawn.
 #[cfg(not(tarpaulin_include))]
 pub fn detach(
     config_dir: &Path,
-    queues: Option<Vec<String>>,
+    queues: Option<&[String]>,
     concurrency: Option<usize>,
     no_cron: bool,
 ) -> Result<()> {
@@ -165,7 +171,7 @@ pub fn detach(
 
     cmd.arg("-C").arg(&config_dir).arg("work");
 
-    if let Some(ref q) = queues {
+    if let Some(q) = queues {
         cmd.arg("--queues").arg(q.join(","));
     }
 
@@ -190,13 +196,13 @@ pub fn detach(
 
     helpers::write_pid_file(&config_dir, PID_FILENAME, pid)?;
 
-    cli::success(&format!("Started worker in background (PID {})", pid));
+    cli::success(&format!("Started worker in background (PID {pid})"));
 
     Ok(())
 }
 
 /// Log worker configuration before starting.
-fn log_worker_config(queues: &Option<Vec<String>>, no_cron: bool, concurrency: usize) {
+fn log_worker_config(queues: Option<&[String]>, no_cron: bool, concurrency: usize) {
     if let Some(q) = queues {
         info!("Worker processing queues: {}", q.join(", "));
     } else {
@@ -214,6 +220,11 @@ fn log_worker_config(queues: &Option<Vec<String>>, no_cron: bool, concurrency: u
 }
 
 /// Run a standalone job worker.
+///
+/// # Errors
+///
+/// Returns an error if config loading, Lua init, pool creation, migrations,
+/// hook initialization, or scheduler startup fails.
 #[cfg(not(tarpaulin_include))]
 pub async fn run(
     config_dir: &Path,
@@ -231,7 +242,7 @@ pub async fn run(
 
     let hook_runner = HookRunner::builder()
         .config_dir(config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&cfg)
         .build()?;
 
@@ -252,23 +263,18 @@ pub async fn run(
         jobs_config.max_concurrent = c;
     }
 
-    log_worker_config(&queues, no_cron, jobs_config.max_concurrent);
+    log_worker_config(queues.as_deref(), no_cron, jobs_config.max_concurrent);
 
-    scheduler::start(
-        SchedulerParamsBuilder::new(
-            db_pool,
-            hook_runner,
-            registry,
-            jobs_config,
-            shutdown,
-            storage,
-            cfg.locale.clone(),
-        )
-        .email_provider(email_provider)
-        .email_queue_timeout(cfg.email.queue_timeout)
-        .email_queue_concurrency(cfg.email.queue_concurrency)
-        .build(),
-    )
+    scheduler::start(SchedulerParams {
+        pool: db_pool,
+        hook_runner,
+        registry,
+        config: jobs_config,
+        shutdown,
+        storage,
+        locale_config: cfg.locale.clone(),
+        email_provider: Some(email_provider),
+    })
     .await?;
 
     helpers::remove_pid_file(&pid_config_dir, PID_FILENAME);

@@ -1,6 +1,22 @@
 //! Globals locale/versioned/draft, upload serving, dashboard variants,
 //! CSRF, CORS, access gate tests for admin HTTP handlers.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
+use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -13,6 +29,7 @@ use crap_cms::admin::server::build_router;
 use crap_cms::admin::templates;
 use crap_cms::admin::translations::Translations;
 use crap_cms::config::{CrapConfig, LocaleConfig};
+use crap_cms::core::DocumentFields;
 use crap_cms::core::auth;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
@@ -52,10 +69,7 @@ fn make_users_def() -> CollectionDefinition {
             .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth {
-        enabled: true,
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled());
     def
 }
 
@@ -73,7 +87,7 @@ struct TestApp {
     _tmp: tempfile::TempDir,
     router: axum::Router,
     pool: crap_cms::db::DbPool,
-    registry: crap_cms::core::SharedRegistry,
+    registry: Arc<crap_cms::core::Registry>,
     jwt_secret: JwtSecret,
 }
 
@@ -94,9 +108,9 @@ fn setup_app_with_config(
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &collections {
             reg.register_collection(def.clone());
         }
@@ -105,11 +119,12 @@ fn setup_app_with_config(
         }
     }
 
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -119,16 +134,16 @@ fn setup_app_with_config(
         .expect("create handlebars");
     let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
-    let has_auth = {
-        let reg = registry.read().unwrap();
-        reg.collections.values().any(|d| d.is_auth_collection())
-    };
+    let has_auth = registry
+        .collections
+        .values()
+        .any(crap_cms::core::CollectionDefinition::is_auth_collection);
 
     let state = AdminState {
         config,
         config_dir: tmp.path().to_path_buf(),
         pool: db_pool.clone(),
-        registry: Registry::snapshot(&registry),
+        registry: Arc::clone(&registry),
         handlebars,
         hook_runner,
         jwt_secret: "test-jwt-secret".into(),
@@ -161,7 +176,7 @@ fn setup_app_with_config(
         )
         .unwrap(),
         token_provider: std::sync::Arc::new(crap_cms::core::auth::JwtTokenProvider::new(
-            "test-secret",
+            "test-jwt-secret",
         )),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,
@@ -170,7 +185,7 @@ fn setup_app_with_config(
         ),
         populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
         cache: None,
-        custom_pages: Default::default(),
+        custom_pages: crap_cms::admin::custom_pages::CustomPageRegistry::default(),
     };
 
     let router = build_router(state);
@@ -185,16 +200,16 @@ fn setup_app_with_config(
 }
 
 fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
-    let reg = app.registry.read().unwrap();
+    let reg = &app.registry;
     let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([
-        ("email".to_string(), email.to_string()),
-        ("name".to_string(), "Test User".to_string()),
-    ]);
+    let data: DocumentFields = HashMap::from([
+        ("email".to_string(), json!(email)),
+        ("name".to_string(), json!("Test User")),
+    ])
+    .into();
     let doc = query::create(&tx, "users", &def, &data, None).unwrap();
     query::update_password(&tx, "users", &doc.id, password).unwrap();
     tx.commit().unwrap();
@@ -202,23 +217,32 @@ fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
 }
 
 fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
+    // `update_password` bumps `_session_version` to 1 the moment a password
+    // is set; the evaluator rejects a default-built Claims (session_version
+    // = 0) as `Invalid(StaleSession)`. Read the user's current version so
+    // the test cookie matches the DB.
+    let conn = app.pool.get().unwrap();
+    let session_version =
+        crap_cms::db::query::auth::get_session_version(&conn, "users", user_id).unwrap_or(0);
+    drop(conn);
     let claims = auth::Claims::builder(user_id, "users")
         .email(email)
+        .session_version(session_version)
         .exp((chrono::Utc::now().timestamp() as u64) + 3600)
         .build()
         .unwrap();
     let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();
-    format!("crap_session={}", token)
+    format!("crap_session={token}")
 }
 
 const TEST_CSRF: &str = "test-csrf-token-12345";
 
 fn csrf_cookie() -> String {
-    format!("crap_csrf={}", TEST_CSRF)
+    format!("crap_csrf={TEST_CSRF}")
 }
 
 fn auth_and_csrf(auth_cookie: &str) -> String {
-    format!("{}; crap_csrf={}", auth_cookie, TEST_CSRF)
+    format!("{auth_cookie}; crap_csrf={TEST_CSRF}")
 }
 
 async fn body_string(body: Body) -> String {
@@ -307,8 +331,7 @@ async fn global_update_with_locale() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Global update with locale should succeed, got {}",
-        status
+        "Global update with locale should succeed, got {status}"
     );
 }
 
@@ -373,8 +396,7 @@ async fn global_unpublish() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Global unpublish should succeed, got {}",
-        status
+        "Global unpublish should succeed, got {status}"
     );
 }
 
@@ -423,8 +445,7 @@ async fn global_non_versioned_versions_page_redirects() {
         status == StatusCode::SEE_OTHER
             || status == StatusCode::FOUND
             || status == StatusCode::TEMPORARY_REDIRECT,
-        "Non-versioned global versions page should redirect, got {}",
-        status
+        "Non-versioned global versions page should redirect, got {status}"
     );
 }
 
@@ -448,8 +469,7 @@ async fn global_restore_version_non_versioned_redirects() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Global restore on non-versioned should redirect, got {}",
-        status
+        "Global restore on non-versioned should redirect, got {status}"
     );
 }
 
@@ -507,22 +527,18 @@ async fn serve_upload_existing_file() {
     let ct = resp
         .headers()
         .get("content-type")
-        .map(|v| v.to_str().unwrap_or(""))
-        .unwrap_or("");
+        .map_or("", |v| v.to_str().unwrap_or(""));
     assert!(
         ct.contains("text/plain"),
-        "Should detect text/plain MIME, got {}",
-        ct
+        "Should detect text/plain MIME, got {ct}"
     );
     let cache = resp
         .headers()
         .get("cache-control")
-        .map(|v| v.to_str().unwrap_or(""))
-        .unwrap_or("");
+        .map_or("", |v| v.to_str().unwrap_or(""));
     assert!(
         cache.contains("public"),
-        "Public file should have public cache control, got {}",
-        cache
+        "Public file should have public cache control, got {cache}"
     );
     let body = body_string(resp.into_body()).await;
     assert_eq!(body, "hello world");
@@ -550,12 +566,10 @@ async fn serve_upload_image_file() {
     let ct = resp
         .headers()
         .get("content-type")
-        .map(|v| v.to_str().unwrap_or(""))
-        .unwrap_or("");
+        .map_or("", |v| v.to_str().unwrap_or(""));
     assert!(
         ct.contains("image/png"),
-        "Should detect image/png MIME, got {}",
-        ct
+        "Should detect image/png MIME, got {ct}"
     );
 }
 
@@ -608,8 +622,7 @@ async fn upload_path_traversal_in_collection_returns_404() {
     let status = resp.status();
     assert!(
         status == StatusCode::NOT_FOUND || status == StatusCode::BAD_REQUEST,
-        "Path traversal should be rejected, got {}",
-        status
+        "Path traversal should be rejected, got {status}"
     );
 }
 
@@ -668,8 +681,7 @@ async fn static_js_returns_200() {
         .map(|v| v.to_str().unwrap_or(""));
     assert!(
         ct.unwrap_or("").contains("javascript"),
-        "JS content type should be javascript, got {:?}",
-        ct
+        "JS content type should be javascript, got {ct:?}"
     );
 }
 
@@ -696,8 +708,7 @@ async fn global_save_as_draft() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Global save as draft should succeed, got {}",
-        status
+        "Global save as draft should succeed, got {status}"
     );
 }
 
@@ -760,8 +771,7 @@ async fn versioned_global_update_as_draft() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Global draft save should succeed, got {}",
-        status
+        "Global draft save should succeed, got {status}"
     );
 }
 
@@ -979,10 +989,7 @@ async fn csrf_post_with_matching_header_passes() {
 async fn csrf_post_with_form_field_passes() {
     let app = setup_app(vec![make_users_def()], vec![]);
 
-    let body = format!(
-        "collection=users&email=a@b.com&password=wrong&_csrf={}",
-        TEST_CSRF
-    );
+    let body = format!("collection=users&email=a@b.com&password=wrong&_csrf={TEST_CSRF}");
     let resp = app
         .router
         .oneshot(

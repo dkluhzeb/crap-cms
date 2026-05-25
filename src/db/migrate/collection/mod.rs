@@ -15,22 +15,22 @@ pub(super) use create::create_collection_table;
 pub(crate) mod test_helpers {
     use crate::config::{CrapConfig, LocaleConfig};
     use crate::core::CollectionDefinition;
-    use crate::core::field::{FieldDefinition, FieldType};
+    use crate::core::{FieldDefinition, FieldType};
     use crate::db::{DbPool, pool};
     use tempfile::TempDir;
 
-    pub fn in_memory_pool() -> (TempDir, DbPool) {
+    pub(crate) fn in_memory_pool() -> (TempDir, DbPool) {
         let dir = TempDir::new().expect("temp dir");
         let config = CrapConfig::default();
         let p = pool::create_pool(dir.path(), &config).expect("in-memory pool");
         (dir, p)
     }
 
-    pub fn no_locale() -> LocaleConfig {
+    pub(crate) fn no_locale() -> LocaleConfig {
         LocaleConfig::default()
     }
 
-    pub fn locale_en_de() -> LocaleConfig {
+    pub(crate) fn locale_en_de() -> LocaleConfig {
         LocaleConfig {
             default_locale: "en".to_string(),
             locales: vec!["en".to_string(), "de".to_string()],
@@ -38,17 +38,20 @@ pub(crate) mod test_helpers {
         }
     }
 
-    pub fn simple_collection(slug: &str, fields: Vec<FieldDefinition>) -> CollectionDefinition {
+    pub(crate) fn simple_collection(
+        slug: &str,
+        fields: Vec<FieldDefinition>,
+    ) -> CollectionDefinition {
         let mut def = CollectionDefinition::new(slug);
         def.fields = fields;
         def
     }
 
-    pub fn text_field(name: &str) -> FieldDefinition {
+    pub(crate) fn text_field(name: &str) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Text).build()
     }
 
-    pub fn localized_field(name: &str) -> FieldDefinition {
+    pub(crate) fn localized_field(name: &str) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Text)
             .localized(true)
             .build()

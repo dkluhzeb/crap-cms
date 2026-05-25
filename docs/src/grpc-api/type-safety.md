@@ -7,27 +7,31 @@ But `Struct` means your gRPC client sees `fields` as an untyped map. This page e
 ## The Two-Layer Architecture
 
 ```
-┌──────────────────────────────────────────────────┐
-│  Lua definitions (source of truth)               │
-│  collections/posts.lua → fields, types, options  │
-└────────────┬─────────────────────┬───────────────┘
-             │                     │
-    ┌────────▼────────┐   ┌───────▼────────────┐
-    │  DescribeCollection │   │  crap-cms typegen     │
-    │  (runtime, gRPC)    │   │  (build-time, Lua)   │
-    └────────┬────────┘   └───────┬────────────┘
-             │                     │
-    ┌────────▼────────┐   ┌───────▼────────────┐
-    │  Client codegen │   │  types/crap.lua     │
-    │  TS/Go/Python   │   │  types/generated.lua│
-    │  typed wrappers │   │  (IDE types for     │
-    │                 │   │   hooks & init.lua) │
-    └─────────────────┘   └────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  Lua definitions (source of truth)                       │
+│  collections/posts.lua → fields, types, options          │
+└──────────┬────────────────┬────────────────┬─────────────┘
+           │                │                │
+    ┌──────▼──────┐  ┌──────▼──────────┐  ┌──▼─────────────┐
+    │ Describe-   │  │ crap-cms typegen│  │ crap-cms typegen│
+    │ Collection  │  │ client -l X     │  │ lua            │
+    │ (runtime,   │  │ (build-time)    │  │ (build-time)   │
+    │  gRPC)      │  │                 │  │                │
+    └──────┬──────┘  └──────┬──────────┘  └──┬─────────────┘
+           │                │                │
+    ┌──────▼──────┐  ┌──────▼──────────┐  ┌──▼─────────────┐
+    │ Generic     │  │ types/client.X  │  │ types/crap.lua │
+    │ Document    │  │ (TS/Go/Py/Rs    │  │ types/hooks.lua│
+    │ message     │  │ typed shapes    │  │ (IDE types for │
+    │             │  │ for API clients)│  │ hooks/init.lua)│
+    └─────────────┘  └─────────────────┘  └────────────────┘
 ```
 
 **Layer 1: Runtime schema discovery** — the `DescribeCollection` RPC returns the full field schema. gRPC clients call it at startup or build time to generate typed wrappers.
 
-**Layer 2: Lua typegen** — the `crap-cms typegen` command writes `types/crap.lua` (API surface types) and `types/generated.lua` (per-collection types) with LuaLS annotations. This gives you autocompletion and type checking inside hooks and init.lua.
+**Layer 2: Server-side Lua typegen** — `crap-cms typegen lua` writes `types/crap.lua` (the `crap.*` API surface) and `types/hooks.lua` (per-collection hook/data/doc shapes) with LuaLS annotations. This gives you autocompletion and type checking inside hooks and init.lua. Under `admin.dev_mode = true`, `crap-cms serve` regenerates them on every startup.
+
+**Layer 3: Client-side consumer typegen** — `crap-cms typegen client -l <lang>` writes `types/client.<ext>` with typed per-collection shapes for external API consumers (TypeScript, Go, Python, Rust).
 
 ## DescribeCollection
 
@@ -259,13 +263,19 @@ The gRPC type safety story above is for **external clients**. For **Lua hooks an
 
 ### Generate Types
 
-Types are auto-generated on every server startup. You can also generate them explicitly:
+Under `admin.dev_mode = true`, server-side Lua types are auto-regenerated on every `crap-cms serve` startup. In production (or to refresh after a binary upgrade), regenerate explicitly:
 
 ```bash
-crap-cms typegen
+crap-cms typegen lua
 ```
 
-This writes `<config_dir>/types/generated.lua` with LuaLS annotations derived from your Lua collection definitions. Use `-l all` to generate types for all supported languages (Lua, TypeScript, Go, Python, Rust).
+This writes `<config_dir>/types/crap.lua` (the `crap.*` API surface, copied from the binary) and `<config_dir>/types/hooks.lua` (per-collection hook/data/doc shapes derived from your collection definitions) with LuaLS annotations.
+
+For external API consumers (TypeScript, Go, Python, Rust), use the `client` subcommand:
+
+```bash
+crap-cms typegen client -l ts,go,py,rs
+```
 
 ### What Gets Generated
 
@@ -287,7 +297,7 @@ For array fields: `crap.array_row.*` with the sub-field types.
 
 Select fields become union types: `"draft" | "published" | "archived"`.
 
-Function overloads are generated so `crap.collections.find("posts", ...)` returns `crap.find_result.Posts` instead of the generic `crap.FindResult`.
+Function overloads are generated so `crap.collections.posts.find(...)` returns `crap.find_result.Posts` instead of the generic `crap.FindResult`.
 
 ### IDE Setup
 

@@ -1,14 +1,61 @@
 //! Reset password handler — reset password using a valid reset token.
 
-use anyhow::Context as _;
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
 
+use crate::core::collection::Auth;
 use crate::{
     api::{content, handlers::ContentService},
+    core::CollectionDefinition,
+    db::DbPool,
     service::{ServiceContext, ServiceError, auth::consume_reset_token},
 };
+
+/// Owned bundle for the `ResetPassword` spawn-blocking body.
+struct ResetPasswordBlockingInput {
+    pool: DbPool,
+    slug: String,
+    def: CollectionDefinition,
+    token: String,
+    password: String,
+}
+
+/// The outer `Status` carries infrastructure failures (pool/tx/commit) that
+/// always map to 500 internal. The inner `Result<(), ServiceError>` carries
+/// the semantic outcome of `consume_reset_token` — kept as `ServiceError`
+/// so the caller can record a rate-limit failure before mapping to `Status`.
+fn reset_password_blocking(
+    input: &ResetPasswordBlockingInput,
+) -> Result<Result<(), ServiceError>, Status> {
+    let mut conn = input
+        .pool
+        .get()
+        .inspect_err(|e| error!("Reset password DB connection error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))?;
+    // `transaction_immediate()` — same SELECT-then-UPDATE pattern as
+    // `verify_email_blocking`: reads the reset-token row, then writes
+    // the new password hash. DEFERRED would risk `SQLITE_BUSY_SNAPSHOT`
+    // under concurrent writers.
+    let tx = conn
+        .transaction_immediate()
+        .inspect_err(|e| error!("Reset password start transaction error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))?;
+
+    let ctx = ServiceContext::collection(&input.slug, &input.def)
+        .conn(&tx)
+        .build();
+
+    if let Err(e) = consume_reset_token(&ctx, &input.token, &input.password) {
+        return Ok(Err(e));
+    }
+
+    tx.commit()
+        .inspect_err(|e| error!("Reset password commit error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))?;
+
+    Ok(Ok(()))
+}
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -19,8 +66,7 @@ impl ContentService {
     ) -> Result<Response<content::ResetPasswordResponse>, Status> {
         let ip = request
             .remote_addr()
-            .map(|a| a.ip().to_string())
-            .unwrap_or_else(|| "unknown".to_string());
+            .map_or_else(|| "unknown".to_string(), |a| a.ip().to_string());
         let req = request.into_inner();
 
         if self.ip_forgot_password_limiter.is_blocked(&ip) {
@@ -38,7 +84,7 @@ impl ContentService {
             )));
         }
 
-        if def.auth.as_ref().is_some_and(|a| a.disable_local) {
+        if !def.auth.as_ref().is_some_and(Auth::password_login_enabled) {
             return Err(Status::permission_denied(
                 "Local login is disabled for this collection",
             ));
@@ -48,28 +94,18 @@ impl ContentService {
             return Err(Status::invalid_argument(e.to_string()));
         }
 
-        let pool = self.pool.clone();
-        let slug = req.collection.clone();
-        let token = req.token.clone();
-        let password = req.new_password.clone();
-        let def_owned = def;
+        let input = ResetPasswordBlockingInput {
+            pool: self.pool.clone(),
+            slug: req.collection.clone(),
+            def,
+            token: req.token.clone(),
+            password: req.new_password.clone(),
+        };
 
-        let result = task::spawn_blocking(move || {
-            let mut conn = pool.get().context("DB connection")?;
-            let tx = conn.transaction().context("Start transaction")?;
-
-            let ctx = ServiceContext::collection(&slug, &def_owned)
-                .conn(&tx)
-                .build();
-
-            consume_reset_token(&ctx, &token, &password)?;
-            tx.commit().context("Commit transaction")?;
-
-            Ok::<(), ServiceError>(())
-        })
-        .await
-        .inspect_err(|e| error!("Reset password task error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))?;
+        let result = task::spawn_blocking(move || reset_password_blocking(&input))
+            .await
+            .inspect_err(|e| error!("Reset password task error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))??;
 
         match result {
             Ok(()) => Ok(Response::new(content::ResetPasswordResponse {

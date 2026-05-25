@@ -1,39 +1,48 @@
 //! Execute `count` — count documents matching filters.
 
-use std::sync::Arc;
-
 use anyhow::{Context as _, Result};
-use serde_json::{Value, json};
+use serde::Serialize;
+use serde_json::{Value, to_string_pretty};
 
 use crate::{
-    core::Registry,
-    db::DbPool,
-    hooks::HookRunner,
-    mcp::tools::collection::helpers::parse_where_filters,
-    service::{CountDocumentsInput, RunnerReadHooks, ServiceContext, count_documents},
+    mcp::tools::{ToolExecCtx, collection::helpers::parse_where_filters},
+    service::{
+        CountDocumentsInput, RunnerReadHooks, ServiceContext, ServiceError, count_documents,
+    },
 };
+
+/// Shape returned to the MCP client for a `count` tool call.
+#[derive(Serialize)]
+struct CountResponse {
+    count: i64,
+}
 
 /// Execute `count` — count documents matching filters.
 pub(in crate::mcp::tools) fn exec_count(
     args: &Value,
     slug: &str,
-    registry: &Arc<Registry>,
-    pool: &DbPool,
-    runner: &HookRunner,
+    ctx: &ToolExecCtx<'_>,
 ) -> Result<String> {
-    let def = registry
+    let def = ctx
+        .registry
         .collections
         .get(slug)
         .context("Collection not found")?;
-    let conn = pool.get().context("DB connection")?;
+    let conn = ctx.pool.get().context("DB connection")?;
 
     let filters = parse_where_filters(args);
-    let include_drafts = args.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
-    let trash = args.get("trash").and_then(|v| v.as_bool()).unwrap_or(false);
+    let include_drafts = args
+        .get("draft")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let trash = args
+        .get("trash")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
 
-    let hooks = RunnerReadHooks::new(runner, &conn);
-    let ctx = ServiceContext::collection(slug, def)
-        .pool(pool)
+    let hooks = RunnerReadHooks::new(ctx.runner, &conn);
+    let svc_ctx = ServiceContext::collection(slug, def)
+        .pool(ctx.pool)
         .conn(&conn)
         .read_hooks(&hooks)
         .override_access(true)
@@ -44,7 +53,7 @@ pub(in crate::mcp::tools) fn exec_count(
         .trash(trash)
         .build();
 
-    let count = count_documents(&ctx, &input).map_err(|e| e.into_anyhow())?;
+    let count = count_documents(&svc_ctx, &input).map_err(ServiceError::into_anyhow)?;
 
-    Ok(json!({ "count": count }).to_string())
+    Ok(to_string_pretty(&CountResponse { count })?)
 }

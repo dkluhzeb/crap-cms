@@ -91,12 +91,12 @@ pub(super) fn build_op_condition(
         FilterOp::Equals(v) => {
             let ph = conn.placeholder(params.len() + 1);
             params.push(coerce_filter_value(field_type, op, v));
-            format!("{} = {}", expr, ph)
+            format!("{expr} = {ph}")
         }
         FilterOp::NotEquals(v) => {
             let ph = conn.placeholder(params.len() + 1);
             params.push(coerce_filter_value(field_type, op, v));
-            format!("{} != {}", expr, ph)
+            format!("{expr} != {ph}")
         }
         FilterOp::Like(v) => {
             let ph = conn.placeholder(params.len() + 1);
@@ -106,28 +106,28 @@ pub(super) fn build_op_condition(
         FilterOp::Contains(v) => {
             let escaped = v.replace('%', "\\%").replace('_', "\\_");
             let ph = conn.placeholder(params.len() + 1);
-            params.push(DbValue::Text(format!("%{}%", escaped)));
+            params.push(DbValue::Text(format!("%{escaped}%")));
             format!("{} {} {} ESCAPE '\\'", expr, conn.like_operator(), ph)
         }
         FilterOp::GreaterThan(v) => {
             let ph = conn.placeholder(params.len() + 1);
             params.push(coerce_filter_value(field_type, op, v));
-            format!("{} > {}", expr, ph)
+            format!("{expr} > {ph}")
         }
         FilterOp::LessThan(v) => {
             let ph = conn.placeholder(params.len() + 1);
             params.push(coerce_filter_value(field_type, op, v));
-            format!("{} < {}", expr, ph)
+            format!("{expr} < {ph}")
         }
         FilterOp::GreaterThanOrEqual(v) => {
             let ph = conn.placeholder(params.len() + 1);
             params.push(coerce_filter_value(field_type, op, v));
-            format!("{} >= {}", expr, ph)
+            format!("{expr} >= {ph}")
         }
         FilterOp::LessThanOrEqual(v) => {
             let ph = conn.placeholder(params.len() + 1);
             params.push(coerce_filter_value(field_type, op, v));
-            format!("{} <= {}", expr, ph)
+            format!("{expr} <= {ph}")
         }
         FilterOp::In(vals) => {
             // Empty IN list: "x IN ()" is a SQL error, so emit always-false.
@@ -164,10 +164,10 @@ pub(super) fn build_op_condition(
             format!("{} NOT IN ({})", expr, placeholders.join(", "))
         }
         FilterOp::Exists => {
-            format!("{} IS NOT NULL", expr)
+            format!("{expr} IS NOT NULL")
         }
         FilterOp::NotExists => {
-            format!("{} IS NULL", expr)
+            format!("{expr} IS NULL")
         }
     }
 }
@@ -183,7 +183,7 @@ pub(super) fn build_op_condition(
 /// Defense-in-depth: rejects field names that are not valid SQL identifiers
 /// (alphanumeric + underscore), even though higher-level validation should
 /// have caught them already.
-pub fn build_filter_condition(
+pub(crate) fn build_filter_condition(
     conn: &dyn DbConnection,
     f: &Filter,
     field_type: Option<&FieldType>,
@@ -203,7 +203,7 @@ pub fn build_filter_condition(
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
-    use crate::db::sqlite::InMemoryConn;
+    use crate::db::InMemoryConn;
     use crate::db::{
         DbValue,
         query::{Filter, FilterOp},
@@ -488,8 +488,7 @@ mod tests {
             assert_eq!(
                 params,
                 vec![DbValue::Text((*bad).into())],
-                "expected Text fallback for '{}'",
-                bad
+                "expected Text fallback for '{bad}'"
             );
         }
     }
@@ -528,9 +527,7 @@ mod tests {
             assert_eq!(
                 params,
                 vec![DbValue::Integer(*expected)],
-                "'{}' should parse to {}",
-                input,
-                expected
+                "'{input}' should parse to {expected}"
             );
         }
     }

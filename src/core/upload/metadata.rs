@@ -1,87 +1,95 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use serde_json::{Map, Value, json};
+use serde::Serialize;
+use serde_json::Value;
 
 use crate::{
     core::{
-        Document,
-        upload::{CollectionUpload, ProcessedUpload, QueuedConversion, storage::StorageBackend},
+        Document, DocumentFields,
+        upload::{
+            CollectionUpload, ImageConvertJobData, ProcessedUpload, QueuedConversion,
+            queue_image_conversion, storage::StorageBackend,
+        },
     },
-    db::{
-        DbConnection,
-        query::images::{NewImageEntry, insert_image_queue_entry},
-    },
+    db::DbConnection,
 };
+
+/// One entry under the document's `sizes` object — the PayloadCMS-style nested
+/// `{ url, width, height, formats: { webp: { url }, avif: { url } } }` shape.
+#[derive(Serialize)]
+struct ImageSizeEntry {
+    url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    height: Option<u32>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    formats: HashMap<String, FormatVariant>,
+}
+
+/// One entry under `formats` (e.g. `webp`, `avif`).
+#[derive(Serialize)]
+struct FormatVariant {
+    url: String,
+}
 
 /// Assemble per-size typed columns into a structured `sizes` object on the document.
 /// Reads `{name}_url`, `{name}_width`, `{name}_height`, `{name}_webp_url`, `{name}_avif_url`
 /// from document fields, builds a nested PayloadCMS-style object, inserts as `sizes`,
 /// and removes the individual per-size columns.
+///
+/// # Panics
+///
+/// Panics only if `serde_json::to_value` on the assembled `HashMap` fails —
+/// unreachable for a map of owned `String`/`u32`-valued structs.
 pub fn assemble_sizes_object(doc: &mut Document, upload: &CollectionUpload) {
-    let mut sizes = Map::new();
+    let mut sizes: HashMap<String, ImageSizeEntry> = HashMap::new();
 
     for size_def in &upload.image_sizes {
         let name = &size_def.name;
 
         let url = doc
             .fields
-            .remove(&format!("{}_url", name))
+            .remove(&format!("{name}_url"))
             .and_then(|v| match v {
                 Value::String(s) => Some(s),
                 _ => None,
             });
         let width = doc
             .fields
-            .remove(&format!("{}_width", name))
-            .and_then(|v| v.as_f64())
-            .map(|v| v as u32);
+            .remove(&format!("{name}_width"))
+            .and_then(|v| v.as_u64())
+            .and_then(|v| u32::try_from(v).ok());
         let height = doc
             .fields
-            .remove(&format!("{}_height", name))
-            .and_then(|v| v.as_f64())
-            .map(|v| v as u32);
+            .remove(&format!("{name}_height"))
+            .and_then(|v| v.as_u64())
+            .and_then(|v| u32::try_from(v).ok());
 
         if let Some(url) = url {
             let formats = collect_format_urls(doc, name, upload);
-            let entry = build_size_entry(url, width, height, formats);
 
-            sizes.insert(name.clone(), Value::Object(entry));
+            sizes.insert(
+                name.clone(),
+                ImageSizeEntry {
+                    url,
+                    width,
+                    height,
+                    formats,
+                },
+            );
         } else {
             // Still remove format columns even if there's no URL
-            doc.fields.remove(&format!("{}_webp_url", name));
-            doc.fields.remove(&format!("{}_avif_url", name));
+            doc.fields.remove(&format!("{name}_webp_url"));
+            doc.fields.remove(&format!("{name}_avif_url"));
         }
     }
 
     if !sizes.is_empty() {
-        doc.fields.insert("sizes".to_string(), Value::Object(sizes));
+        let value = serde_json::to_value(&sizes).expect("ImageSizeEntry serialize");
+        doc.fields.insert("sizes".to_string(), value);
     }
-}
-
-/// Build the JSON object for a single image size entry.
-fn build_size_entry(
-    url: String,
-    width: Option<u32>,
-    height: Option<u32>,
-    formats: Map<String, Value>,
-) -> Map<String, Value> {
-    let mut entry = Map::new();
-    entry.insert("url".to_string(), Value::String(url));
-
-    if let Some(w) = width {
-        entry.insert("width".to_string(), json!(w));
-    }
-
-    if let Some(h) = height {
-        entry.insert("height".to_string(), json!(h));
-    }
-
-    if !formats.is_empty() {
-        entry.insert("formats".to_string(), Value::Object(formats));
-    }
-
-    entry
 }
 
 /// Collect format variant URLs (webp, avif) from document fields.
@@ -89,26 +97,26 @@ fn collect_format_urls(
     doc: &mut Document,
     size_name: &str,
     upload: &CollectionUpload,
-) -> Map<String, Value> {
-    let mut formats = Map::new();
+) -> HashMap<String, FormatVariant> {
+    let mut formats = HashMap::new();
 
     if upload.format_options.webp.is_some()
-        && let Some(Value::String(webp_url)) = doc.fields.remove(&format!("{}_webp_url", size_name))
+        && let Some(Value::String(url)) = doc.fields.remove(&format!("{size_name}_webp_url"))
     {
-        formats.insert("webp".to_string(), json!({ "url": webp_url }));
+        formats.insert("webp".to_string(), FormatVariant { url });
     }
 
     if upload.format_options.avif.is_some()
-        && let Some(Value::String(avif_url)) = doc.fields.remove(&format!("{}_avif_url", size_name))
+        && let Some(Value::String(url)) = doc.fields.remove(&format!("{size_name}_avif_url"))
     {
-        formats.insert("avif".to_string(), json!({ "url": avif_url }));
+        formats.insert("avif".to_string(), FormatVariant { url });
     }
 
     formats
 }
 
 /// Inject upload metadata fields into form data from a processed upload.
-/// Writes per-size typed fields ({name}_url, {name}_width, {name}_height, {name}_webp_url, etc.)
+/// Writes per-size typed fields ({name}_url, {name}_width, {name}_height, {name}_`webp_url`, etc.)
 pub fn inject_upload_metadata(
     form_data: &mut HashMap<String, String>,
     processed: &ProcessedUpload,
@@ -127,11 +135,11 @@ pub fn inject_upload_metadata(
 
     // Per-size typed fields
     for (name, size) in &processed.sizes {
-        form_data.insert(format!("{}_url", name), size.url.clone());
-        form_data.insert(format!("{}_width", name), size.width.to_string());
-        form_data.insert(format!("{}_height", name), size.height.to_string());
+        form_data.insert(format!("{name}_url"), size.url.clone());
+        form_data.insert(format!("{name}_width"), size.width.to_string());
+        form_data.insert(format!("{name}_height"), size.height.to_string());
         for (fmt, result) in &size.formats {
-            form_data.insert(format!("{}_{}_url", name, fmt), result.url.clone());
+            form_data.insert(format!("{name}_{fmt}_url"), result.url.clone());
         }
     }
 }
@@ -139,8 +147,8 @@ pub fn inject_upload_metadata(
 /// Delete all files associated with an upload document.
 /// Reads the url and per-size url fields to determine which files to remove.
 /// Extracts storage keys from `/uploads/{key}` URLs and deletes via the storage backend.
-pub fn delete_upload_files(storage: &dyn StorageBackend, doc_fields: &HashMap<String, Value>) {
-    for (key, value) in doc_fields {
+pub fn delete_upload_files(storage: &dyn StorageBackend, doc_fields: &DocumentFields) {
+    for (key, value) in doc_fields.as_map() {
         if (key == "url" || key.ends_with("_url"))
             && key != "image_url"
             && let Value::String(url) = value
@@ -154,38 +162,48 @@ pub fn delete_upload_files(storage: &dyn StorageBackend, doc_fields: &HashMap<St
     }
 }
 
-/// Insert queued format conversions into the image processing queue.
+/// Insert queued format conversions as `_system_image_convert` jobs.
 /// Called after document creation, when the document ID is known.
+/// The unified job queue handles retries, heartbeats, recovery, and
+/// per-slug concurrency — see
+/// `core::upload::queue::queue_image_conversion`.
+///
+/// # Errors
+///
+/// Returns a backend error if any job insert fails.
 pub fn enqueue_conversions(
     conn: &dyn DbConnection,
     collection: &str,
     document_id: &str,
     conversions: &[QueuedConversion],
+    max_attempts: u32,
 ) -> Result<()> {
     for c in conversions {
-        let entry = NewImageEntry {
-            collection,
-            document_id,
-            source_path: &c.source_path,
-            target_path: &c.target_path,
-            format: &c.format,
+        let data = ImageConvertJobData {
+            collection: collection.to_string(),
+            document_id: document_id.to_string(),
+            source_path: c.source_path.clone(),
+            target_path: c.target_path.clone(),
+            format: c.format.clone(),
             quality: c.quality,
-            url_column: &c.url_column,
-            url_value: &c.url_value,
+            url_column: c.url_column.clone(),
+            url_value: c.url_value.clone(),
         };
-        insert_image_queue_entry(conn, &entry)?;
+        queue_image_conversion(conn, &data, max_attempts)?;
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use crate::core::{
         Document, DocumentId,
         upload::{
-            FormatOptions, FormatQuality, FormatResult, ImageSizeBuilder, ProcessedUploadBuilder,
-            SizeResultBuilder, storage::LocalStorage,
+            FormatOptions, FormatQuality, FormatResult, ImageSizeBuilder, ProcessedUpload,
+            SizeResult, storage::LocalStorage,
         },
     };
 
@@ -400,13 +418,17 @@ mod tests {
 
     #[test]
     fn inject_upload_metadata_basic() {
-        let processed =
-            ProcessedUploadBuilder::new("abc_photo.png", "/uploads/media/abc_photo.png")
-                .mime_type("image/png")
-                .filesize(12345)
-                .width(800)
-                .height(600)
-                .build();
+        let processed = ProcessedUpload {
+            filename: "abc_photo.png".to_string(),
+            mime_type: "image/png".to_string(),
+            filesize: 12345,
+            width: Some(800),
+            height: Some(600),
+            url: "/uploads/media/abc_photo.png".to_string(),
+            sizes: HashMap::new(),
+            queued_conversions: Vec::new(),
+            created_files: Vec::new(),
+        };
         let mut form_data = HashMap::new();
         inject_upload_metadata(&mut form_data, &processed);
 
@@ -423,10 +445,17 @@ mod tests {
 
     #[test]
     fn inject_upload_metadata_no_dimensions() {
-        let processed = ProcessedUploadBuilder::new("doc.pdf", "/uploads/docs/doc.pdf")
-            .mime_type("application/pdf")
-            .filesize(999)
-            .build();
+        let processed = ProcessedUpload {
+            filename: "doc.pdf".to_string(),
+            mime_type: "application/pdf".to_string(),
+            filesize: 999,
+            width: None,
+            height: None,
+            url: "/uploads/docs/doc.pdf".to_string(),
+            sizes: HashMap::new(),
+            queued_conversions: Vec::new(),
+            created_files: Vec::new(),
+        };
         let mut form_data = HashMap::new();
         inject_upload_metadata(&mut form_data, &processed);
 
@@ -442,20 +471,25 @@ mod tests {
         let mut sizes = HashMap::new();
         sizes.insert(
             "thumb".into(),
-            SizeResultBuilder::new("/uploads/m/t.png")
-                .width(100)
-                .height(100)
-                .formats(formats)
-                .build(),
+            SizeResult {
+                url: "/uploads/m/t.png".to_string(),
+                width: 100,
+                height: 100,
+                formats,
+            },
         );
 
-        let processed = ProcessedUploadBuilder::new("img.png", "/uploads/m/img.png")
-            .mime_type("image/png")
-            .filesize(5000)
-            .width(800)
-            .height(600)
-            .sizes(sizes)
-            .build();
+        let processed = ProcessedUpload {
+            filename: "img.png".to_string(),
+            mime_type: "image/png".to_string(),
+            filesize: 5000,
+            width: Some(800),
+            height: Some(600),
+            url: "/uploads/m/img.png".to_string(),
+            sizes,
+            queued_conversions: Vec::new(),
+            created_files: Vec::new(),
+        };
         let mut form_data = HashMap::new();
         inject_upload_metadata(&mut form_data, &processed);
 
@@ -468,7 +502,7 @@ mod tests {
         );
     }
 
-    /// Helper to create a LocalStorage backed by a tempdir.
+    /// Helper to create a `LocalStorage` backed by a tempdir.
     fn test_storage(tmp: &tempfile::TempDir) -> LocalStorage {
         LocalStorage::new(tmp.path().join("uploads"))
     }
@@ -481,7 +515,7 @@ mod tests {
             .put("media/test.png", b"fake image data", "image/png")
             .unwrap();
 
-        let mut doc_fields = HashMap::new();
+        let mut doc_fields = DocumentFields::new();
         doc_fields.insert("url".into(), json!("/uploads/media/test.png"));
 
         delete_upload_files(&storage, &doc_fields);
@@ -495,7 +529,7 @@ mod tests {
     fn delete_upload_files_handles_missing_file() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let storage = test_storage(&tmp);
-        let mut doc_fields = HashMap::new();
+        let mut doc_fields = DocumentFields::new();
         doc_fields.insert("url".into(), json!("/uploads/media/nonexistent.png"));
 
         // Should not panic even if file doesn't exist
@@ -506,7 +540,7 @@ mod tests {
     fn delete_upload_files_skips_non_upload_urls() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let storage = test_storage(&tmp);
-        let mut doc_fields = HashMap::new();
+        let mut doc_fields = DocumentFields::new();
         doc_fields.insert("url".into(), json!("https://external.com/image.png"));
         doc_fields.insert("website_url".into(), json!("https://example.com"));
 
@@ -527,7 +561,7 @@ mod tests {
             .put("media/orig_thumb.webp", b"webp", "image/webp")
             .unwrap();
 
-        let mut doc_fields = HashMap::new();
+        let mut doc_fields = DocumentFields::new();
         doc_fields.insert("url".into(), json!("/uploads/media/orig.png"));
         doc_fields.insert("thumb_url".into(), json!("/uploads/media/orig_thumb.png"));
         doc_fields.insert(
@@ -549,7 +583,7 @@ mod tests {
             .put("media/keep.png", b"keep me", "image/png")
             .unwrap();
 
-        let mut doc_fields = HashMap::new();
+        let mut doc_fields = DocumentFields::new();
         doc_fields.insert("image_url".into(), json!("/uploads/media/keep.png"));
 
         delete_upload_files(&storage, &doc_fields);
@@ -572,7 +606,7 @@ mod tests {
             .unwrap();
         storage.put("media/keep.png", b"keep", "image/png").unwrap();
 
-        let mut doc_fields = HashMap::new();
+        let mut doc_fields = DocumentFields::new();
         doc_fields.insert("hero_image_url".into(), json!("/uploads/media/hero.png"));
         doc_fields.insert(
             "banner_image_url".into(),
@@ -601,7 +635,7 @@ mod tests {
     fn delete_upload_files_skips_non_string_values() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let storage = test_storage(&tmp);
-        let mut doc_fields = HashMap::new();
+        let mut doc_fields = DocumentFields::new();
         doc_fields.insert("url".into(), json!(42));
         doc_fields.insert("thumb_url".into(), json!(null));
 
@@ -617,7 +651,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let storage = test_storage(&tmp);
 
-        let mut doc_fields = HashMap::new();
+        let mut doc_fields = DocumentFields::new();
         doc_fields.insert("url".into(), json!("/uploads/../secret.txt"));
 
         // Should not panic — storage.delete handles non-existent keys gracefully

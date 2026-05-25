@@ -36,12 +36,13 @@ async fn dispatch(server: &Arc<McpServer>, request: JsonRpcRequest) -> JsonRpcRe
     let request_id = request.id.clone();
     let server_clone = Arc::clone(server);
 
-    match tokio::task::spawn_blocking(move || server_clone.handle_message(request)).await {
-        Ok(resp) => resp,
-        Err(_) => {
-            error!("MCP spawn_blocking task panicked");
-            JsonRpcResponse::error(request_id, INTERNAL_ERROR, "Internal error")
-        }
+    if let Ok(resp) =
+        tokio::task::spawn_blocking(move || server_clone.handle_message(request)).await
+    {
+        resp
+    } else {
+        error!("MCP spawn_blocking task panicked");
+        JsonRpcResponse::error(request_id, INTERNAL_ERROR, "Internal error")
     }
 }
 

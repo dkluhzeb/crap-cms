@@ -8,6 +8,7 @@ pub struct ListVersionsInput<'a> {
 }
 
 impl<'a> ListVersionsInput<'a> {
+    #[must_use]
     pub fn builder(parent_id: &'a str) -> ListVersionsInputBuilder<'a> {
         ListVersionsInputBuilder::new(parent_id)
     }

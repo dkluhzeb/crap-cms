@@ -1,4 +1,4 @@
-//! `make field` — scaffold a per-field render template + Lua wrapper
+//! `make field` -- scaffold a per-field render template + Lua wrapper
 //! plugin + a `<crap-*>` Web Component skeleton, all wired together.
 
 mod generator;

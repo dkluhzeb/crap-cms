@@ -1,72 +1,113 @@
 //! Shared service layer for collection/global CRUD operations.
 //!
-//! These synchronous functions encapsulate the transaction lifecycle (open tx → run hooks →
-//! DB operation → commit) shared between admin handlers and the gRPC service. They are meant
+//! These synchronous functions encapsulate the transaction lifecycle
+//! (open tx -> run before hooks -> DB op -> run after hooks -> commit)
+//! shared between admin handlers and the gRPC service. They are meant
 //! to be called from within `spawn_blocking`.
+//!
+//! ## Submodule layout
+//!
+//! - `types/` -- the input/output value types used across the service
+//!   layer: `ServiceContext` + builder, `WriteInput`, `WriteResult`,
+//!   `PersistOptions`, `Find*Input`, `*Result`, `Def` (collection
+//!   vs global tag), `EmailContext`, the event/verification queues.
+//! - `collections/` -- public CRUD entry points for collections:
+//!   `create_document`, `update_document`, `delete_document`,
+//!   `undelete_document`, `unpublish_document`, plus the bulk
+//!   variants (`create_many`, `update_many`, `delete_many`).
+//! - `globals/` -- global-document equivalents.
+//! - `read/` -- query/read helpers shared by both: `find_documents`,
+//!   `find_document_by_id`, `count_documents`, `search_documents`,
+//!   `get_global_document`.
+//! - `persist/` -- the actual `persist_create` / `persist_update` /
+//!   `persist_unpublish` / `persist_draft_version` /
+//!   `persist_bulk_update` machinery that materializes a write into
+//!   the DB once hooks have run.
+//! - `write/` -- transaction-agnostic CRUD (`*_in_conn` suffix
+//!   indicates the fn expects a connection in `ctx`).
+//! - `versions/` -- version listing, restore, and unpublish-with-
+//!   snapshot.
+//! - `auth/`, `jobs/`, `upload/` -- domain-specific service helpers.
+//! - `hooks/` -- read/write `*Hooks` traits + Lua impls invoked from
+//!   the service layer.
+//! - `email/`, `helpers/`, `user_settings/`, `document_info/` --
+//!   support submodules.
+//! - `error.rs` -- `ServiceError` enum + classification helpers
+//!   (`From<ServiceError> for Status` lives in `api/`).
+//!
+//! ## Conventions
+//!
+//! - Public service fns take `(ctx: &ServiceContext, input: ...)`.
+//!   Write ops open their own tx via `ctx.pool` + `ctx.runner()`;
+//!   Lua-bridged CRUD passes `ctx.conn` + `ctx.write_hooks` directly.
+//! - Transaction-agnostic helpers carry the `_in_conn` suffix; they
+//!   never open or commit a transaction themselves.
+//! - Optional setters on context/option builders take `Option<&T>`
+//!   (or `Option<T>` for owned handles) so a caller can pass through
+//!   a parent's optional field without `if let Some(x) = ...`.
 
 pub mod auth;
-mod collection;
-pub mod document_info;
+mod collections;
+mod context;
+pub(crate) mod document_info;
 mod email;
 mod error;
 mod globals;
-pub mod helpers;
-pub mod hooks;
+pub(crate) mod helpers;
+pub(crate) mod hooks;
 pub mod jobs;
 mod persist;
-pub mod read;
+pub(crate) mod read;
 mod types;
 pub mod upload;
-pub mod user_settings;
+pub(crate) mod user_settings;
 pub(crate) mod versions;
-pub mod write;
+pub(crate) mod write;
 
+pub use context::{Def, ServiceContext};
 pub use error::ServiceError;
 pub(crate) use types::AfterChangeInput;
 pub use types::{
-    CountDocumentsInput, CountDocumentsInputBuilder, Def, EmailContext, EventQueue, FindByIdInput,
-    FindByIdInputBuilder, FindDocumentsInput, FindDocumentsInputBuilder, GetGlobalInput,
-    ListVersionsInput, PaginatedResult, PersistOptions, PersistOptionsBuilder,
-    SearchDocumentsInput, ServiceContext, ServiceContextBuilder, VerificationQueue, WriteInput,
-    WriteInputBuilder, WriteResult, flush_queue, flush_verification_queue,
+    CountDocumentsInput, EmailContext, EventQueue, FindByIdInput, FindDocumentsInput,
+    GetGlobalInput, ListVersionsInput, PaginatedResult, PersistOptions, SearchDocumentsInput,
+    VerificationQueue, WriteInput, WriteResult, values_from_strings,
 };
+pub(crate) use types::{flush_queue, flush_verification_queue};
 
-pub use collection::{
+pub use collections::{
     CreateManyItem, CreateManyOptions, CreateManyResult, DeleteManyOptions, DeleteManyResult,
     UpdateManyOptions, UpdateManyResult, create_document, create_many, delete_document,
-    delete_many, undelete_document, undelete_document_core, unpublish_document,
-    unpublish_document_core, update_document, update_many,
+    delete_many, undelete_document, unpublish_document, update_document, update_many,
 };
-pub use email::send_verification_email;
-pub use globals::{unpublish_global_document, update_global_core, update_global_document};
-pub(crate) use helpers::{build_hook_data, run_after_change_hooks};
+pub(crate) use email::{VerificationEmailInput, send_verification_email};
+pub use globals::{unpublish_global_document, update_global_document, update_global_in_conn};
+pub(crate) use helpers::run_after_change_hooks;
 pub use hooks::{
-    LuaReadHooks, LuaReadHooksBuilder, LuaWriteHooks, LuaWriteHooksBuilder, ReadHooks,
-    ReadHooksJoinGuard, RunnerReadHooks, RunnerWriteHooks, WriteHooks,
+    LuaReadHooks, LuaWriteHooks, ReadHooks, RunnerReadHooks, RunnerWriteHooks, WriteHooks,
 };
-pub use persist::{
-    persist_bulk_update, persist_create, persist_draft_version, persist_unpublish, persist_update,
-};
+pub(crate) use persist::persist_bulk_update;
+pub use persist::{persist_create, persist_draft_version, persist_unpublish, persist_update};
 pub use read::{
-    ReadOptions, ReadOptionsBuilder, count_documents, find_document_by_id, find_documents,
-    get_global_document, search_documents, validate_access_constraints, validate_user_filters,
+    count_documents, find_document_by_id, find_documents, get_global_document, search_documents,
+    validate_access_constraints, validate_user_filters,
 };
-pub use versions::unpublish_with_snapshot;
+pub(crate) use versions::unpublish_with_snapshot;
 pub use versions::{
     find_version_by_id, list_versions, restore_collection_version, restore_global_version,
 };
-pub use write::{
-    DeleteResult, ValidateContext, create_document_core, delete_document_core,
-    update_document_core, update_many_single_core, validate_document,
+pub use write::{ValidateContext, create_document_in_conn, validate_document};
+pub(crate) use write::{
+    delete_document_in_conn, update_document_in_conn, update_many_single_in_conn,
 };
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
+    use crate::core::DocumentFields;
     use crate::core::collection::*;
     use crate::core::field::*;
     use rusqlite::Connection;
-    use std::collections::HashMap;
+    use serde_json::json;
 
     fn test_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
@@ -94,14 +135,14 @@ mod tests {
     fn persist_create_basic() {
         let conn = setup_db();
         let def = test_def();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Hello".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Hello"));
 
         let ctx = ServiceContext::collection("posts", &def)
             .conn(&conn)
             .build();
 
-        let doc = persist_create(&ctx, &data, &HashMap::new(), &PersistOptions::default()).unwrap();
+        let doc = persist_create(&ctx, &data, &PersistOptions::default()).unwrap();
         assert!(!doc.id.is_empty());
         assert_eq!(doc.get_str("title"), Some("Hello"));
     }
@@ -110,27 +151,20 @@ mod tests {
     fn persist_update_basic() {
         let conn = setup_db();
         let def = test_def();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Original".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Original"));
 
         let ctx = ServiceContext::collection("posts", &def)
             .conn(&conn)
             .build();
 
-        let doc = persist_create(&ctx, &data, &HashMap::new(), &PersistOptions::default()).unwrap();
+        let doc = persist_create(&ctx, &data, &PersistOptions::default()).unwrap();
         let id = doc.id.clone();
 
-        let mut update_data = HashMap::new();
-        update_data.insert("title".to_string(), "Updated".to_string());
+        let mut update_data = DocumentFields::new();
+        update_data.insert("title".to_string(), json!("Updated"));
 
-        let updated = persist_update(
-            &ctx,
-            &id,
-            &update_data,
-            &HashMap::new(),
-            &PersistOptions::default(),
-        )
-        .unwrap();
+        let updated = persist_update(&ctx, &id, &update_data, &PersistOptions::default()).unwrap();
         assert_eq!(updated.get_str("title"), Some("Updated"));
     }
 
@@ -188,23 +222,20 @@ mod tests {
         )
         .unwrap();
 
-        let mut data = HashMap::new();
-        data.insert("alt".to_string(), "Test Image".to_string());
-        data.insert("filename".to_string(), "abc123_test.jpg".to_string());
-        data.insert("mime_type".to_string(), "image/jpeg".to_string());
-        data.insert("filesize".to_string(), "12345".to_string());
-        data.insert("width".to_string(), "1920".to_string());
-        data.insert("height".to_string(), "1080".to_string());
-        data.insert(
-            "url".to_string(),
-            "/uploads/media/abc123_test.jpg".to_string(),
-        );
+        let mut data = DocumentFields::new();
+        data.insert("alt".to_string(), json!("Test Image"));
+        data.insert("filename".to_string(), json!("abc123_test.jpg"));
+        data.insert("mime_type".to_string(), json!("image/jpeg"));
+        data.insert("filesize".to_string(), json!("12345"));
+        data.insert("width".to_string(), json!("1920"));
+        data.insert("height".to_string(), json!("1080"));
+        data.insert("url".to_string(), json!("/uploads/media/abc123_test.jpg"));
 
         let ctx = ServiceContext::collection("media", &def)
             .conn(&conn)
             .build();
 
-        let doc = persist_create(&ctx, &data, &HashMap::new(), &PersistOptions::default()).unwrap();
+        let doc = persist_create(&ctx, &data, &PersistOptions::default()).unwrap();
 
         assert_eq!(doc.get_str("filename"), Some("abc123_test.jpg"));
         assert_eq!(
@@ -218,17 +249,19 @@ mod tests {
             "url should be stored"
         );
         assert_eq!(
-            doc.fields.get("width").and_then(|v| v.as_f64()),
+            doc.fields.get("width").and_then(serde_json::Value::as_f64),
             Some(1920.0),
             "width should be stored"
         );
         assert_eq!(
-            doc.fields.get("height").and_then(|v| v.as_f64()),
+            doc.fields.get("height").and_then(serde_json::Value::as_f64),
             Some(1080.0),
             "height should be stored"
         );
         assert_eq!(
-            doc.fields.get("filesize").and_then(|v| v.as_f64()),
+            doc.fields
+                .get("filesize")
+                .and_then(serde_json::Value::as_f64),
             Some(12345.0),
             "filesize should be stored"
         );

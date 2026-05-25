@@ -4,7 +4,7 @@ use crate::{
     core::{Document, FieldDefinition, collection::Hooks},
     db::DbConnection,
     hooks::{HookContext, ValidationCtx},
-    service::{WriteInput, build_hook_data, hooks::WriteHooks},
+    service::{WriteInput, hooks::WriteHooks},
 };
 
 use super::{ServiceError, helpers::strip_denied_fields};
@@ -28,6 +28,11 @@ pub struct ValidateContext<'a> {
 /// (field stripping, field hooks, validation, collection hooks) and returns.
 ///
 /// Used by live validation endpoints.
+///
+/// # Errors
+///
+/// Returns service-layer errors (validation failures, hook errors) without
+/// touching the database.
 pub fn validate_document(
     conn: &dyn DbConnection,
     write_hooks: &dyn WriteHooks,
@@ -42,9 +47,9 @@ pub fn validate_document(
 
     // Strip write-denied fields
     let denied = write_hooks.field_write_denied(ctx.fields, user, ctx.operation);
-    let join_data = strip_denied_fields(&denied, &mut input.data, input.join_data);
+    strip_denied_fields(&denied, &mut input.data);
 
-    let hook_data = build_hook_data(&input.data, &join_data);
+    let hook_data = input.data.clone();
 
     let hook_ctx = HookContext::builder(ctx.slug, ctx.operation)
         .data(hook_data)

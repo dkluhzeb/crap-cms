@@ -11,6 +11,7 @@ use super::{SharedEmailProvider, log::LogEmailProvider, smtp, webhook};
 
 /// Check if email sending is configured.
 /// Returns false if SMTP host is empty and provider is smtp (the default).
+#[must_use]
 pub fn is_configured(config: &EmailConfig) -> bool {
     match config.provider.as_str() {
         "smtp" | "" => !config.smtp_host.is_empty(),
@@ -20,6 +21,11 @@ pub fn is_configured(config: &EmailConfig) -> bool {
 }
 
 /// Create the appropriate email provider from config.
+///
+/// # Errors
+///
+/// Returns an error if the provider name is unknown or the chosen
+/// backend fails to initialize.
 pub fn create_email_provider(config: &EmailConfig) -> Result<SharedEmailProvider> {
     match config.provider.as_str() {
         "smtp" | "" => {
@@ -42,7 +48,7 @@ pub fn create_email_provider(config: &EmailConfig) -> Result<SharedEmailProvider
             info!("Custom email provider selected — waiting for Lua init");
             Ok(Arc::new(LogEmailProvider))
         }
-        other => bail!("Unknown email provider: '{}'", other),
+        other => bail!("Unknown email provider: '{other}'"),
     }
 }
 
@@ -75,9 +81,7 @@ fn is_loopback_host(host: &str) -> bool {
         return true;
     }
 
-    host.parse::<IpAddr>()
-        .map(|ip| ip.is_loopback())
-        .unwrap_or(false)
+    host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 #[cfg(test)]

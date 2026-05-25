@@ -8,6 +8,10 @@ use crate::{
 };
 
 /// Find a document by email in an auth collection.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails or the row fails to parse.
 pub fn find_by_email(
     conn: &dyn DbConnection,
     slug: &str,
@@ -30,6 +34,10 @@ pub fn find_by_email(
 }
 
 /// Get the password hash for a document by ID. Returns None if no hash set.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails or the column fails to parse.
 pub fn get_password_hash(
     conn: &dyn DbConnection,
     slug: &str,
@@ -51,6 +59,10 @@ pub fn get_password_hash(
 
 /// Update the password hash for a document by ID.
 /// Hashes the plaintext password before storing.
+///
+/// # Errors
+///
+/// Returns an error if password hashing fails or the UPDATE fails.
 pub fn update_password(
     conn: &dyn DbConnection,
     slug: &str,
@@ -75,6 +87,10 @@ pub fn update_password(
 }
 
 /// Check whether a user has a password set (non-NULL `_password_hash`).
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails.
 pub fn has_password(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
     let sql = format!(
         "SELECT (_password_hash IS NOT NULL) AS has_pw FROM \"{slug}\" WHERE id = {}",
@@ -95,6 +111,7 @@ mod tests {
     use crate::config::CrapConfig;
     use crate::core::collection::*;
     use crate::core::field::*;
+    use crate::db::query::auth::get_session_version;
     use crate::db::{BoxedConnection, DbConnection, pool};
 
     fn setup() -> (TempDir, BoxedConnection) {
@@ -194,8 +211,6 @@ mod tests {
 
     #[test]
     fn update_password_increments_session_version() {
-        use crate::db::query::auth::get_session_version;
-
         let (_dir, conn) = setup();
         assert_eq!(get_session_version(&conn, "users", "user1").unwrap(), 0);
         update_password(&conn, "users", "user1", "pass1").unwrap();
@@ -206,8 +221,6 @@ mod tests {
 
     #[test]
     fn update_password_increments_from_null() {
-        use crate::db::query::auth::get_session_version;
-
         let (_dir, conn) = setup();
         conn.execute(
             "UPDATE users SET _session_version = NULL WHERE id = 'user1'",

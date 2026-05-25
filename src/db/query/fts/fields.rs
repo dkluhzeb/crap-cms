@@ -1,6 +1,6 @@
 //! Field/column resolution helpers for FTS5 indexing.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 
@@ -28,6 +28,7 @@ const CONTAINER_FIELD_TYPES: &[FieldType] = &[
 ///
 /// Container types (array, blocks, group, row, collapsible, tabs) are always
 /// excluded because they don't have columns on the parent table.
+#[must_use]
 pub fn get_fts_fields(def: &CollectionDefinition) -> Vec<String> {
     if !def.admin.list_searchable_fields.is_empty() {
         // Only keep fields that actually exist as columns on the parent table.
@@ -95,6 +96,10 @@ fn collect_fts_defaults(fields: &[FieldDefinition]) -> Vec<String> {
 ///
 /// For non-localized fields, the column name is the field name.
 /// For localized fields, each field expands to `field__locale` for each locale.
+///
+/// # Errors
+///
+/// Returns an error if any field name conflicts with locale-suffixed naming.
 pub fn get_fts_columns(
     def: &CollectionDefinition,
     locale_config: &LocaleConfig,
@@ -130,10 +135,8 @@ pub fn get_fts_columns(
 
 /// Build a set of column names that are JSON-format richtext fields.
 /// Checks both bare field names and locale-expanded variants (`field__locale`).
-pub(super) fn json_richtext_columns(
-    def: &CollectionDefinition,
-) -> std::collections::HashSet<String> {
-    let mut set = std::collections::HashSet::new();
+pub(super) fn json_richtext_columns(def: &CollectionDefinition) -> HashSet<String> {
+    let mut set = HashSet::new();
     for f in &def.fields {
         if f.field_type == FieldType::Richtext && f.admin.richtext_format.as_deref() == Some("json")
         {
@@ -150,9 +153,8 @@ pub(super) fn build_node_searchable_map<'a>(
     registry: Option<&'a Registry>,
 ) -> HashMap<&'a str, Vec<&'a str>> {
     let mut map = HashMap::new();
-    let (def, registry) = match (def, registry) {
-        (Some(d), Some(r)) => (d, r),
-        _ => return map,
+    let (Some(def), Some(registry)) = (def, registry) else {
+        return map;
     };
     for field in &def.fields {
         if field.field_type == FieldType::Richtext
@@ -167,7 +169,7 @@ pub(super) fn build_node_searchable_map<'a>(
                         node_def
                             .searchable_attrs
                             .iter()
-                            .map(|s| s.as_str())
+                            .map(std::string::String::as_str)
                             .collect(),
                     );
                 }

@@ -32,7 +32,7 @@ use crate::cli;
 const SUPPORTED_SHELLS: &[Shell] = &[Shell::Bash, Shell::Zsh, Shell::Fish];
 
 /// Detect the user's login shell from `$SHELL`.
-pub fn detect_shell() -> Option<Shell> {
+pub(super) fn detect_shell() -> Option<Shell> {
     let shell_path = std::env::var("SHELL").ok()?;
     let shell_name = shell_path.rsplit('/').next()?;
 
@@ -46,14 +46,14 @@ pub fn detect_shell() -> Option<Shell> {
 }
 
 /// Generate completions to stdout (for `update completions <shell>`).
-pub fn print_completions<C: CommandFactory>(shell: Shell) {
+pub(super) fn print_completions<C: CommandFactory>(shell: Shell) {
     let mut cmd = C::command();
     let name = cmd.get_name().to_string();
     generate(shell, &mut cmd, name, &mut std::io::stdout());
 }
 
 /// Install completions for the user's login shell. Best-effort.
-pub fn install_completions<C: CommandFactory>() {
+pub(super) fn install_completions<C: CommandFactory>() {
     let Some(shell) = detect_shell() else {
         return;
     };
@@ -64,7 +64,7 @@ pub fn install_completions<C: CommandFactory>() {
 /// Install completions for a specific shell. Probes the shell's setup so
 /// we write somewhere that will actually be loaded; emits an activation
 /// hint otherwise.
-pub fn install_completions_for<C: CommandFactory>(shell: Shell) {
+pub(super) fn install_completions_for<C: CommandFactory>(shell: Shell) {
     let Some(plan) = plan_install(shell) else {
         cli::warning(&format!(
             "Don't know where to install completions for {shell}."
@@ -104,7 +104,7 @@ pub fn install_completions_for<C: CommandFactory>(shell: Shell) {
 
 /// Remove the installed completion file for a specific shell.
 /// Returns true if a file was removed.
-pub fn uninstall_completions_for(shell: Shell) -> bool {
+pub(super) fn uninstall_completions_for(shell: Shell) -> bool {
     let Some(path) = default_install_path(shell) else {
         return false;
     };
@@ -114,7 +114,7 @@ pub fn uninstall_completions_for(shell: Shell) -> bool {
 
 /// Remove completion files for every supported shell. Called when
 /// `update uninstall` removes the last installed version.
-pub fn uninstall_all_completions() {
+pub(super) fn uninstall_all_completions() {
     let mut removed = 0usize;
 
     for &shell in SUPPORTED_SHELLS {
@@ -143,14 +143,14 @@ fn plan_install(shell: Shell) -> Option<InstallPlan> {
     let home = home_dir()?;
 
     match shell {
-        Shell::Bash => plan_bash(&home),
-        Shell::Zsh => plan_zsh(&home),
+        Shell::Bash => Some(plan_bash(&home)),
+        Shell::Zsh => Some(plan_zsh(&home)),
         Shell::Fish => Some(plan_fish(&home)),
         _ => None,
     }
 }
 
-fn plan_bash(home: &Path) -> Option<InstallPlan> {
+fn plan_bash(home: &Path) -> InstallPlan {
     let path = bash_xdg_path(home);
     let hint = if bash_completion_available() {
         None
@@ -161,39 +161,39 @@ fn plan_bash(home: &Path) -> Option<InstallPlan> {
                 .to_string(),
         )
     };
-    Some(InstallPlan { path, hint })
+    InstallPlan { path, hint }
 }
 
-fn plan_zsh(home: &Path) -> Option<InstallPlan> {
+fn plan_zsh(home: &Path) -> InstallPlan {
     let fpath = zsh_fpath();
     let zfunc = home.join(".zfunc");
 
     // 1. If ~/.zfunc is already on fpath, install there — stable across updates.
     if fpath.iter().any(|p| p == &zfunc) {
-        return Some(InstallPlan {
+        return InstallPlan {
             path: zfunc.join("_crap-cms"),
             hint: None,
-        });
+        };
     }
 
     // 2. Otherwise, pick the first user-owned dir on fpath.
     if let Some(dir) = fpath.iter().find(|p| p.starts_with(home)) {
-        return Some(InstallPlan {
+        return InstallPlan {
             path: dir.join("_crap-cms"),
             hint: None,
-        });
+        };
     }
 
     // 3. Nothing on fpath looks writable — fall back to ~/.zfunc and nag
     //    the user (every install) until they wire it up.
-    Some(InstallPlan {
+    InstallPlan {
         path: zfunc.join("_crap-cms"),
         hint: Some(
             "~/.zfunc is not on $fpath — add `fpath=(~/.zfunc $fpath)` before \
              `compinit` in your .zshrc, then restart your shell."
                 .to_string(),
         ),
-    })
+    }
 }
 
 fn plan_fish(home: &Path) -> InstallPlan {
@@ -220,8 +220,7 @@ fn bash_xdg_path(home: &Path) -> PathBuf {
     let xdg_data = std::env::var("XDG_DATA_HOME")
         .ok()
         .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".local/share"));
+        .map_or_else(|| home.join(".local/share"), PathBuf::from);
 
     xdg_data.join("bash-completion/completions/crap-cms")
 }
@@ -230,8 +229,7 @@ fn fish_path(home: &Path) -> PathBuf {
     let config = std::env::var("XDG_CONFIG_HOME")
         .ok()
         .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".config"));
+        .map_or_else(|| home.join(".config"), PathBuf::from);
 
     config.join("fish/completions/crap-cms.fish")
 }

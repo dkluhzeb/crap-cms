@@ -6,6 +6,8 @@ use anyhow::{Context as _, Result, bail};
 
 use crate::cli;
 
+use crate::scaffold::init::LUA_API_TYPES;
+
 use super::helpers::{blueprints_dir, copy_dir_recursive, validate_blueprint_name};
 use super::list::list_blueprint_names;
 use super::manifest::{check_blueprint_version, read_manifest};
@@ -13,6 +15,11 @@ use super::manifest::{check_blueprint_version, read_manifest};
 /// Create a new project from a saved blueprint.
 ///
 /// Copies the blueprint to `dir` (or `./crap-cms/` if omitted).
+///
+/// # Errors
+///
+/// Returns an error if the blueprint name is invalid, the blueprint
+/// doesn't exist, version compatibility fails, or the file copy fails.
 pub fn blueprint_use(name: &str, dir: Option<PathBuf>) -> Result<()> {
     validate_blueprint_name(name)?;
 
@@ -32,7 +39,7 @@ pub fn blueprint_use(name: &str, dir: Option<PathBuf>) -> Result<()> {
 
     if target.join("crap.toml").exists() {
         bail!(
-            "Directory '{}' already contains a crap.toml — refusing to overwrite",
+            "Directory '{}' already contains a crap.toml -- refusing to overwrite",
             target.display()
         );
     }
@@ -48,14 +55,11 @@ pub fn blueprint_use(name: &str, dir: Option<PathBuf>) -> Result<()> {
         )
     })?;
 
-    // Regenerate types/crap.lua — blueprints skip types/ during save.
+    // Regenerate types/crap.lua -- blueprints skip types/ during save.
     let types_dir = target.join("types");
     fs::create_dir_all(&types_dir).context("Failed to create types/")?;
-    fs::write(
-        types_dir.join("crap.lua"),
-        super::super::init::LUA_API_TYPES,
-    )
-    .context("Failed to write types/crap.lua")?;
+    fs::write(types_dir.join("crap.lua"), LUA_API_TYPES)
+        .context("Failed to write types/crap.lua")?;
 
     let abs = target.canonicalize().unwrap_or_else(|_| target.clone());
     cli::success(&format!(
@@ -77,8 +81,7 @@ fn not_found_error(name: &str) -> Result<anyhow::Error> {
 
     if available.is_empty() {
         bail!(
-            "Blueprint '{}' not found. No blueprints saved yet.\nSave one with: crap-cms blueprint save <dir> <name>",
-            name
+            "Blueprint '{name}' not found. No blueprints saved yet.\nSave one with: crap-cms blueprint save <dir> <name>"
         );
     }
 
@@ -116,11 +119,10 @@ mod tests {
             let result = blueprint_use("missing-bp", None);
             assert!(result.is_err());
             let err = result.unwrap_err().to_string();
-            assert!(err.contains("not found"), "got: {}", err);
+            assert!(err.contains("not found"), "got: {err}");
             assert!(
                 err.contains("other-bp"),
-                "should list available, got: {}",
-                err
+                "should list available, got: {err}"
             );
         });
     }
@@ -169,7 +171,7 @@ mod tests {
 
             let target = tmp.path().join("new-project");
             let result = blueprint_use("old-version-bp", Some(target.clone()));
-            assert!(result.is_ok(), "should succeed with mismatch: {:?}", result);
+            assert!(result.is_ok(), "should succeed with mismatch: {result:?}");
             assert!(target.join("crap.toml").exists());
         });
     }
@@ -188,7 +190,7 @@ mod tests {
 
             let target = tmp.path().join("my-new-project");
             let result = blueprint_use("good-bp", Some(target.clone()));
-            assert!(result.is_ok(), "blueprint_use failed: {:?}", result);
+            assert!(result.is_ok(), "blueprint_use failed: {result:?}");
 
             assert!(target.join("crap.toml").exists());
             assert!(target.join("collections/posts.lua").exists());

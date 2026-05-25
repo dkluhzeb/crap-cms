@@ -11,10 +11,10 @@
 //! The marker `crap-cms:source <version>` is wrapped in the file's native
 //! comment syntax (so it doesn't disturb the renderer / parser):
 //!
-//! - `.hbs`  → `{{!-- crap-cms:source 0.1.0-alpha.8 --}}`
-//! - `.js`   → `// crap-cms:source 0.1.0-alpha.8`
-//! - `.css`  → `/* crap-cms:source 0.1.0-alpha.8 */`
-//! - `.lua`  → `-- crap-cms:source 0.1.0-alpha.8`
+//! - `.hbs`  -> `{{!-- crap-cms:source 0.1.0-alpha.8 --}}`
+//! - `.js`   -> `// crap-cms:source 0.1.0-alpha.8`
+//! - `.css`  -> `/* crap-cms:source 0.1.0-alpha.8 */`
+//! - `.lua`  -> `-- crap-cms:source 0.1.0-alpha.8`
 //!
 //! The header is **optional**: hand-written files or comment-stripped
 //! overlays just report `unknown` in `overlay status`. Users can edit or
@@ -23,7 +23,7 @@
 //! ## Parsing
 //!
 //! [`parse_source_version`] looks at the first ~5 lines of any file and
-//! extracts the version after `crap-cms:source `. It is forgiving — works
+//! extracts the version after `crap-cms:source `. It is forgiving -- works
 //! across all comment dialects above.
 
 use std::path::Path;
@@ -45,9 +45,9 @@ pub fn source_header_for(path: &Path, version: &str) -> Option<String> {
     };
 
     Some(if suffix.is_empty() {
-        format!("{} {}{}\n", prefix, MARKER, version)
+        format!("{prefix} {MARKER}{version}\n")
     } else {
-        format!("{} {}{} {}\n", prefix, MARKER, version, suffix)
+        format!("{prefix} {MARKER}{version} {suffix}\n")
     })
 }
 

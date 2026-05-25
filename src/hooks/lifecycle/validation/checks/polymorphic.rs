@@ -20,8 +20,6 @@
 //! no-op for plain (non-polymorphic) relationships, where the target
 //! collection is fixed by the field config and unforgeable.
 
-use std::collections::HashMap;
-
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
@@ -62,20 +60,18 @@ pub(crate) fn check_polymorphic_allowlist(
             _ => return,
         };
         for item in items {
-            check_one(field, data_key, &item, rc, errors);
+            check_one(field, data_key, &item, errors);
         }
     } else {
-        check_one(field, data_key, value, rc, errors);
+        check_one(field, data_key, value, errors);
     }
 }
 
-fn check_one(
-    field: &FieldDefinition,
-    data_key: &str,
-    value: &Value,
-    rc: &crate::core::field::RelationshipConfig,
-    errors: &mut Vec<FieldError>,
-) {
+fn check_one(field: &FieldDefinition, data_key: &str, value: &Value, errors: &mut Vec<FieldError>) {
+    let Some(rc) = field.relationship.as_ref() else {
+        return;
+    };
+
     let collection = match value {
         Value::String(s) if s.is_empty() => return,
         Value::String(s) => s.split_once('/').map(|(c, _)| c.to_string()),
@@ -94,30 +90,34 @@ fn check_one(
         return;
     };
 
-    let allowed: Vec<&str> = rc.polymorphic.iter().map(|s| s.as_ref()).collect();
+    let allowed: Vec<&str> = rc
+        .polymorphic
+        .iter()
+        .map(std::convert::AsRef::as_ref)
+        .collect();
     if allowed.contains(&collection.as_str()) {
         return;
     }
 
-    errors.push(FieldError::with_key(
-        data_key.to_owned(),
-        format!(
-            "{} references collection '{}' which is not in the polymorphic allowlist {:?}",
-            field.name, collection, allowed
-        ),
-        "validation.polymorphic_collection_not_allowed",
-        HashMap::from([
-            ("field".to_string(), field.name.clone()),
-            ("collection".to_string(), collection),
-            ("allowed".to_string(), allowed.join(",")),
-        ]),
-    ));
+    errors.push(
+        FieldError::with_key(
+            data_key.to_owned(),
+            format!(
+                "{} references collection '{}' which is not in the polymorphic allowlist {:?}",
+                field.name, collection, allowed
+            ),
+            "validation.polymorphic_collection_not_allowed",
+        )
+        .with_param("field", field.name.clone())
+        .with_param("collection", collection)
+        .with_param("allowed", allowed.join(",")),
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{FieldDefinition, FieldType, RelationshipConfig};
+    use crate::core::{FieldDefinition, FieldType, RelationshipConfig};
     use serde_json::json;
 
     fn polymorphic_field(has_many: bool, allowlist: &[&str]) -> FieldDefinition {
@@ -153,7 +153,7 @@ mod tests {
         let mut errors = Vec::new();
         let val = json!(["posts/p1", "articles/a1"]);
         check_polymorphic_allowlist(&field, "ref", Some(&val), &mut errors);
-        assert!(errors.is_empty(), "got: {:?}", errors);
+        assert!(errors.is_empty(), "got: {errors:?}");
     }
 
     #[test]

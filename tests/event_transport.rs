@@ -10,11 +10,25 @@
 //! `src/core/event/redis_transport.rs`. Real-world operators are expected to
 //! smoke-test Redis fanout against their deployment.
 
-use std::{collections::HashMap, sync::Arc};
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
+use std::sync::Arc;
 
 use crap_cms::config::LiveConfig;
 use crap_cms::core::{
-    DocumentId, Slug,
+    DocumentFields, DocumentId, Slug,
     event::{
         EventOperation, EventTarget, InProcessEventBus, InProcessInvalidationBus,
         InvalidationTransport, MutationEventInput, RecvError, SharedEventTransport,
@@ -28,7 +42,7 @@ fn sample_input() -> MutationEventInput {
         operation: EventOperation::Create,
         collection: Slug::new("posts"),
         document_id: DocumentId::new("doc-1"),
-        data: HashMap::new(),
+        data: DocumentFields::new(),
         edited_by: None,
     }
 }
@@ -71,7 +85,7 @@ async fn in_process_event_transport_lagged_error_surfaces() {
     // Next recv must surface a Lagged, matching the broadcast channel semantic.
     match rx.recv().await {
         Err(RecvError::Lagged(n)) => assert!(n >= 1),
-        other => panic!("expected Lagged, got {:?}", other),
+        other => panic!("expected Lagged, got {other:?}"),
     }
 }
 
@@ -119,11 +133,7 @@ fn factory_rejects_unknown_transport() {
     let Err(err) = create_event_transport(&cfg, "") else {
         panic!("expected error for unknown transport");
     };
-    assert!(
-        err.to_string().contains("kafka"),
-        "unexpected error: {}",
-        err
-    );
+    assert!(err.to_string().contains("kafka"), "unexpected error: {err}");
 }
 
 #[cfg(not(feature = "redis"))]
@@ -139,7 +149,6 @@ fn factory_rejects_redis_without_feature() {
     };
     assert!(
         err.to_string().contains("redis` feature"),
-        "unexpected error: {}",
-        err
+        "unexpected error: {err}"
     );
 }

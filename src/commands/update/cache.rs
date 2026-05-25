@@ -23,12 +23,13 @@ pub const CACHE_TTL_HOURS: i64 = 24;
 const MAX_CACHE_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpdateCache {
+pub(super) struct UpdateCache {
     pub checked_at: DateTime<Utc>,
     pub latest: String,
 }
 
 /// Default cache path: `$XDG_CACHE_HOME/crap-cms/update-check.json`.
+#[must_use]
 pub fn default_path() -> Option<PathBuf> {
     Some(cache_dir()?.join("update-check.json"))
 }
@@ -46,7 +47,7 @@ fn cache_dir() -> Option<PathBuf> {
 }
 
 /// Write the cache atomically (write to tmp, rename).
-pub fn write_at(path: &Path, cache: &UpdateCache) -> Result<()> {
+pub(super) fn write_at(path: &Path, cache: &UpdateCache) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
@@ -60,7 +61,7 @@ pub fn write_at(path: &Path, cache: &UpdateCache) -> Result<()> {
 /// Read the cache (returns `None` on any error, including "not present",
 /// "too large", or "parse error"). Never panics — the startup nudge path
 /// must never block serve.
-pub fn read_at(path: &Path) -> Option<UpdateCache> {
+pub(super) fn read_at(path: &Path) -> Option<UpdateCache> {
     let file = File::open(path).ok()?;
 
     // Size-cap the read so a corrupt or tampered cache file can't slurp
@@ -82,6 +83,7 @@ pub fn read_at(path: &Path) -> Option<UpdateCache> {
 
 /// Return the cached latest tag if the cache is present AND fresh (within
 /// `CACHE_TTL_HOURS` of `now`). Used by the serve startup nudge.
+#[must_use]
 pub fn fresh_latest_at(path: &Path, now: DateTime<Utc>) -> Option<String> {
     let cache = read_at(path)?;
     let age = now.signed_duration_since(cache.checked_at);

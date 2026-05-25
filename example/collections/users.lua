@@ -2,15 +2,19 @@ crap.collections.define("users", {
   labels = { singular = "User", plural = "Users" },
   timestamps = true,
   auth = {
-    forgot_password = true,
-    verify_email = false,
-    -- mfa = "email",  -- uncomment to enable email-based MFA
-    strategies = {
+    enabled = true,
+    methods = crap.auth.with_defaults({
+      -- Custom API-key strategy alongside password_login + bearer + session_cookie.
+      -- The strategy fires only when the `x-api-key` header is present —
+      -- explicit discriminator avoids accidental cross-collection auth.
       {
+        type = "strategy",
         name = "api-key",
         authenticate = "access.api_key_strategy",
+        activates_on = { header = "x-api-key" },
+        surfaces = { "grpc", "admin" },
       },
-    },
+    }),
   },
   admin = {
     use_as_title = "name",

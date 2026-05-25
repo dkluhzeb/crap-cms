@@ -2,9 +2,8 @@
 
 use anyhow::Result;
 use serde_json::{Map, Value};
-use std::collections::HashMap;
 
-use crate::core::{Document, FieldDefinition, FieldType};
+use crate::core::{Document, DocumentFields, FieldDefinition, FieldType};
 use crate::db::{
     DbConnection,
     query::{
@@ -14,6 +13,10 @@ use crate::db::{
 };
 
 /// Build a JSON snapshot of a document's current state (fields + join data).
+///
+/// # Errors
+///
+/// Returns a backend error if hydration of join-table data fails.
 pub fn build_snapshot(
     conn: &dyn DbConnection,
     slug: &str,
@@ -35,16 +38,10 @@ pub fn build_snapshot(
     Ok(Value::Object(data))
 }
 
-/// Convert a JSON value to a string for the data HashMap.
-/// Returns None for complex types (arrays/objects) that are handled via join tables.
-pub(super) fn snapshot_val_to_string(val: Option<&Value>) -> Option<String> {
-    match val {
-        Some(Value::String(s)) => Some(s.clone()),
-        Some(Value::Number(n)) => Some(n.to_string()),
-        Some(Value::Bool(b)) => Some(b.to_string()),
-        Some(Value::Null) | None => Some(String::new()),
-        _ => None, // complex types (arrays/objects) handled via join tables
-    }
+/// Whether a snapshot JSON value is a scalar that maps to a column write.
+/// Arrays / objects are handled via join tables and skipped here.
+fn is_scalar_snapshot_value(val: &Value) -> bool {
+    !matches!(val, Value::Array(_) | Value::Object(_))
 }
 
 /// Extract flat field data from a snapshot for the UPDATE statement.
@@ -54,7 +51,7 @@ pub(super) fn extract_snapshot_data(
     obj: &Map<String, Value>,
     fields: &[FieldDefinition],
     locales_enabled: bool,
-) -> HashMap<String, String> {
+) -> DocumentFields {
     extract_snapshot_recursive(obj, fields, locales_enabled, "", false)
 }
 
@@ -66,8 +63,8 @@ fn extract_snapshot_recursive(
     locales_enabled: bool,
     prefix: &str,
     inherited_localized: bool,
-) -> HashMap<String, String> {
-    let mut data: HashMap<String, String> = HashMap::new();
+) -> DocumentFields {
+    let mut data = DocumentFields::new();
 
     for field in fields {
         match field.field_type {
@@ -132,9 +129,9 @@ fn extract_snapshot_recursive(
                 let key = prefixed_name(prefix, &field.name);
 
                 if let Some(val) = obj.get(&key).or_else(|| obj.get(&field.name))
-                    && let Some(s) = snapshot_val_to_string(Some(val))
+                    && is_scalar_snapshot_value(val)
                 {
-                    data.insert(key.clone(), s);
+                    data.insert(key.clone(), val.clone());
                 }
 
                 if field.field_type == FieldType::Date && field.timezone {
@@ -143,9 +140,9 @@ fn extract_snapshot_recursive(
                     if let Some(tz_val) = obj
                         .get(&tz_key)
                         .or_else(|| obj.get(&tz_column(&field.name)))
-                        && let Some(s) = snapshot_val_to_string(Some(tz_val))
+                        && is_scalar_snapshot_value(tz_val)
                     {
-                        data.insert(tz_key, s);
+                        data.insert(tz_key, tz_val.clone());
                     }
                 }
             }
@@ -160,7 +157,7 @@ fn extract_snapshot_recursive(
 pub(super) fn collect_join_data_from_snapshot(
     fields: &[FieldDefinition],
     obj: &Map<String, Value>,
-    join_data: &mut HashMap<String, Value>,
+    join_data: &mut DocumentFields,
 ) {
     for field in fields {
         match field.field_type {
@@ -188,36 +185,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::core::field::{FieldDefinition, FieldTab, RelationshipConfig};
-
-    #[test]
-    fn snapshot_val_to_string_variants() {
-        assert_eq!(
-            snapshot_val_to_string(Some(&json!("hello"))),
-            Some("hello".to_string())
-        );
-        assert_eq!(
-            snapshot_val_to_string(Some(&json!(42))),
-            Some("42".to_string())
-        );
-        assert_eq!(
-            snapshot_val_to_string(Some(&json!(true))),
-            Some("true".to_string())
-        );
-        assert_eq!(
-            snapshot_val_to_string(Some(&json!(false))),
-            Some("false".to_string())
-        );
-        assert_eq!(
-            snapshot_val_to_string(Some(&Value::Null)),
-            Some(String::new())
-        );
-        assert_eq!(snapshot_val_to_string(None), Some(String::new()));
-        // Complex types return None
-        assert_eq!(snapshot_val_to_string(Some(&json!([1, 2]))), None);
-        assert_eq!(snapshot_val_to_string(Some(&json!({"a": 1}))), None);
-    }
-
+    use crate::core::{FieldDefinition, FieldTab, RelationshipConfig};
     #[test]
     fn extract_snapshot_data_basic() {
         let fields = vec![
@@ -229,8 +197,8 @@ mod tests {
             serde_json::from_value(json!({"title": "Hello", "count": 42})).unwrap();
 
         let data = extract_snapshot_data(&obj, &fields, false);
-        assert_eq!(data.get("title"), Some(&"Hello".to_string()));
-        assert_eq!(data.get("count"), Some(&"42".to_string()));
+        assert_eq!(data.get("title"), Some(&json!("Hello")));
+        assert_eq!(data.get("count"), Some(&json!(42)));
     }
 
     #[test]
@@ -250,7 +218,7 @@ mod tests {
             !data.contains_key("title"),
             "localized field should be skipped"
         );
-        assert_eq!(data.get("slug"), Some(&"hello".to_string()));
+        assert_eq!(data.get("slug"), Some(&json!("hello")));
     }
 
     #[test]
@@ -267,13 +235,13 @@ mod tests {
         let obj: Map<String, Value> =
             serde_json::from_value(json!({"seo__title": "SEO Title"})).unwrap();
         let data = extract_snapshot_data(&obj, &fields, false);
-        assert_eq!(data.get("seo__title"), Some(&"SEO Title".to_string()));
+        assert_eq!(data.get("seo__title"), Some(&json!("SEO Title")));
 
         // Nested format: seo: { title: "..." }
         let obj2: Map<String, Value> =
             serde_json::from_value(json!({"seo": {"title": "Nested SEO"}})).unwrap();
         let data2 = extract_snapshot_data(&obj2, &fields, false);
-        assert_eq!(data2.get("seo__title"), Some(&"Nested SEO".to_string()));
+        assert_eq!(data2.get("seo__title"), Some(&json!("Nested SEO")));
     }
 
     #[test]
@@ -295,8 +263,8 @@ mod tests {
             serde_json::from_value(json!({"template": "landing", "show_in_nav": true})).unwrap();
 
         let data = extract_snapshot_data(&obj, &fields, false);
-        assert_eq!(data.get("template"), Some(&"landing".to_string()));
-        assert_eq!(data.get("show_in_nav"), Some(&"true".to_string()));
+        assert_eq!(data.get("template"), Some(&json!("landing")));
+        assert_eq!(data.get("show_in_nav"), Some(&json!(true)));
     }
 
     #[test]
@@ -312,7 +280,7 @@ mod tests {
         let obj: Map<String, Value> = serde_json::from_value(json!({"width": 100})).unwrap();
 
         let data = extract_snapshot_data(&obj, &fields, false);
-        assert_eq!(data.get("width"), Some(&"100".to_string()));
+        assert_eq!(data.get("width"), Some(&json!(100)));
     }
 
     #[test]
@@ -340,10 +308,10 @@ mod tests {
         let data = extract_snapshot_data(&obj, &fields, false);
         assert_eq!(
             data.get("title"),
-            Some(&"Hello".to_string()),
+            Some(&json!("Hello")),
             "Row inside Tabs must be recursed"
         );
-        assert_eq!(data.get("slug"), Some(&"hello".to_string()));
+        assert_eq!(data.get("slug"), Some(&json!("hello")));
     }
 
     #[test]
@@ -365,7 +333,7 @@ mod tests {
         }))
         .unwrap();
 
-        let mut join_data = HashMap::new();
+        let mut join_data = DocumentFields::new();
         collect_join_data_from_snapshot(&fields, &obj, &mut join_data);
 
         assert!(
@@ -404,7 +372,7 @@ mod tests {
         }))
         .unwrap();
 
-        let mut join_data = HashMap::new();
+        let mut join_data = DocumentFields::new();
         collect_join_data_from_snapshot(&fields, &obj, &mut join_data);
 
         assert!(
@@ -439,12 +407,12 @@ mod tests {
 
         assert_eq!(
             data.get("start_date"),
-            Some(&"2024-06-15T14:00:00.000Z".to_string()),
+            Some(&json!("2024-06-15T14:00:00.000Z")),
             "Date value should be extracted"
         );
         assert_eq!(
             data.get("start_date_tz"),
-            Some(&"America/New_York".to_string()),
+            Some(&json!("America/New_York")),
             "Timezone companion should be extracted"
         );
     }
@@ -463,7 +431,7 @@ mod tests {
 
         assert_eq!(
             data.get("event_date"),
-            Some(&"2024-06-15T14:00:00.000Z".to_string())
+            Some(&json!("2024-06-15T14:00:00.000Z"))
         );
         assert!(
             !data.contains_key("event_date_tz"),
@@ -495,11 +463,11 @@ mod tests {
 
         assert_eq!(
             data.get("schedule__start"),
-            Some(&"2024-06-15T07:00:00.000Z".to_string())
+            Some(&json!("2024-06-15T07:00:00.000Z"))
         );
         assert_eq!(
             data.get("schedule__start_tz"),
-            Some(&"Europe/Berlin".to_string()),
+            Some(&json!("Europe/Berlin")),
             "Group _tz companion should be extracted with prefix"
         );
     }

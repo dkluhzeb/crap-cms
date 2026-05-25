@@ -1,4 +1,4 @@
-//! `make slot` command — scaffold a slot-widget HBS file.
+//! `make slot` command -- scaffold a slot-widget HBS file.
 
 mod generator;
 

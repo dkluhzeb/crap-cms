@@ -1,8 +1,7 @@
 --- Field before_validate hook: generate slug from title if empty.
----@param value string|nil
----@param context crap.FieldHookContext
----@return string|nil
-return function(value, context)
+--- Used across multiple collections (posts, pages, tags, ...) so the
+--- factory is the generic `crap.any.field_hook`.
+return crap.any.field_hook(function(value, context)
   if value and value ~= "" then
     return value
   end
@@ -13,4 +12,4 @@ return function(value, context)
   end
 
   return crap.util.slugify(title)
-end
+end)

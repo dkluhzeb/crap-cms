@@ -8,7 +8,7 @@ use crate::{cli::crap_theme, commands::MakeAction, scaffold};
 
 /// Handle the `make global` subcommand — resolve slug interactively if missing.
 #[cfg(not(tarpaulin_include))]
-pub fn run_global(config_dir: &Path, action: MakeAction) -> Result<()> {
+pub(super) fn run_global(config_dir: &Path, action: MakeAction) -> Result<()> {
     let MakeAction::Global {
         slug,
         fields,

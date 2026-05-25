@@ -1,0 +1,22 @@
+[package]
+name = "crap-cms-macros"
+description = "Procedural macros for crap-cms (LuaAnnotation)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full", "extra-traits"] }
+quote = "1"
+proc-macro2 = "1"
+darling = "0.21"

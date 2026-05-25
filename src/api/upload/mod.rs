@@ -8,20 +8,7 @@
 mod create;
 mod delete;
 mod helpers;
+mod router;
 mod update;
 
-use axum::{
-    Router,
-    routing::{delete as delete_route, patch, post},
-};
-
-use crate::admin::AdminState;
-
-/// Build the upload API router with all routes.
-pub fn upload_router(state: AdminState) -> Router<AdminState> {
-    Router::new()
-        .route("/upload/{slug}", post(create::create_upload))
-        .route("/upload/{slug}/{id}", patch(update::update_upload))
-        .route("/upload/{slug}/{id}", delete_route(delete::delete_upload))
-        .with_state(state)
-}
+pub use router::upload_router;

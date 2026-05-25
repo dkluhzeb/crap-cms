@@ -2,7 +2,8 @@
 
 use anyhow::{Result, anyhow, bail};
 
-use super::types::{BlockStub, CONTAINER_TYPES, FieldStub, TabStub, VALID_FIELD_TYPES};
+use super::field_types::{CONTAINER_TYPES, VALID_FIELD_TYPES};
+use super::stubs::{BlockStub, FieldStub, TabStub};
 
 /// Escape a string for safe embedding in a Lua double-quoted string literal.
 pub(super) fn escape_lua_string(s: &str) -> String {
@@ -13,7 +14,7 @@ pub(super) fn escape_lua_string(s: &str) -> String {
         .replace('\0', "\\0")
 }
 
-/// Naive English singularization: strip trailing "s", "es", or "ies" → "y".
+/// Naive English singularization: strip trailing "s", "es", or "ies" -> "y".
 pub(super) fn singularize(s: &str) -> String {
     let lower = s.to_lowercase();
 
@@ -45,20 +46,20 @@ pub(super) fn pluralize(s: &str) -> String {
 
     let lower = s.to_lowercase();
 
-    if lower.ends_with("z") && !lower.ends_with("zz") {
-        return format!("{}zes", s);
+    if lower.ends_with('z') && !lower.ends_with("zz") {
+        return format!("{s}zes");
     }
 
-    if lower.ends_with("s")
-        || lower.ends_with("x")
+    if lower.ends_with('s')
+        || lower.ends_with('x')
         || lower.ends_with("zz")
         || lower.ends_with("sh")
         || lower.ends_with("ch")
     {
-        return format!("{}es", s);
+        return format!("{s}es");
     }
 
-    if lower.ends_with("y")
+    if lower.ends_with('y')
         && !lower.ends_with("ay")
         && !lower.ends_with("ey")
         && !lower.ends_with("oy")
@@ -67,7 +68,7 @@ pub(super) fn pluralize(s: &str) -> String {
         return format!("{}ies", &s[..s.len() - 1]);
     }
 
-    format!("{}s", s)
+    format!("{s}s")
 }
 
 /// Split `s` on `sep` only when parenthesis depth is zero.
@@ -109,7 +110,7 @@ fn find_matching_paren(s: &str) -> Result<usize> {
         }
     }
 
-    bail!("Unbalanced parentheses — missing closing ')'");
+    bail!("Unbalanced parentheses -- missing closing ')'");
 }
 
 /// Parse inline field shorthand: "title:text:required,status:select,body:textarea:localized"
@@ -120,6 +121,11 @@ fn find_matching_paren(s: &str) -> Result<usize> {
 /// - `tabs`: `name:tabs(label(fields),...)`
 ///
 /// Modifiers after the type (or closing `)`) are order-independent flags: `required`, `localized`.
+///
+/// # Errors
+///
+/// Returns an error if the shorthand is malformed (unbalanced parens,
+/// invalid field name, unknown type, missing label for blocks/tabs, …).
 pub fn parse_fields_shorthand(s: &str) -> Result<Vec<FieldStub>> {
     let parts = split_at_depth_zero(s, ',');
     let mut fields = Vec::new();
@@ -148,10 +154,7 @@ fn parse_field_token(token: &str) -> Result<FieldStub> {
 
     let segments = split_at_depth_zero(token, ':');
     if segments.len() < 2 {
-        bail!(
-            "Invalid field shorthand '{}' — expected 'name:type[:required][:localized]'",
-            token
-        );
+        bail!("Invalid field shorthand '{token}' -- expected 'name:type[:required][:localized]'");
     }
 
     let name = segments[0].to_string();
@@ -175,10 +178,7 @@ fn parse_field_token(token: &str) -> Result<FieldStub> {
 /// Validate that a field name is a safe identifier.
 fn validate_field_name(name: &str) -> Result<()> {
     if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        bail!(
-            "Invalid field name '{}' — must contain only letters, digits, and underscores",
-            name
-        );
+        bail!("Invalid field name '{name}' -- must contain only letters, digits, and underscores");
     }
     Ok(())
 }
@@ -187,7 +187,7 @@ fn validate_field_name(name: &str) -> Result<()> {
 fn validate_field_type(field_type: &str) -> Result<()> {
     if !VALID_FIELD_TYPES.contains(&field_type) {
         bail!(
-            "Unknown field type '{}' — valid types: {}",
+            "Unknown field type '{}' -- valid types: {}",
             field_type,
             VALID_FIELD_TYPES.join(", ")
         );
@@ -208,11 +208,7 @@ fn parse_type_segment(segment: &str, name: &str) -> Result<(String, Option<Strin
     let after = &rest[close + 1..];
 
     if !after.is_empty() {
-        bail!(
-            "Unexpected characters '{}' after closing ')' in field '{}'",
-            after,
-            name
-        );
+        bail!("Unexpected characters '{after}' after closing ')' in field '{name}'");
     }
 
     Ok((ft, Some(content.to_string())))
@@ -229,9 +225,7 @@ fn parse_modifiers(segments: &[&str], name: &str) -> Result<(bool, bool)> {
             "localized" => localized = true,
             "index" => {} // accepted but not stored
             other => bail!(
-                "Unknown modifier '{}' in field '{}' — valid: required, localized, index",
-                other,
-                name
+                "Unknown modifier '{other}' in field '{name}' -- valid: required, localized, index"
             ),
         }
     }
@@ -259,8 +253,7 @@ fn parse_subfield_content(
     }
 
     bail!(
-        "Field type '{}' does not support subfields — only group, array, row, collapsible, blocks, and tabs do",
-        field_type
+        "Field type '{field_type}' does not support subfields -- only group, array, row, collapsible, blocks, and tabs do"
     );
 }
 
@@ -276,10 +269,7 @@ fn parse_block_entries(s: &str) -> Result<Vec<BlockStub>> {
         }
 
         let pipe_pos = part.find('|').ok_or_else(|| {
-            anyhow!(
-                "Block entry '{}' missing '|' separator — expected 'type|label(fields)'",
-                part
-            )
+            anyhow!("Block entry '{part}' missing '|' separator -- expected 'type|label(fields)'")
         })?;
         let block_type = part[..pipe_pos].to_string();
         let rest = &part[pipe_pos + 1..];
@@ -298,10 +288,7 @@ fn parse_block_entries(s: &str) -> Result<Vec<BlockStub>> {
             bail!("Block type cannot be empty");
         }
         if label.is_empty() {
-            bail!(
-                "Block label cannot be empty for block type '{}'",
-                block_type
-            );
+            bail!("Block label cannot be empty for block type '{block_type}'");
         }
 
         blocks.push(BlockStub::new(block_type, label, fields));
@@ -326,10 +313,7 @@ fn parse_tab_entries(s: &str) -> Result<Vec<TabStub>> {
         }
 
         let Some(paren_pos) = part.find('(') else {
-            bail!(
-                "Tab entry '{}' missing '(fields)' — expected 'label(fields)'",
-                part
-            );
+            bail!("Tab entry '{part}' missing '(fields)' -- expected 'label(fields)'");
         };
 
         let label = part[..paren_pos].to_string();
@@ -356,7 +340,7 @@ fn parse_tab_entries(s: &str) -> Result<Vec<TabStub>> {
 mod tests {
     use super::*;
 
-    // ── Inflection ──────────────────────────────────────────────────────
+    // == Inflection ======================================================
 
     #[test]
     fn singularize_basic() {
@@ -394,7 +378,7 @@ mod tests {
         assert_eq!(pluralize("Buzz"), "Buzzes");
     }
 
-    // ── Escape ──────────────────────────────────────────────────────────
+    // == Escape ==========================================================
 
     #[test]
     fn escape_lua_string_basic() {
@@ -405,7 +389,7 @@ mod tests {
         assert_eq!(escape_lua_string("null\0byte"), "null\\0byte");
     }
 
-    // ── Utilities ───────────────────────────────────────────────────────
+    // == Utilities =======================================================
 
     #[test]
     fn split_at_depth_zero_basic() {
@@ -426,7 +410,7 @@ mod tests {
         assert!(find_matching_paren("(abc").is_err());
     }
 
-    // ── Field shorthand parsing ─────────────────────────────────────────
+    // == Field shorthand parsing =========================================
 
     #[test]
     fn parse_basic_fields() {
@@ -515,7 +499,7 @@ mod tests {
         assert!(parse_fields_shorthand("field;name:text").is_err());
     }
 
-    // ── Nested parsing ──────────────────────────────────────────────────
+    // == Nested parsing ==================================================
 
     #[test]
     fn parse_nested_group() {
@@ -607,7 +591,7 @@ mod tests {
         assert_eq!(fields[0].tabs[0].fields[0].name, "name");
     }
 
-    // ── Parse errors ────────────────────────────────────────────────────
+    // == Parse errors ====================================================
 
     #[test]
     fn parse_error_unbalanced_parens() {

@@ -1,24 +1,28 @@
 //! Collection and global definition types parsed from Lua configuration files.
 
-mod access_builder;
-mod admin_config_builder;
+mod access;
+mod admin_config;
 mod auth;
-mod collection_definition;
-mod collection_definition_builder;
+mod definition;
 mod global_definition;
-mod global_definition_builder;
-mod hooks_builder;
-mod shared;
+mod hooks;
+mod index_definition;
+mod labels;
+mod live;
+mod mcp_config;
+mod versions_config;
 
-pub use access_builder::AccessBuilder;
-pub use admin_config_builder::AdminConfigBuilder;
-pub use auth::{Auth, AuthStrategy, MfaMode};
-pub use collection_definition::CollectionDefinition;
-pub use collection_definition_builder::CollectionDefinitionBuilder;
-pub use global_definition::GlobalDefinition;
-pub use global_definition_builder::GlobalDefinitionBuilder;
-pub use hooks_builder::HooksBuilder;
-pub use shared::{
-    Access, AdminConfig, Hooks, IndexDefinition, Labels, LiveMode, LiveSetting, McpConfig,
-    VersionsConfig,
+pub use access::{Access, AccessBuilder};
+pub use admin_config::{AdminConfig, AdminConfigBuilder};
+pub use auth::{
+    Activation, Auth, AuthMethod, MfaMode, PasswordLoginBuilder, PasswordLoginCfg, StrategyCfg,
+    Surface, SurfaceSet,
 };
+pub use definition::{CollectionDefinition, CollectionDefinitionBuilder};
+pub use global_definition::{GlobalDefinition, GlobalDefinitionBuilder};
+pub use hooks::{Hooks, HooksBuilder};
+pub use index_definition::IndexDefinition;
+pub use labels::Labels;
+pub use live::{LiveMode, LiveSetting};
+pub use mcp_config::McpConfig;
+pub use versions_config::VersionsConfig;

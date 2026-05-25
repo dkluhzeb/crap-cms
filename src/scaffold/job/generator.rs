@@ -1,13 +1,39 @@
-//! `make job` — generate job Lua files.
+//! `make job` -- generate job Lua files.
 
 use std::{fs, path::Path};
 
-use anyhow::{Context as _, Result, bail};
-use serde_json::json;
+use anyhow::{Context as _, Result};
+use serde::Serialize;
 
 use crate::cli;
-use crate::scaffold::{render::render, to_title_case, validate_slug};
+use crate::scaffold::guards::refuse_file_overwrite;
+use crate::scaffold::{paths, render::render, to_title_case, validate_slug};
 use crate::typegen::to_pascal_case;
+
+/// Handlebars context for the `job` template. Optional fields are skipped via
+/// `#[serde(skip_serializing_if = "Option::is_none")]` so `{{#if}}` blocks
+/// in the template behave as before -- `Some("default")` queue or
+/// `Some(60)` timeout were already filtered upstream.
+#[derive(Serialize)]
+struct JobTemplateContext<'a> {
+    label: String,
+    slug: &'a str,
+    pascal: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schedule: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    queue: Option<&'a str>,
+    /// Companion boolean for `retries`. Handlebars `{{#if retries}}`
+    /// treats integer `0` as falsy, so we need a separate flag to
+    /// distinguish "operator said 0 retries" (emit) from "operator
+    /// didn't pass --retries" (skip). The template uses
+    /// `{{#if has_retries}}` to decide whether to emit the line.
+    has_retries: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retries: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timeout: Option<u64>,
+}
 
 /// Options for `make_job()`.
 pub struct MakeJobOptions<'a> {
@@ -23,20 +49,19 @@ pub struct MakeJobOptions<'a> {
 /// Scaffold a job Lua file in `jobs/<slug>.lua`.
 ///
 /// Generates a module with a `run` handler, followed by `crap.jobs.define()`.
+///
+/// # Errors
+///
+/// Returns an error if the slug is invalid, the file already exists without
+/// `--force`, or writing the file fails.
 pub fn make_job(opts: &MakeJobOptions) -> Result<()> {
     validate_slug(opts.slug)?;
 
-    let jobs_dir = opts.config_dir.join("jobs");
+    let jobs_dir = paths::jobs_dir(opts.config_dir);
     fs::create_dir_all(&jobs_dir).context("Failed to create jobs/ directory")?;
 
     let file_path = jobs_dir.join(format!("{}.lua", opts.slug));
-
-    if file_path.exists() && !opts.force {
-        bail!(
-            "File '{}' already exists — use --force to overwrite",
-            file_path.display()
-        );
-    }
+    refuse_file_overwrite(&file_path, opts.force)?;
 
     let lua = render_job_lua(opts)?;
 
@@ -56,22 +81,28 @@ fn render_job_lua(opts: &MakeJobOptions) -> Result<String> {
     let label = to_title_case(opts.slug);
     let pascal = to_pascal_case(opts.slug);
 
-    // Filter out default values so {{#if}} in the template skips them
+    // Filter out default values so {{#if}} in the template skips them.
+    // Retries: pass through verbatim — `--retries 0` is an explicit
+    // operator choice ("no retries even if the queue default is
+    // higher") under the alpha.9 queue-inheritance model, not a
+    // synonym for "default". Filtering it out would silently demote
+    // the choice to "inherit queue default."
     let queue = opts.queue.filter(|q| *q != "default");
-    let retries = opts.retries.filter(|&r| r > 0);
+    let retries = opts.retries;
     let timeout = opts.timeout.filter(|&t| t != 60);
 
     render(
         "job",
-        &json!({
-            "label": label,
-            "slug": opts.slug,
-            "pascal": pascal,
-            "schedule": opts.schedule,
-            "queue": queue,
-            "retries": retries,
-            "timeout": timeout,
-        }),
+        &JobTemplateContext {
+            label,
+            slug: opts.slug,
+            pascal,
+            schedule: opts.schedule,
+            queue,
+            has_retries: retries.is_some(),
+            retries,
+            timeout,
+        },
     )
 }
 
@@ -122,8 +153,8 @@ mod tests {
 
         let content = fs::read_to_string(tmp.path().join("jobs/cleanup.lua")).unwrap();
         assert!(content.contains("local M = {}"));
-        assert!(content.contains("crap.JobHandlerContext"));
-        assert!(content.contains("function M.run(context)"));
+        assert!(content.contains("crap.any.job_handler("));
+        assert!(content.contains("M.run = crap.any.job_handler(function(context)"));
         assert!(content.contains("crap.jobs.define(\"cleanup\""));
         assert!(content.contains("handler = \"jobs.cleanup.run\""));
         assert!(content.contains("return M"));
@@ -197,6 +228,31 @@ mod tests {
         let content = fs::read_to_string(tmp.path().join("jobs/import.lua")).unwrap();
         assert!(content.contains("retries = 3"));
         assert!(content.contains("timeout = 300"));
+    }
+
+    /// Regression: `--retries 0` is an explicit operator choice
+    /// ("no retries even if the queue default is higher"); the
+    /// generator must emit it verbatim so the `JobDefinition` ends up
+    /// with `Some(0)` rather than `None` (which would silently inherit
+    /// `[jobs.queues.<queue>] retries`).
+    #[test]
+    fn explicit_zero_retries_is_emitted() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        make_job(&opts(
+            tmp.path(),
+            "no_retry_job",
+            None,
+            None,
+            Some(0),
+            None,
+            false,
+        ))
+        .unwrap();
+        let content = fs::read_to_string(tmp.path().join("jobs/no_retry_job.lua")).unwrap();
+        assert!(
+            content.contains("retries = 0"),
+            "explicit `--retries 0` must appear in the generated Lua so the JobDefinition is `Some(0)`, not `None`; got:\n{content}"
+        );
     }
 
     #[test]

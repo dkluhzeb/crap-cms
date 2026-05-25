@@ -29,7 +29,7 @@ dev_mode = false
 
 # [admin.csp]                       # Content-Security-Policy header (enabled by default)
 # enabled = true
-# script_src ships without 'unsafe-inline' — a per-request nonce is emitted
+# script_src ships without 'unsafe-inline' -- a per-request nonce is emitted
 # instead and exposed to templates as {{crap.csp_nonce}}. Overlay templates
 # that use inline <script> MUST carry nonce="{{crap.csp_nonce}}".
 # script_src = ["'self'"]
@@ -62,7 +62,7 @@ secret = "{{{auth_secret}}}"
 
 [live]
 # enabled = true                # enable SSE + gRPC Subscribe for live mutation events
-# transport = "memory"          # "memory" (default) — in-process events, or "redis" — cross-node fanout via Redis pub/sub (requires --features redis, reuses cache.redis_url)
+# transport = "memory"          # "memory" (default) -- in-process events, or "redis" -- cross-node fanout via Redis pub/sub (requires --features redis, reuses cache.redis_url)
 # channel_capacity = 1024       # broadcast channel buffer size
 # max_sse_connections = 1000    # max concurrent SSE connections (0 = unlimited)
 # max_subscribe_connections = 1000  # max concurrent gRPC Subscribe streams (0 = unlimited)
@@ -131,12 +131,27 @@ fallback = true
 # http_max_response_bytes = "10MB" # max HTTP response body size for crap.http.request
 
 # [jobs]
-# max_concurrent = 10             # max concurrent job executions
+# max_concurrent = 10             # cluster-wide cap on concurrent jobs (counted via DB)
 # poll_interval = 1              # seconds between job queue polls
 # cron_interval = 60             # seconds between cron schedule checks
 # heartbeat_interval = 10        # seconds between running job heartbeats
 # auto_purge = 604800            # auto-purge completed/failed jobs older than N seconds (7 days)
-# image_queue_batch_size = 10    # image conversions per scheduler poll
+# priority_decay = 0              # priority aging period (e.g. "1m") — 0 disables (pure static priority)
+
+# Per-queue aggregate concurrency caps (all caps in jobs are cluster-wide).
+# Strictest of: max_concurrent / queue cap / per-slug JobDefinition::concurrency
+# wins. Queues without an entry are unconstrained beyond the global cap.
+#
+# Framework defaults applied if not overridden:
+#   images = { concurrency = 2 }   — AVIF/WebP encoders are CPU-bound
+[jobs.queues]
+# Per-queue knobs: { concurrency, timeout, retries }. Operator-supplied
+# fields override the framework defaults; unspecified fields keep them.
+# Framework defaults: images = { concurrency = 2, timeout = "5m", retries = 2 }
+#                     email  = { concurrency = 5, timeout = "30s", retries = 3 }
+images = { concurrency = 2 }
+# email   = { concurrency = 8, timeout = "1m", retries = 5 }
+# reports = { concurrency = 1, timeout = "30m", retries = 0 }
 
 # [cors]
 # allowed_origins = []           # empty = CORS disabled; ["*"] = allow any origin

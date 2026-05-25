@@ -74,6 +74,7 @@ impl FindQuery {
     /// `Default`, so tests that need an "empty" query use `FindQuery::default()`
     /// or struct literals with `..Default::default()`. Production code must
     /// route through the builder.
+    #[must_use]
     pub fn builder() -> FindQueryBuilder {
         FindQueryBuilder::default()
     }
@@ -94,51 +95,61 @@ pub struct FindQueryBuilder {
 }
 
 impl FindQueryBuilder {
+    #[must_use]
     pub fn filters(mut self, filters: Vec<FilterClause>) -> Self {
         self.filters = filters;
         self
     }
 
+    #[must_use]
     pub fn order_by(mut self, order_by: Option<String>) -> Self {
         self.order_by = order_by;
         self
     }
 
+    #[must_use]
     pub fn limit(mut self, limit: Option<i64>) -> Self {
         self.limit = limit;
         self
     }
 
+    #[must_use]
     pub fn offset(mut self, offset: Option<i64>) -> Self {
         self.offset = offset;
         self
     }
 
+    #[must_use]
     pub fn select(mut self, select: Option<Vec<String>>) -> Self {
         self.select = select;
         self
     }
 
+    #[must_use]
     pub fn after_cursor(mut self, cursor: Option<cursor::CursorData>) -> Self {
         self.after_cursor = cursor;
         self
     }
 
+    #[must_use]
     pub fn before_cursor(mut self, cursor: Option<cursor::CursorData>) -> Self {
         self.before_cursor = cursor;
         self
     }
 
+    #[must_use]
     pub fn search(mut self, search: Option<String>) -> Self {
         self.search = search;
         self
     }
 
+    #[must_use]
     pub fn include_deleted(mut self, include: bool) -> Self {
         self.include_deleted = include;
         self
     }
 
+    #[must_use]
     pub fn build(self) -> FindQuery {
         FindQuery {
             filters: self.filters,

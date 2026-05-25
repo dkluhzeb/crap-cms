@@ -371,6 +371,41 @@ scenario_create() {
     }' "$GRPC_ADDR" crap.ContentAPI/DeleteMany 2>/dev/null)
     deleted=$(echo "$result" | jq -r '((.deleted // "0") | tonumber) + ((.softDeleted // "0") | tonumber)')
     ok "Cleaned up ${deleted} loadtest posts"
+
+    # Bench-environment hygiene: scrub orphaned `_versions_posts` rows.
+    #
+    # The gRPC hard-delete above DOES cascade-delete versions in
+    # production — SQLite `ON DELETE CASCADE` fires because the pool
+    # sets `PRAGMA foreign_keys = ON` on every connection acquisition.
+    # See `db::pool::tests::fk_cascade_*` and
+    # `tests/versions.rs::bulk_hard_delete_cascades_to_versions_via_service`
+    # for the proof.
+    #
+    # This purge exists for the BENCH environment specifically:
+    # - Runs from before commit 28334c72 used soft-delete (no
+    #   `forceHardDelete: true`), which left posts + their versions
+    #   intact. Tens of thousands of those orphans accumulated in
+    #   `example/data/crap.db` and bloat the SQLite page cache; we
+    #   measured `count @ 50` and `find_by_id @ 50` drop to ~1/3 of
+    #   baseline once `_versions_posts` grew past ~50k rows.
+    # - Interrupted bench runs that don't reach this cleanup step also
+    #   leave soft-deleted residue when the create scenario hasn't
+    #   finished.
+    #
+    # The DELETE is gated on `_parent NOT IN (SELECT id FROM posts)`
+    # so it only touches genuinely orphaned rows. Default DB path
+    # matches the `cargo run -- -C ./example serve` invocation in the
+    # script preamble; override with `LOADTEST_DB=/path/to/db`.
+    local loadtest_db="${LOADTEST_DB:-./example/data/crap.db}"
+    if [[ -f "$loadtest_db" ]] && command -v sqlite3 >/dev/null 2>&1; then
+        info "  Purging orphaned version rows from $loadtest_db..."
+        local version_rows
+        version_rows=$(sqlite3 "$loadtest_db" \
+            "DELETE FROM _versions_posts WHERE _parent NOT IN (SELECT id FROM posts); \
+             SELECT changes(); \
+             PRAGMA wal_checkpoint(TRUNCATE);" 2>/dev/null | head -1)
+        ok "Purged ${version_rows:-0} orphaned version rows"
+    fi
 }
 
 scenario_update() {

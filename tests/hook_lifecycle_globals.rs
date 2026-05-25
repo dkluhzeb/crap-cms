@@ -5,18 +5,34 @@
 //! paths against a globals-only fixture and asserts each phase fires and
 //! affects the observable result.
 
-use std::collections::HashMap;
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
+use crap_cms::core::Document;
+use crap_cms::core::DocumentFields;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::service::{
     GetGlobalInput, RunnerReadHooks, RunnerWriteHooks, ServiceContext, WriteInput,
-    get_global_document, update_global_core,
+    get_global_document, update_global_in_conn,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/globals_hook_tests")
@@ -25,7 +41,7 @@ fn fixture_dir() -> PathBuf {
 fn setup() -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    crap_cms::core::SharedRegistry,
+    std::sync::Arc<crap_cms::core::Registry>,
     HookRunner,
 ) {
     let config_dir = fixture_dir();
@@ -40,7 +56,7 @@ fn setup() -> (
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("build runner");
@@ -50,16 +66,14 @@ fn setup() -> (
 
 fn seed_global_tagline(
     pool: &crap_cms::db::DbPool,
-    registry: &crap_cms::core::SharedRegistry,
+    registry: &std::sync::Arc<crap_cms::core::Registry>,
     slug: &str,
     tagline: &str,
 ) {
-    let reg = registry.read().unwrap();
-    let def = reg.get_global(slug).expect("global not found").clone();
-    drop(reg);
+    let def = registry.get_global(slug).expect("global not found").clone();
 
-    let mut data = HashMap::new();
-    data.insert("tagline".to_string(), tagline.to_string());
+    let mut data = DocumentFields::new();
+    data.insert("tagline".to_string(), json!(tagline));
 
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
@@ -72,13 +86,10 @@ fn seed_global_tagline(
 #[test]
 fn global_before_validate_hook_fires() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_global("site_settings").unwrap().clone();
-    drop(reg);
+    let def = registry.get_global("site_settings").unwrap().clone();
 
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "  Padded Title  ".to_string());
-    let join_data = HashMap::new();
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("  Padded Title  "));
 
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
@@ -88,8 +99,8 @@ fn global_before_validate_hook_fires() {
         .write_hooks(&wh)
         .build();
 
-    let input = WriteInput::builder(data, &join_data).build();
-    let (doc, _after) = update_global_core(&ctx, input).expect("update should succeed");
+    let input = WriteInput::builder(data).build();
+    let (doc, _after) = update_global_in_conn(&ctx, input).expect("update should succeed");
     tx.commit().unwrap();
 
     // before_validate trimmed the title.
@@ -105,13 +116,10 @@ fn global_before_validate_hook_fires() {
 #[test]
 fn global_before_change_hook_fires() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_global("site_settings").unwrap().clone();
-    drop(reg);
+    let def = registry.get_global("site_settings").unwrap().clone();
 
-    let mut data = HashMap::new();
-    data.insert("site_name".to_string(), "POISON".to_string());
-    let join_data = HashMap::new();
+    let mut data = DocumentFields::new();
+    data.insert("site_name".to_string(), json!("POISON"));
 
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
@@ -121,9 +129,9 @@ fn global_before_change_hook_fires() {
         .write_hooks(&wh)
         .build();
 
-    let input = WriteInput::builder(data, &join_data).build();
+    let input = WriteInput::builder(data).build();
     let err =
-        update_global_core(&ctx, input).expect_err("before_change hook should abort the update");
+        update_global_in_conn(&ctx, input).expect_err("before_change hook should abort the update");
     let msg = err.to_string();
     assert!(
         msg.contains("aborted by before_change hook")
@@ -142,9 +150,7 @@ fn global_after_read_hook_fires() {
     // verify after_read uppercases it on the read path.
     seed_global_tagline(&pool, &registry, "site_settings", "hello world");
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_global("site_settings").unwrap().clone();
-    drop(reg);
+    let def = registry.get_global("site_settings").unwrap().clone();
 
     let conn = pool.get().unwrap();
     let rh = RunnerReadHooks::new(&runner, &conn);
@@ -168,14 +174,12 @@ fn global_after_read_hook_fires() {
 #[test]
 fn global_read_access_denied_for_non_admin() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_global("restricted").unwrap().clone();
-    drop(reg);
+    let def = registry.get_global("restricted").unwrap().clone();
 
     // Editor user (not admin) — admin_only returns false.
-    let mut editor_fields = HashMap::new();
+    let mut editor_fields = DocumentFields::new();
     editor_fields.insert("role".to_string(), serde_json::json!("editor"));
-    let editor = crap_cms::core::Document {
+    let editor = Document {
         id: "editor-1".into(),
         fields: editor_fields,
         created_at: None,
@@ -203,13 +207,11 @@ fn global_read_access_denied_for_non_admin() {
 #[test]
 fn global_update_access_denied_for_non_admin() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_global("restricted").unwrap().clone();
-    drop(reg);
+    let def = registry.get_global("restricted").unwrap().clone();
 
-    let mut editor_fields = HashMap::new();
+    let mut editor_fields = DocumentFields::new();
     editor_fields.insert("role".to_string(), serde_json::json!("editor"));
-    let editor = crap_cms::core::Document {
+    let editor = Document {
         id: "editor-1".into(),
         fields: editor_fields,
         created_at: None,
@@ -225,13 +227,12 @@ fn global_update_access_denied_for_non_admin() {
         .user(Some(&editor))
         .build();
 
-    let mut data = HashMap::new();
-    data.insert("secret_value".to_string(), "Hacked".to_string());
-    let join_data = HashMap::new();
-    let input = WriteInput::builder(data, &join_data).build();
+    let mut data = DocumentFields::new();
+    data.insert("secret_value".to_string(), json!("Hacked"));
+    let input = WriteInput::builder(data).build();
 
     let err =
-        update_global_core(&ctx, input).expect_err("non-admin should be denied update access");
+        update_global_in_conn(&ctx, input).expect_err("non-admin should be denied update access");
     let msg = err.to_string();
     assert!(
         msg.to_lowercase().contains("access denied") || msg.to_lowercase().contains("denied"),

@@ -8,6 +8,5 @@ mod poly;
 #[cfg(all(test, feature = "sqlite"))]
 mod tests;
 
-pub use dispatch::{
-    populate_relationships_cached, populate_relationships_cached_with_singleflight,
-};
+pub(crate) use dispatch::populate_relationships_cached;
+pub use dispatch::populate_relationships_cached_with_singleflight;

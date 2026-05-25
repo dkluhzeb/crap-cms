@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::{
     extract::{Query, State},
     response::Response,
@@ -17,9 +19,8 @@ use crate::{
 
 /// Check whether a reset token exists across all auth collections.
 fn is_valid_reset_token(pool: &DbPool, registry: &Registry, token: &str) -> bool {
-    let conn = match pool.get() {
-        Ok(c) => c,
-        Err(_) => return false,
+    let Ok(conn) = pool.get() else {
+        return false;
     };
 
     for def in registry.collections.values() {
@@ -45,7 +46,7 @@ pub async fn reset_password_page(
     Query(query): Query<ResetPasswordQuery>,
 ) -> Response {
     let pool = state.pool.clone();
-    let registry = state.registry.clone();
+    let registry = Arc::clone(&state.registry);
     let token = query.token.clone();
 
     let valid = task::spawn_blocking(move || is_valid_reset_token(&pool, &registry, &token))

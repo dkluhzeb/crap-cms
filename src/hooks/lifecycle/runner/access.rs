@@ -1,17 +1,16 @@
-//! HookRunner methods for auth strategies and access control.
+//! `HookRunner` methods for auth strategies and access control.
 
 use std::collections::HashMap;
 
 use anyhow::Result;
-use mlua::Value;
-use serde_json::Value as JsonValue;
+use mlua::{LuaSerdeExt, Value};
 use tracing::error;
 
 use crate::{
-    core::{Document, FieldDefinition, FieldType, document::DocumentBuilder},
+    core::{Document, DocumentFields, FieldDefinition, FieldType, document::DocumentBuilder},
     db::{AccessResult, DbConnection, query::helpers::prefixed_name},
     hooks::{
-        HookRunner, api,
+        HookRunner,
         lifecycle::{
             access::{
                 check_access_with_lua, check_field_read_access_with_lua,
@@ -20,11 +19,12 @@ use crate::{
             execution::resolve_hook_function,
             types::TxContextGuard,
         },
+        lua_api,
     },
 };
 
 /// Convert a Lua table returned by an auth strategy into a Document.
-fn lua_table_to_auth_user(lua: &mlua::Lua, tbl: &mlua::Table) -> Result<Document> {
+fn lua_table_to_auth_user(tbl: &mlua::Table) -> Result<Document> {
     let id: String = tbl.get("id")?;
     let mut fields = HashMap::new();
 
@@ -35,7 +35,7 @@ fn lua_table_to_auth_user(lua: &mlua::Lua, tbl: &mlua::Table) -> Result<Document
             continue;
         }
 
-        fields.insert(k, api::lua_to_json(lua, &v)?);
+        fields.insert(k, lua_api::lua_to_json(&v)?);
     }
 
     let created_at: Option<String> = tbl.get("created_at").ok();
@@ -52,6 +52,11 @@ impl HookRunner {
     /// Run a custom auth strategy function. Takes a strategy function ref and
     /// a headers map, returns Some(Document) if the strategy authenticates a user.
     /// The strategy function gets CRUD access via the provided connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if VM acquisition, function resolution, or the
+    /// strategy call itself fails.
     pub fn run_auth_strategy(
         &self,
         authenticate_ref: &str,
@@ -66,42 +71,59 @@ impl HookRunner {
 
         let func = resolve_hook_function(&lua, authenticate_ref)?;
 
-        // Build context table: { headers = {...}, collection = "..." }
-        let ctx_table = lua.create_table()?;
-        let headers_table = lua.create_table()?;
+        // Build context table from a typed Rust struct so the Lua-side
+        // shape is the single source of truth (see
+        // `hooks::lifecycle::AuthStrategyContext`).
+        let ctx = crate::hooks::lifecycle::AuthStrategyContext {
+            headers,
+            collection,
+        };
+        let ctx_value = lua.to_value(&ctx)?;
 
-        for (k, v) in headers {
-            headers_table.set(k.as_str(), v.as_str())?;
-        }
-
-        ctx_table.set("headers", headers_table)?;
-        ctx_table.set("collection", collection)?;
-
-        let result: Value = func.call(ctx_table)?;
+        let result: Value = func.call(ctx_value)?;
 
         match result {
-            Value::Table(tbl) => Ok(Some(lua_table_to_auth_user(&lua, &tbl)?)),
-            Value::Nil | Value::Boolean(false) => Ok(None),
+            Value::Table(tbl) => Ok(Some(lua_table_to_auth_user(&tbl)?)),
             _ => Ok(None),
         }
     }
 
     /// Run a collection-level or global-level access check.
     ///
-    /// `access_ref` is the Lua function ref (e.g., "hooks.access.admin_only").
+    /// `access_ref` is the Lua function ref (e.g., "`hooks.access.admin_only`").
     /// If `None`, access is allowed (no restriction configured).
     /// The function receives `{ user = ..., id = ..., data = ... }` and returns:
     /// - `true` → Allowed
     /// - `false` / `nil` → Denied
     /// - `table` → Constrained (read only: additional WHERE filters)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if VM acquisition or the access function call fails.
     pub fn check_access(
         &self,
         access_ref: Option<&str>,
         user: Option<&Document>,
         id: Option<&str>,
-        data: Option<&HashMap<String, JsonValue>>,
+        data: Option<&DocumentFields>,
         conn: &dyn DbConnection,
     ) -> Result<AccessResult> {
+        // No access function configured — the in-Lua path would
+        // only read the `DefaultDeny` flag from `app_data` and
+        // return immediately, so skip the entire VM round-trip.
+        // With pool size 16 and 50 concurrent reads, the previous
+        // unconditional `pool.acquire()` serialized 34 requests on
+        // the VM-pool mutex per tick (was 26% of total CPU spent in
+        // futex syscalls). The cached `default_deny` flag is set
+        // at builder time from `[access] default_deny`.
+        if access_ref.is_none() {
+            return Ok(if self.default_deny {
+                AccessResult::Denied
+            } else {
+                AccessResult::Allowed
+            });
+        }
+
         let lua = self.pool.acquire()?;
         let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
@@ -222,8 +244,7 @@ fn deny_all_recursive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{FieldAccess, FieldTab};
-
+    use crate::core::{FieldAccess, FieldTab};
     fn make_field(name: &str, access: FieldAccess) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Text)
             .access(access)

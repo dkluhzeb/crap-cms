@@ -2,14 +2,11 @@
 
 use serde_json::{Map, Value, json};
 
-use crate::core::{
-    collection::{CollectionDefinition, GlobalDefinition},
-    field::{FieldDefinition, FieldType},
-};
+use crate::core::{CollectionDefinition, FieldDefinition, FieldType, GlobalDefinition};
 
 /// CRUD operation type, determines which fields are included/required in the schema.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum CrudOp {
+pub(in crate::mcp) enum CrudOp {
     Create,
     CreateMany,
     Update,
@@ -52,8 +49,7 @@ fn relationship_schema(field: &FieldDefinition) -> Value {
     let has_many = field
         .relationship
         .as_ref()
-        .map(|r| r.has_many)
-        .unwrap_or(field.has_many);
+        .map_or(field.has_many, |r| r.has_many);
 
     if has_many {
         json!({ "type": "array", "items": { "type": "string" } })
@@ -97,32 +93,32 @@ fn blocks_schema(field: &FieldDefinition) -> Value {
 }
 
 /// Convert a single `FieldDefinition` to a JSON Schema value.
-pub fn field_to_json_schema(field: &FieldDefinition) -> Value {
+pub(in crate::mcp) fn field_to_json_schema(field: &FieldDefinition) -> Value {
     let description = field.mcp.description.as_deref().or(field
         .admin
         .description
         .as_ref()
-        .map(|ls| ls.resolve_default()));
+        .map(crate::core::LocalizedString::resolve_default));
 
     let mut schema = match field.field_type {
         FieldType::Text
         | FieldType::Textarea
         | FieldType::Email
         | FieldType::Code
-        | FieldType::Richtext => json!({ "type": "string" }),
+        | FieldType::Richtext
+        | FieldType::Join => json!({ "type": "string" }),
         FieldType::Date => json!({ "type": "string", "format": "date-time" }),
         FieldType::Number => json!({ "type": "number" }),
         FieldType::Checkbox => json!({ "type": "boolean" }),
         FieldType::Select | FieldType::Radio => select_radio_schema(field),
-        FieldType::Json => json!({}),
         FieldType::Relationship | FieldType::Upload => relationship_schema(field),
         FieldType::Array => {
             json!({ "type": "array", "items": fields_to_object_schema(&field.fields) })
         }
         FieldType::Blocks => blocks_schema(field),
         FieldType::Group => fields_to_object_schema(&field.fields),
-        FieldType::Row | FieldType::Collapsible | FieldType::Tabs => json!({}),
-        FieldType::Join => json!({ "type": "string" }),
+        // Json has no schema constraint; Row/Collapsible/Tabs are pure layout wrappers.
+        FieldType::Json | FieldType::Row | FieldType::Collapsible | FieldType::Tabs => json!({}),
     };
 
     if let Some(desc) = description
@@ -249,135 +245,163 @@ fn id_only_schema() -> Value {
     })
 }
 
-/// Generate the input schema for a collection CRUD tool.
-pub fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value {
+/// Generate the input schema for a collection CRUD tool. Each match arm
+/// delegates to a per-op schema builder so the table-of-contents shape of
+/// this fn matches the `CrudOp` enum 1:1.
+pub(in crate::mcp) fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value {
     match op {
         CrudOp::Create => create_schema(def),
-        CrudOp::CreateMany => {
-            let item_schema = create_schema(def);
-            json!({
-                "type": "object",
-                "properties": {
-                    "documents": {
-                        "type": "array",
-                        "items": item_schema,
-                        "description": "Array of documents to create"
-                    },
-                    "hooks": {
-                        "type": "boolean",
-                        "description": "Run per-document lifecycle hooks (default: true)"
-                    },
-                    "draft": {
-                        "type": "boolean",
-                        "description": "Create documents as drafts (default: false)"
-                    }
-                },
-                "required": ["documents"]
-            })
-        }
+        CrudOp::CreateMany => create_many_schema(def),
         CrudOp::Update => update_schema(def),
-        CrudOp::UpdateMany => {
-            let data_schema = fields_to_object_schema(&def.fields);
-            json!({
-                "type": "object",
-                "properties": {
-                    "where": {
-                        "type": "object",
-                        "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"})"
-                    },
-                    "data": {
-                        "allOf": [data_schema],
-                        "description": "Field values to set on all matching documents"
-                    },
-                    "hooks": {
-                        "type": "boolean",
-                        "description": "Run per-document lifecycle hooks (default: true)"
-                    },
-                    "draft": {
-                        "type": "boolean",
-                        "description": "Target draft versions (default: false)"
-                    }
-                },
-                "required": ["data"]
-            })
-        }
+        CrudOp::UpdateMany => update_many_schema(def),
         CrudOp::Delete | CrudOp::Undelete | CrudOp::Unpublish => id_only_schema(),
-        CrudOp::DeleteMany => json!({
-            "type": "object",
-            "properties": {
-                "where": {
-                    "type": "object",
-                    "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"}). Omit to match all documents."
-                },
-                "hooks": {
-                    "type": "boolean",
-                    "description": "Run per-document lifecycle hooks (default: true)"
-                },
-                "force_hard_delete": {
-                    "type": "boolean",
-                    "description": "Force hard delete even on soft-delete collections (default: false)"
-                }
-            }
-        }),
-        CrudOp::FindById => json!({
-            "type": "object",
-            "properties": {
-                "id": { "type": "string" },
-                "depth": { "type": "integer", "description": "Relationship population depth" },
-                "locale": { "type": "string", "description": "Locale code (e.g. 'en', 'de') or 'all' for all locales" }
-            },
-            "required": ["id"]
-        }),
-        CrudOp::Find => json!({
-            "type": "object",
-            "properties": {
-                "where": {
-                    "type": "object",
-                    "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"}, {\"greater_than\": 5})"
-                },
-                "order_by": { "type": "string", "description": "Sort field (prefix with - for descending)" },
-                "limit": { "type": "integer", "description": "Max results per page" },
-                "page": { "type": "integer", "description": "Page number (1-indexed, page mode only)" },
-                "after_cursor": { "type": "string", "description": "Forward cursor (cursor mode only, mutually exclusive with page and before_cursor)" },
-                "before_cursor": { "type": "string", "description": "Backward cursor (cursor mode only, mutually exclusive with page and after_cursor)" },
-                "depth": { "type": "integer", "description": "Relationship population depth" },
-                "search": { "type": "string", "description": "Full-text search query" },
-                "locale": { "type": "string", "description": "Locale code (e.g. 'en', 'de') or 'all' for all locales" },
-                "trash": { "type": "boolean", "description": "When true, return only soft-deleted documents (trash view)" }
-            }
-        }),
-        CrudOp::Count => json!({
-            "type": "object",
-            "properties": {
-                "where": {
-                    "type": "object",
-                    "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"}, {\"greater_than\": 5})"
-                },
-                "draft": { "type": "boolean", "description": "Include draft/deleted documents in the count" }
-            }
-        }),
-        CrudOp::ListVersions => json!({
-            "type": "object",
-            "properties": {
-                "id": { "type": "string", "description": "Document ID to list versions for" },
-                "limit": { "type": "integer", "description": "Max versions to return" },
-                "offset": { "type": "integer", "description": "Number of versions to skip" }
-            },
-            "required": ["id"]
-        }),
-        CrudOp::RestoreVersion => json!({
-            "type": "object",
-            "properties": {
-                "id": { "type": "string", "description": "Document ID to restore" },
-                "version_id": { "type": "string", "description": "Version snapshot ID to restore from" }
-            },
-            "required": ["id", "version_id"]
-        }),
+        CrudOp::DeleteMany => delete_many_schema(),
+        CrudOp::FindById => find_by_id_schema(),
+        CrudOp::Find => find_schema(),
+        CrudOp::Count => count_schema(),
+        CrudOp::ListVersions => list_versions_schema(),
+        CrudOp::RestoreVersion => restore_version_schema(),
     }
 }
 
+fn create_many_schema(def: &CollectionDefinition) -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "documents": {
+                "type": "array",
+                "items": create_schema(def),
+                "description": "Array of documents to create"
+            },
+            "hooks": {
+                "type": "boolean",
+                "description": "Run per-document lifecycle hooks (default: true)"
+            },
+            "draft": {
+                "type": "boolean",
+                "description": "Create documents as drafts (default: false)"
+            }
+        },
+        "required": ["documents"]
+    })
+}
+
+fn update_many_schema(def: &CollectionDefinition) -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "where": {
+                "type": "object",
+                "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"})"
+            },
+            "data": {
+                "allOf": [fields_to_object_schema(&def.fields)],
+                "description": "Field values to set on all matching documents"
+            },
+            "hooks": {
+                "type": "boolean",
+                "description": "Run per-document lifecycle hooks (default: true)"
+            },
+            "draft": {
+                "type": "boolean",
+                "description": "Target draft versions (default: false)"
+            }
+        },
+        "required": ["data"]
+    })
+}
+
+fn delete_many_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "where": {
+                "type": "object",
+                "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"}). Omit to match all documents."
+            },
+            "hooks": {
+                "type": "boolean",
+                "description": "Run per-document lifecycle hooks (default: true)"
+            },
+            "force_hard_delete": {
+                "type": "boolean",
+                "description": "Force hard delete even on soft-delete collections (default: false)"
+            }
+        }
+    })
+}
+
+fn find_by_id_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "id": { "type": "string" },
+            "depth": { "type": "integer", "description": "Relationship population depth" },
+            "locale": { "type": "string", "description": "Locale code (e.g. 'en', 'de') or 'all' for all locales" }
+        },
+        "required": ["id"]
+    })
+}
+
+fn find_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "where": {
+                "type": "object",
+                "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"}, {\"greater_than\": 5})"
+            },
+            "order_by": { "type": "string", "description": "Sort field (prefix with - for descending)" },
+            "limit": { "type": "integer", "description": "Max results per page" },
+            "page": { "type": "integer", "description": "Page number (1-indexed, page mode only)" },
+            "after_cursor": { "type": "string", "description": "Forward cursor (cursor mode only, mutually exclusive with page and before_cursor)" },
+            "before_cursor": { "type": "string", "description": "Backward cursor (cursor mode only, mutually exclusive with page and after_cursor)" },
+            "depth": { "type": "integer", "description": "Relationship population depth" },
+            "search": { "type": "string", "description": "Full-text search query" },
+            "locale": { "type": "string", "description": "Locale code (e.g. 'en', 'de') or 'all' for all locales" },
+            "trash": { "type": "boolean", "description": "When true, return only soft-deleted documents (trash view)" }
+        }
+    })
+}
+
+fn count_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "where": {
+                "type": "object",
+                "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"}, {\"greater_than\": 5})"
+            },
+            "draft": { "type": "boolean", "description": "Include draft/deleted documents in the count" }
+        }
+    })
+}
+
+fn list_versions_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "id": { "type": "string", "description": "Document ID to list versions for" },
+            "limit": { "type": "integer", "description": "Max versions to return" },
+            "offset": { "type": "integer", "description": "Number of versions to skip" }
+        },
+        "required": ["id"]
+    })
+}
+
+fn restore_version_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "id": { "type": "string", "description": "Document ID to restore" },
+            "version_id": { "type": "string", "description": "Version snapshot ID to restore from" }
+        },
+        "required": ["id", "version_id"]
+    })
+}
+
 /// Generate the input schema for a global CRUD tool.
-pub fn global_input_schema(def: &GlobalDefinition, op: CrudOp) -> Value {
+pub(in crate::mcp) fn global_input_schema(def: &GlobalDefinition, op: CrudOp) -> Value {
     match op {
         CrudOp::Find => {
             // Read global — no params needed
@@ -893,15 +917,13 @@ mod tests {
             let s = global_input_schema(&def, *op);
             assert!(
                 s["properties"].is_object(),
-                "op {:?} should return object with properties",
-                op
+                "op {op:?} should return object with properties"
             );
             // Should be empty properties
             assert_eq!(
                 s["properties"].as_object().unwrap().len(),
                 0,
-                "op {:?} should have no properties",
-                op
+                "op {op:?} should have no properties"
             );
         }
     }

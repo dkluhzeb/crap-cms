@@ -1,6 +1,21 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::collections::{HashMap, HashSet};
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
+use crap_cms::core::DocumentFields;
 use crap_cms::core::Registry;
 use crap_cms::core::collection::{CollectionDefinition, GlobalDefinition};
 use crap_cms::core::field::{BlockDefinition, FieldDefinition, FieldType, RelationshipConfig};
@@ -51,7 +66,7 @@ fn setup_localized() -> (
         locales: vec!["en".to_string(), "de".to_string()],
         fallback: true,
     };
-    migrate::sync_all(&pool, &registry, &locale_config).expect("Sync");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &locale_config).expect("Sync");
     (_tmp, pool, def, locale_config)
 }
 
@@ -63,9 +78,9 @@ fn create_with_locale_writes_correct_column() {
         mode: query::LocaleMode::Single("en".to_string()),
         config: locale_config.clone(),
     };
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "English Title".to_string());
-    data.insert("slug_field".to_string(), "test-page".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("English Title"));
+    data.insert("slug_field".to_string(), json!("test-page"));
 
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
@@ -86,9 +101,9 @@ fn find_with_locale_coalesce_fallback() {
         mode: query::LocaleMode::Single("en".to_string()),
         config: locale_config.clone(),
     };
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "English Title".to_string());
-    data.insert("slug_field".to_string(), "test-page".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("English Title"));
+    data.insert("slug_field".to_string(), json!("test-page"));
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
     query::create(&tx, "localized_pages", &def, &data, Some(&en_ctx)).expect("Create");
@@ -121,9 +136,9 @@ fn find_all_locales_returns_nested() {
         mode: query::LocaleMode::Single("en".to_string()),
         config: locale_config.clone(),
     };
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "English Title".to_string());
-    data.insert("slug_field".to_string(), "page".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("English Title"));
+    data.insert("slug_field".to_string(), json!("page"));
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
     let doc = query::create(&tx, "localized_pages", &def, &data, Some(&en_ctx)).expect("Create");
@@ -134,8 +149,8 @@ fn find_all_locales_returns_nested() {
         mode: query::LocaleMode::Single("de".to_string()),
         config: locale_config.clone(),
     };
-    let mut de_data = HashMap::new();
-    de_data.insert("title".to_string(), "Deutscher Titel".to_string());
+    let mut de_data = DocumentFields::new();
+    de_data.insert("title".to_string(), json!("Deutscher Titel"));
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
     query::update(
@@ -167,8 +182,7 @@ fn find_all_locales_returns_nested() {
     let title_val = docs[0].get("title").expect("title should exist");
     assert!(
         title_val.is_object(),
-        "title should be a locale object, got: {:?}",
-        title_val
+        "title should be a locale object, got: {title_val:?}"
     );
     assert_eq!(
         title_val.get("en").unwrap().as_str().unwrap(),
@@ -188,17 +202,17 @@ fn update_with_locale() {
         mode: query::LocaleMode::Single("en".to_string()),
         config: locale_config.clone(),
     };
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Original".to_string());
-    data.insert("slug_field".to_string(), "test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Original"));
+    data.insert("slug_field".to_string(), json!("test"));
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
     let doc = query::create(&tx, "localized_pages", &def, &data, Some(&en_ctx)).expect("Create");
     tx.commit().expect("Commit");
 
     // Update the English title
-    let mut update = HashMap::new();
-    update.insert("title".to_string(), "Updated English".to_string());
+    let mut update = DocumentFields::new();
+    update.insert("title".to_string(), json!("Updated English"));
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
     let updated = query::update(
@@ -225,9 +239,9 @@ fn filter_on_localized_field() {
 
     // Create two documents
     for (title, slug) in &[("Hello World", "hello"), ("Goodbye World", "goodbye")] {
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), title.to_string());
-        data.insert("slug_field".to_string(), slug.to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!(title));
+        data.insert("slug_field".to_string(), json!(slug));
         let mut conn = pool.get().expect("conn");
         let tx = conn.transaction().expect("tx");
         query::create(&tx, "localized_pages", &def, &data, Some(&en_ctx)).expect("Create");
@@ -321,7 +335,7 @@ fn setup_localized_joins() -> (
         locales: vec!["en".to_string(), "de".to_string()],
         fallback: true,
     };
-    migrate::sync_all(&pool, &registry, &locale_config).expect("Sync");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &locale_config).expect("Sync");
     (_tmp, pool, def, locale_config)
 }
 
@@ -334,8 +348,8 @@ fn localized_related_ids_scoped_by_locale() {
     let tx = conn.transaction().expect("tx");
 
     // Create a parent document
-    let mut data = HashMap::new();
-    data.insert("slug_field".to_string(), "test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("slug_field".to_string(), json!("test"));
     let doc = query::create(&tx, "l10n_articles", &_def, &data, None).expect("Create");
 
     // Write English tags
@@ -378,8 +392,8 @@ fn localized_related_ids_update_one_locale_preserves_other() {
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
 
-    let mut data = HashMap::new();
-    data.insert("slug_field".to_string(), "test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("slug_field".to_string(), json!("test"));
     let doc = query::create(&tx, "l10n_articles", &_def, &data, None).expect("Create");
 
     // Write both locales
@@ -429,17 +443,17 @@ fn localized_array_rows_scoped_by_locale() {
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
 
-    let mut data = HashMap::new();
-    data.insert("slug_field".to_string(), "test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("slug_field".to_string(), json!("test"));
     let doc = query::create(&tx, "l10n_articles", &def, &data, None).expect("Create");
 
     let en_rows = vec![HashMap::from([
-        ("url".to_string(), "https://en.example.com".to_string()),
-        ("label".to_string(), "English Link".to_string()),
+        ("url".to_string(), json!("https://en.example.com")),
+        ("label".to_string(), json!("English Link")),
     ])];
     let de_rows = vec![HashMap::from([
-        ("url".to_string(), "https://de.example.com".to_string()),
-        ("label".to_string(), "German Link".to_string()),
+        ("url".to_string(), json!("https://de.example.com")),
+        ("label".to_string(), json!("German Link")),
     ])];
 
     query::set_array_rows(
@@ -497,17 +511,17 @@ fn localized_array_rows_update_preserves_other_locale() {
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
 
-    let mut data = HashMap::new();
-    data.insert("slug_field".to_string(), "test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("slug_field".to_string(), json!("test"));
     let doc = query::create(&tx, "l10n_articles", &def, &data, None).expect("Create");
 
     let en_rows = vec![HashMap::from([
-        ("url".to_string(), "https://en.example.com".to_string()),
-        ("label".to_string(), "English".to_string()),
+        ("url".to_string(), json!("https://en.example.com")),
+        ("label".to_string(), json!("English")),
     ])];
     let de_rows = vec![HashMap::from([
-        ("url".to_string(), "https://de.example.com".to_string()),
-        ("label".to_string(), "Deutsch".to_string()),
+        ("url".to_string(), json!("https://de.example.com")),
+        ("label".to_string(), json!("Deutsch")),
     ])];
 
     query::set_array_rows(
@@ -533,8 +547,8 @@ fn localized_array_rows_update_preserves_other_locale() {
 
     // Replace EN rows — DE should remain
     let en_new = vec![HashMap::from([
-        ("url".to_string(), "https://new-en.example.com".to_string()),
-        ("label".to_string(), "New English".to_string()),
+        ("url".to_string(), json!("https://new-en.example.com")),
+        ("label".to_string(), json!("New English")),
     ])];
     query::set_array_rows(
         &tx,
@@ -583,8 +597,8 @@ fn localized_block_rows_scoped_by_locale() {
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
 
-    let mut data = HashMap::new();
-    data.insert("slug_field".to_string(), "test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("slug_field".to_string(), json!("test"));
     let doc = query::create(&tx, "l10n_articles", &def, &data, None).expect("Create");
 
     let en_blocks = vec![json!({"_block_type": "paragraph", "text": "Hello world"})];
@@ -628,8 +642,8 @@ fn localized_block_rows_update_preserves_other_locale() {
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
 
-    let mut data = HashMap::new();
-    data.insert("slug_field".to_string(), "test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("slug_field".to_string(), json!("test"));
     let doc = query::create(&tx, "l10n_articles", &def, &data, None).expect("Create");
 
     query::set_block_rows(
@@ -691,12 +705,12 @@ fn save_join_table_data_with_locale_scopes_writes() {
 
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
-    let mut data = HashMap::new();
-    data.insert("slug_field".to_string(), "test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("slug_field".to_string(), json!("test"));
     let doc = query::create(&tx, "l10n_articles", &def, &data, None).expect("Create");
 
     // Save EN join data
-    let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut en_join = DocumentFields::new();
     en_join.insert("tags".to_string(), json!(["en-tag"]));
     en_join.insert(
         "content".to_string(),
@@ -721,7 +735,7 @@ fn save_join_table_data_with_locale_scopes_writes() {
     .unwrap();
 
     // Save DE join data
-    let mut de_join: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut de_join = DocumentFields::new();
     de_join.insert("tags".to_string(), json!(["de-tag"]));
     de_join.insert(
         "content".to_string(),
@@ -784,12 +798,12 @@ fn hydrate_document_with_locale_returns_correct_data() {
 
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
-    let mut data = HashMap::new();
-    data.insert("slug_field".to_string(), "test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("slug_field".to_string(), json!("test"));
     let doc = query::create(&tx, "l10n_articles", &def, &data, None).expect("Create");
 
     // Write EN data
-    let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut en_join = DocumentFields::new();
     en_join.insert("tags".to_string(), json!(["en-tag-1", "en-tag-2"]));
     en_join.insert(
         "links".to_string(),
@@ -814,7 +828,7 @@ fn hydrate_document_with_locale_returns_correct_data() {
     .unwrap();
 
     // Write DE data
-    let mut de_join: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut de_join = DocumentFields::new();
     de_join.insert("tags".to_string(), json!(["de-tag-1"]));
     de_join.insert(
         "links".to_string(),
@@ -908,12 +922,12 @@ fn save_join_data_in_one_locale_does_not_clobber_other() {
 
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
-    let mut data = HashMap::new();
-    data.insert("slug_field".to_string(), "test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("slug_field".to_string(), json!("test"));
     let doc = query::create(&tx, "l10n_articles", &def, &data, None).expect("Create");
 
     // Write EN content first
-    let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut en_join = DocumentFields::new();
     en_join.insert(
         "content".to_string(),
         json!([
@@ -933,7 +947,7 @@ fn save_join_data_in_one_locale_does_not_clobber_other() {
 
     // Now write DE content — this is the bug scenario: previously this would DELETE all rows
     // (regardless of locale) and then INSERT only the DE rows, destroying EN content.
-    let mut de_join: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut de_join = DocumentFields::new();
     de_join.insert(
         "content".to_string(),
         json!([
@@ -1004,13 +1018,13 @@ fn non_localized_join_field_ignores_locale_context() {
 
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
-    let mut data = HashMap::new();
-    data.insert("slug_field".to_string(), "test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("slug_field".to_string(), json!("test"));
     let doc = query::create(&tx, "l10n_articles", &def, &data, None).expect("Create");
 
     // Write to the non-localized "meta" blocks field via save_join_table_data with a locale ctx.
     // Since meta.localized=false, the locale should be ignored (writes without _locale scoping).
-    let mut join: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut join = DocumentFields::new();
     join.insert(
         "meta".to_string(),
         json!([
@@ -1074,8 +1088,8 @@ fn hydrate_without_locale_returns_all_locale_rows() {
 
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
-    let mut data = HashMap::new();
-    data.insert("slug_field".to_string(), "test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("slug_field".to_string(), json!("test"));
     let doc = query::create(&tx, "l10n_articles", &def, &data, None).expect("Create");
 
     // Write blocks in both locales
@@ -1172,12 +1186,12 @@ fn join_fallback_has_many_falls_back_to_default_locale() {
 
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
-    let mut data = HashMap::new();
-    data.insert("slug_field".to_string(), "test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("slug_field".to_string(), json!("test"));
     let doc = query::create(&tx, "l10n_articles", &def, &data, None).expect("Create");
 
     // Write EN tags only — no DE tags
-    let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut en_join = DocumentFields::new();
     en_join.insert("tags".to_string(), json!(["tag-1", "tag-2"]));
     query::save_join_table_data(
         &tx,
@@ -1242,12 +1256,12 @@ fn join_fallback_array_falls_back_to_default_locale() {
 
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
-    let mut data = HashMap::new();
-    data.insert("slug_field".to_string(), "test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("slug_field".to_string(), json!("test"));
     let doc = query::create(&tx, "l10n_articles", &def, &data, None).expect("Create");
 
     // Write EN links only
-    let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut en_join = DocumentFields::new();
     en_join.insert(
         "links".to_string(),
         json!([
@@ -1299,12 +1313,12 @@ fn join_fallback_blocks_falls_back_to_default_locale() {
 
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
-    let mut data = HashMap::new();
-    data.insert("slug_field".to_string(), "test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("slug_field".to_string(), json!("test"));
     let doc = query::create(&tx, "l10n_articles", &def, &data, None).expect("Create");
 
     // Write EN blocks only
-    let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut en_join = DocumentFields::new();
     en_join.insert(
         "content".to_string(),
         json!([
@@ -1360,12 +1374,12 @@ fn join_fallback_does_not_trigger_when_locale_has_data() {
 
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
-    let mut data = HashMap::new();
-    data.insert("slug_field".to_string(), "test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("slug_field".to_string(), json!("test"));
     let doc = query::create(&tx, "l10n_articles", &def, &data, None).expect("Create");
 
     // Write both EN and DE content
-    let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut en_join = DocumentFields::new();
     en_join.insert(
         "content".to_string(),
         json!([
@@ -1383,7 +1397,7 @@ fn join_fallback_does_not_trigger_when_locale_has_data() {
     )
     .unwrap();
 
-    let mut de_join: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut de_join = DocumentFields::new();
     de_join.insert(
         "content".to_string(),
         json!([
@@ -1441,12 +1455,12 @@ fn join_fallback_disabled_returns_empty() {
 
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
-    let mut data = HashMap::new();
-    data.insert("slug_field".to_string(), "test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("slug_field".to_string(), json!("test"));
     let doc = query::create(&tx, "l10n_articles", &def, &data, None).expect("Create");
 
     // Write EN content only
-    let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut en_join = DocumentFields::new();
     en_join.insert(
         "content".to_string(),
         json!([
@@ -1503,12 +1517,12 @@ fn join_fallback_default_locale_no_fallback_needed() {
 
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
-    let mut data = HashMap::new();
-    data.insert("slug_field".to_string(), "test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("slug_field".to_string(), json!("test"));
     let doc = query::create(&tx, "l10n_articles", &def, &data, None).expect("Create");
 
     // Write EN content
-    let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut en_join = DocumentFields::new();
     en_join.insert(
         "content".to_string(),
         json!([
@@ -1579,7 +1593,7 @@ fn locale_config() -> LocaleConfig {
     }
 }
 
-/// Collection: localized group creates seo__meta_title__en, seo__meta_title__de columns.
+/// Collection: localized group creates `seo__meta_title__en`, `seo__meta_title__de` columns.
 #[test]
 fn collection_localized_group_migration_creates_locale_columns() {
     let (_tmp, pool) = create_test_pool();
@@ -1589,7 +1603,7 @@ fn collection_localized_group_migration_creates_locale_columns() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &locale_config()).expect("Sync");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &locale_config()).expect("Sync");
 
     let conn = pool.get().unwrap();
     let columns: HashSet<String> = conn
@@ -1629,7 +1643,7 @@ fn collection_localized_group_write_and_read() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &locale_config()).expect("Sync");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &locale_config()).expect("Sync");
 
     let en_ctx = query::LocaleContext {
         mode: query::LocaleMode::Single("en".to_string()),
@@ -1641,23 +1655,20 @@ fn collection_localized_group_write_and_read() {
     };
 
     // Create with English group data
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Test Page".to_string());
-    data.insert("seo__meta_title".to_string(), "EN SEO Title".to_string());
-    data.insert(
-        "seo__meta_description".to_string(),
-        "EN SEO Desc".to_string(),
-    );
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Test Page"));
+    data.insert("seo__meta_title".to_string(), json!("EN SEO Title"));
+    data.insert("seo__meta_description".to_string(), json!("EN SEO Desc"));
 
     let conn = pool.get().unwrap();
     let doc = query::create(&conn, "pages_l10n", &def, &data, Some(&en_ctx)).expect("Create");
 
     // Update with German group data
-    let mut de_data = HashMap::new();
-    de_data.insert("seo__meta_title".to_string(), "DE SEO Titel".to_string());
+    let mut de_data = DocumentFields::new();
+    de_data.insert("seo__meta_title".to_string(), json!("DE SEO Titel"));
     de_data.insert(
         "seo__meta_description".to_string(),
-        "DE SEO Beschreibung".to_string(),
+        json!("DE SEO Beschreibung"),
     );
     query::update(&conn, "pages_l10n", &def, &doc.id, &de_data, Some(&de_ctx)).expect("Update DE");
 
@@ -1714,7 +1725,7 @@ fn make_global_with_localized_group() -> GlobalDefinition {
     def
 }
 
-/// Global: localized group creates seo__meta_title__en, seo__meta_title__de columns.
+/// Global: localized group creates `seo__meta_title__en`, `seo__meta_title__de` columns.
 #[test]
 fn global_localized_group_migration_creates_locale_columns() {
     let (_tmp, pool) = create_test_pool();
@@ -1724,7 +1735,7 @@ fn global_localized_group_migration_creates_locale_columns() {
         let mut reg = registry.write().unwrap();
         reg.register_global(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &locale_config()).expect("Sync");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &locale_config()).expect("Sync");
 
     let conn = pool.get().unwrap();
     let columns: HashSet<String> = conn
@@ -1764,7 +1775,7 @@ fn global_localized_group_write_and_read() {
         let mut reg = registry.write().unwrap();
         reg.register_global(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &locale_config()).expect("Sync");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &locale_config()).expect("Sync");
 
     let en_ctx = query::LocaleContext {
         mode: query::LocaleMode::Single("en".to_string()),
@@ -1776,20 +1787,20 @@ fn global_localized_group_write_and_read() {
     };
 
     // Update with English group data
-    let mut data = HashMap::new();
-    data.insert("site_name".to_string(), "My Site".to_string());
-    data.insert("seo__meta_title".to_string(), "EN Title".to_string());
-    data.insert("seo__meta_description".to_string(), "EN Desc".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("site_name".to_string(), json!("My Site"));
+    data.insert("seo__meta_title".to_string(), json!("EN Title"));
+    data.insert("seo__meta_description".to_string(), json!("EN Desc"));
 
     let conn = pool.get().unwrap();
     query::update_global(&conn, "site_l10n", &def, &data, Some(&en_ctx)).expect("Update EN");
 
     // Update with German group data
-    let mut de_data = HashMap::new();
-    de_data.insert("seo__meta_title".to_string(), "DE Titel".to_string());
+    let mut de_data = DocumentFields::new();
+    de_data.insert("seo__meta_title".to_string(), json!("DE Titel"));
     de_data.insert(
         "seo__meta_description".to_string(),
-        "DE Beschreibung".to_string(),
+        json!("DE Beschreibung"),
     );
     query::update_global(&conn, "site_l10n", &def, &de_data, Some(&de_ctx)).expect("Update DE");
 
@@ -1828,7 +1839,7 @@ fn global_localized_group_fallback() {
         let mut reg = registry.write().unwrap();
         reg.register_global(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &locale_config()).expect("Sync");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &locale_config()).expect("Sync");
 
     let en_ctx = query::LocaleContext {
         mode: query::LocaleMode::Single("en".to_string()),
@@ -1840,8 +1851,8 @@ fn global_localized_group_fallback() {
     };
 
     // Only set English data
-    let mut data = HashMap::new();
-    data.insert("seo__meta_title".to_string(), "EN Title".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("seo__meta_title".to_string(), json!("EN Title"));
     let conn = pool.get().unwrap();
     query::update_global(&conn, "site_l10n", &def, &data, Some(&en_ctx)).expect("Update EN");
 

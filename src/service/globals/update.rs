@@ -5,12 +5,12 @@ use std::{cell::RefCell, rc::Rc};
 use anyhow::Context as _;
 
 use crate::{
-    core::event::EventOperation,
-    db::{AccessResult, query, query::helpers::global_table},
+    core::{Document, collection::GlobalDefinition, event::EventOperation},
+    db::{AccessResult, DbConnection, query, query::helpers::global_table},
     hooks::{HookContext, LuaCrudInfra, ValidationCtx},
     service::{
-        AfterChangeInput, RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, WriteResult,
-        build_hook_data, flush_queue, helpers as svc_helpers, run_after_change_hooks,
+        AfterChangeInput, RunnerWriteHooks, ServiceContext, ServiceError, WriteHooks, WriteInput,
+        WriteResult, flush_queue, helpers as svc_helpers, run_after_change_hooks,
         versions::{self, VersionSnapshotCtx},
         write::helpers::strip_denied_fields,
     },
@@ -22,6 +22,11 @@ type Result<T> = std::result::Result<T, ServiceError>;
 ///
 /// **Pool mode** (`ctx.pool` set): opens a transaction, commits after success.
 /// **Conn mode** (`ctx.conn` set, Lua CRUD path): runs on the existing connection.
+///
+/// # Errors
+///
+/// Returns service-layer errors (access denied, validation, hook errors) or
+/// a backend error if the DB transaction or persistence fails.
 #[cfg(not(tarpaulin_include))]
 pub fn update_global_document(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<WriteResult> {
     if ctx.pool.is_some() {
@@ -34,7 +39,7 @@ pub fn update_global_document(ctx: &ServiceContext, input: WriteInput<'_>) -> Re
 fn update_global_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<WriteResult> {
     let pool = ctx.pool.context("pool required")?;
     let runner = ctx.runner()?;
-    let def = ctx.global_def();
+    let def = ctx.global_def()?;
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
@@ -60,7 +65,7 @@ fn update_global_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<Wri
         .event_queue(queue.clone())
         .build();
 
-    let result = update_global_core(&inner_ctx, input)?;
+    let result = update_global_in_conn(&inner_ctx, input)?;
     drop(inner_ctx);
 
     tx.commit().context("Commit transaction")?;
@@ -74,7 +79,7 @@ fn update_global_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<Wri
 }
 
 fn update_global_conn(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<WriteResult> {
-    let result = update_global_core(ctx, input)?;
+    let result = update_global_in_conn(ctx, input)?;
 
     ctx.clear_cache();
 
@@ -83,108 +88,34 @@ fn update_global_conn(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<Wri
     Ok(result)
 }
 
-/// Core logic for global update — accepts ServiceContext for hook abstraction.
-pub fn update_global_core(ctx: &ServiceContext, mut input: WriteInput<'_>) -> Result<WriteResult> {
+/// Core logic for global update — accepts `ServiceContext` for hook abstraction.
+///
+/// # Errors
+///
+/// Returns service-layer errors (access denied, validation, hook errors) or
+/// a backend error if persistence fails.
+pub fn update_global_in_conn(
+    ctx: &ServiceContext,
+    mut input: WriteInput<'_>,
+) -> Result<WriteResult> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
-    let def = ctx.global_def();
+    let def = ctx.global_def()?;
 
-    let access = write_hooks.check_access(def.access.update.as_deref(), ctx.user, None, None)?;
-    if matches!(access, AccessResult::Denied) {
-        return Err(ServiceError::AccessDenied("Update access denied".into()));
-    }
-
-    if matches!(access, AccessResult::Constrained(_)) {
-        return Err(ServiceError::HookError(format!(
-            "Access hook for global '{}' returned a filter table; globals don't support filter-based access — return true/false based on ctx.user fields instead.",
-            ctx.slug
-        )));
-    }
+    check_global_update_access(ctx, write_hooks, def)?;
 
     let is_draft = input.draft && def.has_drafts();
     let gtable = global_table(ctx.slug);
     let ui_locale = input.ui_locale.as_deref();
 
     let denied = write_hooks.field_write_denied(&def.fields, ctx.user, "update");
-    let join_data = strip_denied_fields(&denied, &mut input.data, input.join_data);
+    strip_denied_fields(&denied, &mut input.data);
 
-    let hook_data = build_hook_data(&input.data, &join_data);
-    let hook_ctx = HookContext::builder(ctx.slug, "update")
-        .data(hook_data)
-        .locale(input.locale.clone())
-        .draft(is_draft)
-        .user(ctx.user)
-        .ui_locale(ui_locale)
-        .build();
+    let final_ctx =
+        run_global_before_write_hooks(write_hooks, ctx, def, &input, &gtable, is_draft, ui_locale)?;
 
-    let val_ctx = ValidationCtx::builder(conn, &gtable)
-        .exclude_id(Some("default"))
-        .draft(is_draft)
-        .locale_ctx(input.locale_ctx)
-        .build();
-
-    let final_ctx = write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?;
-    let final_data = final_ctx.to_string_map(&def.fields);
-
-    let doc = if is_draft && def.has_versions() {
-        let existing_doc = query::get_global(conn, ctx.slug, def, input.locale_ctx)?;
-
-        versions::save_draft_version(
-            conn,
-            &gtable,
-            "default",
-            &def.fields,
-            def.versions.as_ref(),
-            &existing_doc,
-            &final_ctx.data,
-        )?;
-        existing_doc
-    } else {
-        let locale_cfg = input
-            .locale_ctx
-            .map(|lctx| lctx.config.clone())
-            .unwrap_or_default();
-
-        let old_refs = query::ref_count::snapshot_outgoing_refs(
-            conn,
-            &gtable,
-            "default",
-            &def.fields,
-            &locale_cfg,
-        )?;
-
-        let doc = query::update_global(conn, ctx.slug, def, &final_data, input.locale_ctx)?;
-
-        query::save_join_table_data(
-            conn,
-            &gtable,
-            &def.fields,
-            "default",
-            &final_ctx.data,
-            input.locale_ctx,
-        )?;
-
-        query::ref_count::after_update(
-            conn,
-            &gtable,
-            "default",
-            &def.fields,
-            &locale_cfg,
-            old_refs,
-        )?;
-
-        if def.has_versions() {
-            let snap_ctx = VersionSnapshotCtx::builder(&gtable, "default")
-                .fields(&def.fields)
-                .versions(def.versions.as_ref())
-                .has_drafts(def.has_drafts())
-                .build();
-            versions::create_version_snapshot(conn, &snap_ctx, "published", &doc)?;
-        }
-
-        doc
-    };
+    let doc = persist_global_update(conn, ctx, def, &gtable, &final_ctx, &input, is_draft)?;
 
     let after_ctx = run_after_change_hooks(
         write_hooks,
@@ -202,13 +133,141 @@ pub fn update_global_core(ctx: &ServiceContext, mut input: WriteInput<'_>) -> Re
     )?;
 
     let mut doc = doc;
-
     query::hydrate_document(conn, &gtable, &def.fields, &mut doc, None, input.locale_ctx)?;
 
     let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user);
     read_denied.extend(svc_helpers::collect_api_hidden_field_names(&def.fields, ""));
-
     doc.strip_fields(&read_denied);
 
     Ok((doc, after_ctx))
+}
+
+/// Enforce the global-update access check. Globals don't support
+/// filter-based access — the `Constrained` variant is rejected so
+/// access hooks have to be boolean (true/false on `ctx.user`).
+fn check_global_update_access(
+    ctx: &ServiceContext,
+    write_hooks: &dyn WriteHooks,
+    def: &GlobalDefinition,
+) -> Result<()> {
+    let access = write_hooks.check_access(def.access.update.as_deref(), ctx.user, None, None)?;
+    if matches!(access, AccessResult::Denied) {
+        return Err(ServiceError::AccessDenied("Update access denied".into()));
+    }
+    if matches!(access, AccessResult::Constrained(_)) {
+        return Err(ServiceError::HookError(format!(
+            "Access hook for global '{}' returned a filter table; globals don't support filter-based access — return true/false based on ctx.user fields instead.",
+            ctx.slug
+        )));
+    }
+    Ok(())
+}
+
+/// Build the hook + validation contexts and run the before-write
+/// hook chain. The returned `ReqContext` carries the (possibly
+/// mutated) data forward into the persistence step.
+fn run_global_before_write_hooks(
+    write_hooks: &dyn WriteHooks,
+    ctx: &ServiceContext,
+    def: &GlobalDefinition,
+    input: &WriteInput<'_>,
+    gtable: &str,
+    is_draft: bool,
+    ui_locale: Option<&str>,
+) -> Result<HookContext> {
+    let hook_data = input.data.clone();
+    let hook_ctx = HookContext::builder(ctx.slug, "update")
+        .data(hook_data)
+        .locale(input.locale.clone())
+        .draft(is_draft)
+        .user(ctx.user)
+        .ui_locale(ui_locale)
+        .build();
+
+    let conn = ctx.resolve_conn()?;
+    let val_ctx = ValidationCtx::builder(conn.as_ref(), gtable)
+        .exclude_id(Some("default"))
+        .draft(is_draft)
+        .locale_ctx(input.locale_ctx)
+        .build();
+
+    Ok(write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?)
+}
+
+/// Either save a draft version (when `is_draft && has_versions`) or
+/// run the published-update pipeline (column update + join tables +
+/// ref-count delta + version snapshot if versioned).
+fn persist_global_update(
+    conn: &dyn DbConnection,
+    ctx: &ServiceContext,
+    def: &GlobalDefinition,
+    gtable: &str,
+    final_ctx: &HookContext,
+    input: &WriteInput<'_>,
+    is_draft: bool,
+) -> Result<Document> {
+    if is_draft && def.has_versions() {
+        let existing_doc = query::get_global(conn, ctx.slug, def, input.locale_ctx)?;
+        versions::save_draft_version(
+            conn,
+            gtable,
+            "default",
+            &def.fields,
+            def.versions.as_ref(),
+            &existing_doc,
+            &final_ctx.data,
+        )?;
+        return Ok(existing_doc);
+    }
+    persist_global_published_update(conn, ctx, def, gtable, final_ctx, input)
+}
+
+/// Published-write path: snapshot the outgoing refs, write the row +
+/// join tables, apply the ref-count delta, and (if the global is
+/// versioned) capture a "published" snapshot.
+fn persist_global_published_update(
+    conn: &dyn DbConnection,
+    ctx: &ServiceContext,
+    def: &GlobalDefinition,
+    gtable: &str,
+    final_ctx: &HookContext,
+    input: &WriteInput<'_>,
+) -> Result<Document> {
+    let locale_cfg = input
+        .locale_ctx
+        .map(|lctx| lctx.config.clone())
+        .unwrap_or_default();
+
+    let old_refs = query::ref_count::snapshot_outgoing_refs(
+        conn,
+        gtable,
+        "default",
+        &def.fields,
+        &locale_cfg,
+    )?;
+
+    let final_data = final_ctx.to_value_map(&def.fields);
+    let doc = query::update_global(conn, ctx.slug, def, &final_data, input.locale_ctx)?;
+
+    query::save_join_table_data(
+        conn,
+        gtable,
+        &def.fields,
+        "default",
+        &final_ctx.data,
+        input.locale_ctx,
+    )?;
+
+    query::ref_count::after_update(conn, gtable, "default", &def.fields, &locale_cfg, &old_refs)?;
+
+    if def.has_versions() {
+        let snap_ctx = VersionSnapshotCtx::builder(gtable, "default")
+            .fields(&def.fields)
+            .versions(def.versions.as_ref())
+            .has_drafts(def.has_drafts())
+            .build();
+        versions::create_version_snapshot(conn, &snap_ctx, "published", &doc)?;
+    }
+
+    Ok(doc)
 }

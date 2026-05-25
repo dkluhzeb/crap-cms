@@ -1,11 +1,10 @@
 //! Core delete operation for collections.
 
-use std::collections::HashMap;
-
 use serde_json::Value;
 
 use crate::{
     config::LocaleConfig,
+    core::{DocumentFields, ReqContext},
     db::{AccessResult, LocaleContext, query},
     hooks::{HookContext, HookEvent},
     service::{ServiceContext, helpers::enforce_access_constraints},
@@ -16,11 +15,11 @@ use super::ServiceError;
 type Result<T> = std::result::Result<T, ServiceError>;
 
 /// Result of a delete operation.
-pub struct DeleteResult {
+pub(crate) struct DeleteResult {
     /// Request-scoped context returned by after-delete hooks.
-    pub context: HashMap<String, Value>,
+    pub context: ReqContext,
     /// Upload file fields from the deleted document (for post-commit cleanup).
-    pub upload_doc_fields: Option<HashMap<String, Value>>,
+    pub upload_doc_fields: Option<DocumentFields>,
 }
 
 /// Delete a document on an existing connection/transaction.
@@ -28,7 +27,7 @@ pub struct DeleteResult {
 /// Runs the full lifecycle: ref count check -> before-delete hooks -> delete -> cleanup -> after-delete hooks.
 /// Does NOT manage transactions — caller must open/commit.
 /// Upload file cleanup is returned as `upload_doc_fields` for the caller to handle after commit.
-pub fn delete_document_core(
+pub(crate) fn delete_document_in_conn(
     ctx: &ServiceContext,
     id: &str,
     locale_config: Option<&LocaleConfig>,
@@ -36,7 +35,7 @@ pub fn delete_document_core(
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     // Collection-level access check — use trash access for soft delete, delete for hard
     let access_ref = if def.soft_delete {
@@ -89,8 +88,8 @@ pub fn delete_document_core(
     }
 
     // Before-delete hooks
-    let mut hook_data: HashMap<String, Value> =
-        [("id".to_string(), Value::String(id.to_string()))].into();
+    let mut hook_data = DocumentFields::new();
+    hook_data.insert("id".to_string(), Value::String(id.to_string()));
 
     if def.soft_delete {
         hook_data.insert("soft_delete".to_string(), Value::Bool(true));
@@ -137,7 +136,9 @@ pub fn delete_document_core(
         query::fts::fts_delete(conn, ctx.slug, id)?;
     }
     if def.is_upload_collection() {
-        let _ = query::images::delete_entries_for_document(conn, ctx.slug, id);
+        // Best-effort cleanup of any queued `_system_image_convert`
+        // jobs targeting this doc — see `core/upload/queue.rs`.
+        let _ = crate::core::upload::delete_image_jobs_for_document(conn, ctx.slug, id);
     }
 
     // After-delete hooks
@@ -171,11 +172,9 @@ mod tests {
 
     use crate::{
         core::{
-            CollectionDefinition, Document, FieldDefinition,
-            collection::{Auth, Hooks},
-            event::{InProcessInvalidationBus, SharedInvalidationTransport},
-            field::FieldType,
-            validate::ValidationError,
+            CollectionDefinition, Document, FieldDefinition, FieldType, Hooks,
+            SharedInvalidationTransport, ValidationError, collection::Auth,
+            event::InProcessInvalidationBus,
         },
         db::DbConnection,
         hooks::ValidationCtx,
@@ -232,7 +231,7 @@ mod tests {
             _access_ref: Option<&str>,
             _user: Option<&Document>,
             _id: Option<&str>,
-            _data: Option<&HashMap<String, Value>>,
+            _data: Option<&DocumentFields>,
         ) -> anyhow::Result<AccessResult> {
             Ok(AccessResult::Allowed)
         }
@@ -249,7 +248,7 @@ mod tests {
         fn validate_fields(
             &self,
             _fields: &[FieldDefinition],
-            _data: &HashMap<String, Value>,
+            _data: &DocumentFields,
             _ctx: &ValidationCtx,
         ) -> std::result::Result<(), ValidationError> {
             Ok(())
@@ -300,7 +299,7 @@ mod tests {
             .invalidation_transport(Some(transport))
             .build();
 
-        let _ = delete_document_core(&ctx, "u1", None).expect("delete");
+        let _ = delete_document_in_conn(&ctx, "u1", None).expect("delete");
 
         let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
             .await
@@ -329,7 +328,7 @@ mod tests {
             .invalidation_transport(Some(transport))
             .build();
 
-        let _ = delete_document_core(&ctx, "u1", None).expect("soft delete");
+        let _ = delete_document_in_conn(&ctx, "u1", None).expect("soft delete");
 
         // No publish must have happened — poll briefly and assert timeout.
         let recv_result =
@@ -371,7 +370,7 @@ mod tests {
             .invalidation_transport(Some(transport))
             .build();
 
-        let _ = delete_document_core(&ctx, "p1", None).expect("delete");
+        let _ = delete_document_in_conn(&ctx, "p1", None).expect("delete");
 
         let recv_result =
             tokio::time::timeout(std::time::Duration::from_millis(150), rx.recv()).await;

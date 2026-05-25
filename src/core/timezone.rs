@@ -80,6 +80,8 @@ pub const TIMEZONE_OPTIONS: &[(&str, &str)] = &[
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use chrono_tz::Tz;
 
     use super::*;
@@ -89,19 +91,17 @@ mod tests {
         for (tz_str, label) in TIMEZONE_OPTIONS {
             assert!(
                 tz_str.parse::<Tz>().is_ok(),
-                "Invalid IANA timezone '{}' (label: '{}')",
-                tz_str,
-                label
+                "Invalid IANA timezone '{tz_str}' (label: '{label}')"
             );
         }
     }
 
     #[test]
     fn no_duplicate_timezone_codes() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
 
         for (tz_str, _) in TIMEZONE_OPTIONS {
-            assert!(seen.insert(tz_str), "Duplicate timezone code: {}", tz_str);
+            assert!(seen.insert(tz_str), "Duplicate timezone code: {tz_str}");
         }
     }
 }

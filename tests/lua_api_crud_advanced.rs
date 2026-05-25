@@ -1,8 +1,22 @@
-use std::collections::HashMap;
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::SharedRegistry;
+use crap_cms::core::{DocumentFields, Registry, ReqContext};
 use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
@@ -39,10 +53,10 @@ fn eval_lua(runner: &HookRunner, code: &str) -> String {
 
 // ── Helper: setup with real DB tables ────────────────────────────────────────
 
-/// Set up a HookRunner with a real synced database (tables created from Lua definitions).
+/// Set up a `HookRunner` with a real synced database (tables created from Lua definitions).
 /// Returns (tempdir, pool, registry, runner). The tempdir must be kept alive for the DB.
 #[allow(dead_code)]
-fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
+fn setup_with_db() -> (tempfile::TempDir, DbPool, Arc<Registry>, HookRunner) {
     let config_dir = fixture_dir();
     let config = CrapConfig::test_default();
     let registry = hooks::init_lua(&config_dir, &config).expect("init_lua failed");
@@ -56,7 +70,7 @@ fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("HookRunner::new failed");
@@ -726,15 +740,14 @@ crap.collections.define("items", {
 
     let runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("runner");
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("items").expect("items");
+    let def = registry.get_collection("items").expect("items");
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("name".to_string(), json!("test"));
 
     let ctx = HookContext {
@@ -743,7 +756,7 @@ crap.collections.define("items", {
         data,
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -791,10 +804,10 @@ fn context_starts_empty() {
     let ctx = HookContext {
         collection: "test".to_string(),
         operation: "create".to_string(),
-        data: HashMap::new(),
+        data: DocumentFields::new(),
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -810,9 +823,7 @@ fn after_hook_has_crud_access() {
     use crap_cms::hooks::lifecycle::{HookContext, HookEvent};
 
     let (_tmp, pool, registry, runner) = setup_with_db();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // Build hooks with an after_change hook that creates a side-effect document
     let hooks = Hooks {
@@ -823,11 +834,12 @@ fn after_hook_has_crud_access() {
     // First, create a document so the after-hook has something to work with
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = [
-        ("title".to_string(), "original".to_string()),
-        ("status".to_string(), "published".to_string()),
+    let data: DocumentFields = [
+        ("title".to_string(), json!("original")),
+        ("status".to_string(), json!("published")),
     ]
-    .into();
+    .into_iter()
+    .collect();
     let doc = crap_cms::db::query::create(&tx, "articles", &def, &data, None).unwrap();
 
     // Run after_change hooks inside the same transaction
@@ -837,7 +849,7 @@ fn after_hook_has_crud_access() {
         data: doc.fields.clone(),
         locale: None,
         draft: None,
-        context: std::collections::HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -878,9 +890,7 @@ fn after_hook_error_rolls_back() {
     use crap_cms::hooks::lifecycle::{HookContext, HookEvent};
 
     let (_tmp, pool, registry, runner) = setup_with_db();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // Build hooks with an after_change hook that errors
     let hooks = Hooks {
@@ -891,11 +901,12 @@ fn after_hook_error_rolls_back() {
     // Create a document inside a transaction
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = [
-        ("title".to_string(), "should-be-rolled-back".to_string()),
-        ("status".to_string(), "published".to_string()),
+    let data: DocumentFields = [
+        ("title".to_string(), json!("should-be-rolled-back")),
+        ("status".to_string(), json!("published")),
     ]
-    .into();
+    .into_iter()
+    .collect();
     let doc = crap_cms::db::query::create(&tx, "articles", &def, &data, None).unwrap();
     let doc_id = doc.id.clone();
 
@@ -906,7 +917,7 @@ fn after_hook_error_rolls_back() {
         data: doc.fields.clone(),
         locale: None,
         draft: None,
-        context: std::collections::HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -943,13 +954,13 @@ fn context_flows_to_after_hooks() {
     let tx = conn.transaction().unwrap();
 
     // Simulate a context that was set by before-hooks
-    let mut req_context = HashMap::new();
+    let mut req_context = ReqContext::new();
     req_context.insert("before_marker".to_string(), json!("set-by-before-hook"));
 
     let ctx = HookContext {
         collection: "articles".to_string(),
         operation: "create".to_string(),
-        data: HashMap::new(),
+        data: DocumentFields::new(),
         locale: None,
         draft: None,
         context: req_context,

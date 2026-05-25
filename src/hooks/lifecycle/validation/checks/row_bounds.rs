@@ -1,10 +1,8 @@
-use std::collections::HashMap;
-
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, validate::FieldError};
 
-/// Validate min_rows / max_rows for Array, Blocks, and has-many Relationship fields.
+/// Validate `min_rows` / `max_rows` for Array, Blocks, and has-many Relationship fields.
 pub(crate) fn check_row_bounds(
     field: &FieldDefinition,
     data_key: &str,
@@ -24,38 +22,38 @@ pub(crate) fn check_row_bounds(
     if let Some(min) = field.min_rows
         && row_count < min
     {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!("{} requires at least {} item(s)", field.name, min),
-            "validation.min_rows",
-            HashMap::from([
-                ("field".to_string(), field.name.clone()),
-                ("min".to_string(), min.to_string()),
-            ]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} requires at least {} item(s)", field.name, min),
+                "validation.min_rows",
+            )
+            .with_param("field", field.name.clone())
+            .with_param("min", min.to_string()),
+        );
     }
 
     if let Some(max) = field.max_rows
         && row_count > max
     {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!("{} allows at most {} item(s)", field.name, max),
-            "validation.max_rows",
-            HashMap::from([
-                ("field".to_string(), field.name.clone()),
-                ("max".to_string(), max.to_string()),
-            ]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} allows at most {} item(s)", field.name, max),
+                "validation.max_rows",
+            )
+            .with_param("field", field.name.clone())
+            .with_param("max", max.to_string()),
+        );
     }
 }
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
-    use crate::core::field::{FieldDefinition, FieldType};
+    use crate::core::DocumentFields;
+    use crate::core::{FieldDefinition, FieldType};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
-    use std::collections::HashMap;
 
     #[test]
     fn test_validate_min_rows() {
@@ -68,7 +66,7 @@ mod tests {
                 .min_rows(2)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("items".to_string(), json!([{"label": "one"}]));
         let result = validate_fields_inner(
             &lua,
@@ -91,7 +89,7 @@ mod tests {
                 .max_rows(1)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("items".to_string(), json!([{"a": 1}, {"a": 2}]));
         let result = validate_fields_inner(
             &lua,
@@ -114,7 +112,7 @@ mod tests {
                 .min_rows(3)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("items".to_string(), json!([{"x": 1}]));
         let result = validate_fields_inner(
             &lua,
@@ -139,7 +137,7 @@ mod tests {
                 .max_rows(1)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("items".to_string(), json!([{"a": 1}, {"a": 2}, {"a": 3}]));
         let result = validate_fields_inner(
             &lua,
@@ -164,7 +162,7 @@ mod tests {
                 .min_rows(1)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("items".to_string(), json!("not-an-array"));
         let result = validate_fields_inner(
             &lua,

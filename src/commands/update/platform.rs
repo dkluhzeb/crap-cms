@@ -12,7 +12,7 @@ use anyhow::{Result, bail};
 ///
 /// Errors on platforms with no published artifact so callers surface a clear
 /// message instead of downloading a missing URL.
-pub fn asset_name() -> Result<String> {
+pub(super) fn asset_name() -> Result<String> {
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
 
@@ -20,7 +20,7 @@ pub fn asset_name() -> Result<String> {
 }
 
 /// Pure function for unit-testing the mapping without touching `std::env`.
-pub fn asset_name_for(os: &str, arch: &str) -> Result<String> {
+pub(super) fn asset_name_for(os: &str, arch: &str) -> Result<String> {
     match (os, arch) {
         ("linux", "x86_64") => Ok("crap-cms-linux-x86_64".to_string()),
         ("linux", "aarch64") => Ok("crap-cms-linux-aarch64".to_string()),

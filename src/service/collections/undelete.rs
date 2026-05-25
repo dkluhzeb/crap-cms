@@ -1,0 +1,130 @@
+//! Collection document undelete from soft-delete.
+
+use anyhow::Context as _;
+
+use std::{cell::RefCell, rc::Rc};
+
+use crate::{
+    core::{Document, event::EventOperation},
+    db::{AccessResult, query},
+    hooks::LuaCrudInfra,
+    service::{RunnerWriteHooks, ServiceContext, ServiceError, flush_queue, helpers},
+};
+
+type Result<T> = std::result::Result<T, ServiceError>;
+
+/// Core undelete logic on an existing connection: access check + restore row + FTS re-sync.
+///
+/// Does NOT manage transactions — caller must open/commit.
+fn undelete_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document> {
+    let conn = ctx.resolve_conn()?;
+    let conn = conn.as_ref();
+    let write_hooks = ctx.write_hooks()?;
+    let def = ctx.collection_def()?;
+
+    let access = write_hooks.check_access(def.access.resolve_trash(), ctx.user, Some(id), None)?;
+
+    if matches!(access, AccessResult::Denied) {
+        return Err(ServiceError::AccessDenied("Undelete access denied".into()));
+    }
+
+    // When the hook returned Constrained filters, enforce row-level match.
+    // The target row is soft-deleted, so we must search the trash view.
+    helpers::enforce_access_constraints(ctx, id, &access, "Undelete", true)?;
+
+    let restored = query::restore(conn, ctx.slug, id)?;
+
+    if !restored {
+        return Err(ServiceError::NotFound(
+            "Document not found or not deleted".into(),
+        ));
+    }
+
+    if conn.supports_fts()
+        && let Ok(Some(doc)) = query::find_by_id_unfiltered(conn, ctx.slug, def, id, None)
+    {
+        query::fts::fts_upsert(conn, ctx.slug, &doc, Some(def))?;
+    }
+
+    let mut doc = query::find_by_id(conn, ctx.slug, def, id, None)?
+        .ok_or_else(|| ServiceError::NotFound("Document not found after undelete".into()))?;
+
+    let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user);
+    read_denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
+
+    doc.strip_fields(&read_denied);
+
+    Ok(doc)
+}
+
+/// Undelete a soft-deleted document.
+///
+/// **Pool mode** (`ctx.pool` set): opens a transaction, commits after success.
+/// **Conn mode** (`ctx.conn` set, Lua CRUD path): runs on the existing connection.
+///
+/// # Errors
+///
+/// Returns service-layer errors (access denied, document not found, hook
+/// errors) or a backend error if the DB transaction or persistence fails.
+#[cfg(not(tarpaulin_include))]
+pub fn undelete_document(ctx: &ServiceContext, id: &str) -> Result<Document> {
+    if ctx.pool.is_some() {
+        undelete_document_pool(ctx, id)
+    } else {
+        undelete_document_conn(ctx, id)
+    }
+}
+
+/// Pool-based undelete: own transaction with event publishing after commit.
+fn undelete_document_pool(ctx: &ServiceContext, id: &str) -> Result<Document> {
+    let pool = ctx.pool.context("pool required")?;
+    let runner = ctx.runner()?;
+    let def = ctx.collection_def()?;
+    let mut conn = pool.get().context("DB connection")?;
+    let tx = conn.transaction_immediate().context("Start transaction")?;
+
+    let queue = Rc::new(RefCell::new(Vec::new()));
+
+    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), None);
+
+    let mut wh = RunnerWriteHooks::new(runner)
+        .with_conn(&tx)
+        .with_infra(infra);
+
+    if ctx.override_access {
+        wh = wh.with_override_access();
+    }
+
+    let inner_ctx = ServiceContext::collection(ctx.slug, def)
+        .conn(&tx)
+        .write_hooks(&wh)
+        .user(ctx.user)
+        .override_access(ctx.override_access)
+        .cache(ctx.cache.clone())
+        .event_transport(ctx.event_transport.clone())
+        .event_queue(queue.clone())
+        .build();
+
+    let doc = undelete_document_in_conn(&inner_ctx, id)?;
+    drop(inner_ctx);
+
+    tx.commit()?;
+
+    ctx.clear_cache();
+
+    ctx.publish_mutation_event(EventOperation::Update, &doc.id, &doc.fields);
+    flush_queue(ctx, &queue);
+
+    Ok(doc)
+}
+
+/// Conn-based undelete: uses existing connection (Lua CRUD path).
+fn undelete_document_conn(ctx: &ServiceContext, id: &str) -> Result<Document> {
+    let doc = undelete_document_in_conn(ctx, id)?;
+
+    ctx.clear_cache();
+
+    ctx.publish_mutation_event(EventOperation::Update, &doc.id, &doc.fields);
+
+    Ok(doc)
+}

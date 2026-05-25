@@ -1,0 +1,31 @@
+\{{!--
+  Custom admin page: {{label}}
+  Route: /admin/p/{{slug}}
+
+  Renders against the standard admin context. `crap.*` (build hash,
+  site name, etc.), `user`, `nav` are all available. Wrap dynamic data
+  via `crap.template_data.register("<name>", fn)` and pull from
+  `\{{data "<name>"}}` here.
+--}}
+\{{#> layout/base}}
+  <h1>{{label}}</h1>
+
+  <div class="cards">
+    <div class="card">
+      <div class="card__header">
+        <span class="material-symbols-outlined">info</span>
+        <h3>Hello</h3>
+      </div>
+      <div class="card__body">
+        <p>This is the {{slug}} page. Edit
+          <code>templates/pages/{{slug}}.hbs</code> in your config dir to
+          replace this content.</p>
+
+        \{{!-- Example: render dynamic data registered via Lua. --}}
+        \{{!-- \{{#with (data "{{slug}}_data")}}                       --}}
+        \{{!--   <p>\{{this.value}}</p>                              --}}
+        \{{!-- \{{/with}}                                            --}}
+      </div>
+    </div>
+  </div>
+\{{/layout/base}}

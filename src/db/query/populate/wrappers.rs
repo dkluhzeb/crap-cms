@@ -13,6 +13,10 @@ use super::{
 
 /// Recursively populate relationship fields with full document objects.
 /// Convenience wrapper that creates a fresh no-op cache per call.
+///
+/// # Errors
+///
+/// Returns a backend error if any relationship-target lookup fails.
 pub fn populate_relationships(
     ctx: &PopulateContext<'_>,
     doc: &mut Document,
@@ -24,6 +28,10 @@ pub fn populate_relationships(
 
 /// Batch-populate relationship fields across a slice of documents.
 /// Convenience wrapper that creates a fresh no-op cache per call.
+///
+/// # Errors
+///
+/// Returns a backend error if any relationship-target lookup fails.
 pub fn populate_relationships_batch(
     ctx: &PopulateContext<'_>,
     docs: &mut [Document],

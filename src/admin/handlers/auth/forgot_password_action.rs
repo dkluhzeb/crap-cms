@@ -5,10 +5,10 @@ use axum::{
     http::HeaderMap,
     response::Response,
 };
-use serde_json::json;
 use tokio::task;
 use tracing::error;
 
+use crate::core::collection::Auth;
 use crate::{
     admin::{
         AdminState,
@@ -17,7 +17,10 @@ use crate::{
         },
     },
     config::EmailConfig,
-    core::{CollectionDefinition, email, email::EmailRenderer},
+    core::{
+        CollectionDefinition, email,
+        email::{EmailRenderer, PasswordResetEmailContext},
+    },
     db::DbPool,
     service::{ServiceContext, auth::generate_reset_token},
 };
@@ -32,6 +35,7 @@ struct ResetEmailParams {
     email_renderer: Arc<EmailRenderer>,
     base_url: String,
     reset_expiry: u64,
+    email_max_attempts: u32,
 }
 
 /// Check whether the collection supports forgot-password.
@@ -42,8 +46,8 @@ fn forgot_password_collection(
     let def = state.registry.get_collection(collection)?;
 
     if def.is_auth_collection()
-        && def.auth.as_ref().is_some_and(|a| a.forgot_password)
-        && !def.auth.as_ref().is_some_and(|a| a.disable_local)
+        && def.auth.as_ref().is_some_and(Auth::forgot_password_enabled)
+        && def.auth.as_ref().is_some_and(Auth::password_login_enabled)
     {
         Some(def.clone())
     } else {
@@ -55,7 +59,7 @@ fn forgot_password_collection(
 ///
 /// Runs inside `spawn_blocking`. Silently returns on any failure — the
 /// handler always shows "success" to avoid leaking whether the email exists.
-fn send_reset_email(params: ResetEmailParams) {
+fn send_reset_email(params: &ResetEmailParams) {
     let conn = match params.pool.get() {
         Ok(c) => c,
         Err(e) => {
@@ -82,11 +86,11 @@ fn send_reset_email(params: ResetEmailParams) {
 
     let html = match params.email_renderer.render(
         "password_reset",
-        &json!({
-            "reset_url": reset_url,
-            "expiry_minutes": params.reset_expiry / 60,
-            "from_name": params.email_config.from_name,
-        }),
+        &PasswordResetEmailContext {
+            reset_url: &reset_url,
+            expiry_minutes: params.reset_expiry / 60,
+            from_name: &params.email_config.from_name,
+        },
     ) {
         Ok(h) => h,
         Err(e) => {
@@ -97,12 +101,13 @@ fn send_reset_email(params: ResetEmailParams) {
 
     if let Err(e) = email::queue_email(
         &conn,
-        &params.user_email,
-        "Reset your password",
-        &html,
-        None,
-        params.email_config.queue_retries + 1,
-        &params.email_config.queue_name,
+        &email::EmailJobData {
+            to: params.user_email.clone(),
+            subject: "Reset your password".to_string(),
+            html,
+            text: None,
+        },
+        params.email_max_attempts,
     ) {
         error!("Failed to queue reset email: {}", e);
     }
@@ -142,9 +147,10 @@ pub async fn forgot_password_action(
             email_renderer: state.email_renderer.clone(),
             base_url: state.config.server.base_url(),
             reset_expiry: state.config.auth.reset_token_expiry,
+            email_max_attempts: state.config.jobs.system_email_max_attempts(),
         };
 
-        task::spawn_blocking(move || send_reset_email(params));
+        task::spawn_blocking(move || send_reset_email(&params));
     }
 
     render_forgot_success(&state, &auth_collections)

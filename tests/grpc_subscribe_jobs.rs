@@ -1,6 +1,20 @@
 //! gRPC integration tests for Subscribe streaming and Job RPCs.
 //!
-//! Uses ContentService directly (no network) via ContentApi trait.
+//! Uses `ContentService` directly (no network) via `ContentApi` trait.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -73,16 +87,19 @@ fn setup_service_inner(
     config.auth.secret = "test-jwt-secret".into();
 
     if !locales.is_empty() {
-        config.locale.locales = locales.iter().map(|s| s.to_string()).collect();
+        config.locale.locales = locales
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect();
         config.locale.default_locale = locales.first().unwrap_or(&"en").to_string();
         config.locale.fallback = true;
     }
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &collections {
             reg.register_collection(def.clone());
         }
@@ -91,11 +108,12 @@ fn setup_service_inner(
         }
     }
 
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -104,9 +122,8 @@ fn setup_service_inner(
 
     let mut deps = ContentServiceDeps::builder()
         .pool(db_pool.clone())
-        .registry(Registry::snapshot(&registry))
+        .registry(Registry::snapshot(&shared))
         .hook_runner(hook_runner)
-        .jwt_secret(config.auth.secret.clone())
         .config(config.clone())
         .config_dir(tmp.path().to_path_buf())
         .storage(
@@ -131,7 +148,7 @@ fn setup_service_inner(
         )))
         .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
         .token_provider(std::sync::Arc::new(
-            crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+            crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
         ))
         .password_provider(std::sync::Arc::new(
             crap_cms::core::auth::Argon2PasswordProvider,
@@ -162,16 +179,19 @@ fn setup_service_inner_with_jobs(
     config.auth.secret = "test-jwt-secret".into();
 
     if !locales.is_empty() {
-        config.locale.locales = locales.iter().map(|s| s.to_string()).collect();
+        config.locale.locales = locales
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect();
         config.locale.default_locale = locales.first().unwrap_or(&"en").to_string();
         config.locale.fallback = true;
     }
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &collections {
             reg.register_collection(def.clone());
         }
@@ -183,11 +203,12 @@ fn setup_service_inner_with_jobs(
         }
     }
 
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -196,9 +217,8 @@ fn setup_service_inner_with_jobs(
 
     let deps = ContentServiceDeps::builder()
         .pool(db_pool.clone())
-        .registry(Registry::snapshot(&registry))
+        .registry(Registry::snapshot(&shared))
         .hook_runner(hook_runner)
-        .jwt_secret(config.auth.secret.clone())
         .config(config.clone())
         .config_dir(tmp.path().to_path_buf())
         .storage(
@@ -223,7 +243,7 @@ fn setup_service_inner_with_jobs(
         )))
         .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
         .token_provider(std::sync::Arc::new(
-            crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+            crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
         ))
         .password_provider(std::sync::Arc::new(
             crap_cms::core::auth::Argon2PasswordProvider,
@@ -287,10 +307,7 @@ fn make_users_def() -> CollectionDefinition {
             .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth {
-        enabled: true,
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled());
     def
 }
 
@@ -333,10 +350,8 @@ async fn create_user_and_login(ts: &TestSetup) -> String {
 
 /// Add Bearer token to a Request.
 fn add_auth<T>(req: &mut Request<T>, token: &str) {
-    req.metadata_mut().insert(
-        "authorization",
-        format!("Bearer {}", token).parse().unwrap(),
-    );
+    req.metadata_mut()
+        .insert("authorization", format!("Bearer {token}").parse().unwrap());
 }
 
 // ── Subscribe Tests ─────────────────────────────────────────────────────
@@ -613,6 +628,7 @@ async fn trigger_job_authenticated() {
     let mut req = Request::new(content::TriggerJobRequest {
         slug: "process".to_string(),
         data_json: Some(r#"{"key": "value"}"#.to_string()),
+        priority: None,
     });
     add_auth(&mut req, &token);
 
@@ -637,6 +653,7 @@ async fn list_job_runs_authenticated() {
     let mut trigger_req = Request::new(content::TriggerJobRequest {
         slug: "sync".to_string(),
         data_json: None,
+        priority: None,
     });
     add_auth(&mut trigger_req, &token);
     ts.service.trigger_job(trigger_req).await.unwrap();

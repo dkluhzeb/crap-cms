@@ -5,24 +5,25 @@ use serde_json::Value;
 
 use crate::{
     cli,
-    core::{Document, SharedRegistry},
+    core::{Document, Registry},
     db::{DbPool, query},
     service::{self, ServiceContext},
 };
 
 use super::helpers::{get_user_email, resolve_user};
+use crate::core::collection::Auth;
 
 /// Show detailed info for a single user.
 #[cfg(not(tarpaulin_include))]
-pub fn user_info(
+pub(super) fn user_info(
     pool: &DbPool,
-    registry: &SharedRegistry,
+    registry: &Registry,
     collection: &str,
     email: Option<String>,
     id: Option<String>,
 ) -> Result<()> {
     let (def, doc) = resolve_user(pool, registry, collection, email, id)?;
-    let verify_email = def.auth.as_ref().map(|a| a.verify_email).unwrap_or(false);
+    let verify_email = def.auth.as_ref().is_some_and(Auth::requires_verify_email);
 
     let conn = pool.get().context("Failed to get database connection")?;
     let ctx = ServiceContext::slug_only(collection).conn(&conn).build();

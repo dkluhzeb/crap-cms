@@ -1,33 +1,15 @@
 //! Shared helper functions for the service layer.
 
-use std::collections::HashMap;
-
 use serde_json::Value;
 
 use crate::{
-    core::{Document, FieldDefinition, FieldType, collection::Hooks},
+    core::{Document, FieldDefinition, FieldType, ReqContext, collection::Hooks},
     db::{
         AccessResult, DbConnection, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query,
     },
     hooks::{HookContext, HookEvent},
     service::{AfterChangeInput, ServiceContext, ServiceError, hooks::WriteHooks},
 };
-
-/// Build the hook data map from form data + structured join data.
-/// Converts string values to JSON strings and merges in blocks/arrays/has-many.
-pub(crate) fn build_hook_data(
-    data: &HashMap<String, String>,
-    join_data: &HashMap<String, Value>,
-) -> HashMap<String, Value> {
-    let mut hook_data: HashMap<String, Value> = data
-        .iter()
-        .map(|(k, v)| (k.clone(), Value::String(v.clone())))
-        .collect();
-    for (k, v) in join_data {
-        hook_data.insert(k.clone(), v.clone());
-    }
-    hook_data
-}
 
 /// Run after-change hooks and return the request-scoped context.
 /// This pattern is repeated across create, update, unpublish, and global update.
@@ -38,7 +20,7 @@ pub(crate) fn run_after_change_hooks(
     doc: &Document,
     input: AfterChangeInput<'_>,
     tx: &dyn DbConnection,
-) -> anyhow::Result<HashMap<String, Value>> {
+) -> anyhow::Result<ReqContext> {
     let mut after_data = doc.fields.clone();
     after_data.insert("id".to_string(), Value::String(doc.id.to_string()));
     let after_ctx = HookContext::builder(input.slug, input.operation)
@@ -129,7 +111,7 @@ pub(crate) fn enforce_access_constraints(
 
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     let mut filters: Vec<FilterClause> = extra.clone();
     filters.push(FilterClause::Single(Filter {
@@ -179,17 +161,19 @@ pub(crate) struct PaginationInputs<'a> {
 ///
 /// Shared by `find_documents` and `search_documents` to avoid duplicating the
 /// cursor/page branching logic.
-pub(crate) fn build_pagination(inputs: PaginationInputs<'_>) -> query::PaginationResult {
+pub(crate) fn build_pagination(inputs: &PaginationInputs<'_>) -> query::PaginationResult {
     let limit = inputs.fq.limit.unwrap_or(inputs.total);
 
     if inputs.cursor_enabled {
         query::PaginationResult::builder(inputs.docs, inputs.total, limit).cursor(
             inputs.fq.order_by.as_deref(),
-            inputs.has_timestamps,
-            inputs.has_drafts,
-            inputs.fq.before_cursor.is_some(),
-            inputs.had_cursor,
-            inputs.cursor_has_more,
+            query::CursorFlags {
+                has_timestamps: inputs.has_timestamps,
+                has_drafts: inputs.has_drafts,
+                had_before_cursor: inputs.fq.before_cursor.is_some(),
+                had_any_cursor: inputs.had_cursor,
+                cursor_has_more: inputs.cursor_has_more,
+            },
         )
     } else {
         let offset = inputs.fq.offset.unwrap_or(0);

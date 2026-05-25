@@ -38,7 +38,9 @@ pub(crate) fn read_orientation(bytes: &[u8]) -> Option<u8> {
         .ok()?;
     let field = exif.get_field(Tag::Orientation, In::PRIMARY)?;
     match field.value {
-        Value::Short(ref v) => v.first().copied().map(|v| v as u8),
+        // Orientation is documented as 1..=8; reject anything that
+        // wouldn't fit in u8 rather than silently truncating.
+        Value::Short(ref v) => v.first().copied().and_then(|v| u8::try_from(v).ok()),
         _ => None,
     }
 }
@@ -47,7 +49,6 @@ pub(crate) fn read_orientation(bytes: &[u8]) -> Option<u8> {
 /// upright form. Unknown values pass through unchanged.
 pub(crate) fn apply_orientation(img: DynamicImage, orientation: u8) -> DynamicImage {
     match orientation {
-        1 => img,
         2 => img.fliph(),
         3 => img.rotate180(),
         4 => img.flipv(),
@@ -55,6 +56,7 @@ pub(crate) fn apply_orientation(img: DynamicImage, orientation: u8) -> DynamicIm
         6 => img.rotate90(),
         7 => DynamicImage::ImageRgba8(imageops::flip_horizontal(&img.rotate90())),
         8 => img.rotate270(),
+        // 1 (no rotation) and any unknown value pass through unchanged.
         _ => img,
     }
 }
@@ -70,6 +72,20 @@ pub(crate) fn apply_exif_orientation(bytes: &[u8], img: DynamicImage) -> Dynamic
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::*;
     use image::{ImageBuffer, Rgba};

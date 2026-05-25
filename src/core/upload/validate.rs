@@ -108,10 +108,8 @@ fn validate_filename_extension_matches(filename: &str, effective_mime: &str) -> 
     }
 
     bail!(
-        "Filename extension implies renderable type '{}' but content is '{}' — \
+        "Filename extension implies renderable type '{ext_mime_str}' but content is '{effective_mime}' — \
          rename the file with an extension that matches its actual type",
-        ext_mime_str,
-        effective_mime,
     );
 }
 
@@ -135,10 +133,10 @@ pub(super) fn check_image_dimensions(data: &[u8]) -> Result<()> {
         const MAX_PIXELS: u64 = 100_000_000;
         const MAX_PIXELS_PER_BYTE: u64 = 500;
 
-        let pixels = (w as u64) * (h as u64);
+        let pixels = u64::from(w) * u64::from(h);
 
         if pixels > MAX_PIXELS {
-            bail!("Image too large: {}x{} exceeds pixel limit", w, h);
+            bail!("Image too large: {w}x{h} exceeds pixel limit");
         }
 
         // `data.len() + 1` prevents a pathological zero-byte file (rare
@@ -251,25 +249,53 @@ pub(super) fn sanitize_filename(name: &str) -> String {
         .collect::<Vec<_>>()
         .join("-");
     match ext {
-        Some(e) => format!("{}.{}", clean_stem, e),
+        Some(e) => format!("{clean_stem}.{e}"),
         None => clean_stem,
     }
 }
 
 /// Format a file size in human-readable form.
+/// Format a byte count as a human-readable string. Integer math avoids the
+/// `u64 as f64` precision-loss path.
+#[must_use]
 pub fn format_filesize(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{} B", bytes)
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+
+    fn split(bytes: u64, unit: u64) -> (u64, u64) {
+        (bytes / unit, (bytes % unit) * 10 / unit)
+    }
+
+    if bytes < KB {
+        format!("{bytes} B")
+    } else if bytes < MB {
+        let (whole, tenths) = split(bytes, KB);
+        format!("{whole}.{tenths} KB")
+    } else if bytes < GB {
+        let (whole, tenths) = split(bytes, MB);
+        format!("{whole}.{tenths} MB")
     } else {
-        format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+        let (whole, tenths) = split(bytes, GB);
+        format!("{whole}.{tenths} GB")
     }
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::*;
 

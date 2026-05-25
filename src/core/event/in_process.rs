@@ -25,6 +25,7 @@ pub struct InProcessEventBus {
 
 impl InProcessEventBus {
     /// Create a new in-process event bus with the given channel capacity.
+    #[must_use]
     pub fn new(capacity: usize) -> Self {
         let (sender, _) = broadcast::channel(capacity);
 
@@ -70,6 +71,7 @@ impl Default for InProcessInvalidationBus {
 
 impl InProcessInvalidationBus {
     /// Create a new bus with the internal fixed capacity.
+    #[must_use]
     pub fn new() -> Self {
         let (sender, _) = broadcast::channel(USER_INVALIDATION_CAPACITY);
 
@@ -94,10 +96,9 @@ impl InvalidationTransport for InProcessInvalidationBus {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
 
     use crate::core::event::{EventOperation, EventTarget, EventUser, RecvError};
-    use crate::core::{DocumentId, Slug};
+    use crate::core::{DocumentFields, DocumentId, Slug};
 
     use super::*;
 
@@ -109,7 +110,7 @@ mod tests {
             operation: EventOperation::Create,
             collection: Slug::new("posts"),
             document_id: DocumentId::new("id1"),
-            data: HashMap::new(),
+            data: DocumentFields::new(),
             edited_by: None,
         }
     }
@@ -131,7 +132,7 @@ mod tests {
                 operation: EventOperation::Create,
                 collection: Slug::new("posts"),
                 document_id: DocumentId::new("id1"),
-                data: HashMap::new(),
+                data: DocumentFields::new(),
                 edited_by: Some(EventUser::new("u1", "test@example.com")),
             })
             .expect("should publish with subscriber");
@@ -191,7 +192,7 @@ mod tests {
 
         match rx.recv().await {
             Err(RecvError::Lagged(_)) => {}
-            other => panic!("expected Lagged, got {:?}", other),
+            other => panic!("expected Lagged, got {other:?}"),
         }
     }
 

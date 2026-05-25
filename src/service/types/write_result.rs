@@ -1,10 +1,6 @@
 //! Result type for write operations.
 
-use std::collections::HashMap;
-
-use serde_json::Value;
-
-use crate::core::Document;
+use crate::core::{Document, ReqContext};
 
 /// Result of a write operation: the document and the request-scoped hook context.
-pub type WriteResult = (Document, HashMap<String, Value>);
+pub type WriteResult = (Document, ReqContext);

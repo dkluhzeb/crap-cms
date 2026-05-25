@@ -14,7 +14,7 @@ use super::helpers::has_locales_enabled;
 
 /// Entry point from the `run` dispatcher — destructures CLI args and delegates.
 #[cfg(not(tarpaulin_include))]
-pub fn run_collection(config_dir: &Path, action: MakeAction) -> Result<()> {
+pub(super) fn run_collection(config_dir: &Path, action: MakeAction) -> Result<()> {
     let MakeAction::Collection {
         slug,
         fields,
@@ -148,7 +148,7 @@ fn resolve_fields(
             };
 
             if Confirm::with_theme(&crap_theme())
-                .with_prompt(format!("Add custom fields? ({})", hint))
+                .with_prompt(format!("Add custom fields? ({hint})"))
                 .default(false)
                 .interact()
                 .context("Failed to read custom fields preference")?

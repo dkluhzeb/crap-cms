@@ -17,11 +17,7 @@ use crate::{
     admin::AdminState,
     config::McpApiKey,
     mcp::{
-        McpServer,
-        protocol::{
-            INTERNAL_ERROR, INVALID_REQUEST, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
-            PARSE_ERROR,
-        },
+        INTERNAL_ERROR, INVALID_REQUEST, JsonRpcError, JsonRpcRequest, JsonRpcResponse, PARSE_ERROR,
     },
 };
 
@@ -48,9 +44,7 @@ fn validate_api_key(
         return Ok(());
     }
 
-    let peer = peer_addr
-        .map(|a| a.ip().to_string())
-        .unwrap_or_else(|| "unknown".into());
+    let peer = peer_addr.map_or_else(|| "unknown".into(), |a| a.ip().to_string());
 
     warn!(
         peer = %peer,
@@ -88,7 +82,7 @@ async fn parse_rpc_body(request: Request<Body>) -> Result<JsonRpcRequest, Respon
             result: None,
             error: Some(JsonRpcError {
                 code: PARSE_ERROR,
-                message: format!("Parse error: {}", e),
+                message: format!("Parse error: {e}"),
                 data: None,
             }),
         })
@@ -125,16 +119,7 @@ pub(super) async fn mcp_http_handler(
         Err(resp) => return resp,
     };
 
-    let server = McpServer {
-        pool: state.pool.clone(),
-        registry: state.registry.clone(),
-        runner: state.hook_runner.clone(),
-        config: state.config.clone(),
-        config_dir: state.config_dir.clone(),
-        event_transport: state.event_transport.clone(),
-        invalidation_transport: Some(state.invalidation_transport.clone()),
-        cache: state.cache.clone(),
-    };
+    let server = state.mcp_server();
 
     let response = match task::spawn_blocking(move || server.handle_message(rpc_request)).await {
         Ok(resp) => resp,

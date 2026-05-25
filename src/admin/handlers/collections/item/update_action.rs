@@ -24,9 +24,8 @@ pub async fn update_action(
     auth_user: Option<Extension<AuthUser>>,
     request: Request,
 ) -> Response {
-    let def = match state.registry.get_collection(&slug) {
-        Some(d) => d.clone(),
-        None => return redirect_response("/admin/collections"),
+    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+        return redirect_response(paths::COLLECTIONS_ROOT);
     };
 
     let (mut form_data, file) = match parse_form(request, &state, &def).await {
@@ -40,8 +39,8 @@ pub async fn update_action(
     let method = form_data.remove("_method").unwrap_or_default();
 
     if method.eq_ignore_ascii_case("DELETE") {
-        return delete_action_impl(&state, &slug, &id, &auth_user, false, false).await;
+        return delete_action_impl(&state, &slug, &id, auth_user.as_ref(), false, false).await;
     }
 
-    do_update(&state, &slug, &id, form_data, file, &auth_user).await
+    do_update(&state, &slug, &id, form_data, file, auth_user.as_ref()).await
 }

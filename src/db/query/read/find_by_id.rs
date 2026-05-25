@@ -8,7 +8,8 @@ use crate::{
         DbConnection, DbValue, LocaleContext, LocaleMode,
         document::row_to_document,
         query::{
-            get_column_names, get_locale_select_columns_full, group_locale_fields, hydrate_document,
+            get_column_names, get_locale_select_columns_full, group_locale_fields,
+            hydrate_document, hydrate_documents,
         },
     },
 };
@@ -21,6 +22,10 @@ use crate::{
 ///
 /// Soft-deleted documents are excluded by default when `def.soft_delete` is true.
 /// Use [`find_by_id_unfiltered`] to include soft-deleted documents.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT, row parsing, or hydration fails.
 pub fn find_by_id(
     conn: &dyn DbConnection,
     slug: &str,
@@ -40,6 +45,10 @@ pub fn find_by_id(
 /// Like [`find_by_id`] but includes soft-deleted documents.
 ///
 /// Used by trash/restore operations that need to access deleted documents.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT, row parsing, or hydration fails.
 pub fn find_by_id_unfiltered(
     conn: &dyn DbConnection,
     slug: &str,
@@ -74,6 +83,10 @@ fn hydrate_raw(
 /// Uses a single `SELECT ... WHERE id IN (?, ?, ...)` query instead of N individual
 /// lookups. Returns documents in arbitrary order (caller should reorder if needed).
 /// Missing IDs are silently skipped (not included in the result).
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT, row parsing, or hydration fails.
 pub fn find_by_ids(
     conn: &dyn DbConnection,
     slug: &str,
@@ -104,7 +117,7 @@ pub fn find_by_ids(
         .query_all(&sql, &params)
         .with_context(|| format!("Failed to execute find_by_ids on '{slug}'"))?;
 
-    let mut documents = Vec::new();
+    let mut documents = Vec::with_capacity(rows.len());
     for row in &rows {
         let mut doc = row_to_document(conn, row)?;
 
@@ -114,9 +127,15 @@ pub fn find_by_ids(
         {
             group_locale_fields(&mut doc, &def.fields, &ctx.config)?;
         }
-        hydrate_document(conn, slug, &def.fields, &mut doc, None, locale_ctx)?;
         documents.push(doc);
     }
+
+    // Batched hydrate: one `WHERE parent_id IN (…)` SELECT per
+    // relationship field instead of one per (doc, field). This is the
+    // same fix as `post_process_docs` — critical here too because
+    // `find_by_ids` is the inner step of `populate` at depth > 0, so
+    // a find_deep@50 hits this path once per level per parent batch.
+    hydrate_documents(conn, slug, &def.fields, &mut documents, None, locale_ctx)?;
 
     Ok(documents)
 }
@@ -190,11 +209,14 @@ pub(crate) fn find_by_id_raw(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use serde_json::json;
+
+    use std::collections::HashSet;
     use tempfile::TempDir;
 
     use super::*;
     use crate::config::{CrapConfig, DatabaseConfig};
+    use crate::core::DocumentFields;
     use crate::core::collection::*;
     use crate::core::field::*;
     use crate::db::{DbPool, pool, query::write::create};
@@ -240,9 +262,9 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = test_def();
 
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Test Post".to_string());
-        data.insert("status".to_string(), "draft".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Test Post"));
+        data.insert("status".to_string(), json!("draft"));
         let created = create(&conn, "posts", &def, &data, None).unwrap();
 
         let found = find_by_id(&conn, "posts", &def, &created.id, None).unwrap();
@@ -278,16 +300,16 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = test_def();
 
-        let mut d1 = HashMap::new();
-        d1.insert("title".to_string(), "First".to_string());
+        let mut d1 = DocumentFields::new();
+        d1.insert("title".to_string(), json!("First"));
         let doc1 = create(&conn, "posts", &def, &d1, None).unwrap();
 
-        let mut d2 = HashMap::new();
-        d2.insert("title".to_string(), "Second".to_string());
+        let mut d2 = DocumentFields::new();
+        d2.insert("title".to_string(), json!("Second"));
         let doc2 = create(&conn, "posts", &def, &d2, None).unwrap();
 
-        let mut d3 = HashMap::new();
-        d3.insert("title".to_string(), "Third".to_string());
+        let mut d3 = DocumentFields::new();
+        d3.insert("title".to_string(), json!("Third"));
         create(&conn, "posts", &def, &d3, None).unwrap();
 
         // Fetch only first two
@@ -297,7 +319,7 @@ mod tests {
 
         let titles: HashSet<String> = result
             .iter()
-            .filter_map(|d| d.get_str("title").map(|s| s.to_string()))
+            .filter_map(|d| d.get_str("title").map(std::string::ToString::to_string))
             .collect();
         assert!(titles.contains("First"));
         assert!(titles.contains("Second"));
@@ -400,8 +422,8 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = test_def();
 
-        let mut d1 = HashMap::new();
-        d1.insert("title".to_string(), "Exists".to_string());
+        let mut d1 = DocumentFields::new();
+        d1.insert("title".to_string(), json!("Exists"));
         let doc1 = create(&conn, "posts", &def, &d1, None).unwrap();
 
         let ids = vec![doc1.id.to_string(), "nonexistent-id".to_string()];

@@ -30,14 +30,14 @@ pub(super) fn populate_nonpoly_has_many(
     let ids: Vec<String> = match doc.fields.get(field_name) {
         Some(Value::Array(arr)) => arr
             .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
             .collect(),
         _ => return Ok(()),
     };
 
     let fetch_ids: Vec<String> = ids
         .iter()
-        .filter(|id| !visited.contains(&(rel_collection.to_string(), id.to_string())))
+        .filter(|id| !visited.contains(&(rel_collection.to_string(), (*id).clone())))
         .cloned()
         .collect();
 
@@ -184,11 +184,11 @@ pub(super) fn populate_nonpoly_has_one(
 mod tests {
     use serde_json::json;
 
-    use super::super::super::test_helpers::*;
-    use super::super::super::{PopulateContext, PopulateOpts, populate_cache_key};
     use super::populate_relationships_cached;
     use crate::core::cache::{CacheBackend, MemoryCache, NoneCache};
     use crate::core::{Document, Registry, field::*};
+    use crate::db::query::populate::test_helpers::*;
+    use crate::db::query::populate::{PopulateContext, PopulateOpts, populate_cache_key};
     use rusqlite::Connection;
     use std::collections::HashSet;
 

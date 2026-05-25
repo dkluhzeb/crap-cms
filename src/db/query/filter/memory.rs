@@ -4,10 +4,11 @@
 //! access constraints without DB queries. Evaluates the same `FilterClause`
 //! types that `Find` uses as SQL WHERE clauses.
 
-use std::collections::HashMap;
+use std::cmp::Ordering;
 
 use serde_json::Value;
 
+use crate::core::DocumentFields;
 use crate::db::{Filter, FilterClause, FilterOp};
 
 /// Evaluate filter clauses against in-memory document data.
@@ -15,7 +16,8 @@ use crate::db::{Filter, FilterClause, FilterOp};
 /// Returns `true` if all clauses match (AND semantics, same as SQL WHERE).
 /// Returns `false` (fail-closed) if a referenced field is missing from data.
 /// Returns `true` for empty constraints (no filters = no restrictions).
-pub fn matches_constraints(data: &HashMap<String, Value>, constraints: &[FilterClause]) -> bool {
+#[must_use]
+pub fn matches_constraints(data: &DocumentFields, constraints: &[FilterClause]) -> bool {
     if constraints.is_empty() {
         return true;
     }
@@ -29,10 +31,9 @@ pub fn matches_constraints(data: &HashMap<String, Value>, constraints: &[FilterC
 }
 
 /// Evaluate a single filter against document data.
-fn matches_filter(data: &HashMap<String, Value>, filter: &Filter) -> bool {
-    let value = match data.get(&filter.field) {
-        Some(v) => v,
-        None => return matches_missing_field(&filter.op),
+fn matches_filter(data: &DocumentFields, filter: &Filter) -> bool {
+    let Some(value) = data.get(&filter.field) else {
+        return matches_missing_field(&filter.op);
     };
 
     let value_str = value_to_string(value);
@@ -43,21 +44,21 @@ fn matches_filter(data: &HashMap<String, Value>, filter: &Filter) -> bool {
         FilterOp::Contains(needle) => value_str.contains(needle.as_str()),
         FilterOp::Like(pattern) => matches_like(&value_str, pattern),
         FilterOp::GreaterThan(expected) => {
-            compare_values(&value_str, expected) == Some(std::cmp::Ordering::Greater)
+            compare_values(&value_str, expected) == Some(Ordering::Greater)
         }
         FilterOp::LessThan(expected) => {
-            compare_values(&value_str, expected) == Some(std::cmp::Ordering::Less)
+            compare_values(&value_str, expected) == Some(Ordering::Less)
         }
         FilterOp::GreaterThanOrEqual(expected) => {
             matches!(
                 compare_values(&value_str, expected),
-                Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+                Some(Ordering::Greater | Ordering::Equal)
             )
         }
         FilterOp::LessThanOrEqual(expected) => {
             matches!(
                 compare_values(&value_str, expected),
-                Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+                Some(Ordering::Less | Ordering::Equal)
             )
         }
         FilterOp::In(values) => values.contains(&value_str),
@@ -86,7 +87,7 @@ fn value_to_string(v: &Value) -> String {
 }
 
 /// Compare two string values, trying numeric comparison first.
-fn compare_values(a: &str, b: &str) -> Option<std::cmp::Ordering> {
+fn compare_values(a: &str, b: &str) -> Option<Ordering> {
     if let (Ok(na), Ok(nb)) = (a.parse::<f64>(), b.parse::<f64>()) {
         na.partial_cmp(&nb)
     } else {
@@ -98,9 +99,7 @@ fn compare_values(a: &str, b: &str) -> Option<std::cmp::Ordering> {
 fn matches_like(value: &str, pattern: &str) -> bool {
     let regex_pattern = pattern.replace('%', ".*").replace('_', ".");
 
-    regex::Regex::new(&format!("^{}$", regex_pattern))
-        .map(|re| re.is_match(value))
-        .unwrap_or(false)
+    regex::Regex::new(&format!("^{regex_pattern}$")).is_ok_and(|re| re.is_match(value))
 }
 
 #[cfg(test)]
@@ -109,7 +108,7 @@ mod tests {
 
     use super::*;
 
-    fn data(pairs: &[(&str, Value)]) -> HashMap<String, Value> {
+    fn data(pairs: &[(&str, Value)]) -> DocumentFields {
         pairs
             .iter()
             .map(|(k, v)| (k.to_string(), v.clone()))
@@ -134,7 +133,7 @@ mod tests {
 
     #[test]
     fn empty_constraints_always_match() {
-        assert!(matches_constraints(&HashMap::new(), &[]));
+        assert!(matches_constraints(&DocumentFields::new(), &[]));
         assert!(matches_constraints(&data(&[("x", json!("y"))]), &[]));
     }
 
@@ -406,9 +405,9 @@ mod tests {
 
     // ── Null values ─────────────────────────────────────────────────
 
-    /// Null JSON values compare as empty string. This mirrors SQLite behavior
+    /// Null JSON values compare as empty string. This mirrors `SQLite` behavior
     /// where NULL text columns coerce to "" in comparisons, and matches how
-    /// event data arrives from the DB layer (serde_json maps SQL NULL → Value::Null,
+    /// event data arrives from the DB layer (`serde_json` maps SQL NULL → `Value::Null`,
     /// and `value_to_string` normalizes it to ""). Without this, a filter like
     /// `status != "deleted"` would fail-closed on documents where status is null,
     /// incorrectly blocking access.

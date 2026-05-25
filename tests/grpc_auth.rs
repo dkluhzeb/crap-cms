@@ -1,7 +1,21 @@
 //! Auth-related gRPC integration tests: login, me, password reset,
 //! email verification, bearer token, order-by tests.
 //!
-//! Uses ContentService directly (no network) via ContentApi trait.
+//! Uses `ContentService` directly (no network) via `ContentApi` trait.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -55,10 +69,7 @@ fn make_users_def() -> CollectionDefinition {
             .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth {
-        enabled: true,
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled());
     def
 }
 
@@ -103,9 +114,9 @@ fn setup_service(
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &collections {
             reg.register_collection(def.clone());
         }
@@ -114,11 +125,12 @@ fn setup_service(
         }
     }
 
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -128,9 +140,8 @@ fn setup_service(
     let service = ContentService::new(
         ContentServiceDeps::builder()
             .pool(db_pool.clone())
-            .registry(Registry::snapshot(&registry))
+            .registry(Registry::snapshot(&shared))
             .hook_runner(hook_runner)
-            .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
             .storage(
@@ -155,7 +166,7 @@ fn setup_service(
             ))
             .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
             .token_provider(std::sync::Arc::new(
-                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+                crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
             ))
             .password_provider(std::sync::Arc::new(
                 crap_cms::core::auth::Argon2PasswordProvider,
@@ -183,11 +194,7 @@ fn make_verify_users_def() -> CollectionDefinition {
             .unique(true)
             .build(),
     ];
-    def.auth = Some(Auth {
-        enabled: true,
-        verify_email: true,
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled().map_password_login(|b| b.verify_email(true)));
     def
 }
 
@@ -290,7 +297,7 @@ async fn login_token_carries_auth_time() {
 
     let after = chrono::Utc::now().timestamp() as u64;
 
-    let provider = JwtTokenProvider::new("test-secret");
+    let provider = JwtTokenProvider::new("test-jwt-secret");
     let claims = provider
         .validate_token(&resp.token)
         .expect("token must validate");
@@ -529,8 +536,8 @@ async fn forgot_password_not_enabled() {
     // ForgotPassword returns success even when forgot_password is disabled to
     // avoid leaking collection configuration details to potential attackers.
     let mut def = make_users_def();
-    if let Some(ref mut auth) = def.auth {
-        auth.forgot_password = false;
+    if let Some(auth) = def.auth.take() {
+        def.auth = Some(auth.map_password_login(|b| b.forgot_password(false)));
     }
     let ts = setup_service(vec![def], vec![]);
 
@@ -606,10 +613,8 @@ async fn authenticated_crud_with_bearer_token() {
         locale: None,
         draft: None,
     });
-    req.metadata_mut().insert(
-        "authorization",
-        format!("Bearer {}", token).parse().unwrap(),
-    );
+    req.metadata_mut()
+        .insert("authorization", format!("Bearer {token}").parse().unwrap());
 
     let doc = req.extensions().get::<()>(); // just to consume the var
     let _ = doc;

@@ -6,17 +6,17 @@ use std::collections::{HashMap, HashSet};
 use crate::db::DbConnection;
 
 /// Check if a table exists in the database.
-pub fn table_exists(conn: &dyn DbConnection, name: &str) -> Result<bool> {
+pub(crate) fn table_exists(conn: &dyn DbConnection, name: &str) -> Result<bool> {
     conn.table_exists(name)
 }
 
 /// Get the set of column names for a table.
-pub fn get_table_columns(conn: &dyn DbConnection, table: &str) -> Result<HashSet<String>> {
+pub(crate) fn get_table_columns(conn: &dyn DbConnection, table: &str) -> Result<HashSet<String>> {
     conn.get_table_columns(table)
 }
 
 /// Get a mapping of column name -> column type for a table.
-pub fn get_table_column_types(
+pub(crate) fn get_table_column_types(
     conn: &dyn DbConnection,
     table: &str,
 ) -> Result<HashMap<String, String>> {

@@ -1,7 +1,21 @@
 //! Localization, drafts, versions, complex globals, has-many relationships,
 //! bulk operations, count, FTS search, and jobs RPC tests.
 //!
-//! Uses ContentService directly (no network) via ContentApi trait.
+//! Uses `ContentService` directly (no network) via `ContentApi` trait.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -105,9 +119,9 @@ fn setup_service(
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &collections {
             reg.register_collection(def.clone());
         }
@@ -116,11 +130,12 @@ fn setup_service(
         }
     }
 
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -130,9 +145,8 @@ fn setup_service(
     let service = ContentService::new(
         ContentServiceDeps::builder()
             .pool(db_pool.clone())
-            .registry(Registry::snapshot(&registry))
+            .registry(Registry::snapshot(&shared))
             .hook_runner(hook_runner)
-            .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
             .storage(
@@ -157,7 +171,7 @@ fn setup_service(
             ))
             .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
             .token_provider(std::sync::Arc::new(
-                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+                crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
             ))
             .password_provider(std::sync::Arc::new(
                 crap_cms::core::auth::Argon2PasswordProvider,
@@ -181,15 +195,18 @@ fn setup_service_with_locale(
     let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
-    config.locale.locales = locales.iter().map(|s| s.to_string()).collect();
+    config.locale.locales = locales
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
     config.locale.default_locale = locales.first().unwrap_or(&"en").to_string();
     config.locale.fallback = true;
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &collections {
             reg.register_collection(def.clone());
         }
@@ -198,11 +215,12 @@ fn setup_service_with_locale(
         }
     }
 
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -212,9 +230,8 @@ fn setup_service_with_locale(
     let service = ContentService::new(
         ContentServiceDeps::builder()
             .pool(db_pool.clone())
-            .registry(Registry::snapshot(&registry))
+            .registry(Registry::snapshot(&shared))
             .hook_runner(hook_runner)
-            .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
             .storage(
@@ -239,7 +256,7 @@ fn setup_service_with_locale(
             ))
             .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
             .token_provider(std::sync::Arc::new(
-                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+                crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
             ))
             .password_provider(std::sync::Arc::new(
                 crap_cms::core::auth::Argon2PasswordProvider,
@@ -486,10 +503,7 @@ async fn create_and_find_with_locale_all() {
         }
         other => {
             // Some implementations may return it differently
-            panic!(
-                "Expected struct with locale keys for locale=all, got: {:?}",
-                other
-            );
+            panic!("Expected struct with locale keys for locale=all, got: {other:?}");
         }
     }
 }

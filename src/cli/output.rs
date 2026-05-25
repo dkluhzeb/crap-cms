@@ -1,56 +1,29 @@
 //! Colored CLI output primitives. Auto-disables color when piped, and falls
-//! back to ASCII glyphs when the terminal isn't UTF-8 capable.
+//! back to ASCII glyphs (via [`super::glyphs`]) when the terminal isn't
+//! UTF-8 capable.
 
-use std::sync::OnceLock;
+use console::style;
 
-use console::{Term, style};
-
-/// Cached UTF-8 capability check. Computed once per process.
-static UNICODE: OnceLock<bool> = OnceLock::new();
-
-/// Whether to use Unicode glyphs in CLI output.
-///
-/// Resolution order:
-/// 1. `CRAP_NO_UNICODE=1` → force ASCII (escape hatch for tests, niche terms).
-/// 2. `CRAP_FORCE_UNICODE=1` → force Unicode (override broken detection).
-/// 3. `console::Term::stdout().features().wants_emoji()` — checks
-///    `LANG`/`LC_ALL`/`LC_CTYPE` on Unix and the active codepage on Windows.
-fn unicode_supported() -> bool {
-    *UNICODE.get_or_init(|| {
-        if std::env::var("CRAP_NO_UNICODE").is_ok_and(|v| v == "1") {
-            return false;
-        }
-        if std::env::var("CRAP_FORCE_UNICODE").is_ok_and(|v| v == "1") {
-            return true;
-        }
-        Term::stdout().features().wants_emoji()
-    })
-}
-
-/// Pick `unicode` when the terminal can render it, else `ascii`. Both args
-/// must be `&'static str` literals so the return type can stay `&'static str`.
-fn glyph(unicode: &'static str, ascii: &'static str) -> &'static str {
-    if unicode_supported() { unicode } else { ascii }
-}
+use super::glyphs;
 
 /// Print a success message: `<glyph> msg` in green on stdout.
 pub fn success(msg: &str) {
-    println!("{} {}", style(glyph("✓", "+")).green().bold(), msg);
+    println!("{} {}", style(glyphs::success()).green().bold(), msg);
 }
 
 /// Print an error message: `<glyph> msg` in red bold on stderr.
 pub fn error(msg: &str) {
-    eprintln!("{} {}", style(glyph("✗", "x")).red().bold(), msg);
+    eprintln!("{} {}", style(glyphs::error()).red().bold(), msg);
 }
 
 /// Print a warning message: `<glyph> msg` in yellow on stderr.
 pub fn warning(msg: &str) {
-    eprintln!("{} {}", style(glyph("⚠", "!")).yellow().bold(), msg);
+    eprintln!("{} {}", style(glyphs::warning()).yellow().bold(), msg);
 }
 
 /// Print an info message: `<glyph> msg` in blue on stdout.
 pub fn info(msg: &str) {
-    println!("{} {}", style(glyph("→", ">")).blue().bold(), msg);
+    println!("{} {}", style(glyphs::info()).blue().bold(), msg);
 }
 
 /// Print a hint (dimmed) on stdout.
@@ -60,7 +33,7 @@ pub fn hint(msg: &str) {
 
 /// Print a section header: `─── title ───` in bold on stdout.
 pub fn header(title: &str) {
-    let bar = glyph("───", "---");
+    let bar = glyphs::bar();
     println!();
     println!(
         "{} {} {}",
@@ -72,7 +45,7 @@ pub fn header(title: &str) {
 
 /// Print a wizard step indicator: `[n/total] msg` in cyan on stdout.
 pub fn step(n: usize, total: usize, msg: &str) {
-    let bar = glyph("───", "---");
+    let bar = glyphs::bar();
     println!(
         "\n{} {} {}",
         style(bar).dim(),
@@ -162,12 +135,5 @@ mod tests {
     #[test]
     fn kv_status_bad() {
         kv_status("Status", "failing", false);
-    }
-
-    #[test]
-    fn glyph_picks_static_literal() {
-        // Smoke-check the helper returns one of the inputs depending on cap.
-        let g = glyph("✓", "+");
-        assert!(g == "✓" || g == "+");
     }
 }

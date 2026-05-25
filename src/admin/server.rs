@@ -54,13 +54,11 @@ use crate::{
     api::upload::upload_router,
     config::{CompressionMode, CrapConfig},
     core::{
-        JwtSecret, Registry,
-        auth::{SharedPasswordProvider, SharedTokenProvider},
-        cache::SharedCache,
+        CollectionDefinition, JwtSecret, Registry, SharedCache, SharedEventTransport,
+        SharedInvalidationTransport, SharedPasswordProvider, SharedStorage, SharedTokenProvider,
         email::{EmailRenderer, create_email_provider},
-        event::{InProcessInvalidationBus, SharedEventTransport, SharedInvalidationTransport},
+        event::InProcessInvalidationBus,
         rate_limit::LoginRateLimiter,
-        upload::SharedStorage,
     },
     db::{DbConnection, DbPool},
     hooks::HookRunner,
@@ -92,12 +90,18 @@ pub struct AdminStartParams {
 
 impl AdminStartParams {
     /// Create a builder for `AdminStartParams`.
+    #[must_use]
     pub fn builder() -> AdminStartParamsBuilder {
         AdminStartParamsBuilder::new()
     }
 }
 
 /// Start the admin HTTP server (Axum) with all routes, middleware, and static file serving.
+///
+/// # Errors
+///
+/// Returns an error if the TCP listener can't bind, the router fails to
+/// build, or the server hits an unrecoverable runtime error.
 // Excluded from coverage: async server startup orchestration (binds TCP listener, runs Axum server).
 #[cfg(not(tarpaulin_include))]
 pub async fn start(
@@ -140,7 +144,7 @@ pub async fn start(
     let has_auth = registry
         .collections
         .values()
-        .any(|d| d.is_auth_collection());
+        .any(CollectionDefinition::is_auth_collection);
 
     let max_sse_connections = config.live.max_sse_connections;
     let subscriber_send_timeout_ms = config.live.subscriber_send_timeout_ms;
@@ -203,7 +207,7 @@ pub async fn start(
     // (SSE streams and other long-lived connections may not close promptly)
     select! {
         result = server_future => { result?; }
-        _ = async {
+        () = async {
             shutdown_timeout.cancelled().await;
 
             sleep(Duration::from_secs(10)).await;
@@ -216,7 +220,7 @@ pub async fn start(
 }
 
 /// Run the admin server with h2c (HTTP/2 cleartext) support.
-/// Uses hyper-util's auto::Builder which negotiates HTTP/1.1 vs HTTP/2
+/// Uses hyper-util's `auto::Builder` which negotiates HTTP/1.1 vs HTTP/2
 /// on the same port. Reverse proxies can speak HTTP/2 to the backend
 /// without TLS; browsers fall back to HTTP/1.1 gracefully.
 #[cfg(not(tarpaulin_include))]
@@ -244,7 +248,7 @@ async fn serve_h2c(listener: TcpListener, app: Router, shutdown: CancellationTok
                         .ok(); // Connection errors are expected (client disconnect)
                 });
             }
-            _ = shutdown.cancelled() => break,
+            () = shutdown.cancelled() => break,
         }
     }
     Ok(())
@@ -369,32 +373,55 @@ fn protected_routes(
 // Handlebars registry, etc). Tested indirectly through CLI integration tests.
 #[cfg(not(tarpaulin_include))]
 pub fn build_router(state: AdminState) -> Router {
+    let protected = protected_with_auth(&state);
+    let upload_api = upload_router(state.clone());
+
+    let router = assemble_base_router(&state, protected, upload_api);
+    let router = with_request_layers(router, &state);
+    let router = with_cors_layer(router, &state);
+    let router = with_compression_layer(router, &state);
+    let router = with_tracing_layer(router);
+    let router = with_timeout_layer(router, &state);
+
+    router.with_state(state)
+}
+
+/// Build the protected (auth-required) sub-router and, when the deployment
+/// has auth collections or `require_auth = true`, layer the auth middleware
+/// on top.
+#[cfg(not(tarpaulin_include))]
+fn protected_with_auth(state: &AdminState) -> Router<AdminState> {
     let (slug_methods, item_methods, globals_methods) = method_routers();
     let protected = protected_routes(slug_methods, item_methods, globals_methods);
 
-    // Apply auth middleware if auth collections exist OR require_auth is set
     let needs_auth_layer = state.has_auth || state.config.admin.require_auth;
-    let protected = if needs_auth_layer {
+    if needs_auth_layer {
         protected.layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
         ))
     } else {
         protected
-    };
+    }
+}
 
-    let config_dir = &state.config_dir;
-
-    // Mount MCP HTTP endpoint if enabled
+/// Compose the public auth routes, the protected sub-router, the optional
+/// MCP HTTP endpoint, the upload API, and the static-asset / upload-serving
+/// routes into a single base router (no middleware layers yet).
+#[cfg(not(tarpaulin_include))]
+fn assemble_base_router(
+    state: &AdminState,
+    protected: Router<AdminState>,
+    upload_api: Router<AdminState>,
+) -> Router<AdminState> {
     let mcp_route = if state.config.mcp.enabled && state.config.mcp.http {
         Some(post(mcp_http_handler))
     } else {
         None
     };
+    let mcp_router = mcp_route.map_or_else(Router::new, |mcp| Router::new().route("/mcp", mcp));
 
-    let upload_api = upload_router(state.clone());
-
-    let router = Router::new()
+    Router::new()
         .route("/health", get(health_liveness))
         .route("/ready", get(health_readiness))
         .route(
@@ -420,20 +447,26 @@ pub fn build_router(state: AdminState) -> Router {
             get(auth_handlers::auth_callback).post(auth_handlers::auth_callback),
         )
         .merge(protected)
-        .merge(if let Some(mcp) = mcp_route {
-            Router::new().route("/mcp", mcp)
-        } else {
-            Router::new()
-        })
+        .merge(mcp_router)
         .nest("/api", upload_api)
-        .nest_service("/static", static_assets::overlay_service(config_dir))
+        .nest_service("/static", static_assets::overlay_service(&state.config_dir))
         .route(
             "/uploads/{collection_slug}/{filename}",
             get(uploads::serve_upload),
         )
-        .layer(DefaultBodyLimit::max(
-            (state.config.upload.max_file_size + 1024 * 1024) as usize,
-        ))
+}
+
+/// Apply the always-on request layers: body-size limit, CSRF, HTML cache
+/// control, and security headers (X-Frame-Options / CSP / etc).
+#[cfg(not(tarpaulin_include))]
+fn with_request_layers(router: Router<AdminState>, state: &AdminState) -> Router<AdminState> {
+    // 32-bit overflow path falls back to 50 MiB rather than usize::MAX —
+    // an effectively-unbounded request limit would be a DoS vector.
+    let body_limit = usize::try_from(state.config.upload.max_file_size + 1024 * 1024)
+        .unwrap_or(50 * 1024 * 1024);
+
+    router
+        .layer(DefaultBodyLimit::max(body_limit))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             csrf_middleware,
@@ -442,17 +475,23 @@ pub fn build_router(state: AdminState) -> Router {
         .layer(middleware::from_fn_with_state(
             state.clone(),
             security_headers,
-        ));
+        ))
+}
 
-    // Add CORS layer if configured (runs before CSRF in request processing)
-    let router = if let Some(cors) = state.config.cors.build_layer() {
+/// Apply the configured CORS layer (no-op when CORS is disabled).
+#[cfg(not(tarpaulin_include))]
+fn with_cors_layer(router: Router<AdminState>, state: &AdminState) -> Router<AdminState> {
+    if let Some(cors) = state.config.cors.build_layer() {
         router.layer(cors)
     } else {
         router
-    };
+    }
+}
 
-    // Add response compression if configured
-    let router = match state.config.server.compression {
+/// Apply the configured response compression (gzip / brotli / both / off).
+#[cfg(not(tarpaulin_include))]
+fn with_compression_layer(router: Router<AdminState>, state: &AdminState) -> Router<AdminState> {
+    match state.config.server.compression {
         CompressionMode::Off => router,
         CompressionMode::Gzip => {
             router.layer(CompressionLayer::new().no_br().no_deflate().no_zstd())
@@ -461,10 +500,14 @@ pub fn build_router(state: AdminState) -> Router {
             router.layer(CompressionLayer::new().no_gzip().no_deflate().no_zstd())
         }
         CompressionMode::All => router.layer(CompressionLayer::new()),
-    };
+    }
+}
 
-    // Request tracing: per-request spans with method, path, status, latency
-    let router = router.layer(
+/// Apply per-request tracing: spans with method, path, status, latency, and
+/// a 12-char request id propagated through the response.
+#[cfg(not(tarpaulin_include))]
+fn with_tracing_layer(router: Router<AdminState>) -> Router<AdminState> {
+    router.layer(
         TraceLayer::new_for_http()
             .make_span_with(|req: &Request<_>| {
                 let request_id = nanoid!(12);
@@ -485,23 +528,23 @@ pub fn build_router(state: AdminState) -> Router {
                     );
                 },
             ),
-    );
+    )
+}
 
-    // Add request timeout if configured. Uses HandleErrorLayer to convert
-    // tower::timeout errors into 408 Request Timeout responses.
-    let router = if let Some(timeout_secs) = state.config.server.request_timeout {
-        router.layer(
-            ServiceBuilder::new()
-                .layer(HandleErrorLayer::new(|_| async {
-                    StatusCode::REQUEST_TIMEOUT
-                }))
-                .layer(TimeoutLayer::new(Duration::from_secs(timeout_secs))),
-        )
-    } else {
-        router
+/// Apply the configured request-timeout layer, mapping tower timeout errors
+/// to a 408 Request Timeout response.
+#[cfg(not(tarpaulin_include))]
+fn with_timeout_layer(router: Router<AdminState>, state: &AdminState) -> Router<AdminState> {
+    let Some(timeout_secs) = state.config.server.request_timeout else {
+        return router;
     };
-
-    router.with_state(state)
+    router.layer(
+        ServiceBuilder::new()
+            .layer(HandleErrorLayer::new(|_| async {
+                StatusCode::REQUEST_TIMEOUT
+            }))
+            .layer(TimeoutLayer::new(Duration::from_secs(timeout_secs))),
+    )
 }
 
 /// Liveness probe — always returns 200 OK.
@@ -612,7 +655,7 @@ async fn validate_csrf_mutation(
         .headers()
         .get("X-CSRF-Token")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
 
     if let Some(ref ht) = header_token
         && bool::from(ht.as_bytes().ct_eq(cookie_value.as_bytes()))
@@ -686,7 +729,8 @@ async fn csrf_middleware(
         .unwrap_or("")
         .to_string();
 
-    let csrf_cookie = extract_cookie(&cookie_header, "crap_csrf").map(|s| s.to_string());
+    let csrf_cookie = extract_cookie(&cookie_header, auth_handlers::CSRF_COOKIE)
+        .map(std::string::ToString::to_string);
 
     // On mutating methods, validate CSRF token
     if matches!(
@@ -749,10 +793,7 @@ fn ensure_csrf_cookie(
 
     let token = nanoid!(32);
     let secure = if dev_mode { "" } else { "; Secure" };
-    let cookie = format!(
-        "crap_csrf={}; Path=/; SameSite=Strict; Max-Age={}{}",
-        token, lifetime, secure
-    );
+    let cookie = format!("crap_csrf={token}; Path=/; SameSite=Strict; Max-Age={lifetime}{secure}");
 
     if let Ok(value) = cookie.parse() {
         response.headers_mut().append(SET_COOKIE, value);

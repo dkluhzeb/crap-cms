@@ -28,36 +28,9 @@ local id = crap.util.nanoid()
 
 | **Returns** | string | Random nanoid |
 
-## crap.util.json_encode(value)
+## JSON encode/decode
 
-Encode a Lua value (table, string, number, boolean, nil) as a JSON string.
-
-> **Tip:** `crap.json.encode()` and `crap.json.decode()` are aliases — see [crap.json](json.md).
-
-```lua
-local json = crap.util.json_encode({ name = "test", count = 42 })
--- '{"count":42,"name":"test"}'
-```
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `value` | any | Lua value to encode |
-| **Returns** | string | JSON string |
-
-## crap.util.json_decode(str)
-
-Decode a JSON string into a Lua value.
-
-```lua
-local data = crap.util.json_decode('{"name":"test","count":42}')
-print(data.name)   -- "test"
-print(data.count)  -- 42
-```
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `str` | string | JSON string |
-| **Returns** | any | Decoded Lua value |
+See [crap.json](json.md) for `crap.json.encode()` and `crap.json.decode()`.
 
 ## Common Hook Patterns
 
@@ -88,7 +61,7 @@ end
 ```lua
 function M.store_metadata(ctx)
     if type(ctx.data.metadata) == "table" then
-        ctx.data.metadata = crap.util.json_encode(ctx.data.metadata)
+        ctx.data.metadata = crap.json.encode(ctx.data.metadata)
     end
     return ctx
 end

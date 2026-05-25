@@ -2,45 +2,47 @@
   {{!-- Save panel --}}
   {{#> partials/sidebar-panel}}
     <div class="edit-sidebar__actions">
-      {{#if global.has_drafts}}
-        <button
-          type="submit"
-          name="_action"
-          value="publish"
-          class="button button--primary"
-        >
-          {{t "publish"}}
-        </button>
-        <button
-          type="submit"
-          name="_action"
-          value="save_draft"
-          formnovalidate
-          class="button button--secondary"
-        >
-          {{t "save_draft"}}
-        </button>
-        {{#if (eq doc_status "published")}}
+      {{#if perms.update}}
+        {{#if global.has_drafts}}
           <button
             type="submit"
             name="_action"
-            value="unpublish"
-            class="button button--ghost"
+            value="publish"
+            class="button button--primary"
           >
-            {{t "unpublish"}}
+            {{t "publish"}}
+          </button>
+          <button
+            type="submit"
+            name="_action"
+            value="save_draft"
+            formnovalidate
+            class="button button--secondary"
+          >
+            {{t "save_draft"}}
+          </button>
+          {{#if (eq doc_status "published")}}
+            <button
+              type="submit"
+              name="_action"
+              value="unpublish"
+              class="button button--ghost"
+            >
+              {{t "unpublish"}}
+            </button>
+          {{/if}}
+        {{else}}
+          <button
+            type="submit"
+            class="button button--primary"
+          >
+            {{t "save"}}
+            {{global.display_name}}
           </button>
         {{/if}}
-      {{else}}
-        <button
-          type="submit"
-          class="button button--primary"
-        >
-          {{t "save"}}
-          {{global.display_name}}
-        </button>
-      {{/if}}
 
-      {{> partials/loading-indicator variant="sidebar"}}
+        {{> partials/loading-indicator variant="sidebar"}}
+      {{/if}}
       {{> partials/htmx-nav-link href="/admin" label_key="cancel"}}
     </div>
   {{/partials/sidebar-panel}}

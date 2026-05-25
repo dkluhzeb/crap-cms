@@ -3,6 +3,20 @@
 //! Verifies that collections without explicit access functions deny all
 //! operations when `access.default_deny = true` (the production default).
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::sync::Arc;
 
 use tonic::Request;
@@ -41,17 +55,18 @@ fn setup_default_deny() -> TestSetup {
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         reg.register_collection(def);
     }
 
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -60,9 +75,8 @@ fn setup_default_deny() -> TestSetup {
 
     let deps = ContentServiceDeps::builder()
         .pool(db_pool.clone())
-        .registry(Registry::snapshot(&registry))
+        .registry(Registry::snapshot(&shared))
         .hook_runner(hook_runner)
-        .jwt_secret(config.auth.secret.clone())
         .config(config.clone())
         .config_dir(tmp.path().to_path_buf())
         .storage(
@@ -87,7 +101,7 @@ fn setup_default_deny() -> TestSetup {
         )))
         .cache(Arc::new(crap_cms::core::cache::NoneCache))
         .token_provider(Arc::new(crap_cms::core::auth::JwtTokenProvider::new(
-            "test-secret",
+            "test-jwt-secret",
         )))
         .password_provider(Arc::new(crap_cms::core::auth::Argon2PasswordProvider));
 
@@ -105,10 +119,7 @@ fn insert_test_doc(pool: &crap_cms::db::DbPool, id: &str, title: &str) {
     use crap_cms::db::DbConnection;
     let conn = pool.get().unwrap();
     conn.execute(
-        &format!(
-            "INSERT INTO \"posts\" (id, title) VALUES ('{}', '{}')",
-            id, title
-        ),
+        &format!("INSERT INTO \"posts\" (id, title) VALUES ('{id}', '{title}')"),
         &[],
     )
     .unwrap();

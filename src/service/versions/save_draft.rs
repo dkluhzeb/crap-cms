@@ -1,12 +1,10 @@
 //! Draft version save: merge data onto existing doc, snapshot, prune.
 
-use std::collections::HashMap;
-
 use anyhow::Result;
 use serde_json::{Map, Value};
 
 use crate::{
-    core::{Document, FieldDefinition, FieldType, collection::VersionsConfig},
+    core::{Document, DocumentFields, FieldDefinition, FieldType, collection::VersionsConfig},
     db::{DbConnection, query},
 };
 
@@ -21,7 +19,7 @@ pub(crate) fn save_draft_version(
     fields: &[FieldDefinition],
     versions: Option<&VersionsConfig>,
     existing_doc: &Document,
-    final_ctx_data: &HashMap<String, Value>,
+    final_ctx_data: &DocumentFields,
 ) -> Result<()> {
     let mut snapshot_fields = existing_doc.fields.clone();
 
@@ -53,7 +51,7 @@ pub(crate) fn save_draft_version(
 fn merge_join_data_into_snapshot(
     obj: &mut Map<String, Value>,
     fields: &[FieldDefinition],
-    data: &HashMap<String, Value>,
+    data: &DocumentFields,
 ) {
     for field in fields {
         match field.field_type {

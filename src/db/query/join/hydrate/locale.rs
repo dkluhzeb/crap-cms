@@ -7,7 +7,7 @@ use crate::{
 
 /// Resolve the effective locale string for a join table operation.
 /// Returns Some("en") when the field is localized and locale is enabled,
-/// None otherwise (same pattern as locale_write_column for regular columns).
+/// None otherwise (same pattern as `locale_write_column` for regular columns).
 pub(super) fn resolve_join_locale(
     field: &FieldDefinition,
     locale_ctx: Option<&LocaleContext>,
@@ -48,18 +48,18 @@ pub(super) fn resolve_join_fallback_locale(
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
+    use std::collections::HashMap;
+
     use serde_json::json;
 
     use super::*;
-    use crate::{
-        config::LocaleConfig,
-        core::field::{FieldDefinition, FieldType, RelationshipConfig},
-        db::query::{LocaleContext, LocaleMode},
-    };
+    use crate::config::LocaleConfig;
+    use crate::core::{FieldDefinition, FieldType, RelationshipConfig};
+    use crate::db::query::join::arrays::set_array_rows;
+    use crate::db::query::join::hydrate::hydrate_document;
+    use crate::db::query::join::relationships::{find_related_ids, set_related_ids};
+    use crate::db::query::{LocaleContext, LocaleMode};
     use rusqlite::Connection;
-
-    use super::super::super::relationships::{find_related_ids, set_related_ids};
-    use super::super::hydrate_document;
 
     fn localized_tags_field() -> FieldDefinition {
         FieldDefinition::builder("tags", FieldType::Relationship)
@@ -305,8 +305,6 @@ mod tests {
 
     #[test]
     fn hydrate_group_array_locale_fallback() {
-        use super::super::super::arrays::set_array_rows;
-
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE posts (id TEXT PRIMARY KEY, config__label TEXT);
@@ -323,10 +321,7 @@ mod tests {
 
         // Insert EN-only data
         let sub = vec![FieldDefinition::builder("name", FieldType::Text).build()];
-        let rows = vec![std::collections::HashMap::from([(
-            "name".to_string(),
-            "FallbackItem".to_string(),
-        )])];
+        let rows = vec![HashMap::from([("name".to_string(), json!("FallbackItem"))])];
         set_array_rows(
             &conn,
             "posts",

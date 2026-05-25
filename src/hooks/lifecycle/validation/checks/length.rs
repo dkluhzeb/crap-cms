@@ -1,11 +1,9 @@
-use std::collections::HashMap;
-
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, validate::FieldError};
 
-/// Validate min_length / max_length for text/textarea fields.
-/// Skipped for has_many fields (validated per-element in `check_has_many_elements`).
+/// Validate `min_length` / `max_length` for text/textarea fields.
+/// Skipped for `has_many` fields (validated per-element in `check_has_many_elements`).
 pub(crate) fn check_length_bounds(
     field: &FieldDefinition,
     data_key: &str,
@@ -26,38 +24,38 @@ pub(crate) fn check_length_bounds(
     if let Some(min_len) = field.min_length
         && len < min_len
     {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!("{} must be at least {} characters", field.name, min_len),
-            "validation.min_length",
-            HashMap::from([
-                ("field".to_string(), field.name.clone()),
-                ("min".to_string(), min_len.to_string()),
-            ]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} must be at least {} characters", field.name, min_len),
+                "validation.min_length",
+            )
+            .with_param("field", field.name.clone())
+            .with_param("min", min_len.to_string()),
+        );
     }
 
     if let Some(max_len) = field.max_length
         && len > max_len
     {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!("{} must be at most {} characters", field.name, max_len),
-            "validation.max_length",
-            HashMap::from([
-                ("field".to_string(), field.name.clone()),
-                ("max".to_string(), max_len.to_string()),
-            ]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} must be at most {} characters", field.name, max_len),
+                "validation.max_length",
+            )
+            .with_param("field", field.name.clone())
+            .with_param("max", max_len.to_string()),
+        );
     }
 }
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
-    use crate::core::field::{FieldDefinition, FieldType};
+    use crate::core::DocumentFields;
+    use crate::core::{FieldDefinition, FieldType};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
-    use std::collections::HashMap;
 
     #[test]
     fn test_validate_min_length_fails() {
@@ -70,7 +68,7 @@ mod tests {
                 .min_length(5)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".to_string(), json!("ab"));
         let result = validate_fields_inner(
             &lua,
@@ -97,7 +95,7 @@ mod tests {
                 .min_length(3)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".to_string(), json!("hello"));
         let result = validate_fields_inner(
             &lua,
@@ -119,7 +117,7 @@ mod tests {
                 .max_length(5)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".to_string(), json!("toolongvalue"));
         let result = validate_fields_inner(
             &lua,
@@ -146,7 +144,7 @@ mod tests {
                 .max_length(10)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".to_string(), json!("short"));
         let result = validate_fields_inner(
             &lua,
@@ -172,7 +170,7 @@ mod tests {
                 .max_length(4)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".to_string(), json!("café"));
         let result = validate_fields_inner(
             &lua,
@@ -188,7 +186,7 @@ mod tests {
                 .min_length(4)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".to_string(), json!("你好世界"));
         let result = validate_fields_inner(
             &lua,
@@ -213,7 +211,7 @@ mod tests {
                 .min_length(5)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,

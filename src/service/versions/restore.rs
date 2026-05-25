@@ -1,6 +1,6 @@
 //! Version restore operations for collections and globals.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use anyhow::Context as _;
 use serde_json::Value;
@@ -8,17 +8,17 @@ use tracing::warn;
 
 use crate::{
     config::LocaleConfig,
-    core::{Document, FieldDefinition, FieldType, event::EventOperation},
+    core::{Document, DocumentFields, FieldDefinition, FieldType, event::EventOperation},
     db::{AccessResult, query, query::helpers::global_table},
     hooks::{LuaCrudInfra, ValidationCtx},
     service::{RunnerWriteHooks, ServiceContext, ServiceError, helpers},
 };
 
-/// Convert a snapshot JSON object into a `HashMap<String, Value>` suitable
+/// Convert a snapshot JSON object into a `DocumentFields` suitable
 /// for `validate_fields`. The snapshot's top-level keys are field names
 /// (group fields appear in either flat `seo__title` or nested `seo: {…}`
 /// form — the validator handles both via the schema walk).
-fn snapshot_to_validation_data(snapshot: &Value) -> HashMap<String, Value> {
+fn snapshot_to_validation_data(snapshot: &Value) -> DocumentFields {
     snapshot
         .as_object()
         .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
@@ -84,13 +84,6 @@ fn warn_on_snapshot_drift(
     slug: &str,
     version_id: &str,
 ) {
-    let Some(obj) = snapshot.as_object() else {
-        return;
-    };
-
-    let mut known: HashSet<String> = HashSet::new();
-    collect_known_keys(fields, "", &mut known);
-
     // Accept standard document metadata + locale suffixes transparently.
     const METADATA: &[&str] = &[
         "id",
@@ -100,6 +93,13 @@ fn warn_on_snapshot_drift(
         "_trashed_at",
         "_ref_count",
     ];
+
+    let Some(obj) = snapshot.as_object() else {
+        return;
+    };
+
+    let mut known: HashSet<String> = HashSet::new();
+    collect_known_keys(fields, "", &mut known);
 
     for key in obj.keys() {
         if METADATA.contains(&key.as_str()) {
@@ -130,6 +130,11 @@ type Result<T> = std::result::Result<T, ServiceError>;
 ///
 /// **Pool mode** (`ctx.pool` set): opens a transaction, commits after success.
 /// **Conn mode** (`ctx.conn` set, Lua CRUD path): runs on the existing connection.
+///
+/// # Errors
+///
+/// Returns `AccessDenied`, `NotFound`, or `Validation` errors as appropriate.
+/// Returns a backend error if the DB transaction or persistence fails.
 pub fn restore_collection_version(
     ctx: &ServiceContext,
     document_id: &str,
@@ -151,7 +156,7 @@ fn restore_collection_version_pool(
 ) -> Result<Document> {
     let pool = ctx.pool.context("pool required")?;
     let runner = ctx.runner()?;
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
@@ -208,7 +213,7 @@ pub(crate) fn restore_collection_version_core(
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     let access = write_hooks.check_access(
         def.access.update.as_deref(),
@@ -263,6 +268,12 @@ pub(crate) fn restore_collection_version_core(
 }
 
 /// Restore a global document to a specific version snapshot.
+///
+/// # Errors
+///
+/// Returns `AccessDenied`, `NotFound`, `HookError` (for constrained access on
+/// a global, which is not supported), or `Validation` errors as appropriate.
+/// Returns a backend error if the DB transaction or persistence fails.
 pub fn restore_global_version(
     ctx: &ServiceContext,
     version_id: &str,
@@ -270,7 +281,7 @@ pub fn restore_global_version(
 ) -> Result<Document> {
     let pool = ctx.pool.context("pool required")?;
     let runner = ctx.runner()?;
-    let def = ctx.global_def();
+    let def = ctx.global_def()?;
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
@@ -312,7 +323,7 @@ pub(crate) fn restore_global_version_core(
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
-    let def = ctx.global_def();
+    let def = ctx.global_def()?;
 
     let access = write_hooks.check_access(def.access.update.as_deref(), ctx.user, None, None)?;
 
@@ -394,7 +405,7 @@ mod tests {
     }
 
     /// Regression: when a snapshot contains keys that no longer exist in the
-    /// current schema, warn_on_snapshot_drift must emit a `warn!` for each.
+    /// current schema, `warn_on_snapshot_drift` must emit a `warn!` for each.
     /// We can't capture tracing output without extra deps, so at minimum assert
     /// that (1) the drift helper does not panic for the drift scenario and
     /// (2) `collect_known_keys` does not accept the stale key — the warn path

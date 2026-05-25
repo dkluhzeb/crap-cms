@@ -1,7 +1,6 @@
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
-use std::collections::HashMap;
 
 /// Check required constraint. Skipped for checkboxes, drafts, and partial updates.
 /// For Array and has-many Relationship, "required" means at least one item.
@@ -26,12 +25,14 @@ pub(crate) fn check_required(
         return;
     }
 
-    errors.push(FieldError::with_key(
-        data_key.to_owned(),
-        format!("{} is required", field.name),
-        "validation.required",
-        HashMap::from([("field".to_string(), field.name.clone())]),
-    ));
+    errors.push(
+        FieldError::with_key(
+            data_key.to_owned(),
+            format!("{} is required", field.name),
+            "validation.required",
+        )
+        .with_param("field", field.name.clone()),
+    );
 }
 
 /// Check if a field value is "present" for required validation purposes.
@@ -48,9 +49,9 @@ fn is_value_present(field: &FieldDefinition, value: Option<&Value>, is_empty: bo
     if field.has_many {
         // has_many with parent column: value is a JSON array string
         return match value {
-            Some(Value::String(s)) => serde_json::from_str::<Vec<Value>>(s)
-                .map(|arr| !arr.is_empty())
-                .unwrap_or(!s.is_empty()),
+            Some(Value::String(s)) => {
+                serde_json::from_str::<Vec<Value>>(s).map_or(!s.is_empty(), |arr| !arr.is_empty())
+            }
             _ => false,
         };
     }
@@ -61,10 +62,10 @@ fn is_value_present(field: &FieldDefinition, value: Option<&Value>, is_empty: bo
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
-    use crate::core::field::RelationshipConfig;
+    use crate::core::DocumentFields;
+    use crate::core::RelationshipConfig;
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
-    use std::collections::HashMap;
 
     #[test]
     fn test_validate_required_field_empty_string() {
@@ -77,7 +78,7 @@ mod tests {
                 .required(true)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -102,7 +103,7 @@ mod tests {
                 .required(true)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".to_string(), json!(null));
         let result = validate_fields_inner(
             &lua,
@@ -124,7 +125,7 @@ mod tests {
                 .required(true)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -147,7 +148,7 @@ mod tests {
                 .relationship(RelationshipConfig::new("tags", true))
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!([]));
         let result = validate_fields_inner(
             &lua,
@@ -171,7 +172,7 @@ mod tests {
                 .relationship(RelationshipConfig::new("tags", true))
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(["t1", "t2"]));
         let result = validate_fields_inner(
             &lua,
@@ -193,7 +194,7 @@ mod tests {
                 .required(true)
                 .build(),
         ];
-        let data = HashMap::new();
+        let data = DocumentFields::new();
         let result = validate_fields_inner(
             &lua,
             &fields,
@@ -216,7 +217,7 @@ mod tests {
                 .required(true)
                 .build(),
         ];
-        let data = HashMap::new();
+        let data = DocumentFields::new();
         let result = validate_fields_inner(
             &lua,
             &fields,
@@ -237,7 +238,7 @@ mod tests {
                 .required(true)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("items".to_string(), json!([]));
         let result = validate_fields_inner(
             &lua,
@@ -263,7 +264,7 @@ mod tests {
                 .required(true)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("items".to_string(), json!([{"x": 1}]));
         let result = validate_fields_inner(
             &lua,

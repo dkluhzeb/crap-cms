@@ -2,6 +2,22 @@
 //!
 //! Covers: collection CRUD, search/filter/sort, validation, versioning, uploads (API).
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
+use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -14,12 +30,13 @@ use crap_cms::admin::server::build_router;
 use crap_cms::admin::templates;
 use crap_cms::admin::translations::Translations;
 use crap_cms::config::{CrapConfig, LocaleConfig};
+use crap_cms::core::DocumentFields;
 use crap_cms::core::auth;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
 use crap_cms::core::{JwtSecret, Registry};
-use crap_cms::db::{migrate, pool, query};
+use crap_cms::db::{DbConnection, DbValue, migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -53,10 +70,7 @@ fn make_users_def() -> CollectionDefinition {
             .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth {
-        enabled: true,
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled());
     def
 }
 
@@ -64,7 +78,7 @@ struct TestApp {
     _tmp: tempfile::TempDir,
     router: axum::Router,
     pool: crap_cms::db::DbPool,
-    registry: crap_cms::core::SharedRegistry,
+    registry: Arc<crap_cms::core::Registry>,
     jwt_secret: JwtSecret,
 }
 
@@ -85,9 +99,9 @@ fn setup_app_with_config(
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &collections {
             reg.register_collection(def.clone());
         }
@@ -96,11 +110,12 @@ fn setup_app_with_config(
         }
     }
 
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -110,16 +125,16 @@ fn setup_app_with_config(
         .expect("create handlebars");
     let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
-    let has_auth = {
-        let reg = registry.read().unwrap();
-        reg.collections.values().any(|d| d.is_auth_collection())
-    };
+    let has_auth = registry
+        .collections
+        .values()
+        .any(crap_cms::core::CollectionDefinition::is_auth_collection);
 
     let state = AdminState {
         config,
         config_dir: tmp.path().to_path_buf(),
         pool: db_pool.clone(),
-        registry: Registry::snapshot(&registry),
+        registry: Arc::clone(&registry),
         handlebars,
         hook_runner,
         jwt_secret: "test-jwt-secret".into(),
@@ -152,7 +167,7 @@ fn setup_app_with_config(
         )
         .unwrap(),
         token_provider: std::sync::Arc::new(crap_cms::core::auth::JwtTokenProvider::new(
-            "test-secret",
+            "test-jwt-secret",
         )),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,
@@ -161,7 +176,7 @@ fn setup_app_with_config(
         ),
         populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
         cache: None,
-        custom_pages: Default::default(),
+        custom_pages: crap_cms::admin::custom_pages::CustomPageRegistry::default(),
     };
 
     let router = build_router(state);
@@ -176,16 +191,16 @@ fn setup_app_with_config(
 }
 
 fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
-    let reg = app.registry.read().unwrap();
+    let reg = &app.registry;
     let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([
-        ("email".to_string(), email.to_string()),
-        ("name".to_string(), "Test User".to_string()),
-    ]);
+    let data: DocumentFields = HashMap::from([
+        ("email".to_string(), json!(email)),
+        ("name".to_string(), json!("Test User")),
+    ])
+    .into();
     let doc = query::create(&tx, "users", &def, &data, None).unwrap();
     query::update_password(&tx, "users", &doc.id, password).unwrap();
     tx.commit().unwrap();
@@ -193,19 +208,28 @@ fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
 }
 
 fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
+    // `update_password` bumps `_session_version` to 1 the moment a password
+    // is set; the evaluator rejects a default-built Claims (session_version
+    // = 0) as `Invalid(StaleSession)`. Read the user's current version so
+    // the test cookie matches the DB.
+    let conn = app.pool.get().unwrap();
+    let session_version =
+        crap_cms::db::query::auth::get_session_version(&conn, "users", user_id).unwrap_or(0);
+    drop(conn);
     let claims = auth::Claims::builder(user_id, "users")
         .email(email)
+        .session_version(session_version)
         .exp((chrono::Utc::now().timestamp() as u64) + 3600)
         .build()
         .unwrap();
     let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();
-    format!("crap_session={}", token)
+    format!("crap_session={token}")
 }
 
 const TEST_CSRF: &str = "test-csrf-token-12345";
 
 fn auth_and_csrf(auth_cookie: &str) -> String {
-    format!("{}; crap_csrf={}", auth_cookie, TEST_CSRF)
+    format!("{auth_cookie}; crap_csrf={TEST_CSRF}")
 }
 
 async fn body_string(body: Body) -> String {
@@ -394,7 +418,7 @@ async fn list_items_url_status_filter_narrows_drafts_only() {
     let cookie = make_auth_cookie(&app, &user_id, "statusf@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
@@ -405,15 +429,13 @@ async fn list_items_url_status_filter_narrows_drafts_only() {
     // `persist::create_document` does internally when `is_draft = true`,
     // we just skip the service wrapper here to keep the test focused on
     // the filter pipeline.
-    let mut data1 = std::collections::HashMap::new();
-    data1.insert("title".to_string(), "Live Article".to_string());
+    let mut data1 = DocumentFields::new();
+    data1.insert("title".to_string(), json!("Live Article"));
     query::create(&tx, "posts", &def, &data1, None).expect("publish create ok");
 
-    let mut data2 = std::collections::HashMap::new();
-    data2.insert("title".to_string(), "Pending Draft".to_string());
+    let mut data2 = DocumentFields::new();
+    data2.insert("title".to_string(), json!("Pending Draft"));
     let draft_doc = query::create(&tx, "posts", &def, &data2, None).expect("draft create ok");
-    use crap_cms::db::DbConnection;
-    use crap_cms::db::DbValue;
     tx.execute(
         "UPDATE posts SET _status = 'draft' WHERE id = ?1",
         &[DbValue::Text(draft_doc.id.to_string())],
@@ -560,14 +582,14 @@ async fn list_items_or_clause_widens_results() {
     let cookie = make_auth_cookie(&app, &user_id, "or-filter@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     for title in ["Alpha", "Bravo", "Charlie"] {
-        let mut data = std::collections::HashMap::new();
-        data.insert("title".to_string(), title.to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!(title));
         query::create(&tx, "posts", &def, &data, None).unwrap();
     }
     tx.commit().unwrap();
@@ -670,18 +692,18 @@ async fn list_items_url_filter_narrows_results() {
 
     // Insert one draft + one published post.
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let mut data1 = std::collections::HashMap::new();
-    data1.insert("title".to_string(), "Draft Post".to_string());
-    data1.insert("status".to_string(), "draft".to_string());
+    let mut data1 = DocumentFields::new();
+    data1.insert("title".to_string(), json!("Draft Post"));
+    data1.insert("status".to_string(), json!("draft"));
     query::create(&tx, "posts", &def, &data1, None).unwrap();
-    let mut data2 = std::collections::HashMap::new();
-    data2.insert("title".to_string(), "Published Post".to_string());
-    data2.insert("status".to_string(), "published".to_string());
+    let mut data2 = DocumentFields::new();
+    data2.insert("title".to_string(), json!("Published Post"));
+    data2.insert("status".to_string(), json!("published"));
     query::create(&tx, "posts", &def, &data2, None).unwrap();
     tx.commit().unwrap();
     drop(conn);
@@ -806,8 +828,7 @@ async fn create_action_creates_document() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::FOUND || status == StatusCode::OK,
-        "Create action should redirect or HX-Redirect, got {}",
-        status
+        "Create action should redirect or HX-Redirect, got {status}"
     );
 }
 
@@ -818,12 +839,12 @@ async fn edit_form_returns_200() {
     let cookie = make_auth_cookie(&app, &user_id, "edit@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([("title".to_string(), "Edit Me".to_string())]);
+    let data: DocumentFields = HashMap::from([("title".to_string(), json!("Edit Me"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -847,12 +868,12 @@ async fn update_action_updates_document() {
     let cookie = make_auth_cookie(&app, &user_id, "update@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([("title".to_string(), "Original".to_string())]);
+    let data: DocumentFields = HashMap::from([("title".to_string(), json!("Original"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -871,8 +892,7 @@ async fn update_action_updates_document() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::FOUND || status == StatusCode::OK,
-        "Update action should redirect or HX-Redirect, got {}",
-        status
+        "Update action should redirect or HX-Redirect, got {status}"
     );
 }
 
@@ -883,12 +903,12 @@ async fn delete_action_removes_document() {
     let cookie = make_auth_cookie(&app, &user_id, "delete@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([("title".to_string(), "Delete Me".to_string())]);
+    let data: DocumentFields = HashMap::from([("title".to_string(), json!("Delete Me"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -906,8 +926,7 @@ async fn delete_action_removes_document() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::FOUND || status == StatusCode::OK,
-        "Delete action should redirect or return 200, got {}",
-        status
+        "Delete action should redirect or return 200, got {status}"
     );
 }
 
@@ -939,13 +958,13 @@ async fn list_items_with_search() {
     let cookie = make_auth_cookie(&app, &user_id, "search@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     for title in &["Zebra Unique Alpha", "Beta Common", "Gamma Common"] {
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let data = std::collections::HashMap::from([("title".to_string(), title.to_string())]);
+        let data: DocumentFields = HashMap::from([("title".to_string(), json!(title))]).into();
         query::create(&tx, "posts", &def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -992,8 +1011,7 @@ async fn create_action_with_locale() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Localized create with locale param should succeed, got {}",
-        status
+        "Localized create with locale param should succeed, got {status}"
     );
 }
 
@@ -1004,13 +1022,13 @@ async fn delete_action_returns_redirect() {
     let cookie = make_auth_cookie(&app, &user_id, "delredir@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data =
-        std::collections::HashMap::from([("title".to_string(), "To Delete Redir".to_string())]);
+    let data: DocumentFields =
+        HashMap::from([("title".to_string(), json!("To Delete Redir"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -1028,8 +1046,7 @@ async fn delete_action_returns_redirect() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::FOUND || status == StatusCode::OK,
-        "Delete action should redirect or return 200 with HX-Redirect, got {}",
-        status
+        "Delete action should redirect or return 200 with HX-Redirect, got {status}"
     );
 
     if status == StatusCode::SEE_OTHER || status == StatusCode::FOUND {
@@ -1040,8 +1057,7 @@ async fn delete_action_returns_redirect() {
         if let Some(loc) = location {
             assert!(
                 loc.contains("/admin/collections/posts"),
-                "Delete redirect should point to collection list, got {}",
-                loc
+                "Delete redirect should point to collection list, got {loc}"
             );
         }
     }
@@ -1093,8 +1109,7 @@ async fn delete_nonexistent_document() {
             || status == StatusCode::OK
             || status == StatusCode::FOUND
             || status == StatusCode::NOT_FOUND,
-        "Delete nonexistent should return redirect or not found, got {}",
-        status
+        "Delete nonexistent should return redirect or not found, got {status}"
     );
 }
 
@@ -1125,8 +1140,7 @@ async fn update_nonexistent_document() {
             || status == StatusCode::FOUND
             || status == StatusCode::NOT_FOUND
             || status == StatusCode::INTERNAL_SERVER_ERROR,
-        "Update nonexistent should return redirect or error, got {}",
-        status
+        "Update nonexistent should return redirect or error, got {status}"
     );
 }
 
@@ -1139,13 +1153,14 @@ async fn collection_list_pagination_multi_page_shows_nav() {
     let cookie = make_auth_cookie(&app, &user_id, "page@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     for i in 0..5 {
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let data = std::collections::HashMap::from([("title".to_string(), format!("Post {}", i))]);
+        let data: DocumentFields =
+            HashMap::from([("title".to_string(), json!(format!("Post {}", i)))]).into();
         query::create(&tx, "posts", &def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -1223,13 +1238,14 @@ async fn collection_list_pagination_single_page_no_nav() {
     let cookie = make_auth_cookie(&app, &user_id, "single@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     for i in 0..3 {
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let data = std::collections::HashMap::from([("title".to_string(), format!("Post {}", i))]);
+        let data: DocumentFields =
+            HashMap::from([("title".to_string(), json!(format!("Post {}", i)))]).into();
         query::create(&tx, "posts", &def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -1282,17 +1298,16 @@ async fn localized_collection_list_shows_documents() {
     let cookie = make_auth_cookie(&app, &user_id, "admin@test.com");
 
     {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         let def = reg.get_collection("pages").unwrap().clone();
-        drop(reg);
 
         let locale_ctx = query::LocaleContext {
             mode: query::LocaleMode::Single("en".to_string()),
             config: make_locale_config(),
         };
-        let mut data = std::collections::HashMap::new();
-        data.insert("title".to_string(), "Hello World".to_string());
-        data.insert("body".to_string(), "Page body".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Hello World"));
+        data.insert("body".to_string(), json!("Page body"));
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         query::create(&tx, "pages", &def, &data, Some(&locale_ctx)).unwrap();
@@ -1340,8 +1355,7 @@ async fn localized_collection_create_via_form() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Localized create should redirect or HX-Redirect, got {}",
-        status
+        "Localized create should redirect or HX-Redirect, got {status}"
     );
 }
 
@@ -1352,17 +1366,16 @@ async fn localized_collection_edit_page_returns_200() {
     let cookie = make_auth_cookie(&app, &user_id, "admin@test.com");
 
     let doc_id = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         let def = reg.get_collection("pages").unwrap().clone();
-        drop(reg);
 
         let locale_ctx = query::LocaleContext {
             mode: query::LocaleMode::Single("en".to_string()),
             config: make_locale_config(),
         };
-        let mut data = std::collections::HashMap::new();
-        data.insert("title".to_string(), "Editable Page".to_string());
-        data.insert("body".to_string(), "Content".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Editable Page"));
+        data.insert("body".to_string(), json!("Content"));
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         let doc = query::create(&tx, "pages", &def, &data, Some(&locale_ctx)).unwrap();
@@ -1373,7 +1386,7 @@ async fn localized_collection_edit_page_returns_200() {
     let resp = app
         .router
         .oneshot(
-            Request::get(format!("/admin/collections/pages/{}", doc_id))
+            Request::get(format!("/admin/collections/pages/{doc_id}"))
                 .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -1395,16 +1408,15 @@ async fn localized_collection_delete_succeeds() {
     let cookie = make_auth_cookie(&app, &user_id, "admin@test.com");
 
     let doc_id = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         let def = reg.get_collection("pages").unwrap().clone();
-        drop(reg);
 
         let locale_ctx = query::LocaleContext {
             mode: query::LocaleMode::Single("en".to_string()),
             config: make_locale_config(),
         };
-        let mut data = std::collections::HashMap::new();
-        data.insert("title".to_string(), "To Delete".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("To Delete"));
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         let doc = query::create(&tx, "pages", &def, &data, Some(&locale_ctx)).unwrap();
@@ -1415,7 +1427,7 @@ async fn localized_collection_delete_succeeds() {
     let resp = app
         .router
         .oneshot(
-            Request::delete(format!("/admin/collections/pages/{}", doc_id))
+            Request::delete(format!("/admin/collections/pages/{doc_id}"))
                 .header("cookie", auth_and_csrf(&cookie))
                 .header("X-CSRF-Token", TEST_CSRF)
                 .body(Body::empty())
@@ -1426,8 +1438,7 @@ async fn localized_collection_delete_succeeds() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::FOUND || status == StatusCode::OK,
-        "expected redirect after delete, got {}",
-        status
+        "expected redirect after delete, got {status}"
     );
 }
 
@@ -1438,16 +1449,15 @@ async fn localized_collection_search_returns_200() {
     let cookie = make_auth_cookie(&app, &user_id, "admin@test.com");
 
     {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         let def = reg.get_collection("pages").unwrap().clone();
-        drop(reg);
 
         let locale_ctx = query::LocaleContext {
             mode: query::LocaleMode::Single("en".to_string()),
             config: make_locale_config(),
         };
-        let mut data = std::collections::HashMap::new();
-        data.insert("title".to_string(), "Searchable Page".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Searchable Page"));
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         query::create(&tx, "pages", &def, &data, Some(&locale_ctx)).unwrap();
@@ -1476,15 +1486,16 @@ async fn collection_versions_page_returns_200() {
     let cookie = make_auth_cookie(&app, &user_id, "cvp@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("articles").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([
-        ("title".to_string(), "Versioned Article".to_string()),
-        ("body".to_string(), "Content".to_string()),
-    ]);
+    let data: DocumentFields = HashMap::from([
+        ("title".to_string(), json!("Versioned Article")),
+        ("body".to_string(), json!("Content")),
+    ])
+    .into();
     let doc = query::create(&tx, "articles", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -1525,8 +1536,7 @@ async fn collection_create_with_draft() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Create draft should succeed, got {}",
-        status
+        "Create draft should succeed, got {status}"
     );
 }
 
@@ -1539,13 +1549,14 @@ async fn list_items_with_pagination_renders_docs() {
     let cookie = make_auth_cookie(&app, &user_id, "page@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     for i in 0..25 {
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let data = std::collections::HashMap::from([("title".to_string(), format!("Post {}", i))]);
+        let data: DocumentFields =
+            HashMap::from([("title".to_string(), json!(format!("Post {}", i)))]).into();
         query::create(&tx, "posts", &def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -1597,16 +1608,14 @@ async fn list_items_with_search_and_pagination() {
     let cookie = make_auth_cookie(&app, &user_id, "sp@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     for i in 0..5 {
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let data = std::collections::HashMap::from([(
-            "title".to_string(),
-            format!("Searchable Item {}", i),
-        )]);
+        let data: DocumentFields =
+            HashMap::from([("title".to_string(), json!(format!("Searchable Item {}", i)))]).into();
         let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
         query::fts::fts_upsert(&tx, "posts", &doc, Some(&def)).unwrap();
         tx.commit().unwrap();
@@ -1659,8 +1668,7 @@ async fn create_action_validation_error_missing_required_field() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Expected 200 (validation error re-render) or redirect, got {}",
-        status
+        "Expected 200 (validation error re-render) or redirect, got {status}"
     );
 }
 
@@ -1689,8 +1697,7 @@ async fn create_action_auth_collection_with_password() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Create auth collection user should succeed, got {}",
-        status
+        "Create auth collection user should succeed, got {status}"
     );
 }
 

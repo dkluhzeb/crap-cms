@@ -1,16 +1,17 @@
 //! Document context — the typed shape of `{{document.*}}` for edit/delete pages.
 
-use std::collections::HashMap;
-
 use schemars::JsonSchema;
 use serde::Serialize;
-use serde_json::Value;
 
-use crate::core::Document;
+use crate::{
+    core::{Document, DocumentFields},
+    typegen::LuaAnnotation,
+};
 
 /// A document reference exposed at `{{document.*}}`. The `data` map carries the
 /// document's field values (untyped — typing field values is part of 1.C.2).
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.document")]
 pub struct DocumentRef {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -20,7 +21,8 @@ pub struct DocumentRef {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<HashMap<String, Value>>,
+    #[lua(ty = "table")]
+    pub data: Option<DocumentFields>,
 }
 
 impl DocumentRef {

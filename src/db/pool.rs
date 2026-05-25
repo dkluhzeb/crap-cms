@@ -15,18 +15,18 @@ use crate::config::CrapConfig;
 
 use super::connection::BoxedConnection;
 #[cfg(feature = "sqlite")]
-use super::sqlite::SqliteConnection;
+use crate::db::backend::sqlite::SqliteConnection;
 
 /// Trait for pool backends.
 ///
-/// Each backend (SQLite, PostgreSQL, ...) implements this once.
+/// Each backend (`SQLite`, `PostgreSQL`, ...) implements this once.
 /// `DbPool` holds an `Arc<dyn PoolBackend>` and delegates `get()` to it.
 pub(crate) trait PoolBackend: Send + Sync {
     fn get(&self) -> Result<BoxedConnection>;
     fn kind(&self) -> &'static str;
 }
 
-/// SQLite pool backend.
+/// `SQLite` pool backend.
 #[cfg(feature = "sqlite")]
 struct SqlitePoolBackend {
     pool: Pool<SqliteConnectionManager>,
@@ -55,17 +55,24 @@ pub struct DbPool {
 
 impl DbPool {
     /// Get a connection from the pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the pool is exhausted or the backend fails to
+    /// hand out a connection.
     pub fn get(&self) -> Result<BoxedConnection> {
         self.inner.get()
     }
 
     /// Return the backend identifier (e.g. `"sqlite"`, `"postgres"`).
+    #[must_use]
     pub fn kind(&self) -> &str {
         self.inner.kind()
     }
 
-    /// Wrap an existing r2d2 SQLite pool. Used in tests.
+    /// Wrap an existing r2d2 `SQLite` pool. Used in tests.
     #[cfg(feature = "sqlite")]
+    #[must_use]
     pub fn from_pool(pool: Pool<SqliteConnectionManager>) -> Self {
         Self {
             inner: Arc::new(SqlitePoolBackend { pool }),
@@ -73,7 +80,7 @@ impl DbPool {
     }
 
     /// Create from an `Arc<dyn PoolBackend>` (used by backend-specific pool constructors).
-    #[cfg_attr(not(feature = "postgres"), allow(dead_code))]
+    #[cfg(feature = "postgres")]
     pub(crate) fn from_backend(backend: Arc<dyn PoolBackend>) -> Self {
         Self { inner: backend }
     }
@@ -81,8 +88,13 @@ impl DbPool {
 
 /// Create a connection pool based on the configured backend.
 ///
-/// `config_dir` is used by the SQLite backend to resolve relative DB paths;
+/// `config_dir` is used by the `SQLite` backend to resolve relative DB paths;
 /// the Postgres backend ignores it (connection is fully URL-driven).
+///
+/// # Errors
+///
+/// Returns an error if the backend pool cannot be initialized (bad
+/// configuration, unreachable database, missing feature flag, …).
 pub fn create_pool(config_dir: &Path, config: &CrapConfig) -> Result<DbPool> {
     // Silence unused-param warning when built without the sqlite feature.
     let _ = config_dir;
@@ -91,7 +103,7 @@ pub fn create_pool(config_dir: &Path, config: &CrapConfig) -> Result<DbPool> {
         #[cfg(feature = "sqlite")]
         "sqlite" => create_sqlite_pool(config_dir, config),
         #[cfg(feature = "postgres")]
-        "postgres" => super::postgres::create_pool(config),
+        "postgres" => crate::db::backend::postgres::create_pool(config),
         other => anyhow::bail!(
             "Unknown database backend '{}'. Supported: {}",
             other,
@@ -111,7 +123,7 @@ fn supported_backends() -> &'static str {
     return "(none — enable the 'sqlite' or 'postgres' feature)";
 }
 
-/// Create a SQLite connection pool.
+/// Create a `SQLite` connection pool.
 #[cfg(feature = "sqlite")]
 fn create_sqlite_pool(config_dir: &Path, config: &CrapConfig) -> Result<DbPool> {
     let db_path = config.db_path(config_dir);
@@ -136,6 +148,7 @@ fn create_sqlite_pool(config_dir: &Path, config: &CrapConfig) -> Result<DbPool> 
             cache_size: config.database.cache_size,
             mmap_size: config.database.mmap_size,
             wal_autocheckpoint: config.database.wal_autocheckpoint,
+            stmt_cache_capacity: config.database.stmt_cache_capacity,
         }))
         .test_on_check_out(false)
         .build(manager)
@@ -151,6 +164,7 @@ struct SqlitePragmas {
     cache_size: i64,
     mmap_size: u64,
     wal_autocheckpoint: u32,
+    stmt_cache_capacity: usize,
 }
 
 #[cfg(feature = "sqlite")]
@@ -167,6 +181,16 @@ impl r2d2::CustomizeConnection<rusqlite::Connection, rusqlite::Error> for Sqlite
              PRAGMA temp_store = MEMORY;",
             self.busy_timeout, self.wal_autocheckpoint, self.cache_size, self.mmap_size
         ))?;
+        // rusqlite's default prepared-statement cache holds 16 entries
+        // per connection. With more than ~16 distinct SQL strings on
+        // the hot path (find + per-doc hydrate joins + auth resolve),
+        // the LRU evicts and the next call re-runs `sqlite3_prepare_v2`
+        // → the query planner → SQLite's internal allocator (globally
+        // locked). Profiling at concurrency 50 attributed ~53% of CPU
+        // to `native_queued_spin_lock_slowpath` inside
+        // `sqlite3LockAndPrepare` before this knob was wired up.
+        // Configurable via `[database] stmt_cache_capacity`.
+        conn.set_prepared_statement_cache_capacity(self.stmt_cache_capacity);
         Ok(())
     }
 }
@@ -267,5 +291,95 @@ mod tests {
             .expect("PRAGMA wal_autocheckpoint failed");
         let checkpoint = row.unwrap().get_i64("wal_autocheckpoint").unwrap();
         assert_eq!(checkpoint, 1000, "wal_autocheckpoint should be 1000");
+    }
+
+    /// Production-critical: foreign-key cascade must fire when a parent
+    /// row is deleted through a pooled connection. If this regresses,
+    /// every hard-delete of a versioned document leaves orphan rows in
+    /// `_versions_<collection>` that grow without bound. Mirrors the
+    /// real `_versions_posts → posts(id) ON DELETE CASCADE` schema.
+    #[test]
+    fn fk_cascade_fires_on_pooled_connection_delete() {
+        let (_dir, pool) = temp_pool();
+        let conn = pool.get().expect("failed to get connection");
+
+        conn.execute_batch(
+            "CREATE TABLE posts (id TEXT PRIMARY KEY);
+             CREATE TABLE _versions_posts (
+                id TEXT PRIMARY KEY,
+                _parent TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+                snapshot TEXT
+             );
+             INSERT INTO posts (id) VALUES ('p1'), ('p2');
+             INSERT INTO _versions_posts VALUES \
+                ('v1', 'p1', '{}'), \
+                ('v2', 'p1', '{}'), \
+                ('v3', 'p2', '{}');",
+        )
+        .unwrap();
+
+        let before = conn
+            .query_one("SELECT COUNT(*) AS c FROM _versions_posts", &[])
+            .unwrap()
+            .unwrap()
+            .get_i64("c")
+            .unwrap();
+        assert_eq!(before, 3, "fixture: 3 versions before delete");
+
+        conn.execute("DELETE FROM posts WHERE id = 'p1'", &[])
+            .unwrap();
+
+        let after = conn
+            .query_one("SELECT COUNT(*) AS c FROM _versions_posts", &[])
+            .unwrap()
+            .unwrap()
+            .get_i64("c")
+            .unwrap();
+
+        assert_eq!(
+            after, 1,
+            "FK cascade must remove v1 + v2 when p1 is deleted; only v3 (p2's version) should remain"
+        );
+    }
+
+    /// Sibling check: cascade fires *across* connection boundaries when
+    /// a different pooled connection observes the parent table after
+    /// the delete. Catches a class of "FK ON for the writer but OFF for
+    /// the reader" misconfigurations that would let orphans accumulate
+    /// in production where many connections share the pool.
+    #[test]
+    fn fk_cascade_visible_across_pool_connections() {
+        let (_dir, pool) = temp_pool();
+        let writer = pool.get().expect("writer connection");
+
+        writer
+            .execute_batch(
+                "CREATE TABLE posts (id TEXT PRIMARY KEY);
+                 CREATE TABLE _versions_posts (
+                    id TEXT PRIMARY KEY,
+                    _parent TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+                    snapshot TEXT
+                 );
+                 INSERT INTO posts (id) VALUES ('p1');
+                 INSERT INTO _versions_posts VALUES ('v1', 'p1', '{}');",
+            )
+            .unwrap();
+
+        writer
+            .execute("DELETE FROM posts WHERE id = 'p1'", &[])
+            .unwrap();
+
+        // Drop the writer so r2d2 returns it to the pool, then read on
+        // a freshly-acquired connection.
+        drop(writer);
+
+        let reader = pool.get().expect("reader connection");
+        let count = reader
+            .query_one("SELECT COUNT(*) AS c FROM _versions_posts", &[])
+            .unwrap()
+            .unwrap()
+            .get_i64("c")
+            .unwrap();
+        assert_eq!(count, 0, "orphaned version row must be gone after cascade");
     }
 }

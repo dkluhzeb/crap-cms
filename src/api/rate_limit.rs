@@ -21,6 +21,7 @@ pub struct GrpcRateLimitLayer {
 
 impl GrpcRateLimitLayer {
     /// Create a new rate limit layer with the given limiter.
+    #[must_use]
     pub fn new(limiter: Arc<GrpcRateLimiter>) -> Self {
         Self { limiter }
     }
@@ -64,9 +65,8 @@ where
         let ip = req
             .extensions()
             .get::<TcpConnectInfo>()
-            .and_then(|info| info.remote_addr())
-            .map(|addr| addr.ip().to_string())
-            .unwrap_or_else(|| "unknown".to_string());
+            .and_then(tonic::transport::server::TcpConnectInfo::remote_addr)
+            .map_or_else(|| "unknown".to_string(), |addr| addr.ip().to_string());
 
         if !self.limiter.check_and_record(&ip) {
             let status = Status::resource_exhausted("rate limit exceeded");
@@ -82,6 +82,20 @@ where
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use std::{
         convert::Infallible,
@@ -172,7 +186,7 @@ mod tests {
     /// independently, confirming extraction is working.
     ///
     /// gRPC always uses HTTP 200 for transport; the real status is in the
-    /// `grpc-status` header.  Code 0 = OK, code 8 = ResourceExhausted.
+    /// `grpc-status` header.  Code 0 = OK, code 8 = `ResourceExhausted`.
     #[tokio::test]
     async fn ip_extracted_from_tcp_connect_info() {
         // Limit of 2 requests per IP.  ip_a will exhaust its budget on its
@@ -316,8 +330,8 @@ mod tests {
 
     // ── Limit exceeded → gRPC ResourceExhausted ───────────────────────────
 
-    /// The (max_requests + 1)-th request from the same IP must be rejected
-    /// with gRPC status 8 (ResourceExhausted).  The HTTP status remains 200
+    /// The (`max_requests` + 1)-th request from the same IP must be rejected
+    /// with gRPC status 8 (`ResourceExhausted`).  The HTTP status remains 200
     /// because gRPC embeds its status in headers, not the HTTP status line.
     #[tokio::test]
     async fn exceeding_limit_returns_resource_exhausted() {

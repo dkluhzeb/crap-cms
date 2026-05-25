@@ -8,25 +8,26 @@ use tracing::{error, warn};
 
 use crate::{
     admin::AdminState,
-    core::{AuthUser, Document, FieldDefinition, FieldType},
+    core::{AuthUser, Document, DocumentFields, FieldDefinition, FieldType},
     db::AccessResult,
     hooks::{HookRunner, lifecycle::access::has_any_field_access},
 };
 
 use super::response::{forbidden, server_error};
 
-/// Extract the user document from AuthUser extension (for access checks).
-pub fn get_user_doc(auth_user: &Option<Extension<AuthUser>>) -> Option<&Document> {
-    auth_user.as_ref().map(|Extension(au)| &au.user_doc)
+/// Extract the user document from `AuthUser` extension (for access checks).
+#[must_use]
+pub fn get_user_doc(auth_user: Option<&Extension<AuthUser>>) -> Option<&Document> {
+    auth_user.map(|Extension(au)| &au.user_doc)
 }
 
-/// Helper to check collection/global-level access. Returns AccessResult or renders a 403 page.
+/// Helper to check collection/global-level access. Returns `AccessResult` or renders a 403 page.
 pub fn check_access_or_forbid(
     state: &AdminState,
     access_ref: Option<&str>,
-    auth_user: &Option<Extension<AuthUser>>,
+    auth_user: Option<&Extension<AuthUser>>,
     id: Option<&str>,
-    data: Option<&HashMap<String, Value>>,
+    data: Option<&DocumentFields>,
 ) -> Result<AccessResult, Box<axum::response::Response>> {
     if access_ref.is_none() {
         return if state.config.access.default_deny {
@@ -50,10 +51,8 @@ pub fn check_access_or_forbid(
     let result = state
         .hook_runner
         .check_access(access_ref, user_doc, id, data, &tx)
-        .map_err(|e| {
-            error!("Access check error: {}", e);
-            Box::new(forbidden(state, "Access check failed").into_response())
-        })?;
+        .inspect_err(|e| error!("Access check error: {}", e))
+        .map_err(|_| Box::new(forbidden(state, "Access check failed").into_response()))?;
 
     tx.commit()
         .map_err(|_| Box::new(forbidden(state, "Database error").into_response()))?;
@@ -65,7 +64,7 @@ pub fn check_access_or_forbid(
 /// Skips the check entirely (returns empty vec) if no field has read access configured.
 pub fn compute_denied_read_fields(
     state: &AdminState,
-    auth_user: &Option<Extension<AuthUser>>,
+    auth_user: Option<&Extension<AuthUser>>,
     fields: &[FieldDefinition],
 ) -> Result<Vec<String>, Box<axum::response::Response>> {
     if !has_any_field_access(fields, |f| f.access.read.as_deref()) {
@@ -74,15 +73,16 @@ pub fn compute_denied_read_fields(
 
     let user_doc = get_user_doc(auth_user);
 
-    let mut conn = state.pool.get().map_err(|e| {
-        error!("Field access check pool error: {}", e);
-        Box::new(server_error(state, "Database error"))
-    })?;
+    let mut conn = state
+        .pool
+        .get()
+        .inspect_err(|e| error!("Field access check pool error: {}", e))
+        .map_err(|_| Box::new(server_error(state, "Database error")))?;
 
-    let tx = conn.transaction().map_err(|e| {
-        error!("Field access check tx error: {}", e);
-        Box::new(server_error(state, "Database error"))
-    })?;
+    let tx = conn
+        .transaction()
+        .inspect_err(|e| error!("Field access check tx error: {}", e))
+        .map_err(|_| Box::new(server_error(state, "Database error")))?;
 
     let denied = state
         .hook_runner
@@ -125,12 +125,12 @@ pub fn collect_condition_refs(fields: &[FieldDefinition]) -> HashSet<&str> {
 #[derive(serde::Deserialize)]
 pub struct EvaluateConditionsRequest {
     /// The current form data.
-    pub form_data: HashMap<String, Value>,
+    pub form_data: DocumentFields,
     /// Map of field names to their condition function references.
     pub conditions: HashMap<String, String>,
 }
 
-/// Evaluate display conditions and return a field_name → visible map.
+/// Evaluate display conditions and return a `field_name` → visible map.
 ///
 /// Validates each function ref against the set of known condition refs from the
 /// field definitions to prevent calling arbitrary Lua functions.
@@ -139,7 +139,7 @@ pub fn evaluate_condition_results(
     fields: &[FieldDefinition],
     req: &EvaluateConditionsRequest,
 ) -> Map<String, Value> {
-    use crate::hooks::lifecycle::DisplayConditionResult;
+    use crate::hooks::DisplayConditionResult;
 
     let valid_refs = collect_condition_refs(fields);
     let form_data = json!(req.form_data);
@@ -167,8 +167,41 @@ pub fn evaluate_condition_results(
     results
 }
 
-/// Quick read-access check for dashboard/list visibility.
-/// Returns true if the user is allowed to see this collection or global.
+/// Boolean access check — used for UI-gating ("can this user create X?")
+/// rather than enforcement. Treats missing `access_ref` as allowed unless
+/// `default_deny` is configured, in which case the no-config case denies.
+///
+/// Takes an existing connection so callers computing multiple permissions
+/// (e.g. `CollectionPermissions::for_user`) can share a single transaction
+/// instead of paying for a pool acquisition per check.
+///
+/// Called without `id` / `data`; access fns that gate on doc content
+/// (rather than user role) will return false here, which errs on the safe
+/// side for UI visibility — the server-side enforcement runs the same fn
+/// with full context when the user actually tries the action.
+pub fn has_access_with_conn(
+    state: &AdminState,
+    access_ref: Option<&str>,
+    user_doc: Option<&Document>,
+    conn: &dyn crate::db::DbConnection,
+) -> bool {
+    if access_ref.is_none() {
+        return !state.config.access.default_deny;
+    }
+
+    let result = state
+        .hook_runner
+        .check_access(access_ref, user_doc, None, None, conn);
+
+    matches!(
+        result,
+        Ok(AccessResult::Allowed | AccessResult::Constrained(_))
+    )
+}
+
+/// Quick read-access check for dashboard/list visibility. Convenience
+/// wrapper around [`has_access_with_conn`] that opens its own transaction.
+/// Use the with-conn variant when checking multiple permissions in a row.
 pub fn has_read_access(
     state: &AdminState,
     access_ref: Option<&str>,
@@ -178,26 +211,19 @@ pub fn has_read_access(
         return !state.config.access.default_deny;
     }
 
-    let mut conn = match state.pool.get() {
-        Ok(c) => c,
-        Err(_) => return false,
+    let Ok(mut conn) = state.pool.get() else {
+        return false;
     };
 
-    let tx = match conn.transaction() {
-        Ok(t) => t,
-        Err(_) => return false,
+    let Ok(tx) = conn.transaction() else {
+        return false;
     };
 
-    let result = state
-        .hook_runner
-        .check_access(access_ref, user_doc, None, None, &tx);
+    let allowed = has_access_with_conn(state, access_ref, user_doc, &tx);
 
     if let Err(e) = tx.commit() {
         warn!("tx commit failed: {e}");
     }
 
-    matches!(
-        result,
-        Ok(AccessResult::Allowed | AccessResult::Constrained(_))
-    )
+    allowed
 }

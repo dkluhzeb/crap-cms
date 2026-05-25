@@ -1,6 +1,10 @@
 //! Shared helper functions used across multiple command handlers.
 
+use std::sync::Arc;
+
 use anyhow::{Context as _, Result};
+#[cfg(unix)]
+use std::io;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -9,10 +13,9 @@ use tracing::{info, warn};
 
 use crate::{
     config::CrapConfig,
-    core::SharedRegistry,
+    core::Registry,
     db::{DbPool, migrate, pool},
-    hooks,
-    hooks::HookRunner,
+    hooks::{self, HookRunner},
 };
 
 #[cfg(unix)]
@@ -22,7 +25,12 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 
 /// Load config, init Lua, create pool, and sync schema. Shared by user, export, import commands.
-pub fn load_config_and_sync(config_dir: &Path) -> Result<(DbPool, SharedRegistry)> {
+///
+/// # Errors
+///
+/// Returns an error if config loading, Lua init, pool creation, or schema
+/// sync fails.
+pub fn load_config_and_sync(config_dir: &Path) -> Result<(DbPool, Arc<Registry>)> {
     let config_dir = config_dir
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
@@ -44,7 +52,7 @@ pub fn load_config_and_sync(config_dir: &Path) -> Result<(DbPool, SharedRegistry
 
 /// Load config, init Lua, create pool, sync schema, and return all three.
 /// Used by commands that need the config (jobs, trash).
-pub fn init_stack(config_dir: &Path) -> Result<(CrapConfig, SharedRegistry, DbPool)> {
+pub fn init_stack(config_dir: &Path) -> Result<(CrapConfig, Arc<Registry>, DbPool)> {
     let config_dir = config_dir
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
@@ -82,7 +90,7 @@ pub fn load_and_validate_config(config_dir: &Path) -> Result<CrapConfig> {
     Ok(cfg)
 }
 
-/// Run on_init hooks if configured. Failure aborts startup.
+/// Run `on_init` hooks if configured. Failure aborts startup.
 pub fn run_on_init_hooks(cfg: &CrapConfig, pool: &DbPool, hook_runner: &HookRunner) -> Result<()> {
     if cfg.hooks.on_init.is_empty() {
         return Ok(());
@@ -199,14 +207,32 @@ pub fn read_pid(config_dir: &Path, filename: &str) -> Option<u32> {
         .and_then(|s| s.trim().parse().ok())
 }
 
+/// Send a signal to a process by PID.
+///
+/// Returns `Ok(())` if `kill(2)` returned 0, otherwise an error wrapping the
+/// underlying OS error. The single canonical wrapper around `libc::kill` —
+/// other call sites should go through this helper rather than calling
+/// `libc::kill` directly.
+#[cfg(unix)]
+pub fn send_signal(pid: u32, sig: i32) -> Result<()> {
+    let pid_i32 = i32::try_from(pid).context("PID too large for i32")?;
+    // SAFETY: kill(2) is safe to call with any pid/signal combination.
+    let ret = unsafe { libc::kill(pid_i32, sig) };
+
+    if ret == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+            .with_context(|| format!("Failed to send signal {sig} to PID {pid}"))
+    }
+}
+
 /// Check if a process with the given PID is running.
+///
+/// Sends signal 0 (no-op probe); succeeds iff the kernel can deliver to that PID.
 #[cfg(unix)]
 pub fn is_process_running(pid: u32) -> bool {
-    let Ok(pid_i32) = i32::try_from(pid) else {
-        return false;
-    };
-
-    unsafe { libc::kill(pid_i32, 0) == 0 }
+    send_signal(pid, 0).is_ok()
 }
 
 /// Check if a PID file exists and warn if the process is still running.

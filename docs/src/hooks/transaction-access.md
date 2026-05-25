@@ -22,15 +22,15 @@ Inside hooks with CRUD access:
 
 ```lua
 -- Collections
-crap.collections.find("posts", { where = { status = "published" } })
-crap.collections.find_by_id("posts", "abc123")
-crap.collections.create("audit_log", { action = "update", target = ctx.data.id })
-crap.collections.update("posts", id, { view_count = views + 1 })
-crap.collections.delete("drafts", old_id)
+crap.collections.posts.find({ where = { status = "published" } })
+crap.collections.posts.find_by_id("abc123")
+crap.collections.audit_log.create({ action = "update", target = ctx.data.id })
+crap.collections.posts.update(id, { view_count = views + 1 })
+crap.collections.drafts.delete(old_id)
 
 -- Globals
-crap.globals.get("site_settings")
-crap.globals.update("counters", { total_posts = count + 1 })
+crap.globals.site_settings.get()
+crap.globals.counters.update({ total_posts = count + 1 })
 ```
 
 ## Transaction Sharing
@@ -70,9 +70,9 @@ on_init = ["hooks.seed.run"]
 local M = {}
 
 function M.run(ctx)
-    local result = crap.collections.find("posts")
+    local result = crap.collections.posts.find()
     if result.pagination.totalDocs == 0 then
-        crap.collections.create("posts", {
+        crap.collections.posts.create({
             title = "Welcome",
             slug = "welcome",
             status = "published",

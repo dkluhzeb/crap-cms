@@ -1,4 +1,4 @@
-//! `make migration` command — generate migration Lua files.
+//! `make migration` command -- generate migration Lua files.
 
 mod generator;
 

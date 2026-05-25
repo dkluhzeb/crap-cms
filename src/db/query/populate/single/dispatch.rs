@@ -13,7 +13,7 @@ use super::{join, nested, nonpoly, poly};
 ///
 /// depth=0 is a no-op. Tracks visited (collection, id) pairs to break cycles.
 /// Uses a shared `cache` to avoid redundant fetches within the same request.
-pub fn populate_relationships_cached(
+pub(crate) fn populate_relationships_cached(
     ctx: &PopulateContext<'_>,
     doc: &mut Document,
     visited: &mut HashSet<(String, String)>,
@@ -32,6 +32,10 @@ pub fn populate_relationships_cached(
 /// Callers in the service layer pass the process-wide
 /// [`SharedPopulateSingleflight`](crate::db::query::SharedPopulateSingleflight)
 /// here. Internal callers keep using the fresh-per-call variant above.
+///
+/// # Errors
+///
+/// Returns a backend error if any relationship-target lookup fails.
 pub fn populate_relationships_cached_with_singleflight(
     ctx: &PopulateContext<'_>,
     doc: &mut Document,
@@ -103,9 +107,8 @@ fn populate_flat_relationships(
             continue;
         }
 
-        let rel = match &field.relationship {
-            Some(rc) => rc,
-            None => continue,
+        let Some(rel) = &field.relationship else {
+            continue;
         };
 
         let effective_depth = match rel.max_depth {

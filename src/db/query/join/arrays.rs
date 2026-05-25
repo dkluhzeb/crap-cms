@@ -8,8 +8,8 @@ use crate::core::{FieldDefinition, FieldType, field::flatten_array_sub_fields};
 use crate::db::{
     DbConnection, DbValue,
     query::{
-        coerce_value,
-        helpers::{coerce_date_value, join_table, tz_column},
+        coerce_json_value,
+        helpers::{coerce_date_value_json, join_table, tz_column},
     },
 };
 
@@ -18,12 +18,16 @@ use super::helpers::delete_junction_rows;
 /// Set array rows for an array field join table.
 /// Deletes all existing rows for the parent and inserts new ones with nanoid + _order.
 /// When `locale` is Some, scopes the DELETE to that locale and includes `_locale` in INSERT.
+///
+/// # Errors
+///
+/// Returns a backend error if the DELETE or any per-row INSERT fails.
 pub fn set_array_rows(
     conn: &dyn DbConnection,
     collection: &str,
     field_name: &str,
     parent_id: &str,
-    rows: &[HashMap<String, String>],
+    rows: &[HashMap<String, Value>],
     sub_fields: &[FieldDefinition],
     locale: Option<&str>,
 ) -> Result<()> {
@@ -48,7 +52,7 @@ pub fn set_array_rows(
 
     let col_list = col_names.join(", ");
     let (all_cols, placeholders) = if locale.is_some() {
-        let all_cols = format!("id, parent_id, _order, _locale, {}", col_list);
+        let all_cols = format!("id, parent_id, _order, _locale, {col_list}");
         let placeholders = format!(
             "{}, {}, {}, {}, {}",
             conn.placeholder(1),
@@ -62,7 +66,7 @@ pub fn set_array_rows(
         );
         (all_cols, placeholders)
     } else {
-        let all_cols = format!("id, parent_id, _order, {}", col_list);
+        let all_cols = format!("id, parent_id, _order, {col_list}");
         let placeholders = format!(
             "{}, {}, {}, {}",
             conn.placeholder(1),
@@ -75,17 +79,17 @@ pub fn set_array_rows(
         );
         (all_cols, placeholders)
     };
-    let sql = format!(
-        "INSERT INTO \"{}\" ({}) VALUES ({})",
-        table_name, all_cols, placeholders
-    );
+    let sql = format!("INSERT INTO \"{table_name}\" ({all_cols}) VALUES ({placeholders})");
 
     for (order, row) in rows.iter().enumerate() {
         let id = nanoid::nanoid!();
+        // Row indices saturate at i64::MAX for the unreachable case of >9.2e18
+        // rows — it'd only affect sort key ordering at that point.
+        let order_i64 = i64::try_from(order).unwrap_or(i64::MAX);
         let mut params: Vec<DbValue> = vec![
             DbValue::Text(id),
             DbValue::Text(parent_id.to_string()),
-            DbValue::Integer(order as i64),
+            DbValue::Integer(order_i64),
         ];
 
         if let Some(loc) = locale {
@@ -93,20 +97,24 @@ pub fn set_array_rows(
         }
 
         for sf in &flat_subs {
-            let value = row.get(&sf.name).cloned().unwrap_or_default();
+            let value = row.get(&sf.name).cloned().unwrap_or(Value::Null);
 
             let db_val = if sf.field_type == FieldType::Date && sf.timezone {
                 let tz_key = tz_column(&sf.name);
-                coerce_date_value(&sf.field_type, &value, row.get(&tz_key).map(|s| s.as_str()))
+                coerce_date_value_json(
+                    &sf.field_type,
+                    &value,
+                    row.get(&tz_key).and_then(Value::as_str),
+                )
             } else {
-                coerce_value(&sf.field_type, &value)
+                coerce_json_value(&sf.field_type, &value)
             };
             params.push(db_val);
 
             // Push timezone companion value
             if sf.field_type == FieldType::Date && sf.timezone {
                 let tz_key = tz_column(&sf.name);
-                let tz_val = row.get(&tz_key).map(|s| s.as_str()).unwrap_or("");
+                let tz_val = row.get(&tz_key).and_then(Value::as_str).unwrap_or("");
                 params.push(if tz_val.is_empty() {
                     DbValue::Null
                 } else {
@@ -122,6 +130,10 @@ pub fn set_array_rows(
 
 /// Find array rows for an array field join table, ordered.
 /// When `locale` is Some, filters by `_locale`.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails.
 pub fn find_array_rows(
     conn: &dyn DbConnection,
     collection: &str,
@@ -150,8 +162,7 @@ pub fn find_array_rows(
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
         (
             format!(
-                "SELECT {} FROM \"{}\" WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order",
-                select_cols, table_name
+                "SELECT {select_cols} FROM \"{table_name}\" WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order"
             ),
             vec![
                 DbValue::Text(parent_id.to_string()),
@@ -162,8 +173,7 @@ pub fn find_array_rows(
         let p1 = conn.placeholder(1);
         (
             format!(
-                "SELECT {} FROM \"{}\" WHERE parent_id = {p1} ORDER BY _order",
-                select_cols, table_name
+                "SELECT {select_cols} FROM \"{table_name}\" WHERE parent_id = {p1} ORDER BY _order"
             ),
             vec![DbValue::Text(parent_id.to_string())],
         )
@@ -185,7 +195,6 @@ pub fn find_array_rows(
             col_idx += 1;
 
             let json_val = match val {
-                DbValue::Null => Value::Null,
                 DbValue::Integer(n) => json!(n),
                 DbValue::Real(f) => json!(f),
                 DbValue::Text(s) => {
@@ -202,7 +211,7 @@ pub fn find_array_rows(
                         _ => Value::String(s),
                     }
                 }
-                DbValue::Blob(_) => Value::Null,
+                DbValue::Null | DbValue::Blob(_) => Value::Null,
             };
             map.insert(sf.name.clone(), json_val);
 
@@ -228,7 +237,7 @@ pub fn find_array_rows(
 mod tests {
     use super::*;
     use crate::config::CrapConfig;
-    use crate::core::field::FieldTab;
+    use crate::core::FieldTab;
     use crate::db::{BoxedConnection, pool};
     use tempfile::TempDir;
 
@@ -270,12 +279,12 @@ mod tests {
         let sub = array_sub_fields();
         let rows = vec![
             HashMap::from([
-                ("label".to_string(), "Label A".to_string()),
-                ("value".to_string(), "Value A".to_string()),
+                ("label".to_string(), json!("Label A")),
+                ("value".to_string(), json!("Value A")),
             ]),
             HashMap::from([
-                ("label".to_string(), "Label B".to_string()),
-                ("value".to_string(), "Value B".to_string()),
+                ("label".to_string(), json!("Label B")),
+                ("value".to_string(), json!("Value B")),
             ]),
         ];
         set_array_rows(&conn, "posts", "items", "p1", &rows, &sub, None).unwrap();
@@ -295,14 +304,14 @@ mod tests {
         let (_dir, conn) = setup_array_db();
         let sub = array_sub_fields();
         let rows_old = vec![HashMap::from([
-            ("label".to_string(), "Old".to_string()),
-            ("value".to_string(), "Old Val".to_string()),
+            ("label".to_string(), json!("Old")),
+            ("value".to_string(), json!("Old Val")),
         ])];
         set_array_rows(&conn, "posts", "items", "p1", &rows_old, &sub, None).unwrap();
 
         let rows_new = vec![HashMap::from([
-            ("label".to_string(), "New".to_string()),
-            ("value".to_string(), "New Val".to_string()),
+            ("label".to_string(), json!("New")),
+            ("value".to_string(), json!("New Val")),
         ])];
         set_array_rows(&conn, "posts", "items", "p1", &rows_new, &sub, None).unwrap();
 
@@ -317,8 +326,8 @@ mod tests {
         let (_dir, conn) = setup_array_db();
         let sub = array_sub_fields();
         let rows = vec![HashMap::from([
-            ("label".to_string(), "X".to_string()),
-            ("value".to_string(), "Y".to_string()),
+            ("label".to_string(), json!("X")),
+            ("value".to_string(), json!("Y")),
         ])];
         set_array_rows(&conn, "posts", "items", "p1", &rows, &sub, None).unwrap();
         set_array_rows(&conn, "posts", "items", "p1", &[], &sub, None).unwrap();
@@ -361,8 +370,8 @@ mod tests {
         ];
 
         let mut row = HashMap::new();
-        row.insert("title".to_string(), "Hello".to_string());
-        row.insert("body".to_string(), "World".to_string());
+        row.insert("title".to_string(), json!("Hello"));
+        row.insert("body".to_string(), json!("World"));
         set_array_rows(&conn, "posts", "items", "p1", &[row], &sub_fields, None).unwrap();
 
         let result = find_array_rows(&conn, "posts", "items", "p1", &sub_fields, None).unwrap();
@@ -395,8 +404,8 @@ mod tests {
         ];
 
         let mut row = HashMap::new();
-        row.insert("x".to_string(), "10".to_string());
-        row.insert("y".to_string(), "20".to_string());
+        row.insert("x".to_string(), json!("10"));
+        row.insert("y".to_string(), json!("20"));
         set_array_rows(&conn, "posts", "items", "p1", &[row], &sub_fields, None).unwrap();
 
         let result = find_array_rows(&conn, "posts", "items", "p1", &sub_fields, None).unwrap();
@@ -450,9 +459,9 @@ mod tests {
         ];
 
         let rows = vec![HashMap::from([
-            ("event_date".to_string(), "2024-01-15T09:00".to_string()),
-            ("event_date_tz".to_string(), "America/New_York".to_string()),
-            ("label".to_string(), "Meeting".to_string()),
+            ("event_date".to_string(), json!("2024-01-15T09:00")),
+            ("event_date_tz".to_string(), json!("America/New_York")),
+            ("label".to_string(), json!("Meeting")),
         ])];
 
         set_array_rows(&conn, "posts", "schedule", "p1", &rows, &sub_fields, None).unwrap();
@@ -488,7 +497,7 @@ mod tests {
 
         let rows = vec![HashMap::from([(
             "event_date".to_string(),
-            "2024-01-15T09:00".to_string(),
+            json!("2024-01-15T09:00"),
         )])];
 
         set_array_rows(&conn, "posts", "schedule", "p1", &rows, &sub_fields, None).unwrap();

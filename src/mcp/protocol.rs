@@ -42,6 +42,7 @@ pub const INVALID_PARAMS: i64 = -32602;
 pub const INTERNAL_ERROR: i64 = -32603;
 
 impl JsonRpcResponse {
+    #[must_use]
     pub fn success(id: Option<Value>, result: Value) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
@@ -65,7 +66,16 @@ impl JsonRpcResponse {
     }
 }
 
-/// MCP Initialize params from client.
+/// MCP `initialize` request params.
+///
+/// All three fields are required by the MCP spec; we accept them with
+/// `#[serde(default)]` for `capabilities` (clients have been observed
+/// sending `{}`) but reject a missing `protocol_version`. The server
+/// reads each field at handshake time to emit a diagnostic log line
+/// — the protocol version goes in for compat tracking, client info
+/// for identifying the integration in support, and the capabilities
+/// blob so we can spot clients that announce features we'd otherwise
+/// silently ignore.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeParams {
@@ -93,20 +103,32 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
+impl ToolDefinition {
+    /// Construct a tool definition with the given name, description, and JSON
+    /// schema. Wraps the description in `Some(...)` so call sites read as a
+    /// straight three-arg call instead of a struct literal with positional
+    /// `Some(...)` noise. MCP always emits a description for runtime tools;
+    /// the `Option` exists only to satisfy the wire-format `null` case.
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        input_schema: Value,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: Some(description.into()),
+            input_schema,
+        }
+    }
+}
+
 /// MCP tools/call params.
 #[derive(Debug, Deserialize)]
 pub struct ToolCallParams {
     pub name: String,
     #[serde(default)]
     pub arguments: Value,
-}
-
-/// MCP tool call result content.
-#[derive(Debug, Serialize)]
-pub struct ToolResultContent {
-    #[serde(rename = "type")]
-    pub content_type: String,
-    pub text: String,
 }
 
 /// MCP resource definition.

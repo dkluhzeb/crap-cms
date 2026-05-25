@@ -1,35 +1,39 @@
-//! Interactive field wizard — prompts for field definitions via CLI dialogs.
+//! Interactive field wizard -- prompts for field definitions via CLI dialogs.
 
 use anyhow::Context as _;
 use dialoguer::{Confirm, Input, Select};
 
 use crate::cli::{self, crap_theme};
-use crate::scaffold::collection::{BlockStub, FieldStub, TabStub, VALID_FIELD_TYPES};
+use crate::scaffold::collection::{
+    BlockStub, CONTAINER_TYPES, FieldStub, TabStub, VALID_FIELD_TYPES,
+};
 use crate::scaffold::to_title_case;
 
 /// Maximum nesting depth for the interactive field wizard.
 const MAX_WIZARD_DEPTH: usize = 4;
 
-/// Container field types that prompt for subfields.
-const WIZARD_CONTAINER_TYPES: &[&str] = &["group", "array", "row", "collapsible"];
-
-/// Interactive field wizard — prompts for field name, type, required, localized,
+/// Interactive field wizard -- prompts for field name, type, required, localized,
 /// and recursively prompts for subfields on container types. Returns the field stubs
 /// directly (empty vec = no fields).
 ///
 /// `locales_enabled` controls whether the "Localized?" prompt is shown.
+///
+/// # Errors
+///
+/// Returns an error if any prompt fails to read (e.g. stdin closed) or
+/// the nesting limit is exceeded.
 #[cfg(not(tarpaulin_include))]
 pub fn interactive_field_wizard(locales_enabled: bool) -> anyhow::Result<Vec<FieldStub>> {
     field_loop(locales_enabled, &[])
 }
 
-/// Recursive field prompt loop — collects fields until an empty name is entered.
+/// Recursive field prompt loop -- collects fields until an empty name is entered.
 #[cfg(not(tarpaulin_include))]
 fn field_loop(locales_enabled: bool, breadcrumb: &[String]) -> anyhow::Result<Vec<FieldStub>> {
     let depth = breadcrumb.len();
     if depth >= MAX_WIZARD_DEPTH {
         cli::warning(&format!(
-            "{}Maximum nesting depth ({}) reached — cannot add subfields here.",
+            "{}Maximum nesting depth ({}) reached -- cannot add subfields here.",
             "  ".repeat(depth),
             MAX_WIZARD_DEPTH
         ));
@@ -51,7 +55,7 @@ fn field_loop(locales_enabled: bool, breadcrumb: &[String]) -> anyhow::Result<Ve
 
     loop {
         let name: String = Input::with_theme(&crap_theme())
-            .with_prompt(format!("{}Field name", indent))
+            .with_prompt(format!("{indent}Field name"))
             .allow_empty(true)
             .interact_text()
             .context("Failed to read field name")?;
@@ -61,7 +65,7 @@ fn field_loop(locales_enabled: bool, breadcrumb: &[String]) -> anyhow::Result<Ve
         }
 
         let type_idx = Select::with_theme(&crap_theme())
-            .with_prompt(format!("{}Field type", indent))
+            .with_prompt(format!("{indent}Field type"))
             .items(VALID_FIELD_TYPES)
             .default(0)
             .interact()
@@ -69,14 +73,14 @@ fn field_loop(locales_enabled: bool, breadcrumb: &[String]) -> anyhow::Result<Ve
         let field_type = VALID_FIELD_TYPES[type_idx];
 
         let required = Confirm::with_theme(&crap_theme())
-            .with_prompt(format!("{}Required?", indent))
+            .with_prompt(format!("{indent}Required?"))
             .default(false)
             .interact()
             .context("Failed to read required flag")?;
 
         let localized = if locales_enabled {
             Confirm::with_theme(&crap_theme())
-                .with_prompt(format!("{}Localized?", indent))
+                .with_prompt(format!("{indent}Localized?"))
                 .default(false)
                 .interact()
                 .context("Failed to read localized flag")?
@@ -88,7 +92,7 @@ fn field_loop(locales_enabled: bool, breadcrumb: &[String]) -> anyhow::Result<Ve
         let mut sub_blocks = Vec::new();
         let mut sub_tabs = Vec::new();
 
-        if WIZARD_CONTAINER_TYPES.contains(&field_type) {
+        if CONTAINER_TYPES.contains(&field_type) {
             let mut child_bc = breadcrumb.to_vec();
             child_bc.push(name.clone());
             sub_fields = field_loop(locales_enabled, &child_bc)?;
@@ -135,7 +139,7 @@ fn block_loop(
 
     loop {
         let block_type: String = Input::with_theme(&crap_theme())
-            .with_prompt(format!("{}Block type", indent))
+            .with_prompt(format!("{indent}Block type"))
             .allow_empty(true)
             .interact_text()
             .context("Failed to read block type")?;
@@ -145,7 +149,7 @@ fn block_loop(
         }
 
         let label: String = Input::with_theme(&crap_theme())
-            .with_prompt(format!("{}Block label", indent))
+            .with_prompt(format!("{indent}Block label"))
             .default(to_title_case(&block_type))
             .interact_text()
             .context("Failed to read block label")?;
@@ -184,7 +188,7 @@ fn tab_loop(
 
     loop {
         let label: String = Input::with_theme(&crap_theme())
-            .with_prompt(format!("{}Tab label", indent))
+            .with_prompt(format!("{indent}Tab label"))
             .allow_empty(true)
             .interact_text()
             .context("Failed to read tab label")?;

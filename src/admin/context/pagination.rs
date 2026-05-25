@@ -1,13 +1,13 @@
 //! Pagination context — `{{pagination.*}}` for list pages.
 //!
-//! Two modes coexist: page-mode (numeric page, total_pages) and cursor-mode
+//! Two modes coexist: page-mode (numeric page, `total_pages`) and cursor-mode
 //! (no page numbers, just prev/next URLs). Cursor mode omits `page` and
 //! `total_pages` so templates can detect mode via key presence.
 
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::db::query::PaginationResult;
+use crate::db::PaginationResult;
 
 /// Pagination metadata for list views.
 #[derive(Serialize, JsonSchema)]

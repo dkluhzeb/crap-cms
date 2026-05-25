@@ -2,6 +2,22 @@
 //!
 //! Covers: collection CRUD, search/filter/sort, validation, versioning, uploads (API).
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
+use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -14,6 +30,7 @@ use crap_cms::admin::server::build_router;
 use crap_cms::admin::templates;
 use crap_cms::admin::translations::Translations;
 use crap_cms::config::{CrapConfig, LocaleConfig};
+use crap_cms::core::DocumentFields;
 use crap_cms::core::auth;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
@@ -53,10 +70,7 @@ fn make_users_def() -> CollectionDefinition {
             .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth {
-        enabled: true,
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled());
     def
 }
 
@@ -64,7 +78,7 @@ struct TestApp {
     _tmp: tempfile::TempDir,
     router: axum::Router,
     pool: crap_cms::db::DbPool,
-    registry: crap_cms::core::SharedRegistry,
+    registry: Arc<crap_cms::core::Registry>,
     jwt_secret: JwtSecret,
 }
 
@@ -85,9 +99,9 @@ fn setup_app_with_config(
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &collections {
             reg.register_collection(def.clone());
         }
@@ -96,11 +110,12 @@ fn setup_app_with_config(
         }
     }
 
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -110,16 +125,16 @@ fn setup_app_with_config(
         .expect("create handlebars");
     let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
-    let has_auth = {
-        let reg = registry.read().unwrap();
-        reg.collections.values().any(|d| d.is_auth_collection())
-    };
+    let has_auth = registry
+        .collections
+        .values()
+        .any(crap_cms::core::CollectionDefinition::is_auth_collection);
 
     let state = AdminState {
         config,
         config_dir: tmp.path().to_path_buf(),
         pool: db_pool.clone(),
-        registry: Registry::snapshot(&registry),
+        registry: Arc::clone(&registry),
         handlebars,
         hook_runner,
         jwt_secret: "test-jwt-secret".into(),
@@ -152,7 +167,7 @@ fn setup_app_with_config(
         )
         .unwrap(),
         token_provider: std::sync::Arc::new(crap_cms::core::auth::JwtTokenProvider::new(
-            "test-secret",
+            "test-jwt-secret",
         )),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,
@@ -161,7 +176,7 @@ fn setup_app_with_config(
         ),
         populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
         cache: None,
-        custom_pages: Default::default(),
+        custom_pages: crap_cms::admin::custom_pages::CustomPageRegistry::default(),
     };
 
     let router = build_router(state);
@@ -176,16 +191,16 @@ fn setup_app_with_config(
 }
 
 fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
-    let reg = app.registry.read().unwrap();
+    let reg = &app.registry;
     let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([
-        ("email".to_string(), email.to_string()),
-        ("name".to_string(), "Test User".to_string()),
-    ]);
+    let data: DocumentFields = HashMap::from([
+        ("email".to_string(), json!(email)),
+        ("name".to_string(), json!("Test User")),
+    ])
+    .into();
     let doc = query::create(&tx, "users", &def, &data, None).unwrap();
     query::update_password(&tx, "users", &doc.id, password).unwrap();
     tx.commit().unwrap();
@@ -193,23 +208,32 @@ fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
 }
 
 fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
+    // `update_password` bumps `_session_version` to 1 the moment a password
+    // is set; the evaluator rejects a default-built Claims (session_version
+    // = 0) as `Invalid(StaleSession)`. Read the user's current version so
+    // the test cookie matches the DB.
+    let conn = app.pool.get().unwrap();
+    let session_version =
+        crap_cms::db::query::auth::get_session_version(&conn, "users", user_id).unwrap_or(0);
+    drop(conn);
     let claims = auth::Claims::builder(user_id, "users")
         .email(email)
+        .session_version(session_version)
         .exp((chrono::Utc::now().timestamp() as u64) + 3600)
         .build()
         .unwrap();
     let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();
-    format!("crap_session={}", token)
+    format!("crap_session={token}")
 }
 
 const TEST_CSRF: &str = "test-csrf-token-12345";
 
 fn csrf_cookie() -> String {
-    format!("crap_csrf={}", TEST_CSRF)
+    format!("crap_csrf={TEST_CSRF}")
 }
 
 fn auth_and_csrf(auth_cookie: &str) -> String {
-    format!("{}; crap_csrf={}", auth_cookie, TEST_CSRF)
+    format!("{auth_cookie}; crap_csrf={TEST_CSRF}")
 }
 
 async fn body_string(body: Body) -> String {
@@ -224,7 +248,7 @@ fn make_bearer_token(app: &TestApp, user_id: &str, email: &str) -> String {
         .build()
         .unwrap();
     let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();
-    format!("Bearer {}", token)
+    format!("Bearer {token}")
 }
 
 fn make_locale_config() -> LocaleConfig {
@@ -362,30 +386,27 @@ fn build_multipart_body(
     let boundary = "----CrapTestBoundary";
     let mut body = Vec::new();
 
-    body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
     body.extend_from_slice(
-        format!(
-            "Content-Disposition: form-data; name=\"_file\"; filename=\"{}\"\r\n",
-            filename
-        )
-        .as_bytes(),
+        format!("Content-Disposition: form-data; name=\"_file\"; filename=\"{filename}\"\r\n")
+            .as_bytes(),
     );
-    body.extend_from_slice(format!("Content-Type: {}\r\n\r\n", content_type).as_bytes());
+    body.extend_from_slice(format!("Content-Type: {content_type}\r\n\r\n").as_bytes());
     body.extend_from_slice(file_data);
     body.extend_from_slice(b"\r\n");
 
     for (name, value) in fields {
-        body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
         body.extend_from_slice(
-            format!("Content-Disposition: form-data; name=\"{}\"\r\n\r\n", name).as_bytes(),
+            format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
         );
         body.extend_from_slice(value.as_bytes());
         body.extend_from_slice(b"\r\n");
     }
 
-    body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
 
-    let content_type = format!("multipart/form-data; boundary={}", boundary);
+    let content_type = format!("multipart/form-data; boundary={boundary}");
     (content_type, body)
 }
 
@@ -408,16 +429,17 @@ async fn search_uses_configured_searchable_fields() {
     let cookie = make_auth_cookie(&app, &user_id, "search2@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("sposts").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([
-        ("title".to_string(), "Unique Title XYZ".to_string()),
-        ("body".to_string(), "Some body text".to_string()),
-        ("category".to_string(), "tech".to_string()),
-    ]);
+    let data: DocumentFields = HashMap::from([
+        ("title".to_string(), json!("Unique Title XYZ")),
+        ("body".to_string(), json!("Some body text")),
+        ("category".to_string(), json!("tech")),
+    ])
+    .into();
     let doc = query::create(&tx, "sposts", &def, &data, None).unwrap();
     query::fts::fts_upsert(&tx, "sposts", &doc, Some(&def)).unwrap();
     tx.commit().unwrap();
@@ -449,15 +471,14 @@ async fn update_localized_collection_redirects_with_locale() {
     let cookie = make_auth_cookie(&app, &user_id, "updloc@test.com");
 
     let doc_id = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         let def = reg.get_collection("pages").unwrap().clone();
-        drop(reg);
         let locale_ctx = query::LocaleContext {
             mode: query::LocaleMode::Single("en".to_string()),
             config: make_locale_config(),
         };
-        let mut data = std::collections::HashMap::new();
-        data.insert("title".to_string(), "Update Locale".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Update Locale"));
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         let doc = query::create(&tx, "pages", &def, &data, Some(&locale_ctx)).unwrap();
@@ -468,7 +489,7 @@ async fn update_localized_collection_redirects_with_locale() {
     let resp = app
         .router
         .oneshot(
-            Request::post(format!("/admin/collections/pages/{}", doc_id))
+            Request::post(format!("/admin/collections/pages/{doc_id}"))
                 .header("cookie", auth_and_csrf(&cookie))
                 .header("X-CSRF-Token", TEST_CSRF)
                 .header("content-type", "application/x-www-form-urlencoded")
@@ -480,8 +501,7 @@ async fn update_localized_collection_redirects_with_locale() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Localized update should succeed, got {}",
-        status
+        "Localized update should succeed, got {status}"
     );
     if status == StatusCode::OK
         && let Some(hx_redir) = resp.headers().get("HX-Redirect")
@@ -489,8 +509,7 @@ async fn update_localized_collection_redirects_with_locale() {
         let redir = hx_redir.to_str().unwrap_or("");
         assert!(
             !redir.contains("locale="),
-            "HX-Redirect should not contain locale= (cookie-based now), got {}",
-            redir
+            "HX-Redirect should not contain locale= (cookie-based now), got {redir}"
         );
     }
 }
@@ -539,8 +558,7 @@ async fn create_action_nonexistent_collection_redirects() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::FOUND,
-        "Create on nonexistent collection should redirect, got {}",
-        status
+        "Create on nonexistent collection should redirect, got {status}"
     );
 }
 
@@ -556,13 +574,13 @@ async fn list_items_uses_title_field() {
     let cookie = make_auth_cookie(&app, &user_id, "titlefield@test.com");
 
     let real_def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data =
-        std::collections::HashMap::from([("title".to_string(), "My Custom Title".to_string())]);
+    let data: DocumentFields =
+        HashMap::from([("title".to_string(), json!("My Custom Title"))]).into();
     query::create(&tx, "posts", &real_def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -605,8 +623,7 @@ async fn create_action_missing_required_field_shows_errors() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Validation error should re-render form or redirect, got {}",
-        status
+        "Validation error should re-render form or redirect, got {status}"
     );
 }
 
@@ -643,7 +660,7 @@ async fn edit_form_auth_collection_includes_password() {
     let resp = app
         .router
         .oneshot(
-            Request::get(format!("/admin/collections/users/{}", user_id))
+            Request::get(format!("/admin/collections/users/{user_id}"))
                 .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -722,13 +739,13 @@ async fn post_with_method_delete_deletes_document() {
     let cookie = make_auth_cookie(&app, &user_id, "methoddel@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data =
-        std::collections::HashMap::from([("title".to_string(), "Method Delete".to_string())]);
+    let data: DocumentFields =
+        HashMap::from([("title".to_string(), json!("Method Delete"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -747,8 +764,7 @@ async fn post_with_method_delete_deletes_document() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "DELETE via _method should succeed, got {}",
-        status
+        "DELETE via _method should succeed, got {status}"
     );
 }
 
@@ -798,8 +814,7 @@ async fn delete_action_nonexistent_collection_redirects() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Delete on nonexistent collection should redirect, got {}",
-        status
+        "Delete on nonexistent collection should redirect, got {status}"
     );
 }
 
@@ -829,12 +844,12 @@ async fn restore_version_nonversioned_redirects() {
     let cookie = make_auth_cookie(&app, &user_id, "restnv@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([("title".to_string(), "NV Restore".to_string())]);
+    let data: DocumentFields = HashMap::from([("title".to_string(), json!("NV Restore"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -915,16 +930,15 @@ async fn edit_form_with_non_default_locale() {
     let cookie = make_auth_cookie(&app, &user_id, "efloc@test.com");
 
     let doc_id = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         let def = reg.get_collection("pages").unwrap().clone();
-        drop(reg);
 
         let locale_ctx = query::LocaleContext {
             mode: query::LocaleMode::Single("en".to_string()),
             config: make_locale_config(),
         };
-        let mut data = std::collections::HashMap::new();
-        data.insert("title".to_string(), "Locale Edit Test".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Locale Edit Test"));
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         let doc = query::create(&tx, "pages", &def, &data, Some(&locale_ctx)).unwrap();
@@ -935,7 +949,7 @@ async fn edit_form_with_non_default_locale() {
     let resp = app
         .router
         .oneshot(
-            Request::get(format!("/admin/collections/pages/{}", doc_id))
+            Request::get(format!("/admin/collections/pages/{doc_id}"))
                 .header("cookie", format!("{}; crap_editor_locale=de", &cookie))
                 .body(Body::empty())
                 .unwrap(),
@@ -954,16 +968,15 @@ async fn update_action_with_locale() {
     let cookie = make_auth_cookie(&app, &user_id, "updloc@test.com");
 
     let doc_id = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         let def = reg.get_collection("pages").unwrap().clone();
-        drop(reg);
 
         let locale_ctx = query::LocaleContext {
             mode: query::LocaleMode::Single("en".to_string()),
             config: make_locale_config(),
         };
-        let mut data = std::collections::HashMap::new();
-        data.insert("title".to_string(), "Update Locale Test".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Update Locale Test"));
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         let doc = query::create(&tx, "pages", &def, &data, Some(&locale_ctx)).unwrap();
@@ -974,7 +987,7 @@ async fn update_action_with_locale() {
     let resp = app
         .router
         .oneshot(
-            Request::post(format!("/admin/collections/pages/{}", doc_id))
+            Request::post(format!("/admin/collections/pages/{doc_id}"))
                 .header("cookie", auth_and_csrf(&cookie))
                 .header("X-CSRF-Token", TEST_CSRF)
                 .header("content-type", "application/x-www-form-urlencoded")
@@ -986,8 +999,7 @@ async fn update_action_with_locale() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Update with locale should succeed, got {}",
-        status
+        "Update with locale should succeed, got {status}"
     );
 }
 
@@ -1130,7 +1142,7 @@ async fn admin_upload_edit_form_renders_focal_point_preview() {
     let edit_resp = app
         .router
         .oneshot(
-            Request::get(format!("/admin/collections/media/{}", doc_id))
+            Request::get(format!("/admin/collections/media/{doc_id}"))
                 .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -1159,9 +1171,9 @@ async fn upload_api_create_no_file_returns_400() {
 
     let boundary = "----CrapTestBoundary";
     let mut body = Vec::new();
-    body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
     body.extend_from_slice(b"Content-Disposition: form-data; name=\"alt\"\r\n\r\nsome text\r\n");
-    body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
 
     let resp = app
         .router
@@ -1169,7 +1181,7 @@ async fn upload_api_create_no_file_returns_400() {
             Request::post("/api/upload/media")
                 .header(
                     "content-type",
-                    format!("multipart/form-data; boundary={}", boundary),
+                    format!("multipart/form-data; boundary={boundary}"),
                 )
                 .header("authorization", &bearer)
                 .header("Cookie", csrf_cookie())
@@ -1314,7 +1326,7 @@ async fn upload_api_update_replaces_file() {
         .router
         .clone()
         .oneshot(
-            Request::patch(format!("/api/upload/media/{}", doc_id))
+            Request::patch(format!("/api/upload/media/{doc_id}"))
                 .header("content-type", ct2)
                 .header("authorization", &bearer)
                 .header("Cookie", csrf_cookie())
@@ -1369,7 +1381,7 @@ async fn upload_api_delete_returns_success() {
         .router
         .clone()
         .oneshot(
-            Request::delete(format!("/api/upload/media/{}", doc_id))
+            Request::delete(format!("/api/upload/media/{doc_id}"))
                 .header("authorization", &bearer)
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
@@ -1458,13 +1470,13 @@ async fn delete_confirm_page_returns_200() {
     let cookie = make_auth_cookie(&app, &user_id, "delconf@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data =
-        std::collections::HashMap::from([("title".to_string(), "To Confirm Delete".to_string())]);
+    let data: DocumentFields =
+        HashMap::from([("title".to_string(), json!("To Confirm Delete"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -1493,11 +1505,11 @@ async fn delete_confirm_page_with_schema_mismatch_returns_200() {
     // Create a document normally
     let mut conn = app.pool.get().unwrap();
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([("title".to_string(), "Broken Doc".to_string())]);
+    let data: DocumentFields = HashMap::from([("title".to_string(), json!("Broken Doc"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 

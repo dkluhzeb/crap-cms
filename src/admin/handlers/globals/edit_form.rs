@@ -6,30 +6,25 @@ use axum::{
     http::HeaderMap,
     response::Response,
 };
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::task;
-use tracing::error;
 
 use crate::{
     admin::{
         AdminState,
         context::{
-            BasePageContext, Breadcrumb, GlobalContext, PageMeta, PageType, field::FieldContext,
-            page::globals::GlobalEditPage,
+            BasePageContext, Breadcrumb, GlobalContext, GlobalPermissions, PageMeta, PageType,
+            field::FieldContext, page::globals::GlobalEditPage,
         },
         handlers::shared::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
             build_locale_template_data, compute_denied_read_fields, enrich_field_contexts,
             extract_doc_status, extract_editor_locale, fetch_version_sidebar_data,
-            flatten_document_values, forbidden, is_non_default_locale, not_found, paths,
-            render_page, server_error, split_sidebar_fields,
+            flatten_document_values, is_non_default_locale, not_found, paths, render_page,
+            service_error_to_admin_response, split_sidebar_fields, task_join_error_response,
         },
     },
-    core::{
-        Document,
-        auth::{AuthUser, Claims},
-        collection::GlobalDefinition,
-    },
+    core::{AuthUser, Claims, Document, DocumentFields, collection::GlobalDefinition},
     db::DbPool,
     hooks::HookRunner,
     service::{GetGlobalInput, RunnerReadHooks, ServiceContext, ServiceError, get_global_document},
@@ -41,13 +36,13 @@ struct ReadParams {
     runner: HookRunner,
     slug: String,
     def: GlobalDefinition,
-    locale_ctx: Option<crate::db::query::LocaleContext>,
+    locale_ctx: Option<crate::db::LocaleContext>,
     user_doc: Option<Document>,
     user_ui_locale: Option<String>,
 }
 
 /// Fetch the global document via the shared service layer read lifecycle.
-fn read_global_document(params: ReadParams) -> Result<Document, ServiceError> {
+fn read_global_document_blocking(params: &ReadParams) -> Result<Document, ServiceError> {
     let conn = params.pool.get().map_err(ServiceError::Internal)?;
 
     let hooks = RunnerReadHooks::new(&params.runner, &conn);
@@ -67,7 +62,7 @@ fn read_global_document(params: ReadParams) -> Result<Document, ServiceError> {
 fn prepare_edit_fields(
     state: &AdminState,
     def: &GlobalDefinition,
-    doc_fields: &HashMap<String, Value>,
+    doc_fields: &DocumentFields,
     editor_locale: Option<&str>,
     denied_read_fields: &[String],
 ) -> (Vec<FieldContext>, Vec<FieldContext>) {
@@ -122,7 +117,7 @@ pub async fn edit_form(
 ) -> Response {
     let def = match state.registry.get_global(&slug) {
         Some(d) => d.clone(),
-        None => return not_found(&state, &format!("Global '{}' not found", slug)),
+        None => return not_found(&state, &format!("Global '{slug}' not found")),
     };
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
@@ -138,25 +133,23 @@ pub async fn edit_form(
         user_ui_locale: auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone()),
     };
 
-    let read_result = task::spawn_blocking(move || read_global_document(read_params)).await;
+    let read_result =
+        task::spawn_blocking(move || read_global_document_blocking(&read_params)).await;
 
     let document = match read_result {
         Ok(Ok(doc)) => doc,
-        Ok(Err(ServiceError::AccessDenied(_))) => {
-            return forbidden(&state, "You don't have permission to view this global");
-        }
         Ok(Err(e)) => {
-            error!("Global read query error: {}", e);
-            return server_error(&state, "An internal error occurred.");
+            return service_error_to_admin_response(
+                &state,
+                e,
+                "You don't have permission to view this global",
+            );
         }
-        Err(e) => {
-            error!("Global read task error: {}", e);
-            return server_error(&state, "An internal error occurred.");
-        }
+        Err(e) => return task_join_error_response(&state, &e),
     };
 
     // Compute read-denied fields to exclude from form rendering.
-    let denied = match compute_denied_read_fields(&state, &auth_user, &def.fields) {
+    let denied = match compute_denied_read_fields(&state, auth_user.as_ref(), &def.fields) {
         Ok(d) => d,
         Err(resp) => return *resp,
     };
@@ -191,22 +184,25 @@ pub async fn edit_form(
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
     let breadcrumbs = vec![
-        Breadcrumb::link("dashboard", "/admin"),
+        Breadcrumb::link("dashboard", paths::DASHBOARD),
         Breadcrumb::current(def.display_name()),
     ];
 
     let base = BasePageContext::for_handler(
         &state,
         claims_ref,
-        &auth_user,
+        auth_user.as_ref(),
         PageMeta::new(PageType::GlobalEdit, def.display_name()),
     )
     .with_editor_locale(editor_locale.as_deref(), &state)
     .with_breadcrumbs(breadcrumbs);
 
+    let perms = GlobalPermissions::for_user(&state, &def, auth_user.as_ref());
+
     let ctx = GlobalEditPage {
         base,
         global: GlobalContext::from_def(&def),
+        perms,
         fields: main_fields,
         sidebar_fields,
         has_drafts,

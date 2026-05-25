@@ -1,11 +1,9 @@
-use std::collections::HashMap;
-
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, validate::FieldError};
 
 /// Validate min / max bounds for number fields.
-/// Skipped for has_many fields (validated per-element in `check_has_many_elements`).
+/// Skipped for `has_many` fields (validated per-element in `check_has_many_elements`).
 pub(crate) fn check_numeric_bounds(
     field: &FieldDefinition,
     data_key: &str,
@@ -33,50 +31,52 @@ pub(crate) fn check_numeric_bounds(
     // would otherwise reach the DB unchallenged and break downstream
     // filters / aggregations (NaN ≠ NaN, no row ever matches).
     if !v.is_finite() {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!("{} must be a finite number", field.name),
-            "validation.finite_number",
-            HashMap::from([("field".to_string(), field.name.clone())]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} must be a finite number", field.name),
+                "validation.finite_number",
+            )
+            .with_param("field", field.name.clone()),
+        );
         return;
     }
 
     if let Some(min_val) = field.min
         && v < min_val
     {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!("{} must be at least {}", field.name, min_val),
-            "validation.min_value",
-            HashMap::from([
-                ("field".to_string(), field.name.clone()),
-                ("min".to_string(), min_val.to_string()),
-            ]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} must be at least {}", field.name, min_val),
+                "validation.min_value",
+            )
+            .with_param("field", field.name.clone())
+            .with_param("min", min_val.to_string()),
+        );
     }
 
     if let Some(max_val) = field.max
         && v > max_val
     {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!("{} must be at most {}", field.name, max_val),
-            "validation.max_value",
-            HashMap::from([
-                ("field".to_string(), field.name.clone()),
-                ("max".to_string(), max_val.to_string()),
-            ]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} must be at most {}", field.name, max_val),
+                "validation.max_value",
+            )
+            .with_param("field", field.name.clone())
+            .with_param("max", max_val.to_string()),
+        );
     }
 }
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
-    use crate::core::field::{FieldDefinition, FieldType};
+    use crate::core::DocumentFields;
+    use crate::core::{FieldDefinition, FieldType};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
-    use std::collections::HashMap;
 
     #[test]
     fn test_validate_number_min_fails() {
@@ -89,7 +89,7 @@ mod tests {
                 .min(0.0)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("score".to_string(), json!("-5"));
         let result = validate_fields_inner(
             &lua,
@@ -112,7 +112,7 @@ mod tests {
                 .max(100.0)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("score".to_string(), json!("150"));
         let result = validate_fields_inner(
             &lua,
@@ -140,7 +140,7 @@ mod tests {
                 .max(100.0)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("score".to_string(), json!("50"));
         let result = validate_fields_inner(
             &lua,
@@ -162,7 +162,7 @@ mod tests {
                 .min(10.0)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("score".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -185,7 +185,7 @@ mod tests {
                 .max(10.0)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("score".to_string(), json!(15));
         let result = validate_fields_inner(
             &lua,
@@ -217,7 +217,7 @@ mod tests {
         ];
 
         for bad in ["NaN", "Infinity", "-Infinity", "inf", "-inf"] {
-            let mut data = HashMap::new();
+            let mut data = DocumentFields::new();
             data.insert("score".to_string(), json!(bad));
             let result = validate_fields_inner(
                 &lua,
@@ -252,7 +252,7 @@ mod tests {
         ];
 
         for ok in ["0", "50.5", "100", "1e2"] {
-            let mut data = HashMap::new();
+            let mut data = DocumentFields::new();
             data.insert("score".to_string(), json!(ok));
             let result = validate_fields_inner(
                 &lua,

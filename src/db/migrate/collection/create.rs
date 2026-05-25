@@ -1,12 +1,15 @@
 //! Collection table creation from Lua definitions.
 
+use std::fmt::Write as _;
+
 use anyhow::{Context as _, Result};
 use serde_json::Value;
 use tracing::{debug, info, warn};
 
+use crate::core::collection::Auth;
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, FieldType},
+    core::{CollectionDefinition, FieldType, collection::MfaMode},
     db::{DbConnection, migrate::helpers::collect_column_specs, query::helpers::locale_column},
 };
 
@@ -15,14 +18,14 @@ struct ColumnConstraints<'a> {
     required: bool,
     unique: bool,
     soft_delete: bool,
-    default_value: &'a Option<Value>,
+    default_value: Option<&'a Value>,
     field_type: &'a FieldType,
     db_kind: &'a str,
 }
 
 /// Build a column definition string with type, constraints, and default.
 fn build_column_def(col_name: &str, col_type: &str, constraints: &ColumnConstraints) -> String {
-    let mut col = format!("{} {}", col_name, col_type);
+    let mut col = format!("{col_name} {col_type}");
 
     if constraints.required {
         col.push_str(" NOT NULL");
@@ -45,7 +48,7 @@ fn build_column_def(col_name: &str, col_type: &str, constraints: &ColumnConstrai
     col
 }
 
-pub fn create_collection_table(
+pub(crate) fn create_collection_table(
     conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
@@ -62,7 +65,7 @@ pub fn create_collection_table(
     debug!("SQL: {}", sql);
 
     conn.execute_ddl(&sql, &[])
-        .with_context(|| format!("Failed to create table {}", slug))?;
+        .with_context(|| format!("Failed to create table {slug}"))?;
 
     Ok(())
 }
@@ -90,13 +93,13 @@ fn collect_field_columns(
                     && !def.has_drafts();
 
                 if spec.companion_text {
-                    columns.push(format!("{} TEXT", col_name));
+                    columns.push(format!("{col_name} TEXT"));
                 } else {
                     let c = ColumnConstraints {
                         required: is_required,
                         unique: spec.field.unique,
                         soft_delete: def.soft_delete,
-                        default_value: &spec.field.default_value,
+                        default_value: spec.field.default_value.as_ref(),
                         field_type: &spec.field.field_type,
                         db_kind: conn.kind(),
                     };
@@ -110,7 +113,7 @@ fn collect_field_columns(
                 required: spec.field.required && !def.has_drafts(),
                 unique: spec.field.unique,
                 soft_delete: def.soft_delete,
-                default_value: &spec.field.default_value,
+                default_value: spec.field.default_value.as_ref(),
                 field_type: &spec.field.field_type,
                 db_kind: conn.kind(),
             };
@@ -147,11 +150,22 @@ fn collect_system_columns(
             "_session_version INTEGER DEFAULT 0".to_string(),
         ]);
 
-        if def.auth.as_ref().is_some_and(|a| a.verify_email) {
+        if def.auth.as_ref().is_some_and(Auth::requires_verify_email) {
             columns.extend([
                 "_verified INTEGER DEFAULT 0".to_string(),
                 "_verification_token TEXT".to_string(),
                 "_verification_token_exp INTEGER".to_string(),
+            ]);
+        }
+
+        // MFA columns (parallel to alter::alter_collection_table). Without
+        // these, `set_mfa_code` fails silently on a freshly-created auth
+        // collection with `mfa = Email`, which means the MFA challenge
+        // email never gets queued.
+        if def.auth.as_ref().is_some_and(|a| a.mfa() != MfaMode::Off) {
+            columns.extend([
+                "_mfa_code TEXT".to_string(),
+                "_mfa_code_exp INTEGER".to_string(),
             ]);
         }
     }
@@ -164,28 +178,34 @@ fn collect_system_columns(
 
 /// Append a DEFAULT value clause to a column definition string.
 #[cfg(test)]
-pub fn append_default_value(
+pub(crate) fn append_default_value(
     col: &mut String,
-    default_value: &Option<Value>,
+    default_value: Option<&Value>,
     field_type: &FieldType,
 ) {
     append_default_value_for(col, default_value, field_type, "sqlite");
 }
 
 /// Append a DEFAULT clause. Uses `0`/`1` for booleans (INTEGER on all backends).
-pub fn append_default_value_for(
+pub(crate) fn append_default_value_for(
     col: &mut String,
-    default_value: &Option<Value>,
+    default_value: Option<&Value>,
     field_type: &FieldType,
     _db_kind: &str,
 ) {
-    if let Some(default) = &default_value {
+    if let Some(default) = default_value {
         warn_default_type_mismatch(default, field_type);
 
         match default {
-            Value::String(s) => col.push_str(&format!(" DEFAULT '{}'", s.replace('\'', "''"))),
-            Value::Number(n) => col.push_str(&format!(" DEFAULT {}", n)),
-            Value::Bool(b) => col.push_str(&format!(" DEFAULT {}", if *b { 1 } else { 0 })),
+            Value::String(s) => {
+                let _ = write!(col, " DEFAULT '{}'", s.replace('\'', "''"));
+            }
+            Value::Number(n) => {
+                let _ = write!(col, " DEFAULT {n}");
+            }
+            Value::Bool(b) => {
+                let _ = write!(col, " DEFAULT {}", i32::from(*b));
+            }
             _ => {}
         }
     } else if *field_type == FieldType::Checkbox {
@@ -217,12 +237,14 @@ fn warn_default_type_mismatch(default: &Value, field_type: &FieldType) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use serde_json::json;
 
-    use super::super::test_helpers::*;
     use super::*;
     use crate::core::collection::*;
-    use crate::core::field::{FieldDefinition, FieldTab, FieldType};
+    use crate::core::{FieldDefinition, FieldTab, FieldType};
+    use crate::db::migrate::collection::test_helpers::*;
     use crate::db::migrate::helpers::get_table_columns;
 
     /// Create a collection table and return its column names.
@@ -230,7 +252,7 @@ mod tests {
         slug: &str,
         def: &CollectionDefinition,
         locale: &LocaleConfig,
-    ) -> std::collections::HashSet<String> {
+    ) -> HashSet<String> {
         let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
 
@@ -264,11 +286,7 @@ mod tests {
     #[test]
     fn create_auth_collection_has_system_columns() {
         let mut def = simple_collection("users", vec![text_field("email")]);
-        def.auth = Some({
-            let mut auth = Auth::new(true);
-            auth.verify_email = true;
-            auth
-        });
+        def.auth = Some(Auth::enabled().map_password_login(|b| b.verify_email(true)));
         let cols = create_and_columns("users", &def, &no_locale());
         assert!(cols.contains("_password_hash"));
         assert!(cols.contains("_reset_token"));
@@ -670,35 +688,35 @@ mod tests {
     #[test]
     fn append_default_string() {
         let mut col = "name TEXT".to_string();
-        append_default_value(&mut col, &Some(json!("hello")), &FieldType::Text);
+        append_default_value(&mut col, Some(&json!("hello")), &FieldType::Text);
         assert!(col.contains("DEFAULT 'hello'"));
     }
 
     #[test]
     fn append_default_number() {
         let mut col = "count REAL".to_string();
-        append_default_value(&mut col, &Some(json!(42)), &FieldType::Number);
+        append_default_value(&mut col, Some(&json!(42)), &FieldType::Number);
         assert!(col.contains("DEFAULT 42"));
     }
 
     #[test]
     fn append_default_bool() {
         let mut col = "active INTEGER".to_string();
-        append_default_value(&mut col, &Some(json!(true)), &FieldType::Checkbox);
+        append_default_value(&mut col, Some(&json!(true)), &FieldType::Checkbox);
         assert!(col.contains("DEFAULT 1"));
     }
 
     #[test]
     fn append_default_checkbox_none() {
         let mut col = "active INTEGER".to_string();
-        append_default_value(&mut col, &None, &FieldType::Checkbox);
+        append_default_value(&mut col, None, &FieldType::Checkbox);
         assert!(col.contains("DEFAULT 0"));
     }
 
     #[test]
     fn append_default_none_non_checkbox() {
         let mut col = "name TEXT".to_string();
-        append_default_value(&mut col, &None, &FieldType::Text);
+        append_default_value(&mut col, None, &FieldType::Text);
         assert!(!col.contains("DEFAULT"));
     }
 

@@ -1,11 +1,9 @@
-use std::collections::HashMap;
-
 use mlua::Lua;
 use serde_json::Value;
 use tracing::warn;
 
 use crate::{
-    core::{FieldDefinition, validate::FieldError},
+    core::{DocumentFields, FieldDefinition, validate::FieldError},
     hooks::lifecycle::validation::custom::run_validate_function_inner,
 };
 
@@ -15,17 +13,15 @@ pub(crate) fn check_custom_validate(
     field: &FieldDefinition,
     data_key: &str,
     value: Option<&Value>,
-    data: &HashMap<String, Value>,
+    data: &DocumentFields,
     table: &str,
     errors: &mut Vec<FieldError>,
 ) {
-    let validate_ref = match field.validate {
-        Some(ref v) => v,
-        None => return,
+    let Some(validate_ref) = field.validate.as_ref() else {
+        return;
     };
-    let val = match value {
-        Some(v) => v,
-        None => return,
+    let Some(val) = value else {
+        return;
     };
 
     match run_validate_function_inner(lua, validate_ref, val, data, table, &field.name) {
@@ -36,22 +32,24 @@ pub(crate) fn check_custom_validate(
         Err(e) => {
             warn!("Validate function '{}' error: {}", validate_ref, e);
 
-            errors.push(FieldError::with_key(
-                data_key.to_owned(),
-                format!("Validation failed (internal error in '{}')", validate_ref),
-                "validation.custom_error",
-                HashMap::from([("field".to_string(), field.name.clone())]),
-            ));
+            errors.push(
+                FieldError::with_key(
+                    data_key.to_owned(),
+                    format!("Validation failed (internal error in '{validate_ref}')"),
+                    "validation.custom_error",
+                )
+                .with_param("field", field.name.clone()),
+            );
         }
     }
 }
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
-    use crate::core::field::{FieldDefinition, FieldType};
+    use crate::core::DocumentFields;
+    use crate::core::{FieldDefinition, FieldType};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
-    use std::collections::HashMap;
 
     #[test]
     fn test_validate_custom_validate_function_returns_error() {
@@ -81,7 +79,7 @@ mod tests {
                 .validate("validators.validate_test")
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".to_string(), json!("bad"));
         let result = validate_fields_inner(
             &lua,
@@ -119,7 +117,7 @@ mod tests {
                 .validate("validators.validate_fail")
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".to_string(), json!("anything"));
         let result = validate_fields_inner(
             &lua,
@@ -153,7 +151,7 @@ mod tests {
                 .validate("validators.validate_ok")
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".to_string(), json!("good"));
         let result = validate_fields_inner(
             &lua,
@@ -188,7 +186,7 @@ mod tests {
                 .validate("validators.validate_boom")
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".to_string(), json!("anything"));
         let result = validate_fields_inner(
             &lua,

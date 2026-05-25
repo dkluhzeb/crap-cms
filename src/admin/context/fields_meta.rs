@@ -5,10 +5,11 @@
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::core::FieldDefinition;
+use crate::{core::FieldDefinition, typegen::LuaAnnotation};
 
 /// Metadata about a single field as it appears to templates.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.field_meta")]
 pub struct FieldMeta {
     pub name: String,
     pub field_type: String,
@@ -19,7 +20,8 @@ pub struct FieldMeta {
 }
 
 /// Admin-presentation metadata for a field (label, description, layout hints).
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.field_admin_meta")]
 pub struct FieldAdminMeta {
     pub label: Option<String>,
     pub hidden: bool,
@@ -46,7 +48,7 @@ impl FieldMeta {
                     .map(|ls| ls.resolve_default().to_string()),
                 hidden: field.admin.hidden,
                 readonly: field.admin.readonly,
-                width: field.admin.width.clone(),
+                width: field.admin.width.as_ref().map(|w| w.as_str().to_owned()),
                 description: field
                     .admin
                     .description
@@ -71,8 +73,7 @@ impl FieldMeta {
 mod tests {
     use super::*;
 
-    use crate::core::field::{FieldAdmin, FieldType, LocalizedString};
-
+    use crate::core::{FieldAdmin, FieldType, LocalizedString};
     #[test]
     fn from_def_includes_admin_info() {
         let field = FieldDefinition::builder("title", FieldType::Text)

@@ -1,5 +1,8 @@
 //! Find handler — query documents with filters, sorting, and pagination.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
@@ -8,16 +11,93 @@ use crate::{
     api::{
         content,
         handlers::{
-            ContentService, collection::filter_builder::FilterBuilder, convert::document_to_proto,
+            ContentService, collection::filter_builder::FilterBuilder, proto::document_to_proto,
         },
     },
-    db::{AccessResult, FindQuery, LocaleContext, query},
+    core::{CollectionDefinition, Registry, SharedCache, SharedTokenProvider},
+    db::{AccessResult, DbPool, FindQuery, LocaleContext, SharedPopulateSingleflight, query},
+    hooks::HookRunner,
     service::{FindDocumentsInput, RunnerReadHooks, ServiceContext, ServiceError, find_documents},
 };
 
-use crate::api::handlers::convert::pagination_result_to_proto;
+use crate::api::handlers::proto::pagination_result_to_proto;
 
-/// Build a FindQuery from the gRPC request parameters.
+/// Owned bundle for the `Find` spawn-blocking body.
+struct FindBlockingInput {
+    pool: DbPool,
+    runner: HookRunner,
+    headers: HashMap<String, String>,
+    token_provider: SharedTokenProvider,
+    registry: Arc<Registry>,
+    db_kind: String,
+    collection: String,
+    def: CollectionDefinition,
+    pop_cache: SharedCache,
+    singleflight: SharedPopulateSingleflight,
+    token: Option<String>,
+    find_query: FindQuery,
+    locale_ctx: Option<LocaleContext>,
+    select: Option<Vec<String>>,
+    depth: i32,
+    cursor_enabled: bool,
+    is_trash: bool,
+    include_drafts: bool,
+}
+
+fn find_blocking(
+    input: FindBlockingInput,
+) -> Result<(Vec<content::Document>, content::PaginationInfo), Status> {
+    let conn = input
+        .pool
+        .get()
+        .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
+
+    let auth_user = ContentService::resolve_auth_user(
+        input.token.as_deref(),
+        &input.headers,
+        &*input.token_provider,
+        &input.runner,
+        &input.registry,
+        &conn,
+    )?;
+
+    query::validate_query_fields(&input.def, &input.find_query, input.locale_ctx.as_ref())
+        .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+    let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+
+    let read_hooks = RunnerReadHooks::new(&input.runner, &conn);
+    let ctx = ServiceContext::collection(&input.collection, &input.def)
+        .pool(&input.pool)
+        .conn(&conn)
+        .read_hooks(&read_hooks)
+        .user(user_doc)
+        .build();
+
+    let find_input = FindDocumentsInput::builder(&input.find_query)
+        .depth(input.depth)
+        .select(input.select.as_deref())
+        .locale_ctx(input.locale_ctx.as_ref())
+        .registry(Some(&input.registry))
+        .cache(Some(&*input.pop_cache))
+        .cursor_enabled(input.cursor_enabled)
+        .trash(input.is_trash)
+        .include_drafts(input.include_drafts)
+        .singleflight(Some(input.singleflight))
+        .build();
+
+    let result = find_documents(&ctx, &find_input).map_err(Status::from)?;
+
+    let proto_docs: Vec<_> = result
+        .docs
+        .iter()
+        .map(|doc| document_to_proto(doc, &input.collection))
+        .collect();
+
+    Ok((proto_docs, pagination_result_to_proto(&result.pagination)))
+}
+
+/// Build a `FindQuery` from the gRPC request parameters.
 ///
 /// Produces a *user* query — system filters (`_status`, `_deleted_at`) are
 /// injected by the service layer based on the typed `trash` / `include_drafts`
@@ -64,6 +144,7 @@ impl ContentService {
     ) -> Result<Response<content::FindResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
+        let headers = self.metadata_headers(&metadata);
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
@@ -89,66 +170,34 @@ impl ContentService {
         let depth = req.depth.unwrap_or(0).max(0).min(self.max_depth);
         let cursor_enabled = self.pagination_ctx.cursor_enabled;
 
-        let pool = self.pool.clone();
-        let runner = self.hook_runner.clone();
-        let token_provider = self.token_provider.clone();
-        let registry = self.registry.clone();
-        let db_kind = self.db_kind.clone();
-        let collection = req.collection.clone();
-        let pop_cache = self.cache.clone();
-        let singleflight = self.populate_singleflight.clone();
-        let def_owned = def;
-        let is_trash = req.trash.unwrap_or(false) && def_owned.soft_delete;
-        let include_drafts = req.draft.unwrap_or(false);
+        let is_trash = req.trash.unwrap_or(false) && def.soft_delete;
+        let find_query = build_find_query(&req, &def, &pagination, select.as_deref())?;
 
-        let find_query = build_find_query(&req, &def_owned, &pagination, select.as_deref())?;
+        let input = FindBlockingInput {
+            pool: self.pool.clone(),
+            runner: self.hook_runner.clone(),
+            token_provider: self.token_provider.clone(),
+            registry: Arc::clone(&self.registry),
+            db_kind: self.db_kind.clone(),
+            collection: req.collection.clone(),
+            def,
+            pop_cache: self.cache.clone(),
+            singleflight: self.populate_singleflight.clone(),
+            token,
+            headers,
+            find_query,
+            locale_ctx,
+            select,
+            depth,
+            cursor_enabled,
+            is_trash,
+            include_drafts: req.draft.unwrap_or(false),
+        };
 
-        let (proto_docs, pagination_info) = task::spawn_blocking(move || -> Result<_, Status> {
-            let conn = pool
-                .get()
-                .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
-
-            let auth_user =
-                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
-
-            query::validate_query_fields(&def_owned, &find_query, locale_ctx.as_ref())
-                .map_err(|e| Status::invalid_argument(e.to_string()))?;
-
-            let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-
-            let read_hooks = RunnerReadHooks::new(&runner, &conn);
-            let ctx = ServiceContext::collection(&collection, &def_owned)
-                .pool(&pool)
-                .conn(&conn)
-                .read_hooks(&read_hooks)
-                .user(user_doc)
-                .build();
-
-            let input = FindDocumentsInput::builder(&find_query)
-                .depth(depth)
-                .select(select.as_deref())
-                .locale_ctx(locale_ctx.as_ref())
-                .registry(Some(&registry))
-                .cache(Some(&*pop_cache))
-                .cursor_enabled(cursor_enabled)
-                .trash(is_trash)
-                .include_drafts(include_drafts)
-                .singleflight(Some(singleflight))
-                .build();
-
-            let result = find_documents(&ctx, &input).map_err(Status::from)?;
-
-            let proto_docs: Vec<_> = result
-                .docs
-                .iter()
-                .map(|doc| document_to_proto(doc, &collection))
-                .collect();
-
-            Ok((proto_docs, pagination_result_to_proto(&result.pagination)))
-        })
-        .await
-        .inspect_err(|e| error!("Task error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))??;
+        let (proto_docs, pagination_info) = task::spawn_blocking(move || find_blocking(input))
+            .await
+            .inspect_err(|e| error!("Task error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))??;
 
         Ok(Response::new(content::FindResponse {
             documents: proto_docs,

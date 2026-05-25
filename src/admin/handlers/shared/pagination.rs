@@ -54,7 +54,7 @@ mod tests {
     use super::*;
     use crate::config::{PaginationConfig, PaginationMode};
     use crate::core::Document;
-    use crate::db::query::PaginationResult;
+    use crate::db::PaginationResult;
 
     fn test_config() -> PaginationConfig {
         PaginationConfig {

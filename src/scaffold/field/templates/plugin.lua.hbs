@@ -1,0 +1,50 @@
+--- {{label}} field plugin: pre-configures `crap.fields.{{base_type}}` with
+--- `admin.template = "fields/{{name}}"` so a single-instance per-field
+--- template (`templates/fields/{{name}}.hbs`) and a Web Component
+--- (`static/components/crap-{{name}}.js`) render the field's UI.
+---
+--- Storage stays as `{{base_type}}` -- validation, SQL schema, and list-view
+--- formatting all flow through the built-in type. Only the admin
+--- rendering is custom.
+---
+--- Use it in a collection like:
+---
+---   local {{name}} = require("plugins.{{name}}")
+---
+---   crap.collections.define("products", {
+---     fields = {
+---       {{name}}.field({ name = "my_{{name}}" }),
+---     },
+---   })
+
+local M = {}
+
+---@param opts table?
+---@return table
+function M.field(opts)
+  opts = opts or {}
+  local admin = opts.admin or {}
+
+  -- Per-instance template binding. The Web Component
+  -- (`<crap-{{name}}>` registered via `static/components/custom.js`)
+  -- handles the actual UI; this template wraps it in the standard
+  -- field chrome.
+  admin.template = "fields/{{name}}"
+  admin.extra = admin.extra or {}
+
+  -- Default extras passed to the template as `\{{extra.<key>}}`.
+  -- Override per-field by setting `admin.extra.color = "..."` in the
+  -- collection definition.
+  if admin.extra.color == nil then
+    admin.extra.color = "amber"
+  end
+
+  return crap.fields.{{base_type}}({
+    name = opts.name or "{{name}}",
+    required = opts.required,
+    default_value = opts.default_value,
+    admin = admin,
+  })
+end
+
+return M

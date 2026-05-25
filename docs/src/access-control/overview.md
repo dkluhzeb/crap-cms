@@ -45,7 +45,7 @@ Access functions run with transaction context — they can call `crap.collection
 >
 > ```lua
 > function M.check(ctx)
->     local count = crap.collections.count("items", { overrideAccess = true })
+>     local count = crap.collections.items.count({ overrideAccess = true })
 >     return count < 100  -- allow if under limit
 > end
 > ```

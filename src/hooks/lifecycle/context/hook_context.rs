@@ -5,31 +5,61 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::HashMap;
 
 use crate::{
-    core::{Document, FieldDefinition, FieldType},
+    core::{Document, DocumentFields, FieldDefinition, FieldType, ReqContext},
     hooks::{
-        api,
         lifecycle::{HookDepth, converters::document_to_lua_table},
+        lua_api,
     },
+    typegen::lua::LuaAnnotation,
 };
 
 use super::HookContextBuilder;
 
 /// Context passed to hook functions.
-#[derive(Debug, Clone)]
+///
+/// `data` is mutable in `before_*` hooks; read-only in `after_*` hooks.
+/// `hook_depth` (not on the Rust struct, added at `to_lua_table` time
+/// from `HookDepth` app-data) tracks recursion depth — `0` for a
+/// top-level API call, `1+` from Lua CRUD invoked inside another hook.
+//
+// `LuaAnnotation` derive emits the Lua-facing `crap.HookContext` class
+// in `types/crap.lua`. Field types are overridden where the Rust shape
+// (`DocumentFields` / `ReqContext` / `Option<Document>`) differs from
+// what the Lua user sees on the hook context table.
+#[derive(Debug, Clone, LuaAnnotation)]
+#[lua(
+    class = "crap.HookContext",
+    extra_field = "hook_depth integer  Current recursion depth. `0` = top-level API/admin call, `1+` = from Lua CRUD inside hooks. Hooks are skipped when this reaches `hooks.max_depth` (default: `3`)."
+)]
 pub struct HookContext {
+    /// Collection slug.
     pub collection: String,
+    /// The operation being performed.
+    #[lua(ty = "\"create\"|\"update\"|\"delete\"|\"find\"|\"find_by_id\"|\"get_global\"|\"init\"")]
     pub operation: String,
-    pub data: HashMap<String, JsonValue>,
+    /// Document data. For read hooks, contains document fields including
+    /// `id` / timestamps. For delete hooks, contains only
+    /// `{ id = "..." }`. In `after_change` hooks, `data.id` carries the
+    /// new document ID.
+    #[lua(ty = "table<string, any>")]
+    pub data: DocumentFields,
+    /// Current locale code (nil if localization disabled or default
+    /// locale).
     pub locale: Option<String>,
-    /// Whether this operation is a draft save (`true` = draft, `false`/`None` = publish).
+    /// `true` when this is a draft save (only set for collections with
+    /// `versions.drafts` enabled).
     pub draft: Option<bool>,
-    /// Request-scoped shared table that flows from before_validate through after_change.
-    /// Hooks can read/write this to share state within one request lifecycle.
-    /// Only JSON-compatible values survive (no functions, userdata, etc.).
-    pub context: HashMap<String, JsonValue>,
-    /// Authenticated user document, if any. Exposed as `ctx.user` in Lua hooks.
+    /// Request-scoped shared table that persists from `before_validate`
+    /// through `after_change` within one request. Only JSON-compatible
+    /// values survive (no functions / userdata).
+    #[lua(ty = "table<string, any>")]
+    pub context: ReqContext,
+    /// Authenticated user document (nil if unauthenticated or no auth
+    /// collection).
+    #[lua(ty = "table", optional)]
     pub user: Option<Document>,
-    /// Admin UI locale (e.g. "en", "de"). Exposed as `ctx.ui_locale` in Lua hooks.
+    /// Admin UI locale code (e.g., `"en"`, `"de"`). Nil if not set or
+    /// called from gRPC without locale context.
     pub ui_locale: Option<String>,
 }
 
@@ -51,7 +81,7 @@ impl HookContext {
         tbl.set("data", hashmap_to_lua(lua, &self.data)?)?;
         tbl.set("context", hashmap_to_lua(lua, &self.context)?)?;
 
-        let depth = lua.app_data_ref::<HookDepth>().map(|d| d.0).unwrap_or(0);
+        let depth = lua.app_data_ref::<HookDepth>().map_or(0, |d| d.0);
         tbl.set("hook_depth", depth)?;
 
         if let Some(ref v) = self.locale {
@@ -70,40 +100,42 @@ impl HookContext {
         Ok(tbl)
     }
 
-    /// Convert data to a string map for query functions.
+    /// Convert data to a typed-value map for `query::create`/`query::update`.
     ///
     /// Only includes fields that have parent table columns (skips array/has-many).
     /// Group fields are flattened from `{ "seo": { "meta_title": "X" } }` to
     /// `{ "seo__meta_title": "X" }` so `query::create/update` can find them.
-    pub fn to_string_map(&self, fields: &[FieldDefinition]) -> HashMap<String, String> {
-        let mut map = HashMap::new();
+    /// Typed values (Number, Bool, etc.) flow through unchanged so the DB
+    /// coercion path can preserve precision via `coerce_json_value`.
+    #[must_use]
+    pub fn to_value_map(&self, fields: &[FieldDefinition]) -> DocumentFields {
+        let mut map = DocumentFields::new();
 
-        for (k, v) in &self.data {
+        for (k, v) in self.data.as_map() {
             // Check if this key is a group field that needs flattening
             let is_group = fields
                 .iter()
                 .any(|f| f.name == *k && f.field_type == FieldType::Group);
 
             if is_group && let Some(obj) = v.as_object() {
-                flatten_group_to_map(k, obj, &mut map);
+                flatten_group_to_value_map(k, obj, &mut map);
 
                 continue;
             }
 
-            // If the value is already a string (e.g. from form data), fall through
-            map.insert(k.clone(), json_val_to_string(v));
+            map.insert(k.clone(), v.clone());
         }
 
         map
     }
 
     /// Read the `context` table from a returned Lua hook table, replacing `self.context`.
-    pub(crate) fn read_context_back(&mut self, lua: &Lua, tbl: &Table) {
+    pub(crate) fn read_context_back(&mut self, tbl: &Table) {
         if let Ok(context_tbl) = tbl.get::<Table>("context") {
             self.context.clear();
 
             for (k, v) in context_tbl.pairs::<String, Value>().flatten() {
-                if let Ok(json_val) = api::lua_to_json(lua, &v) {
+                if let Ok(json_val) = lua_api::lua_to_json(&v) {
                     self.context.insert(k, json_val);
                 }
             }
@@ -111,38 +143,30 @@ impl HookContext {
     }
 }
 
-/// Convert a HashMap<String, JsonValue> to a Lua table.
+/// Convert a `HashMap`<String, `JsonValue`> to a Lua table.
 fn hashmap_to_lua(lua: &Lua, map: &HashMap<String, JsonValue>) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
 
     for (k, v) in map {
-        tbl.set(k.as_str(), api::json_to_lua(lua, v)?)?;
+        tbl.set(k.as_str(), lua_api::json_to_lua(lua, v)?)?;
     }
 
     Ok(tbl)
 }
 
-/// Convert a JSON value to its string representation for the string map.
-fn json_val_to_string(v: &JsonValue) -> String {
-    match v {
-        JsonValue::String(s) => s.clone(),
-        other => other.to_string(),
-    }
-}
-
-/// Recursively flatten a group object into `prefix__key` pairs for the string map.
-fn flatten_group_to_map(
+/// Recursively flatten a group object into `prefix__key` typed pairs.
+fn flatten_group_to_value_map(
     prefix: &str,
     obj: &JsonMap<String, JsonValue>,
-    map: &mut HashMap<String, String>,
+    map: &mut DocumentFields,
 ) {
     for (sub_key, sub_val) in obj {
-        let flat_key = format!("{}__{}", prefix, sub_key);
+        let flat_key = format!("{prefix}__{sub_key}");
 
         if let JsonValue::Object(nested) = sub_val {
-            flatten_group_to_map(&flat_key, nested, map);
+            flatten_group_to_value_map(&flat_key, nested, map);
         } else {
-            map.insert(flat_key, json_val_to_string(sub_val));
+            map.insert(flat_key, sub_val.clone());
         }
     }
 }
@@ -158,7 +182,7 @@ mod tests {
         lua.set_app_data(HookDepth(3));
         let mut data = HashMap::new();
         data.insert("title".to_string(), json!("Hello"));
-        let mut ctx_map = HashMap::new();
+        let mut ctx_map = ReqContext::new();
         ctx_map.insert("request_id".to_string(), json!("abc-123"));
 
         let ctx = HookContext::builder("posts", "create")
@@ -191,12 +215,12 @@ mod tests {
         context_tbl.set("key2", 42).unwrap();
         tbl.set("context", context_tbl).unwrap();
 
-        let mut ctx_map = HashMap::new();
+        let mut ctx_map = ReqContext::new();
         ctx_map.insert("old_key".to_string(), json!("old_value"));
         let mut ctx = HookContext::builder("test", "create")
             .context(ctx_map)
             .build();
-        ctx.read_context_back(&lua, &tbl);
+        ctx.read_context_back(&tbl);
 
         assert!(
             !ctx.context.contains_key("old_key"),
@@ -211,12 +235,12 @@ mod tests {
         let lua = mlua::Lua::new();
         let tbl = lua.create_table().unwrap();
 
-        let mut ctx_map = HashMap::new();
+        let mut ctx_map = ReqContext::new();
         ctx_map.insert("old_key".to_string(), json!("old_value"));
         let mut ctx = HookContext::builder("test", "create")
             .context(ctx_map)
             .build();
-        ctx.read_context_back(&lua, &tbl);
+        ctx.read_context_back(&tbl);
 
         assert!(ctx.context.contains_key("old_key"));
     }
@@ -236,10 +260,12 @@ mod tests {
             FieldDefinition::builder("active", FieldType::Checkbox).build(),
         ];
 
-        let map = ctx.to_string_map(&fields);
-        assert_eq!(map.get("title").unwrap(), "Hello World");
-        assert_eq!(map.get("count").unwrap(), "42");
-        assert_eq!(map.get("active").unwrap(), "true");
+        let map = ctx.to_value_map(&fields);
+        // Typed values flow through unchanged so coerce_json_value can
+        // preserve precision per field_type.
+        assert_eq!(map.get("title"), Some(&json!("Hello World")));
+        assert_eq!(map.get("count"), Some(&json!(42)));
+        assert_eq!(map.get("active"), Some(&json!(true)));
     }
 
     #[test]
@@ -261,10 +287,13 @@ mod tests {
             FieldDefinition::builder("title", FieldType::Text).build(),
         ];
 
-        let map = ctx.to_string_map(&fields);
-        assert_eq!(map.get("seo__meta_title").unwrap(), "My Title");
-        assert_eq!(map.get("seo__meta_description").unwrap(), "My Description");
-        assert_eq!(map.get("title").unwrap(), "Hello");
+        let map = ctx.to_value_map(&fields);
+        assert_eq!(map.get("seo__meta_title"), Some(&json!("My Title")));
+        assert_eq!(
+            map.get("seo__meta_description"),
+            Some(&json!("My Description"))
+        );
+        assert_eq!(map.get("title"), Some(&json!("Hello")));
         assert!(!map.contains_key("seo"));
     }
 
@@ -277,8 +306,8 @@ mod tests {
 
         let fields = vec![FieldDefinition::builder("seo", FieldType::Group).build()];
 
-        let map = ctx.to_string_map(&fields);
-        assert_eq!(map.get("seo").unwrap(), "plain-string");
+        let map = ctx.to_value_map(&fields);
+        assert_eq!(map.get("seo"), Some(&json!("plain-string")));
     }
 
     #[test]
@@ -300,9 +329,9 @@ mod tests {
 
         let fields = vec![FieldDefinition::builder("address", FieldType::Group).build()];
 
-        let map = ctx.to_string_map(&fields);
-        assert_eq!(map.get("address__geo__lat").unwrap(), "40.7128");
-        assert_eq!(map.get("address__geo__lng").unwrap(), "-74.0060");
+        let map = ctx.to_value_map(&fields);
+        assert_eq!(map.get("address__geo__lat"), Some(&json!("40.7128")));
+        assert_eq!(map.get("address__geo__lng"), Some(&json!("-74.0060")));
         assert!(!map.contains_key("address"));
         assert!(!map.contains_key("address__geo"));
     }
@@ -322,8 +351,8 @@ mod tests {
 
         let fields = vec![FieldDefinition::builder("metrics", FieldType::Group).build()];
 
-        let map = ctx.to_string_map(&fields);
-        assert_eq!(map.get("metrics__views").unwrap(), "100");
-        assert_eq!(map.get("metrics__likes").unwrap(), "42");
+        let map = ctx.to_value_map(&fields);
+        assert_eq!(map.get("metrics__views"), Some(&json!(100)));
+        assert_eq!(map.get("metrics__likes"), Some(&json!(42)));
     }
 }

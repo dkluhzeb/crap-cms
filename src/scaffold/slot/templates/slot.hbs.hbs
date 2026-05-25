@@ -1,0 +1,25 @@
+\{{!--
+  Slot widget: {{title}}
+  Renders inside the `{{slot}}` slot, alongside any other contributions.
+
+  Filename order is render order (alphabetical). Prefix with NN- if you
+  need to control where this widget appears.
+
+  Page context (`\{{user}}`, `\{{nav}}`, `\{{crap.site_name}}`,
+  ...) is available here. For dynamic data, register a Lua function via
+  `crap.template_data.register("<name>", fn)` and pull it via
+  `\{{data "<name>"}}` below.
+--}}
+<div class="card">
+  <div class="card__header">
+    <h3>{{title}}</h3>
+  </div>
+  <div class="card__body">
+    <p>Slot widget. Edit
+      <code>templates/slots/{{slot}}/{{file}}.hbs</code> in your config dir.</p>
+
+    \{{!-- \{{#with (data "{{file}}_data")}}    --}}
+    \{{!--   <p>\{{this.value}}</p>          --}}
+    \{{!-- \{{/with}}                         --}}
+  </div>
+</div>

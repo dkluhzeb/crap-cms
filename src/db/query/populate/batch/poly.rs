@@ -85,7 +85,7 @@ pub(super) fn batch_poly_has_many(
         let items: Vec<String> = match doc.fields.get(field_name) {
             Some(Value::Array(arr)) => arr
                 .iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
                 .collect(),
             _ => continue,
         };

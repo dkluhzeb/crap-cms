@@ -6,6 +6,10 @@ use subtle::ConstantTimeEq;
 use crate::db::{DbConnection, DbValue};
 
 /// Store a MFA code for a user. Overwrites any existing code.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
 pub fn set_mfa_code(
     conn: &dyn DbConnection,
     slug: &str,
@@ -43,6 +47,10 @@ pub fn set_mfa_code(
 /// **Constant-time compare**: the byte comparison goes through
 /// `subtle::ConstantTimeEq` so a remote attacker cannot recover the
 /// stored code byte-by-byte from response-time variance.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT or the clearing UPDATE fails.
 pub fn verify_mfa_code(
     conn: &dyn DbConnection,
     slug: &str,
@@ -60,13 +68,11 @@ pub fn verify_mfa_code(
         return Ok(false);
     };
 
-    let stored_code = match row.get_value(0) {
-        Some(DbValue::Text(s)) => s.clone(),
-        _ => return Ok(false),
+    let Some(stored_code) = row.opt_text_at(0) else {
+        return Ok(false);
     };
-    let exp = match row.get_value(1) {
-        Some(DbValue::Integer(n)) => *n,
-        _ => return Ok(false),
+    let Some(exp) = row.i64_at(1) else {
+        return Ok(false);
     };
 
     // Compare BEFORE clearing so we know whether to return success.

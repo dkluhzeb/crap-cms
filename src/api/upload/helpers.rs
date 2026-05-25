@@ -1,7 +1,5 @@
 //! Shared helpers for upload API handlers: auth, JSON responses, error classification.
 
-use std::collections::HashMap;
-
 use axum::{
     http::{
         HeaderMap, StatusCode,
@@ -9,20 +7,37 @@ use axum::{
     },
     response::{IntoResponse, Response},
 };
-use serde_json::{Value, json};
+use serde::Serialize;
 use tracing::{error, warn};
 
 use crate::{
     admin::{AdminState, server::load_auth_user},
     core::{
-        CollectionDefinition, Document,
-        auth::{self, AuthUser},
+        AuthUser, CollectionDefinition, Document, DocumentFields,
         event::{EventOperation, EventTarget, EventUser},
     },
     db::AccessResult,
     hooks::lifecycle::PublishEventInput,
     service::ServiceError,
 };
+
+/// JSON body for an error response: `{ "error": "<message>" }`.
+#[derive(Serialize)]
+struct ErrorBody<'a> {
+    error: &'a str,
+}
+
+/// JSON body for upload create/update success: `{ "document": <doc> }`.
+#[derive(Serialize)]
+pub struct DocumentBody<'a> {
+    pub document: &'a Document,
+}
+
+/// JSON body for upload delete success: `{ "success": true }`.
+#[derive(Serialize)]
+pub struct SuccessBody {
+    pub success: bool,
+}
 
 /// Extract Bearer token string from an Authorization header value.
 pub fn extract_bearer_token(auth_header: &str) -> Option<&str> {
@@ -53,17 +68,19 @@ pub fn extract_bearer_user(
         None => return Ok(None),
     };
 
-    let token = match extract_bearer_token(auth_header) {
-        Some(t) => t,
-        None => {
-            return Err(Box::new(json_error(
-                StatusCode::UNAUTHORIZED,
-                "Authorization header must use Bearer scheme",
-            )));
-        }
+    let Some(token) = extract_bearer_token(auth_header) else {
+        return Err(Box::new(json_error(
+            StatusCode::UNAUTHORIZED,
+            "Authorization header must use Bearer scheme",
+        )));
     };
 
-    let claims = auth::validate_token(token, state.jwt_secret.as_ref()).map_err(|_| {
+    // Route through `state.token_provider` (the trait-object form)
+    // rather than the free `validate_token` against `jwt_secret`.
+    // The two are wired with the same secret today (`startup.rs` ties
+    // them) but a future backend swap (Paseto, opaque tokens, …) flows
+    // here automatically only via the provider.
+    let claims = state.token_provider.validate_token(token).map_err(|_| {
         Box::new(json_error(
             StatusCode::UNAUTHORIZED,
             "Invalid or expired token",
@@ -80,14 +97,7 @@ pub fn extract_bearer_user(
 
 /// Return a JSON error response.
 pub fn json_error(status: StatusCode, message: &str) -> Response {
-    let body = json!({ "error": message });
-
-    (
-        status,
-        [(CONTENT_TYPE, "application/json; charset=utf-8")],
-        body.to_string(),
-    )
-        .into_response()
+    json_ok(status, &ErrorBody { error: message })
 }
 
 /// Classify a delete error message into the appropriate HTTP status code.
@@ -102,11 +112,13 @@ pub fn classify_delete_error(msg: &str) -> StatusCode {
 }
 
 /// Return a JSON success response with the given status and body.
-pub fn json_ok(status: StatusCode, body: &Value) -> Response {
+pub fn json_ok<T: Serialize>(status: StatusCode, body: &T) -> Response {
+    let serialized = serde_json::to_string(body).expect("response body serialize");
+
     (
         status,
         [(CONTENT_TYPE, "application/json; charset=utf-8")],
-        body.to_string(),
+        serialized,
     )
         .into_response()
 }
@@ -156,7 +168,7 @@ pub fn check_upload_access(
     }
 }
 
-/// Publish a mutation event and build the EventUser from auth.
+/// Publish a mutation event and build the `EventUser` from auth.
 #[cfg(not(tarpaulin_include))]
 pub fn publish_upload_event(
     state: &AdminState,
@@ -164,12 +176,11 @@ pub fn publish_upload_event(
     collection: impl Into<String>,
     doc_id: impl Into<String>,
     operation: EventOperation,
-    data: Option<HashMap<String, Value>>,
-    auth_user: &Option<AuthUser>,
+    data: Option<DocumentFields>,
+    auth_user: Option<&AuthUser>,
 ) {
-    let edited_by = auth_user
-        .as_ref()
-        .map(|au| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()));
+    let edited_by =
+        auth_user.map(|au| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()));
 
     let mut builder = PublishEventInput::builder(EventTarget::Collection, operation)
         .collection(collection.into())
@@ -197,18 +208,20 @@ pub fn publish_upload_event(
 /// `Transient` and `Internal` wrap raw backend / pool errors whose `Display`
 /// can leak DB identifiers or driver vocabulary. Those are logged at `error`
 /// and the client receives a generic phrase only.
-pub fn service_error_to_response(err: ServiceError) -> Response {
-    let (status, message) = match &err {
+pub fn service_error_to_response(err: &ServiceError) -> Response {
+    let (status, message) = match err {
         ServiceError::AccessDenied(_) => (StatusCode::FORBIDDEN, err.to_string()),
         ServiceError::NotFound(_) => (StatusCode::NOT_FOUND, err.to_string()),
-        ServiceError::Validation(_) => (StatusCode::BAD_REQUEST, err.to_string()),
-        ServiceError::HookError(_) => (StatusCode::BAD_REQUEST, err.to_string()),
-        ServiceError::UniqueViolation(_) => (StatusCode::CONFLICT, err.to_string()),
-        ServiceError::Referenced { .. } => (StatusCode::CONFLICT, err.to_string()),
+        ServiceError::Validation(_) | ServiceError::HookError(_) => {
+            (StatusCode::BAD_REQUEST, err.to_string())
+        }
+        ServiceError::UniqueViolation(_) | ServiceError::Referenced { .. } => {
+            (StatusCode::CONFLICT, err.to_string())
+        }
         ServiceError::AccountLocked
         | ServiceError::EmailNotVerified
-        | ServiceError::InvalidCredentials => (StatusCode::UNAUTHORIZED, err.to_string()),
-        ServiceError::InvalidToken { .. } => (StatusCode::UNAUTHORIZED, err.to_string()),
+        | ServiceError::InvalidCredentials
+        | ServiceError::InvalidToken { .. } => (StatusCode::UNAUTHORIZED, err.to_string()),
         ServiceError::Transient(_) => {
             error!("Upload service transient error: {}", err);
             (
@@ -232,7 +245,6 @@ pub fn service_error_to_response(err: ServiceError) -> Response {
 mod tests {
     use anyhow::anyhow;
     use axum::body::to_bytes;
-    use serde_json::json;
 
     use super::*;
 
@@ -261,15 +273,14 @@ mod tests {
 
     #[tokio::test]
     async fn json_ok_returns_correct_status() {
-        let body = json!({ "success": true });
-        let resp = json_ok(StatusCode::CREATED, &body);
+        let resp = json_ok(StatusCode::CREATED, &SuccessBody { success: true });
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
     #[tokio::test]
     async fn json_ok_body_matches() {
-        let body_val = json!({ "document": { "id": "abc" } });
-        let resp = json_ok(StatusCode::OK, &body_val);
+        let doc = Document::new("abc");
+        let resp = json_ok(StatusCode::OK, &DocumentBody { document: &doc });
         let body = to_bytes(resp.into_body(), 4096).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["document"]["id"], "abc");
@@ -338,13 +349,13 @@ mod tests {
 
     #[tokio::test]
     async fn service_error_access_denied_returns_403() {
-        let resp = service_error_to_response(ServiceError::AccessDenied("nope".into()));
+        let resp = service_error_to_response(&ServiceError::AccessDenied("nope".into()));
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
     async fn service_error_not_found_returns_404() {
-        let resp = service_error_to_response(ServiceError::NotFound("gone".into()));
+        let resp = service_error_to_response(&ServiceError::NotFound("gone".into()));
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
@@ -352,25 +363,25 @@ mod tests {
     async fn service_error_validation_returns_400() {
         use crate::core::validate::{FieldError, ValidationError};
         let ve = ValidationError::new(vec![FieldError::new("title", "required")]);
-        let resp = service_error_to_response(ServiceError::Validation(ve));
+        let resp = service_error_to_response(&ServiceError::Validation(ve));
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
     async fn service_error_hook_error_returns_400() {
-        let resp = service_error_to_response(ServiceError::HookError("bad hook".into()));
+        let resp = service_error_to_response(&ServiceError::HookError("bad hook".into()));
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
     async fn service_error_unique_violation_returns_409() {
-        let resp = service_error_to_response(ServiceError::UniqueViolation("email".into()));
+        let resp = service_error_to_response(&ServiceError::UniqueViolation("email".into()));
         assert_eq!(resp.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]
     async fn service_error_referenced_returns_409() {
-        let resp = service_error_to_response(ServiceError::Referenced {
+        let resp = service_error_to_response(&ServiceError::Referenced {
             id: "doc-1".into(),
             count: 3,
         });
@@ -379,7 +390,7 @@ mod tests {
 
     #[tokio::test]
     async fn service_error_internal_returns_500_generic_message() {
-        let resp = service_error_to_response(ServiceError::Internal(anyhow!("secret details")));
+        let resp = service_error_to_response(&ServiceError::Internal(anyhow!("secret details")));
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
         let body = to_bytes(resp.into_body(), 1024).await.unwrap();
@@ -391,7 +402,7 @@ mod tests {
     async fn service_error_transient_returns_503_generic_message() {
         // The raw DB error text ("database is locked", connection-pool errors,
         // driver identifiers) must not reach the client — logged only.
-        let resp = service_error_to_response(ServiceError::Transient(anyhow!(
+        let resp = service_error_to_response(&ServiceError::Transient(anyhow!(
             "database is locked (secret backend detail)"
         )));
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -407,13 +418,13 @@ mod tests {
 
     #[tokio::test]
     async fn service_error_account_locked_returns_401() {
-        let resp = service_error_to_response(ServiceError::AccountLocked);
+        let resp = service_error_to_response(&ServiceError::AccountLocked);
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
     async fn service_error_invalid_token_returns_401() {
-        let resp = service_error_to_response(ServiceError::InvalidToken {
+        let resp = service_error_to_response(&ServiceError::InvalidToken {
             kind: "reset",
             reason: "expired",
         });

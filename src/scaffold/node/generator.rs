@@ -1,4 +1,4 @@
-//! `make node` — scaffold a custom richtext-node registration.
+//! `make node` -- scaffold a custom richtext-node registration.
 //!
 //! Writes `<config_dir>/lua/richtext_nodes/<name>.lua` containing the
 //! `crap.richtext.register_node(...)` call. Doesn't auto-modify
@@ -7,12 +7,21 @@
 
 use std::{fs, path::Path};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
+use serde::Serialize;
 
 use crate::{
     cli,
-    scaffold::{to_title_case, validate_slug},
+    scaffold::{guards::refuse_file_overwrite, paths, render, to_title_case, validate_slug},
 };
+
+#[derive(Serialize)]
+struct NodeCtx<'a> {
+    name: &'a str,
+    label: String,
+    kind: &'static str,
+    inline_str: &'static str,
+}
 
 /// Options for `make_node`.
 pub struct MakeNodeOptions<'a> {
@@ -23,21 +32,21 @@ pub struct MakeNodeOptions<'a> {
 }
 
 /// Scaffold the richtext-node Lua snippet.
+///
+/// # Errors
+///
+/// Returns an error if the name is invalid, the file already exists without
+/// `--force`, or writing the file fails.
 pub fn make_node(opts: &MakeNodeOptions) -> Result<()> {
     validate_slug(opts.name)?;
 
-    let dir = opts.config_dir.join("lua").join("richtext_nodes");
+    let dir = paths::richtext_nodes_dir(opts.config_dir);
     fs::create_dir_all(&dir).context("Failed to create lua/richtext_nodes/ directory")?;
 
     let file_path = dir.join(format!("{}.lua", opts.name));
-    if file_path.exists() && !opts.force {
-        bail!(
-            "File '{}' already exists — use --force to overwrite",
-            file_path.display()
-        );
-    }
+    refuse_file_overwrite(&file_path, opts.force)?;
 
-    let lua = render_node_lua(opts);
+    let lua = render_node_lua(opts)?;
     fs::write(&file_path, &lua)
         .with_context(|| format!("Failed to write {}", file_path.display()))?;
 
@@ -50,56 +59,15 @@ pub fn make_node(opts: &MakeNodeOptions) -> Result<()> {
     Ok(())
 }
 
-fn render_node_lua(opts: &MakeNodeOptions) -> String {
-    let label = to_title_case(opts.name);
-    let inline_str = if opts.inline { "true" } else { "false" };
-    format!(
-        r#"--- Custom richtext node: {label}
----
---- Registered automatically when this file is `require()`d from
---- init.lua. Inserts as a {kind} node in the richtext block picker.
----
---- Attrs are typed via `crap.fields.*`. Allowed types: text, number,
---- textarea, select, radio, checkbox, date, email, json, code.
---- Render function returns the HTML the node serializes to; if
---- omitted, the node falls through to a `<crap-node>` passthrough for
---- client-side rendering.
-
-crap.richtext.register_node("{name}", {{
-  label = "{label}",
-  inline = {inline_str},
-  attrs = {{
-    crap.fields.text({{
-      name = "text",
-      required = true,
-      admin = {{ label = "Text", placeholder = "Display text" }},
-    }}),
-    -- Add more attrs here. Examples:
-    -- crap.fields.text({{ name = "url", required = true,
-    --                     admin = {{ label = "URL", placeholder = "https://..." }} }}),
-    -- crap.fields.select({{
-    --   name = "style",
-    --   admin = {{ label = "Style" }},
-    --   options = {{
-    --     {{ label = "Primary", value = "primary" }},
-    --     {{ label = "Secondary", value = "secondary" }},
-    --   }},
-    -- }}),
-  }},
-  searchable_attrs = {{ "text" }},
-  render = function(attrs)
-    -- Server-side HTML output. Escape user-controlled strings.
-    return string.format(
-      '<span class="{name}">%s</span>',
-      attrs.text or ""
-    )
-  end,
-}})
-"#,
-        name = opts.name,
-        label = label,
-        kind = if opts.inline { "inline" } else { "block-level" },
-        inline_str = inline_str,
+fn render_node_lua(opts: &MakeNodeOptions) -> Result<String> {
+    render::render(
+        "node",
+        &NodeCtx {
+            name: opts.name,
+            label: to_title_case(opts.name),
+            kind: if opts.inline { "inline" } else { "block-level" },
+            inline_str: if opts.inline { "true" } else { "false" },
+        },
     )
 }
 

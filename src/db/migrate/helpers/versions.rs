@@ -12,7 +12,7 @@ pub(in crate::db::migrate) fn sync_versions_table(
     conn: &dyn DbConnection,
     slug: &str,
 ) -> Result<()> {
-    let table_name = format!("_versions_{}", slug);
+    let table_name = format!("_versions_{slug}");
 
     if table_exists(conn, &table_name)? {
         return Ok(());
@@ -37,29 +37,25 @@ pub(in crate::db::migrate) fn sync_versions_table(
 
     info!("Creating versions table: {}", table_name);
     conn.execute_ddl(&sql, &[])
-        .with_context(|| format!("Failed to create versions table {}", table_name))?;
+        .with_context(|| format!("Failed to create versions table {table_name}"))?;
 
     conn.execute_ddl(
         &format!(
-            "CREATE INDEX IF NOT EXISTS idx__ver_{slug}_parent_latest ON {table} (_parent, _latest)",
-            slug = slug,
-            table = table_name
+            "CREATE INDEX IF NOT EXISTS idx__ver_{slug}_parent_latest ON {table_name} (_parent, _latest)"
         ),
         &[],
     )?;
 
     conn.execute_ddl(
         &format!(
-            "CREATE INDEX IF NOT EXISTS idx__ver_{slug}_parent_version ON {table} (_parent, _version DESC)",
-            slug = slug, table = table_name
+            "CREATE INDEX IF NOT EXISTS idx__ver_{slug}_parent_version ON {table_name} (_parent, _version DESC)"
         ),
         &[],
     )?;
 
     conn.execute_ddl(
         &format!(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx__ver_{slug}_parent_version_unique ON {table} (_parent, _version)",
-            slug = slug, table = table_name
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx__ver_{slug}_parent_version_unique ON {table_name} (_parent, _version)"
         ),
         &[],
     )?;

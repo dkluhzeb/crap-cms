@@ -19,6 +19,7 @@ pub struct CustomStorage {
 impl CustomStorage {
     /// Create a new custom storage backend.
     /// The Lua state must have `crap.storage` functions registered.
+    #[must_use]
     pub fn new(lua: Lua) -> Self {
         Self { lua }
     }
@@ -29,15 +30,15 @@ impl CustomStorage {
             .lua
             .globals()
             .get("crap")
-            .map_err(|e| anyhow!("crap global not found: {}", e))?;
+            .map_err(|e| anyhow!("crap global not found: {e}"))?;
 
         let storage: Table = crap
             .get("_storage")
-            .map_err(|e| anyhow!("crap._storage not found: {}", e))?;
+            .map_err(|e| anyhow!("crap._storage not found: {e}"))?;
 
         storage
             .get(name)
-            .map_err(|e| anyhow!("crap._storage.{} not found: {}", name, e))
+            .map_err(|e| anyhow!("crap._storage.{name} not found: {e}"))
     }
 }
 
@@ -50,21 +51,21 @@ impl StorageBackend for CustomStorage {
             self.lua.create_string(data)?,
             content_type.to_string(),
         ))
-        .map_err(|e| anyhow::anyhow!("custom storage put error: {:#}", e))
+        .map_err(|e| anyhow::anyhow!("custom storage put error: {e:#}"))
     }
 
     fn get(&self, key: &str) -> Result<Vec<u8>> {
         let func = self.get_fn("get")?;
         let result: mlua::String = func
             .call(key.to_string())
-            .map_err(|e| anyhow::anyhow!("custom storage get error: {:#}", e))?;
+            .map_err(|e| anyhow::anyhow!("custom storage get error: {e:#}"))?;
         Ok(result.as_bytes().to_vec())
     }
 
     fn delete(&self, key: &str) -> Result<()> {
         let func = self.get_fn("delete")?;
         func.call::<()>(key.to_string())
-            .map_err(|e| anyhow::anyhow!("custom storage delete error: {:#}", e))
+            .map_err(|e| anyhow::anyhow!("custom storage delete error: {e:#}"))
     }
 
     fn exists(&self, key: &str) -> Result<bool> {
@@ -73,7 +74,7 @@ impl StorageBackend for CustomStorage {
             Ok(func) => {
                 let result: bool = func
                     .call(key.to_string())
-                    .map_err(|e| anyhow::anyhow!("custom storage exists error: {:#}", e))?;
+                    .map_err(|e| anyhow::anyhow!("custom storage exists error: {e:#}"))?;
                 Ok(result)
             }
             Err(_) => {
@@ -90,8 +91,8 @@ impl StorageBackend for CustomStorage {
         match self.get_fn("url") {
             Ok(func) => func
                 .call::<String>(key.to_string())
-                .unwrap_or_else(|_| format!("/uploads/{}", key)),
-            Err(_) => format!("/uploads/{}", key),
+                .unwrap_or_else(|_| format!("/uploads/{key}")),
+            Err(_) => format!("/uploads/{key}"),
         }
     }
 

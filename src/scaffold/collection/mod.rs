@@ -1,11 +1,15 @@
-//! `make collection` command — generate collection Lua files.
+//! `make collection` command -- generate collection Lua files.
 
+mod field_types;
 mod generator;
+mod options;
 pub(crate) mod parser;
-mod types;
+mod stubs;
 mod writer;
 
+pub use field_types::{CONTAINER_TYPES, VALID_FIELD_TYPES};
 pub use generator::make_collection;
+pub use options::CollectionOptions;
 pub use parser::parse_fields_shorthand;
-pub use types::{BlockStub, CollectionOptions, FieldStub, TabStub, VALID_FIELD_TYPES};
-pub use writer::{type_specific_stub, write_field_lua};
+pub use stubs::{BlockStub, FieldStub, TabStub};
+pub use writer::write_field_lua;

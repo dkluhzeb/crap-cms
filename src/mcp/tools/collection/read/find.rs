@@ -1,43 +1,47 @@
 //! Execute `find` — paginated query with filters, search, and population.
 
-use std::sync::Arc;
-
 use anyhow::{Context as _, Result, anyhow};
-use serde_json::{Value, json, to_string_pretty, to_value};
+use serde::Serialize;
+use serde_json::{Value, to_string_pretty};
 
 use crate::{
-    config::CrapConfig,
-    core::Registry,
-    db::{DbPool, FindQuery, LocaleContext, query},
-    hooks::HookRunner,
-    mcp::tools::collection::helpers::{doc_to_json, parse_where_filters},
-    service::{FindDocumentsInput, RunnerReadHooks, ServiceContext, find_documents},
+    db::{FindQuery, LocaleContext, query, query::PaginationResult},
+    mcp::tools::{
+        ToolExecCtx,
+        collection::helpers::{doc_to_json, parse_where_filters},
+    },
+    service::{FindDocumentsInput, RunnerReadHooks, ServiceContext, ServiceError, find_documents},
 };
+
+/// Shape returned to the MCP client for a `find` tool call.
+#[derive(Serialize)]
+struct FindResponse<'a> {
+    docs: Vec<Value>,
+    pagination: &'a PaginationResult,
+}
 
 /// Execute `find` — paginated query with filters, search, and population.
 pub(in crate::mcp::tools) fn exec_find(
     args: &Value,
     slug: &str,
-    registry: &Arc<Registry>,
-    pool: &DbPool,
-    runner: &HookRunner,
-    config: &CrapConfig,
+    ctx: &ToolExecCtx<'_>,
 ) -> Result<String> {
-    let def = registry
+    let def = ctx
+        .registry
         .collections
         .get(slug)
         .context("Collection not found")?;
-    let conn = pool.get().context("DB connection")?;
+    let conn = ctx.pool.get().context("DB connection")?;
 
-    let limit = args.get("limit").and_then(|v| v.as_i64());
-    let page = args.get("page").and_then(|v| v.as_i64());
+    let limit = args.get("limit").and_then(serde_json::Value::as_i64);
+    let page = args.get("page").and_then(serde_json::Value::as_i64);
     let after_cursor = args.get("after_cursor").and_then(|v| v.as_str());
     let before_cursor = args.get("before_cursor").and_then(|v| v.as_str());
 
     let pg_ctx = query::PaginationCtx::new(
-        config.pagination.default_limit,
-        config.pagination.max_limit,
-        config.pagination.is_cursor(),
+        ctx.config.pagination.default_limit,
+        ctx.config.pagination.max_limit,
+        ctx.config.pagination.is_cursor(),
     );
     let pagination = pg_ctx
         .validate(limit, page, after_cursor, before_cursor)
@@ -46,19 +50,33 @@ pub(in crate::mcp::tools) fn exec_find(
     let order_by = args
         .get("order_by")
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
     let search = args
         .get("search")
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
     let locale = args.get("locale").and_then(|v| v.as_str());
-    let locale_ctx = LocaleContext::from_locale_string(locale, &config.locale)?;
+    let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
 
-    let depth = args.get("depth").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-    let depth = depth.min(config.depth.max_depth);
+    // MCP requests outside i32 range can't be valid populate depths; treat
+    // them as 0 (no population) before applying max_depth.
+    let depth_raw = args
+        .get("depth")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0);
+    let depth = i32::try_from(depth_raw)
+        .unwrap_or(0)
+        .min(ctx.config.depth.max_depth);
 
-    let is_trash = args.get("trash").and_then(|v| v.as_bool()).unwrap_or(false) && def.soft_delete;
-    let include_drafts = args.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
+    let is_trash = args
+        .get("trash")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+        && def.soft_delete;
+    let include_drafts = args
+        .get("draft")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
 
     // Default sort for trash listings is a presentation concern.
     let order_by = order_by
@@ -77,9 +95,9 @@ pub(in crate::mcp::tools) fn exec_find(
         .search(search.clone())
         .build();
 
-    let hooks = RunnerReadHooks::new(runner, &conn);
-    let ctx = ServiceContext::collection(slug, def)
-        .pool(pool)
+    let hooks = RunnerReadHooks::new(ctx.runner, &conn);
+    let svc_ctx = ServiceContext::collection(slug, def)
+        .pool(ctx.pool)
         .conn(&conn)
         .read_hooks(&hooks)
         .override_access(true)
@@ -88,18 +106,18 @@ pub(in crate::mcp::tools) fn exec_find(
     let input = FindDocumentsInput::builder(&fq)
         .depth(depth)
         .locale_ctx(locale_ctx.as_ref())
-        .registry(Some(registry.as_ref()))
-        .cursor_enabled(config.pagination.is_cursor())
+        .registry(Some(ctx.registry.as_ref()))
+        .cursor_enabled(ctx.config.pagination.is_cursor())
         .trash(is_trash)
         .include_drafts(include_drafts)
         .build();
 
-    let result = find_documents(&ctx, &input).map_err(|e| e.into_anyhow())?;
+    let result = find_documents(&svc_ctx, &input).map_err(ServiceError::into_anyhow)?;
 
-    let doc_values: Vec<Value> = result.docs.iter().map(doc_to_json).collect();
-    let output = json!({
-        "docs": doc_values,
-        "pagination": to_value(&result.pagination)?,
-    });
-    Ok(to_string_pretty(&output)?)
+    let docs: Vec<Value> = result.docs.iter().map(doc_to_json).collect();
+    let response = FindResponse {
+        docs,
+        pagination: &result.pagination,
+    };
+    Ok(to_string_pretty(&response)?)
 }

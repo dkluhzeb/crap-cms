@@ -32,6 +32,11 @@ fn row_to_version(row: &DbRow) -> Result<VersionSnapshot> {
 }
 
 /// Create a new version entry. Clears previous `_latest` flag, inserts new version.
+///
+/// # Errors
+///
+/// Returns a backend error if any SELECT/UPDATE/INSERT fails or the snapshot
+/// fails to serialize.
 pub fn create_version(
     conn: &dyn DbConnection,
     slug: &str,
@@ -88,6 +93,10 @@ pub fn create_version(
 }
 
 /// Find the latest version for a parent document.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails or the row fails to parse.
 pub fn find_latest_version(
     conn: &dyn DbConnection,
     slug: &str,
@@ -108,6 +117,10 @@ pub fn find_latest_version(
 }
 
 /// Count total versions for a parent document.
+///
+/// # Errors
+///
+/// Returns a backend error if the COUNT query fails.
 pub fn count_versions(conn: &dyn DbConnection, slug: &str, parent_id: &str) -> Result<i64> {
     let table = version_table(slug);
     let p1 = conn.placeholder(1);
@@ -121,6 +134,10 @@ pub fn count_versions(conn: &dyn DbConnection, slug: &str, parent_id: &str) -> R
 }
 
 /// List versions for a parent document, newest first.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails or any row fails to parse.
 pub fn list_versions(
     conn: &dyn DbConnection,
     slug: &str,
@@ -164,6 +181,10 @@ pub fn list_versions(
 }
 
 /// Find a specific version by its ID.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails or the row fails to parse.
 pub fn find_version_by_id(
     conn: &dyn DbConnection,
     slug: &str,
@@ -183,7 +204,11 @@ pub fn find_version_by_id(
     Ok(Some(row_to_version(&row)?))
 }
 
-/// Delete oldest versions beyond the max_versions cap for a document.
+/// Delete oldest versions beyond the `max_versions` cap for a document.
+///
+/// # Errors
+///
+/// Returns a backend error if the DELETE fails.
 pub fn prune_versions(
     conn: &dyn DbConnection,
     slug: &str,
@@ -204,7 +229,7 @@ pub fn prune_versions(
         ),
         &[
             DbValue::Text(parent_id.to_string()),
-            DbValue::Integer(max_versions as i64),
+            DbValue::Integer(i64::from(max_versions)),
         ],
     )
     .context("Failed to prune versions")?;
@@ -212,6 +237,10 @@ pub fn prune_versions(
 }
 
 /// Set the `_status` column on a document in the main table.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE fails.
 pub fn set_document_status(
     conn: &dyn DbConnection,
     slug: &str,
@@ -230,11 +259,15 @@ pub fn set_document_status(
             DbValue::Text(id.to_string()),
         ],
     )
-    .with_context(|| format!("Failed to set _status on {}.{}", slug, id))?;
+    .with_context(|| format!("Failed to set _status on {slug}.{id}"))?;
     Ok(())
 }
 
 /// Get the `_status` column from a document in the main table.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails or column extraction fails.
 pub fn get_document_status(
     conn: &dyn DbConnection,
     slug: &str,

@@ -18,11 +18,14 @@ set -euo pipefail
 echo "[pre-commit] cargo fmt --check"
 cargo fmt --all -- --check
 
-echo "[pre-commit] cargo clippy --all-targets -- -D warnings"
-cargo clippy --all-targets -- -D warnings
+echo "[pre-commit] cargo clippy --all-targets --all-features -- -D warnings"
+cargo clippy --all-targets --all-features -- -D warnings
 
 echo "[pre-commit] crap-cms fmt --check (Handlebars templates)"
 cargo run --quiet --bin crap-cms -- fmt --check
+
+echo "[pre-commit] cargo xtask gen-lua-types --check (Lua type definitions)"
+cargo xtask gen-lua-types --check
 
 # Biome lints JS + CSS only. Most Rust-only commits don't need it, but
 # any commit that touches static/components/**/*.js or static/styles/**/*.css

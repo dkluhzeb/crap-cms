@@ -8,9 +8,34 @@ use crate::db::{DbConnection, DbValue};
 
 use super::helpers::delete_junction_rows;
 
+/// Split a block row into `(_block_type, data_json)` for INSERT.
+///
+/// `_block_type` and `id` are stored in dedicated SQL columns; the
+/// remainder of the row's keys are serialized to the `data` column as
+/// JSON. Errors when `_block_type` is missing or non-string.
+fn split_block_row(row: &Value, order: usize) -> Result<(String, String)> {
+    let block_type = row
+        .get("_block_type")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("Block row at index {order} is missing '_block_type'"))?
+        .to_string();
+
+    let mut data_map = row.as_object().cloned().unwrap_or_default();
+    data_map.remove("_block_type");
+    data_map.remove("id");
+
+    let data_json = Value::Object(data_map).to_string();
+
+    Ok((block_type, data_json))
+}
+
 /// Set block rows for a blocks field join table.
 /// Deletes all existing rows for the parent and inserts new ones with nanoid + _order.
 /// When `locale` is Some, scopes the DELETE to that locale and includes `_locale` in INSERT.
+///
+/// # Errors
+///
+/// Returns a backend error if the DELETE or any per-row INSERT fails.
 pub fn set_block_rows(
     conn: &dyn DbConnection,
     collection: &str,
@@ -37,31 +62,18 @@ pub fn set_block_rows(
             conn.placeholder(6),
         );
         let sql = format!(
-            "INSERT INTO \"{}\" (id, parent_id, _order, _block_type, data, _locale) VALUES ({p1}, {p2}, {p3}, {p4}, {p5}, {p6})",
-            table_name
+            "INSERT INTO \"{table_name}\" (id, parent_id, _order, _block_type, data, _locale) VALUES ({p1}, {p2}, {p3}, {p4}, {p5}, {p6})"
         );
         for (order, row) in rows.iter().enumerate() {
+            let (block_type, data_json) = split_block_row(row, order)?;
             let id = nanoid::nanoid!();
-            let block_type = row
-                .get("_block_type")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    anyhow::anyhow!("Block row at index {} is missing '_block_type'", order)
-                })?
-                .to_string();
-            let mut data_map = match row.as_object() {
-                Some(m) => m.clone(),
-                None => Map::new(),
-            };
-            data_map.remove("_block_type");
-            data_map.remove("id");
-            let data_json = Value::Object(data_map).to_string();
+
             conn.execute(
                 &sql,
                 &[
                     DbValue::Text(id),
                     DbValue::Text(parent_id.to_string()),
-                    DbValue::Integer(order as i64),
+                    DbValue::Integer(i64::try_from(order).unwrap_or(i64::MAX)),
                     DbValue::Text(block_type),
                     DbValue::Text(data_json),
                     DbValue::Text(loc.to_string()),
@@ -77,31 +89,18 @@ pub fn set_block_rows(
             conn.placeholder(5),
         );
         let sql = format!(
-            "INSERT INTO \"{}\" (id, parent_id, _order, _block_type, data) VALUES ({p1}, {p2}, {p3}, {p4}, {p5})",
-            table_name
+            "INSERT INTO \"{table_name}\" (id, parent_id, _order, _block_type, data) VALUES ({p1}, {p2}, {p3}, {p4}, {p5})"
         );
         for (order, row) in rows.iter().enumerate() {
+            let (block_type, data_json) = split_block_row(row, order)?;
             let id = nanoid::nanoid!();
-            let block_type = row
-                .get("_block_type")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    anyhow::anyhow!("Block row at index {} is missing '_block_type'", order)
-                })?
-                .to_string();
-            let mut data_map = match row.as_object() {
-                Some(m) => m.clone(),
-                None => Map::new(),
-            };
-            data_map.remove("_block_type");
-            data_map.remove("id");
-            let data_json = Value::Object(data_map).to_string();
+
             conn.execute(
                 &sql,
                 &[
                     DbValue::Text(id),
                     DbValue::Text(parent_id.to_string()),
-                    DbValue::Integer(order as i64),
+                    DbValue::Integer(i64::try_from(order).unwrap_or(i64::MAX)),
                     DbValue::Text(block_type),
                     DbValue::Text(data_json),
                 ],
@@ -113,6 +112,10 @@ pub fn set_block_rows(
 
 /// Find block rows for a blocks field join table, ordered.
 /// When `locale` is Some, filters by `_locale`.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails.
 pub fn find_block_rows(
     conn: &dyn DbConnection,
     collection: &str,
@@ -125,8 +128,7 @@ pub fn find_block_rows(
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
         (
             format!(
-                "SELECT id, _block_type, data FROM \"{}\" WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order",
-                table_name
+                "SELECT id, _block_type, data FROM \"{table_name}\" WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order"
             ),
             vec![
                 DbValue::Text(parent_id.to_string()),
@@ -137,8 +139,7 @@ pub fn find_block_rows(
         let p1 = conn.placeholder(1);
         (
             format!(
-                "SELECT id, _block_type, data FROM \"{}\" WHERE parent_id = {p1} ORDER BY _order",
-                table_name
+                "SELECT id, _block_type, data FROM \"{table_name}\" WHERE parent_id = {p1} ORDER BY _order"
             ),
             vec![DbValue::Text(parent_id.to_string())],
         )
@@ -152,14 +153,10 @@ pub fn find_block_rows(
             let block_type = row.get_value(1).cloned()?;
             let data_raw = row.get_value(2).cloned()?;
 
-            let id_str = if let DbValue::Text(s) = id {
-                s
-            } else {
+            let DbValue::Text(id_str) = id else {
                 return None;
             };
-            let bt_str = if let DbValue::Text(s) = block_type {
-                s
-            } else {
+            let DbValue::Text(bt_str) = block_type else {
                 return None;
             };
             let data_str = if let DbValue::Text(s) = data_raw {

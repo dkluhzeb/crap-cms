@@ -5,15 +5,18 @@ use schemars::JsonSchema;
 use serde::Serialize;
 
 use super::{Breadcrumb, PageType};
+use crate::typegen::LuaAnnotation;
 
 /// The `page` object every admin template receives. Carries the page-type
 /// discriminant, the page title (already-translated label or translation key),
 /// optional title interpolation parameter, and breadcrumb trail.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.page")]
 pub struct PageMeta {
-    /// Page-type discriminant. Serialized as a snake_case string literal so
+    /// Page-type discriminant. Serialized as a `snake_case` string literal so
     /// templates can branch with `{{#if (eq page.type "collection_edit")}}`.
     #[serde(rename = "type")]
+    #[lua(ty_expr = "PageType::lua_type_union()")]
     pub page_type: &'static str,
 
     /// Page title or translation key.
@@ -25,12 +28,13 @@ pub struct PageMeta {
 
     /// Breadcrumb trail rendered by `partials/breadcrumb.hbs`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[lua(optional)]
     pub breadcrumbs: Vec<Breadcrumb>,
 }
 
 impl PageMeta {
     /// Construct page metadata for the given page type and title. Breadcrumbs
-    /// and title_name default to empty/None — callers add them as needed.
+    /// and `title_name` default to empty/None — callers add them as needed.
     pub fn new(page_type: PageType, title: impl Into<String>) -> Self {
         Self {
             page_type: page_type.as_str(),
@@ -43,12 +47,6 @@ impl PageMeta {
     /// Fluent setter for the title interpolation name parameter.
     pub fn with_title_name(mut self, name: impl Into<String>) -> Self {
         self.title_name = Some(name.into());
-        self
-    }
-
-    /// Fluent setter for the breadcrumb trail.
-    pub fn with_breadcrumbs(mut self, breadcrumbs: Vec<Breadcrumb>) -> Self {
-        self.breadcrumbs = breadcrumbs;
         self
     }
 }
@@ -73,26 +71,6 @@ mod tests {
         assert_eq!(
             v,
             json!({"type": "collection_edit", "title": "edit_name", "title_name": "Post"})
-        );
-    }
-
-    #[test]
-    fn page_meta_with_breadcrumbs_includes_them() {
-        let meta = PageMeta::new(PageType::CollectionItems, "posts").with_breadcrumbs(vec![
-            Breadcrumb::link("Home", "/admin"),
-            Breadcrumb::current("Posts"),
-        ]);
-        let v = serde_json::to_value(&meta).unwrap();
-        assert_eq!(
-            v,
-            json!({
-                "type": "collection_items",
-                "title": "posts",
-                "breadcrumbs": [
-                    {"label": "Home", "url": "/admin"},
-                    {"label": "Posts"}
-                ]
-            })
         );
     }
 }

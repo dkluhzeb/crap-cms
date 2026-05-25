@@ -1,7 +1,7 @@
---- Collection before_change hook: set published_at when status changes to published.
----@param context crap.HookContext
----@return crap.HookContext
-return function(context)
+--- Collection before_change hook: set published_at when status
+--- changes to published. Used by posts AND projects, so the factory
+--- is the generic `crap.any.collection_hook`.
+return crap.any.collection_hook(function(context)
   if not context.data then
     return context
   end
@@ -12,4 +12,4 @@ return function(context)
   end
 
   return context
-end
+end)

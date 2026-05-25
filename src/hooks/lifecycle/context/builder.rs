@@ -1,19 +1,18 @@
 //! Builder for [`HookContext`].
 
-use std::collections::HashMap;
-
-use serde_json::Value;
-
-use crate::{core::Document, hooks::HookContext};
+use crate::{
+    core::{Document, DocumentFields, ReqContext},
+    hooks::HookContext,
+};
 
 /// Builder for `HookContext`. Created via [`HookContext::builder`].
 pub struct HookContextBuilder {
     collection: String,
     operation: String,
-    data: HashMap<String, Value>,
+    data: DocumentFields,
     locale: Option<String>,
     draft: Option<bool>,
-    context: HashMap<String, Value>,
+    context: ReqContext,
     user: Option<Document>,
     ui_locale: Option<String>,
 }
@@ -23,45 +22,52 @@ impl HookContextBuilder {
         Self {
             collection,
             operation,
-            data: HashMap::new(),
+            data: DocumentFields::new(),
             locale: None,
             draft: None,
-            context: HashMap::new(),
+            context: ReqContext::new(),
             user: None,
             ui_locale: None,
         }
     }
 
-    pub fn data(mut self, data: HashMap<String, Value>) -> Self {
-        self.data = data;
+    #[must_use]
+    pub fn data(mut self, data: impl Into<DocumentFields>) -> Self {
+        self.data = data.into();
         self
     }
 
+    #[must_use]
     pub fn locale(mut self, locale: Option<impl Into<String>>) -> Self {
-        self.locale = locale.map(|l| l.into());
+        self.locale = locale.map(std::convert::Into::into);
         self
     }
 
+    #[must_use]
     pub fn draft(mut self, draft: bool) -> Self {
         self.draft = Some(draft);
         self
     }
 
-    pub fn context(mut self, context: HashMap<String, Value>) -> Self {
-        self.context = context;
+    #[must_use]
+    pub fn context(mut self, context: impl Into<ReqContext>) -> Self {
+        self.context = context.into();
         self
     }
 
+    #[must_use]
     pub fn user(mut self, user: Option<&Document>) -> Self {
         self.user = user.cloned();
         self
     }
 
+    #[must_use]
     pub fn ui_locale(mut self, ui_locale: Option<&str>) -> Self {
-        self.ui_locale = ui_locale.map(|s| s.to_string());
+        self.ui_locale = ui_locale.map(std::string::ToString::to_string);
         self
     }
 
+    #[must_use]
     pub fn build(self) -> HookContext {
         HookContext {
             collection: self.collection,
@@ -78,6 +84,8 @@ impl HookContextBuilder {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use serde_json::json;
 
     use super::*;
@@ -99,7 +107,7 @@ mod tests {
     fn builder_all_fields() {
         let mut data = HashMap::new();
         data.insert("title".to_string(), json!("Hello"));
-        let mut ctx_map = HashMap::new();
+        let mut ctx_map = ReqContext::new();
         ctx_map.insert("request_id".to_string(), json!("abc"));
 
         let ctx = HookContext::builder("posts", "update")
@@ -127,7 +135,7 @@ mod tests {
         assert!(ctx.data.is_empty());
     }
 
-    /// Regression: unpublish must build HookContext with draft=true so hooks
+    /// Regression: unpublish must build `HookContext` with draft=true so hooks
     /// know the document is transitioning to draft state.
     #[test]
     fn unpublish_hook_context_has_draft_true() {

@@ -1,4 +1,4 @@
-//! `make hook` command — generate hook Lua files.
+//! `make hook` command -- generate hook Lua files.
 
 mod generator;
 

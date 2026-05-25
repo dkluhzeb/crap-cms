@@ -1,6 +1,6 @@
 //! Lua VM initialization, sandboxing, and definition loading.
 
-use std::{fs, path::Path};
+use std::{fs, path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result};
 use mlua::{Lua, LuaOptions, StdLib, Table, Value};
@@ -12,21 +12,33 @@ use crate::{
     hooks::lifecycle::InitPhase,
 };
 
-use super::api;
+use super::lua_api;
 
 /// Initialize the Lua VM, register the crap API, load collections/globals,
-/// and run init.lua. Returns a populated SharedRegistry.
-pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<SharedRegistry> {
+/// and run init.lua. Returns an immutable `Arc<Registry>` snapshot.
+///
+/// The writeable `SharedRegistry` exists only within this function's
+/// stack. After all definitions are loaded and validations pass, the
+/// registry is snapshotted and the writeable handle is dropped. Every
+/// downstream consumer (`HookRunner`, `AdminState`, MCP, gRPC, scheduler)
+/// holds only the `Arc<Registry>` snapshot.
+///
+/// # Errors
+///
+/// Returns an error if the Lua VM can't be created, sandboxing fails, the
+/// `crap` global can't be registered, or any of the `<config_dir>/*.lua`
+/// files fail to load.
+pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>> {
     let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default())?;
 
     sandbox_lua(&lua)?;
 
-    lua.set_app_data(api::VmLabel("init".to_string()));
+    lua.set_app_data(lua_api::VmLabel("init".to_string()));
 
     let registry = Registry::shared();
 
     setup_package_paths(&lua, config_dir)?;
-    api::register_api(&lua, registry.clone(), config)?;
+    lua_api::register_api(&lua, &registry, config)?;
 
     // Mark init phase so register-only APIs (`crap.pages.register`,
     // `crap.template_data.register`, …) accept calls. Cleared after
@@ -36,6 +48,14 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<SharedRegistry
     let n_collections = load_def_dir(&lua, config_dir, "collection")?;
     let n_globals = load_def_dir(&lua, config_dir, "global")?;
     let n_jobs = load_def_dir(&lua, config_dir, "job")?;
+
+    // Per-slug typing-helper factories — `crap.collections.<slug>.field_hook(...)`
+    // etc. need to exist before init.lua / the hook-ref validation pass
+    // tries to `require` any hook file that wraps in a factory. The init
+    // VM gets only the typing helpers (no CRUD wrappers — those are
+    // pool-VM only).
+    lua_api::register::register_per_slug_typing_helpers(&lua, &registry)
+        .context("Failed to register per-slug typing helpers")?;
 
     let has_init = execute_init_lua(&lua, config_dir)?;
 
@@ -51,17 +71,34 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<SharedRegistry
 
     apply_config_defaults(&registry, config);
 
+    // Take the snapshot before validations so they read from the
+    // frozen view (and the rest of the function can pass `&Registry`
+    // instead of `&SharedRegistry`).
+    let snapshot = Registry::snapshot(&registry);
+
     // BUG-5: statically-known hook/access refs are resolved at startup so
     // typos fail to boot instead of surfacing at first request.
-    super::validate::validate_hook_references(&lua, &registry)
+    super::startup_checks::validate_hook_references(&lua, &snapshot)
         .context("Hook/access reference validation failed")?;
 
     // Reject field names that collide with the generated locale-suffixed
     // column pattern `{name}__{locale}`.
-    super::validate::validate_locale_field_collisions(&registry, &config.locale.locales)
+    super::startup_checks::validate_locale_field_collisions(&snapshot, &config.locale.locales)
         .context("Locale/field-name collision detected")?;
 
-    Ok(registry)
+    // Validate per-collection auth.methods configurations: hard errors
+    // for structural issues (enabled+empty methods, duplicate password_login,
+    // etc.), warnings for footgun patterns (always-active strategies).
+    super::startup_checks::validate_auth_methods(&snapshot)
+        .context("Auth method configuration invalid")?;
+
+    // The init VM and `registry` (SharedRegistry) drop here. The
+    // closures inside the VM that captured SharedRegistry clones are
+    // also dropped; no writeable handle survives this function.
+    drop(lua);
+    drop(registry);
+
+    Ok(snapshot)
 }
 
 /// Execute init.lua if present. Returns whether it existed.
@@ -87,16 +124,20 @@ fn execute_init_lua(lua: &Lua, config_dir: &Path) -> Result<bool> {
 
 /// Load definition files from `{config_dir}/{kind}s/` if the directory exists.
 fn load_def_dir(lua: &Lua, config_dir: &Path, kind: &str) -> Result<usize> {
-    let dir = config_dir.join(format!("{kind}s"));
+    let dir_name = format!("{kind}s");
+    let dir = config_dir.join(&dir_name);
 
     if dir.exists() {
-        load_lua_dir(lua, &dir, kind)
+        // Pass the plural directory name as the require-key prefix so
+        // `require("jobs.foo")` hits the cache populated here for
+        // `<config_dir>/jobs/foo.lua`.
+        load_lua_dir(lua, &dir, &dir_name)
     } else {
         Ok(0)
     }
 }
 
-/// Resolve config-level default_timezone into date fields that don't specify their own.
+/// Resolve config-level `default_timezone` into date fields that don't specify their own.
 fn apply_config_defaults(registry: &SharedRegistry, config: &CrapConfig) {
     if config.admin.default_timezone.is_empty() {
         return;
@@ -117,7 +158,7 @@ fn apply_config_defaults(registry: &SharedRegistry, config: &CrapConfig) {
 }
 
 /// Recursively set `default_timezone` on Date fields with `timezone: true`
-/// that don't already have their own default_timezone.
+/// that don't already have their own `default_timezone`.
 fn apply_default_timezone(fields: &mut [FieldDefinition], default_tz: &str) {
     for field in fields.iter_mut() {
         if field.field_type == FieldType::Date && field.timezone && field.default_timezone.is_none()
@@ -137,7 +178,7 @@ fn setup_package_paths(lua: &Lua, config_dir: &Path) -> Result<()> {
     let config_str = config_dir.to_string_lossy();
     let pkg: Table = lua.globals().get("package")?;
     let current_path: String = pkg.get("path")?;
-    let new_path = format!("{0}/?.lua;{0}/?/init.lua;{1}", config_str, current_path);
+    let new_path = format!("{config_str}/?.lua;{config_str}/?/init.lua;{current_path}");
 
     pkg.set("path", new_path)?;
 
@@ -174,16 +215,28 @@ pub(crate) fn sandbox_lua(lua: &Lua) -> Result<()> {
     Ok(())
 }
 
-/// Load and execute all `.lua` files in a directory (used for `collections/` and `globals/`).
-/// Returns the number of files loaded.
+/// Load and execute all `.lua` files in a directory (used for
+/// `collections/`, `globals/`, `jobs/`).
+///
+/// Each file is evaluated and its return value is cached in
+/// `package.loaded["<kind>.<stem>"]` so subsequent `require()`
+/// calls (e.g. the job dispatcher resolving a handler) hit the
+/// cache and don't re-execute the file's top-level. Without this,
+/// a `crap.<x>.define(...)` call at the top of `jobs/foo.lua`
+/// would run again at runtime and trip the `InitPhase` guard.
+/// Files that don't `return` cache as `true` (Lua's standard
+/// require-no-return convention).
 pub(crate) fn load_lua_dir(lua: &Lua, dir: &Path, kind: &str) -> Result<usize> {
     let mut entries: Vec<_> = fs::read_dir(dir)
         .with_context(|| format!("Failed to read {} directory: {}", kind, dir.display()))?
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "lua"))
         .collect();
 
-    entries.sort_by_key(|e| e.file_name());
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+
+    let pkg: Table = lua.globals().get("package")?;
+    let loaded: Table = pkg.get("loaded")?;
 
     let count = entries.len();
     for entry in entries {
@@ -193,18 +246,31 @@ pub(crate) fn load_lua_dir(lua: &Lua, dir: &Path, kind: &str) -> Result<usize> {
         };
         let name = name.to_string_lossy();
         let label = lua
-            .app_data_ref::<api::VmLabel>()
-            .map(|l| l.0.clone())
-            .unwrap_or_else(|| "lua".into());
+            .app_data_ref::<lua_api::VmLabel>()
+            .map_or_else(|| "lua".into(), |l| l.0.clone());
         debug!("[lua:{label}] Loading {kind}: {name}");
 
         let code = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
 
-        lua.load(&code)
+        let returned: Value = lua
+            .load(&code)
             .set_name(path.to_string_lossy())
-            .exec()
+            .eval()
             .with_context(|| format!("Failed to execute {}", path.display()))?;
+
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let module_name = format!("{kind}.{stem}");
+        let cached = match returned {
+            Value::Nil => Value::Boolean(true),
+            v => v,
+        };
+        loaded
+            .set(module_name.as_str(), cached)
+            .with_context(|| format!("Failed to cache loaded module '{module_name}'"))?;
     }
 
     Ok(count)

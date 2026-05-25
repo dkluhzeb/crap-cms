@@ -3,11 +3,26 @@
 //! Tests for command library functions (sections 18-30):
 //! direct Rust calls without invoking the binary.
 
-use std::collections::HashMap;
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
+use serde_json::json;
 use std::path::{Path, PathBuf};
 
 use crap_cms::commands;
 use crap_cms::config::CrapConfig;
+use crap_cms::core::DocumentFields;
 use crap_cms::core::auth;
 use crap_cms::db::{DbPool, migrate, pool, query};
 use crap_cms::hooks;
@@ -22,8 +37,12 @@ fn fixture_dir() -> PathBuf {
 }
 
 /// Copy fixture dir to a temp dir, init Lua, create pool, sync schema.
-/// Returns (TempDir, DbPool, SharedRegistry).
-fn full_setup() -> (tempfile::TempDir, DbPool, crap_cms::core::SharedRegistry) {
+/// Returns (`TempDir`, `DbPool`, Arc<Registry>).
+fn full_setup() -> (
+    tempfile::TempDir,
+    DbPool,
+    std::sync::Arc<crap_cms::core::Registry>,
+) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("config");
     copy_dir(&fixture_dir(), &config_dir);
@@ -51,7 +70,7 @@ fn copy_dir(src: &Path, dst: &Path) {
     }
 }
 
-/// Create a user in an auth collection via query::create + update_password.
+/// Create a user in an auth collection via `query::create` + `update_password`.
 fn create_user(
     pool: &DbPool,
     def: &crap_cms::core::CollectionDefinition,
@@ -59,10 +78,10 @@ fn create_user(
     password: &str,
     extra_fields: &[(&str, &str)],
 ) -> crap_cms::core::Document {
-    let mut data = HashMap::new();
-    data.insert("email".to_string(), email.to_string());
+    let mut data = DocumentFields::new();
+    data.insert("email".to_string(), json!(email.to_string()));
     for (k, v) in extra_fields {
-        data.insert(k.to_string(), v.to_string());
+        data.insert(k.to_string(), json!(v.to_string()));
     }
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
@@ -105,13 +124,12 @@ fn cmd_export_all() {
 
     // Seed some posts
     {
-        let reg = registry.read().unwrap();
-        let def = reg.get_collection("posts").unwrap();
+        let def = registry.get_collection("posts").unwrap();
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         for i in 0..3 {
-            let mut data = HashMap::new();
-            data.insert("title".to_string(), format!("Export Post {}", i));
+            let mut data = DocumentFields::new();
+            data.insert("title".to_string(), json!(format!("Export Post {}", i)));
             query::create(&tx, "posts", def, &data, None).unwrap();
         }
         tx.commit().unwrap();
@@ -146,32 +164,26 @@ fn cmd_export_collection_filter() {
 
     // Seed posts and a user
     {
-        let reg = registry.read().unwrap();
-        let posts_def = reg.get_collection("posts").unwrap();
-        let users_def = reg.get_collection("users").unwrap();
+        let posts_def = registry.get_collection("posts").unwrap();
+        let users_def = registry.get_collection("users").unwrap();
 
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
 
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Filtered Post".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Filtered Post".to_string()));
         query::create(&tx, "posts", posts_def, &data, None).unwrap();
 
-        let mut udata = HashMap::new();
-        udata.insert("email".to_string(), "filter@example.com".to_string());
-        udata.insert("name".to_string(), "Filter User".to_string());
+        let mut udata = DocumentFields::new();
+        udata.insert("email".to_string(), json!("filter@example.com".to_string()));
+        udata.insert("name".to_string(), json!("Filter User".to_string()));
         query::create(&tx, "users", users_def, &udata, None).unwrap();
 
         tx.commit().unwrap();
     }
 
     let output_path = tmp.path().join("export_filtered.json");
-    commands::export::export(
-        &config_dir,
-        Some("posts".to_string()),
-        Some(output_path.clone()),
-    )
-    .unwrap();
+    commands::export::export(&config_dir, Some("posts"), Some(output_path.clone())).unwrap();
 
     let content = std::fs::read_to_string(&output_path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -192,7 +204,7 @@ fn cmd_export_nonexistent_errors() {
     let output_path = tmp.path().join("export_bad.json");
     let result = commands::export::export(
         &config_dir,
-        Some("nonexistent_collection".to_string()),
+        Some("nonexistent_collection"),
         Some(output_path),
     );
     assert!(
@@ -202,8 +214,7 @@ fn cmd_export_nonexistent_errors() {
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("not found"),
-        "error should mention 'not found', got: {}",
-        err_msg
+        "error should mention 'not found', got: {err_msg}"
     );
 }
 
@@ -215,14 +226,13 @@ fn cmd_import_roundtrip() {
     // Seed data
     let mut original_ids = Vec::new();
     {
-        let reg = registry.read().unwrap();
-        let def = reg.get_collection("posts").unwrap();
+        let def = registry.get_collection("posts").unwrap();
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         for i in 0..3 {
-            let mut data = HashMap::new();
-            data.insert("title".to_string(), format!("Roundtrip {}", i));
-            data.insert("status".to_string(), "published".to_string());
+            let mut data = DocumentFields::new();
+            data.insert("title".to_string(), json!(format!("Roundtrip {}", i)));
+            data.insert("status".to_string(), json!("published"));
             let doc = query::create(&tx, "posts", def, &data, None).unwrap();
             original_ids.push(doc.id.clone());
         }
@@ -245,20 +255,18 @@ fn cmd_import_roundtrip() {
 
     // Verify empty
     {
-        let reg = registry.read().unwrap();
-        let def = reg.get_collection("posts").unwrap();
+        let def = registry.get_collection("posts").unwrap();
         let conn = pool.get().unwrap();
         let docs = query::find(&conn, "posts", def, &query::FindQuery::default(), None).unwrap();
         assert_eq!(docs.len(), 0, "posts should be empty after delete");
     }
 
     // Import from the exported file
-    commands::export::import(&config_dir, &export_path, Some("posts".to_string())).unwrap();
+    commands::export::import(&config_dir, &export_path, Some("posts")).unwrap();
 
     // Verify data restored
     {
-        let reg = registry.read().unwrap();
-        let def = reg.get_collection("posts").unwrap();
+        let def = registry.get_collection("posts").unwrap();
         let conn = pool.get().unwrap();
         let docs = query::find(&conn, "posts", def, &query::FindQuery::default(), None).unwrap();
         assert_eq!(docs.len(), 3, "should have 3 posts after import");
@@ -279,20 +287,19 @@ fn cmd_import_roundtrip() {
 fn cmd_user_create_via_library() {
     let (_tmp, pool, registry) = full_setup();
 
-    commands::user::user_create(
-        &pool,
-        &registry,
-        "users",
-        Some("lib_create@example.com".to_string()),
-        Some("password123".to_string()),
-        vec![("name".to_string(), "Lib User".to_string())],
-        &crap_cms::config::PasswordPolicy::default(),
-    )
+    commands::user_create(commands::UserCreateParams {
+        pool: &pool,
+        registry: &registry,
+        collection: "users",
+        email: Some("lib_create@example.com".to_string()),
+        password: Some("password123".to_string()),
+        fields: vec![("name".to_string(), "Lib User".to_string())],
+        password_policy: &crap_cms::config::PasswordPolicy::default(),
+    })
     .unwrap();
 
     // Verify user was created in DB
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap();
+    let def = registry.get_collection("users").unwrap();
     let conn = pool.get().unwrap();
     let found = query::find_by_email(&conn, "users", def, "lib_create@example.com")
         .unwrap()
@@ -311,22 +318,21 @@ fn cmd_user_create_via_library() {
 fn cmd_user_create_extra_fields() {
     let (_tmp, pool, registry) = full_setup();
 
-    commands::user::user_create(
-        &pool,
-        &registry,
-        "users",
-        Some("extra@example.com".to_string()),
-        Some("secret456".to_string()),
-        vec![
+    commands::user_create(commands::UserCreateParams {
+        pool: &pool,
+        registry: &registry,
+        collection: "users",
+        email: Some("extra@example.com".to_string()),
+        password: Some("secret456".to_string()),
+        fields: vec![
             ("name".to_string(), "Admin User".to_string()),
             ("role".to_string(), "admin".to_string()),
         ],
-        &crap_cms::config::PasswordPolicy::default(),
-    )
+        password_policy: &crap_cms::config::PasswordPolicy::default(),
+    })
     .unwrap();
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap();
+    let def = registry.get_collection("users").unwrap();
     let conn = pool.get().unwrap();
     let found = query::find_by_email(&conn, "users", def, "extra@example.com")
         .unwrap()
@@ -339,15 +345,15 @@ fn cmd_user_create_extra_fields() {
 fn cmd_user_create_non_auth_errors() {
     let (_tmp, pool, registry) = full_setup();
 
-    let result = commands::user::user_create(
-        &pool,
-        &registry,
-        "posts",
-        Some("fail@example.com".to_string()),
-        Some("password".to_string()),
-        vec![],
-        &crap_cms::config::PasswordPolicy::default(),
-    );
+    let result = commands::user_create(commands::UserCreateParams {
+        pool: &pool,
+        registry: &registry,
+        collection: "posts",
+        email: Some("fail@example.com".to_string()),
+        password: Some("password".to_string()),
+        fields: vec![],
+        password_policy: &crap_cms::config::PasswordPolicy::default(),
+    });
     assert!(
         result.is_err(),
         "creating user in non-auth collection should fail"
@@ -355,8 +361,7 @@ fn cmd_user_create_non_auth_errors() {
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("not an auth collection"),
-        "error should mention 'not an auth collection', got: {}",
-        err_msg
+        "error should mention 'not an auth collection', got: {err_msg}"
     );
 }
 
@@ -365,11 +370,11 @@ fn cmd_user_create_non_auth_errors() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
-fn cmd_typegen_via_library() {
+fn cmd_typegen_lua_via_library() {
     let (tmp, _pool, _registry) = full_setup();
     let config_dir = tmp.path().join("config");
 
-    let result = commands::typegen::run(&config_dir, "lua", None, None);
+    let result = commands::typegen::run(&config_dir, commands::TypegenAction::Lua { output: None });
     assert!(
         result.is_ok(),
         "typegen lua should succeed: {:?}",
@@ -378,14 +383,25 @@ fn cmd_typegen_via_library() {
 }
 
 #[test]
-fn cmd_typegen_all_via_library() {
+fn cmd_typegen_client_all_langs_via_library() {
     let (tmp, _pool, _registry) = full_setup();
     let config_dir = tmp.path().join("config");
 
-    let result = commands::typegen::run(&config_dir, "all", None, None);
+    let result = commands::typegen::run(
+        &config_dir,
+        commands::TypegenAction::Client {
+            lang: vec![
+                "ts".to_string(),
+                "go".to_string(),
+                "py".to_string(),
+                "rs".to_string(),
+            ],
+            output: None,
+        },
+    );
     assert!(
         result.is_ok(),
-        "typegen all should succeed: {:?}",
+        "typegen client (all langs) should succeed: {:?}",
         result.err()
     );
 }
@@ -395,13 +411,18 @@ fn cmd_typegen_invalid_lang_errors() {
     let (tmp, _pool, _registry) = full_setup();
     let config_dir = tmp.path().join("config");
 
-    let result = commands::typegen::run(&config_dir, "invalid_lang", None, None);
+    let result = commands::typegen::run(
+        &config_dir,
+        commands::TypegenAction::Client {
+            lang: vec!["invalid_lang".to_string()],
+            output: None,
+        },
+    );
     assert!(result.is_err(), "typegen with invalid language should fail");
     let err_msg = result.unwrap_err().to_string();
     assert!(
-        err_msg.contains("Unknown language"),
-        "error should mention 'Unknown language', got: {}",
-        err_msg
+        err_msg.contains("unknown client language"),
+        "error should mention 'unknown client language', got: {err_msg}"
     );
 }
 
@@ -411,19 +432,24 @@ fn cmd_typegen_custom_output_dir() {
     let config_dir = tmp.path().join("config");
     let custom_output = tmp.path().join("custom_types");
 
-    let result = commands::typegen::run(&config_dir, "lua", Some(&custom_output), None);
+    let result = commands::typegen::run(
+        &config_dir,
+        commands::TypegenAction::Lua {
+            output: Some(custom_output.clone()),
+        },
+    );
     assert!(
         result.is_ok(),
-        "typegen with custom output should succeed: {:?}",
+        "typegen lua with custom output should succeed: {:?}",
         result.err()
     );
     assert!(
-        custom_output.join("generated.lua").exists(),
-        "should write to custom output dir"
+        custom_output.join("hooks.lua").exists(),
+        "should write hooks.lua to custom output dir"
     );
     assert!(
         custom_output.join("crap.lua").exists(),
-        "should write API types to custom output dir"
+        "should write crap.lua to custom output dir"
     );
 }
 
@@ -438,7 +464,7 @@ fn cmd_migrate_create() {
 
     commands::db::migrate(
         &config_dir,
-        commands::MigrateAction::Create {
+        &commands::MigrateAction::Create {
             name: "test_migration".into(),
         },
     )
@@ -447,14 +473,13 @@ fn cmd_migrate_create() {
     let migrations_dir = config_dir.join("migrations");
     let files: Vec<_> = std::fs::read_dir(&migrations_dir)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .collect();
     assert_eq!(files.len(), 1, "should have created one migration file");
     let filename = files[0].file_name().to_string_lossy().to_string();
     assert!(
         filename.ends_with("_test_migration.lua"),
-        "migration file should end with '_test_migration.lua', got: {}",
-        filename
+        "migration file should end with '_test_migration.lua', got: {filename}"
     );
 
     let content = std::fs::read_to_string(files[0].path()).unwrap();
@@ -472,14 +497,13 @@ fn cmd_migrate_fresh_needs_confirm() {
 
     let result = commands::db::migrate(
         &config_dir,
-        commands::MigrateAction::Fresh { confirm: false },
+        &commands::MigrateAction::Fresh { confirm: false },
     );
     assert!(result.is_err(), "migrate fresh without confirm should fail");
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("--confirm"),
-        "error should mention '--confirm', got: {}",
-        err_msg
+        "error should mention '--confirm', got: {err_msg}"
     );
 }
 
@@ -490,12 +514,11 @@ fn cmd_backup_creates_snapshot() {
 
     // Create some data so the DB has content
     {
-        let reg = registry.read().unwrap();
-        let def = reg.get_collection("posts").unwrap();
+        let def = registry.get_collection("posts").unwrap();
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Backup Test Post".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Backup Test Post".to_string()));
         query::create(&tx, "posts", def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -513,7 +536,7 @@ fn cmd_backup_creates_snapshot() {
     );
     let backup_dirs: Vec<_> = std::fs::read_dir(&backup_output)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.path().is_dir())
         .collect();
     assert_eq!(backup_dirs.len(), 1, "should have one backup directory");
@@ -583,9 +606,8 @@ return M
 
     // Verify the job is registered
     {
-        let reg = registry.read().unwrap();
         assert!(
-            reg.get_job("cleanup").is_some(),
+            registry.get_job("cleanup").is_some(),
             "cleanup job should be registered"
         );
     }
@@ -596,6 +618,7 @@ return M
         commands::JobsAction::Trigger {
             slug: "cleanup".to_string(),
             data: None,
+            priority: None,
         },
     )
     .unwrap();
@@ -639,7 +662,7 @@ fn parse_key_val_no_equals() {
     let result = commands::parse_key_val("noequalssign");
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.contains("no `=` found"), "error: {}", err);
+    assert!(err.contains("no `=` found"), "error: {err}");
 }
 
 #[test]
@@ -666,9 +689,8 @@ fn load_config_and_sync_works() {
     drop(conn);
 
     // Verify registry has expected collections
-    let reg = registry.read().unwrap();
-    assert!(reg.get_collection("posts").is_some());
-    assert!(reg.get_collection("users").is_some());
+    assert!(registry.get_collection("posts").is_some());
+    assert!(registry.get_collection("users").is_some());
 }
 
 #[test]
@@ -719,10 +741,10 @@ fn has_locales_enabled_empty_array() {
 
     std::fs::write(
         config_dir.join("crap.toml"),
-        r#"
+        r"
 [locale]
 locales = []
-"#,
+",
     )
     .unwrap();
 
@@ -837,9 +859,7 @@ fn try_load_field_infos_bad_dir() {
 #[test]
 fn cmd_user_list() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("users").unwrap().clone();
 
     // Create some users
     create_user(
@@ -852,7 +872,7 @@ fn cmd_user_list() {
     create_user(&pool, &def, "bob@example.com", "pw456", &[("name", "Bob")]);
 
     // user_list should succeed
-    let result = commands::user::user_list(&pool, &registry, "users");
+    let result = commands::user_list(&pool, &registry, "users");
     assert!(
         result.is_ok(),
         "user_list should succeed: {:?}",
@@ -865,7 +885,7 @@ fn cmd_user_list_empty() {
     let (_tmp, pool, registry) = full_setup();
 
     // No users yet — should succeed with "No users" message
-    let result = commands::user::user_list(&pool, &registry, "users");
+    let result = commands::user_list(&pool, &registry, "users");
     assert!(
         result.is_ok(),
         "user_list on empty collection should succeed: {:?}",
@@ -877,24 +897,24 @@ fn cmd_user_list_empty() {
 fn cmd_user_list_non_auth_errors() {
     let (_tmp, pool, registry) = full_setup();
 
-    let result = commands::user::user_list(&pool, &registry, "posts");
+    let result = commands::user_list(&pool, &registry, "posts");
     assert!(
         result.is_err(),
         "user_list on non-auth collection should fail"
     );
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("not an auth collection"), "error: {}", err);
+    assert!(err.contains("not an auth collection"), "error: {err}");
 }
 
 #[test]
 fn cmd_user_list_missing_collection_errors() {
     let (_tmp, pool, registry) = full_setup();
 
-    let result = commands::user::user_list(&pool, &registry, "nonexistent");
+    let result = commands::user_list(&pool, &registry, "nonexistent");
     assert!(
         result.is_err(),
         "user_list on missing collection should fail"
     );
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("not found"), "error: {}", err);
+    assert!(err.contains("not found"), "error: {err}");
 }

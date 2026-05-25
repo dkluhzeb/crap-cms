@@ -66,7 +66,7 @@ impl HelperDef for SlotHelper {
                 ))
             })?;
 
-        let prefix = format!("slots/{}/", slot_name);
+        let prefix = format!("slots/{slot_name}/");
 
         // Enumerate all registered templates under `slots/<name>/`.
         let mut names: Vec<String> = r

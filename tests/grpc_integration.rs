@@ -1,12 +1,26 @@
-//! Integration tests for the gRPC ContentService via the ContentApi trait.
+//! Integration tests for the gRPC `ContentService` via the `ContentApi` trait.
 //!
-//! These tests construct a ContentService directly (no network) and call
-//! trait methods with tonic::Request objects to exercise the full RPC path.
+//! These tests construct a `ContentService` directly (no network) and call
+//! trait methods with `tonic::Request` objects to exercise the full RPC path.
 //!
 //! This file covers: basic CRUD, globals, list/describe endpoints.
-//! Auth tests → grpc_auth.rs
-//! Query/filter/hook/depth tests → grpc_query.rs
-//! Locale/draft/version/bulk/FTS tests → grpc_hooks_locale.rs
+//! Auth tests → `grpc_auth.rs`
+//! Query/filter/hook/depth tests → `grpc_query.rs`
+//! Locale/draft/version/bulk/FTS tests → `grpc_hooks_locale.rs`
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -60,10 +74,7 @@ fn make_users_def() -> CollectionDefinition {
             .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth {
-        enabled: true,
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled());
     def
 }
 
@@ -117,7 +128,7 @@ fn setup_service(
 
 /// Build a `ContentService` whose registry is loaded from a Lua fixture dir,
 /// so tests can exercise real access hooks and Lua-defined globals against
-/// the gRPC surface. The HookRunner uses the fixture dir as its config dir
+/// the gRPC surface. The `HookRunner` uses the fixture dir as its config dir
 /// so hooks resolve via package paths.
 #[allow(dead_code)]
 fn setup_service_with_fixture(fixture_dir: &std::path::Path) -> TestSetup {
@@ -136,16 +147,18 @@ fn setup_service_inner(
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
-    let (registry, hook_config_dir) = match fixture_dir.as_deref() {
+    let (shared, hook_config_dir) = match fixture_dir.as_deref() {
         Some(fd) => {
-            let reg = crap_cms::hooks::init_lua(fd, &config).expect("init lua from fixture");
-            (reg, fd.to_path_buf())
+            let init_snap = crap_cms::hooks::init_lua(fd, &config).expect("init lua from fixture");
+            let shared = Registry::shared();
+            *shared.write().unwrap() = (*init_snap).clone();
+            (shared, fd.to_path_buf())
         }
         None => (Registry::shared(), tmp.path().to_path_buf()),
     };
 
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &collections {
             reg.register_collection(def.clone());
         }
@@ -154,11 +167,12 @@ fn setup_service_inner(
         }
     }
 
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner = HookRunner::builder()
         .config_dir(&hook_config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -168,9 +182,8 @@ fn setup_service_inner(
     let service = ContentService::new(
         ContentServiceDeps::builder()
             .pool(db_pool.clone())
-            .registry(Registry::snapshot(&registry))
+            .registry(Arc::clone(&registry))
             .hook_runner(hook_runner)
-            .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
             .storage(
@@ -195,7 +208,7 @@ fn setup_service_inner(
             ))
             .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
             .token_provider(std::sync::Arc::new(
-                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+                crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
             ))
             .password_provider(std::sync::Arc::new(
                 crap_cms::core::auth::Argon2PasswordProvider,
@@ -504,7 +517,7 @@ async fn find_with_limit_and_offset() {
         ts.service
             .create(Request::new(content::CreateRequest {
                 collection: "posts".to_string(),
-                data: Some(make_struct(&[("title", &format!("Post {}", i))])),
+                data: Some(make_struct(&[("title", &format!("Post {i}"))])),
                 locale: None,
                 draft: None,
             }))
@@ -875,8 +888,7 @@ async fn grpc_create_rejects_empty_required_in_nested_array() {
     let msg = err.message().to_string();
     assert!(
         msg.contains("first_name") || msg.contains("required"),
-        "Error should reference the nested required field: {}",
-        msg
+        "Error should reference the nested required field: {msg}"
     );
 }
 
@@ -928,10 +940,8 @@ async fn grpc_global_read_access_denied_returns_permission_denied() {
         slug: "restricted_settings".to_string(),
         locale: None,
     });
-    req.metadata_mut().insert(
-        "authorization",
-        format!("Bearer {}", token).parse().unwrap(),
-    );
+    req.metadata_mut()
+        .insert("authorization", format!("Bearer {token}").parse().unwrap());
 
     let err = ts
         .service

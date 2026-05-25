@@ -1,16 +1,21 @@
 //! `crap` metadata block — version, build hash, dev-mode flag, auth flag, CSP nonce.
 //!
 //! Available to every template at `{{crap.*}}`. The CSP nonce is read from a
-//! task-local set by the security_headers middleware so inline `<script>` tags
+//! task-local set by the `security_headers` middleware so inline `<script>` tags
 //! in built-in and overlay templates pass CSP.
 
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::admin::{AdminState, csp_nonce::current_nonce_or_empty};
+use crate::{
+    admin::{AdminState, csp_nonce::current_nonce_or_empty},
+    core::CollectionDefinition,
+    typegen::LuaAnnotation,
+};
 
 /// Metadata about the running crap-cms process and current request.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.crap_meta")]
 pub struct CrapMeta {
     /// Crate version (Cargo.toml `version`).
     pub version: &'static str,
@@ -61,5 +66,5 @@ fn has_auth_collections(state: &AdminState) -> bool {
         .registry
         .collections
         .values()
-        .any(|def| def.is_auth_collection())
+        .any(CollectionDefinition::is_auth_collection)
 }

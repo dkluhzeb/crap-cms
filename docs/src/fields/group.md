@@ -66,7 +66,7 @@ The double-underscore separator is used in all write operations (forms, gRPC). O
 Use dot notation to filter on group sub-fields. The dot syntax is converted to the double-underscore column name internally.
 
 ```lua
-crap.collections.find("pages", {
+crap.collections.pages.find({
     where = {
         ["seo.title"] = { contains = "SEO" },
         ["seo.no_index"] = "0",

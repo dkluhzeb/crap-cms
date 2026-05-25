@@ -176,7 +176,7 @@ function M.audit_hook(ctx)
     if ctx.hook_depth >= 1 then
         return ctx
     end
-    crap.collections.create("audit_log", {
+    crap.collections.audit_log.create({
         action = ctx.operation,
         collection = ctx.collection,
     })

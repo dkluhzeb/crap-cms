@@ -9,23 +9,19 @@ use crate::{
     cli::{self, Table},
     commands::helpers::init_stack,
     config::CrapConfig,
-    core::{CollectionDefinition, Document, SharedRegistry, upload, upload::StorageBackend},
+    core::{CollectionDefinition, Document, Registry, upload, upload::StorageBackend},
     db::{DbConnection, DbPool, DbValue, query},
 };
 
-/// Validate that a collection exists and has soft_delete enabled.
-fn validate_soft_delete(registry: &SharedRegistry, slug: &str) -> Result<()> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
-    let def = reg
+/// Validate that a collection exists and has `soft_delete` enabled.
+fn validate_soft_delete(registry: &Registry, slug: &str) -> Result<()> {
+    let def = registry
         .collections
         .get(slug)
-        .ok_or_else(|| anyhow!("Collection '{}' not found", slug))?;
+        .ok_or_else(|| anyhow!("Collection '{slug}' not found"))?;
 
     if !def.soft_delete {
-        bail!("Collection '{}' does not have soft_delete enabled", slug);
+        bail!("Collection '{slug}' does not have soft_delete enabled");
     }
 
     Ok(())
@@ -33,17 +29,13 @@ fn validate_soft_delete(registry: &SharedRegistry, slug: &str) -> Result<()> {
 
 /// Collect slugs of collections that have `soft_delete = true`.
 /// If `filter` is provided, only return that collection (validating it exists and supports soft delete).
-fn resolve_collections(registry: &SharedRegistry, filter: Option<&str>) -> Result<Vec<String>> {
+fn resolve_collections(registry: &Registry, filter: Option<&str>) -> Result<Vec<String>> {
     if let Some(slug) = filter {
         validate_soft_delete(registry, slug)?;
         return Ok(vec![slug.to_string()]);
     }
 
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
-    let mut slugs: Vec<String> = reg
+    let mut slugs: Vec<String> = registry
         .collections
         .iter()
         .filter(|(_, def)| def.soft_delete)
@@ -55,7 +47,7 @@ fn resolve_collections(registry: &SharedRegistry, filter: Option<&str>) -> Resul
     Ok(slugs)
 }
 
-/// Build a FindQuery that returns only soft-deleted documents.
+/// Build a `FindQuery` that returns only soft-deleted documents.
 ///
 /// CLI bypasses the service layer (`find_documents`) intentionally — there is
 /// no auth/hook context for a CLI invocation, so we go direct to `query::find`.
@@ -74,7 +66,7 @@ fn deleted_filter() -> query::FindQuery {
 
 /// List trashed (soft-deleted) documents across collections.
 fn run_list(
-    registry: &SharedRegistry,
+    registry: &Registry,
     pool: &DbPool,
     cfg: &CrapConfig,
     collection: Option<&str>,
@@ -86,9 +78,6 @@ fn run_list(
         return Ok(());
     }
 
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
     let conn = pool.get().context("Failed to get DB connection")?;
     let locale_ctx = query::LocaleContext::from_locale_string(None, &cfg.locale)?;
     let fq = deleted_filter();
@@ -97,7 +86,7 @@ fn run_list(
     let mut total = 0usize;
 
     for slug in &slugs {
-        let Some(def) = reg.collections.get(slug.as_str()) else {
+        let Some(def) = registry.collections.get(slug.as_str()) else {
             continue;
         };
 
@@ -109,7 +98,7 @@ fn run_list(
         cli::info("No trashed documents found.");
     } else {
         table.print();
-        table.footer(&format!("{} trashed document(s)", total));
+        table.footer(&format!("{total} trashed document(s)"));
     }
 
     Ok(())
@@ -175,40 +164,41 @@ fn parse_threshold(older_than: &str) -> Result<Option<i64>> {
 
     let secs = parse_older_than(older_than).ok_or_else(|| {
         anyhow!(
-            "Invalid duration '{}'. Use format like '30d' (days), '24h' (hours), '30m' (minutes), '60s' (seconds), or 'all'",
-            older_than
+            "Invalid duration '{older_than}'. Use format like '30d' (days), '24h' (hours), '30m' (minutes), '60s' (seconds), or 'all'"
         )
     })?;
 
     Ok(Some(secs))
 }
 
-/// Purge (permanently delete) trashed documents, optionally filtered by age.
-fn run_purge(
-    registry: &SharedRegistry,
-    pool: &DbPool,
-    storage: &dyn StorageBackend,
-    collection: Option<&str>,
-    older_than: &str,
+/// Args for [`run_purge`]. Bundles the runtime handles and the
+/// `TrashAction::Purge` variant fields so the call site reads
+/// declaratively rather than positionally.
+struct PurgeParams<'a> {
+    registry: &'a Registry,
+    pool: &'a DbPool,
+    storage: &'a dyn StorageBackend,
+    collection: Option<&'a str>,
+    older_than: &'a str,
     dry_run: bool,
-) -> Result<()> {
-    let slugs = resolve_collections(registry, collection)?;
+}
+
+/// Purge (permanently delete) trashed documents, optionally filtered by age.
+fn run_purge(p: &PurgeParams<'_>) -> Result<()> {
+    let slugs = resolve_collections(p.registry, p.collection)?;
 
     if slugs.is_empty() {
         cli::info("No collections with soft_delete enabled.");
         return Ok(());
     }
 
-    let threshold_secs = parse_threshold(older_than)?;
+    let threshold_secs = parse_threshold(p.older_than)?;
 
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-    let mut conn = pool.get().context("Failed to get DB connection")?;
+    let mut conn = p.pool.get().context("Failed to get DB connection")?;
     let mut total = 0u64;
 
     for slug in &slugs {
-        let Some(def) = reg.collections.get(slug.as_str()) else {
+        let Some(def) = p.registry.collections.get(slug.as_str()) else {
             continue;
         };
 
@@ -218,26 +208,30 @@ fn run_purge(
             continue;
         }
 
-        if dry_run {
+        if p.dry_run {
             for id in &ids {
-                cli::info(&format!("Would purge: {} / {}", slug, id));
+                cli::info(&format!("Would purge: {slug} / {id}"));
             }
         } else {
-            let tx = conn.transaction().context("Start transaction")?;
-            purge_documents(&tx, slug, def, &ids, storage)?;
+            // `transaction_immediate()` — `purge_documents` issues
+            // reads (find_by_id_unfiltered to look up upload paths) and
+            // writes (DELETEs + FTS sync) on the same tx. DEFERRED would
+            // risk `SQLITE_BUSY_SNAPSHOT` against concurrent writers.
+            let tx = conn.transaction_immediate().context("Start transaction")?;
+            purge_documents(&tx, slug, def, &ids, p.storage)?;
             tx.commit().context("Commit purge")?;
 
             // Re-acquire connection after commit (tx consumed it)
-            conn = pool.get().context("Failed to get DB connection")?;
+            conn = p.pool.get().context("Failed to get DB connection")?;
         }
 
         total += ids.len() as u64;
     }
 
-    if dry_run {
-        cli::info(&format!("{} document(s) would be purged.", total));
+    if p.dry_run {
+        cli::info(&format!("{total} document(s) would be purged."));
     } else {
-        cli::success(&format!("Purged {} trashed document(s).", total));
+        cli::success(&format!("Purged {total} trashed document(s)."));
     }
 
     Ok(())
@@ -276,15 +270,14 @@ fn find_purge_candidates(
             let (offset_sql, offset_param) = conn.date_offset_expr(secs, 1);
             (
                 format!(
-                    "SELECT id FROM \"{}\" WHERE _deleted_at IS NOT NULL \
-                     AND _deleted_at < {}",
-                    slug, offset_sql
+                    "SELECT id FROM \"{slug}\" WHERE _deleted_at IS NOT NULL \
+                     AND _deleted_at < {offset_sql}"
                 ),
                 vec![offset_param],
             )
         }
         None => (
-            format!("SELECT id FROM \"{}\" WHERE _deleted_at IS NOT NULL", slug),
+            format!("SELECT id FROM \"{slug}\" WHERE _deleted_at IS NOT NULL"),
             vec![],
         ),
     };
@@ -302,24 +295,25 @@ fn find_purge_candidates(
 }
 
 /// Restore a single soft-deleted document.
-fn run_restore(registry: &SharedRegistry, pool: &DbPool, collection: &str, id: &str) -> Result<()> {
+fn run_restore(registry: &Registry, pool: &DbPool, collection: &str, id: &str) -> Result<()> {
     validate_soft_delete(registry, collection)?;
 
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-    let def = reg
+    let def = registry
         .collections
         .get(collection)
-        .with_context(|| format!("Collection '{}' not found", collection))?;
+        .with_context(|| format!("Collection '{collection}' not found"))?;
 
     let mut conn = pool.get().context("Failed to get DB connection")?;
-    let tx = conn.transaction().context("Start transaction")?;
+    // `transaction_immediate()` — restore reads (find_by_id_unfiltered
+    // for the FTS re-sync) and writes (UPDATE deleted_at, FTS upsert)
+    // on the same tx. Avoid `SQLITE_BUSY_SNAPSHOT` against concurrent
+    // writers.
+    let tx = conn.transaction_immediate().context("Start transaction")?;
 
     let restored = query::restore(&tx, collection, id)?;
 
     if !restored {
-        bail!("Document '{}' not found or not in trash", id);
+        bail!("Document '{id}' not found or not in trash");
     }
 
     // Re-sync FTS index (FTS row was deleted on soft-delete)
@@ -331,14 +325,14 @@ fn run_restore(registry: &SharedRegistry, pool: &DbPool, collection: &str, id: &
 
     tx.commit().context("Commit restore")?;
 
-    cli::success(&format!("Restored document '{}' in '{}'.", id, collection));
+    cli::success(&format!("Restored document '{id}' in '{collection}'."));
 
     Ok(())
 }
 
 /// Permanently delete all trashed documents in a collection.
 fn run_empty(
-    registry: &SharedRegistry,
+    registry: &Registry,
     pool: &DbPool,
     storage: &dyn StorageBackend,
     collection: &str,
@@ -346,22 +340,18 @@ fn run_empty(
 ) -> Result<()> {
     validate_soft_delete(registry, collection)?;
 
-    let def = {
-        let reg = registry
-            .read()
-            .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-        reg.collections
-            .get(collection)
-            .with_context(|| format!("Collection '{}' not found", collection))?
-            .clone()
-    };
+    let def = registry
+        .collections
+        .get(collection)
+        .with_context(|| format!("Collection '{collection}' not found"))?
+        .clone();
 
     let mut conn = pool.get().context("Failed to get DB connection")?;
     let fq = deleted_filter();
     let docs = query::find(&conn, collection, &def, &fq, None)?;
 
     if docs.is_empty() {
-        cli::info(&format!("No trashed documents in '{}'.", collection));
+        cli::info(&format!("No trashed documents in '{collection}'."));
         return Ok(());
     }
 
@@ -376,7 +366,10 @@ fn run_empty(
     }
 
     let ids: Vec<String> = docs.iter().map(|d| d.id.to_string()).collect();
-    let tx = conn.transaction().context("Start transaction")?;
+    // `transaction_immediate()` — `purge_documents` interleaves reads
+    // (upload path lookups) and writes (DELETEs + FTS sync) on the
+    // same tx. See the matching note in `run_purge`.
+    let tx = conn.transaction_immediate().context("Start transaction")?;
 
     purge_documents(&tx, collection, &def, &ids, storage)?;
 
@@ -392,6 +385,11 @@ fn run_empty(
 }
 
 /// Handle the `trash` subcommand.
+///
+/// # Errors
+///
+/// Returns an error if config loading, pool creation, storage init, or the
+/// dispatched action fails.
 #[cfg(not(tarpaulin_include))]
 pub fn run(action: TrashAction, config_dir: &Path) -> Result<()> {
     let config_dir = config_dir
@@ -407,14 +405,14 @@ pub fn run(action: TrashAction, config_dir: &Path) -> Result<()> {
             collection,
             older_than,
             dry_run,
-        } => run_purge(
-            &registry,
-            &pool,
-            &*storage,
-            collection.as_deref(),
-            &older_than,
+        } => run_purge(&PurgeParams {
+            registry: &registry,
+            pool: &pool,
+            storage: &*storage,
+            collection: collection.as_deref(),
+            older_than: &older_than,
             dry_run,
-        ),
+        }),
 
         TrashAction::Restore { collection, id } => run_restore(&registry, &pool, &collection, &id),
 

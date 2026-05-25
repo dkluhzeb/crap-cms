@@ -5,8 +5,7 @@ use serde_json::json;
 
 use crate::core::cache::NoneCache;
 use crate::core::{
-    Document, FieldDefinition, Registry,
-    field::{BlockDefinition, FieldTab, FieldType, RelationshipConfig},
+    BlockDefinition, Document, FieldDefinition, FieldTab, FieldType, Registry, RelationshipConfig,
 };
 use crate::db::DbConnection;
 use crate::db::query::populate::{
@@ -94,8 +93,7 @@ fn populate_depth_one_hydrates() {
     let author = doc.fields.get("author").expect("author field should exist");
     assert!(
         author.is_object(),
-        "author should be populated as an object, got {:?}",
-        author
+        "author should be populated as an object, got {author:?}"
     );
 
     let author_obj = author.as_object().unwrap();
@@ -197,8 +195,7 @@ fn populate_circular_ref_stops() {
     if let Some(fp) = fav_post {
         assert!(
             fp.is_string(),
-            "favorite_post should remain a string ID due to circular ref, got {:?}",
-            fp
+            "favorite_post should remain a string ID due to circular ref, got {fp:?}"
         );
     }
 }
@@ -513,8 +510,7 @@ fn populate_upload_inside_blocks() {
     let bg = hero.get("background").expect("background should exist");
     assert!(
         bg.is_object(),
-        "upload inside block should be populated, got {:?}",
-        bg
+        "upload inside block should be populated, got {bg:?}"
     );
     assert_eq!(bg.get("id").and_then(|v| v.as_str()), Some("m1"));
     assert_eq!(
@@ -580,8 +576,7 @@ fn populate_relationship_inside_tabs() {
     let author = doc.fields.get("author").expect("author should exist");
     assert!(
         author.is_object(),
-        "relationship inside tabs should be populated, got {:?}",
-        author
+        "relationship inside tabs should be populated, got {author:?}"
     );
     assert_eq!(author.get("name").and_then(|v| v.as_str()), Some("Alice"));
 }
@@ -638,8 +633,7 @@ fn populate_relationship_inside_group() {
     let og_author = seo_obj.get("og_author").expect("og_author should exist");
     assert!(
         og_author.is_object(),
-        "relationship inside group should be populated, got {:?}",
-        og_author
+        "relationship inside group should be populated, got {og_author:?}"
     );
     assert_eq!(
         og_author.get("name").and_then(|v| v.as_str()),
@@ -702,8 +696,7 @@ fn populate_relationship_inside_array() {
     let related = row.get("related").expect("related should exist");
     assert!(
         related.is_object(),
-        "relationship inside array should be populated, got {:?}",
-        related
+        "relationship inside array should be populated, got {related:?}"
     );
     assert_eq!(related.get("name").and_then(|v| v.as_str()), Some("Alice"));
 }

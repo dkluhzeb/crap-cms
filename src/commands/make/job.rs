@@ -8,7 +8,7 @@ use crate::{cli::crap_theme, commands::MakeAction, scaffold};
 
 /// Handle the `make job` subcommand — resolve slug interactively if missing.
 #[cfg(not(tarpaulin_include))]
-pub fn run_job(config_dir: &Path, action: MakeAction) -> Result<()> {
+pub(super) fn run_job(config_dir: &Path, action: MakeAction) -> Result<()> {
     let MakeAction::Job {
         slug,
         schedule,

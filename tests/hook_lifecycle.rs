@@ -1,14 +1,33 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::Document;
+use crap_cms::core::DocumentFields;
+use crap_cms::core::ReqContext;
 use crap_cms::core::collection::Hooks;
 use crap_cms::core::field::{FieldDefinition, FieldType};
 use crap_cms::db::query::AccessResult;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
-use crap_cms::hooks::lifecycle::{AfterReadCtx, FieldWriteCtx, HookRunner, ValidationCtx};
+use crap_cms::hooks::lifecycle::{
+    AfterReadCtx, FieldWriteCtx, HookContext, HookRunner, ValidationCtx,
+};
 use serde_json::json;
 
 fn fixture_dir() -> PathBuf {
@@ -18,7 +37,7 @@ fn fixture_dir() -> PathBuf {
 fn setup() -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    crap_cms::core::SharedRegistry,
+    std::sync::Arc<crap_cms::core::Registry>,
     HookRunner,
 ) {
     let config_dir = fixture_dir();
@@ -33,7 +52,7 @@ fn setup() -> (
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("Failed to create HookRunner");
@@ -42,15 +61,13 @@ fn setup() -> (
 
 fn create_article(
     pool: &crap_cms::db::DbPool,
-    registry: &crap_cms::core::SharedRegistry,
-    data: &HashMap<String, String>,
+    registry: &std::sync::Arc<crap_cms::core::Registry>,
+    data: &DocumentFields,
 ) -> Document {
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("articles")
         .expect("articles not found")
         .clone();
-    drop(reg);
 
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
@@ -64,21 +81,19 @@ fn create_article(
 #[test]
 fn before_change_hook_modifies_data() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("  Test Title  "));
     data.insert("body".to_string(), json!("Content"));
 
-    let ctx = crap_cms::hooks::lifecycle::HookContext {
+    let ctx = HookContext {
         collection: "articles".to_string(),
         operation: "create".to_string(),
         data,
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -109,20 +124,18 @@ fn before_change_hook_modifies_data() {
 #[test]
 fn before_validate_trims_title() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("  Spaces Around  "));
 
-    let ctx = crap_cms::hooks::lifecycle::HookContext {
+    let ctx = HookContext {
         collection: "articles".to_string(),
         operation: "create".to_string(),
         data,
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -150,11 +163,9 @@ fn before_validate_trims_title() {
 #[test]
 fn field_before_change_transforms_value() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Hello World"));
     // slug intentionally left empty — field hook should auto-generate from title
 
@@ -163,13 +174,14 @@ fn field_before_change_transforms_value() {
 
     runner
         .run_field_hooks_with_conn(
-            &def.fields,
-            crap_cms::hooks::lifecycle::FieldHookEvent::BeforeChange,
             &mut data,
-            "articles",
-            "create",
-            &FieldWriteCtx::builder(&tx).build(),
-            None,
+            &crap_cms::hooks::lifecycle::FieldHooksCall {
+                fields: &def.fields,
+                event: crap_cms::hooks::lifecycle::FieldHookEvent::BeforeChange,
+                collection: "articles",
+                operation: "create",
+            },
+            FieldWriteCtx::builder(&tx).build(),
         )
         .expect("Field hook failed");
 
@@ -182,20 +194,18 @@ fn field_before_change_transforms_value() {
 #[test]
 fn registered_hook_fires_for_all_collections() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Test"));
 
-    let ctx = crap_cms::hooks::lifecycle::HookContext {
+    let ctx = HookContext {
         collection: "articles".to_string(),
         operation: "create".to_string(),
         data,
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -226,9 +236,7 @@ fn hook_error_rolls_back_conceptually() {
     // If a before_change hook returns an error, the caller should not commit.
     // We test this by verifying hook errors propagate correctly.
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let _def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let _def = registry.get_collection("articles").unwrap().clone();
 
     // Run the Lua directly to simulate a hook that errors
     let conn = pool.get().expect("DB connection");
@@ -247,21 +255,19 @@ fn hook_error_rolls_back_conceptually() {
 #[test]
 fn run_before_write_full_lifecycle() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("  My Article  "));
     data.insert("body".to_string(), json!("Article body"));
 
-    let ctx = crap_cms::hooks::lifecycle::HookContext {
+    let ctx = HookContext {
         collection: "articles".to_string(),
         operation: "create".to_string(),
         data,
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -305,20 +311,16 @@ fn run_before_write_full_lifecycle() {
 #[test]
 fn run_before_write_fails_on_validation_error() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // Missing required title
-    let data = HashMap::new();
-
-    let ctx = crap_cms::hooks::lifecycle::HookContext {
+    let ctx = HookContext {
         collection: "articles".to_string(),
         operation: "create".to_string(),
-        data,
+        data: DocumentFields::new(),
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -346,8 +348,8 @@ fn eval_lua_crud_in_hook_context() {
     let (_tmp, pool, registry, runner) = setup();
 
     // Create an article first
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Lua Test Article".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Lua Test Article"));
     let _doc = create_article(&pool, &registry, &data);
 
     let conn = pool.get().expect("DB connection");
@@ -382,8 +384,8 @@ fn make_field_with_write_access(
     update_ref: Option<&str>,
 ) -> FieldDefinition {
     let mut f = make_field(name, FieldType::Text);
-    f.access.create = create_ref.map(|s| s.to_string());
-    f.access.update = update_ref.map(|s| s.to_string());
+    f.access.create = create_ref.map(std::string::ToString::to_string);
+    f.access.update = update_ref.map(std::string::ToString::to_string);
     f
 }
 
@@ -446,7 +448,7 @@ fn check_access_returns_constrained() {
                 "Constrained should have at least one clause"
             );
         }
-        other => panic!("Expected Constrained, got {:?}", other),
+        other => panic!("Expected Constrained, got {other:?}"),
     }
 }
 
@@ -456,7 +458,7 @@ fn check_access_with_user_context() {
     let conn = pool.get().expect("DB connection");
 
     // User with admin role should be allowed
-    let mut admin_fields = HashMap::new();
+    let mut admin_fields = DocumentFields::new();
     admin_fields.insert("role".to_string(), json!("admin"));
     let admin_user = Document {
         id: "user-1".into(),
@@ -480,7 +482,7 @@ fn check_access_with_user_context() {
     );
 
     // User without admin role should be denied
-    let mut regular_fields = HashMap::new();
+    let mut regular_fields = DocumentFields::new();
     regular_fields.insert("role".to_string(), json!("editor"));
     let regular_user = Document {
         id: "user-2".into(),
@@ -529,8 +531,7 @@ fn check_field_read_access_no_access_config() {
     let denied = runner.check_field_read_access(&fields, None, &conn);
     assert!(
         denied.is_empty(),
-        "Fields without access config should not be in denied list, got: {:?}",
-        denied
+        "Fields without access config should not be in denied list, got: {denied:?}"
     );
 }
 
@@ -627,14 +628,12 @@ fn apply_after_read_transforms_doc() {
     let (_tmp, pool, registry, runner) = setup();
 
     // Create an article via DB so we have a real doc
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Read Test".to_string());
-    data.insert("body".to_string(), "Some body text".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Read Test"));
+    data.insert("body".to_string(), json!("Some body text"));
     let doc = create_article(&pool, &registry, &data);
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // apply_after_read should run the after_read hook which adds _was_read marker
     let ar_ctx = AfterReadCtx {
@@ -666,17 +665,15 @@ fn apply_after_read_many_transforms_all() {
     let (_tmp, pool, registry, runner) = setup();
 
     // Create two articles
-    let mut data1 = HashMap::new();
-    data1.insert("title".to_string(), "Article One".to_string());
+    let mut data1 = DocumentFields::new();
+    data1.insert("title".to_string(), json!("Article One"));
     let doc1 = create_article(&pool, &registry, &data1);
 
-    let mut data2 = HashMap::new();
-    data2.insert("title".to_string(), "Article Two".to_string());
+    let mut data2 = DocumentFields::new();
+    data2.insert("title".to_string(), json!("Article Two"));
     let doc2 = create_article(&pool, &registry, &data2);
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let docs = vec![doc1, doc2];
     let ar_ctx = AfterReadCtx {
@@ -704,8 +701,8 @@ fn apply_after_read_no_hooks_returns_same() {
     let (_tmp, pool, registry, runner) = setup();
 
     // Create a document
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Untouched".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Untouched"));
     let doc = create_article(&pool, &registry, &data);
 
     // Use empty hooks (no after_read configured)
@@ -743,13 +740,11 @@ fn apply_after_read_no_hooks_returns_same() {
 #[test]
 fn fire_before_read_executes() {
     let (_tmp, _pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // fire_before_read should succeed without error for articles
     // (articles collection does not have before_read hooks, but it should not error)
-    let data = HashMap::new();
+    let data = DocumentFields::new();
     let result = runner.fire_before_read(&def.hooks, "articles", "find", data);
     assert!(
         result.is_ok(),
@@ -764,8 +759,8 @@ fn auth_strategy_returns_user_on_valid_key() {
     let (_tmp, pool, registry, runner) = setup();
 
     // Create an article (auth_strategy.lua looks up articles to return a user-like doc)
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Strategy Test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Strategy Test"));
     let _doc = create_article(&pool, &registry, &data);
 
     let mut headers = HashMap::new();
@@ -806,7 +801,7 @@ fn auth_strategy_returns_none_on_invalid_key() {
 fn auth_strategy_returns_none_on_missing_header() {
     let (_tmp, pool, _registry, runner) = setup();
 
-    let headers = HashMap::new(); // no x-api-key header
+    let headers: HashMap<String, String> = HashMap::new(); // no x-api-key header
 
     let conn = pool.get().expect("DB connection");
     let result = runner
@@ -825,10 +820,10 @@ fn auth_strategy_has_crud_access() {
     let (_tmp, pool, registry, runner) = setup();
 
     // Create two articles for the strategy to find
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "First Article".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("First Article"));
     let _doc = create_article(&pool, &registry, &data);
-    data.insert("title".to_string(), "Second Article".to_string());
+    data.insert("title".to_string(), json!("Second Article"));
     let _doc = create_article(&pool, &registry, &data);
 
     // The strategy calls crap.collections.find — test that it works
@@ -855,7 +850,7 @@ fn auth_strategy_has_crud_access() {
 #[test]
 fn check_live_setting_none_allows() {
     let (_tmp, _pool, _registry, runner) = setup();
-    let result = runner.check_live_setting(None, "articles", "create", &HashMap::new());
+    let result = runner.check_live_setting(None, "articles", "create", &DocumentFields::new());
     assert!(result.is_ok());
     assert!(result.unwrap(), "None live setting should allow broadcast");
 }

@@ -16,6 +16,7 @@ pub enum DbValue {
 
 impl DbValue {
     /// Returns `true` if this value is `Null`.
+    #[must_use]
     pub fn is_null(&self) -> bool {
         matches!(self, DbValue::Null)
     }
@@ -25,9 +26,7 @@ impl DbValue {
         match self {
             DbValue::Null => Value::Null,
             DbValue::Integer(i) => Value::Number((*i).into()),
-            DbValue::Real(f) => Number::from_f64(*f)
-                .map(Value::Number)
-                .unwrap_or(Value::Null),
+            DbValue::Real(f) => Number::from_f64(*f).map_or(Value::Null, Value::Number),
             DbValue::Text(s) => Value::String(s.clone()),
             DbValue::Blob(b) => Value::String(STANDARD.encode(b)),
         }
@@ -43,21 +42,25 @@ pub struct DbRow {
 
 impl DbRow {
     /// Create a new row from columns and values.
+    #[must_use]
     pub fn new(columns: Vec<String>, values: Vec<DbValue>) -> Self {
         Self { columns, values }
     }
 
     /// Get the column names.
+    #[must_use]
     pub fn column_names(&self) -> &[String] {
         &self.columns
     }
 
     /// Get a value by column index.
+    #[must_use]
     pub fn get_value(&self, idx: usize) -> Option<&DbValue> {
         self.values.get(idx)
     }
 
     /// Get a value by column name.
+    #[must_use]
     pub fn get_named(&self, name: &str) -> Option<&DbValue> {
         self.columns
             .iter()
@@ -65,68 +68,125 @@ impl DbRow {
             .and_then(|idx| self.values.get(idx))
     }
 
+    /// Borrow the text value at a column index. Returns `None` if the column
+    /// is missing, NULL, or not a `DbValue::Text`. Use the by-name [`get_string`]
+    /// when working with named columns.
+    ///
+    /// [`get_string`]: Self::get_string
+    #[must_use]
+    pub fn text_at(&self, idx: usize) -> Option<&str> {
+        match self.get_value(idx) {
+            Some(DbValue::Text(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Owned variant of [`text_at`] — returns `Option<String>` for sites
+    /// that need to assign into a `String` / `Option<String>` field.
+    ///
+    /// [`text_at`]: Self::text_at
+    pub fn opt_text_at(&self, idx: usize) -> Option<String> {
+        self.text_at(idx).map(str::to_string)
+    }
+
+    /// Read an integer value at a column index. Returns `None` if the column
+    /// is missing, NULL, or not a `DbValue::Integer`.
+    #[must_use]
+    pub fn i64_at(&self, idx: usize) -> Option<i64> {
+        match self.get_value(idx) {
+            Some(DbValue::Integer(n)) => Some(*n),
+            _ => None,
+        }
+    }
+
     /// Get an i64 by column name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the column is missing or its value is not an integer.
     pub fn get_i64(&self, name: &str) -> Result<i64> {
         match self.get_named(name) {
             Some(DbValue::Integer(i)) => Ok(*i),
-            Some(other) => bail!("column '{}': expected Integer, got {:?}", name, other),
-            None => bail!("column '{}' not found", name),
+            Some(other) => bail!("column '{name}': expected Integer, got {other:?}"),
+            None => bail!("column '{name}' not found"),
         }
     }
 
     /// Get an f64 by column name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the column is missing or its value is not numeric.
     pub fn get_f64(&self, name: &str) -> Result<f64> {
         match self.get_named(name) {
             Some(DbValue::Real(f)) => Ok(*f),
-            Some(DbValue::Integer(i)) => Ok(*i as f64),
-            Some(other) => bail!("column '{}': expected Real, got {:?}", name, other),
-            None => bail!("column '{}' not found", name),
+            // Integer→Real coercion via i32 stays lossless; values outside
+            // i32 range lose mantissa precision beyond 2^53 and are rejected
+            // rather than silently rounded.
+            Some(DbValue::Integer(i)) => i32::try_from(*i).map(f64::from).map_err(|_| {
+                anyhow::anyhow!("column '{name}': integer {i} outside f64-lossless range")
+            }),
+            Some(other) => bail!("column '{name}': expected Real, got {other:?}"),
+            None => bail!("column '{name}' not found"),
         }
     }
 
     /// Get a string by column name. Returns an error if the column is missing or not text.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the column is missing, NULL, or its value is not text.
     pub fn get_string(&self, name: &str) -> Result<String> {
         match self.get_named(name) {
             Some(DbValue::Text(s)) => Ok(s.clone()),
-            Some(DbValue::Null) => bail!("column '{}': value is NULL", name),
-            Some(other) => bail!("column '{}': expected Text, got {:?}", name, other),
-            None => bail!("column '{}' not found", name),
+            Some(DbValue::Null) => bail!("column '{name}': value is NULL"),
+            Some(other) => bail!("column '{name}': expected Text, got {other:?}"),
+            None => bail!("column '{name}' not found"),
         }
     }
 
     /// Get an optional string by column name. Returns `None` for NULL values.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the column is missing or its value is not text/NULL.
     pub fn get_opt_string(&self, name: &str) -> Result<Option<String>> {
         match self.get_named(name) {
             Some(DbValue::Text(s)) => Ok(Some(s.clone())),
             Some(DbValue::Null) => Ok(None),
-            Some(other) => bail!("column '{}': expected Text or Null, got {:?}", name, other),
-            None => bail!("column '{}' not found", name),
+            Some(other) => bail!("column '{name}': expected Text or Null, got {other:?}"),
+            None => bail!("column '{name}' not found"),
         }
     }
 
     /// Get a boolean by column name (INTEGER: 0 = false, nonzero = true).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the column is missing or its value is not an integer.
     pub fn get_bool(&self, name: &str) -> Result<bool> {
         match self.get_named(name) {
             Some(DbValue::Integer(i)) => Ok(*i != 0),
             Some(DbValue::Null) => Ok(false),
-            Some(other) => bail!(
-                "column '{}': expected Integer (bool), got {:?}",
-                name,
-                other
-            ),
-            None => bail!("column '{}' not found", name),
+            Some(other) => bail!("column '{name}': expected Integer (bool), got {other:?}"),
+            None => bail!("column '{name}' not found"),
         }
     }
 
-    /// Get the JSON value for a column by name, converting from the underlying DbValue.
+    /// Get the JSON value for a column by name, converting from the underlying `DbValue`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the column is missing.
     pub fn get_json(&self, name: &str) -> Result<Value> {
         match self.get_named(name) {
             Some(v) => Ok(v.to_json()),
-            None => bail!("column '{}' not found", name),
+            None => bail!("column '{name}' not found"),
         }
     }
 
     /// Number of columns in this row.
+    #[must_use]
     pub fn column_count(&self) -> usize {
         self.columns.len()
     }

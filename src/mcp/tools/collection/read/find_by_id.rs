@@ -1,50 +1,54 @@
 //! Execute `find_by_id` — single document lookup with population.
 
-use std::sync::Arc;
-
 use anyhow::{Context as _, Result};
-use serde_json::{Value, json, to_string_pretty};
+use serde::Serialize;
+use serde_json::{Value, to_string_pretty};
 
 use crate::{
-    config::CrapConfig,
-    core::Registry,
-    db::{DbPool, LocaleContext},
-    hooks::HookRunner,
-    mcp::tools::collection::helpers::doc_to_json,
-    service::{FindByIdInput, RunnerReadHooks, ServiceContext, find_document_by_id},
+    db::LocaleContext,
+    mcp::tools::{ToolExecCtx, collection::helpers::doc_to_json},
+    service::{FindByIdInput, RunnerReadHooks, ServiceContext, ServiceError, find_document_by_id},
 };
+
+/// Soft "not found" reply for `find_by_id` — distinct from a tool error.
+#[derive(Serialize)]
+struct NotFoundResponse {
+    error: &'static str,
+}
 
 /// Execute `find_by_id` — single document lookup with population.
 pub(in crate::mcp::tools) fn exec_find_by_id(
     args: &Value,
     slug: &str,
-    registry: &Arc<Registry>,
-    pool: &DbPool,
-    runner: &HookRunner,
-    config: &CrapConfig,
+    ctx: &ToolExecCtx<'_>,
 ) -> Result<String> {
     let id = args
         .get("id")
         .and_then(|v| v.as_str())
         .context("Missing 'id' argument")?;
-    let def = registry
+    let def = ctx
+        .registry
         .collections
         .get(slug)
         .context("Collection not found")?;
-    let conn = pool.get().context("DB connection")?;
+    let conn = ctx.pool.get().context("DB connection")?;
 
     let locale = args.get("locale").and_then(|v| v.as_str());
-    let locale_ctx = LocaleContext::from_locale_string(locale, &config.locale)?;
+    let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
 
-    let depth = args
+    // MCP requests outside i32 range can't be valid populate depths; clamp
+    // to the configured default before applying max_depth.
+    let depth_raw = args
         .get("depth")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(config.depth.default_depth as i64) as i32;
-    let depth = depth.min(config.depth.max_depth);
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(i64::from(ctx.config.depth.default_depth));
+    let depth = i32::try_from(depth_raw)
+        .unwrap_or(ctx.config.depth.default_depth)
+        .min(ctx.config.depth.max_depth);
 
-    let hooks = RunnerReadHooks::new(runner, &conn);
-    let ctx = ServiceContext::collection(slug, def)
-        .pool(pool)
+    let hooks = RunnerReadHooks::new(ctx.runner, &conn);
+    let svc_ctx = ServiceContext::collection(slug, def)
+        .pool(ctx.pool)
         .conn(&conn)
         .read_hooks(&hooks)
         .override_access(true)
@@ -53,13 +57,15 @@ pub(in crate::mcp::tools) fn exec_find_by_id(
     let input = FindByIdInput::builder(id)
         .depth(depth)
         .locale_ctx(locale_ctx.as_ref())
-        .registry(Some(registry.as_ref()))
+        .registry(Some(ctx.registry.as_ref()))
         .build();
 
-    let doc = find_document_by_id(&ctx, &input).map_err(|e| e.into_anyhow())?;
+    let doc = find_document_by_id(&svc_ctx, &input).map_err(ServiceError::into_anyhow)?;
 
     match doc {
         Some(d) => Ok(to_string_pretty(&doc_to_json(&d))?),
-        None => Ok(json!({ "error": "Document not found" }).to_string()),
+        None => Ok(to_string_pretty(&NotFoundResponse {
+            error: "Document not found",
+        })?),
     }
 }

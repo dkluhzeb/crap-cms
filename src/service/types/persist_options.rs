@@ -2,7 +2,7 @@
 
 use crate::{config::LocaleConfig, db::LocaleContext};
 
-/// Optional parameters for the persist_create / persist_update operations.
+/// Optional parameters for the `persist_create` / `persist_update` operations.
 #[derive(Default)]
 pub struct PersistOptions<'a> {
     pub password: Option<&'a str>,
@@ -13,6 +13,7 @@ pub struct PersistOptions<'a> {
 
 impl<'a> PersistOptions<'a> {
     /// Create a builder with all fields defaulted.
+    #[must_use]
     pub fn builder() -> PersistOptionsBuilder<'a> {
         PersistOptionsBuilder::new()
     }
@@ -42,8 +43,8 @@ impl<'a> PersistOptionsBuilder<'a> {
         self
     }
 
-    pub fn locale_config(mut self, locale_config: &'a LocaleConfig) -> Self {
-        self.locale_config = Some(locale_config);
+    pub fn locale_config(mut self, locale_config: Option<&'a LocaleConfig>) -> Self {
+        self.locale_config = locale_config;
         self
     }
 

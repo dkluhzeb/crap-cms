@@ -1,0 +1,145 @@
+//! Lua function references for collection/global access control.
+
+use serde::{Deserialize, Serialize};
+
+use crate::typegen::lua::LuaAnnotation;
+
+/// Lua function references for access control (read/create/update/delete).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, LuaAnnotation)]
+#[lua(class = "crap.Access")]
+pub struct Access {
+    /// Hook ref for read access control.
+    #[serde(default)]
+    pub read: Option<String>,
+    /// Hook ref for create access control.
+    #[serde(default)]
+    pub create: Option<String>,
+    /// Hook ref for update access control.
+    #[serde(default)]
+    pub update: Option<String>,
+    /// Hook ref for delete access control.
+    #[serde(default)]
+    pub delete: Option<String>,
+    /// Hook ref for soft-delete (trash) access control. Falls back to
+    /// `update` when unset, so most collections don't set this
+    /// explicitly. Set to lock trashing behind a different policy
+    /// than update — e.g. only editors can trash, but authors can
+    /// still update their own drafts.
+    #[serde(default)]
+    #[lua(optional)]
+    pub trash: Option<String>,
+}
+
+impl Access {
+    /// Create a new default access control configuration.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a builder for access control configuration.
+    #[must_use]
+    pub fn builder() -> AccessBuilder {
+        AccessBuilder::new()
+    }
+
+    /// Resolve the access function for trash operations (soft delete + restore).
+    /// Returns `access.trash` when set, otherwise falls back to `access.update`.
+    #[must_use]
+    pub fn resolve_trash(&self) -> Option<&str> {
+        self.trash.as_deref().or(self.update.as_deref())
+    }
+}
+
+/// Builder for [`Access`]. Created via [`Access::builder`].
+#[derive(Default)]
+pub struct AccessBuilder {
+    read: Option<String>,
+    create: Option<String>,
+    update: Option<String>,
+    delete: Option<String>,
+    trash: Option<String>,
+}
+
+impl AccessBuilder {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn read(mut self, read: Option<String>) -> Self {
+        self.read = read;
+
+        self
+    }
+
+    #[must_use]
+    pub fn create(mut self, create: Option<String>) -> Self {
+        self.create = create;
+
+        self
+    }
+
+    #[must_use]
+    pub fn update(mut self, update: Option<String>) -> Self {
+        self.update = update;
+
+        self
+    }
+
+    #[must_use]
+    pub fn delete(mut self, delete: Option<String>) -> Self {
+        self.delete = delete;
+
+        self
+    }
+
+    #[must_use]
+    pub fn trash(mut self, trash: Option<String>) -> Self {
+        self.trash = trash;
+
+        self
+    }
+
+    #[must_use]
+    pub fn build(self) -> Access {
+        Access {
+            read: self.read,
+            create: self.create,
+            update: self.update,
+            delete: self.delete,
+            trash: self.trash,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_trash_prefers_trash_over_update() {
+        let access = Access {
+            trash: Some("trash_fn".to_string()),
+            update: Some("update_fn".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(access.resolve_trash(), Some("trash_fn"));
+    }
+
+    #[test]
+    fn resolve_trash_falls_back_to_update() {
+        let access = Access {
+            trash: None,
+            update: Some("update_fn".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(access.resolve_trash(), Some("update_fn"));
+    }
+
+    #[test]
+    fn resolve_trash_returns_none_when_both_unset() {
+        let access = Access::default();
+        assert!(access.resolve_trash().is_none());
+    }
+}

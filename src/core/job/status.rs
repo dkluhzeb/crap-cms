@@ -12,6 +12,7 @@ pub enum JobStatus {
 }
 
 impl JobStatus {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             JobStatus::Pending => "pending",
@@ -22,6 +23,7 @@ impl JobStatus {
         }
     }
 
+    #[must_use]
     pub fn from_name(s: &str) -> Option<Self> {
         match s {
             "pending" => Some(JobStatus::Pending),

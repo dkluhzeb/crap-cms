@@ -1,5 +1,3 @@
----@param context crap.AccessContext
----@return boolean
-return function(context)
+return crap.any.access(function(context)
 	return context.user ~= nil
-end
+end)

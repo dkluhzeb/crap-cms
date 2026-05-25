@@ -38,11 +38,25 @@ pub fn is_process_running(pid: u32) -> bool {
 
 /// Check if a PID file exists and warn if the process is still running.
 #[cfg(unix)]
-pub fn check_existing_pid(config_dir: &Path) {
+pub(super) fn check_existing_pid(config_dir: &Path) {
     helpers::check_existing_pid(config_dir, PID_FILENAME);
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::*;
     use std::fs;

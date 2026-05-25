@@ -750,6 +750,7 @@ Queue a job for execution. Requires authentication. Checks the job's `access` fu
 message TriggerJobRequest {
   string slug = 1;
   optional string data_json = 2;  // JSON input data
+  optional int32 priority = 3;    // scheduling priority (higher = sooner; default 0)
 }
 
 message TriggerJobResponse {
@@ -760,7 +761,8 @@ message TriggerJobResponse {
 ```bash
 grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
     "slug": "cleanup_expired",
-    "data_json": "{\"force\": true}"
+    "data_json": "{\"force\": true}",
+    "priority": 10
 }' localhost:50051 crap.ContentAPI/TriggerJob
 ```
 
@@ -786,6 +788,8 @@ message GetJobRunResponse {
   optional string created_at = 10;
   optional string started_at = 11;
   optional string completed_at = 12;
+  int32 priority = 13;
+  optional string unique_key = 14;
 }
 ```
 

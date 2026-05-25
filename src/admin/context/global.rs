@@ -6,10 +6,12 @@ use serde::Serialize;
 use crate::{
     admin::context::{FieldMeta, VersionsMeta},
     core::collection::GlobalDefinition,
+    typegen::LuaAnnotation,
 };
 
 /// Top-level global metadata exposed to templates.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, LuaAnnotation)]
+#[lua(class = "crap.template.global")]
 pub struct GlobalContext {
     pub slug: String,
     pub display_name: String,
@@ -37,10 +39,7 @@ impl GlobalContext {
 mod tests {
     use super::*;
 
-    use crate::core::{
-        collection::{GlobalDefinition, Labels},
-        field::{FieldDefinition, FieldType, LocalizedString},
-    };
+    use crate::core::{FieldDefinition, FieldType, GlobalDefinition, Labels, LocalizedString};
 
     #[test]
     fn from_def_includes_all_fields() {

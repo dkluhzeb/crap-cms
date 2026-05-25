@@ -1,4 +1,4 @@
-//! In-memory cache backend using DashMap.
+//! In-memory cache backend using `DashMap`.
 
 use anyhow::Result;
 use dashmap::DashMap;
@@ -15,6 +15,7 @@ pub struct MemoryCache {
 }
 
 impl MemoryCache {
+    #[must_use]
     pub fn new(max_entries: usize) -> Self {
         Self {
             store: DashMap::new(),
@@ -109,7 +110,7 @@ mod tests {
         let cache = MemoryCache::new(3);
 
         for i in 0..10 {
-            cache.set(&format!("k{}", i), b"v").unwrap();
+            cache.set(&format!("k{i}"), b"v").unwrap();
         }
 
         // Only first 3 should be stored

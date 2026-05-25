@@ -4,10 +4,24 @@
 //! 1. Library function tests — direct Rust calls with temp dirs.
 //! 2. Binary invocation tests — `std::process::Command` for clap parsing.
 
-use std::collections::HashMap;
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::path::{Path, PathBuf};
 
 use crap_cms::config::CrapConfig;
+use crap_cms::core::DocumentFields;
 use crap_cms::core::auth;
 use crap_cms::db::{DbConnection, DbPool, DbValue, migrate, pool, query};
 use crap_cms::hooks;
@@ -28,8 +42,12 @@ fn crap_bin() -> PathBuf {
 }
 
 /// Copy fixture dir to a temp dir, init Lua, create pool, sync schema.
-/// Returns (TempDir, DbPool, SharedRegistry).
-fn full_setup() -> (tempfile::TempDir, DbPool, crap_cms::core::SharedRegistry) {
+/// Returns (`TempDir`, `DbPool`, Arc<Registry>).
+fn full_setup() -> (
+    tempfile::TempDir,
+    DbPool,
+    std::sync::Arc<crap_cms::core::Registry>,
+) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("config");
     copy_dir(&fixture_dir(), &config_dir);
@@ -57,7 +75,7 @@ fn copy_dir(src: &Path, dst: &Path) {
     }
 }
 
-/// Create a user in an auth collection via query::create + update_password.
+/// Create a user in an auth collection via `query::create` + `update_password`.
 fn create_user(
     pool: &DbPool,
     def: &crap_cms::core::CollectionDefinition,
@@ -65,10 +83,10 @@ fn create_user(
     password: &str,
     extra_fields: &[(&str, &str)],
 ) -> crap_cms::core::Document {
-    let mut data = HashMap::new();
-    data.insert("email".to_string(), email.to_string());
+    let mut data = DocumentFields::new();
+    data.insert("email".to_string(), json!(email.to_string()));
     for (k, v) in extra_fields {
-        data.insert(k.to_string(), v.to_string());
+        data.insert(k.to_string(), json!(v.to_string()));
     }
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
@@ -107,9 +125,7 @@ fn help_shows_all_commands() {
     ] {
         assert!(
             stdout.contains(cmd),
-            "help should list '{}' command, got:\n{}",
-            cmd,
-            stdout
+            "help should list '{cmd}' command, got:\n{stdout}"
         );
     }
 }
@@ -146,9 +162,7 @@ fn user_subcommand_help() {
     ] {
         assert!(
             stdout.contains(sub),
-            "user help should list '{}', got:\n{}",
-            sub,
-            stdout
+            "user help should list '{sub}', got:\n{stdout}"
         );
     }
 }
@@ -164,9 +178,7 @@ fn make_subcommand_help() {
     for sub in &["collection", "global", "hook", "migration"] {
         assert!(
             stdout.contains(sub),
-            "make help should list '{}', got:\n{}",
-            sub,
-            stdout
+            "make help should list '{sub}', got:\n{stdout}"
         );
     }
 }
@@ -182,9 +194,7 @@ fn migrate_subcommand_help() {
     for sub in &["create", "up", "down", "list", "fresh"] {
         assert!(
             stdout.contains(sub),
-            "migrate help should list '{}', got:\n{}",
-            sub,
-            stdout
+            "migrate help should list '{sub}', got:\n{stdout}"
         );
     }
 }
@@ -209,11 +219,11 @@ fn migrate_create_via_binary() {
     let migrations_dir = config_dir.join("migrations");
     let files: Vec<_> = std::fs::read_dir(&migrations_dir)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .collect();
     assert_eq!(files.len(), 1);
     let filename = files[0].file_name().to_string_lossy().to_string();
-    assert!(filename.ends_with("_add_tags.lua"), "got: {}", filename);
+    assert!(filename.ends_with("_add_tags.lua"), "got: {filename}");
 
     let content = std::fs::read_to_string(files[0].path()).unwrap();
     assert!(content.contains("function M.up()"));
@@ -451,12 +461,11 @@ fn make_collection_roundtrip() {
 
     let cfg = CrapConfig::load(&config_dir).unwrap();
     let registry = hooks::init_lua(&config_dir, &cfg).unwrap();
-    let reg = registry.read().unwrap();
     assert!(
-        reg.get_collection("articles").is_some(),
+        registry.get_collection("articles").is_some(),
         "articles should be in registry"
     );
-    let def = reg.get_collection("articles").unwrap();
+    let def = registry.get_collection("articles").unwrap();
     assert_eq!(def.fields.len(), 2);
     assert_eq!(def.fields[0].name, "title");
     assert_eq!(def.fields[1].name, "body");
@@ -496,9 +505,8 @@ fn make_global_roundtrip() {
 
     let cfg = CrapConfig::load(&config_dir).unwrap();
     let registry = hooks::init_lua(&config_dir, &cfg).unwrap();
-    let reg = registry.read().unwrap();
     assert!(
-        reg.get_global("navigation").is_some(),
+        registry.get_global("navigation").is_some(),
         "navigation should be in registry"
     );
 }
@@ -546,7 +554,12 @@ fn make_hook_creates_file() {
     let path = tmp.path().join("hooks/posts/auto_slug.lua");
     assert!(path.exists(), "hook file should be created");
     let content = std::fs::read_to_string(&path).unwrap();
-    assert!(content.contains("return function(context)"));
+    // Scaffold wraps the user's handler in a typesafe-factory call —
+    // the literal in the generated file is e.g.
+    // `return crap.collections.posts.hook(function(context)`. Match on
+    // the inner `function(context)` chunk so the assertion stays
+    // robust to the surrounding factory wrapping.
+    assert!(content.contains("function(context)"));
 }
 
 #[test]
@@ -564,9 +577,12 @@ fn make_hook_collection_hook() {
     scaffold::make_hook(&opts).unwrap();
 
     let content = std::fs::read_to_string(tmp.path().join("hooks/posts/auto_slug.lua")).unwrap();
-    assert!(content.contains("crap.hook.Posts"));
+    assert!(content.contains("crap.collections.posts.hook("));
     assert!(content.contains("before_change hook for posts"));
-    assert!(content.contains("return function(context)"));
+    // Factory-wrapped — `function(context)` lives inside the
+    // `crap.collections.posts.hook(...)` call rather than after a
+    // bare `return`. Match the inner chunk.
+    assert!(content.contains("function(context)"));
     assert!(content.contains("return context"));
 }
 
@@ -586,10 +602,11 @@ fn make_hook_field_hook() {
 
     let content = std::fs::read_to_string(tmp.path().join("hooks/posts/normalize.lua")).unwrap();
     assert!(
-        content.contains("crap.field_hook.Posts"),
+        content.contains("crap.collections.posts.field_hook(\"title\", "),
         "should use typed field hook context"
     );
-    assert!(content.contains("return function(value, context)"));
+    // Same factory-wrap pattern — match the inner closure shape.
+    assert!(content.contains("function(value, context)"));
     assert!(content.contains("return value"));
 }
 
@@ -608,7 +625,7 @@ fn make_hook_access_hook() {
     scaffold::make_hook(&opts).unwrap();
 
     let content = std::fs::read_to_string(tmp.path().join("access/admin_only.lua")).unwrap();
-    assert!(content.contains("crap.AccessContext"));
+    assert!(content.contains("crap.any.access("));
     assert!(content.contains("return true"));
 }
 
@@ -703,15 +720,11 @@ fn make_migration_creates_file() {
 
     let files: Vec<_> = std::fs::read_dir(tmp.path().join("migrations"))
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .collect();
     assert_eq!(files.len(), 1);
     let filename = files[0].file_name().to_string_lossy().to_string();
-    assert!(
-        filename.ends_with("_add_categories.lua"),
-        "got: {}",
-        filename
-    );
+    assert!(filename.ends_with("_add_categories.lua"), "got: {filename}");
 }
 
 #[test]
@@ -721,7 +734,7 @@ fn make_migration_has_up_down() {
 
     let files: Vec<_> = std::fs::read_dir(tmp.path().join("migrations"))
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .collect();
     let content = std::fs::read_to_string(files[0].path()).unwrap();
     assert!(content.contains("function M.up()"));
@@ -761,13 +774,15 @@ fn proto_to_dir() {
 #[test]
 fn status_collection_counts() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("posts").unwrap();
+    let def = registry.get_collection("posts").unwrap();
 
     // Create 3 posts
     for i in 0..3 {
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), format!("Post {}", i));
+        let mut data = DocumentFields::new();
+        data.insert(
+            "title".to_string(),
+            serde_json::json!(format!("Post {}", i)),
+        );
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         query::create(&tx, "posts", def, &data, None).unwrap();
@@ -790,22 +805,20 @@ fn status_empty_project() {
     let db_pool = pool::create_pool(&config_dir, &cfg).unwrap();
     migrate::sync_all(&db_pool, &registry, &cfg.locale).unwrap();
 
-    let reg = registry.read().unwrap();
-    assert!(reg.collections.is_empty());
-    assert!(reg.globals.is_empty());
+    assert!(registry.collections.is_empty());
+    assert!(registry.globals.is_empty());
 }
 
 #[test]
 fn status_auth_tag() {
     let (_tmp, _pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let users_def = reg.get_collection("users").unwrap();
+    let users_def = registry.get_collection("users").unwrap();
     assert!(
         users_def.is_auth_collection(),
         "users should be an auth collection"
     );
 
-    let posts_def = reg.get_collection("posts").unwrap();
+    let posts_def = registry.get_collection("posts").unwrap();
     assert!(
         !posts_def.is_auth_collection(),
         "posts should NOT be an auth collection"
@@ -819,9 +832,7 @@ fn status_auth_tag() {
 #[test]
 fn user_create_and_find() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("users").unwrap().clone();
 
     let doc = create_user(
         &pool,
@@ -842,9 +853,7 @@ fn user_create_and_find() {
 #[test]
 fn user_create_with_fields() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("users").unwrap().clone();
 
     let doc = create_user(
         &pool,
@@ -865,9 +874,7 @@ fn user_create_with_fields() {
 #[test]
 fn user_password_verify() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("users").unwrap().clone();
 
     let doc = create_user(
         &pool,
@@ -892,9 +899,7 @@ fn user_password_verify() {
 #[test]
 fn user_find_by_email() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("users").unwrap().clone();
 
     create_user(
         &pool,
@@ -917,9 +922,7 @@ fn user_find_by_email() {
 #[test]
 fn user_find_by_id() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("users").unwrap().clone();
 
     let doc = create_user(&pool, &def, "byid@example.com", "pw", &[("name", "ByID")]);
 
@@ -933,9 +936,7 @@ fn user_find_by_id() {
 #[test]
 fn user_delete() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("users").unwrap().clone();
 
     let doc = create_user(
         &pool,
@@ -961,9 +962,7 @@ fn user_delete() {
 #[test]
 fn user_lock_unlock() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("users").unwrap().clone();
 
     let doc = create_user(
         &pool,
@@ -985,9 +984,7 @@ fn user_lock_unlock() {
 #[test]
 fn user_change_password() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("users").unwrap().clone();
 
     let doc = create_user(
         &pool,
@@ -1010,8 +1007,7 @@ fn user_change_password() {
 #[test]
 fn user_non_auth_rejected() {
     let (_tmp, _pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let posts_def = reg.get_collection("posts").unwrap();
+    let posts_def = registry.get_collection("posts").unwrap();
     assert!(!posts_def.is_auth_collection(), "posts is not auth");
     // The CLI would check is_auth_collection() and bail — we verify the flag.
 }
@@ -1019,8 +1015,7 @@ fn user_non_auth_rejected() {
 #[test]
 fn user_missing_collection_rejected() {
     let (_tmp, _pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    assert!(reg.get_collection("nonexistent").is_none());
+    assert!(registry.get_collection("nonexistent").is_none());
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1030,23 +1025,22 @@ fn user_missing_collection_rejected() {
 #[test]
 fn export_all() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let posts_def = reg.get_collection("posts").unwrap();
-    let users_def = reg.get_collection("users").unwrap();
+    let posts_def = registry.get_collection("posts").unwrap();
+    let users_def = registry.get_collection("users").unwrap();
 
     // Seed data
     {
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Hello".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Hello".to_string()));
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         query::create(&tx, "posts", posts_def, &data, None).unwrap();
         tx.commit().unwrap();
     }
     {
-        let mut data = HashMap::new();
-        data.insert("email".to_string(), "export@example.com".to_string());
-        data.insert("name".to_string(), "Exporter".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("email".to_string(), json!("export@example.com".to_string()));
+        data.insert("name".to_string(), json!("Exporter".to_string()));
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         query::create(&tx, "users", users_def, &data, None).unwrap();
@@ -1056,7 +1050,7 @@ fn export_all() {
     // Replicate export logic
     let conn = pool.get().unwrap();
     let mut collections_data = serde_json::Map::new();
-    for (slug, def) in &reg.collections {
+    for (slug, def) in &registry.collections {
         let docs = query::find(&conn, slug, def, &query::FindQuery::default(), None).unwrap();
         let docs_json: Vec<serde_json::Value> = docs
             .into_iter()
@@ -1075,12 +1069,11 @@ fn export_all() {
 #[test]
 fn export_filtered() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let posts_def = reg.get_collection("posts").unwrap();
+    let posts_def = registry.get_collection("posts").unwrap();
 
     {
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Filtered".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Filtered".to_string()));
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         query::create(&tx, "posts", posts_def, &data, None).unwrap();
@@ -1090,8 +1083,8 @@ fn export_filtered() {
     let conn = pool.get().unwrap();
     // Only export "posts"
     let slug = "posts";
-    assert!(reg.get_collection(slug).is_some());
-    let def = reg.get_collection(slug).unwrap();
+    assert!(registry.get_collection(slug).is_some());
+    let def = registry.get_collection(slug).unwrap();
     let docs = query::find(&conn, slug, def, &query::FindQuery::default(), None).unwrap();
     assert_eq!(docs.len(), 1);
 }
@@ -1099,8 +1092,7 @@ fn export_filtered() {
 #[test]
 fn export_empty() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("posts").unwrap();
+    let def = registry.get_collection("posts").unwrap();
 
     let conn = pool.get().unwrap();
     let docs = query::find(&conn, "posts", def, &query::FindQuery::default(), None).unwrap();
@@ -1110,9 +1102,8 @@ fn export_empty() {
 #[test]
 fn export_nonexistent_fails() {
     let (_tmp, _pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
     assert!(
-        reg.get_collection("nonexistent").is_none(),
+        registry.get_collection("nonexistent").is_none(),
         "nonexistent collection should not be found"
     );
 }
@@ -1124,8 +1115,7 @@ fn export_nonexistent_fails() {
 #[test]
 fn import_basic() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("posts").unwrap();
+    let def = registry.get_collection("posts").unwrap();
 
     let import_json = json!({
         "collections": {
@@ -1164,7 +1154,7 @@ fn import_basic() {
             "posts",
             parent_cols
                 .iter()
-                .map(|c| format!("\"{}\"", c))
+                .map(|c| format!("\"{c}\""))
                 .collect::<Vec<_>>()
                 .join(", "),
             placeholders.join(", ")
@@ -1186,7 +1176,6 @@ fn import_basic() {
 #[test]
 fn import_collection_filter() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
 
     let import_json = json!({
         "collections": {
@@ -1204,7 +1193,7 @@ fn import_collection_filter() {
     // Only import "posts"
     let slug = "posts";
     assert!(collections_obj.contains_key(slug));
-    let def = reg.get_collection(slug).unwrap();
+    let def = registry.get_collection(slug).unwrap();
     let docs_array = collections_obj[slug].as_array().unwrap();
 
     let mut conn = pool.get().unwrap();
@@ -1214,10 +1203,7 @@ fn import_collection_filter() {
         let id = obj["id"].as_str().unwrap();
         let title = obj.get("title").and_then(|v| v.as_str()).unwrap_or("");
         tx.execute(
-            &format!(
-                "INSERT OR REPLACE INTO \"{}\" (id, title) VALUES (?1, ?2)",
-                slug
-            ),
+            &format!("INSERT OR REPLACE INTO \"{slug}\" (id, title) VALUES (?1, ?2)"),
             &[
                 DbValue::Text(id.to_string()),
                 DbValue::Text(title.to_string()),
@@ -1232,7 +1218,7 @@ fn import_collection_filter() {
     let posts = query::find(&conn, "posts", def, &query::FindQuery::default(), None).unwrap();
     assert_eq!(posts.len(), 1);
 
-    let users_def = reg.get_collection("users").unwrap();
+    let users_def = registry.get_collection("users").unwrap();
     let users = query::find(
         &conn,
         "users",
@@ -1247,8 +1233,7 @@ fn import_collection_filter() {
 #[test]
 fn import_preserves_ids() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("posts").unwrap();
+    let def = registry.get_collection("posts").unwrap();
 
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
@@ -1273,8 +1258,7 @@ fn import_preserves_ids() {
 #[test]
 fn import_with_timestamps() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("posts").unwrap();
+    let def = registry.get_collection("posts").unwrap();
 
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
@@ -1307,7 +1291,6 @@ fn import_with_timestamps() {
 #[test]
 fn import_unknown_collection_fails() {
     let (_tmp, _pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
 
     let import_json = json!({
         "collections": {
@@ -1319,7 +1302,7 @@ fn import_unknown_collection_fails() {
 
     let collections_obj = import_json["collections"].as_object().unwrap();
     for slug in collections_obj.keys() {
-        let found = reg.get_collection(slug);
+        let found = registry.get_collection(slug);
         if slug == "nonexistent" {
             assert!(
                 found.is_none(),

@@ -14,7 +14,7 @@ use crate::{
     admin::{
         AdminState,
         handlers::{
-            forms::{extract_join_data_from_form, transform_select_has_many},
+            forms::FormData,
             shared::{check_access_or_forbid, get_user_doc},
             validate::{
                 RunValidationParams, ValidateRequest, handle_validation_result, run_validation,
@@ -22,11 +22,8 @@ use crate::{
             },
         },
     },
-    core::auth::AuthUser,
-    db::{
-        AccessResult,
-        query::{LocaleContext, helpers::global_table},
-    },
+    core::{DocumentFields, auth::AuthUser},
+    db::{AccessResult, LocaleContext, query::helpers::global_table},
 };
 
 /// POST /admin/globals/{slug}/validate — validate fields for global update
@@ -42,19 +39,24 @@ pub async fn validate_global(
         None => return validation_error_response_simple("Global not found"),
     };
 
-    match check_access_or_forbid(&state, def.access.update.as_deref(), &auth_user, None, None) {
+    match check_access_or_forbid(
+        &state,
+        def.access.update.as_deref(),
+        auth_user.as_ref(),
+        None,
+        None,
+    ) {
         Ok(AccessResult::Denied) => return validation_error_response_simple("Access denied"),
         Err(_) => return validation_error_response_simple("Access check failed"),
         _ => {}
     }
 
-    let mut form_data = values_to_string_map(&payload.data);
+    let form_data = values_to_string_map(&payload.data);
 
     // Field write access stripping is now handled inside service::validate_document
     // via WriteHooks::field_write_denied.
 
-    transform_select_has_many(&mut form_data, &def.fields);
-    let join_data = extract_join_data_from_form(&form_data, &def.fields);
+    let data: DocumentFields = FormData::from_raw(form_data, &def.fields).into();
 
     let is_draft = payload.draft && def.has_drafts();
     let locale_ctx =
@@ -66,7 +68,7 @@ pub async fn validate_global(
     let runner = state.hook_runner.clone();
     let slug_owned = slug.clone();
     let def_owned = def.clone();
-    let user_doc = get_user_doc(&auth_user).cloned();
+    let user_doc = get_user_doc(auth_user.as_ref()).cloned();
 
     let result = task::spawn_blocking(move || {
         run_validation(&RunValidationParams {
@@ -78,8 +80,7 @@ pub async fn validate_global(
             table_name: &gtable,
             operation: "update",
             exclude_id: Some("default"),
-            form_data: &form_data,
-            join_data: &join_data,
+            data: &data,
             is_draft,
             soft_delete: false,
             locale_ctx: locale_ctx.as_ref(),
@@ -88,5 +89,5 @@ pub async fn validate_global(
     })
     .await;
 
-    handle_validation_result(result, &auth_user, &state)
+    handle_validation_result(result, auth_user.as_ref(), &state)
 }

@@ -56,11 +56,11 @@ Globals always have `created_at` and `updated_at` timestamp columns.
 
 ```lua
 -- Get current value
-local settings = crap.globals.get("site_settings")
+local settings = crap.globals.site_settings.get()
 print(settings.site_name)
 
 -- Update
-crap.globals.update("site_settings", {
+crap.globals.site_settings.update({
     site_name = "New Name",
     tagline = "A fresh start",
 })

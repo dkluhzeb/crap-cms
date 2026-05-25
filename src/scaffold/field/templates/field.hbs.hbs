@@ -1,0 +1,24 @@
+\{{!--
+  Per-field render template for fields configured with
+  `admin.template = "fields/{{name}}"` (see `plugins/{{name}}.lua`).
+
+  Reads optional config from `\{{extra.<key>}}`; the wrapper plugin
+  populates `admin.extra` with whatever per-field knobs you want
+  (color, icon, max value, etc.).
+
+  Standard `partials/field` chrome wraps the input -- label, required
+  marker, error, help text -- same as built-in field types.
+--}}
+\{{#> partials/field}}
+  <{{tag}}
+    id="field-\{{name}}"
+    name="\{{name}}"
+    value="\{{value}}"
+    \{{#if has_min}}data-min="\{{min}}"\{{/if}}
+    \{{#if has_max}}data-max="\{{max}}"\{{/if}}
+    \{{#if extra.color}}data-color="\{{extra.color}}"\{{/if}}
+    \{{#if required}}required\{{/if}}
+    \{{#if readonly}}readonly\{{/if}}
+    \{{#if error}}data-error\{{/if}}
+  ></{{tag}}>
+\{{/partials/field}}

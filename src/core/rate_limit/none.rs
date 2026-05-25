@@ -33,6 +33,8 @@ impl RateLimitBackend for NoneRateLimitBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::rate_limit::{LoginRateLimiter, SharedRateLimitBackend};
+    use std::sync::Arc;
 
     #[test]
     fn count_always_zero() {
@@ -51,9 +53,6 @@ mod tests {
 
     #[test]
     fn never_blocks_login_limiter() {
-        use crate::core::rate_limit::{LoginRateLimiter, SharedRateLimitBackend};
-        use std::sync::Arc;
-
         let backend: SharedRateLimitBackend = Arc::new(NoneRateLimitBackend);
         let limiter = LoginRateLimiter::with_backend(backend, "test", 1, 60);
 

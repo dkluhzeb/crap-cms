@@ -12,7 +12,8 @@ use crate::{
     admin::{
         AdminState,
         context::{
-            BasePageContext, Breadcrumb, CollectionContext, PageMeta, PageType,
+            BasePageContext, Breadcrumb, CollectionContext, CollectionPermissions, PageMeta,
+            PageType,
             field::{BaseFieldData, ConditionData, FieldContext, TextField, ValidationAttrs},
             page::collections::{CollectionCreatePage, UploadFormContext},
         },
@@ -23,7 +24,7 @@ use crate::{
             split_sidebar_fields,
         },
     },
-    core::{AuthUser, Claims, CollectionDefinition},
+    core::{AuthUser, Claims, CollectionDefinition, DocumentFields},
     db::AccessResult,
 };
 
@@ -36,18 +37,12 @@ fn prepare_create_fields(
     let non_default_locale = is_non_default_locale(state, editor_locale);
     let empty: HashMap<String, String> = HashMap::new();
 
-    let mut fields = build_field_contexts(
-        &def.fields,
-        &empty,
-        &HashMap::new(),
-        true,
-        non_default_locale,
-    );
+    let mut fields = build_field_contexts(&def.fields, &empty, &empty, true, non_default_locale);
 
     enrich_field_contexts(
         &mut fields,
         &def.fields,
-        &HashMap::new(),
+        &DocumentFields::new(),
         state,
         &EnrichOptions::builder(&HashMap::new())
             .filter_hidden(true)
@@ -111,14 +106,17 @@ pub async fn create_form(
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let def = match state.registry.get_collection(&slug) {
-        Some(d) => d.clone(),
-        None => {
-            return not_found(&state, &format!("Collection '{}' not found", slug));
-        }
+    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+        return not_found(&state, &format!("Collection '{slug}' not found"));
     };
 
-    match check_access_or_forbid(&state, def.access.create.as_deref(), &auth_user, None, None) {
+    match check_access_or_forbid(
+        &state,
+        def.access.create.as_deref(),
+        auth_user.as_ref(),
+        None,
+        None,
+    ) {
         Ok(AccessResult::Denied) => {
             return forbidden(
                 &state,
@@ -137,7 +135,7 @@ pub async fn create_form(
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
     let breadcrumbs = vec![
-        Breadcrumb::link("collections", "/admin/collections"),
+        Breadcrumb::link("collections", paths::COLLECTIONS_ROOT),
         Breadcrumb::link(def.display_name(), paths::collection(&slug)),
         Breadcrumb::current("create_name").with_name(def.singular_name()),
     ];
@@ -145,7 +143,7 @@ pub async fn create_form(
     let base = BasePageContext::for_handler(
         &state,
         claims_ref,
-        &auth_user,
+        auth_user.as_ref(),
         PageMeta::new(PageType::CollectionCreate, "create_name")
             .with_title_name(def.singular_name()),
     )
@@ -156,9 +154,12 @@ pub async fn create_form(
         .is_upload_collection()
         .then(|| upload_accept_context(&def));
 
+    let perms = CollectionPermissions::for_user(&state, &def, auth_user.as_ref());
+
     let ctx = CollectionCreatePage {
         base,
         collection: CollectionContext::from_def(&def),
+        perms,
         fields: main_fields,
         sidebar_fields,
         editing: false,

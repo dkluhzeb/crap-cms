@@ -1,6 +1,22 @@
-use std::collections::{HashMap, HashSet};
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
+use std::collections::HashSet;
+use std::sync::Arc;
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
+use crap_cms::core::DocumentFields;
 use crap_cms::core::Registry;
 use crap_cms::core::collection::CollectionDefinition;
 use crap_cms::core::field::{BlockDefinition, FieldDefinition, FieldType, RelationshipConfig};
@@ -54,16 +70,17 @@ fn setup_articles() -> (
     CollectionDefinition,
 ) {
     let (_tmp, pool) = create_test_pool();
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     let def = make_articles_with_join_tables();
     let mut tags_def = CollectionDefinition::new("tags");
     tags_def.timestamps = true;
     tags_def.fields = vec![make_field("name", FieldType::Text)];
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         reg.register_collection(def.clone());
         reg.register_collection(tags_def);
     }
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
     (_tmp, pool, def)
 }
@@ -75,8 +92,8 @@ fn set_and_find_related_ids() {
     // Create an article
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Test Article".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Test Article".to_string()));
     let doc = query::create(&tx, "articles", &def, &data, None).expect("Create failed");
 
     let ids = vec![
@@ -99,8 +116,8 @@ fn set_related_ids_replaces_existing() {
     let (_tmp, pool, def) = setup_articles();
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Test".to_string()));
     let doc = query::create(&tx, "articles", &def, &data, None).expect("Create failed");
 
     // First set
@@ -137,8 +154,8 @@ fn find_related_ids_empty() {
     let (_tmp, pool, def) = setup_articles();
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Test".to_string()));
     let doc = query::create(&tx, "articles", &def, &data, None).expect("Create failed");
     tx.commit().expect("Commit");
 
@@ -156,21 +173,24 @@ fn set_and_find_array_rows() {
 
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Test".to_string()));
     let doc = query::create(&tx, "articles", &def, &data, None).expect("Create failed");
 
     let rows = vec![
         {
-            let mut m = HashMap::new();
-            m.insert("url".to_string(), "https://example.com".to_string());
-            m.insert("label".to_string(), "Example".to_string());
+            let mut m = std::collections::HashMap::new();
+            m.insert("url".to_string(), json!("https://example.com".to_string()));
+            m.insert("label".to_string(), json!("Example".to_string()));
             m
         },
         {
-            let mut m = HashMap::new();
-            m.insert("url".to_string(), "https://rust-lang.org".to_string());
-            m.insert("label".to_string(), "Rust".to_string());
+            let mut m = std::collections::HashMap::new();
+            m.insert(
+                "url".to_string(),
+                json!("https://rust-lang.org".to_string()),
+            );
+            m.insert("label".to_string(), json!("Rust".to_string()));
             m
         },
     ];
@@ -203,23 +223,23 @@ fn set_array_rows_replaces_existing() {
 
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Test".to_string()));
     let doc = query::create(&tx, "articles", &def, &data, None).expect("Create failed");
 
     let rows1 = vec![{
-        let mut m = HashMap::new();
-        m.insert("url".to_string(), "https://old.com".to_string());
-        m.insert("label".to_string(), "Old".to_string());
+        let mut m = std::collections::HashMap::new();
+        m.insert("url".to_string(), json!("https://old.com"));
+        m.insert("label".to_string(), json!("Old"));
         m
     }];
     query::set_array_rows(&tx, "articles", "links", &doc.id, &rows1, sub_fields, None)
         .expect("Set failed");
 
     let rows2 = vec![{
-        let mut m = HashMap::new();
-        m.insert("url".to_string(), "https://new.com".to_string());
-        m.insert("label".to_string(), "New".to_string());
+        let mut m = std::collections::HashMap::new();
+        m.insert("url".to_string(), json!("https://new.com"));
+        m.insert("label".to_string(), json!("New"));
         m
     }];
     query::set_array_rows(&tx, "articles", "links", &doc.id, &rows2, sub_fields, None)
@@ -244,8 +264,8 @@ fn find_array_rows_empty() {
 
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Test".to_string()));
     let doc = query::create(&tx, "articles", &def, &data, None).expect("Create failed");
     tx.commit().expect("Commit");
 
@@ -260,8 +280,8 @@ fn set_and_find_block_rows() {
     let (_tmp, pool, def) = setup_articles();
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Test".to_string()));
     let doc = query::create(&tx, "articles", &def, &data, None).expect("Create failed");
 
     let blocks = vec![
@@ -301,8 +321,8 @@ fn set_block_rows_replaces_existing() {
     let (_tmp, pool, def) = setup_articles();
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Test".to_string()));
     let doc = query::create(&tx, "articles", &def, &data, None).expect("Create failed");
 
     let blocks1 = vec![json!({"_block_type": "paragraph", "text": "Old"})];
@@ -327,8 +347,8 @@ fn find_block_rows_empty() {
     let (_tmp, pool, def) = setup_articles();
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Test".to_string()));
     let doc = query::create(&tx, "articles", &def, &data, None).expect("Create failed");
     tx.commit().expect("Commit");
 
@@ -345,8 +365,8 @@ fn hydrate_document_populates_join_data() {
 
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Test".to_string()));
     let doc = query::create(&tx, "articles", &def, &data, None).expect("Create failed");
 
     // Set up join table data
@@ -360,9 +380,9 @@ fn hydrate_document_populates_join_data() {
     )
     .expect("Set related failed");
     let rows = vec![{
-        let mut m = HashMap::new();
-        m.insert("url".to_string(), "https://example.com".to_string());
-        m.insert("label".to_string(), "Ex".to_string());
+        let mut m = std::collections::HashMap::new();
+        m.insert("url".to_string(), json!("https://example.com".to_string()));
+        m.insert("label".to_string(), json!("Ex".to_string()));
         m
     }];
     query::set_array_rows(
@@ -421,12 +441,12 @@ fn save_join_table_data_from_hashmap() {
     let (_tmp, pool, def) = setup_articles();
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Test".to_string()));
     let doc = query::create(&tx, "articles", &def, &data, None).expect("Create failed");
 
     // Prepare join table data as JSON values
-    let mut jt_data: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut jt_data = DocumentFields::new();
     jt_data.insert("tags".to_string(), json!(["tag-a", "tag-b"]));
     jt_data.insert(
         "links".to_string(),
@@ -474,12 +494,12 @@ fn save_join_table_data_partial_update() {
     let (_tmp, pool, def) = setup_articles();
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Test".to_string()));
     let doc = query::create(&tx, "articles", &def, &data, None).expect("Create failed");
 
     // First: set tags and links
-    let mut jt_data: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut jt_data = DocumentFields::new();
     jt_data.insert("tags".to_string(), json!(["tag-1", "tag-2"]));
     jt_data.insert(
         "links".to_string(),
@@ -489,7 +509,7 @@ fn save_join_table_data_partial_update() {
         .expect("Save failed");
 
     // Second: only update tags (links should be unchanged)
-    let mut jt_data2: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut jt_data2 = DocumentFields::new();
     jt_data2.insert("tags".to_string(), json!(["tag-3"]));
     query::save_join_table_data(&tx, "articles", &def.fields, &doc.id, &jt_data2, None)
         .expect("Save failed");
@@ -566,22 +586,23 @@ fn make_posts_with_category() -> CollectionDefinition {
 fn setup_posts_categories() -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    crap_cms::core::SharedRegistry,
+    Arc<Registry>,
     CollectionDefinition,
     CollectionDefinition,
 ) {
     let (_tmp, pool) = create_test_pool();
-    let shared_registry = Registry::shared();
+    let shared = Registry::shared();
     let cats_def = make_categories_def();
     let posts_def = make_posts_with_category();
     {
-        let mut reg = shared_registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         reg.register_collection(cats_def.clone());
         reg.register_collection(posts_def.clone());
     }
-    migrate::sync_all(&pool, &shared_registry, &CrapConfig::default().locale).expect("Sync failed");
+    let registry = Registry::snapshot(&shared);
+    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
 
-    (_tmp, pool, shared_registry, posts_def, cats_def)
+    (_tmp, pool, registry, posts_def, cats_def)
 }
 
 #[test]
@@ -591,14 +612,14 @@ fn populate_depth_0_leaves_ids() {
     // Create a category
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
-    let mut cat_data = HashMap::new();
-    cat_data.insert("name".to_string(), "Tech".to_string());
+    let mut cat_data = DocumentFields::new();
+    cat_data.insert("name".to_string(), json!("Tech".to_string()));
     let cat =
         query::create(&tx, "categories", &cats_def, &cat_data, None).expect("Create cat failed");
 
-    let mut post_data = HashMap::new();
-    post_data.insert("title".to_string(), "My Post".to_string());
-    post_data.insert("category".to_string(), cat.id.to_string());
+    let mut post_data = DocumentFields::new();
+    post_data.insert("title".to_string(), json!("My Post".to_string()));
+    post_data.insert("category".to_string(), json!(cat.id.to_string()));
     let mut post =
         query::create(&tx, "posts_v2", &posts_def, &post_data, None).expect("Create post failed");
     tx.commit().expect("Commit");
@@ -607,7 +628,7 @@ fn populate_depth_0_leaves_ids() {
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &query::PopulateContext::new(&conn, &registry.read().unwrap(), "posts_v2", &posts_def),
+        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def),
         &mut post,
         &mut visited,
         &query::PopulateOpts::new(0),
@@ -624,13 +645,13 @@ fn populate_depth_1_hydrates_has_one() {
 
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
-    let mut cat_data = HashMap::new();
-    cat_data.insert("name".to_string(), "Tech".to_string());
+    let mut cat_data = DocumentFields::new();
+    cat_data.insert("name".to_string(), json!("Tech".to_string()));
     let cat = query::create(&tx, "categories", &cats_def, &cat_data, None).expect("Create cat");
 
-    let mut post_data = HashMap::new();
-    post_data.insert("title".to_string(), "My Post".to_string());
-    post_data.insert("category".to_string(), cat.id.to_string());
+    let mut post_data = DocumentFields::new();
+    post_data.insert("title".to_string(), json!("My Post".to_string()));
+    post_data.insert("category".to_string(), json!(cat.id.to_string()));
     let mut post =
         query::create(&tx, "posts_v2", &posts_def, &post_data, None).expect("Create post");
     tx.commit().expect("Commit");
@@ -638,7 +659,7 @@ fn populate_depth_1_hydrates_has_one() {
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &query::PopulateContext::new(&conn, &registry.read().unwrap(), "posts_v2", &posts_def),
+        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def),
         &mut post,
         &mut visited,
         &query::PopulateOpts::new(1),
@@ -649,8 +670,7 @@ fn populate_depth_1_hydrates_has_one() {
     let cat_val = post.get("category").expect("category should exist");
     assert!(
         cat_val.is_object(),
-        "category should be an object, got: {:?}",
-        cat_val
+        "category should be an object, got: {cat_val:?}"
     );
     assert_eq!(cat_val.get("name").unwrap().as_str().unwrap(), "Tech");
     assert_eq!(
@@ -666,16 +686,16 @@ fn populate_depth_1_hydrates_has_many() {
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
 
-    let mut cat1_data = HashMap::new();
-    cat1_data.insert("name".to_string(), "Tech".to_string());
+    let mut cat1_data = DocumentFields::new();
+    cat1_data.insert("name".to_string(), json!("Tech".to_string()));
     let cat1 = query::create(&tx, "categories", &cats_def, &cat1_data, None).expect("Create cat1");
 
-    let mut cat2_data = HashMap::new();
-    cat2_data.insert("name".to_string(), "Science".to_string());
+    let mut cat2_data = DocumentFields::new();
+    cat2_data.insert("name".to_string(), json!("Science".to_string()));
     let cat2 = query::create(&tx, "categories", &cats_def, &cat2_data, None).expect("Create cat2");
 
-    let mut post_data = HashMap::new();
-    post_data.insert("title".to_string(), "Multi-cat Post".to_string());
+    let mut post_data = DocumentFields::new();
+    post_data.insert("title".to_string(), json!("Multi-cat Post".to_string()));
     let mut post =
         query::create(&tx, "posts_v2", &posts_def, &post_data, None).expect("Create post");
 
@@ -696,7 +716,7 @@ fn populate_depth_1_hydrates_has_many() {
 
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &query::PopulateContext::new(&conn, &registry.read().unwrap(), "posts_v2", &posts_def),
+        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def),
         &mut post,
         &mut visited,
         &query::PopulateOpts::new(1),
@@ -720,18 +740,18 @@ fn populate_circular_ref_stops() {
     let tx = conn.transaction().expect("Start transaction");
 
     // Create cat A → parent B → parent A (circular)
-    let mut a_data = HashMap::new();
-    a_data.insert("name".to_string(), "A".to_string());
+    let mut a_data = DocumentFields::new();
+    a_data.insert("name".to_string(), json!("A".to_string()));
     let cat_a = query::create(&tx, "categories", &cats_def, &a_data, None).expect("Create A");
 
-    let mut b_data = HashMap::new();
-    b_data.insert("name".to_string(), "B".to_string());
-    b_data.insert("parent".to_string(), cat_a.id.to_string());
+    let mut b_data = DocumentFields::new();
+    b_data.insert("name".to_string(), json!("B".to_string()));
+    b_data.insert("parent".to_string(), json!(cat_a.id.to_string()));
     let cat_b = query::create(&tx, "categories", &cats_def, &b_data, None).expect("Create B");
 
     // Update A to point to B
-    let mut update = HashMap::new();
-    update.insert("parent".to_string(), cat_b.id.to_string());
+    let mut update = DocumentFields::new();
+    update.insert("parent".to_string(), json!(cat_b.id.to_string()));
     let mut cat_a =
         query::update(&tx, "categories", &cats_def, &cat_a.id, &update, None).expect("Update A");
     tx.commit().expect("Commit");
@@ -740,7 +760,7 @@ fn populate_circular_ref_stops() {
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &query::PopulateContext::new(&conn, &registry.read().unwrap(), "categories", &cats_def),
+        &query::PopulateContext::new(&conn, &registry, "categories", &cats_def),
         &mut cat_a,
         &mut visited,
         &query::PopulateOpts::new(10),
@@ -758,9 +778,12 @@ fn populate_missing_related_doc_becomes_null() {
 
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
-    let mut post_data = HashMap::new();
-    post_data.insert("title".to_string(), "Orphaned".to_string());
-    post_data.insert("category".to_string(), "nonexistent-cat-id".to_string());
+    let mut post_data = DocumentFields::new();
+    post_data.insert("title".to_string(), json!("Orphaned".to_string()));
+    post_data.insert(
+        "category".to_string(),
+        json!("nonexistent-cat-id".to_string()),
+    );
     let mut post =
         query::create(&tx, "posts_v2", &posts_def, &post_data, None).expect("Create post");
     tx.commit().expect("Commit");
@@ -768,7 +791,7 @@ fn populate_missing_related_doc_becomes_null() {
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &query::PopulateContext::new(&conn, &registry.read().unwrap(), "posts_v2", &posts_def),
+        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def),
         &mut post,
         &mut visited,
         &query::PopulateOpts::new(1),
@@ -795,13 +818,13 @@ fn populate_respects_field_max_depth() {
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
 
-    let mut cat_data = HashMap::new();
-    cat_data.insert("name".to_string(), "Tech".to_string());
+    let mut cat_data = DocumentFields::new();
+    cat_data.insert("name".to_string(), json!("Tech".to_string()));
     let cat = query::create(&tx, "categories", &cats_def, &cat_data, None).expect("Create cat");
 
-    let mut post_data = HashMap::new();
-    post_data.insert("title".to_string(), "Post".to_string());
-    post_data.insert("limited_cat".to_string(), cat.id.to_string());
+    let mut post_data = DocumentFields::new();
+    post_data.insert("title".to_string(), json!("Post".to_string()));
+    post_data.insert("limited_cat".to_string(), json!(cat.id.to_string()));
     let mut post =
         query::create(&tx, "posts_v2", &posts_def, &post_data, None).expect("Create post");
     tx.commit().expect("Commit");
@@ -810,7 +833,7 @@ fn populate_respects_field_max_depth() {
     let mut visited = HashSet::new();
     // Even with depth=5, the limited_cat field has max_depth=0, so it shouldn't populate
     query::populate_relationships(
-        &query::PopulateContext::new(&conn, &registry.read().unwrap(), "posts_v2", &posts_def),
+        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def),
         &mut post,
         &mut visited,
         &query::PopulateOpts::new(5),
@@ -832,21 +855,21 @@ fn populate_respects_field_max_depth_1_stops_nested_relations() {
     let tx = conn.transaction().expect("Start transaction");
 
     // Create parent category
-    let mut parent_data = HashMap::new();
-    parent_data.insert("name".to_string(), "Parent".to_string());
+    let mut parent_data = DocumentFields::new();
+    parent_data.insert("name".to_string(), json!("Parent".to_string()));
     let parent =
         query::create(&tx, "categories", &cats_def, &parent_data, None).expect("Create parent");
 
     // Child category with parent set
-    let mut child_data = HashMap::new();
-    child_data.insert("name".to_string(), "Child".to_string());
-    child_data.insert("parent".to_string(), parent.id.to_string());
+    let mut child_data = DocumentFields::new();
+    child_data.insert("name".to_string(), json!("Child".to_string()));
+    child_data.insert("parent".to_string(), json!(parent.id.to_string()));
     let child =
         query::create(&tx, "categories", &cats_def, &child_data, None).expect("Create child");
 
-    let mut post_data = HashMap::new();
-    post_data.insert("title".to_string(), "Post".to_string());
-    post_data.insert("capped_cat".to_string(), child.id.to_string());
+    let mut post_data = DocumentFields::new();
+    post_data.insert("title".to_string(), json!("Post".to_string()));
+    post_data.insert("capped_cat".to_string(), json!(child.id.to_string()));
     let mut post =
         query::create(&tx, "posts_v2", &posts_def, &post_data, None).expect("Create post");
     tx.commit().expect("Commit");
@@ -855,7 +878,7 @@ fn populate_respects_field_max_depth_1_stops_nested_relations() {
     let mut visited = HashSet::new();
     // Request depth=3 — but `capped_cat` has max_depth = 1, so the cap wins.
     query::populate_relationships(
-        &query::PopulateContext::new(&conn, &registry.read().unwrap(), "posts_v2", &posts_def),
+        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def),
         &mut post,
         &mut visited,
         &query::PopulateOpts::new(3),
@@ -866,8 +889,7 @@ fn populate_respects_field_max_depth_1_stops_nested_relations() {
     let capped = post.get("capped_cat").expect("capped_cat should exist");
     assert!(
         capped.is_object(),
-        "capped_cat should be hydrated at depth 1, got: {:?}",
-        capped
+        "capped_cat should be hydrated at depth 1, got: {capped:?}"
     );
     assert_eq!(
         capped.get("name").and_then(|v| v.as_str()),
@@ -881,8 +903,7 @@ fn populate_respects_field_max_depth_1_stops_nested_relations() {
     let nested_parent = capped.get("parent").expect("nested parent should exist");
     assert!(
         nested_parent.is_string(),
-        "nested parent should stay as ID (max_depth=1 caps), got: {:?}",
-        nested_parent
+        "nested parent should stay as ID (max_depth=1 caps), got: {nested_parent:?}"
     );
     assert_eq!(
         nested_parent.as_str(),
@@ -930,7 +951,8 @@ fn populate_with_localized_related_collection() {
         locales: vec!["en".to_string(), "de".to_string()],
         fallback: true,
     };
-    migrate::sync_all(&pool, &shared_registry, &locale_config).expect("Sync failed");
+    migrate::sync_all(&pool, &shared_registry.read().unwrap(), &locale_config)
+        .expect("Sync failed");
 
     let locale_ctx = query::LocaleContext {
         mode: query::LocaleMode::Single("en".to_string()),
@@ -940,16 +962,16 @@ fn populate_with_localized_related_collection() {
     // Create a media document with localized caption
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
-    let mut media_data = HashMap::new();
-    media_data.insert("url".to_string(), "/img/test.png".to_string());
-    media_data.insert("caption".to_string(), "Test image".to_string());
+    let mut media_data = DocumentFields::new();
+    media_data.insert("url".to_string(), json!("/img/test.png".to_string()));
+    media_data.insert("caption".to_string(), json!("Test image".to_string()));
     let media_doc = query::create(&tx, "media", &media_def, &media_data, Some(&locale_ctx))
         .expect("Create media");
 
     // Create an article referencing the media
-    let mut article_data = HashMap::new();
-    article_data.insert("title".to_string(), "My Article".to_string());
-    article_data.insert("image".to_string(), media_doc.id.to_string());
+    let mut article_data = DocumentFields::new();
+    article_data.insert("title".to_string(), json!("My Article".to_string()));
+    article_data.insert("image".to_string(), json!(media_doc.id.to_string()));
     let mut article =
         query::create(&tx, "articles", &articles_def, &article_data, None).expect("Create article");
     tx.commit().expect("Commit");
@@ -976,8 +998,7 @@ fn populate_with_localized_related_collection() {
     let img = article.get("image").expect("image field should exist");
     assert!(
         img.is_object(),
-        "image should be populated object, got: {:?}",
-        img
+        "image should be populated object, got: {img:?}"
     );
     assert_eq!(img.get("url").unwrap().as_str().unwrap(), "/img/test.png");
     assert_eq!(img.get("caption").unwrap().as_str().unwrap(), "Test image");

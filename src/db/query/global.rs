@@ -1,11 +1,9 @@
 //! Global document query functions.
 
-use std::collections::HashMap;
-
 use anyhow::{Context as _, Result};
 
 use crate::{
-    core::{Document, collection::GlobalDefinition},
+    core::{Document, DocumentFields, collection::GlobalDefinition},
     db::{
         DbConnection, DbRow, DbValue, LocaleContext, LocaleMode,
         document::row_to_document,
@@ -19,6 +17,10 @@ use crate::{
 };
 
 /// Get the single global document from `_global_{slug}`.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT, row parsing, or hydration fails.
 pub fn get_global(
     conn: &dyn DbConnection,
     slug: &str,
@@ -44,7 +46,7 @@ pub fn get_global(
     // Build a row with aliased column names so row_to_document sees the right names
     let raw_row = conn
         .query_one(&sql, &[])?
-        .with_context(|| format!("Failed to get global '{}'", slug))?;
+        .with_context(|| format!("Failed to get global '{slug}'"))?;
 
     // Remap columns to result_names (for locale SELECT aliasing)
     let values: Vec<DbValue> = (0..raw_row.column_count())
@@ -68,11 +70,15 @@ pub fn get_global(
 }
 
 /// Update the single global document in `_global_{slug}`. Returns the updated document.
+///
+/// # Errors
+///
+/// Returns a backend error if the UPDATE, join-table sync, or re-read fails.
 pub fn update_global(
     conn: &dyn DbConnection,
     slug: &str,
     def: &GlobalDefinition,
-    data: &HashMap<String, String>,
+    data: &DocumentFields,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Document> {
     let table_name = global_table(slug);
@@ -80,7 +86,7 @@ pub fn update_global(
 
     let mut col = UpdateCollector::new();
 
-    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn)?;
+    collect_update_params(&def.fields, data, locale_ctx, &mut col, conn)?;
 
     if col.set_clauses.is_empty() {
         return get_global(conn, slug, def, locale_ctx);
@@ -95,7 +101,7 @@ pub fn update_global(
     );
 
     conn.execute(&sql, &col.params)
-        .with_context(|| format!("Failed to update global '{}'", slug))?;
+        .with_context(|| format!("Failed to update global '{slug}'"))?;
 
     get_global(conn, slug, def, locale_ctx)
 }
@@ -245,8 +251,8 @@ mod tests {
         let (_dir, conn) = setup_conn();
         setup_global_db(&conn);
         let def = global_def();
-        let mut data = HashMap::new();
-        data.insert("site_name".to_string(), "My Site".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("site_name".to_string(), json!("My Site"));
         let doc = update_global(&conn, "settings", &def, &data, None).unwrap();
         assert_eq!(doc.get_str("site_name"), Some("My Site"));
     }
@@ -258,13 +264,13 @@ mod tests {
         let def = global_def();
 
         // First update: set site_name
-        let mut data1 = HashMap::new();
-        data1.insert("site_name".to_string(), "My Site".to_string());
+        let mut data1 = DocumentFields::new();
+        data1.insert("site_name".to_string(), json!("My Site"));
         update_global(&conn, "settings", &def, &data1, None).unwrap();
 
         // Second update: set only tagline
-        let mut data2 = HashMap::new();
-        data2.insert("tagline".to_string(), "A great site".to_string());
+        let mut data2 = DocumentFields::new();
+        data2.insert("tagline".to_string(), json!("A great site"));
         let doc = update_global(&conn, "settings", &def, &data2, None).unwrap();
 
         assert_eq!(
@@ -288,8 +294,8 @@ mod tests {
         let before = get_global(&conn, "settings", &def, None).unwrap();
         assert_eq!(before.updated_at.as_deref(), Some("2024-01-01"));
 
-        let mut data = HashMap::new();
-        data.insert("site_name".to_string(), "New Name".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("site_name".to_string(), json!("New Name"));
         let after = update_global(&conn, "settings", &def, &data, None).unwrap();
 
         assert_ne!(
@@ -320,7 +326,7 @@ mod tests {
         let def = def;
 
         // Update without providing the checkbox field -- should default to 0
-        let data = HashMap::new();
+        let data = DocumentFields::new();
         let doc = update_global(&conn, "prefs", &def, &data, None).unwrap();
         assert_eq!(doc.get("newsletter"), Some(&json!(0)));
     }
@@ -352,9 +358,9 @@ mod tests {
         ];
         let def = def;
 
-        let mut data = HashMap::new();
-        data.insert("colors__primary".to_string(), "#ff0000".to_string());
-        data.insert("colors__secondary".to_string(), "#00ff00".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("colors__primary".to_string(), json!("#ff0000"));
+        data.insert("colors__secondary".to_string(), json!("#00ff00"));
 
         let doc = update_global(&conn, "branding", &def, &data, None).unwrap();
         // Group fields should be reconstructed as nested object by hydrate_document
@@ -418,9 +424,9 @@ mod tests {
         ];
         let def = def;
 
-        let mut data = HashMap::new();
-        data.insert("colors__primary".to_string(), "#ff0000".to_string());
-        data.insert("colors__secondary".to_string(), "#00ff00".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("colors__primary".to_string(), json!("#ff0000"));
+        data.insert("colors__secondary".to_string(), json!("#00ff00"));
 
         let doc = update_global(&conn, "branding", &def, &data, None).unwrap();
         let colors = doc.fields.get("colors").expect("colors should exist");
@@ -473,9 +479,9 @@ mod tests {
         ];
         let def = def;
 
-        let mut data = HashMap::new();
-        data.insert("config__theme".to_string(), "dark".to_string());
-        data.insert("config__cache_ttl".to_string(), "3600".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("config__theme".to_string(), json!("dark"));
+        data.insert("config__cache_ttl".to_string(), json!("3600"));
 
         let doc = update_global(&conn, "settings", &def, &data, None).unwrap();
         let config = doc.fields.get("config").expect("config should exist");

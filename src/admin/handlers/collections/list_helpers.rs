@@ -7,11 +7,7 @@ use crate::{
     admin::handlers::shared::{
         ListUrlContext, auto_label_from_name, is_column_eligible, url_decode,
     },
-    core::{
-        collection::CollectionDefinition,
-        document::Document,
-        field::{FieldDefinition, FieldType},
-    },
+    core::{FieldDefinition, FieldType, collection::CollectionDefinition, document::Document},
     db::query::{FilterClause, FilterOp},
 };
 
@@ -60,7 +56,7 @@ pub(super) fn resolve_columns(
     }
 
     let sort_field = url_ctx.sort.map(|s| s.strip_prefix('-').unwrap_or(s));
-    let sort_desc = url_ctx.sort.map(|s| s.starts_with('-')).unwrap_or(false);
+    let sort_desc = url_ctx.sort.is_some_and(|s| s.starts_with('-'));
 
     keys.iter()
         .map(|key| {
@@ -79,7 +75,7 @@ pub(super) fn resolve_columns(
 
             let is_sorted = sort_field == Some(key.as_str());
             let next_sort = if is_sorted && !sort_desc {
-                format!("-{}", key)
+                format!("-{key}")
             } else {
                 key.clone()
             };
@@ -145,12 +141,11 @@ pub(super) fn compute_cells(
                             }
                             FieldType::Select | FieldType::Radio => {
                                 let raw_val = raw.as_str().unwrap_or("");
-                                let label = f
-                                    .options
-                                    .iter()
-                                    .find(|o| o.value == raw_val)
-                                    .map(|o| o.label.resolve_default().to_string())
-                                    .unwrap_or_else(|| raw_val.to_string());
+                                let label =
+                                    f.options.iter().find(|o| o.value == raw_val).map_or_else(
+                                        || raw_val.to_string(),
+                                        |o| o.label.resolve_default().to_string(),
+                                    );
 
                                 json!({ "value": label })
                             }
@@ -327,8 +322,7 @@ pub(super) fn build_filter_pills(
                     .fields
                     .iter()
                     .find(|f| f.name == name)
-                    .map(field_label)
-                    .unwrap_or_else(|| auto_label_from_name(name)),
+                    .map_or_else(|| auto_label_from_name(name), field_label),
             };
 
             let (op_label, value) = match &filter.op {
@@ -371,11 +365,11 @@ pub(super) fn build_filter_pills(
         .collect()
 }
 
-/// Map a FilterOp to its URL parameter name.
+/// Map a `FilterOp` to its URL parameter name.
 pub(super) fn op_to_param_name(op: &FilterOp) -> &'static str {
     match op {
-        FilterOp::Equals(_) => "equals",
-        FilterOp::NotEquals(_) => "not_equals",
+        FilterOp::Equals(_) | FilterOp::In(_) => "equals",
+        FilterOp::NotEquals(_) | FilterOp::NotIn(_) => "not_equals",
         FilterOp::Contains(_) => "contains",
         FilterOp::Like(_) => "like",
         FilterOp::GreaterThan(_) => "gt",
@@ -384,17 +378,16 @@ pub(super) fn op_to_param_name(op: &FilterOp) -> &'static str {
         FilterOp::LessThanOrEqual(_) => "lte",
         FilterOp::Exists => "exists",
         FilterOp::NotExists => "not_exists",
-        _ => "equals",
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::VersionsConfig;
     use crate::core::{
-        collection::*,
+        FieldAdmin, FieldDefinition, FieldType, LocalizedString, SelectOption, collection::*,
         document::DocumentBuilder,
-        field::{FieldAdmin, FieldDefinition, FieldType, LocalizedString, SelectOption},
     };
 
     fn test_collection() -> CollectionDefinition {
@@ -593,8 +586,6 @@ mod tests {
 
     #[test]
     fn build_filter_fields_includes_status_with_drafts() {
-        use crate::core::collection::VersionsConfig;
-
         let mut def = test_collection();
         def.versions = Some(VersionsConfig::new(true, 10));
 

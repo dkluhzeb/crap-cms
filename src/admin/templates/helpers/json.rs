@@ -12,7 +12,9 @@ impl HelperDef for JsonHelper {
         _ctx: &'rc handlebars::Context,
         _rc: &mut RenderContext<'reg, 'rc>,
     ) -> Result<ScopedJson<'rc>, RenderError> {
-        let val = h.param(0).map(|p| p.value()).unwrap_or(&Value::Null);
+        let val = h
+            .param(0)
+            .map_or(&Value::Null, handlebars::PathAndJson::value);
         let json_str = serde_json::to_string(val).unwrap_or_default();
 
         // Prevent </script> breakout when used inside <script> blocks.
@@ -81,13 +83,11 @@ mod tests {
         let result = hbs.render("t", &json!({"val": "it's a test"})).unwrap();
         assert!(
             !result.contains('\''),
-            "must not contain literal single quote: {}",
-            result
+            "must not contain literal single quote: {result}"
         );
         assert!(
             result.contains(r"\u0027"),
-            r"should escape ' to \u0027: {}",
-            result
+            r"should escape ' to \u0027: {result}"
         );
     }
 
@@ -100,8 +100,7 @@ mod tests {
             .unwrap();
         assert!(
             result.contains(r"<\/script>"),
-            "should escape </script> to <\\/script>: {}",
-            result
+            "should escape </script> to <\\/script>: {result}"
         );
         assert!(
             !result.contains("</script>"),

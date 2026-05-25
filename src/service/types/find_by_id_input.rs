@@ -25,6 +25,7 @@ pub struct FindByIdInput<'a> {
 }
 
 impl<'a> FindByIdInput<'a> {
+    #[must_use]
     pub fn builder(id: &'a str) -> FindByIdInputBuilder<'a> {
         FindByIdInputBuilder::new(id)
     }
@@ -156,7 +157,7 @@ mod tests {
 
     use super::*;
 
-    use crate::db::query::Singleflight;
+    use crate::db::Singleflight;
 
     /// Regression: `FindByIdInput::builder().singleflight(..)` must plumb the
     /// Arc through to the built input so post-processing can share one

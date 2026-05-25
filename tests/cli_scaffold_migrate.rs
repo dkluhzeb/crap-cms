@@ -1,19 +1,33 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
 #![cfg(feature = "sqlite")]
 
 //! CLI integration tests: roundtrip, typegen, migrate, backup, blueprint, jobs.
 //!
-//! Split from cli_integration.rs for faster parallel compilation.
+//! Split from `cli_integration.rs` for faster parallel compilation.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crap_cms::commands;
 use crap_cms::config::CrapConfig;
+use crap_cms::core::DocumentFields;
 use crap_cms::db::{DbConnection, DbPool, DbValue, migrate, ops, pool, query};
 use crap_cms::hooks;
 use crap_cms::scaffold;
 use crap_cms::typegen;
-use serde_json::json;
+use serde_json::{Value, json};
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -29,8 +43,12 @@ fn crap_bin() -> PathBuf {
 }
 
 /// Copy fixture dir to a temp dir, init Lua, create pool, sync schema.
-/// Returns (TempDir, DbPool, SharedRegistry).
-fn full_setup() -> (tempfile::TempDir, DbPool, crap_cms::core::SharedRegistry) {
+/// Returns (`TempDir`, `DbPool`, Arc<Registry>).
+fn full_setup() -> (
+    tempfile::TempDir,
+    DbPool,
+    std::sync::Arc<crap_cms::core::Registry>,
+) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("config");
     copy_dir(&fixture_dir(), &config_dir);
@@ -85,17 +103,19 @@ fn copy_dir_skip(src: &Path, dst: &Path, skip: &[&str]) {
 #[test]
 fn roundtrip_data_preserved() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("posts").unwrap();
+    let def = registry.get_collection("posts").unwrap();
 
     // Create some data
     {
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         for i in 0..3 {
-            let mut data = HashMap::new();
-            data.insert("title".to_string(), format!("Roundtrip Post {}", i));
-            data.insert("status".to_string(), "published".to_string());
+            let mut data = DocumentFields::new();
+            data.insert(
+                "title".to_string(),
+                Value::String(format!("Roundtrip Post {i}")),
+            );
+            data.insert("status".to_string(), json!("published"));
             query::create(&tx, "posts", def, &data, None).unwrap();
         }
         tx.commit().unwrap();
@@ -168,23 +188,22 @@ fn roundtrip_data_preserved() {
 #[test]
 fn roundtrip_multiple_collections() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
 
     // Seed both collections
     {
-        let posts_def = reg.get_collection("posts").unwrap();
-        let users_def = reg.get_collection("users").unwrap();
+        let posts_def = registry.get_collection("posts").unwrap();
+        let users_def = registry.get_collection("users").unwrap();
 
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
 
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Multi Post".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Multi Post"));
         query::create(&tx, "posts", posts_def, &data, None).unwrap();
 
-        let mut udata = HashMap::new();
-        udata.insert("email".to_string(), "multi@test.com".to_string());
-        udata.insert("name".to_string(), "Multi User".to_string());
+        let mut udata = DocumentFields::new();
+        udata.insert("email".to_string(), json!("multi@test.com"));
+        udata.insert("name".to_string(), json!("Multi User"));
         query::create(&tx, "users", users_def, &udata, None).unwrap();
 
         tx.commit().unwrap();
@@ -193,7 +212,7 @@ fn roundtrip_multiple_collections() {
     // Export both
     let conn = pool.get().unwrap();
     let mut collections_data = serde_json::Map::new();
-    for (slug, def) in &reg.collections {
+    for (slug, def) in &registry.collections {
         let docs = query::find(&conn, slug, def, &query::FindQuery::default(), None).unwrap();
         let docs_json: Vec<serde_json::Value> = docs
             .into_iter()
@@ -221,33 +240,37 @@ fn typegen_lua() {
 
     let cfg = CrapConfig::load(&config_dir).expect("load config");
     let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
-    let reg = registry.read().unwrap();
 
-    let path = typegen::generate(&config_dir, &reg).unwrap();
-    assert!(path.exists());
-    assert!(path.to_string_lossy().ends_with("generated.lua"));
+    let paths = typegen::generate_lua(&config_dir, &registry, None).unwrap();
+    assert_eq!(paths.len(), 2, "generate_lua writes crap.lua + hooks.lua");
 
-    let content = std::fs::read_to_string(&path).unwrap();
-    assert!(!content.is_empty());
+    let crap_lua = &paths[0];
+    let hooks_lua = &paths[1];
+    assert!(crap_lua.to_string_lossy().ends_with("crap.lua"));
+    assert!(hooks_lua.to_string_lossy().ends_with("hooks.lua"));
+    assert!(crap_lua.exists());
+    assert!(hooks_lua.exists());
+
+    let hooks_content = std::fs::read_to_string(hooks_lua).unwrap();
+    assert!(!hooks_content.is_empty());
 }
 
 #[test]
-fn typegen_all_languages() {
+fn typegen_all_client_languages() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("config");
     copy_dir(&fixture_dir(), &config_dir);
 
     let cfg = CrapConfig::load(&config_dir).expect("load config");
     let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
-    let reg = registry.read().unwrap();
 
     for lang in typegen::Language::all() {
-        let path = typegen::generate_lang(&config_dir, &reg, *lang, None).unwrap();
-        assert!(path.exists(), "file should exist for {:?}", lang);
-        let expected_ext = format!("generated.{}", lang.file_extension());
+        let path = typegen::generate_client(&config_dir, &registry, *lang, None).unwrap();
+        assert!(path.exists(), "file should exist for {lang:?}");
+        let expected_ext = format!("client.{}", lang.file_extension());
         assert!(
             path.to_string_lossy().ends_with(&expected_ext),
-            "expected ext {}, got {}",
+            "expected suffix {}, got {}",
             expected_ext,
             path.display()
         );
@@ -292,7 +315,7 @@ fn migrate_up() {
     std::fs::create_dir_all(&migrations_dir).unwrap();
     std::fs::write(
         migrations_dir.join("20240101000000_test.lua"),
-        r#"
+        r"
 local M = {}
 function M.up()
     -- no-op for test
@@ -301,7 +324,7 @@ function M.down()
     -- no-op for test
 end
 return M
-"#,
+",
     )
     .unwrap();
 
@@ -347,14 +370,14 @@ fn migrate_down() {
     std::fs::create_dir_all(&migrations_dir).unwrap();
     std::fs::write(
         migrations_dir.join("20240101000000_rollback.lua"),
-        r#"
+        r"
 local M = {}
 function M.up()
 end
 function M.down()
 end
 return M
-"#,
+",
     )
     .unwrap();
 
@@ -366,7 +389,7 @@ return M
     // Apply migration
     let hook_runner = hooks::lifecycle::HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&cfg)
         .build()
         .unwrap();
@@ -416,12 +439,11 @@ fn migrate_fresh() {
 
     // Seed data
     {
-        let reg = registry.read().unwrap();
-        let def = reg.get_collection("posts").unwrap();
+        let def = registry.get_collection("posts").unwrap();
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Pre-fresh".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Pre-fresh"));
         query::create(&tx, "posts", def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -431,8 +453,7 @@ fn migrate_fresh() {
     migrate::sync_all(&db_pool, &registry, &cfg.locale).unwrap();
 
     // Verify data is gone but tables exist
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("posts").unwrap();
+    let def = registry.get_collection("posts").unwrap();
     let count = ops::count_documents(&db_pool, "posts", def, &[], None).unwrap();
     assert_eq!(count, 0, "data should be gone after fresh");
 }
@@ -454,12 +475,11 @@ fn backup_snapshot() {
 
     // Create a document so the DB has data
     {
-        let reg = registry.read().unwrap();
-        let def = reg.get_collection("posts").unwrap();
+        let def = registry.get_collection("posts").unwrap();
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Backup test".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Backup test"));
         query::create(&tx, "posts", def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -561,7 +581,7 @@ fn blueprint_save_and_list() {
     let bp_base = tmp.path().join("blueprints");
     let names: Vec<String> = std::fs::read_dir(&bp_base)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.path().is_dir())
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();
@@ -684,7 +704,10 @@ fn make_job_creates_lua_file() {
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(content.contains("crap.jobs.define(\"cleanup\""));
     assert!(content.contains("jobs.cleanup.run"));
-    assert!(content.contains("function M.run(context)"));
+    // The scaffold now wraps the handler in the `crap.any.job_handler`
+    // typesafe factory: `M.run = crap.any.job_handler(function(context)…`.
+    // Match the inner shape so the assertion stays robust.
+    assert!(content.contains("M.run = crap.any.job_handler(function(context)"));
 }
 
 #[test]
@@ -801,8 +824,16 @@ fn make_job_default_timeout_omitted() {
     assert!(!content.contains("timeout ="));
 }
 
+/// Under the alpha.9 queue-inheritance model, `--retries 0` is an
+/// explicit operator choice ("no retries even if the queue default is
+/// higher"), so the generator must emit `retries = 0` verbatim — the
+/// resulting `JobDefinition` is `Some(0)`, not `None` (which would
+/// silently inherit `[jobs.queues.<queue>] retries`). Previously the
+/// generator collapsed `Some(0)` to "omit" because pre-alpha.9 `0`
+/// was the field's default value; this regression test pins the
+/// alpha.9 behaviour.
 #[test]
-fn make_job_zero_retries_omitted() {
+fn make_job_zero_retries_is_emitted() {
     let tmp = tempfile::tempdir().expect("tempdir");
     scaffold::make_job(&scaffold::MakeJobOptions {
         config_dir: tmp.path(),
@@ -816,7 +847,10 @@ fn make_job_zero_retries_omitted() {
     .unwrap();
 
     let content = std::fs::read_to_string(tmp.path().join("jobs/noretry.lua")).unwrap();
-    assert!(!content.contains("retries ="));
+    assert!(
+        content.contains("retries = 0"),
+        "explicit `--retries 0` must appear in the generated Lua; got:\n{content}"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -860,12 +894,11 @@ fn cmd_restore_roundtrip() {
 
     // Create data
     {
-        let reg = registry.read().unwrap();
-        let def = reg.get_collection("posts").unwrap();
+        let def = registry.get_collection("posts").unwrap();
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Restore Test Post".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Restore Test Post"));
         query::create(&tx, "posts", def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -877,7 +910,7 @@ fn cmd_restore_roundtrip() {
 
     let backup_dirs: Vec<_> = std::fs::read_dir(&backup_output)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.path().is_dir())
         .collect();
     let backup_dir = backup_dirs[0].path();
@@ -896,8 +929,7 @@ fn cmd_restore_roundtrip() {
 
     // Verify data is intact
     let pool2 = pool::create_pool(&config_dir, &cfg).expect("create pool");
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("posts").unwrap();
+    let def = registry.get_collection("posts").unwrap();
     let conn = pool2.get().unwrap();
     let results = query::find(&conn, "posts", def, &query::FindQuery::default(), None).unwrap();
     assert_eq!(results.len(), 1);
@@ -1054,8 +1086,7 @@ fn make_collection_via_binary_no_slug_no_input_fails() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("required") || stderr.contains("slug"),
-        "error should mention slug is required, got: {}",
-        stderr
+        "error should mention slug is required, got: {stderr}"
     );
 }
 
@@ -1159,18 +1190,22 @@ fn templates_extract_via_binary() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Helper: scaffold a fresh project, add a collection with given Lua, load config, sync schema.
-/// Returns (TempDir, DbPool, SharedRegistry).
+/// Returns (`TempDir`, `DbPool`, Arc<Registry>).
 fn setup_with_collection(
     slug: &str,
     lua_content: &str,
-) -> (tempfile::TempDir, DbPool, crap_cms::core::SharedRegistry) {
+) -> (
+    tempfile::TempDir,
+    DbPool,
+    std::sync::Arc<crap_cms::core::Registry>,
+) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("config");
     scaffold::init(Some(config_dir.clone()), &scaffold::InitOptions::default()).unwrap();
 
     // Write the collection Lua file
     std::fs::write(
-        config_dir.join(format!("collections/{}.lua", slug)),
+        config_dir.join(format!("collections/{slug}.lua")),
         lua_content,
     )
     .unwrap();
@@ -1228,8 +1263,7 @@ fn nested_group_scaffold_to_schema_sync() {
     migrate::sync_all(&db_pool, &registry, &cfg.locale).expect("sync schema with nested group");
 
     // Verify collection was registered
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("articles")
         .expect("articles should exist in registry");
     assert!(def.fields.iter().any(|f| f.name == "seo"));
@@ -1259,8 +1293,7 @@ fn nested_array_scaffold_to_schema_sync() {
     migrate::sync_all(&db_pool, &registry, &cfg.locale).expect("sync schema with nested array");
 
     // Verify structure
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("products").unwrap();
+    let def = registry.get_collection("products").unwrap();
     let array_field = def.fields.iter().find(|f| f.name == "items").unwrap();
     assert_eq!(
         array_field.field_type,
@@ -1362,8 +1395,7 @@ fn fts_excludes_container_fields_from_searchable() {
     let (_tmp, pool, registry) = setup_with_collection("test_fts", lua);
 
     // If we get here, FTS sync didn't crash. Verify title is searchable.
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("test_fts").unwrap();
+    let def = registry.get_collection("test_fts").unwrap();
 
     // Verify the FTS fields exclude the array field
     let fts_fields = crap_cms::db::query::fts::get_fts_fields(def);
@@ -1379,8 +1411,8 @@ fn fts_excludes_container_fields_from_searchable() {
     // Verify we can create a document (full roundtrip)
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Hello FTS".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Hello FTS"));
     query::create(&tx, "test_fts", def, &data, None).unwrap();
     tx.commit().unwrap();
 }
@@ -1495,11 +1527,7 @@ fn init_no_input_creates_default_structure() {
         "migrations",
         "types",
     ] {
-        assert!(
-            dir.join(subdir).is_dir(),
-            "{} directory should exist",
-            subdir
-        );
+        assert!(dir.join(subdir).is_dir(), "{subdir} directory should exist");
     }
 }
 
@@ -1526,27 +1554,25 @@ fn init_no_input_full_roundtrip() {
 
     // Verify collections registered
     {
-        let reg = registry.read().unwrap();
-        let users_def = reg
+        let users_def = registry
             .get_collection("users")
             .expect("users collection should be registered");
         assert!(users_def.auth.is_some(), "users should have auth flag");
 
-        let media_def = reg
+        let media_def = registry
             .get_collection("media")
             .expect("media collection should be registered");
         assert!(media_def.upload.is_some(), "media should have upload flag");
     }
 
     // Create a user programmatically
-    let reg = registry.read().unwrap();
-    let users_def = reg.get_collection("users").unwrap();
+    let users_def = registry.get_collection("users").unwrap();
     {
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut data = HashMap::new();
-        data.insert("email".to_string(), "test@example.com".to_string());
-        data.insert("password".to_string(), "secret123".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("email".to_string(), json!("test@example.com"));
+        data.insert("password".to_string(), json!("secret123"));
         query::create(&tx, "users", users_def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -1562,17 +1588,17 @@ fn init_no_input_full_roundtrip() {
     )
     .unwrap();
     assert_eq!(users.len(), 1);
+    drop(conn);
 
     // Create a document in media collection
-    let media_def = reg.get_collection("media").unwrap();
-    drop(conn);
+    let media_def = registry.get_collection("media").unwrap();
     {
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut data = HashMap::new();
-        data.insert("filename".to_string(), "test.png".to_string());
-        data.insert("mime_type".to_string(), "image/png".to_string());
-        data.insert("size".to_string(), "1024".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("filename".to_string(), json!("test.png"));
+        data.insert("mime_type".to_string(), json!("image/png"));
+        data.insert("size".to_string(), json!("1024"));
         query::create(&tx, "media", media_def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -1603,8 +1629,7 @@ fn init_no_input_requires_dir() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("required"),
-        "stderr should mention 'required': {}",
-        stderr
+        "stderr should mention 'required': {stderr}"
     );
 }
 
@@ -1629,8 +1654,7 @@ fn init_via_binary_refuses_existing() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("refusing to overwrite"),
-        "should mention refusing to overwrite: {}",
-        stderr
+        "should mention refusing to overwrite: {stderr}"
     );
 }
 
@@ -1670,15 +1694,14 @@ fn init_scaffold_nested_collection_full_crud() {
     let db_pool = pool::create_pool(&config_dir, &cfg).expect("create pool");
     migrate::sync_all(&db_pool, &registry, &cfg.locale).expect("sync schema");
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap();
+    let def = registry.get_collection("articles").unwrap();
 
     // Create a document with title
     {
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Test Article".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Test Article"));
         query::create(&tx, "articles", def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -1687,16 +1710,16 @@ fn init_scaffold_nested_collection_full_crud() {
     let conn = db_pool.get().unwrap();
     let docs = query::find(&conn, "articles", def, &query::FindQuery::default(), None).unwrap();
     assert_eq!(docs.len(), 1);
+    drop(conn);
 
     // Create a user
-    let users_def = reg.get_collection("users").unwrap();
-    drop(conn);
+    let users_def = registry.get_collection("users").unwrap();
     {
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut data = HashMap::new();
-        data.insert("email".to_string(), "admin@test.com".to_string());
-        data.insert("password".to_string(), "password123".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("email".to_string(), json!("admin@test.com"));
+        data.insert("password".to_string(), json!("password123"));
         query::create(&tx, "users", users_def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -1744,8 +1767,7 @@ fn init_with_locales_and_nested_localized_crud() {
     migrate::sync_all(&db_pool, &registry, &cfg.locale).expect("sync schema");
 
     // Verify collection registered with localized fields
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("pages").unwrap();
+    let def = registry.get_collection("pages").unwrap();
     let title_field = def.fields.iter().find(|f| f.name == "title").unwrap();
     assert!(title_field.localized, "title field should be localized");
 
@@ -1754,10 +1776,10 @@ fn init_with_locales_and_nested_localized_crud() {
     {
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut data = HashMap::new();
-        data.insert("slug".to_string(), "test-page".to_string());
-        data.insert("title__en".to_string(), "Test Page".to_string());
-        data.insert("title__de".to_string(), "Testseite".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("slug".to_string(), json!("test-page"));
+        data.insert("title__en".to_string(), json!("Test Page"));
+        data.insert("title__de".to_string(), json!("Testseite"));
         query::create(&tx, "pages", def, &data, locale_ctx.as_ref()).unwrap();
         tx.commit().unwrap();
     }
@@ -1939,8 +1961,7 @@ fn nested_fields_with_locales_e2e() {
         .expect("sync schema with localized nested fields");
 
     // Verify FTS columns are properly expanded for localized text fields
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("pages").unwrap();
+    let def = registry.get_collection("pages").unwrap();
     let fts_cols = crap_cms::db::query::fts::get_fts_columns(def, &cfg.locale).unwrap();
     // "title" is localized text → should expand to title__en, title__de
     assert!(

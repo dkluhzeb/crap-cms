@@ -11,7 +11,7 @@ use super::snapshot::prune_versions;
 
 /// Set a document's status to "draft", build+save a snapshot, and prune.
 /// Used by both collection `persist_unpublish` and the globals unpublish handler.
-pub fn unpublish_with_snapshot(
+pub(crate) fn unpublish_with_snapshot(
     conn: &dyn DbConnection,
     table: &str,
     parent_id: &str,

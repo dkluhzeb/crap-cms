@@ -2,16 +2,20 @@
 
 use anyhow::{Context as _, Result};
 use serde_json::Value;
-use std::collections::HashMap;
 
 use crate::core::{
-    CollectionDefinition, Document, collection::GlobalDefinition, document::DocumentBuilder,
+    CollectionDefinition, Document, DocumentFields, collection::GlobalDefinition,
+    document::DocumentBuilder,
 };
 use crate::db::{
     DbConnection, DbPool, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query,
 };
 
 /// Find documents (read-only, no transaction needed).
+///
+/// # Errors
+///
+/// Returns a backend error if the connection acquisition or query fails.
 pub fn find_documents(
     pool: &DbPool,
     slug: &str,
@@ -24,6 +28,10 @@ pub fn find_documents(
 }
 
 /// Find a single document by ID (read-only, no transaction needed).
+///
+/// # Errors
+///
+/// Returns a backend error if the connection acquisition or query fails.
 pub fn find_document_by_id(
     pool: &DbPool,
     slug: &str,
@@ -36,6 +44,10 @@ pub fn find_document_by_id(
 }
 
 /// Count documents (read-only, no transaction needed).
+///
+/// # Errors
+///
+/// Returns a backend error if the connection acquisition or COUNT query fails.
 pub fn count_documents(
     pool: &DbPool,
     slug: &str,
@@ -48,6 +60,10 @@ pub fn count_documents(
 }
 
 /// Get a global document (read-only, no transaction needed).
+///
+/// # Errors
+///
+/// Returns a backend error if the connection acquisition or query fails.
 pub fn get_global(
     pool: &DbPool,
     slug: &str,
@@ -76,9 +92,13 @@ pub struct FindByIdFullParams<'a> {
 /// - Draft overlay: if `use_draft` is true and the latest version is a draft,
 ///   returns the document from the version snapshot (blocks/arrays included).
 /// - Access constraints: if `constraints` is Some, uses a filtered find instead
-///   of a direct find_by_id.
+///   of a direct `find_by_id`.
 /// - Hydration: join table data (blocks, arrays, has-many) is hydrated unless
 ///   a draft snapshot was used (snapshots already contain everything).
+///
+/// # Errors
+///
+/// Returns a backend error if any of the underlying queries fails.
 pub fn find_by_id_full(p: FindByIdFullParams<'_>) -> Result<Option<Document>> {
     if p.use_draft
         && p.def.has_drafts()
@@ -116,7 +136,7 @@ pub fn find_by_id_full(p: FindByIdFullParams<'_>) -> Result<Option<Document>> {
 /// Reconstruct a Document from a version snapshot JSON object.
 fn document_from_snapshot(id: &str, snapshot: &Value) -> Option<Document> {
     let obj = snapshot.as_object()?;
-    let mut fields: HashMap<String, Value> = obj.clone().into_iter().collect();
+    let mut fields: DocumentFields = obj.clone().into_iter().collect();
 
     let created_at = fields
         .remove("created_at")

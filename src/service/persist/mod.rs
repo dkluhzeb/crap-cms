@@ -8,5 +8,6 @@ mod update;
 mod version;
 
 pub use create::persist_create;
-pub use update::{persist_bulk_update, persist_update};
+pub(crate) use update::persist_bulk_update;
+pub use update::persist_update;
 pub use version::{persist_draft_version, persist_unpublish};

@@ -16,9 +16,18 @@ pub type SharedTokenProvider = Arc<dyn TokenProvider>;
 /// and potential future backends (opaque tokens, Paseto, etc.).
 pub trait TokenProvider: Send + Sync {
     /// Create a signed token from claims.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if signing fails (e.g. claim serialization).
     fn create_token(&self, claims: &Claims) -> Result<String>;
 
     /// Validate a token and return decoded claims.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the token is malformed, has an invalid signature,
+    /// is expired, or is missing required claims.
     fn validate_token(&self, token: &str) -> Result<Claims>;
 
     /// Backend identifier.
@@ -73,6 +82,10 @@ impl TokenProvider for JwtTokenProvider {
 ///
 /// Free function for direct usage (admin middleware, upload auth).
 /// For provider-based usage, prefer `TokenProvider::create_token`.
+///
+/// # Errors
+///
+/// Returns an error if signing fails.
 pub fn create_token(claims: &Claims, secret: &str) -> Result<String> {
     JwtTokenProvider::new(secret).create_token(claims)
 }
@@ -81,11 +94,30 @@ pub fn create_token(claims: &Claims, secret: &str) -> Result<String> {
 ///
 /// Free function for direct usage (admin middleware, upload auth).
 /// For provider-based usage, prefer `TokenProvider::validate_token`.
+///
+/// # Errors
+///
+/// Returns an error if the token is malformed, has an invalid signature,
+/// is expired, or is missing required claims.
 pub fn validate_token(token: &str, secret: &str) -> Result<Claims> {
     JwtTokenProvider::new(secret).validate_token(token)
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::*;
 

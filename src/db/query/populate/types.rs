@@ -22,16 +22,20 @@ pub trait JoinAccessCheck {
     ///
     /// `access_ref` is the target collection's `access.read` string reference.
     /// Implementations return `Allowed`, `Denied`, or `Constrained(filters)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the implementing access hook raises (e.g. a Lua runtime error).
     fn check(&self, access_ref: Option<&str>, user: Option<&Document>) -> Result<AccessResult>;
 }
 
 /// Build a cache key for a populated document.
 ///
 /// Format: `populate:{collection}:{id}` or `populate:{collection}:{id}:{locale}`
-pub fn populate_cache_key(collection: &str, id: &str, locale: Option<&str>) -> String {
+pub(crate) fn populate_cache_key(collection: &str, id: &str, locale: Option<&str>) -> String {
     match locale {
-        Some(l) => format!("populate:{}:{}:{}", collection, id, l),
-        None => format!("populate:{}:{}", collection, id),
+        Some(l) => format!("populate:{collection}:{id}:{l}"),
+        None => format!("populate:{collection}:{id}"),
     }
 }
 
@@ -54,7 +58,7 @@ pub(crate) fn locale_cache_key(locale_ctx: Option<&LocaleContext>) -> Option<Str
 ///
 /// Carries the connection, registry, effective depth, locale context, cache,
 /// and singleflight that every recursive population function needs. The
-/// remaining per-call params (doc/docs, field_name, rel_collection, rel_def,
+/// remaining per-call params (doc/docs, `field_name`, `rel_collection`, `rel_def`,
 /// visited) stay as regular args.
 pub(crate) struct PopulateCtx<'a> {
     pub conn: &'a dyn DbConnection,
@@ -110,6 +114,7 @@ pub struct PopulateOpts<'a> {
 }
 
 impl<'a> PopulateOpts<'a> {
+    #[must_use]
     pub fn new(depth: i32) -> Self {
         Self {
             depth,
@@ -120,11 +125,13 @@ impl<'a> PopulateOpts<'a> {
         }
     }
 
+    #[must_use]
     pub fn select(mut self, select: &'a [String]) -> Self {
         self.select = Some(select);
         self
     }
 
+    #[must_use]
     pub fn locale_ctx(mut self, ctx: &'a LocaleContext) -> Self {
         self.locale_ctx = Some(ctx);
         self
@@ -132,6 +139,7 @@ impl<'a> PopulateOpts<'a> {
 
     /// Attach an access-check for join-field target collections plus the
     /// current user. Both must be set together to enable the check.
+    #[must_use]
     pub fn join_access(
         mut self,
         check: &'a dyn JoinAccessCheck,

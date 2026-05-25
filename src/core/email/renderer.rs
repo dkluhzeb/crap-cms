@@ -5,7 +5,7 @@ use std::{fs, path::Path, str};
 use anyhow::{Context as _, Result};
 use handlebars::Handlebars;
 use include_dir::{Dir, include_dir};
-use serde_json::Value;
+use serde::Serialize;
 use tracing::debug;
 
 static EMAIL_TEMPLATES_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates/email");
@@ -17,8 +17,13 @@ pub struct EmailRenderer {
 }
 
 impl EmailRenderer {
-    /// Create a new EmailRenderer, loading compiled-in defaults then overlaying
+    /// Create a new `EmailRenderer`, loading compiled-in defaults then overlaying
     /// config dir templates from `<config_dir>/templates/email/`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any compiled-in or overlay template fails to load or
+    /// register.
     pub fn new(config_dir: &Path) -> Result<Self> {
         let mut hbs = Handlebars::new();
         hbs.set_strict_mode(false);
@@ -30,9 +35,9 @@ impl EmailRenderer {
             if path.extension().is_some_and(|ext| ext == "hbs") {
                 let name = path.with_extension("").to_string_lossy().to_string();
                 let content = str::from_utf8(file.contents())
-                    .with_context(|| format!("Invalid UTF-8 in email template: {}", name))?;
+                    .with_context(|| format!("Invalid UTF-8 in email template: {name}"))?;
                 hbs.register_template_string(&name, content)
-                    .with_context(|| format!("Failed to register email template: {}", name))?;
+                    .with_context(|| format!("Failed to register email template: {name}"))?;
             }
         }
 
@@ -61,11 +66,15 @@ impl EmailRenderer {
         Ok(Self { hbs })
     }
 
-    /// Render an email template by name with the given data.
-    pub fn render(&self, template: &str, data: &Value) -> Result<String> {
+    /// Render an email template by name with the given typed context.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the template name is unknown or rendering fails.
+    pub fn render<T: Serialize>(&self, template: &str, data: &T) -> Result<String> {
         self.hbs
             .render(template, data)
-            .with_context(|| format!("Failed to render email template '{}'", template))
+            .with_context(|| format!("Failed to render email template '{template}'"))
     }
 }
 
@@ -74,6 +83,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::core::email::{PasswordResetEmailContext, VerifyEmailContext};
 
     #[test]
     fn renderer_new_loads_compiled_templates() {
@@ -81,10 +91,11 @@ mod tests {
         let renderer = EmailRenderer::new(tmp.path()).expect("create renderer");
         let result = renderer.render(
             "password_reset",
-            &json!({
-                "reset_url": "http://example.com/reset?token=abc",
-                "app_name": "Test",
-            }),
+            &PasswordResetEmailContext {
+                reset_url: "http://example.com/reset?token=abc",
+                expiry_minutes: 30,
+                from_name: "Test",
+            },
         );
         assert!(result.is_ok());
         let html = result.unwrap();
@@ -106,7 +117,11 @@ mod tests {
         let html = renderer
             .render(
                 "password_reset",
-                &json!({"reset_url": "http://example.com/reset"}),
+                &PasswordResetEmailContext {
+                    reset_url: "http://example.com/reset",
+                    expiry_minutes: 30,
+                    from_name: "Test",
+                },
             )
             .expect("render");
         assert!(html.contains("Custom reset:"));
@@ -126,7 +141,11 @@ mod tests {
         let renderer = EmailRenderer::new(tmp.path()).expect("create renderer");
         let result = renderer.render(
             "password_reset",
-            &json!({"reset_url": "http://example.com/reset"}),
+            &PasswordResetEmailContext {
+                reset_url: "http://example.com/reset",
+                expiry_minutes: 30,
+                from_name: "Test",
+            },
         );
         assert!(result.is_ok());
     }
@@ -137,5 +156,26 @@ mod tests {
         let renderer = EmailRenderer::new(tmp.path()).expect("create renderer");
         let result = renderer.render("password_reset", &json!({}));
         assert!(result.is_ok());
+    }
+
+    /// Regression: `verify_email.hbs` references `{{from_name}}`, and earlier the
+    /// only call site (`service::email::send_verification_email`) forgot to pass
+    /// it — handlebars non-strict mode silently rendered an empty string, leaving
+    /// the footer reading "Sent by". Typed `VerifyEmailContext` makes that field
+    /// mandatory; this test pins that the rendered output actually includes it.
+    #[test]
+    fn verify_email_renders_from_name() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let renderer = EmailRenderer::new(tmp.path()).expect("create renderer");
+        let html = renderer
+            .render(
+                "verify_email",
+                &VerifyEmailContext {
+                    verify_url: "http://example.com/verify?token=abc",
+                    from_name: "Acme",
+                },
+            )
+            .expect("render");
+        assert!(html.contains("Acme"));
     }
 }

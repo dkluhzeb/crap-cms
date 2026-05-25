@@ -1,4 +1,4 @@
-//! Blueprint manifest — version metadata written to each saved blueprint.
+//! Blueprint manifest -- version metadata written to each saved blueprint.
 
 use anyhow::{Context as _, Result};
 use chrono::Utc;
@@ -77,8 +77,7 @@ fn check_blueprint_version_against(blueprint_version: &str, pkg_version: &str) -
     }
 
     Some(format!(
-        "Blueprint was created with crap-cms v{}, but running version is v{}",
-        blueprint_version, pkg_version
+        "Blueprint was created with crap-cms v{blueprint_version}, but running version is v{pkg_version}"
     ))
 }
 
@@ -178,7 +177,7 @@ mod tests {
 
     #[test]
     fn check_version_no_false_prefix() {
-        // "0.1" should NOT match "0.10.0" — prefix must be followed by a dot
+        // "0.1" should NOT match "0.10.0" -- prefix must be followed by a dot
         let msg = check_blueprint_version_against("0.1", "0.10.0");
         assert!(msg.is_some(), "0.1 should not match 0.10.0");
     }

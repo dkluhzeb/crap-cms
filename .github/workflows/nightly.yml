@@ -26,7 +26,7 @@ jobs:
         run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build
-        run: cross build --release --target x86_64-unknown-linux-musl
+        run: cross build -p crap-cms --release --target x86_64-unknown-linux-musl
 
       - name: Rename binary
         run: cp target/x86_64-unknown-linux-musl/release/crap-cms crap-cms-linux-x86_64

@@ -1,12 +1,12 @@
 //! Auto-generated reference doc for the typed admin page contexts.
 //!
 //! Walks every per-page typed context (login, dashboard, collection edit,
-//! …), produces a Markdown reference at
-//! `docs/src/admin-ui/reference/template-context.md`, and verifies (via the
-//! [`template_context_doc_is_in_sync`] test) that the committed file matches
-//! what the typed structs would produce. Run with
-//! `UPDATE_SCHEMA_DOC=1 cargo test template_context_doc_is_in_sync` to bless
-//! changes after touching a page-context struct.
+//! …) and produces the Markdown content at
+//! `docs/src/admin-ui/reference/template-context.md` via
+//! [`generate_template_context_md`]. The xtask
+//! `cargo xtask gen-template-doc [--check]` writes / diffs that file; an
+//! in-crate `#[test]` at the bottom of this file also asserts drift so
+//! local `cargo test` runs catch staleness without needing the xtask.
 //!
 //! The Markdown structure lives in an inline Handlebars template (we already
 //! depend on the engine for admin pages, so reusing it keeps the doc layout
@@ -19,17 +19,25 @@ use schemars::{Schema, schema_for};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::admin::context::page::{
-    auth::{ForgotPasswordPage, LoginPage, MfaPage, ResetPasswordPage},
-    collections::{
-        CollectionCreatePage, CollectionDeleteConfirmPage, CollectionEditPage,
-        CollectionFormErrorPage, CollectionItemsListPage, CollectionListPage,
-        CollectionRestoreConfirmPage, CollectionVersionsListPage,
-    },
-    dashboard::DashboardPage,
-    errors::ErrorPage,
-    globals::{
-        GlobalEditPage, GlobalFormErrorPage, GlobalRestoreConfirmPage, GlobalVersionsListPage,
+use crate::admin::context::{
+    AuthBasePageContext, BasePageContext, Breadcrumb, CollectionContext, CrapMeta, DocumentRef,
+    EditorLocaleOption, FieldContext, GlobalContext, NavData, PageMeta, PaginationContext,
+    UserContext,
+    locale_template::LocaleTemplateOption,
+    nav::{NavCollection, NavGlobal},
+    page::{
+        auth::{AuthCollection, ForgotPasswordPage, LoginPage, MfaPage, ResetPasswordPage},
+        collections::{
+            CollectionCreatePage, CollectionDeleteConfirmPage, CollectionEditPage, CollectionEntry,
+            CollectionFormErrorPage, CollectionItemsListPage, CollectionListPage,
+            CollectionRestoreConfirmPage, CollectionVersionsListPage, UploadFormContext,
+            UploadInfo,
+        },
+        dashboard::{CollectionCard, DashboardPage, GlobalCard},
+        errors::ErrorPage,
+        globals::{
+            GlobalEditPage, GlobalFormErrorPage, GlobalRestoreConfirmPage, GlobalVersionsListPage,
+        },
     },
 };
 
@@ -38,10 +46,10 @@ use crate::admin::context::page::{
 /// Inline Handlebars template that produces the Markdown doc. Whitespace
 /// outside `{{ }}` blocks is significant — keep the structure tight so the
 /// rendered output stays clean.
-const TEMPLATE: &str = r#"<!--
+const TEMPLATE: &str = r"<!--
   AUTO-GENERATED — do not edit by hand.
   Source of truth: typed page-context structs in `src/admin/context/page/`.
-  Regenerate with: `UPDATE_SCHEMA_DOC=1 cargo test template_context_doc_is_in_sync`
+  Regenerate with: `cargo xtask gen-template-doc`
 -->
 
 # Admin template context reference
@@ -84,7 +92,7 @@ _(No fields.)_
 {{/if}}
 
 {{/each}}
-"#;
+";
 
 // ── Doc-context shape ──────────────────────────────────────────────
 
@@ -127,129 +135,135 @@ struct PageEntry {
     schema: fn() -> Schema,
 }
 
-fn pages() -> Vec<PageEntry> {
-    vec![
-        PageEntry {
-            heading: "Login page",
-            page_type: "auth_login",
-            template: "auth/login",
-            schema: || schema_for!(LoginPage),
-        },
-        PageEntry {
-            heading: "MFA challenge page",
-            page_type: "auth_mfa",
-            template: "auth/mfa",
-            schema: || schema_for!(MfaPage),
-        },
-        PageEntry {
-            heading: "Forgot password page",
-            page_type: "auth_forgot",
-            template: "auth/forgot_password",
-            schema: || schema_for!(ForgotPasswordPage),
-        },
-        PageEntry {
-            heading: "Reset password page",
-            page_type: "auth_reset",
-            template: "auth/reset_password",
-            schema: || schema_for!(ResetPasswordPage),
-        },
-        PageEntry {
-            heading: "Error pages (403 / 404 / 500)",
-            page_type: "error_403 | error_404 | error_500",
-            template: "errors/{403,404,500}",
-            schema: || schema_for!(ErrorPage),
-        },
-        PageEntry {
-            heading: "Dashboard",
-            page_type: "dashboard",
-            template: "dashboard/index",
-            schema: || schema_for!(DashboardPage),
-        },
-        PageEntry {
-            heading: "Collection list",
-            page_type: "collection_list",
-            template: "collections/list",
-            schema: || schema_for!(CollectionListPage),
-        },
-        PageEntry {
-            heading: "Collection items list",
-            page_type: "collection_items",
-            template: "collections/items",
-            schema: || schema_for!(CollectionItemsListPage),
-        },
-        PageEntry {
-            heading: "Collection edit form",
-            page_type: "collection_edit",
-            template: "collections/edit",
-            schema: || schema_for!(CollectionEditPage),
-        },
-        PageEntry {
-            heading: "Collection create form",
-            page_type: "collection_create",
-            template: "collections/edit",
-            schema: || schema_for!(CollectionCreatePage),
-        },
-        PageEntry {
-            heading: "Collection form-error re-render",
-            page_type: "collection_edit | collection_create",
-            template: "collections/edit",
-            schema: || schema_for!(CollectionFormErrorPage),
-        },
-        PageEntry {
-            heading: "Collection delete confirmation",
-            page_type: "collection_delete",
-            template: "collections/delete",
-            schema: || schema_for!(CollectionDeleteConfirmPage),
-        },
-        PageEntry {
-            heading: "Collection versions list",
-            page_type: "collection_versions",
-            template: "collections/versions",
-            schema: || schema_for!(CollectionVersionsListPage),
-        },
-        PageEntry {
-            heading: "Collection restore confirmation",
-            page_type: "collection_versions",
-            template: "collections/restore",
-            schema: || schema_for!(CollectionRestoreConfirmPage),
-        },
-        PageEntry {
-            heading: "Global edit form",
-            page_type: "global_edit",
-            template: "globals/edit",
-            schema: || schema_for!(GlobalEditPage),
-        },
-        PageEntry {
-            heading: "Global form-error re-render",
-            page_type: "global_edit",
-            template: "globals/edit",
-            schema: || schema_for!(GlobalFormErrorPage),
-        },
-        PageEntry {
-            heading: "Global versions list",
-            page_type: "global_versions",
-            template: "globals/versions",
-            schema: || schema_for!(GlobalVersionsListPage),
-        },
-        PageEntry {
-            heading: "Global restore confirmation",
-            page_type: "global_versions",
-            template: "globals/restore",
-            schema: || schema_for!(GlobalRestoreConfirmPage),
-        },
-    ]
+const AUTH_PAGES: &[PageEntry] = &[
+    PageEntry {
+        heading: "Login page",
+        page_type: "auth_login",
+        template: "auth/login",
+        schema: || schema_for!(LoginPage),
+    },
+    PageEntry {
+        heading: "MFA challenge page",
+        page_type: "auth_mfa",
+        template: "auth/mfa",
+        schema: || schema_for!(MfaPage),
+    },
+    PageEntry {
+        heading: "Forgot password page",
+        page_type: "auth_forgot",
+        template: "auth/forgot_password",
+        schema: || schema_for!(ForgotPasswordPage),
+    },
+    PageEntry {
+        heading: "Reset password page",
+        page_type: "auth_reset",
+        template: "auth/reset_password",
+        schema: || schema_for!(ResetPasswordPage),
+    },
+];
+
+const ERROR_PAGES: &[PageEntry] = &[PageEntry {
+    heading: "Error pages (403 / 404 / 500)",
+    page_type: "error_403 | error_404 | error_500",
+    template: "errors/{403,404,500}",
+    schema: || schema_for!(ErrorPage),
+}];
+
+const DASHBOARD_PAGES: &[PageEntry] = &[PageEntry {
+    heading: "Dashboard",
+    page_type: "dashboard",
+    template: "dashboard/index",
+    schema: || schema_for!(DashboardPage),
+}];
+
+const COLLECTION_PAGES: &[PageEntry] = &[
+    PageEntry {
+        heading: "Collection list",
+        page_type: "collection_list",
+        template: "collections/list",
+        schema: || schema_for!(CollectionListPage),
+    },
+    PageEntry {
+        heading: "Collection items list",
+        page_type: "collection_items",
+        template: "collections/items",
+        schema: || schema_for!(CollectionItemsListPage),
+    },
+    PageEntry {
+        heading: "Collection edit form",
+        page_type: "collection_edit",
+        template: "collections/edit",
+        schema: || schema_for!(CollectionEditPage),
+    },
+    PageEntry {
+        heading: "Collection create form",
+        page_type: "collection_create",
+        template: "collections/edit",
+        schema: || schema_for!(CollectionCreatePage),
+    },
+    PageEntry {
+        heading: "Collection form-error re-render",
+        page_type: "collection_edit | collection_create",
+        template: "collections/edit",
+        schema: || schema_for!(CollectionFormErrorPage),
+    },
+    PageEntry {
+        heading: "Collection delete confirmation",
+        page_type: "collection_delete",
+        template: "collections/delete",
+        schema: || schema_for!(CollectionDeleteConfirmPage),
+    },
+    PageEntry {
+        heading: "Collection versions list",
+        page_type: "collection_versions",
+        template: "collections/versions",
+        schema: || schema_for!(CollectionVersionsListPage),
+    },
+    PageEntry {
+        heading: "Collection restore confirmation",
+        page_type: "collection_versions",
+        template: "collections/restore",
+        schema: || schema_for!(CollectionRestoreConfirmPage),
+    },
+];
+
+const GLOBAL_PAGES: &[PageEntry] = &[
+    PageEntry {
+        heading: "Global edit form",
+        page_type: "global_edit",
+        template: "globals/edit",
+        schema: || schema_for!(GlobalEditPage),
+    },
+    PageEntry {
+        heading: "Global form-error re-render",
+        page_type: "global_edit",
+        template: "globals/edit",
+        schema: || schema_for!(GlobalFormErrorPage),
+    },
+    PageEntry {
+        heading: "Global versions list",
+        page_type: "global_versions",
+        template: "globals/versions",
+        schema: || schema_for!(GlobalVersionsListPage),
+    },
+    PageEntry {
+        heading: "Global restore confirmation",
+        page_type: "global_versions",
+        template: "globals/restore",
+        schema: || schema_for!(GlobalRestoreConfirmPage),
+    },
+];
+
+fn pages() -> impl Iterator<Item = &'static PageEntry> {
+    AUTH_PAGES
+        .iter()
+        .chain(ERROR_PAGES)
+        .chain(DASHBOARD_PAGES)
+        .chain(COLLECTION_PAGES)
+        .chain(GLOBAL_PAGES)
 }
 
 fn definitions() -> Vec<(&'static str, Schema)> {
-    use crate::admin::context::{
-        AuthBasePageContext, BasePageContext, Breadcrumb, CollectionContext, CrapMeta, DocumentRef,
-        EditorLocaleOption, FieldContext, GlobalContext, LocaleTemplateOption, NavCollection,
-        NavData, NavGlobal, PageMeta, PaginationContext, UserContext,
-        page::auth::AuthCollection,
-        page::collections::{CollectionEntry, UploadFormContext, UploadInfo},
-        page::dashboard::{CollectionCard, GlobalCard},
-    };
-
     vec![
         ("BasePageContext", schema_for!(BasePageContext)),
         ("AuthBasePageContext", schema_for!(AuthBasePageContext)),
@@ -324,7 +338,7 @@ fn render_type(prop: &Value) -> String {
         if non_null.len() == 1 {
             let inner = format_simple_type(non_null[0], prop);
             return if nullable {
-                format!("Option<{}>", inner)
+                format!("Option&lt;{inner}&gt;")
             } else {
                 inner
             };
@@ -358,9 +372,8 @@ fn format_simple_type(t: &str, prop: &Value) -> String {
         "array" => {
             let item_ty = prop
                 .get("items")
-                .map(render_type)
-                .unwrap_or_else(|| "any".to_string());
-            format!("Vec<{}>", item_ty)
+                .map_or_else(|| "any".to_string(), render_type);
+            format!("Vec&lt;{item_ty}&gt;")
         }
         "object" => "Object".to_string(),
         other => other.to_string(),
@@ -371,7 +384,6 @@ fn format_simple_type(t: &str, prop: &Value) -> String {
 
 fn build_doc_context() -> DocContext {
     let pages: Vec<PageDoc> = pages()
-        .into_iter()
         .map(|p| {
             let schema = (p.schema)();
             PageDoc {
@@ -394,7 +406,25 @@ fn build_doc_context() -> DocContext {
     DocContext { pages, definitions }
 }
 
-fn generate_template_context_md() -> String {
+/// Render the full `template-context.md` content from the typed
+/// page-context structs. Pure function — no I/O. Consumed by the
+/// `cargo xtask gen-template-doc` subcommand (write / `--check` diff
+/// modes) and by the local-drift assertion test below.
+///
+/// Public so the xtask binary can call it via the
+/// [`crate::docgen`](crate::docgen) re-export — the module itself
+/// stays `pub(crate)` because nothing else in the public surface
+/// needs to walk these typed schemas at runtime.
+///
+/// # Panics
+///
+/// Panics only on programmer error: the inline Handlebars template
+/// failing to parse, or the typed `DocContext` failing to render
+/// against it. Both are static — neither depends on runtime input —
+/// so a panic here means the source has been broken at build time
+/// and CI / `cargo test` will fail before any release.
+#[must_use]
+pub fn generate_template_context_md() -> String {
     let mut hb = Handlebars::new();
     hb.set_strict_mode(true);
     // The output is Markdown, not HTML — turn off HTML-escaping so backticks,
@@ -408,43 +438,41 @@ fn generate_template_context_md() -> String {
         .expect("template renders against typed DocContext")
 }
 
-#[test]
-fn template_context_doc_is_in_sync() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("docs/src/admin-ui/reference/template-context.md");
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fmt::Write as _;
 
-    let generated = generate_template_context_md();
+    #[test]
+    fn template_context_doc_is_in_sync() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/src/admin-ui/reference/template-context.md");
 
-    if std::env::var("UPDATE_SCHEMA_DOC").is_ok() {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).expect("create docs parent");
+        let generated = generate_template_context_md();
+        let committed = std::fs::read_to_string(&path).unwrap_or_else(|_| {
+            panic!(
+                "Could not read {} — regenerate with: cargo xtask gen-template-doc",
+                path.display()
+            )
+        });
+
+        if generated == committed {
+            return;
         }
-        std::fs::write(&path, &generated).expect("write template-context.md");
-        eprintln!("Wrote {} bytes to {}", generated.len(), path.display());
-        return;
-    }
 
-    let committed = std::fs::read_to_string(&path).unwrap_or_else(|_| {
-        panic!(
-            "Could not read {} — bless it with: \
-             UPDATE_SCHEMA_DOC=1 cargo test template_context_doc_is_in_sync",
-            path.display()
-        )
-    });
-
-    if generated != committed {
         let g_lines: Vec<&str> = generated.lines().collect();
         let c_lines: Vec<&str> = committed.lines().collect();
         let mut hint = String::new();
         let mut shown = 0usize;
         for (i, (g, c)) in g_lines.iter().zip(c_lines.iter()).enumerate() {
             if g != c {
-                hint.push_str(&format!(
-                    "  line {}:\n    committed: {}\n    generated: {}\n",
+                let _ = writeln!(
+                    hint,
+                    "  line {}:\n    committed: {}\n    generated: {}",
                     i + 1,
                     c,
                     g
-                ));
+                );
                 shown += 1;
                 if shown >= 3 {
                     hint.push_str("  ... (truncated)\n");
@@ -453,19 +481,19 @@ fn template_context_doc_is_in_sync() {
             }
         }
         if g_lines.len() != c_lines.len() {
-            hint.push_str(&format!(
-                "  line counts differ: committed={}, generated={}\n",
+            let _ = writeln!(
+                hint,
+                "  line counts differ: committed={}, generated={}",
                 c_lines.len(),
                 g_lines.len()
-            ));
+            );
         }
 
         panic!(
             "template-context.md is out of sync with the typed page contexts.\n\
              Regenerate with:\n\
-             \n  UPDATE_SCHEMA_DOC=1 cargo test template_context_doc_is_in_sync\n\
-             \nFirst differing lines:\n{}",
-            hint
+             \n  cargo xtask gen-template-doc\n\
+             \nFirst differing lines:\n{hint}"
         );
     }
 }

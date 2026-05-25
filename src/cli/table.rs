@@ -1,5 +1,7 @@
 //! Simple CLI table renderer with auto-calculated column widths.
 
+use std::fmt::Write as _;
+
 use console::style;
 
 /// A simple table for CLI output with bold headers and auto-calculated column widths.
@@ -10,23 +12,31 @@ pub struct Table {
 
 impl Table {
     /// Create a new table with the given column headers.
+    #[must_use]
     pub fn new(headers: Vec<&str>) -> Self {
         Self {
-            headers: headers.into_iter().map(|h| h.to_string()).collect(),
+            headers: headers
+                .into_iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
             rows: Vec::new(),
         }
     }
 
     /// Add a row. The number of cells should match the header count.
     pub fn row(&mut self, cells: Vec<&str>) {
-        self.rows
-            .push(cells.into_iter().map(|c| c.to_string()).collect());
+        self.rows.push(
+            cells
+                .into_iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
+        );
     }
 
     /// Calculate column widths based on content (headers + rows).
     fn column_widths(&self) -> Vec<usize> {
         let col_count = self.headers.len();
-        let mut widths: Vec<usize> = self.headers.iter().map(|h| h.len()).collect();
+        let mut widths: Vec<usize> = self.headers.iter().map(std::string::String::len).collect();
 
         for row in &self.rows {
             for (i, cell) in row.iter().enumerate() {
@@ -49,28 +59,24 @@ impl Table {
         let widths = self.column_widths();
 
         self.print_header(&widths);
-        self.print_separator(&widths);
+        Self::print_separator(&widths);
         self.print_rows(&widths);
     }
 
     /// Print the bold header row.
     fn print_header(&self, widths: &[usize]) {
-        let line: String = self
-            .headers
-            .iter()
-            .enumerate()
-            .map(|(i, h)| {
-                let w = widths.get(i).copied().unwrap_or(h.len() + 2);
-                format!("{}", style(format!("{:<width$}", h, width = w)).bold())
-            })
-            .collect::<Vec<_>>()
-            .join("");
+        let mut line = String::new();
 
-        println!("{}", line);
+        for (i, h) in self.headers.iter().enumerate() {
+            let w = widths.get(i).copied().unwrap_or(h.len() + 2);
+            let _ = write!(line, "{}", style(format!("{h:<w$}")).bold());
+        }
+
+        println!("{line}");
     }
 
     /// Print a dimmed horizontal separator line.
-    fn print_separator(&self, widths: &[usize]) {
+    fn print_separator(widths: &[usize]) {
         let total_width: usize = widths.iter().sum();
 
         println!("{}", style("─".repeat(total_width)).dim());
@@ -79,17 +85,14 @@ impl Table {
     /// Print all data rows with aligned columns.
     fn print_rows(&self, widths: &[usize]) {
         for row in &self.rows {
-            let line: String = row
-                .iter()
-                .enumerate()
-                .map(|(i, cell)| {
-                    let w = widths.get(i).copied().unwrap_or(cell.len() + 2);
-                    format!("{:<width$}", cell, width = w)
-                })
-                .collect::<Vec<_>>()
-                .join("");
+            let mut line = String::new();
 
-            println!("{}", line);
+            for (i, cell) in row.iter().enumerate() {
+                let w = widths.get(i).copied().unwrap_or(cell.len() + 2);
+                let _ = write!(line, "{cell:<w$}");
+            }
+
+            println!("{line}");
         }
     }
 

@@ -3,25 +3,41 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 
 use crate::core::upload::{FormatOptions, ImageSize};
+use crate::typegen::lua::LuaAnnotation;
 
 /// Per-collection upload configuration (MIME filtering, image sizes, format options).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, LuaAnnotation)]
+#[lua(class = "crap.CollectionUpload")]
 pub struct CollectionUpload {
+    // Internal toggle: set automatically when the user provides `upload = true`
+    // or `upload = { ... }` at the collection level. Not exposed in the Lua
+    // API (the higher-level shorthand makes this implicit).
+    #[lua(skip)]
     pub enabled: bool,
+    /// MIME type allowlist with glob support (e.g., "image/*"). Empty = any type.
     #[serde(default)]
+    #[lua(optional)]
     pub mime_types: Vec<String>,
+    /// Max file size — bytes (integer) or human-readable ("10MB", "1GB"). Overrides global default.
     #[serde(default)]
+    #[lua(ty = "integer|string")]
     pub max_file_size: Option<u64>,
+    /// Resize definitions for image uploads.
     #[serde(default)]
+    #[lua(optional, ty = "crap.ImageSize[]")]
     pub image_sizes: Vec<ImageSize>,
+    /// Name of `image_size` to show in admin list.
     #[serde(default)]
     pub admin_thumbnail: Option<String>,
+    /// Auto-generate format variants for each size.
     #[serde(default)]
+    #[lua(optional)]
     pub format_options: FormatOptions,
 }
 
 impl CollectionUpload {
     /// Create a new enabled upload config with defaults for all other fields.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             enabled: true,
@@ -32,6 +48,7 @@ impl CollectionUpload {
     /// Return the set of system-injected field names that are auto-populated
     /// by the upload processing system (not user input).
     /// Mirrors the fields created by `inject_upload_fields()` in the Lua parser.
+    #[must_use]
     pub fn system_field_names(&self) -> HashSet<String> {
         let mut names: HashSet<String> = [
             "filename",
@@ -44,7 +61,7 @@ impl CollectionUpload {
             "focal_y",
         ]
         .iter()
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .collect();
 
         for size in &self.image_sizes {
@@ -67,6 +84,7 @@ impl CollectionUpload {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::upload::{FormatQuality, ImageSizeBuilder};
 
     #[test]
     fn collection_upload_default() {
@@ -97,8 +115,6 @@ mod tests {
 
     #[test]
     fn system_field_names_with_sizes_and_formats() {
-        use crate::core::upload::{FormatQuality, ImageSizeBuilder};
-
         let mut upload = CollectionUpload::new();
         upload.image_sizes = vec![
             ImageSizeBuilder::new("thumb")

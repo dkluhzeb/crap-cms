@@ -1,4 +1,4 @@
-//! Bulk collection RPC handlers: CreateMany, UpdateMany, DeleteMany.
+//! Bulk collection RPC handlers: `CreateMany`, `UpdateMany`, `DeleteMany`.
 
 mod create_many;
 mod delete_many;

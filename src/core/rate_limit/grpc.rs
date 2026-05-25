@@ -27,6 +27,7 @@ impl GrpcRateLimiter {
     }
 
     /// Create a rate limiter with the default in-memory backend.
+    #[must_use]
     pub fn new(max_requests: u32, window_seconds: u64) -> Self {
         Self::with_backend(
             Arc::new(MemoryRateLimitBackend::new()),
@@ -37,12 +38,13 @@ impl GrpcRateLimiter {
 
     /// Check if a request from `ip` is allowed and record it atomically.
     /// Returns `true` if the request is within the limit (or limiting is disabled).
+    #[must_use]
     pub fn check_and_record(&self, ip: &str) -> bool {
         if self.max_requests == 0 {
             return true;
         }
 
-        let key = format!("grpc:{}", ip);
+        let key = format!("grpc:{ip}");
 
         self.backend
             .check_and_record(&key, self.max_requests, self.window_secs)

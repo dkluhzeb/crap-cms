@@ -1,0 +1,75 @@
+/**
+ * <{{tag}}> -- custom Web Component.
+ *
+ * Registered via `<config_dir>/static/components/custom.js` (which
+ * `index.js` auto-imports). Form-associated by default so the value
+ * participates in native form submission and validation; remove
+ * `static formAssociated = true` and the `setFormValue` call if you
+ * don't need form integration.
+ *
+ * Styling uses constructable stylesheets (`adoptedStyleSheets`) and
+ * DOM is built with the `h()` helper -- both pierce the strict CSP
+ * without needing `'unsafe-inline'`.
+ *
+ * @module {{tag}}
+ * @stability stable
+ */
+
+import { css } from './_internal/css.js';
+import { h } from './_internal/h.js';
+
+const sheet = css`
+  :host { display: inline-block; }
+  .container { padding: var(--space-sm, 0.5rem); }
+`;
+
+class {{class_name}} extends HTMLElement {
+  static formAssociated = true;
+  static observedAttributes = ['value'];
+
+  constructor() {
+    super();
+    /** @type {ElementInternals} */
+    this._internals = this.attachInternals();
+    this.attachShadow({ mode: 'open' });
+    this.shadowRoot.adoptedStyleSheets = [sheet];
+
+    this._value = h('span', { part: 'value' });
+    this.shadowRoot.append(
+      h('div', { class: 'container', part: 'container' }, this._value),
+    );
+  }
+
+  connectedCallback() {
+    this._render();
+  }
+
+  attributeChangedCallback(name, _old, value) {
+    if (name === 'value') {
+      this._internals.setFormValue(value ?? '');
+      this._render();
+    }
+  }
+
+  /** Public getter/setter for `.value`, mirrored to the attribute. */
+  get value() {
+    return this.getAttribute('value') ?? '';
+  }
+  set value(v) {
+    this.setAttribute('value', v);
+  }
+
+  _render() {
+    if (!this._value) return;
+    this._value.textContent = this.value || '(empty)';
+  }
+
+  /** Dispatch `crap:change` so <crap-dirty-form> picks up edits. */
+  _emitChange() {
+    this.dispatchEvent(new Event('crap:change', { bubbles: true, composed: true }));
+  }
+}
+
+if (!customElements.get('{{tag}}')) {
+  customElements.define('{{tag}}', {{class_name}});
+}

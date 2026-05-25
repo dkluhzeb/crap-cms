@@ -1,8 +1,22 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
 #![cfg(feature = "sqlite")]
 
 use std::collections::{HashMap, HashSet};
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
+use crap_cms::core::DocumentFields;
 use crap_cms::core::Registry;
 use crap_cms::core::collection::{CollectionDefinition, GlobalDefinition, Labels};
 use crap_cms::core::field::{
@@ -88,7 +102,12 @@ fn setup_global_with_joins() -> (tempfile::TempDir, crap_cms::db::DbPool, Global
         reg.register_global(def.clone());
         reg.register_collection(posts_def);
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
     (_tmp, pool, def)
 }
 
@@ -188,14 +207,14 @@ fn global_array_field_save_and_read() {
     let rows = vec![
         {
             let mut m = HashMap::new();
-            m.insert("url".to_string(), "https://example.com".to_string());
-            m.insert("label".to_string(), "Example".to_string());
+            m.insert("url".to_string(), json!("https://example.com"));
+            m.insert("label".to_string(), json!("Example"));
             m
         },
         {
             let mut m = HashMap::new();
-            m.insert("url".to_string(), "https://rust-lang.org".to_string());
-            m.insert("label".to_string(), "Rust".to_string());
+            m.insert("url".to_string(), json!("https://rust-lang.org"));
+            m.insert("label".to_string(), json!("Rust"));
             m
         },
     ];
@@ -291,7 +310,7 @@ fn global_has_many_field_save_and_read() {
     assert_eq!(posts_arr[2], "post-3");
 }
 
-/// save_join_table_data works with global table names (prefixed _global_).
+/// `save_join_table_data` works with global table names (prefixed _global_).
 #[test]
 fn global_save_join_table_data() {
     let (_tmp, pool, def) = setup_global_with_joins();
@@ -299,7 +318,7 @@ fn global_save_join_table_data() {
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
 
-    let mut join_data: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut join_data = DocumentFields::new();
     join_data.insert(
         "links".to_string(),
         json!([
@@ -353,7 +372,7 @@ fn global_join_table_data_replaces_on_update() {
     // First save
     {
         let tx = conn.transaction().expect("Start transaction");
-        let mut join_data: HashMap<String, serde_json::Value> = HashMap::new();
+        let mut join_data = DocumentFields::new();
         join_data.insert(
             "links".to_string(),
             json!([
@@ -375,7 +394,7 @@ fn global_join_table_data_replaces_on_update() {
     // Second save — should replace
     {
         let tx = conn.transaction().expect("Start transaction");
-        let mut join_data: HashMap<String, serde_json::Value> = HashMap::new();
+        let mut join_data = DocumentFields::new();
         join_data.insert(
             "links".to_string(),
             json!([
@@ -412,10 +431,10 @@ fn global_group_field_preserved() {
     // Update global with group sub-field data (expanded columns)
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "My Homepage".to_string());
-    data.insert("seo__meta_title".to_string(), "Home".to_string());
-    data.insert("seo__meta_description".to_string(), "Welcome".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("My Homepage"));
+    data.insert("seo__meta_title".to_string(), json!("Home"));
+    data.insert("seo__meta_description".to_string(), json!("Welcome"));
     query::update_global(&tx, "homepage", &def, &data, None).expect("Update failed");
     tx.commit().expect("Commit");
 
@@ -445,13 +464,13 @@ fn global_mixed_fields_coexist() {
     let tx = conn.transaction().expect("Start transaction");
 
     // Update scalar + group sub-field data
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Homepage".to_string());
-    data.insert("seo__meta_title".to_string(), "Home".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Homepage"));
+    data.insert("seo__meta_title".to_string(), json!("Home"));
     query::update_global(&tx, "homepage", &def, &data, None).expect("Update failed");
 
     // Save join table data
-    let mut join_data: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut join_data = DocumentFields::new();
     join_data.insert(
         "links".to_string(),
         json!([
@@ -539,13 +558,18 @@ fn global_alter_table_adds_new_columns() {
         let mut reg = registry.write().unwrap();
         reg.register_global(def_v1.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync v1 failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync v1 failed");
 
     // Write data
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
-    let mut data = HashMap::new();
-    data.insert("name".to_string(), "Test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("name".to_string(), json!("Test"));
     query::update_global(&tx, "evolving", &def_v1, &data, None).expect("Update v1 failed");
     tx.commit().expect("Commit");
 
@@ -560,7 +584,12 @@ fn global_alter_table_adds_new_columns() {
         reg.globals.clear();
         reg.register_global(def_v2.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync v2 failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync v2 failed");
 
     // Old data should still be there, new column should exist
     let conn = pool.get().expect("DB connection");
@@ -590,7 +619,12 @@ fn global_alter_table_adds_join_tables() {
         let mut reg = registry.write().unwrap();
         reg.register_global(def_v1);
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync v1 failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync v1 failed");
 
     // Second sync: add array field
     let mut def_v2 = GlobalDefinition::new("growing");
@@ -605,7 +639,12 @@ fn global_alter_table_adds_join_tables() {
         reg.globals.clear();
         reg.register_global(def_v2.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync v2 failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync v2 failed");
 
     // Join table should exist
     let conn = pool.get().expect("DB connection");
@@ -626,7 +665,7 @@ fn global_alter_table_adds_join_tables() {
     let items_field = def_v2.fields.iter().find(|f| f.name == "items").unwrap();
     let rows = vec![{
         let mut m = HashMap::new();
-        m.insert("label".to_string(), "First".to_string());
+        m.insert("label".to_string(), json!("First"));
         m
     }];
     query::set_array_rows(
@@ -648,8 +687,8 @@ fn global_alter_table_adds_join_tables() {
     assert_eq!(items[0]["label"], "First");
 }
 
-/// hydrate_document Group guard: when a global stores groups as single JSON columns,
-/// hydrate_document must NOT attempt to reconstruct from __-prefixed sub-columns.
+/// `hydrate_document` Group guard: when a global stores groups as single JSON columns,
+/// `hydrate_document` must NOT attempt to reconstruct from __-prefixed sub-columns.
 #[test]
 fn hydrate_document_skips_group_reconstruction_for_globals() {
     let manager = r2d2_sqlite::SqliteConnectionManager::memory();
@@ -693,7 +732,7 @@ fn hydrate_document_skips_group_reconstruction_for_globals() {
     assert_eq!(doc.get_str("title"), Some("Test"));
 }
 
-/// hydrate_document Group reconstruction still works for collections
+/// `hydrate_document` Group reconstruction still works for collections
 /// (where __-prefixed sub-columns DO exist).
 #[test]
 fn hydrate_document_reconstructs_group_for_collections() {
@@ -748,7 +787,7 @@ fn hydrate_document_reconstructs_group_for_collections() {
     assert_eq!(seo_obj.get("meta_description").unwrap(), "Page Desc");
 }
 
-/// update_global skips join-table fields (no column for them in parent table).
+/// `update_global` skips join-table fields (no column for them in parent table).
 #[test]
 fn global_update_ignores_join_table_field_values() {
     let (_tmp, pool, def) = setup_global_with_joins();
@@ -758,15 +797,12 @@ fn global_update_ignores_join_table_field_values() {
 
     // Include both scalar data and array/blocks data in the update map.
     // The array/blocks values should be ignored by update_global (no parent column).
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "My Title".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("My Title"));
     // These should not cause SQL errors even though no column exists:
-    data.insert("links".to_string(), "should be ignored".to_string());
-    data.insert("content".to_string(), "should be ignored".to_string());
-    data.insert(
-        "featured_posts".to_string(),
-        "should be ignored".to_string(),
-    );
+    data.insert("links".to_string(), json!("should be ignored"));
+    data.insert("content".to_string(), json!("should be ignored"));
+    data.insert("featured_posts".to_string(), json!("should be ignored"));
 
     let doc = query::update_global(&tx, "homepage", &def, &data, None)
         .expect("Update should succeed despite join-table field values in data");
@@ -791,12 +827,17 @@ fn collection_alter_adds_group_sub_columns() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync v1");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync v1");
 
     // Write initial data
     let conn = pool.get().unwrap();
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "My Article".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("My Article"));
     let doc = query::create(&conn, "articles", &def, &data, None).expect("Create");
 
     // Second sync: add a group field
@@ -812,7 +853,12 @@ fn collection_alter_adds_group_sub_columns() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync v2");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync v2");
 
     // Verify sub-columns exist
     let columns: HashSet<String> = conn
@@ -842,9 +888,9 @@ fn collection_alter_adds_group_sub_columns() {
     assert_eq!(old_doc.get_str("title"), Some("My Article"));
 
     // Write new data with group sub-fields
-    let mut new_data = HashMap::new();
-    new_data.insert("seo__meta_title".to_string(), "SEO Title".to_string());
-    new_data.insert("seo__meta_description".to_string(), "SEO Desc".to_string());
+    let mut new_data = DocumentFields::new();
+    new_data.insert("seo__meta_title".to_string(), json!("SEO Title"));
+    new_data.insert("seo__meta_description".to_string(), json!("SEO Desc"));
     query::update(&conn, "articles", &def, &doc.id, &new_data, None).expect("Update");
 
     let updated = query::find_by_id(&conn, "articles", &def, &doc.id, None)
@@ -882,12 +928,17 @@ fn global_alter_adds_group_sub_columns() {
         let mut reg = registry.write().unwrap();
         reg.register_global(def_v1.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync v1");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync v1");
 
     // Write initial data
     let conn = pool.get().unwrap();
-    let mut data = HashMap::new();
-    data.insert("site_name".to_string(), "My Site".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("site_name".to_string(), json!("My Site"));
     query::update_global(&conn, "settings", &def_v1, &data, None).expect("Update v1");
 
     // Second sync: add a group field
@@ -906,7 +957,12 @@ fn global_alter_adds_group_sub_columns() {
         reg.globals.clear();
         reg.register_global(def_v2.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync v2");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync v2");
 
     // Verify sub-columns exist
     let columns: HashSet<String> = conn
@@ -938,9 +994,9 @@ fn global_alter_adds_group_sub_columns() {
     );
 
     // Write group data
-    let mut new_data = HashMap::new();
-    new_data.insert("seo__meta_title".to_string(), "Global SEO".to_string());
-    new_data.insert("seo__og_image".to_string(), "/og.png".to_string());
+    let mut new_data = DocumentFields::new();
+    new_data.insert("seo__meta_title".to_string(), json!("Global SEO"));
+    new_data.insert("seo__og_image".to_string(), json!("/og.png"));
     query::update_global(&conn, "settings", &def_v2, &new_data, None).expect("Update v2");
 
     let updated = query::get_global(&conn, "settings", &def_v2, None).expect("Get v2");
@@ -982,7 +1038,7 @@ fn collection_alter_adds_localized_group_columns() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &lc).expect("Sync v1");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &lc).expect("Sync v1");
 
     // Verify non-localized sub-column
     let conn = pool.get().unwrap();
@@ -1011,7 +1067,7 @@ fn collection_alter_adds_localized_group_columns() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &lc).expect("Sync v2");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &lc).expect("Sync v2");
 
     // Verify new locale columns were added
     let columns_v2: HashSet<String> = conn

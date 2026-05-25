@@ -10,6 +10,10 @@ use super::helpers::{blueprints_dir, count_lua_files};
 use super::manifest::read_manifest;
 
 /// List all saved blueprints, printing a table to stdout.
+///
+/// # Errors
+///
+/// Returns an error if reading the blueprints directory fails.
 pub fn blueprint_list() -> Result<()> {
     let bp_dir = blueprints_dir()?;
     let names = list_blueprint_names()?;
@@ -46,6 +50,10 @@ pub fn blueprint_list() -> Result<()> {
 }
 
 /// List blueprint names from the global blueprints directory.
+///
+/// # Errors
+///
+/// Returns an error if reading the blueprints directory fails.
 pub fn list_blueprint_names() -> Result<Vec<String>> {
     let bp_dir = blueprints_dir()?;
 

@@ -149,6 +149,7 @@ impl HelperDef for AdminI18nHelper {
 
 #[cfg(test)]
 mod tests {
+    use super::ADMIN_JS_KEYS;
     use std::fs;
 
     use serde_json::{Value, json};
@@ -194,7 +195,6 @@ mod tests {
 
     #[test]
     fn includes_all_curated_keys() {
-        use super::ADMIN_JS_KEYS;
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut hbs = test_hbs_with_translations(tmp.path());
         hbs.register_template_string("t", "{{{admin_i18n}}}")

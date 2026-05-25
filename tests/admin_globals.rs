@@ -3,6 +3,22 @@
 //! Covers: global CRUD, versioning, locale, drafts, upload serving,
 //! static assets, dashboard, CSRF, CORS, access gate.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
+use serde_json::json;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -16,6 +32,7 @@ use crap_cms::admin::server::build_router;
 use crap_cms::admin::templates;
 use crap_cms::admin::translations::Translations;
 use crap_cms::config::{CrapConfig, LocaleConfig};
+use crap_cms::core::DocumentFields;
 use crap_cms::core::auth;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
@@ -56,10 +73,7 @@ fn make_users_def() -> CollectionDefinition {
             .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth {
-        enabled: true,
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled());
     def
 }
 
@@ -77,7 +91,7 @@ struct TestApp {
     _tmp: tempfile::TempDir,
     router: axum::Router,
     pool: crap_cms::db::DbPool,
-    registry: crap_cms::core::SharedRegistry,
+    registry: std::sync::Arc<crap_cms::core::Registry>,
     jwt_secret: JwtSecret,
 }
 
@@ -97,7 +111,7 @@ fn setup_app_with_config(
     setup_app_inner(collections, globals, config, None)
 }
 
-/// Build a TestApp whose HookRunner loads collections, globals, and hooks
+/// Build a `TestApp` whose `HookRunner` loads collections, globals, and hooks
 /// from `fixture_dir`. The programmatically-passed `collections` / `globals`
 /// vecs are *additive* — they're registered on top of whatever the fixture's
 /// `init_lua` already populated. This lets access-control tests use a real
@@ -128,21 +142,20 @@ fn setup_app_inner(
     // fixture's collections/globals/hooks via `hooks::init_lua` and then use
     // the fixture dir as the HookRunner's config_dir. Otherwise stick with the
     // programmatic registration path the rest of the suite relies on.
-    let (registry, hook_config_dir) = match fixture_dir.as_deref() {
+    let (shared, hook_config_dir) = match fixture_dir.as_deref() {
         Some(fd) => {
-            let reg = hooks::init_lua(fd, &config).expect("init lua from fixture");
-            (reg, fd.to_path_buf())
+            let init_snap = hooks::init_lua(fd, &config).expect("init lua from fixture");
+            let shared = Registry::shared();
+            *shared.write().unwrap() = (*init_snap).clone();
+            (shared, fd.to_path_buf())
         }
-        None => {
-            let reg = Registry::shared();
-            (reg, tmp.path().to_path_buf())
-        }
+        None => (Registry::shared(), tmp.path().to_path_buf()),
     };
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &collections {
             reg.register_collection(def.clone());
         }
@@ -151,11 +164,12 @@ fn setup_app_inner(
         }
     }
 
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner = HookRunner::builder()
         .config_dir(&hook_config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -165,16 +179,16 @@ fn setup_app_inner(
         .expect("create handlebars");
     let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
-    let has_auth = {
-        let reg = registry.read().unwrap();
-        reg.collections.values().any(|d| d.is_auth_collection())
-    };
+    let has_auth = registry
+        .collections
+        .values()
+        .any(crap_cms::core::CollectionDefinition::is_auth_collection);
 
     let state = AdminState {
         config,
         config_dir: tmp.path().to_path_buf(),
         pool: db_pool.clone(),
-        registry: Registry::snapshot(&registry),
+        registry: Arc::clone(&registry),
         handlebars,
         hook_runner,
         jwt_secret: "test-jwt-secret".into(),
@@ -207,7 +221,7 @@ fn setup_app_inner(
         )
         .unwrap(),
         token_provider: std::sync::Arc::new(crap_cms::core::auth::JwtTokenProvider::new(
-            "test-secret",
+            "test-jwt-secret",
         )),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,
@@ -216,7 +230,7 @@ fn setup_app_inner(
         ),
         populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
         cache: None,
-        custom_pages: Default::default(),
+        custom_pages: crap_cms::admin::custom_pages::CustomPageRegistry::default(),
     };
 
     let router = build_router(state);
@@ -245,18 +259,17 @@ fn create_test_user_with_role(
     password: &str,
     role: Option<&str>,
 ) -> String {
-    let reg = app.registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
+    let def = app.registry.get_collection("users").unwrap().clone();
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let mut data = std::collections::HashMap::from([
-        ("email".to_string(), email.to_string()),
-        ("name".to_string(), "Test User".to_string()),
-    ]);
+    let mut data: DocumentFields = HashMap::from([
+        ("email".to_string(), json!(email)),
+        ("name".to_string(), json!("Test User")),
+    ])
+    .into();
     if let Some(r) = role {
-        data.insert("role".to_string(), r.to_string());
+        data.insert("role".to_string(), json!(r));
     }
     let doc = query::create(&tx, "users", &def, &data, None).unwrap();
     query::update_password(&tx, "users", &doc.id, password).unwrap();
@@ -279,13 +292,13 @@ fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
         .build()
         .unwrap();
     let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();
-    format!("crap_session={}", token)
+    format!("crap_session={token}")
 }
 
 const TEST_CSRF: &str = "test-csrf-token-12345";
 
 fn auth_and_csrf(auth_cookie: &str) -> String {
-    format!("{}; crap_csrf={}", auth_cookie, TEST_CSRF)
+    format!("{auth_cookie}; crap_csrf={TEST_CSRF}")
 }
 
 async fn body_string(body: Body) -> String {
@@ -372,8 +385,7 @@ async fn global_update_action() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::FOUND || status == StatusCode::OK,
-        "Global update should redirect or HX-Redirect, got {}",
-        status
+        "Global update should redirect or HX-Redirect, got {status}"
     );
 }
 
@@ -400,8 +412,7 @@ async fn global_update_returns_redirect() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::FOUND || status == StatusCode::OK,
-        "Global update should redirect or HX-Redirect, got {}",
-        status
+        "Global update should redirect or HX-Redirect, got {status}"
     );
 }
 
@@ -429,8 +440,7 @@ async fn global_versions_page_returns_200() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Global update should succeed, got {}",
-        status
+        "Global update should succeed, got {status}"
     );
 
     let resp = app
@@ -473,8 +483,7 @@ async fn global_versions_page_non_versioned_redirects() {
         status == StatusCode::SEE_OTHER
             || status == StatusCode::FOUND
             || status == StatusCode::TEMPORARY_REDIRECT,
-        "Non-versioned global versions page should redirect, got {}",
-        status
+        "Non-versioned global versions page should redirect, got {status}"
     );
 }
 
@@ -520,8 +529,7 @@ async fn global_update_with_draft_action() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Draft save should succeed, got {}",
-        status
+        "Draft save should succeed, got {status}"
     );
 }
 
@@ -563,8 +571,7 @@ async fn global_update_unpublish_action() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Unpublish should succeed, got {}",
-        status
+        "Unpublish should succeed, got {status}"
     );
 }
 
@@ -626,8 +633,7 @@ async fn global_restore_version() {
         let status = resp.status();
         assert!(
             status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-            "Restore should succeed, got {}",
-            status
+            "Restore should succeed, got {status}"
         );
     }
 }
@@ -655,8 +661,7 @@ async fn global_restore_non_versioned_redirects() {
             || status == StatusCode::FOUND
             || status == StatusCode::TEMPORARY_REDIRECT
             || status == StatusCode::OK,
-        "Non-versioned restore should redirect, got {}",
-        status
+        "Non-versioned restore should redirect, got {status}"
     );
 }
 
@@ -747,8 +752,7 @@ async fn localized_global_update_with_locale() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Localized global update should succeed, got {}",
-        status
+        "Localized global update should succeed, got {status}"
     );
 }
 
@@ -804,8 +808,7 @@ async fn global_update_nonexistent_redirects() {
         status == StatusCode::SEE_OTHER
             || status == StatusCode::FOUND
             || status == StatusCode::TEMPORARY_REDIRECT,
-        "Update nonexistent global should redirect, got {}",
-        status
+        "Update nonexistent global should redirect, got {status}"
     );
 }
 
@@ -836,14 +839,11 @@ async fn dashboard_renders_collection_counts() {
     let user_id = create_test_user(&app, "dashcount@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "dashcount@test.com");
 
-    let def = {
-        let reg = app.registry.read().unwrap();
-        reg.get_collection("posts").unwrap().clone()
-    };
+    let def = app.registry.get_collection("posts").unwrap().clone();
     for title in &["Post A", "Post B"] {
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let data = std::collections::HashMap::from([("title".to_string(), title.to_string())]);
+        let data: DocumentFields = HashMap::from([("title".to_string(), json!(title))]).into();
         query::create(&tx, "posts", &def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -932,10 +932,10 @@ async fn global_update_access_denied_returns_403_admin() {
     );
 }
 
-/// Service-layer control: verify the fixture's admin_only hook correctly allows
+/// Service-layer control: verify the fixture's `admin_only` hook correctly allows
 /// a role=admin user when we skip the HTTP middleware path entirely. This
-/// isolates whether the bug is in the HTTP chain (auth_middleware /
-/// load_auth_user) or the service/access layer.
+/// isolates whether the bug is in the HTTP chain (`auth_middleware` /
+/// `load_auth_user`) or the service/access layer.
 #[test]
 fn global_read_admin_via_service_layer_allowed() {
     use crap_cms::core::Document;
@@ -957,21 +957,19 @@ fn global_read_admin_via_service_layer_allowed() {
 
     let runner = HookRunner::builder()
         .config_dir(&fixture)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("runner");
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_global("restricted_settings").unwrap().clone();
-    drop(reg);
+    let def = registry.get_global("restricted_settings").unwrap().clone();
 
-    let mut admin_fields = std::collections::HashMap::new();
+    let mut admin_fields = HashMap::new();
     admin_fields.insert("role".to_string(), serde_json::json!("admin"));
     admin_fields.insert("email".to_string(), serde_json::json!("admin@test.com"));
     let admin = Document {
         id: "admin-1".into(),
-        fields: admin_fields,
+        fields: admin_fields.into(),
         created_at: None,
         updated_at: None,
     };
@@ -1012,8 +1010,7 @@ async fn global_read_access_allowed_for_admin() {
         assert_eq!(
             role.as_deref(),
             Some("admin"),
-            "DB sanity: role column must be 'admin', got {:?}",
-            role
+            "DB sanity: role column must be 'admin', got {role:?}"
         );
     }
 
@@ -1037,7 +1034,6 @@ async fn global_read_access_allowed_for_admin() {
     assert_eq!(
         status,
         StatusCode::OK,
-        "admin read should be 200; body was: {}",
-        body
+        "admin read should be 200; body was: {body}"
     );
 }

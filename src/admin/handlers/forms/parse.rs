@@ -4,10 +4,7 @@ use anyhow::anyhow;
 use axum::extract::{Form, FromRequest, Multipart, Request, multipart::Field};
 use std::collections::HashMap;
 
-use crate::{
-    admin::AdminState,
-    core::upload::{UploadedFile, UploadedFileBuilder},
-};
+use crate::{admin::AdminState, core::upload::UploadedFile};
 
 /// Parsed form result: field data and optional uploaded file.
 pub(crate) type ParsedForm = (HashMap<String, String>, Option<UploadedFile>);
@@ -23,17 +20,17 @@ async fn extract_upload_field(field: Field<'_>) -> Result<Option<UploadedFile>, 
     let data = field
         .bytes()
         .await
-        .map_err(|e| anyhow!("Failed to read file data: {}", e))?;
+        .map_err(|e| anyhow!("Failed to read file data: {e}"))?;
 
     if data.is_empty() {
         return Ok(None);
     }
 
-    Ok(Some(
-        UploadedFileBuilder::new(filename, content_type)
-            .data(data.to_vec())
-            .build(),
-    ))
+    Ok(Some(UploadedFile {
+        filename,
+        content_type,
+        data: data.to_vec(),
+    }))
 }
 
 /// Collapse a list of `(key, value)` pairs into a `HashMap<String, String>`,
@@ -73,7 +70,7 @@ pub(crate) async fn parse_multipart_form(
 ) -> Result<(HashMap<String, String>, Option<UploadedFile>), anyhow::Error> {
     let mut multipart = Multipart::from_request(request, state)
         .await
-        .map_err(|e| anyhow!("Failed to parse multipart: {}", e))?;
+        .map_err(|e| anyhow!("Failed to parse multipart: {e}"))?;
 
     let mut pairs: Vec<(String, String)> = Vec::new();
     let mut file: Option<UploadedFile> = None;
@@ -81,7 +78,7 @@ pub(crate) async fn parse_multipart_form(
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|e| anyhow!("Failed to read multipart field: {}", e))?
+        .map_err(|e| anyhow!("Failed to read multipart field: {e}"))?
     {
         let name = field.name().unwrap_or("").to_string();
 
@@ -91,7 +88,7 @@ pub(crate) async fn parse_multipart_form(
             let text = field
                 .text()
                 .await
-                .map_err(|e| anyhow!("Failed to read form field '{}': {}", name, e))?;
+                .map_err(|e| anyhow!("Failed to read form field '{name}': {e}"))?;
 
             pairs.push((name, text));
         }
@@ -109,14 +106,14 @@ pub(crate) async fn parse_form(
     if def.is_upload_collection() {
         parse_multipart_form(request, state)
             .await
-            .map_err(|e| format!("Multipart parse error: {}", e))
+            .map_err(|e| format!("Multipart parse error: {e}"))
     } else {
         // `Vec<(String, String)>` preserves every `name=value` pair, including
         // duplicates that `HashMap<String, String>` would silently drop — the
         // `<select multiple>` / has_many failure mode prior to this change.
         let form = Form::<Vec<(String, String)>>::from_request(request, state)
             .await
-            .map_err(|e| format!("Form parse error: {}", e))?;
+            .map_err(|e| format!("Form parse error: {e}"))?;
 
         Ok((collapse_duplicates(form.0), None))
     }

@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use axum::{
     extract::{ConnectInfo, Form, State},
@@ -8,13 +9,14 @@ use axum::{
 use tokio::task;
 use tracing::error;
 
+use crate::core::collection::Auth;
 use crate::{
     admin::{
         AdminState,
         context::{AuthBasePageContext, PageMeta, PageType, page::auth::ResetPasswordPage},
         handlers::{
             auth::{ResetPasswordForm, client_ip},
-            shared::render_page,
+            shared::{paths, render_page},
         },
     },
     core::{Registry, auth::ResetTokenError},
@@ -56,7 +58,7 @@ fn consume_reset_token(
             continue;
         }
 
-        if def.auth.as_ref().is_some_and(|a| a.disable_local) {
+        if !def.auth.as_ref().is_some_and(Auth::password_login_enabled) {
             continue;
         }
 
@@ -70,7 +72,7 @@ fn consume_reset_token(
             Err(ServiceError::InvalidToken {
                 reason: "not found",
                 ..
-            }) => continue,
+            }) => {}
             Err(e) => {
                 tx.commit()?;
                 return Err(e.into_anyhow());
@@ -106,7 +108,7 @@ pub async fn reset_password_action(
     }
 
     let pool = state.pool.clone();
-    let registry = state.registry.clone();
+    let registry = Arc::clone(&state.registry);
     let token = form.token.clone();
     let password = form.password.clone();
 
@@ -115,7 +117,9 @@ pub async fn reset_password_action(
             .await;
 
     match result {
-        Ok(Ok(())) => Redirect::to("/admin/login?success=success_password_reset").into_response(),
+        Ok(Ok(())) => {
+            Redirect::to(&paths::login_with_success("success_password_reset")).into_response()
+        }
         Ok(Err(e)) => {
             // Record failure on invalid/expired token — not on success
             state.ip_forgot_password_limiter.record_failure(&ip);

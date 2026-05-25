@@ -18,15 +18,14 @@ pub async fn back_references(
     Path((slug, id)): Path<(String, String)>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let def = match state.registry.get_collection(&slug) {
-        Some(d) => d.clone(),
-        None => return Json(json!({ "error": "Collection not found" })).into_response(),
+    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+        return Json(json!({ "error": "Collection not found" })).into_response();
     };
 
     match check_access_or_forbid(
         &state,
         def.access.read.as_deref(),
-        &auth_user,
+        auth_user.as_ref(),
         Some(&id),
         None,
     ) {
@@ -37,18 +36,15 @@ pub async fn back_references(
         _ => {}
     }
 
-    let conn = match state.pool.get() {
-        Ok(c) => c,
-        Err(_) => return Json(json!({ "error": "DB connection error" })).into_response(),
+    let Ok(conn) = state.pool.get() else {
+        return Json(json!({ "error": "DB connection error" })).into_response();
     };
 
     let ctx = ServiceContext::slug_only(&slug).conn(&conn).build();
 
-    let back_refs = match find_back_references(&ctx, &state.registry, &id, &state.config.locale) {
-        Ok(refs) => refs,
-        Err(_) => {
-            return Json(json!({ "error": "Back-reference scan failed" })).into_response();
-        }
+    let Ok(back_refs) = find_back_references(&ctx, &state.registry, &id, &state.config.locale)
+    else {
+        return Json(json!({ "error": "Back-reference scan failed" })).into_response();
     };
 
     Json(json!(back_refs)).into_response()

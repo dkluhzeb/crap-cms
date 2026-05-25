@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Wraps a `String` and provides `Deref<Target=str>` for transparent use
 /// wherever `&str` is expected.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Slug(String);
 
@@ -25,6 +25,7 @@ impl Slug {
     }
 
     /// Consume the wrapper and return the inner `String`.
+    #[must_use]
     pub fn into_inner(self) -> String {
         self.0
     }

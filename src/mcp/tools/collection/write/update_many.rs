@@ -1,33 +1,33 @@
 //! Execute `update_many` — bulk update multiple documents matching filters.
 
-use std::sync::Arc;
-
 use anyhow::{Context as _, Result};
+use serde::Serialize;
 use serde_json::{Value, json, to_string_pretty};
 use tracing::info;
 
 use crate::{
-    config::CrapConfig,
-    core::{Registry, cache::SharedCache, event::SharedEventTransport},
-    db::DbPool,
-    hooks::HookRunner,
-    mcp::tools::collection::helpers::{extract_data_from_args, parse_where_filters},
+    mcp::tools::{
+        ToolExecCtx,
+        collection::helpers::{extract_data_from_args, parse_where_filters},
+    },
     service::{self, ServiceContext, UpdateManyOptions},
 };
 
+/// Shape returned to the MCP client for an `update_many` tool call.
+#[derive(Serialize)]
+struct UpdateManyResponse<'a> {
+    modified: i64,
+    updated_ids: &'a [String],
+}
+
 /// Execute `update_many` — bulk update documents matching a where filter.
-#[allow(clippy::too_many_arguments)]
 pub(in crate::mcp::tools) fn exec_update_many(
     args: &Value,
     slug: &str,
-    registry: &Arc<Registry>,
-    pool: &DbPool,
-    runner: &HookRunner,
-    config: &CrapConfig,
-    event_transport: Option<SharedEventTransport>,
-    cache: Option<SharedCache>,
+    ctx: &ToolExecCtx<'_>,
 ) -> Result<String> {
-    let def = registry
+    let def = ctx
+        .registry
         .collections
         .get(slug)
         .context("Collection not found")?;
@@ -35,18 +35,24 @@ pub(in crate::mcp::tools) fn exec_update_many(
     let filters = parse_where_filters(args);
 
     let data_obj = args.get("data").cloned().unwrap_or(json!({}));
-    let (data, join_data) = extract_data_from_args(&data_obj, &[]);
+    let data = extract_data_from_args(&data_obj, &[]);
 
-    let run_hooks = args.get("hooks").and_then(|v| v.as_bool()).unwrap_or(true);
+    let run_hooks = args
+        .get("hooks")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
 
-    let draft = args.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
+    let draft = args
+        .get("draft")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
 
-    let ctx = ServiceContext::collection(slug, def)
-        .pool(pool)
-        .runner(runner)
+    let svc_ctx = ServiceContext::collection(slug, def)
+        .pool(ctx.pool)
+        .runner(ctx.runner)
         .override_access(true)
-        .event_transport(event_transport)
-        .cache(cache)
+        .event_transport(ctx.event_transport.clone())
+        .cache(ctx.cache.clone())
         .build();
 
     let opts = UpdateManyOptions {
@@ -56,12 +62,15 @@ pub(in crate::mcp::tools) fn exec_update_many(
         ui_locale: None,
     };
 
-    let result = service::update_many(&ctx, filters, data, &join_data, &config.locale, &opts)?;
+    let result = service::update_many(&svc_ctx, &filters, &data, &ctx.config.locale, &opts)?;
 
-    info!("MCP update_many {}: {} modified", slug, result.modified);
+    info!(
+        "MCP update_many {}: {} modified [client={}]",
+        slug, result.modified, ctx.client_label
+    );
 
-    Ok(to_string_pretty(&json!({
-        "modified": result.modified,
-        "updated_ids": result.updated_ids,
-    }))?)
+    Ok(to_string_pretty(&UpdateManyResponse {
+        modified: result.modified,
+        updated_ids: &result.updated_ids,
+    })?)
 }

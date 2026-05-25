@@ -1,7 +1,21 @@
 //! Localization, drafts, versions, complex globals, has-many relationships,
 //! bulk operations, count, FTS search, and jobs RPC tests.
 //!
-//! Uses ContentService directly (no network) via ContentApi trait.
+//! Uses `ContentService` directly (no network) via `ContentApi` trait.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -55,10 +69,7 @@ fn make_users_def() -> CollectionDefinition {
             .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth {
-        enabled: true,
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled());
     def
 }
 
@@ -104,9 +115,9 @@ fn setup_service(
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &collections {
             reg.register_collection(def.clone());
         }
@@ -115,11 +126,12 @@ fn setup_service(
         }
     }
 
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -129,9 +141,8 @@ fn setup_service(
     let service = ContentService::new(
         ContentServiceDeps::builder()
             .pool(db_pool.clone())
-            .registry(Registry::snapshot(&registry))
+            .registry(Registry::snapshot(&shared))
             .hook_runner(hook_runner)
-            .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
             .storage(
@@ -156,7 +167,7 @@ fn setup_service(
             ))
             .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
             .token_provider(std::sync::Arc::new(
-                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+                crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
             ))
             .password_provider(std::sync::Arc::new(
                 crap_cms::core::auth::Argon2PasswordProvider,
@@ -364,7 +375,7 @@ async fn find_with_pagination() {
         ts.service
             .create(Request::new(content::CreateRequest {
                 collection: "posts".to_string(),
-                data: Some(make_struct(&[("title", &format!("Page {}", i))])),
+                data: Some(make_struct(&[("title", &format!("Page {i}"))])),
                 locale: None,
                 draft: None,
             }))
@@ -887,7 +898,7 @@ async fn find_trash_returns_soft_deleted_documents() {
     );
 }
 
-/// FindByID with `trash=true` should find a soft-deleted document.
+/// `FindByID` with `trash=true` should find a soft-deleted document.
 #[tokio::test]
 async fn find_by_id_trash_finds_soft_deleted() {
     let ts = setup_service(vec![make_soft_delete_posts_def()], vec![]);
@@ -1028,6 +1039,7 @@ async fn trigger_job_unauthenticated() {
         .trigger_job(Request::new(content::TriggerJobRequest {
             slug: "cleanup".to_string(),
             data_json: None,
+            priority: None,
         }))
         .await
         .unwrap_err();
@@ -1270,8 +1282,7 @@ async fn find_with_search() {
         let title = get_proto_field(doc, "title").unwrap();
         assert!(
             title.contains("Rust"),
-            "Expected Rust in title, got: {}",
-            title
+            "Expected Rust in title, got: {title}"
         );
     }
 }
@@ -1433,7 +1444,7 @@ async fn find_with_search_empty_string_returns_all() {
         .service
         .find(Request::new(content::FindRequest {
             collection: "posts".to_string(),
-            search: Some("".to_string()),
+            search: Some(String::new()),
             ..Default::default()
         }))
         .await

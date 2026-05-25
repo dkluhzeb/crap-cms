@@ -1,14 +1,12 @@
 //! TypeScript type definition generator — interfaces for gRPC client wrappers.
 
-use std::fmt::Write;
-
 use crate::core::{
     CollectionDefinition, FieldDefinition, FieldType, Registry, collection::GlobalDefinition,
 };
 
-use crate::typegen::{
+use super::helpers::{
     collect_sub_type_fields, is_optional, rel_has_many, sorted_collection_slugs,
-    sorted_global_slugs, to_pascal_case,
+    sorted_global_slugs, to_pascal_case, w,
 };
 
 /// Render all TypeScript type definitions.
@@ -35,38 +33,38 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     let pascal = to_pascal_case(&col.slug);
 
     // Sub-types (Array rows and Group shapes)
-    for stf in collect_sub_type_fields(&col.fields) {
+    for stf in collect_sub_type_fields(&col.fields, &pascal) {
         let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
-        writeln!(out, "export interface {} {{", sub_pascal).expect("write to String");
+        w!(out, "export interface {} {{", sub_pascal);
         for sf in &stf.field.fields {
             write_field(out, sf, &pascal);
         }
-        writeln!(out, "}}\n").expect("write to String");
+        w!(out, "}}\n");
     }
 
     // Input data interface
-    writeln!(out, "/** Input data for creating/updating a {} */", pascal).expect("write to String");
-    writeln!(out, "export interface {}Data {{", pascal).expect("write to String");
+    w!(out, "/** Input data for creating/updating a {} */", pascal);
+    w!(out, "export interface {}Data {{", pascal);
     for f in &col.fields {
         write_field(out, f, &pascal);
     }
-    writeln!(out, "}}\n").expect("write to String");
+    w!(out, "}}\n");
 
     // Document interface (extends data with id + timestamps)
-    writeln!(out, "/** {} document returned from the API */", pascal).expect("write to String");
-    writeln!(
+    w!(out, "/** {} document returned from the API */", pascal);
+    w!(
         out,
         "export interface {}Document extends {}Data {{",
-        pascal, pascal
-    )
-    .expect("write to String");
-    writeln!(out, "  id: string;").expect("write to String");
+        pascal,
+        pascal
+    );
+    w!(out, "  id: string;");
 
     if col.timestamps {
-        writeln!(out, "  created_at?: string;").expect("write to String");
-        writeln!(out, "  updated_at?: string;").expect("write to String");
+        w!(out, "  created_at?: string;");
+        w!(out, "  updated_at?: string;");
     }
-    writeln!(out, "}}\n").expect("write to String");
+    w!(out, "}}\n");
 }
 
 /// Render type definitions for a single global.
@@ -74,36 +72,36 @@ fn render_global(out: &mut String, global: &GlobalDefinition) {
     let pascal = to_pascal_case(&global.slug);
 
     // Sub-types (Array rows and Group shapes)
-    for stf in collect_sub_type_fields(&global.fields) {
+    for stf in collect_sub_type_fields(&global.fields, &pascal) {
         let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
-        writeln!(out, "export interface {} {{", sub_pascal).expect("write to String");
+        w!(out, "export interface {} {{", sub_pascal);
         for sf in &stf.field.fields {
             write_field(out, sf, &pascal);
         }
-        writeln!(out, "}}\n").expect("write to String");
+        w!(out, "}}\n");
     }
 
-    writeln!(out, "/** Input data for {} global */", pascal).expect("write to String");
-    writeln!(out, "export interface {}Data {{", pascal).expect("write to String");
+    w!(out, "/** Input data for {} global */", pascal);
+    w!(out, "export interface {}Data {{", pascal);
     for f in &global.fields {
         write_field(out, f, &pascal);
     }
-    writeln!(out, "}}\n").expect("write to String");
+    w!(out, "}}\n");
 
-    writeln!(out, "/** {} global document */", pascal).expect("write to String");
-    writeln!(
+    w!(out, "/** {} global document */", pascal);
+    w!(
         out,
         "export interface {}Document extends {}Data {{",
-        pascal, pascal
-    )
-    .expect("write to String");
-    writeln!(out, "  id: string;").expect("write to String");
-    writeln!(out, "  created_at?: string;").expect("write to String");
-    writeln!(out, "  updated_at?: string;").expect("write to String");
-    writeln!(out, "}}\n").expect("write to String");
+        pascal,
+        pascal
+    );
+    w!(out, "  id: string;");
+    w!(out, "  created_at?: string;");
+    w!(out, "  updated_at?: string;");
+    w!(out, "}}\n");
 }
 
-/// Render the CollectionSlug union type.
+/// Render the `CollectionSlug` union type.
 fn render_collection_slug_type(out: &mut String, registry: &Registry) {
     let slugs = sorted_collection_slugs(registry);
 
@@ -112,26 +110,26 @@ fn render_collection_slug_type(out: &mut String, registry: &Registry) {
     }
     let union = slugs
         .iter()
-        .map(|s| format!("\"{}\"", s))
+        .map(|s| format!("\"{s}\""))
         .collect::<Vec<_>>()
         .join(" | ");
-    writeln!(out, "/** All collection slugs */").expect("write to String");
-    writeln!(out, "export type CollectionSlug = {};", union).expect("write to String");
+    w!(out, "/** All collection slugs */");
+    w!(out, "export type CollectionSlug = {};", union);
 }
 
-/// Write a JSDoc comment for polymorphic relationship fields.
+/// Write a `JSDoc` comment for polymorphic relationship fields.
 fn write_polymorphic_comment(out: &mut String, field: &FieldDefinition, indent: &str) {
     if field.field_type == FieldType::Relationship
         && let Some(rc) = &field.relationship
         && rc.is_polymorphic()
     {
         let targets = rc.all_collections().join(", ");
-        writeln!(
+        w!(
             out,
             "{}/** Polymorphic relationship — targets: {} */",
-            indent, targets
-        )
-        .expect("write to String");
+            indent,
+            targets
+        );
     }
 }
 
@@ -163,7 +161,7 @@ fn write_field(out: &mut String, field: &FieldDefinition, parent_pascal: &str) {
     write_polymorphic_comment(out, field, "  ");
     let ts_type = field_to_ts(field, parent_pascal);
     let opt = if is_optional(field) { "?" } else { "" };
-    writeln!(out, "  {}{}: {};", field.name, opt, ts_type).expect("write to String");
+    w!(out, "  {}{}: {};", field.name, opt, ts_type);
 }
 
 /// Map a field definition to its TypeScript type string.
@@ -206,7 +204,7 @@ fn field_to_ts(field: &FieldDefinition, parent_pascal: &str) -> String {
                 if field.options.is_empty() {
                     "string[]".to_string()
                 } else {
-                    format!("({})[]", base)
+                    format!("({base})[]")
                 }
             } else {
                 base
@@ -232,9 +230,10 @@ fn field_to_ts(field: &FieldDefinition, parent_pascal: &str) -> String {
                 format!("{}{}", parent_pascal, to_pascal_case(&field.name))
             }
         }
-        FieldType::Row => "Record<string, unknown>".to_string(), // layout-only; sub-fields are promoted
-        FieldType::Collapsible => "Record<string, unknown>".to_string(), // layout-only; sub-fields are promoted
-        FieldType::Tabs => "Record<string, unknown>".to_string(), // layout-only; sub-fields are promoted
+        // Layout-only; sub-fields are promoted
+        FieldType::Row | FieldType::Collapsible | FieldType::Tabs => {
+            "Record<string, unknown>".to_string()
+        }
         FieldType::Upload => {
             if rel_has_many(field) {
                 "string[]".to_string()
@@ -242,16 +241,15 @@ fn field_to_ts(field: &FieldDefinition, parent_pascal: &str) -> String {
                 "string".to_string()
             }
         }
-        FieldType::Blocks => "Record<string, unknown>[]".to_string(),
-        FieldType::Join => "Record<string, unknown>[]".to_string(),
+        FieldType::Blocks | FieldType::Join => "Record<string, unknown>[]".to_string(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{BlockDefinition, LocalizedString, RelationshipConfig, SelectOption};
-
+    use crate::core::FieldTab;
+    use crate::core::{BlockDefinition, LocalizedString, RelationshipConfig, SelectOption};
     fn text_field(name: &str, required: bool) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Text)
             .required(required)
@@ -345,24 +343,20 @@ mod tests {
         // Polymorphic has-one = string (stores "collection/id" composite)
         assert!(
             out.contains("  subject: string;"),
-            "polymorphic has-one should be string: {}",
-            out
+            "polymorphic has-one should be string: {out}"
         );
         // Comment listing target collections
         assert!(
             out.contains("Polymorphic relationship"),
-            "should have polymorphic comment: {}",
-            out
+            "should have polymorphic comment: {out}"
         );
         assert!(
             out.contains("posts"),
-            "comment should list target collections: {}",
-            out
+            "comment should list target collections: {out}"
         );
         assert!(
             out.contains("pages"),
-            "comment should list target collections: {}",
-            out
+            "comment should list target collections: {out}"
         );
     }
 
@@ -384,23 +378,19 @@ mod tests {
         // Polymorphic has-many = string[] (array of "collection/id" composites)
         assert!(
             out.contains("string[]"),
-            "polymorphic has-many should be string[]: {}",
-            out
+            "polymorphic has-many should be string[]: {out}"
         );
         assert!(
             out.contains("Polymorphic relationship"),
-            "should have polymorphic comment: {}",
-            out
+            "should have polymorphic comment: {out}"
         );
         assert!(
             out.contains("articles"),
-            "comment should list target collections: {}",
-            out
+            "comment should list target collections: {out}"
         );
         assert!(
             out.contains("videos"),
-            "comment should list target collections: {}",
-            out
+            "comment should list target collections: {out}"
         );
     }
 
@@ -496,19 +486,16 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("export interface PostsSeo {"),
-            "group sub-type interface should be emitted: {}",
-            out
+            "group sub-type interface should be emitted: {out}"
         );
-        assert!(out.contains("  title: string;"), "group sub-field: {}", out);
+        assert!(out.contains("  title: string;"), "group sub-field: {out}");
         assert!(
             out.contains("  description?: string;"),
-            "group optional sub-field: {}",
-            out
+            "group optional sub-field: {out}"
         );
         assert!(
             out.contains("PostsSeo"),
-            "parent should reference group sub-type: {}",
-            out
+            "parent should reference group sub-type: {out}"
         );
     }
 
@@ -559,8 +546,7 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("  images: string[];"),
-            "has-many upload should be string[]: {}",
-            out
+            "has-many upload should be string[]: {out}"
         );
     }
 
@@ -623,13 +609,11 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("  tags: string[];"),
-            "required has-many text should be string[]: {}",
-            out
+            "required has-many text should be string[]: {out}"
         );
         assert!(
             out.contains("  labels?: string[];"),
-            "optional has-many text should be string[]?: {}",
-            out
+            "optional has-many text should be string[]?: {out}"
         );
     }
 
@@ -651,13 +635,11 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("  scores: number[];"),
-            "required has-many number should be number[]: {}",
-            out
+            "required has-many number should be number[]: {out}"
         );
         assert!(
             out.contains("  weights?: number[];"),
-            "optional has-many number should be number[]?: {}",
-            out
+            "optional has-many number should be number[]?: {out}"
         );
     }
 
@@ -706,18 +688,15 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("  snippet: string;"),
-            "code field should map to string: {}",
-            out
+            "code field should map to string: {out}"
         );
         assert!(
             out.contains("  refs?: Record<string, unknown>[];"),
-            "join field should map to Record[]: {}",
-            out
+            "join field should map to Record[]: {out}"
         );
         assert!(
             out.contains("  color: string;"),
-            "radio without options should be string: {}",
-            out
+            "radio without options should be string: {out}"
         );
     }
 
@@ -744,14 +723,12 @@ mod tests {
         // has_many with options → (opt1 | opt2)[]
         assert!(
             out.contains("(\"a\" | \"b\")[]"),
-            "select has-many with options should be union array: {}",
-            out
+            "select has-many with options should be union array: {out}"
         );
         // has_many without options → string[]
         assert!(
             out.contains("string[]"),
-            "select has-many without options should be string[]: {}",
-            out
+            "select has-many without options should be string[]: {out}"
         );
     }
 
@@ -774,14 +751,12 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("(\"s\" | \"l\")[]"),
-            "radio has-many with options should be union array: {}",
-            out
+            "radio has-many with options should be union array: {out}"
         );
     }
 
     #[test]
     fn typescript_row_collapsible_tabs_promote_subfields() {
-        use crate::core::field::FieldTab;
         let col = make_col(
             "items",
             vec![
@@ -807,40 +782,33 @@ mod tests {
         // Row sub-fields promoted to parent — no "layout_row" key
         assert!(
             !out.contains("layout_row:"),
-            "row field name should not appear as a key: {}",
-            out
+            "row field name should not appear as a key: {out}"
         );
         assert!(
             out.contains("  first_name: string;"),
-            "row sub-field should be promoted: {}",
-            out
+            "row sub-field should be promoted: {out}"
         );
         assert!(
             out.contains("  last_name?: string;"),
-            "row optional sub-field should be promoted: {}",
-            out
+            "row optional sub-field should be promoted: {out}"
         );
         // Collapsible sub-fields promoted
         assert!(
             !out.contains("details:"),
-            "collapsible field name should not appear as a key: {}",
-            out
+            "collapsible field name should not appear as a key: {out}"
         );
         assert!(
             out.contains("  bio?: string;"),
-            "collapsible sub-field should be promoted: {}",
-            out
+            "collapsible sub-field should be promoted: {out}"
         );
         // Tabs sub-fields promoted
         assert!(
             !out.contains("sections:"),
-            "tabs field name should not appear as a key: {}",
-            out
+            "tabs field name should not appear as a key: {out}"
         );
         assert!(
             out.contains("  tab_field: string;"),
-            "tabs sub-field should be promoted: {}",
-            out
+            "tabs sub-field should be promoted: {out}"
         );
     }
 
@@ -862,13 +830,11 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("export interface PostsItems {"),
-            "array nested in Row should emit sub-type: {}",
-            out
+            "array nested in Row should emit sub-type: {out}"
         );
         assert!(
             out.contains("PostsItems[]"),
-            "field should reference sub-type: {}",
-            out
+            "field should reference sub-type: {out}"
         );
     }
 
@@ -887,13 +853,11 @@ mod tests {
         render_global(&mut out, &global);
         assert!(
             out.contains("export interface SettingsNav {"),
-            "global array sub-type should be emitted: {}",
-            out
+            "global array sub-type should be emitted: {out}"
         );
         assert!(
             out.contains("export interface SettingsSeo {"),
-            "global group sub-type should be emitted: {}",
-            out
+            "global group sub-type should be emitted: {out}"
         );
     }
 

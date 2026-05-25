@@ -49,11 +49,7 @@ crap.collections.define("posts", {
       name = "external_url",
       admin = {
         placeholder = "https://...",
-        condition = {
-          field = "post_type",
-          condition = "one_of",
-          value = { "link", "video" },
-        },
+        condition = "hooks.conditions.show_external_url",
       },
     }),
     -- Relationships

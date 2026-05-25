@@ -1,8 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-/// How an image is resized to fit the target dimensions.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+use crate::typegen::lua::LuaAlias;
+
+/// Resize fit mode for image processing.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, LuaAlias)]
 #[serde(rename_all = "lowercase")]
+#[lua(alias = "crap.ImageFit", rename_all = "lowercase")]
 pub enum ImageFit {
     #[default]
     Cover,

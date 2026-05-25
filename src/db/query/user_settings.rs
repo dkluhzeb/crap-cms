@@ -7,6 +7,10 @@ use anyhow::{Context as _, Result};
 use crate::db::{DbConnection, DbValue};
 
 /// Get user settings JSON blob. Returns None if no settings saved.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails.
 pub fn get_user_settings(conn: &dyn DbConnection, user_id: &str) -> Result<Option<String>> {
     let sql = format!(
         "SELECT settings FROM _crap_user_settings WHERE user_id = {}",
@@ -19,6 +23,10 @@ pub fn get_user_settings(conn: &dyn DbConnection, user_id: &str) -> Result<Optio
 }
 
 /// Set user settings JSON blob (UPSERT).
+///
+/// # Errors
+///
+/// Returns a backend error if the INSERT/UPDATE fails.
 pub fn set_user_settings(
     conn: &dyn DbConnection,
     user_id: &str,

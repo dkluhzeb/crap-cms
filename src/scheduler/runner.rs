@@ -1,6 +1,6 @@
 //! Job execution, cron scheduling, stale recovery, cron normalization, and soft-delete purge.
 
-use std::{str::FromStr, time::Instant};
+use std::{collections::HashMap, str::FromStr, time::Instant};
 
 use anyhow::{Context as _, Result, anyhow};
 use chrono::{DateTime, Utc};
@@ -11,24 +11,31 @@ use tracing::{debug, error, info, warn};
 use crate::{
     config::LocaleConfig,
     core::{
-        CollectionDefinition, SharedRegistry,
+        CollectionDefinition, JobDefinition, JobRun, Registry,
         email::{EmailJobData, EmailProvider, SYSTEM_EMAIL_JOB},
-        job::{JobDefinition, JobRun},
-        upload,
-        upload::StorageBackend,
+        upload::{
+            self, ImageConvertJobData, SYSTEM_IMAGE_CONVERT_JOB, SharedStorage, StorageBackend,
+        },
     },
     db::{DbConnection, DbPool, DbValue, query, query::jobs as job_query},
     hooks::HookRunner,
 };
 
 /// Execute a single job: call the Lua handler with CRUD access,
-/// or handle system jobs (like `_system_email`) directly in Rust.
+/// or handle system jobs (`_system_email`, `_system_image_convert`)
+/// directly in Rust.
+///
+/// # Errors
+///
+/// Returns an error if the connection acquisition, Lua hook execution,
+/// system-job handler, or job-status update fails.
 pub fn execute_job(
     pool: &DbPool,
     hook_runner: &HookRunner,
     job_def: &JobDefinition,
     job_run: &JobRun,
     email_provider: Option<&dyn EmailProvider>,
+    storage: &SharedStorage,
 ) -> Result<()> {
     let start = Instant::now();
 
@@ -42,24 +49,32 @@ pub fn execute_job(
         return execute_system_email(pool, job_run, email_provider, start);
     }
 
-    // Open a transaction for the job handler (same TxContext pattern as hooks)
-    let mut conn = pool.get().context("Failed to get DB connection for job")?;
-    let tx = conn
-        .transaction()
-        .context("Failed to begin job transaction")?;
+    // System image-convert job: encode + write URL column + complete.
+    // Rust handler — no Lua VM needed.
+    if job_run.slug == SYSTEM_IMAGE_CONVERT_JOB {
+        return execute_system_image_convert(pool, job_run, storage, start);
+    }
 
+    // Lua job handler runs in **pool-mode**: no outer transaction.
+    // Each CRUD operation inside the handler opens its own short-lived
+    // IMMEDIATE transaction (via `with_lua_db` / the `auto_tx` attribute
+    // on every `#[lua_fn]` CRUD declaration). For multi-step atomicity
+    // the user wraps a block in `crap.transaction(function() ... end)`,
+    // which temporarily swaps the pool context for a shared tx context.
+    // This avoids the `SQLITE_BUSY_SNAPSHOT` hazard that the previous
+    // single-deferred-outer-tx model exposed for long-running handlers
+    // that did read-then-write.
     let result = hook_runner.run_job_handler(
         &job_def.handler,
         &job_run.slug,
         &job_run.data,
         job_run.attempt,
         job_run.max_attempts,
-        &tx,
+        pool,
     );
 
     match result {
         Ok(result_json) => {
-            tx.commit().context("Failed to commit job transaction")?;
             let c = pool
                 .get()
                 .context("Failed to get DB connection for completion")?;
@@ -74,8 +89,6 @@ pub fn execute_job(
             );
         }
         Err(e) => {
-            // Explicit drop triggers rollback (BoxedTransaction rolls back on drop)
-            drop(tx);
             let error_msg = e.to_string();
             let should_retry = job_run.attempt < job_run.max_attempts;
             let c = pool
@@ -131,7 +144,7 @@ fn execute_system_email(
             );
         }
         Err(e) => {
-            let error_msg = format!("{:#}", e);
+            let error_msg = format!("{e:#}");
             let should_retry = job_run.attempt < job_run.max_attempts;
             let c = pool
                 .get()
@@ -153,26 +166,142 @@ fn execute_system_email(
     Ok(())
 }
 
+/// Execute a `_system_image_convert` job: encode the source image,
+/// write the converted bytes to storage, update the target document's
+/// URL column, and mark the job completed. On encode / storage / DB
+/// failure, defer to the job runner's standard `fail_job` retry path.
+///
+/// Mirrors the shape of [`execute_system_email`] — no Lua VM, no
+/// outer transaction held during the slow encode step.
+fn execute_system_image_convert(
+    pool: &DbPool,
+    job_run: &JobRun,
+    storage: &SharedStorage,
+    start: Instant,
+) -> Result<()> {
+    let data: ImageConvertJobData =
+        from_str(&job_run.data).context("Invalid image-convert job data")?;
+
+    if !query::is_valid_identifier(&data.collection) {
+        let error_msg = format!("invalid collection slug: {}", data.collection);
+        let c = pool
+            .get()
+            .context("Failed to get DB connection for image-convert failure")?;
+        job_query::fail_job(&c, &job_run.id, &error_msg, false, job_run.attempt)?;
+        error!(
+            "Image-convert job {} failed permanently: {}",
+            job_run.id, error_msg
+        );
+        return Ok(());
+    }
+    if !query::is_valid_identifier(&data.url_column) {
+        let error_msg = format!("invalid url_column: {}", data.url_column);
+        let c = pool
+            .get()
+            .context("Failed to get DB connection for image-convert failure")?;
+        job_query::fail_job(&c, &job_run.id, &error_msg, false, job_run.attempt)?;
+        error!(
+            "Image-convert job {} failed permanently: {}",
+            job_run.id, error_msg
+        );
+        return Ok(());
+    }
+
+    let encode_result = upload::process_image_entry_with_storage(
+        &data.source_path,
+        &data.target_path,
+        &data.format,
+        data.quality,
+        &**storage,
+    );
+
+    match encode_result {
+        Ok(()) => {
+            let mut conn = pool
+                .get()
+                .context("Failed to get DB connection for image-convert completion")?;
+
+            // One IMMEDIATE tx wraps the URL write + completion mark so the
+            // queue row never lands in `completed` while the document's URL
+            // column is unchanged, or vice versa. Same atomicity property
+            // the legacy `record_conversion_success` provided.
+            let tx = conn
+                .transaction_immediate()
+                .context("Failed to begin image-convert completion transaction")?;
+
+            tx.execute(
+                &format!(
+                    "UPDATE \"{}\" SET \"{}\" = {} WHERE id = {}",
+                    data.collection,
+                    data.url_column,
+                    tx.placeholder(1),
+                    tx.placeholder(2)
+                ),
+                &[
+                    DbValue::Text(data.url_value.clone()),
+                    DbValue::Text(data.document_id.clone()),
+                ],
+            )
+            .context("Failed to update document URL column")?;
+
+            job_query::complete_job(&tx, &job_run.id, None)?;
+
+            tx.commit()
+                .context("Failed to commit image-convert completion transaction")?;
+
+            info!(
+                "Image-convert job {} completed in {:?} ({} → {})",
+                job_run.id,
+                start.elapsed(),
+                data.format,
+                data.target_path
+            );
+        }
+        Err(e) => {
+            let error_msg = format!("{e:#}");
+            let should_retry = job_run.attempt < job_run.max_attempts;
+            let c = pool
+                .get()
+                .context("Failed to get DB connection for image-convert failure")?;
+            job_query::fail_job(&c, &job_run.id, &error_msg, should_retry, job_run.attempt)?;
+
+            if should_retry {
+                warn!(
+                    "Image-convert job {} failed (attempt {}/{}), will retry: {}",
+                    job_run.id, job_run.attempt, job_run.max_attempts, error_msg
+                );
+            } else {
+                error!(
+                    "Image-convert job {} failed permanently: {}",
+                    job_run.id, error_msg
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Check cron schedules and insert pending jobs for due ones.
+///
+/// # Errors
+///
+/// Returns an error if the connection, transaction, or job insertion fails.
 pub fn check_cron_schedules(
     pool: &DbPool,
-    registry: &SharedRegistry,
+    registry: &Registry,
     last_check: DateTime<Utc>,
     now: DateTime<Utc>,
+    queue_retries: &HashMap<String, u32>,
 ) -> Result<()> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
     let mut conn = pool.get().context("Failed to get DB connection for cron")?;
     let tx = conn
         .transaction_immediate()
         .context("Failed to start cron check transaction")?;
 
-    for (slug, def) in &reg.jobs {
-        let schedule_str = match &def.schedule {
-            Some(s) => s,
-            None => continue,
+    for (slug, def) in &registry.jobs {
+        let Some(schedule_str) = &def.schedule else {
+            continue;
         };
 
         // Parse cron expression (the cron crate expects 6-7 fields with seconds;
@@ -226,8 +355,19 @@ pub fn check_cron_schedules(
             }
         }
 
-        // Insert a pending job
-        let job = job_query::insert_job(&tx, slug, "{}", "cron", def.retries + 1, &def.queue)?;
+        // Insert a pending job. `effective_max_attempts` resolves
+        // `JobDefinition.retries` first, falling back to
+        // `[jobs.queues.<queue>] retries` when the definition didn't
+        // set it.
+        let job = job_query::insert_job(
+            &tx,
+            slug,
+            "{}",
+            "cron",
+            def.effective_max_attempts(queue_retries.get(&def.queue).copied()),
+            &def.queue,
+            def.priority,
+        )?;
 
         info!("Cron scheduled job '{}' (run {})", slug, job.id);
     }
@@ -239,26 +379,22 @@ pub fn check_cron_schedules(
 }
 
 /// Recover stale jobs on startup.
-pub fn recover_stale_jobs(conn: &dyn DbConnection, registry: &SharedRegistry) -> Result<()> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
+///
+/// # Errors
+///
+/// Returns an error if listing stale jobs or marking any one stale fails.
+pub fn recover_stale_jobs(conn: &dyn DbConnection, registry: &Registry) -> Result<()> {
     // Find all running jobs — on startup, these are stale (server was restarted)
     let stale = job_query::find_stale_jobs(conn, 0)?;
 
     for job in &stale {
-        let timeout = reg
+        let timeout = registry
             .jobs
             .get(job.slug.as_str())
-            .map(|d| d.timeout)
-            .unwrap_or(60);
+            .map_or(60, |d| d.timeout);
 
         // Any job that was running when we started is stale
-        let error = format!(
-            "stale: server restarted (was running, timeout={}s)",
-            timeout
-        );
+        let error = format!("stale: server restarted (was running, timeout={timeout}s)");
         job_query::mark_stale(conn, &job.id, &error)?;
         info!("Marked stale job {} ({})", job.id, job.slug);
     }
@@ -293,19 +429,19 @@ pub(crate) fn parse_retention_seconds(s: &str) -> Option<i64> {
 /// For each collection with `soft_delete` + `soft_delete_retention`, find docs
 /// where `_deleted_at` is older than the retention threshold and hard-delete them.
 /// Upload files are cleaned up before deletion.
+///
+/// # Errors
+///
+/// Returns an error if the collection scan, upload cleanup, or hard-delete fails.
 pub fn purge_soft_deleted(
     conn: &dyn DbConnection,
-    registry: &SharedRegistry,
+    registry: &Registry,
     storage: &dyn StorageBackend,
     locale_config: &LocaleConfig,
 ) -> Result<u64> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
     let mut total = 0u64;
 
-    for (slug, def) in &reg.collections {
+    for (slug, def) in &registry.collections {
         if !def.soft_delete {
             continue;
         }
@@ -322,7 +458,14 @@ pub fn purge_soft_deleted(
             continue;
         };
 
-        let purged = purge_collection(conn, slug, def, seconds, storage, locale_config)?;
+        let purged = purge_collection(&PurgeCollectionInput {
+            conn,
+            slug,
+            def,
+            retention_seconds: seconds,
+            storage,
+            locale_config,
+        })?;
         total += purged;
     }
 
@@ -335,22 +478,24 @@ pub fn purge_soft_deleted(
 /// from disk after the DB deletes succeed. A crash between DB delete and
 /// file delete leaves orphaned files (safe), rather than orphaned DB records
 /// pointing to deleted files (unsafe).
-fn purge_collection(
-    conn: &dyn DbConnection,
-    slug: &str,
-    def: &CollectionDefinition,
+struct PurgeCollectionInput<'a> {
+    conn: &'a dyn DbConnection,
+    slug: &'a str,
+    def: &'a CollectionDefinition,
     retention_seconds: i64,
-    storage: &dyn StorageBackend,
-    locale_config: &LocaleConfig,
-) -> Result<u64> {
+    storage: &'a dyn StorageBackend,
+    locale_config: &'a LocaleConfig,
+}
+
+fn purge_collection(p: &PurgeCollectionInput<'_>) -> Result<u64> {
     // Find docs past the retention threshold
-    let (offset_sql, offset_param) = conn.date_offset_expr(retention_seconds, 1);
+    let (offset_sql, offset_param) = p.conn.date_offset_expr(p.retention_seconds, 1);
     let threshold_sql = format!(
         "SELECT id FROM \"{}\" WHERE _deleted_at IS NOT NULL \
          AND _deleted_at < {}",
-        slug, offset_sql
+        p.slug, offset_sql
     );
-    let rows = conn.query_all(&threshold_sql, &[offset_param])?;
+    let rows = p.conn.query_all(&threshold_sql, &[offset_param])?;
 
     let mut purged = 0u64;
     let mut upload_docs = Vec::new();
@@ -361,40 +506,41 @@ fn purge_collection(
             _ => continue,
         };
 
-        // Skip documents that are still referenced — protect referential integrity.
+        // Skip documents that are still referenced -- protect referential integrity.
         // Uses locked variant to prevent concurrent creates from incrementing ref count
         // between this check and the DELETE (Postgres only; SQLite serializes via IMMEDIATE).
-        let ref_count = query::ref_count::get_ref_count_locked(conn, slug, &id)?.unwrap_or(0);
+        let ref_count = query::ref_count::get_ref_count_locked(p.conn, p.slug, &id)?.unwrap_or(0);
         if ref_count > 0 {
             debug!(
                 "Skipping purge of {}/{}: referenced by {} document(s)",
-                slug, id, ref_count
+                p.slug, id, ref_count
             );
             continue;
         }
 
         // Decrement ref counts on targets before hard delete (CASCADE removes junction rows)
-        query::ref_count::before_hard_delete(conn, slug, &id, &def.fields, locale_config)?;
+        query::ref_count::before_hard_delete(p.conn, p.slug, &id, &p.def.fields, p.locale_config)?;
 
         // Collect upload file paths BEFORE deleting from DB
-        if def.is_upload_collection()
-            && let Ok(Some(doc)) = query::find_by_id_unfiltered(conn, slug, def, &id, None)
+        if p.def.is_upload_collection()
+            && let Ok(Some(doc)) = query::find_by_id_unfiltered(p.conn, p.slug, p.def, &id, None)
         {
             upload_docs.push(doc);
         }
 
-        // Cancel pending image conversions
-        if def.is_upload_collection() {
-            let _ = query::images::delete_entries_for_document(conn, slug, &id);
+        // Cancel pending image conversions — see
+        // `core/upload/queue.rs::delete_image_jobs_for_document`.
+        if p.def.is_upload_collection() {
+            let _ = upload::delete_image_jobs_for_document(p.conn, p.slug, &id);
         }
 
         // Clean up FTS index before hard delete
-        if conn.supports_fts() {
-            query::fts::fts_delete(conn, slug, &id)?;
+        if p.conn.supports_fts() {
+            query::fts::fts_delete(p.conn, p.slug, &id)?;
         }
 
         // Hard delete the document from DB
-        query::delete(conn, slug, &id)?;
+        query::delete(p.conn, p.slug, &id)?;
         purged += 1;
     }
 
@@ -402,13 +548,13 @@ fn purge_collection(
     // If the process crashes here, we get orphaned files (harmless)
     // rather than DB records pointing to missing files (harmful).
     for doc in &upload_docs {
-        upload::delete_upload_files(storage, &doc.fields);
+        upload::delete_upload_files(p.storage, &doc.fields);
     }
 
     if purged > 0 {
         info!(
             "Purged {} expired soft-deleted doc(s) from '{}'",
-            purged, slug
+            purged, p.slug
         );
     }
 
@@ -420,7 +566,7 @@ fn purge_collection(
 /// fixed interval from the scheduler loop rather than a user-defined cron
 /// expression, but must still be deduped across instances in multi-node
 /// deployments.
-pub const RETENTION_PURGE_SLUG: &str = "__retention_purge";
+pub(super) const RETENTION_PURGE_SLUG: &str = "__retention_purge";
 
 /// Attempt to claim the retention-purge tick for this instance/window.
 ///
@@ -428,7 +574,7 @@ pub const RETENTION_PURGE_SLUG: &str = "__retention_purge";
 /// Uses the same `_crap_cron_fired` dedup table as user cron jobs.
 /// `window_seconds` must match the scheduler's purge cadence so two instances
 /// firing inside the same window still end up with exactly one winner.
-pub fn claim_retention_purge_tick(
+pub(super) fn claim_retention_purge_tick(
     conn: &dyn DbConnection,
     now: DateTime<Utc>,
     window_seconds: i64,
@@ -454,6 +600,8 @@ pub(crate) fn normalize_cron(expr: &str) -> String {
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
+    use std::sync::Arc;
+
     use chrono::Timelike;
     use r2d2::Pool;
     use r2d2_sqlite::SqliteConnectionManager;
@@ -590,15 +738,15 @@ mod tests {
 
     // ── recover_stale_jobs ──────────────────────────────────────────────
 
-    fn make_registry_with_jobs(jobs: Vec<JobDefinition>) -> SharedRegistry {
-        let registry = Registry::shared();
+    fn make_registry_with_jobs(jobs: Vec<JobDefinition>) -> Arc<Registry> {
+        let shared = Registry::shared();
         {
-            let mut reg = registry.write().unwrap();
+            let mut reg = shared.write().unwrap();
             for job in jobs {
                 reg.register_job(job);
             }
         }
-        registry
+        Registry::snapshot(&shared)
     }
 
     #[test]
@@ -612,7 +760,7 @@ mod tests {
         ]);
 
         // Insert a running job (simulates server crash with running job)
-        job_query::insert_job(&conn, "my_job", "{}", "manual", 1, "default").unwrap();
+        job_query::insert_job(&conn, "my_job", "{}", "manual", 1, "default", 0).unwrap();
         conn.execute_batch(
             "UPDATE _crap_jobs SET status = 'running', heartbeat_at = datetime('now', '-600 seconds')",
         ).unwrap();
@@ -641,7 +789,7 @@ mod tests {
                 .build(), // 1 hour
         ]);
 
-        job_query::insert_job(&conn, "long_job", "{}", "manual", 1, "default").unwrap();
+        job_query::insert_job(&conn, "long_job", "{}", "manual", 1, "default", 0).unwrap();
         conn.execute_batch(
             "UPDATE _crap_jobs SET status = 'running', heartbeat_at = datetime('now', '-600 seconds')",
         ).unwrap();
@@ -660,7 +808,7 @@ mod tests {
         // Registry has no job definitions — slug not found, uses default timeout=60
         let registry = make_registry_with_jobs(vec![]);
 
-        job_query::insert_job(&conn, "unknown_job", "{}", "manual", 1, "default").unwrap();
+        job_query::insert_job(&conn, "unknown_job", "{}", "manual", 1, "default", 0).unwrap();
         conn.execute_batch(
             "UPDATE _crap_jobs SET status = 'running', heartbeat_at = datetime('now', '-600 seconds')",
         ).unwrap();
@@ -679,7 +827,7 @@ mod tests {
         let registry = make_registry_with_jobs(vec![]);
 
         // Insert a pending job — should not be affected
-        job_query::insert_job(&conn, "my_job", "{}", "manual", 1, "default").unwrap();
+        job_query::insert_job(&conn, "my_job", "{}", "manual", 1, "default", 0).unwrap();
 
         recover_stale_jobs(&conn, &registry).unwrap();
 
@@ -703,8 +851,8 @@ mod tests {
                 .build(),
         ]);
 
-        job_query::insert_job(&conn, "job_a", "{}", "manual", 1, "default").unwrap();
-        job_query::insert_job(&conn, "job_b", "{}", "manual", 1, "default").unwrap();
+        job_query::insert_job(&conn, "job_a", "{}", "manual", 1, "default", 0).unwrap();
+        job_query::insert_job(&conn, "job_b", "{}", "manual", 1, "default", 0).unwrap();
         conn.execute_batch("UPDATE _crap_jobs SET status = 'running'")
             .unwrap();
 
@@ -731,30 +879,14 @@ mod tests {
 
         let pool = DbPool::from_pool(inner);
 
-        // Create the jobs table
+        // Build the standard jobs schema via the canonical migration
+        // path so we can't drift from production. `_crap_cron_fired`
+        // is colocated here since these tests exercise the cron loop.
         let conn = pool.get().unwrap();
+        crate::db::migrate::create_jobs_table(&conn, "TEXT DEFAULT (datetime('now'))", "TEXT")
+            .expect("create_jobs_table");
         conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS _crap_jobs (
-                id TEXT PRIMARY KEY,
-                slug TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                queue TEXT NOT NULL DEFAULT 'default',
-                data TEXT DEFAULT '{}',
-                result TEXT,
-                error TEXT,
-                attempt INTEGER NOT NULL DEFAULT 0,
-                max_attempts INTEGER NOT NULL DEFAULT 1,
-                scheduled_by TEXT,
-                created_at TEXT DEFAULT (datetime('now')),
-                started_at TEXT,
-                completed_at TEXT,
-                heartbeat_at TEXT,
-                retry_after TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_crap_jobs_status ON _crap_jobs(status);
-            CREATE INDEX IF NOT EXISTS idx_crap_jobs_queue ON _crap_jobs(queue, status);
-            CREATE INDEX IF NOT EXISTS idx_crap_jobs_slug ON _crap_jobs(slug, status);
-            CREATE TABLE IF NOT EXISTS _crap_cron_fired (
+            "CREATE TABLE IF NOT EXISTS _crap_cron_fired (
                 slug TEXT PRIMARY KEY,
                 fired_at TEXT NOT NULL DEFAULT (datetime('now'))
             );",
@@ -781,7 +913,7 @@ mod tests {
         let now = chrono::Utc::now();
         let last_check = now - chrono::Duration::minutes(2);
 
-        check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+        check_cron_schedules(&pool, &registry, last_check, now, &HashMap::new()).unwrap();
 
         let conn = pool.get().unwrap();
         let jobs = job_query::list_job_runs(&conn, Some("cron_job"), None, 100, 0).unwrap();
@@ -800,7 +932,7 @@ mod tests {
         let now = chrono::Utc::now();
         let last_check = now - chrono::Duration::minutes(2);
 
-        check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+        check_cron_schedules(&pool, &registry, last_check, now, &HashMap::new()).unwrap();
 
         let conn = pool.get().unwrap();
         let jobs = job_query::list_job_runs(&conn, None, None, 100, 0).unwrap();
@@ -825,7 +957,7 @@ mod tests {
             .unwrap();
         let last_check = now - chrono::Duration::seconds(1);
 
-        check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+        check_cron_schedules(&pool, &registry, last_check, now, &HashMap::new()).unwrap();
 
         let conn = pool.get().unwrap();
         let jobs = job_query::list_job_runs(&conn, None, None, 100, 0).unwrap();
@@ -849,7 +981,7 @@ mod tests {
         // Insert a running job for this slug
         {
             let conn = pool.get().unwrap();
-            job_query::insert_job(&conn, "skip_job", "{}", "manual", 1, "default").unwrap();
+            job_query::insert_job(&conn, "skip_job", "{}", "manual", 1, "default", 0).unwrap();
             conn.execute_batch("UPDATE _crap_jobs SET status = 'running'")
                 .unwrap();
         }
@@ -857,7 +989,7 @@ mod tests {
         let now = chrono::Utc::now();
         let last_check = now - chrono::Duration::minutes(2);
 
-        check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+        check_cron_schedules(&pool, &registry, last_check, now, &HashMap::new()).unwrap();
 
         // Should NOT insert a new pending job because skip_if_running=true and one is running
         let conn = pool.get().unwrap();
@@ -879,7 +1011,7 @@ mod tests {
         // Insert a running job
         {
             let conn = pool.get().unwrap();
-            job_query::insert_job(&conn, "noskip_job", "{}", "manual", 1, "default").unwrap();
+            job_query::insert_job(&conn, "noskip_job", "{}", "manual", 1, "default", 0).unwrap();
             conn.execute_batch("UPDATE _crap_jobs SET status = 'running'")
                 .unwrap();
         }
@@ -887,7 +1019,7 @@ mod tests {
         let now = chrono::Utc::now();
         let last_check = now - chrono::Duration::minutes(2);
 
-        check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+        check_cron_schedules(&pool, &registry, last_check, now, &HashMap::new()).unwrap();
 
         // Should insert a new pending job even though one is running
         let conn = pool.get().unwrap();
@@ -909,7 +1041,7 @@ mod tests {
         let last_check = now - chrono::Duration::minutes(2);
 
         // Should not error, just skip the invalid expression
-        check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+        check_cron_schedules(&pool, &registry, last_check, now, &HashMap::new()).unwrap();
 
         let conn = pool.get().unwrap();
         let jobs = job_query::list_job_runs(&conn, None, None, 100, 0).unwrap();
@@ -947,6 +1079,74 @@ mod tests {
         assert!(third, "a claim past the window should win again");
     }
 
+    /// Regression: a job defined without `retries` inherits
+    /// `[jobs.queues.<queue>] retries` at cron-fire time. Pre-Option<u32>
+    /// migration this silently collapsed to `0` (one attempt); the
+    /// queue config wins now.
+    #[test]
+    fn check_cron_schedules_inherits_queue_retries() {
+        let pool = make_test_pool();
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition::builder("inherits_cron", "some.handler")
+                .schedule("* * * * *")
+                // NO .retries() call — JobDefinition.retries = None,
+                // so the queue's `retries = 5` should apply.
+                .queue("reports")
+                .skip_if_running(false)
+                .build(),
+        ]);
+
+        let mut queue_retries = HashMap::new();
+        queue_retries.insert("reports".to_string(), 5);
+
+        let now = chrono::Utc::now();
+        let last_check = now - chrono::Duration::minutes(2);
+
+        check_cron_schedules(&pool, &registry, last_check, now, &queue_retries).unwrap();
+
+        let conn = pool.get().unwrap();
+        let jobs = job_query::list_job_runs(&conn, Some("inherits_cron"), None, 100, 0).unwrap();
+        assert_eq!(jobs.len(), 1);
+        // queue retries=5 → max_attempts = 5 + 1 = 6 (inherited)
+        assert_eq!(
+            jobs[0].max_attempts, 6,
+            "JobDefinition without retries should inherit [jobs.queues.reports] retries = 5"
+        );
+    }
+
+    /// Companion to `check_cron_schedules_inherits_queue_retries`:
+    /// explicit `.retries(0)` BEATS the queue default (operator chose
+    /// no retries even though the queue says 5).
+    #[test]
+    fn check_cron_schedules_explicit_zero_retries_overrides_queue() {
+        let pool = make_test_pool();
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition::builder("explicit_zero_cron", "some.handler")
+                .schedule("* * * * *")
+                .retries(0) // explicit "no retries"
+                .queue("reports")
+                .skip_if_running(false)
+                .build(),
+        ]);
+
+        let mut queue_retries = HashMap::new();
+        queue_retries.insert("reports".to_string(), 5);
+
+        let now = chrono::Utc::now();
+        let last_check = now - chrono::Duration::minutes(2);
+
+        check_cron_schedules(&pool, &registry, last_check, now, &queue_retries).unwrap();
+
+        let conn = pool.get().unwrap();
+        let jobs =
+            job_query::list_job_runs(&conn, Some("explicit_zero_cron"), None, 100, 0).unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(
+            jobs[0].max_attempts, 1,
+            "explicit retries(0) must override the queue default of 5"
+        );
+    }
+
     #[test]
     fn check_cron_schedules_retries_stored() {
         let pool = make_test_pool();
@@ -962,7 +1162,7 @@ mod tests {
         let now = chrono::Utc::now();
         let last_check = now - chrono::Duration::minutes(2);
 
-        check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+        check_cron_schedules(&pool, &registry, last_check, now, &HashMap::new()).unwrap();
 
         let conn = pool.get().unwrap();
         let jobs = job_query::list_job_runs(&conn, Some("retried_cron"), None, 100, 0).unwrap();

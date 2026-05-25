@@ -34,6 +34,28 @@ crap.jobs.define("test_cron_nonskip", {
     skip_if_running = false,
 })
 
+-- Atomic multi-step job: both creates wrapped in crap.transaction.
+crap.jobs.define("test_tx_two_creates", {
+    handler = "jobs.test_job.tx_two_creates",
+    timeout = 30,
+})
+
+-- Atomic rollback job: first create succeeds inside the tx, then we
+-- raise an error — the framework must roll back so NEITHER create is
+-- visible after the job completes.
+crap.jobs.define("test_tx_rollback_mid", {
+    handler = "jobs.test_job.tx_rollback_mid",
+    timeout = 30,
+})
+
+-- Pool-mode demo: two SEPARATE crap.transaction blocks. If the second
+-- errors, the first must still be committed (each block is its own
+-- IMMEDIATE tx).
+crap.jobs.define("test_tx_separate_blocks", {
+    handler = "jobs.test_job.tx_separate_blocks",
+    timeout = 30,
+})
+
 local M = {}
 
 function M.create_post(ctx)
@@ -51,6 +73,58 @@ end
 
 function M.echo(ctx)
     return ctx.data
+end
+
+function M.tx_two_creates(ctx)
+    crap.transaction(function()
+        crap.collections.create("posts", {
+            title = "tx-doc-1",
+            status = "published",
+        })
+        crap.collections.create("posts", {
+            title = "tx-doc-2",
+            status = "published",
+        })
+    end)
+    return { ok = true }
+end
+
+function M.tx_rollback_mid(ctx)
+    -- pcall so the job itself completes (status=completed); the
+    -- transaction inside still rolled back.
+    local ok, err = pcall(function()
+        crap.transaction(function()
+            crap.collections.create("posts", {
+                title = "should-not-exist",
+                status = "published",
+            })
+            error("force rollback")
+        end)
+    end)
+    return { ok = ok, err = tostring(err) }
+end
+
+function M.tx_separate_blocks(ctx)
+    -- First block: commits standalone.
+    crap.transaction(function()
+        crap.collections.create("posts", {
+            title = "block-1-doc",
+            status = "published",
+        })
+    end)
+
+    -- Second block: errors. The first block's write is already
+    -- committed and must remain visible.
+    local ok, _ = pcall(function()
+        crap.transaction(function()
+            crap.collections.create("posts", {
+                title = "block-2-doc",
+                status = "published",
+            })
+            error("rollback only block 2")
+        end)
+    end)
+    return { second_ok = ok }
 end
 
 return M

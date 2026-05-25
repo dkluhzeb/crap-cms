@@ -28,12 +28,8 @@ use tracing::warn;
 use crate::{
     admin::AdminState,
     core::{
-        AuthUser, Document, Registry, Slug,
-        collection::LiveMode,
-        event::{
-            EventOperation, EventReceiver, EventTarget, InvalidationReceiver, MutationEvent,
-            RecvError,
-        },
+        AuthUser, Document, EventReceiver, LiveMode, MutationEvent, Registry, Slug,
+        event::{EventOperation, EventTarget, InvalidationReceiver, RecvError},
     },
     db::{AccessResult, FilterClause, query::filter::memory},
     hooks::HookRunner,
@@ -55,7 +51,7 @@ impl Drop for SseConnectionGuard {
     }
 }
 
-/// Stream wrapper that ends when a CancellationToken fires.
+/// Stream wrapper that ends when a `CancellationToken` fires.
 /// Holds an optional SSE connection guard that decrements the counter on drop.
 struct CancellableStream {
     inner: Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>,
@@ -186,7 +182,7 @@ fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document>) -> SseAc
     access
 }
 
-/// Build the JSON payload for an SSE event, applying access control, after_read hooks,
+/// Build the JSON payload for an SSE event, applying access control, `after_read` hooks,
 /// and field stripping. Returns `None` when the subscriber should not receive this event.
 ///
 /// Separated from [`event_to_sse`] so it can be unit-tested without depending on
@@ -273,7 +269,7 @@ fn build_event_payload(
     }))
 }
 
-/// Convert a mutation event to an SSE Event, applying access control, after_read hooks,
+/// Convert a mutation event to an SSE Event, applying access control, `after_read` hooks,
 /// and field stripping to match normal read operations.
 fn event_to_sse(
     event: &MutationEvent,
@@ -437,7 +433,7 @@ pub async fn sse_handler(
     };
 
     let hook_runner = state.hook_runner.clone();
-    let registry = state.registry.clone();
+    let registry = Arc::clone(&state.registry);
     let subscriber_user_doc = auth_user.as_ref().map(|ext| ext.0.user_doc.clone());
     let subscriber_user_id = auth_user.as_ref().map(|ext| ext.0.claims.sub.to_string());
     let send_timeout = Duration::from_millis(state.subscriber_send_timeout_ms);
@@ -477,14 +473,13 @@ pub async fn sse_handler(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::{Value as JsonValue, json};
+    use serde_json::json;
 
     use crate::{
         config::CrapConfig,
         core::{
-            DocumentId,
-            collection::{Access, CollectionDefinition},
-            field::{FieldAccess, FieldDefinition, FieldType},
+            Access, CollectionDefinition, DocumentFields, DocumentId, FieldAccess, FieldDefinition,
+            FieldType,
         },
     };
 
@@ -543,7 +538,7 @@ mod tests {
         def
     }
 
-    fn make_event(slug: &str, data: HashMap<String, JsonValue>) -> MutationEvent {
+    fn make_event(slug: &str, data: DocumentFields) -> MutationEvent {
         MutationEvent {
             sequence: 1,
             timestamp: "2026-01-01T00:00:00Z".to_string(),
@@ -564,32 +559,24 @@ mod tests {
         let config_dir = fixture_dir();
         let config = CrapConfig::test_default();
 
-        // init_lua loads the fixture's collections + hooks into a SharedRegistry.
-        let shared = crate::hooks::init_lua(&config_dir, &config).expect("init lua");
+        // init_lua loads the fixture's collections + hooks into a snapshot Arc.
+        let mut registry = crate::hooks::init_lua(&config_dir, &config).expect("init lua");
 
-        // Replace the registered "articles" with a stripped-down posts collection
-        // that has the field-level read deny we need for this test.
-        {
-            let mut reg = shared.write().unwrap();
-            reg.register_collection(make_posts_with_secret_field());
-        }
+        // Inject a stripped-down posts collection with the field-level read deny
+        // this test needs. `Arc::make_mut` clones if not uniquely owned (no other
+        // clones exist yet at this point) and returns &mut Registry.
+        Arc::make_mut(&mut registry).register_collection(make_posts_with_secret_field());
 
         let runner = HookRunner::builder()
             .config_dir(&config_dir)
-            .registry(shared.clone())
+            .registry(Arc::clone(&registry))
             .config(&config)
             .build()
             .expect("build runner");
 
-        let posts = shared
-            .read()
-            .unwrap()
-            .get_collection("posts")
-            .unwrap()
-            .clone();
-        let registry_snapshot = Registry::snapshot(&shared);
+        let posts = registry.get_collection("posts").unwrap().clone();
 
-        (runner, registry_snapshot, posts)
+        (runner, registry, posts)
     }
 
     #[test]
@@ -615,7 +602,7 @@ mod tests {
             modes,
         };
 
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("title".to_string(), json!("Hello"));
         data.insert("secret".to_string(), json!("redacted-please"));
         let event = make_event("posts", data);
@@ -657,7 +644,7 @@ mod tests {
             modes,
         };
 
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("title".to_string(), json!("Hello"));
         data.insert("secret".to_string(), json!("redacted-please"));
         let event = make_event("posts", data);

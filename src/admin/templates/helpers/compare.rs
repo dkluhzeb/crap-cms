@@ -22,10 +22,7 @@ impl HelperDef for CompareHelper {
     ) -> Result<ScopedJson<'rc>, RenderError> {
         let a = h.param(0).and_then(|p| as_f64(p.value())).unwrap_or(0.0);
         let b = h.param(1).and_then(|p| as_f64(p.value())).unwrap_or(0.0);
-        let result = a
-            .partial_cmp(&b)
-            .map(|o| self.0.contains(&o))
-            .unwrap_or(false);
+        let result = a.partial_cmp(&b).is_some_and(|o| self.0.contains(&o));
         Ok(ScopedJson::Derived(Value::Bool(result)))
     }
 }

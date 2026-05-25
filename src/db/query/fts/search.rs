@@ -1,6 +1,6 @@
 //! FTS search: sanitize queries, build WHERE clauses, run searches.
 //!
-//! Supports SQLite (FTS5 MATCH) and PostgreSQL (tsvector @@ tsquery).
+//! Supports `SQLite` (FTS5 MATCH) and `PostgreSQL` (tsvector @@ tsquery).
 
 use anyhow::{Context as _, Result};
 
@@ -8,7 +8,7 @@ use crate::db::{DbConnection, DbValue};
 
 /// FTS5 table name for a collection.
 pub(super) fn fts_table_name(slug: &str) -> String {
-    format!("_fts_{}", slug)
+    format!("_fts_{slug}")
 }
 
 /// Check if a table exists in the database.
@@ -18,47 +18,44 @@ pub(super) fn table_exists(conn: &dyn DbConnection, name: &str) -> bool {
 
 /// Sanitize a user search query for FTS with prefix matching.
 ///
-/// **SQLite (FTS5):** Each token is wrapped in double quotes and suffixed with `*`
+/// **`SQLite` (FTS5):** Each token is wrapped in double quotes and suffixed with `*`
 /// for prefix matching. Tokens are joined with spaces (implicit AND in FTS5).
 ///
-/// **PostgreSQL:** Each token is lowercased, sanitized (alphanumeric only), suffixed
+/// **`PostgreSQL`:** Each token is lowercased, sanitized (alphanumeric only), suffixed
 /// with `:*` for prefix matching, and joined with ` & ` (AND).
 ///
 /// Empty/whitespace-only input returns an empty string.
-pub fn sanitize_fts_query(conn: &dyn DbConnection, input: &str) -> String {
+pub(crate) fn sanitize_fts_query(conn: &dyn DbConnection, input: &str) -> String {
     let raw_tokens: Vec<&str> = input.split_whitespace().filter(|t| !t.is_empty()).collect();
 
     if raw_tokens.is_empty() {
         return String::new();
     }
 
-    match conn.kind() {
-        "postgres" => {
-            let tokens: Vec<String> = raw_tokens
-                .into_iter()
-                .map(|t| {
-                    // Strip non-alphanumeric chars (except underscore) to prevent
-                    // tsquery injection, then append :* for prefix matching
-                    let clean: String = t
-                        .chars()
-                        .filter(|c| c.is_alphanumeric() || *c == '_')
-                        .collect();
-                    format!("{}:*", clean)
-                })
-                .filter(|t| t != ":*")
-                .collect();
-            tokens.join(" & ")
-        }
-        _ => {
-            let tokens: Vec<String> = raw_tokens
-                .into_iter()
-                .map(|t| {
-                    let escaped = t.replace('"', "\"\"");
-                    format!("\"{}\" *", escaped)
-                })
-                .collect();
-            tokens.join(" ")
-        }
+    if conn.kind() == "postgres" {
+        let tokens: Vec<String> = raw_tokens
+            .into_iter()
+            .map(|t| {
+                // Strip non-alphanumeric chars (except underscore) to prevent
+                // tsquery injection, then append :* for prefix matching
+                let clean: String = t
+                    .chars()
+                    .filter(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                format!("{clean}:*")
+            })
+            .filter(|t| t != ":*")
+            .collect();
+        tokens.join(" & ")
+    } else {
+        let tokens: Vec<String> = raw_tokens
+            .into_iter()
+            .map(|t| {
+                let escaped = t.replace('"', "\"\"");
+                format!("\"{escaped}\" *")
+            })
+            .collect();
+        tokens.join(" ")
     }
 }
 
@@ -66,6 +63,10 @@ pub fn sanitize_fts_query(conn: &dyn DbConnection, input: &str) -> String {
 ///
 /// Returns empty vec if the FTS table doesn't exist (graceful degradation).
 /// Returns empty vec if the query is empty after sanitization.
+///
+/// # Errors
+///
+/// Returns a backend error if the FTS query fails (other than missing-table).
 pub fn fts_search(
     conn: &dyn DbConnection,
     slug: &str,
@@ -91,30 +92,22 @@ pub fn fts_search(
         "postgres" => {
             let p1_copy = conn.placeholder(1);
             format!(
-                "SELECT id FROM {} WHERE tsv @@ to_tsquery('simple', {}) \
-                 ORDER BY ts_rank(tsv, to_tsquery('simple', {})) DESC LIMIT {}",
-                fts_table, p1, p1_copy, p2
+                "SELECT id FROM {fts_table} WHERE tsv @@ to_tsquery('simple', {p1}) \
+                 ORDER BY ts_rank(tsv, to_tsquery('simple', {p1_copy})) DESC LIMIT {p2}"
             )
         }
         _ => format!(
-            "SELECT id FROM {} WHERE {} MATCH {} ORDER BY rank LIMIT {}",
-            fts_table, fts_table, p1, p2
+            "SELECT id FROM {fts_table} WHERE {fts_table} MATCH {p1} ORDER BY rank LIMIT {p2}"
         ),
     };
 
     let rows = conn
         .query_all(&sql, &[DbValue::Text(sanitized), DbValue::Integer(limit)])
-        .with_context(|| format!("FTS search on {}", fts_table))?;
+        .with_context(|| format!("FTS search on {fts_table}"))?;
 
     let ids = rows
         .into_iter()
-        .filter_map(|row| {
-            if let Some(DbValue::Text(s)) = row.get_value(0) {
-                Some(s.clone())
-            } else {
-                None
-            }
-        })
+        .filter_map(|row| row.opt_text_at(0))
         .collect();
 
     Ok(ids)
@@ -124,7 +117,7 @@ pub fn fts_search(
 ///
 /// Returns `None` if the FTS table doesn't exist or search is empty.
 /// Returns `Some((clause_fragment, sanitized_query))` to be appended to a WHERE.
-pub fn fts_where_clause(
+pub(crate) fn fts_where_clause(
     conn: &dyn DbConnection,
     slug: &str,
     search: &str,
@@ -147,13 +140,9 @@ pub fn fts_where_clause(
 
     let clause = match conn.kind() {
         "postgres" => format!(
-            "id IN (SELECT id FROM {} WHERE tsv @@ to_tsquery('simple', {}))",
-            fts_table, placeholder
+            "id IN (SELECT id FROM {fts_table} WHERE tsv @@ to_tsquery('simple', {placeholder}))"
         ),
-        _ => format!(
-            "id IN (SELECT id FROM {} WHERE {} MATCH {})",
-            fts_table, fts_table, placeholder
-        ),
+        _ => format!("id IN (SELECT id FROM {fts_table} WHERE {fts_table} MATCH {placeholder})"),
     };
 
     Some((clause, sanitized))
@@ -163,8 +152,8 @@ pub fn fts_where_clause(
 mod tests {
     use super::*;
     use crate::config::{CrapConfig, LocaleConfig};
-    use crate::core::collection::CollectionDefinition;
-    use crate::core::field::FieldDefinition;
+    use crate::core::CollectionDefinition;
+    use crate::core::FieldDefinition;
     use crate::db::migrate::collection::test_helpers::text_field;
     use crate::db::query::fts::sync::sync_fts_table;
     use crate::db::{BoxedConnection, DbValue, pool};
@@ -271,7 +260,7 @@ mod tests {
     fn search_respects_limit() {
         let (_dir, conn) = setup_db();
         for i in 1..=5 {
-            insert_post(&conn, &format!("id{}", i), &format!("Rust post {}", i), "");
+            insert_post(&conn, &format!("id{i}"), &format!("Rust post {i}"), "");
         }
         let def = simple_def(vec![text_field("title")]);
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
@@ -341,20 +330,11 @@ mod tests {
 
         let (clause, query) = fts_where_clause(&conn, "posts", "Rust", 1).unwrap();
 
-        let sql = format!(
-            "SELECT id FROM posts WHERE status IS NULL AND {} ORDER BY id",
-            clause
-        );
+        let sql = format!("SELECT id FROM posts WHERE status IS NULL AND {clause} ORDER BY id");
         let rows = conn.query_all(&sql, &[DbValue::Text(query)]).unwrap();
         let ids: Vec<String> = rows
             .into_iter()
-            .filter_map(|row| {
-                if let Some(DbValue::Text(s)) = row.get_value(0) {
-                    Some(s.clone())
-                } else {
-                    None
-                }
-            })
+            .filter_map(|row| row.opt_text_at(0))
             .collect();
 
         assert_eq!(ids, vec!["1", "3"]);

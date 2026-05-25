@@ -1,31 +1,21 @@
 //! Execute `read_global` — read a global document.
 
-use std::sync::Arc;
-
 use anyhow::{Context as _, Result};
 use serde_json::{json, to_string_pretty};
 
 use crate::{
-    core::Registry,
-    db::DbPool,
-    hooks::HookRunner,
-    mcp::tools::collection::helpers::doc_to_json,
-    service::{GetGlobalInput, RunnerReadHooks, ServiceContext, get_global_document},
+    mcp::tools::{ToolExecCtx, collection::helpers::doc_to_json},
+    service::{GetGlobalInput, RunnerReadHooks, ServiceContext, ServiceError, get_global_document},
 };
 
 /// Execute `read_global` — read a global document.
-pub(in crate::mcp::tools) fn exec_read_global(
-    slug: &str,
-    registry: &Arc<Registry>,
-    pool: &DbPool,
-    runner: &HookRunner,
-) -> Result<String> {
-    let def = registry.globals.get(slug).context("Global not found")?;
-    let conn = pool.get().context("DB connection")?;
-    let hooks = RunnerReadHooks::new(runner, &conn);
+pub(in crate::mcp::tools) fn exec_read_global(slug: &str, ctx: &ToolExecCtx<'_>) -> Result<String> {
+    let def = ctx.registry.globals.get(slug).context("Global not found")?;
+    let conn = ctx.pool.get().context("DB connection")?;
+    let hooks = RunnerReadHooks::new(ctx.runner, &conn);
 
-    let ctx = ServiceContext::global(slug, def)
-        .pool(pool)
+    let svc_ctx = ServiceContext::global(slug, def)
+        .pool(ctx.pool)
         .conn(&conn)
         .read_hooks(&hooks)
         .override_access(true)
@@ -33,7 +23,7 @@ pub(in crate::mcp::tools) fn exec_read_global(
 
     let input = GetGlobalInput::new(None, None);
 
-    match get_global_document(&ctx, &input).map_err(|e| e.into_anyhow()) {
+    match get_global_document(&svc_ctx, &input).map_err(ServiceError::into_anyhow) {
         Ok(d) => Ok(to_string_pretty(&doc_to_json(&d))?),
         Err(e) => {
             // The global row may not exist yet (table missing or default row not inserted).
@@ -43,9 +33,9 @@ pub(in crate::mcp::tools) fn exec_read_global(
             });
 
             if is_missing {
-                Ok(json!({}).to_string())
+                Ok(to_string_pretty(&json!({}))?)
             } else {
-                Err(e).context(format!("Failed to read global '{}'", slug))
+                Err(e).context(format!("Failed to read global '{slug}'"))
             }
         }
     }

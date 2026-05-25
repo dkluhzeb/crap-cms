@@ -3,15 +3,15 @@
 use tonic::Status;
 
 use crate::{
-    api::handlers::convert::parse_where_json,
+    api::handlers::proto::parse_where_json,
     core::FieldDefinition,
     db::{AccessResult, Filter, FilterClause, FilterOp, query::filter::normalize_filter_fields},
-    service::read::{validate_access_constraints, validate_user_filters},
+    service::{validate_access_constraints, validate_user_filters},
 };
 
 /// Builder for constructing filter clauses from a gRPC request's `where` JSON,
 /// access constraints, and draft filtering. Deduplicates the pattern used across
-/// find, count, update_many, and delete_many handlers.
+/// find, count, `update_many`, and `delete_many` handlers.
 pub(super) struct FilterBuilder<'a> {
     where_json: Option<&'a str>,
     fields: &'a [FieldDefinition],
@@ -62,7 +62,7 @@ impl<'a> FilterBuilder<'a> {
     pub fn build(self) -> Result<Vec<FilterClause>, Status> {
         let mut filters = if let Some(where_json) = self.where_json {
             parse_where_json(where_json)
-                .map_err(|e| Status::invalid_argument(format!("Invalid where clause: {}", e)))?
+                .map_err(|e| Status::invalid_argument(format!("Invalid where clause: {e}")))?
         } else {
             Vec::new()
         };
@@ -101,6 +101,20 @@ impl<'a> FilterBuilder<'a> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::used_underscore_binding
+)]
 mod tests {
     use super::*;
 
@@ -167,7 +181,7 @@ mod tests {
     }
 
     /// Access-hook filter tables that reference a forbidden system column must
-    /// be rejected with an InvalidArgument — bulk handlers call `query::find`
+    /// be rejected with an `InvalidArgument` — bulk handlers call `query::find`
     /// directly, so if the builder silently extended the filter list the
     /// access-hook typo would leak past the validator.
     #[test]

@@ -40,6 +40,11 @@ impl CacheBackend for CustomPlaceholder {
 }
 
 /// Create the appropriate cache backend from config.
+///
+/// # Errors
+///
+/// Returns an error if the backend name is unknown or the Redis client
+/// fails to initialize.
 pub fn create_cache(config: &CacheConfig) -> Result<SharedCache> {
     match config.backend.as_str() {
         "memory" | "" => {
@@ -77,7 +82,7 @@ pub fn create_cache(config: &CacheConfig) -> Result<SharedCache> {
 
             Ok(Arc::new(CustomPlaceholder))
         }
-        other => bail!("Unknown cache backend: '{}'", other),
+        other => bail!("Unknown cache backend: '{other}'"),
     }
 }
 

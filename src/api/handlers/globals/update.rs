@@ -1,4 +1,7 @@
-//! UpdateGlobal handler — update a global's document.
+//! `UpdateGlobal` handler — update a global's document.
+
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use tokio::task;
 use tonic::{Request, Response, Status};
@@ -9,12 +12,78 @@ use crate::{
         content,
         handlers::{
             ContentService,
-            convert::{document_to_proto, prost_struct_to_hashmap, prost_struct_to_json_map},
+            proto::{document_to_proto, prost_struct_to_json_map},
         },
     },
-    db::LocaleContext,
+    core::{
+        DocumentFields, GlobalDefinition, Registry, SharedCache, SharedEventTransport,
+        SharedTokenProvider,
+    },
+    db::{DbPool, LocaleContext},
+    hooks::HookRunner,
     service::{self, ServiceContext, WriteInput},
 };
+
+/// Owned bundle for the `UpdateGlobal` spawn-blocking body.
+struct UpdateGlobalBlockingInput {
+    pool: DbPool,
+    runner: HookRunner,
+    headers: HashMap<String, String>,
+    token_provider: SharedTokenProvider,
+    registry: Arc<Registry>,
+    event_transport: Option<SharedEventTransport>,
+    cache: Option<SharedCache>,
+    slug: String,
+    def: GlobalDefinition,
+    token: Option<String>,
+    data: DocumentFields,
+    locale_ctx: Option<LocaleContext>,
+}
+
+/// Resolve auth, build the context, and run `update_global_document`.
+fn update_global_blocking(input: UpdateGlobalBlockingInput) -> Result<content::Document, Status> {
+    let conn = input
+        .pool
+        .get()
+        .inspect_err(|e| error!("UpdateGlobal pool error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))?;
+
+    let auth_user = ContentService::resolve_auth_user(
+        input.token.as_deref(),
+        &input.headers,
+        &*input.token_provider,
+        &input.runner,
+        &input.registry,
+        &conn,
+    )?;
+
+    // Access control (collection + field level) is checked inside
+    // service::update_global_document via WriteHooks.
+
+    let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
+    let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
+    drop(conn);
+
+    let ctx = ServiceContext::global(&input.slug, &input.def)
+        .pool(&input.pool)
+        .runner(&input.runner)
+        .user(user_doc.as_ref())
+        .event_transport(input.event_transport)
+        .cache(input.cache)
+        .build();
+
+    let (doc, _req_context) = service::update_global_document(
+        &ctx,
+        WriteInput::builder(input.data)
+            .locale_ctx(input.locale_ctx.as_ref())
+            .ui_locale(ui_locale)
+            .build(),
+    )
+    .inspect_err(|e| error!("UpdateGlobal error: {}", e))
+    .map_err(Status::from)?;
+
+    Ok(document_to_proto(&doc, &input.slug))
+}
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -25,76 +94,39 @@ impl ContentService {
     ) -> Result<Response<content::UpdateGlobalResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
+        let headers = self.metadata_headers(&metadata);
         let req = request.into_inner();
         let def = self.get_global_def(&req.slug)?;
 
-        let join_data = req
+        let data: DocumentFields = req
             .data
-            .as_ref()
-            .map(prost_struct_to_json_map)
-            .unwrap_or_default();
-
-        let data = req
-            .data
-            .map(|s| prost_struct_to_hashmap(&s))
-            .unwrap_or_default();
+            .map(|s| prost_struct_to_json_map(&s))
+            .unwrap_or_default()
+            .into();
 
         let locale_ctx =
             LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config)
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        let pool = self.pool.clone();
-        let runner = self.hook_runner.clone();
-        let token_provider = self.token_provider.clone();
-        let registry = self.registry.clone();
-        let event_transport = self.event_transport.clone();
-        let cache = Some(self.cache.clone());
-        let slug = req.slug.clone();
-        let def_owned = def;
+        let input = UpdateGlobalBlockingInput {
+            pool: self.pool.clone(),
+            runner: self.hook_runner.clone(),
+            token_provider: self.token_provider.clone(),
+            registry: Arc::clone(&self.registry),
+            event_transport: self.event_transport.clone(),
+            cache: Some(self.cache.clone()),
+            slug: req.slug.clone(),
+            def,
+            token,
+            headers,
+            data,
+            locale_ctx,
+        };
 
-        let proto_doc = task::spawn_blocking(move || -> Result<_, Status> {
-            let conn = pool.get().map_err(|e| {
-                error!("UpdateGlobal pool error: {}", e);
-                Status::internal("Internal error")
-            })?;
-
-            let auth_user =
-                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
-
-            // Access control (collection + field level) is checked inside
-            // service::update_global_document via WriteHooks.
-
-            let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-            let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
-            drop(conn);
-
-            let ctx = ServiceContext::global(&slug, &def_owned)
-                .pool(&pool)
-                .runner(&runner)
-                .user(user_doc.as_ref())
-                .event_transport(event_transport)
-                .cache(cache)
-                .build();
-
-            let (doc, _req_context) = service::update_global_document(
-                &ctx,
-                WriteInput::builder(data, &join_data)
-                    .locale_ctx(locale_ctx.as_ref())
-                    .ui_locale(ui_locale)
-                    .build(),
-            )
-            .map_err(|e| {
-                error!("UpdateGlobal error: {}", e);
-                Status::internal("Internal error")
-            })?;
-
-            let proto_doc = document_to_proto(&doc, &slug);
-
-            Ok(proto_doc)
-        })
-        .await
-        .inspect_err(|e| error!("UpdateGlobal task error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))??;
+        let proto_doc = task::spawn_blocking(move || update_global_blocking(input))
+            .await
+            .inspect_err(|e| error!("UpdateGlobal task error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))??;
 
         Ok(Response::new(content::UpdateGlobalResponse {
             document: Some(proto_doc),

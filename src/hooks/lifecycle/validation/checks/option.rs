@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
@@ -26,60 +24,63 @@ pub(crate) fn check_option_valid(
     if field.has_many {
         check_has_many_options(field, data_key, s, errors);
     } else if !field.options.iter().any(|opt| opt.value == *s) {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!("{} has an invalid option", field.name),
-            "validation.invalid_option",
-            HashMap::from([("field".to_string(), field.name.clone())]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} has an invalid option", field.name),
+                "validation.invalid_option",
+            )
+            .with_param("field", field.name.clone()),
+        );
     }
 }
 
-/// Validate each value in a has_many select/radio JSON array against the options list.
+/// Validate each value in a `has_many` select/radio JSON array against the options list.
 fn check_has_many_options(
     field: &FieldDefinition,
     data_key: &str,
     json_str: &str,
     errors: &mut Vec<FieldError>,
 ) {
-    let values: Vec<String> = match serde_json::from_str(json_str) {
-        Ok(v) => v,
-        Err(_) => {
-            errors.push(FieldError::with_key(
+    let values: Vec<String> = if let Ok(v) = serde_json::from_str(json_str) {
+        v
+    } else {
+        errors.push(
+            FieldError::with_key(
                 data_key.to_owned(),
                 format!(
                     "{} has invalid multi-select value (malformed JSON)",
                     field.name
                 ),
                 "validation.invalid_multi_select_json",
-                HashMap::from([("field".to_string(), field.name.clone())]),
-            ));
+            )
+            .with_param("field", field.name.clone()),
+        );
 
-            return;
-        }
+        return;
     };
 
     for v in &values {
         if !field.options.iter().any(|opt| opt.value == *v) {
-            errors.push(FieldError::with_key(
-                data_key.to_owned(),
-                format!("{} has an invalid option: {}", field.name, v),
-                "validation.invalid_option_value",
-                HashMap::from([
-                    ("field".to_string(), field.name.clone()),
-                    ("value".to_string(), v.clone()),
-                ]),
-            ));
+            errors.push(
+                FieldError::with_key(
+                    data_key.to_owned(),
+                    format!("{} has an invalid option: {}", field.name, v),
+                    "validation.invalid_option_value",
+                )
+                .with_param("field", field.name.clone())
+                .with_param("value", v.clone()),
+            );
         }
     }
 }
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
-    use crate::core::field::{FieldDefinition, FieldType, LocalizedString, SelectOption};
+    use crate::core::DocumentFields;
+    use crate::core::{FieldDefinition, FieldType, LocalizedString, SelectOption};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
-    use std::collections::HashMap;
 
     #[test]
     fn test_validate_select_option_valid() {
@@ -95,7 +96,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("color".to_string(), json!("red"));
         let result = validate_fields_inner(
             &lua,
@@ -120,7 +121,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("color".to_string(), json!("green"));
         let result = validate_fields_inner(
             &lua,
@@ -150,7 +151,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("color".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -178,7 +179,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("size".to_string(), json!("sm"));
         let result = validate_fields_inner(
             &lua,
@@ -203,7 +204,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("size".to_string(), json!("xl"));
         let result = validate_fields_inner(
             &lua,
@@ -233,7 +234,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("size".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -247,7 +248,7 @@ mod tests {
         );
     }
 
-    /// Regression: malformed JSON in a has_many select must produce a
+    /// Regression: malformed JSON in a `has_many` select must produce a
     /// validation error, not silently pass.
     #[test]
     fn test_validate_has_many_select_malformed_json_rejected() {
@@ -264,7 +265,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!("[invalid json"));
         let result = validate_fields_inner(
             &lua,
@@ -280,7 +281,7 @@ mod tests {
         );
     }
 
-    /// Regression: has_many select must report ALL invalid options, not just the first.
+    /// Regression: `has_many` select must report ALL invalid options, not just the first.
     /// Previously, `break` after the first error caused subsequent violations to be hidden.
     #[test]
     fn test_has_many_select_reports_all_invalid_options() {
@@ -297,7 +298,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         // Two invalid options: "invalid1" and "invalid2"
         data.insert(
             "tags".to_string(),
@@ -326,7 +327,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, status TEXT)")
             .unwrap();
         let fields = vec![FieldDefinition::builder("status", FieldType::Select).build()];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("status".to_string(), json!("anything"));
         let result = validate_fields_inner(
             &lua,

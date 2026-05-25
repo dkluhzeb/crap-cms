@@ -8,7 +8,7 @@ use argon2::{
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
 };
 
-use crate::core::auth::HashedPassword;
+use crate::core::HashedPassword;
 
 /// Thread-safe shared reference to a password provider.
 pub type SharedPasswordProvider = Arc<dyn PasswordProvider>;
@@ -20,9 +20,17 @@ pub type SharedPasswordProvider = Arc<dyn PasswordProvider>;
 /// future backends (bcrypt, scrypt, etc.).
 pub trait PasswordProvider: Send + Sync {
     /// Hash a password for storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if hashing fails.
     fn hash_password(&self, password: &str) -> Result<HashedPassword>;
 
     /// Verify a password against a stored hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the stored hash is malformed.
     fn verify_password(&self, password: &str, hash: &str) -> Result<bool>;
 
     /// Timing-safe dummy verification (prevents user enumeration).
@@ -52,14 +60,13 @@ impl PasswordProvider for Argon2PasswordProvider {
         let argon2 = Argon2::default();
         let hash = argon2
             .hash_password(password.as_bytes(), &salt)
-            .map_err(|e| anyhow!("Password hashing failed: {}", e))?;
+            .map_err(|e| anyhow!("Password hashing failed: {e}"))?;
 
         Ok(HashedPassword::new(hash.to_string()))
     }
 
     fn verify_password(&self, password: &str, hash: &str) -> Result<bool> {
-        let parsed =
-            PasswordHash::new(hash).map_err(|e| anyhow!("Invalid password hash: {}", e))?;
+        let parsed = PasswordHash::new(hash).map_err(|e| anyhow!("Invalid password hash: {e}"))?;
 
         Ok(Argon2::default()
             .verify_password(password.as_bytes(), &parsed)
@@ -80,6 +87,10 @@ impl PasswordProvider for Argon2PasswordProvider {
 ///
 /// Free function for direct usage (Lua API, CLI). For provider-based usage,
 /// prefer `PasswordProvider::hash_password`.
+///
+/// # Errors
+///
+/// Returns an error if hashing fails.
 pub fn hash_password(password: &str) -> Result<HashedPassword> {
     Argon2PasswordProvider.hash_password(password)
 }
@@ -88,6 +99,10 @@ pub fn hash_password(password: &str) -> Result<HashedPassword> {
 ///
 /// Free function for direct usage (Lua API, CLI). For provider-based usage,
 /// prefer `PasswordProvider::verify_password`.
+///
+/// # Errors
+///
+/// Returns an error if the stored hash is malformed.
 pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
     Argon2PasswordProvider.verify_password(password, hash)
 }

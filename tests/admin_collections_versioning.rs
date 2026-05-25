@@ -2,6 +2,21 @@
 //!
 //! Covers: collection CRUD, search/filter/sort, validation, versioning, uploads (API).
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -14,6 +29,7 @@ use crap_cms::admin::server::build_router;
 use crap_cms::admin::templates;
 use crap_cms::admin::translations::Translations;
 use crap_cms::config::CrapConfig;
+use crap_cms::core::DocumentFields;
 use crap_cms::core::auth;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
@@ -54,10 +70,7 @@ fn make_users_def() -> CollectionDefinition {
             .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth {
-        enabled: true,
-        ..Default::default()
-    });
+    def.auth = Some(Auth::enabled());
     def
 }
 
@@ -65,7 +78,7 @@ struct TestApp {
     _tmp: tempfile::TempDir,
     router: axum::Router,
     pool: crap_cms::db::DbPool,
-    registry: crap_cms::core::SharedRegistry,
+    registry: Arc<crap_cms::core::Registry>,
     jwt_secret: JwtSecret,
 }
 
@@ -86,9 +99,9 @@ fn setup_app_with_config(
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &collections {
             reg.register_collection(def.clone());
         }
@@ -97,11 +110,12 @@ fn setup_app_with_config(
         }
     }
 
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -111,16 +125,16 @@ fn setup_app_with_config(
         .expect("create handlebars");
     let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
-    let has_auth = {
-        let reg = registry.read().unwrap();
-        reg.collections.values().any(|d| d.is_auth_collection())
-    };
+    let has_auth = registry
+        .collections
+        .values()
+        .any(crap_cms::core::CollectionDefinition::is_auth_collection);
 
     let state = AdminState {
         config,
         config_dir: tmp.path().to_path_buf(),
         pool: db_pool.clone(),
-        registry: Registry::snapshot(&registry),
+        registry: Arc::clone(&registry),
         handlebars,
         hook_runner,
         jwt_secret: "test-jwt-secret".into(),
@@ -153,7 +167,7 @@ fn setup_app_with_config(
         )
         .unwrap(),
         token_provider: std::sync::Arc::new(crap_cms::core::auth::JwtTokenProvider::new(
-            "test-secret",
+            "test-jwt-secret",
         )),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,
@@ -162,7 +176,7 @@ fn setup_app_with_config(
         ),
         populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
         cache: None,
-        custom_pages: Default::default(),
+        custom_pages: crap_cms::admin::custom_pages::CustomPageRegistry::default(),
     };
 
     let router = build_router(state);
@@ -177,16 +191,16 @@ fn setup_app_with_config(
 }
 
 fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
-    let reg = app.registry.read().unwrap();
+    let reg = &app.registry;
     let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([
-        ("email".to_string(), email.to_string()),
-        ("name".to_string(), "Test User".to_string()),
-    ]);
+    let data: DocumentFields = HashMap::from([
+        ("email".to_string(), json!(email)),
+        ("name".to_string(), json!("Test User")),
+    ])
+    .into();
     let doc = query::create(&tx, "users", &def, &data, None).unwrap();
     query::update_password(&tx, "users", &doc.id, password).unwrap();
     tx.commit().unwrap();
@@ -194,19 +208,28 @@ fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
 }
 
 fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
+    // `update_password` bumps `_session_version` to 1 the moment a password
+    // is set; the evaluator rejects a default-built Claims (session_version
+    // = 0) as `Invalid(StaleSession)`. Read the user's current version so
+    // the test cookie matches the DB.
+    let conn = app.pool.get().unwrap();
+    let session_version =
+        crap_cms::db::query::auth::get_session_version(&conn, "users", user_id).unwrap_or(0);
+    drop(conn);
     let claims = auth::Claims::builder(user_id, "users")
         .email(email)
+        .session_version(session_version)
         .exp((chrono::Utc::now().timestamp() as u64) + 3600)
         .build()
         .unwrap();
     let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();
-    format!("crap_session={}", token)
+    format!("crap_session={token}")
 }
 
 const TEST_CSRF: &str = "test-csrf-token-12345";
 
 fn auth_and_csrf(auth_cookie: &str) -> String {
-    format!("{}; crap_csrf={}", auth_cookie, TEST_CSRF)
+    format!("{auth_cookie}; crap_csrf={TEST_CSRF}")
 }
 
 async fn body_string(body: Body) -> String {
@@ -292,7 +315,7 @@ async fn edit_form_auth_collection_shows_password_field() {
     let resp = app
         .router
         .oneshot(
-            Request::get(format!("/admin/collections/users/{}", user_id))
+            Request::get(format!("/admin/collections/users/{user_id}"))
                 .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -325,12 +348,12 @@ async fn update_action_validation_error() {
     let cookie = make_auth_cookie(&app, &user_id, "update_val@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("articles").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([("title".to_string(), "Valid Title".to_string())]);
+    let data: DocumentFields = HashMap::from([("title".to_string(), json!("Valid Title"))]).into();
     let doc = query::create(&tx, "articles", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -349,8 +372,7 @@ async fn update_action_validation_error() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Expected 200 (validation error re-render) or redirect, got {}",
-        status
+        "Expected 200 (validation error re-render) or redirect, got {status}"
     );
 }
 
@@ -382,13 +404,13 @@ async fn update_action_post_with_method_delete() {
     let cookie = make_auth_cookie(&app, &user_id, "meth_del@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data =
-        std::collections::HashMap::from([("title".to_string(), "Method Delete Test".to_string())]);
+    let data: DocumentFields =
+        HashMap::from([("title".to_string(), json!("Method Delete Test"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -407,8 +429,7 @@ async fn update_action_post_with_method_delete() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "POST with _method=DELETE should succeed, got {}",
-        status
+        "POST with _method=DELETE should succeed, got {status}"
     );
 }
 
@@ -475,8 +496,7 @@ async fn versioned_collection_create_as_draft() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Create as draft should succeed, got {}",
-        status
+        "Create as draft should succeed, got {status}"
     );
 }
 
@@ -487,13 +507,13 @@ async fn versioned_collection_edit_shows_versions() {
     let cookie = make_auth_cookie(&app, &user_id, "editver@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("articles").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data =
-        std::collections::HashMap::from([("title".to_string(), "Versioned Doc".to_string())]);
+    let data: DocumentFields =
+        HashMap::from([("title".to_string(), json!("Versioned Doc"))]).into();
     let doc = query::create(&tx, "articles", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -522,13 +542,13 @@ async fn versioned_collection_update_unpublish() {
     let cookie = make_auth_cookie(&app, &user_id, "unpub@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("articles").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data =
-        std::collections::HashMap::from([("title".to_string(), "Published Post".to_string())]);
+    let data: DocumentFields =
+        HashMap::from([("title".to_string(), json!("Published Post"))]).into();
     let doc = query::create(&tx, "articles", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -547,8 +567,7 @@ async fn versioned_collection_update_unpublish() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Unpublish should succeed, got {}",
-        status
+        "Unpublish should succeed, got {status}"
     );
 }
 
@@ -558,7 +577,7 @@ async fn versioned_collection_update_unpublish() {
 /// which routed through `find_by_id_raw(... locale_ctx: None ...)`. With
 /// `None`, the SELECT generator falls back to bare column names (`title`)
 /// instead of locale-suffixed ones (`title__en`, `title__de`) — but the
-/// table only has the suffixed columns, so SQLite returned `no such
+/// table only has the suffixed columns, so `SQLite` returned `no such
 /// column: title`. The error was caught by the catch-all match arm in
 /// `do_update`, logged, and the user redirected to the same edit page —
 /// "unpublish button does nothing" from the user's perspective.
@@ -629,8 +648,7 @@ async fn versioned_collection_unpublish_with_localized_field() {
     let status = resp.status();
     assert!(
         status == StatusCode::OK || status == StatusCode::SEE_OTHER,
-        "Localized unpublish should succeed, got {}",
-        status
+        "Localized unpublish should succeed, got {status}"
     );
 
     // Confirm the document was actually flipped to draft, not just that the
@@ -688,13 +706,13 @@ async fn versioned_collection_versions_page() {
     let cookie = make_auth_cookie(&app, &user_id, "verpage@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("articles").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data =
-        std::collections::HashMap::from([("title".to_string(), "Versioned Page".to_string())]);
+    let data: DocumentFields =
+        HashMap::from([("title".to_string(), json!("Versioned Page"))]).into();
     let doc = query::create(&tx, "articles", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -723,12 +741,12 @@ async fn non_versioned_collection_versions_page_redirects() {
     let cookie = make_auth_cookie(&app, &user_id, "nover@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([("title".to_string(), "No Versions".to_string())]);
+    let data: DocumentFields = HashMap::from([("title".to_string(), json!("No Versions"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -747,8 +765,63 @@ async fn non_versioned_collection_versions_page_redirects() {
         status == StatusCode::SEE_OTHER
             || status == StatusCode::FOUND
             || status == StatusCode::TEMPORARY_REDIRECT,
-        "Non-versioned collection versions page should redirect, got {}",
-        status
+        "Non-versioned collection versions page should redirect, got {status}"
+    );
+}
+
+/// Regression: the GET restore-confirmation page (`/admin/collections/
+/// {slug}/{id}/versions/{version_id}/restore`) was 500-ing in
+/// production with `"read_hooks not set"` because `restore_confirm`
+/// built `ServiceContext` without `.read_hooks(...)`, and
+/// `find_version_by_id` requires hooks for the per-call access check.
+/// This test exercises the exact admin URL path that surfaced the bug.
+#[tokio::test]
+async fn restore_confirm_get_renders_for_existing_version() {
+    let app = setup_app(vec![make_versioned_posts_def(), make_users_def()], vec![]);
+    let user_id = create_test_user(&app, "rcconfirm@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "rcconfirm@test.com");
+
+    // Create a versioned article + a snapshot we can restore.
+    let def = {
+        let reg = &app.registry;
+        reg.get_collection("articles").unwrap().clone()
+    };
+    let mut conn = app.pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let data: DocumentFields =
+        HashMap::from([("title".to_string(), json!("Restore Confirm Target"))]).into();
+    let doc = query::create(&tx, "articles", &def, &data, None).unwrap();
+    let snap = query::build_snapshot(&tx, "articles", &def.fields, &doc).unwrap();
+    query::create_version(&tx, "articles", &doc.id, "published", &snap).unwrap();
+    tx.commit().unwrap();
+
+    let version = {
+        let conn = app.pool.get().unwrap();
+        query::list_versions(&conn, "articles", &doc.id, None, None)
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("at least one version")
+    };
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::get(format!(
+                "/admin/collections/articles/{}/versions/{}/restore",
+                doc.id, version.id
+            ))
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "GET restore-confirm must render OK; if this returns 500, \
+         `ServiceContext.read_hooks` is missing on the handler again"
     );
 }
 
@@ -759,12 +832,12 @@ async fn restore_version_non_versioned_redirects() {
     let cookie = make_auth_cookie(&app, &user_id, "restnv@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([("title".to_string(), "No Versions".to_string())]);
+    let data: DocumentFields = HashMap::from([("title".to_string(), json!("No Versions"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -785,8 +858,7 @@ async fn restore_version_non_versioned_redirects() {
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Restore version on non-versioned collection should redirect, got {}",
-        status
+        "Restore version on non-versioned collection should redirect, got {status}"
     );
 }
 

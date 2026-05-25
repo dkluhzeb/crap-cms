@@ -1,13 +1,28 @@
 //! Validation-focused tests for crap-cms hook lifecycle.
 //!
-//! Tests for validate_fields: required, unique, custom functions,
+//! Tests for `validate_fields`: required, unique, custom functions,
 //! block/array sub-fields, groups, min/max rows, date format, nested
 //! structures, and related edge cases.
 
-use std::collections::HashMap;
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_statements,
+    clippy::match_wildcard_for_single_variants,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal
+)]
+
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
+use crap_cms::core::DocumentFields;
 use crap_cms::core::field::{BlockDefinition, FieldDefinition, FieldTab, FieldType};
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
@@ -21,7 +36,7 @@ fn fixture_dir() -> PathBuf {
 fn setup() -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    crap_cms::core::SharedRegistry,
+    std::sync::Arc<crap_cms::core::Registry>,
     HookRunner,
 ) {
     let config_dir = fixture_dir();
@@ -36,7 +51,7 @@ fn setup() -> (
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("Failed to create HookRunner");
@@ -45,15 +60,13 @@ fn setup() -> (
 
 fn create_article(
     pool: &crap_cms::db::DbPool,
-    registry: &crap_cms::core::SharedRegistry,
-    data: &HashMap<String, String>,
+    registry: &std::sync::Arc<crap_cms::core::Registry>,
+    data: &DocumentFields,
 ) -> crap_cms::core::Document {
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("articles")
         .expect("articles not found")
         .clone();
-    drop(reg);
 
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
@@ -71,11 +84,9 @@ fn make_field(name: &str, field_type: FieldType) -> FieldDefinition {
 #[test]
 fn validate_required_present_passes() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Valid Title"));
 
     let conn = pool.get().expect("DB connection");
@@ -93,11 +104,9 @@ fn validate_required_present_passes() {
 #[test]
 fn validate_required_missing_fails() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
-    let data = HashMap::new(); // title is missing
+    let data = DocumentFields::new(); // title is missing
 
     let conn = pool.get().expect("DB connection");
     let result = runner.validate_fields(
@@ -119,11 +128,9 @@ fn validate_required_missing_fails() {
 #[test]
 fn validate_required_empty_string_fails() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("")); // empty string
 
     let conn = pool.get().expect("DB connection");
@@ -143,16 +150,14 @@ fn validate_unique_passes_when_no_conflict() {
     let (_tmp, pool, registry, runner) = setup();
 
     // Create one article
-    let mut create_data = HashMap::new();
-    create_data.insert("title".to_string(), "Unique Title".to_string());
+    let mut create_data = DocumentFields::new();
+    create_data.insert("title".to_string(), json!("Unique Title"));
     let _doc = create_article(&pool, &registry, &create_data);
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // Validate a different title — should pass
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Different Title"));
 
     let conn = pool.get().expect("DB connection");
@@ -172,16 +177,14 @@ fn validate_unique_fails_on_duplicate() {
     let (_tmp, pool, registry, runner) = setup();
 
     // Create one article
-    let mut create_data = HashMap::new();
-    create_data.insert("title".to_string(), "Duplicate Title".to_string());
+    let mut create_data = DocumentFields::new();
+    create_data.insert("title".to_string(), json!("Duplicate Title"));
     let _doc = create_article(&pool, &registry, &create_data);
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // Validate same title — should fail
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Duplicate Title"));
 
     let conn = pool.get().expect("DB connection");
@@ -207,16 +210,14 @@ fn validate_unique_excludes_self_on_update() {
     let (_tmp, pool, registry, runner) = setup();
 
     // Create one article
-    let mut create_data = HashMap::new();
-    create_data.insert("title".to_string(), "My Title".to_string());
+    let mut create_data = DocumentFields::new();
+    create_data.insert("title".to_string(), json!("My Title"));
     let doc = create_article(&pool, &registry, &create_data);
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // Validate same title with exclude_id = self — should pass (updating own doc)
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("My Title"));
 
     let conn = pool.get().expect("DB connection");
@@ -238,11 +239,9 @@ fn validate_unique_excludes_self_on_update() {
 #[test]
 fn custom_validate_function_passes() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Valid"));
     data.insert("word_count".to_string(), json!(42)); // positive
 
@@ -261,11 +260,9 @@ fn custom_validate_function_passes() {
 #[test]
 fn custom_validate_function_fails() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Valid"));
     data.insert("word_count".to_string(), json!(-5)); // negative!
 
@@ -289,11 +286,9 @@ fn custom_validate_function_fails() {
 #[test]
 fn custom_validate_returns_error_message() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Valid"));
     data.insert("word_count".to_string(), json!(-1));
 
@@ -332,7 +327,7 @@ fn validate_blocks_required_subfield_fails_when_empty() {
         .build();
 
     let fields = vec![blocks_field];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "content".to_string(),
         json!([
@@ -374,7 +369,7 @@ fn validate_blocks_required_subfield_passes_when_present() {
         .build();
 
     let fields = vec![blocks_field];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "content".to_string(),
         json!([
@@ -410,7 +405,7 @@ fn validate_blocks_skips_required_for_drafts() {
         .build();
 
     let fields = vec![blocks_field];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "content".to_string(),
         json!([
@@ -445,7 +440,7 @@ fn validate_array_required_subfield_fails_when_empty() {
         .build();
 
     let fields = vec![array_field];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "items".to_string(),
         json!([
@@ -492,7 +487,7 @@ fn validate_group_required_subfield_fails() {
         .build();
 
     let fields = vec![group_field];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     // Group sub-fields are stored as group__subfield at top level
     data.insert("seo__meta_title".to_string(), json!(""));
 
@@ -527,7 +522,7 @@ fn validate_group_required_subfield_passes() {
         .build();
 
     let fields = vec![group_field];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("seo__meta_title".to_string(), json!("My Title"));
 
     let conn = pool.get().expect("DB connection");
@@ -555,7 +550,7 @@ fn validate_group_skips_for_drafts() {
         .build();
 
     let fields = vec![group_field];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("seo__meta_title".to_string(), json!(""));
 
     let conn = pool.get().expect("DB connection");
@@ -586,7 +581,7 @@ fn validate_min_rows_fails() {
         .build();
 
     let fields = vec![array_field];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "items".to_string(),
         json!([
@@ -621,7 +616,7 @@ fn validate_max_rows_fails() {
         .build();
 
     let fields = vec![array_field];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "items".to_string(),
         json!([
@@ -658,7 +653,7 @@ fn validate_min_max_rows_passes_when_in_range() {
         .build();
 
     let fields = vec![array_field];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "items".to_string(),
         json!([
@@ -688,7 +683,7 @@ fn validate_min_rows_skips_for_drafts() {
         .build();
 
     let fields = vec![array_field];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([]));
 
     let conn = pool.get().expect("DB connection");
@@ -714,7 +709,7 @@ fn validate_date_field_valid_formats() {
     let conn = pool.get().expect("DB connection");
 
     // YYYY-MM-DD
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("due_date".to_string(), json!("2024-01-15"));
     assert!(
         runner
@@ -780,7 +775,7 @@ fn validate_date_field_invalid_format() {
     let fields = vec![date_field];
     let conn = pool.get().expect("DB connection");
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("due_date".to_string(), json!("not-a-date"));
     let result =
         runner.validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build());
@@ -803,7 +798,7 @@ fn validate_date_empty_is_ok() {
     let conn = pool.get().expect("DB connection");
 
     // Empty string should not trigger date format validation (is_empty = true)
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("due_date".to_string(), json!(""));
     assert!(
         runner
@@ -833,7 +828,7 @@ fn validate_date_subfield_in_array_rows() {
         .build();
 
     let fields = vec![array_field];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "events".to_string(),
         json!([
@@ -869,7 +864,7 @@ fn validate_custom_function_in_array_subfield() {
         .build();
 
     let fields = vec![array_field];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "scores".to_string(),
         json!([
@@ -909,7 +904,7 @@ fn validate_nested_array_in_array_rows() {
         .build();
 
     let fields = vec![nested_array];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "outer".to_string(),
         json!([
@@ -956,7 +951,7 @@ fn validate_nested_blocks_in_array_rows() {
         .build();
 
     let fields = vec![outer];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "sections".to_string(),
         json!([
@@ -1001,7 +996,7 @@ fn validate_group_in_array_row_required_subfield() {
         .build();
 
     let fields = vec![array_field];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     // Group sub-fields in array rows use nested object format
     data.insert(
         "items".to_string(),
@@ -1039,7 +1034,7 @@ fn validate_group_date_subfield_in_array_row() {
         .build();
 
     let fields = vec![array_field];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "items".to_string(),
         json!([
@@ -1079,7 +1074,7 @@ fn validate_group_custom_validate_in_array_row() {
         .build();
 
     let fields = vec![array_field];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "items".to_string(),
         json!([
@@ -1116,7 +1111,7 @@ fn validate_required_field_on_update_skips_when_absent() {
 
     // On update (exclude_id set), if the required field is absent from data
     // (partial update), it should pass — we're keeping the existing value
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("body".to_string(), json!("updated body only"));
     // title is NOT in data
 
@@ -1145,7 +1140,7 @@ fn validate_required_field_checkbox_always_passes() {
     ];
 
     // Checkbox with required=true should pass even with no data
-    let data = HashMap::new();
+    let data = DocumentFields::new();
     let conn = pool.get().expect("DB connection");
     let result =
         runner.validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build());
@@ -1168,7 +1163,7 @@ fn custom_validate_returns_false_generic_message() {
             .build(),
     ];
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("any value"));
 
     let conn = pool.get().expect("DB connection");
@@ -1201,7 +1196,7 @@ fn validate_required_array_must_have_items() {
     let conn = pool.get().expect("DB connection");
 
     // Empty array should fail
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("tags".to_string(), json!([]));
     let result =
         runner.validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build());
@@ -1234,7 +1229,7 @@ fn validate_blocks_unknown_block_type_rejected() {
         .build();
 
     let fields = vec![blocks_field];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "content".to_string(),
         json!([
@@ -1269,7 +1264,7 @@ fn validate_checkbox_subfield_in_array_never_fails_required() {
         .build();
 
     let fields = vec![array_field];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     // Checkbox absent/empty should NOT fail required check
     data.insert("items".to_string(), json!([{}]));
 
@@ -1301,7 +1296,7 @@ fn validate_checkbox_group_subfield_in_array_never_fails_required() {
         .build();
 
     let fields = vec![array_field];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{}]));
 
     let conn = pool.get().expect("DB connection");
@@ -1333,7 +1328,7 @@ fn validate_blocks_non_object_row_rejected() {
         .build();
 
     let fields = vec![blocks_field];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("content".to_string(), json!(["not-an-object"]));
 
     let conn = pool.get().expect("DB connection");
@@ -1379,7 +1374,7 @@ fn validate_row_inside_tabs_inside_array_via_hook_runner() {
             .build(),
     ];
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "team_members".to_string(),
         json!([{"first_name": "", "last_name": ""}]),
@@ -1424,7 +1419,7 @@ fn validate_group_inside_tabs_inside_array_via_hook_runner() {
             .build(),
     ];
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"meta": {"title": ""}}]));
 
     let conn = pool.get().expect("DB connection");

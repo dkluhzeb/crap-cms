@@ -1,19 +1,18 @@
 //! Create operation and its helper.
 
-use std::collections::HashMap;
-
 use anyhow::{Context as _, Result, anyhow};
 use nanoid::nanoid;
+use serde_json::Value;
 
 use crate::{
-    core::{CollectionDefinition, Document, FieldDefinition, FieldType},
+    core::{CollectionDefinition, Document, DocumentFields, FieldDefinition, FieldType},
     db::{
         DbConnection, DbValue, LocaleContext,
         query::{
-            coerce_value,
+            coerce_json_value,
             helpers::{
-                coerce_date_value, prefixed_name, tz_column, utc_now, validate_no_null_byte,
-                walk_leaf_fields,
+                coerce_date_value_json, prefixed_name, tz_column, utc_now,
+                validate_no_null_byte_json, walk_leaf_fields,
             },
             locale_write_column,
             read::find_by_id_raw,
@@ -40,11 +39,15 @@ impl InsertCollector {
 }
 
 /// Create a new document. Returns the created document.
+///
+/// # Errors
+///
+/// Returns a backend error if the INSERT, join-table writes, or re-read fails.
 pub fn create(
     conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
-    data: &HashMap<String, String>,
+    data: &DocumentFields,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Document> {
     let id = nanoid!();
@@ -57,7 +60,7 @@ pub fn create(
         idx: 2,
     };
 
-    collect_insert_params(&def.fields, data, &locale_ctx, &mut collector, conn)?;
+    collect_insert_params(&def.fields, data, locale_ctx, &mut collector, conn)?;
 
     if def.timestamps {
         collector.push(conn, "created_at".to_string(), DbValue::Text(now.clone()));
@@ -72,7 +75,7 @@ pub fn create(
     );
 
     conn.execute(&sql, &collector.params)
-        .with_context(|| format!("Failed to insert into '{}'", slug))?;
+        .with_context(|| format!("Failed to insert into '{slug}'"))?;
 
     // Return the created document with the same locale context.
     find_by_id_raw(conn, slug, def, &id, locale_ctx, false)?
@@ -82,8 +85,8 @@ pub fn create(
 /// Collect INSERT params for a single leaf (scalar) field.
 fn collect_leaf_param(
     field: &FieldDefinition,
-    data: &HashMap<String, String>,
-    locale_ctx: &Option<&LocaleContext>,
+    data: &DocumentFields,
+    locale_ctx: Option<&LocaleContext>,
     collector: &mut InsertCollector,
     conn: &dyn DbConnection,
     prefix: &str,
@@ -107,18 +110,22 @@ fn collect_leaf_param(
         None
     };
 
-    validate_no_null_byte(&field.field_type, &data_key, value)?;
+    validate_no_null_byte_json(&field.field_type, &data_key, value)?;
 
     let db_val = match tz_key.as_ref() {
-        Some(tk) => coerce_date_value(&field.field_type, value, data.get(tk).map(|s| s.as_str())),
-        None => coerce_value(&field.field_type, value),
+        Some(tk) => coerce_date_value_json(
+            &field.field_type,
+            value,
+            data.get(tk).and_then(Value::as_str),
+        ),
+        None => coerce_json_value(&field.field_type, value),
     };
 
     collector.push(conn, col_name, db_val);
 
     if let Some(tk) = tz_key {
         let tz_col = locale_write_column(&tk, field, locale_ctx, inherited_localized)?;
-        let tz_val = data.get(&tk).map(|s| s.as_str()).unwrap_or("");
+        let tz_val = data.get(&tk).and_then(Value::as_str).unwrap_or("");
         let db_val = if tz_val.is_empty() {
             DbValue::Null
         } else {
@@ -135,8 +142,8 @@ fn collect_leaf_param(
 /// Uses `walk_leaf_fields` to handle Group/Row/Collapsible/Tabs recursion.
 pub(super) fn collect_insert_params(
     fields: &[FieldDefinition],
-    data: &HashMap<String, String>,
-    locale_ctx: &Option<&LocaleContext>,
+    data: &DocumentFields,
+    locale_ctx: Option<&LocaleContext>,
     collector: &mut InsertCollector,
     conn: &dyn DbConnection,
 ) -> Result<()> {
@@ -205,8 +212,8 @@ mod tests {
     fn create_basic() {
         let (_dir, conn) = setup_db(posts_ddl());
         let def = test_def();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Hello World".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Hello World"));
 
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         assert!(!doc.id.is_empty());
@@ -217,7 +224,7 @@ mod tests {
     fn create_with_timestamps() {
         let (_dir, conn) = setup_db(posts_ddl());
         let def = test_def();
-        let data = HashMap::new();
+        let data = DocumentFields::new();
 
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         assert!(doc.created_at.is_some(), "created_at should be set");
@@ -244,7 +251,7 @@ mod tests {
             .push(FieldDefinition::builder("published", FieldType::Checkbox).build());
 
         // Create without providing the checkbox field
-        let data = HashMap::new();
+        let data = DocumentFields::new();
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
 
         // Checkbox should default to 0 (integer)
@@ -277,10 +284,10 @@ mod tests {
         ];
         let def = def;
 
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Post1".to_string());
-        data.insert("meta__color".to_string(), "red".to_string());
-        data.insert("meta__size".to_string(), "large".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Post1"));
+        data.insert("meta__color".to_string(), json!("red"));
+        data.insert("meta__size".to_string(), json!("large"));
 
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         assert_eq!(doc.get_str("title"), Some("Post1"));
@@ -303,8 +310,8 @@ mod tests {
         def.fields = vec![FieldDefinition::builder("name", FieldType::Text).build()];
         let def = def;
 
-        let mut data = HashMap::new();
-        data.insert("name".to_string(), "Event1".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("name".to_string(), json!("Event1"));
 
         let doc = create(&conn, "events", &def, &data, None).unwrap();
         assert_eq!(doc.get_str("name"), Some("Event1"));
@@ -340,7 +347,7 @@ mod tests {
         let def = def;
 
         // Create without providing the checkbox group sub-field — should default to 0
-        let data = HashMap::new();
+        let data = DocumentFields::new();
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         let val = doc.get("settings__featured").unwrap();
         assert_eq!(val, &json!(0));
@@ -369,9 +376,9 @@ mod tests {
         ];
         let def = def;
 
-        let mut data = HashMap::new();
-        data.insert("notes".to_string(), "Some notes".to_string());
-        data.insert("footer".to_string(), "Copyright".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("notes".to_string(), json!("Some notes"));
+        data.insert("footer".to_string(), json!("Copyright"));
 
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         assert_eq!(doc.get_str("notes"), Some("Some notes"));
@@ -407,9 +414,9 @@ mod tests {
         ];
         let def = def;
 
-        let mut data = HashMap::new();
-        data.insert("body".to_string(), "Hello world".to_string());
-        data.insert("slug".to_string(), "hello-world".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("body".to_string(), json!("Hello world"));
+        data.insert("slug".to_string(), json!("hello-world"));
 
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         assert_eq!(doc.get_str("body"), Some("Hello world"));
@@ -453,13 +460,10 @@ mod tests {
         ];
         let def = def;
 
-        let mut data = HashMap::new();
-        data.insert(
-            "social__github".to_string(),
-            "https://github.com".to_string(),
-        );
-        data.insert("social__twitter".to_string(), "@test".to_string());
-        data.insert("body".to_string(), "Content here".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("social__github".to_string(), json!("https://github.com"));
+        data.insert("social__twitter".to_string(), json!("@test"));
+        data.insert("body".to_string(), json!("Content here"));
 
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         assert_eq!(doc.get_str("social__github"), Some("https://github.com"));
@@ -501,9 +505,9 @@ mod tests {
         ];
         let def = def;
 
-        let mut data = HashMap::new();
-        data.insert("og__image".to_string(), "hero.jpg".to_string());
-        data.insert("canonical".to_string(), "https://example.com".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("og__image".to_string(), json!("hero.jpg"));
+        data.insert("canonical".to_string(), json!("https://example.com"));
 
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         assert_eq!(doc.get_str("og__image"), Some("hero.jpg"));
@@ -537,9 +541,9 @@ mod tests {
         ];
         let def = def;
 
-        let mut data = HashMap::new();
-        data.insert("meta__title".to_string(), "Hello".to_string());
-        data.insert("meta__slug".to_string(), "hello".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("meta__title".to_string(), json!("Hello"));
+        data.insert("meta__slug".to_string(), json!("hello"));
 
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         assert_eq!(doc.get_str("meta__title"), Some("Hello"));
@@ -581,9 +585,9 @@ mod tests {
         ];
         let def = def;
 
-        let mut data = HashMap::new();
-        data.insert("settings__theme".to_string(), "dark".to_string());
-        data.insert("settings__cache_ttl".to_string(), "3600".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("settings__theme".to_string(), json!("dark"));
+        data.insert("settings__cache_ttl".to_string(), json!("3600"));
 
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         assert_eq!(doc.get_str("settings__theme"), Some("dark"));
@@ -622,8 +626,8 @@ mod tests {
         ];
         let def = def;
 
-        let mut data = HashMap::new();
-        data.insert("outer__inner__deep".to_string(), "bottom".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("outer__inner__deep".to_string(), json!("bottom"));
 
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         assert_eq!(doc.get_str("outer__inner__deep"), Some("bottom"));
@@ -650,9 +654,9 @@ mod tests {
                 .build(),
         ];
 
-        let mut data = HashMap::new();
-        data.insert("start_date".to_string(), "2024-01-15T09:00".to_string());
-        data.insert("start_date_tz".to_string(), "America/New_York".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("start_date".to_string(), json!("2024-01-15T09:00"));
+        data.insert("start_date_tz".to_string(), json!("America/New_York"));
 
         let doc = create(&conn, "events", &def, &data, None).unwrap();
 
@@ -680,8 +684,8 @@ mod tests {
                 .build(),
         ];
 
-        let mut data = HashMap::new();
-        data.insert("start_date".to_string(), "2024-01-15T09:00".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("start_date".to_string(), json!("2024-01-15T09:00"));
         // No timezone value provided
 
         let doc = create(&conn, "events", &def, &data, None).unwrap();
@@ -704,8 +708,8 @@ mod tests {
         let mut def = CollectionDefinition::new("events");
         def.fields = vec![FieldDefinition::builder("event_date", FieldType::Date).build()];
 
-        let mut data = HashMap::new();
-        data.insert("event_date".to_string(), "2024-01-15".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("event_date".to_string(), json!("2024-01-15"));
 
         let doc = create(&conn, "events", &def, &data, None).unwrap();
         assert_eq!(doc.get_str("event_date"), Some("2024-01-15T12:00:00.000Z"));
@@ -735,10 +739,10 @@ mod tests {
                 .build(),
         ];
 
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Conference".to_string());
-        data.insert("start_date".to_string(), "2024-06-15T09:00".to_string());
-        data.insert("start_date_tz".to_string(), "America/New_York".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Conference"));
+        data.insert("start_date".to_string(), json!("2024-06-15T09:00"));
+        data.insert("start_date_tz".to_string(), json!("America/New_York"));
 
         let doc = create(&conn, "events", &def, &data, None).unwrap();
 
@@ -781,15 +785,9 @@ mod tests {
                 .build(),
         ];
 
-        let mut data = HashMap::new();
-        data.insert(
-            "schedule__start".to_string(),
-            "2024-06-15T09:00".to_string(),
-        );
-        data.insert(
-            "schedule__start_tz".to_string(),
-            "Europe/Berlin".to_string(),
-        );
+        let mut data = DocumentFields::new();
+        data.insert("schedule__start".to_string(), json!("2024-06-15T09:00"));
+        data.insert("schedule__start_tz".to_string(), json!("Europe/Berlin"));
 
         let doc = create(&conn, "events", &def, &data, None).unwrap();
 
@@ -827,15 +825,15 @@ mod tests {
                 .build(),
         ];
 
-        let mut data = HashMap::new();
-        data.insert("start_date".to_string(), String::new());
-        data.insert("start_date_tz".to_string(), "America/New_York".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("start_date".to_string(), json!(""));
+        data.insert("start_date_tz".to_string(), json!("America/New_York"));
 
         let doc = create(&conn, "events", &def, &data, None).unwrap();
 
         // Empty date with timezone should result in null
         assert!(
-            doc.get("start_date").is_none_or(|v| v.is_null()),
+            doc.get("start_date").is_none_or(serde_json::Value::is_null),
             "Empty date value should be stored as null"
         );
     }

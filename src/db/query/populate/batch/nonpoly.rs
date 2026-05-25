@@ -49,7 +49,7 @@ pub(super) fn batch_nonpoly_has_many(
         let ids: Vec<String> = match doc.fields.get(field_name) {
             Some(Value::Array(arr)) => arr
                 .iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
                 .collect(),
             _ => continue,
         };
@@ -199,12 +199,12 @@ pub(super) fn batch_fetch_single_collection(
 mod tests {
     use serde_json::json;
 
-    use super::super::super::test_helpers::*;
-    use super::super::super::{PopulateContext, PopulateOpts, populate_cache_key};
-    use super::super::populate_relationships_batch_cached;
     use crate::core::cache::{CacheBackend, MemoryCache, NoneCache};
     use crate::core::field::*;
     use crate::core::{Document, Registry};
+    use crate::db::query::populate::batch::populate_relationships_batch_cached;
+    use crate::db::query::populate::test_helpers::*;
+    use crate::db::query::populate::{PopulateContext, PopulateOpts, populate_cache_key};
     use rusqlite::Connection;
 
     // ── Non-polymorphic has-one: shared refs ──────────────────────────────────
@@ -271,12 +271,10 @@ mod tests {
             let author = doc
                 .fields
                 .get("author")
-                .unwrap_or_else(|| panic!("doc {} missing author", i));
+                .unwrap_or_else(|| panic!("doc {i} missing author"));
             assert!(
                 author.is_object(),
-                "doc {} author should be object, got {:?}",
-                i,
-                author
+                "doc {i} author should be object, got {author:?}"
             );
         }
         // p1 and p2 share the same author

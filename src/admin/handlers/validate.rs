@@ -12,9 +12,7 @@ use tracing::error;
 
 use crate::{
     admin::{AdminState, Translations, handlers::shared::translate_validation_errors},
-    core::{
-        Document, FieldDefinition, auth::AuthUser, collection::Hooks, validate::ValidationError,
-    },
+    core::{AuthUser, Document, DocumentFields, FieldDefinition, Hooks, ValidationError},
     db::{DbPool, query::LocaleContext},
     hooks::HookRunner,
     service,
@@ -23,7 +21,7 @@ use crate::{
 /// JSON request body for validation endpoints.
 #[derive(Deserialize)]
 pub struct ValidateRequest {
-    pub data: HashMap<String, Value>,
+    pub data: DocumentFields,
     #[serde(default)]
     pub draft: bool,
     pub locale: Option<String>,
@@ -49,12 +47,12 @@ pub fn validation_ok_response() -> Response {
     Json(json!({ "valid": true })).into_response()
 }
 
-/// Convert a `HashMap<String, Value>` into a `HashMap<String, String>` suitable for
-/// the form processing pipeline (transform_select_has_many, extract_join_data_from_form).
+/// Convert a `DocumentFields` into a `HashMap<String, String>` suitable for
+/// the form processing pipeline (`transform_select_has_many`, `extract_join_data_from_form`).
 ///
 /// Strings pass through, numbers/bools become their string representation, nulls become
 /// empty strings, and arrays/objects become their JSON serialization.
-pub fn values_to_string_map(data: &HashMap<String, Value>) -> HashMap<String, String> {
+pub fn values_to_string_map(data: &DocumentFields) -> HashMap<String, String> {
     data.iter()
         .map(|(k, v)| {
             let s = match v {
@@ -88,15 +86,14 @@ pub struct RunValidationParams<'a> {
     pub table_name: &'a str,
     pub operation: &'a str,
     pub exclude_id: Option<&'a str>,
-    pub form_data: &'a HashMap<String, String>,
-    pub join_data: &'a HashMap<String, Value>,
+    pub data: &'a DocumentFields,
     pub is_draft: bool,
     pub soft_delete: bool,
     pub locale_ctx: Option<&'a LocaleContext>,
     pub user_doc: Option<&'a Document>,
 }
 
-/// Run the before_validate → validate pipeline inside a rolled-back transaction.
+/// Run the `before_validate` → validate pipeline inside a rolled-back transaction.
 ///
 /// Used by both collection and global validation endpoints. The `table_name`
 /// parameter allows globals to pass `_global_{slug}` while collections pass
@@ -115,7 +112,7 @@ pub fn run_validation(p: &RunValidationParams) -> anyhow::Result<()> {
 
     let wh = service::RunnerWriteHooks::new(p.runner).with_conn(&tx);
 
-    let input = service::WriteInput::builder(p.form_data.clone(), p.join_data)
+    let input = service::WriteInput::builder(p.data.clone())
         .locale_ctx(p.locale_ctx)
         .locale(locale)
         .draft(p.is_draft)
@@ -132,7 +129,7 @@ pub fn run_validation(p: &RunValidationParams) -> anyhow::Result<()> {
     };
 
     service::validate_document(&tx, &wh, &validate_ctx, input, p.user_doc)
-        .map_err(|e| e.into_anyhow())?;
+        .map_err(crate::service::ServiceError::into_anyhow)?;
 
     // Always rollback — this is validation only
     drop(tx);
@@ -143,17 +140,14 @@ pub fn run_validation(p: &RunValidationParams) -> anyhow::Result<()> {
 /// Handle the result of a validation run, returning the appropriate JSON response.
 pub fn handle_validation_result(
     result: Result<anyhow::Result<()>, tokio::task::JoinError>,
-    auth_user: &Option<Extension<AuthUser>>,
+    auth_user: Option<&Extension<AuthUser>>,
     state: &AdminState,
 ) -> Response {
     match result {
         Ok(Ok(())) => validation_ok_response(),
         Ok(Err(e)) => {
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
-                let locale = auth_user
-                    .as_ref()
-                    .map(|Extension(au)| au.ui_locale.as_str())
-                    .unwrap_or("en");
+                let locale = auth_user.map_or("en", |Extension(au)| au.ui_locale.as_str());
 
                 validation_error_response(ve, &state.translations, locale)
             } else {
@@ -174,7 +168,7 @@ mod tests {
 
     #[test]
     fn values_to_string_map_converts_types() {
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("title".to_string(), json!("Hello"));
         data.insert("count".to_string(), json!(42));
         data.insert("active".to_string(), json!(true));

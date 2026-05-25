@@ -8,6 +8,10 @@ use crate::db::migrate::helpers::table_exists;
 use crate::db::{DbConnection, DbPool, DbValue};
 
 /// List all `*.lua` files in the migrations directory, sorted by filename (chronological).
+///
+/// # Errors
+///
+/// Returns an error if reading the migrations directory fails.
 pub fn list_migration_files(migrations_dir: &Path) -> Result<Vec<String>> {
     if !migrations_dir.exists() {
         return Ok(Vec::new());
@@ -34,6 +38,10 @@ pub fn list_migration_files(migrations_dir: &Path) -> Result<Vec<String>> {
 }
 
 /// Get filenames of all applied migrations (unordered set).
+///
+/// # Errors
+///
+/// Returns a backend error if the connection, table check, or SELECT fails.
 pub fn get_applied_migrations(pool: &DbPool) -> Result<HashSet<String>> {
     let conn = pool.get().context("Failed to get DB connection")?;
     // Table may not exist yet if sync_all hasn't run
@@ -54,6 +62,10 @@ pub fn get_applied_migrations(pool: &DbPool) -> Result<HashSet<String>> {
 }
 
 /// Get applied migration filenames, most recent first.
+///
+/// # Errors
+///
+/// Returns a backend error if the connection, table check, or SELECT fails.
 pub fn get_applied_migrations_desc(pool: &DbPool) -> Result<Vec<String>> {
     let conn = pool.get().context("Failed to get DB connection")?;
     let exists = table_exists(&conn, "_crap_migrations")?;
@@ -76,6 +88,10 @@ pub fn get_applied_migrations_desc(pool: &DbPool) -> Result<Vec<String>> {
 }
 
 /// Get pending migration filenames (files on disk minus already applied), sorted ascending.
+///
+/// # Errors
+///
+/// Returns an error if listing files on disk or reading the applied set fails.
 pub fn get_pending_migrations(pool: &DbPool, migrations_dir: &Path) -> Result<Vec<String>> {
     let all = list_migration_files(migrations_dir)?;
     let applied = get_applied_migrations(pool)?;
@@ -84,6 +100,10 @@ pub fn get_pending_migrations(pool: &DbPool, migrations_dir: &Path) -> Result<Ve
 }
 
 /// Record a migration as applied.
+///
+/// # Errors
+///
+/// Returns a backend error if the INSERT fails.
 pub fn record_migration(conn: &dyn DbConnection, filename: &str) -> Result<()> {
     conn.execute(
         &format!(
@@ -92,12 +112,16 @@ pub fn record_migration(conn: &dyn DbConnection, filename: &str) -> Result<()> {
         ),
         &[DbValue::Text(filename.to_string())],
     )
-    .with_context(|| format!("Failed to record migration {}", filename))?;
+    .with_context(|| format!("Failed to record migration {filename}"))?;
 
     Ok(())
 }
 
 /// Remove a migration record (for rollback).
+///
+/// # Errors
+///
+/// Returns a backend error if the DELETE fails.
 pub fn remove_migration(conn: &dyn DbConnection, filename: &str) -> Result<()> {
     conn.execute(
         &format!(
@@ -106,19 +130,23 @@ pub fn remove_migration(conn: &dyn DbConnection, filename: &str) -> Result<()> {
         ),
         &[DbValue::Text(filename.to_string())],
     )
-    .with_context(|| format!("Failed to remove migration record {}", filename))?;
+    .with_context(|| format!("Failed to remove migration record {filename}"))?;
 
     Ok(())
 }
 
 /// Drop all user tables (for `migrate fresh`). Drops everything except sqlite internals.
+///
+/// # Errors
+///
+/// Returns a backend error if listing tables or any DROP statement fails.
 pub fn drop_all_tables(pool: &DbPool) -> Result<()> {
     let conn = pool.get().context("Failed to get DB connection")?;
     let tables = conn.list_user_tables()?;
 
     for table in &tables {
-        conn.execute_ddl(&format!("DROP TABLE IF EXISTS \"{}\"", table), &[])
-            .with_context(|| format!("Failed to drop table {}", table))?;
+        conn.execute_ddl(&format!("DROP TABLE IF EXISTS \"{table}\""), &[])
+            .with_context(|| format!("Failed to drop table {table}"))?;
 
         info!("Dropped table: {}", table);
     }

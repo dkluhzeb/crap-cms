@@ -7,6 +7,10 @@ use crate::{
 };
 
 /// Retrieve a single job run by its ID.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails.
 pub fn get_job_run(conn: &dyn DbConnection, id: &str) -> Result<Option<JobRun>, ServiceError> {
     query::jobs::get_job_run(conn, id).map_err(ServiceError::Internal)
 }

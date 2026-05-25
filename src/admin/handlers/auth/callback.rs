@@ -19,14 +19,34 @@ use tracing::error;
 use crate::{
     admin::{
         AdminState,
-        handlers::auth::{
-            client_ip, create_session_token, extract_user_email, find_auth_collection,
-            headers_to_map, session_redirect,
+        handlers::{
+            auth::{
+                client_ip, create_session_token, extract_user_email, find_auth_collection,
+                headers_to_map, session_redirect,
+            },
+            shared::paths,
         },
     },
     core::Document,
+    db::DbPool,
+    hooks::HookRunner,
     service::{self, ServiceContext},
 };
+
+/// Pull a connection from the pool and execute the configured Lua auth
+/// strategy hook for an external auth flow (OAuth callback etc.).
+fn run_auth_strategy_blocking(
+    pool: &DbPool,
+    hook_runner: &HookRunner,
+    hook_ref: &str,
+    collection: &str,
+    ctx: &HashMap<String, String>,
+) -> anyhow::Result<Option<Document>> {
+    let conn = pool.get()?;
+    hook_runner
+        .run_auth_strategy(hook_ref, collection, ctx, &conn)
+        .map_err(|e| anyhow!("Auth callback hook error: {e:#}"))
+}
 
 /// Run the Lua auth callback hook in a blocking task.
 ///
@@ -40,7 +60,7 @@ async fn run_auth_callback_hook(
     params: &HashMap<String, String>,
     collection: &str,
 ) -> Result<Option<Document>, ()> {
-    let hook_ref = format!("auth_callback.{}", name);
+    let hook_ref = format!("auth_callback.{name}");
     let pool = state.pool.clone();
     let hook_runner = state.hook_runner.clone();
     let collection = collection.to_string();
@@ -48,15 +68,11 @@ async fn run_auth_callback_hook(
     let mut ctx = headers_to_map(headers);
 
     for (k, v) in params {
-        ctx.insert(format!("_query_{}", k), v.clone());
+        ctx.insert(format!("_query_{k}"), v.clone());
     }
 
     let result = task::spawn_blocking(move || {
-        let conn = pool.get()?;
-
-        hook_runner
-            .run_auth_strategy(&hook_ref, &collection, &ctx, &conn)
-            .map_err(|e| anyhow!("Auth callback hook error: {:#}", e))
+        run_auth_strategy_blocking(&pool, &hook_runner, &hook_ref, &collection, &ctx)
     })
     .await;
 
@@ -100,26 +116,24 @@ pub async fn auth_callback(
     let ip = client_ip(&headers, &addr, &state.config.server);
 
     if state.ip_login_limiter.is_blocked(&ip) {
-        return Redirect::to("/admin/login").into_response();
+        return Redirect::to(paths::LOGIN).into_response();
     }
 
-    let collection = match find_auth_collection(&state.registry) {
-        Some(c) => c,
-        None => return Redirect::to("/admin/login").into_response(),
+    let Some(collection) = find_auth_collection(&state.registry) else {
+        return Redirect::to(paths::LOGIN).into_response();
     };
 
     let user = match run_auth_callback_hook(&state, &name, &headers, &params, &collection).await {
         Ok(Some(doc)) => doc,
         Ok(None) => {
             state.ip_login_limiter.record_failure(&ip);
-            return Redirect::to("/admin/login").into_response();
+            return Redirect::to(paths::LOGIN).into_response();
         }
-        Err(()) => return Redirect::to("/admin/login").into_response(),
+        Err(()) => return Redirect::to(paths::LOGIN).into_response(),
     };
 
-    let session_version = match fetch_session_version(&state, &collection, &user.id) {
-        Some(v) => v,
-        None => return Redirect::to("/admin/login").into_response(),
+    let Some(session_version) = fetch_session_version(&state, &collection, &user.id) else {
+        return Redirect::to(paths::LOGIN).into_response();
     };
 
     let email = extract_user_email(&user);
@@ -130,12 +144,12 @@ pub async fn auth_callback(
         &collection,
         email,
         session_version,
-        Utc::now().timestamp().max(0) as u64,
+        Utc::now().timestamp().max(0).cast_unsigned(),
     ) {
         Ok(s) => s,
         Err(e) => {
             error!("Auth callback: {}", e);
-            return Redirect::to("/admin/login").into_response();
+            return Redirect::to(paths::LOGIN).into_response();
         }
     };
 

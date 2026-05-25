@@ -7,42 +7,116 @@ use std::{
 use tracing::{debug, warn};
 
 use crate::core::{
-    CollectionDefinition, FieldDefinition, FieldType, Slug, collection::GlobalDefinition,
-    job::JobDefinition, richtext::RichtextNodeDef,
+    CollectionDefinition, FieldDefinition, FieldType, Slug,
+    collection::{Activation, AuthMethod, GlobalDefinition, Surface},
+    job::JobDefinition,
+    richtext::RichtextNodeDef,
 };
 
+/// Materialised pointer to a single `AuthMethod::Strategy` in the
+/// registry. Carries the bits the evaluator needs to invoke the hook
+/// without re-walking the collection tree per request.
+#[derive(Debug, Clone)]
+pub struct StrategyEntry {
+    /// Collection slug the strategy was declared on. Threaded into
+    /// the Lua hook as `ctx.collection` and used to look up the
+    /// collection's auth config (locked / `verify_email` / token
+    /// expiry) when a strategy hit produces a user document.
+    pub slug: Slug,
+    /// Identifier used in logs and `ResolvedMethod::Strategy.name`.
+    pub name: String,
+    /// Lua function reference (`module.function`) for the strategy.
+    pub authenticate: String,
+}
+
 /// Holds all collection, global, and job definitions loaded at startup.
-#[derive(Clone)]
+///
+/// `always_strategies` and `header_strategies` are precomputed indexes
+/// derived from the strategy `AuthMethod`s in `collections`. They're
+/// built by [`Self::rebuild_strategy_index`] (called at snapshot
+/// time) so the per-request auth evaluator can answer "does any
+/// strategy fire for this request?" without walking every collection
+/// × method on every call. Previously every gRPC request paid an
+/// O(collections × methods × activation-checks) scan even when
+/// nothing was going to match.
+#[derive(Clone, Default)]
 pub struct Registry {
     pub collections: HashMap<Slug, CollectionDefinition>,
     pub globals: HashMap<Slug, GlobalDefinition>,
     pub jobs: HashMap<Slug, JobDefinition>,
     pub richtext_nodes: HashMap<String, RichtextNodeDef>,
+    /// `Activation::Always`-activated strategies grouped by the
+    /// surface they fire on. Looked up once per request to enumerate
+    /// strategies that run unconditionally for that surface.
+    pub always_strategies: HashMap<Surface, Vec<StrategyEntry>>,
+    /// `Activation::Header { header }` strategies grouped by
+    /// `(lowercased-header-name, surface)`. Looked up once per
+    /// request-header to enumerate strategies discriminated by that
+    /// header on that surface. Header names are stored lowercased so
+    /// the lookup matches HTTP / gRPC metadata case-insensitivity
+    /// without per-request normalisation.
+    pub header_strategies: HashMap<(String, Surface), Vec<StrategyEntry>>,
 }
 
-/// Thread-safe shared reference to the registry.
+/// Thread-safe shared reference to the registry. Used during init when
+/// definitions are being mutated; runtime VMs hold an `Arc<Registry>`
+/// snapshot instead.
 pub type SharedRegistry = Arc<RwLock<Registry>>;
 
-impl Default for Registry {
-    fn default() -> Self {
-        Self::new()
+/// Read-only registry handle. Implemented for both [`SharedRegistry`]
+/// (init-phase, locks per call) and `Arc<Registry>` (runtime snapshot,
+/// no lock), so registration helpers can stay flavour-agnostic and a
+/// single function body covers both phases. Each call to [`with`]
+/// borrows the underlying [`Registry`] for the duration of the closure.
+pub trait RegistryRead: Clone + Send + Sync + 'static {
+    /// Invoke `f` with a borrow of the underlying [`Registry`]. Returns
+    /// `Err` if the underlying lock is poisoned (only possible for the
+    /// `SharedRegistry` implementation).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryLockPoisoned`] when the `SharedRegistry` mutex is
+    /// poisoned. The `Arc<Registry>` snapshot implementation never errors.
+    fn with<R>(&self, f: impl FnOnce(&Registry) -> R) -> Result<R, RegistryLockPoisoned>;
+}
+
+/// Returned by [`RegistryRead::with`] when the underlying lock is
+/// poisoned. Only the `SharedRegistry` implementation can produce this.
+#[derive(Debug, Clone, Copy)]
+pub struct RegistryLockPoisoned;
+
+impl std::fmt::Display for RegistryLockPoisoned {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Registry lock poisoned")
+    }
+}
+
+impl std::error::Error for RegistryLockPoisoned {}
+
+impl RegistryRead for SharedRegistry {
+    fn with<R>(&self, f: impl FnOnce(&Registry) -> R) -> Result<R, RegistryLockPoisoned> {
+        let r = self.read().map_err(|_| RegistryLockPoisoned)?;
+        Ok(f(&r))
+    }
+}
+
+impl RegistryRead for Arc<Registry> {
+    fn with<R>(&self, f: impl FnOnce(&Registry) -> R) -> Result<R, RegistryLockPoisoned> {
+        Ok(f(self))
     }
 }
 
 impl Registry {
     /// Create an empty registry with no collections or globals.
+    #[must_use]
     pub fn new() -> Self {
-        Self {
-            collections: HashMap::new(),
-            globals: HashMap::new(),
-            jobs: HashMap::new(),
-            richtext_nodes: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// Create a new registry wrapped in `Arc<RwLock<>>` for shared ownership.
+    #[must_use]
     pub fn shared() -> SharedRegistry {
-        Arc::new(RwLock::new(Self::new()))
+        Arc::new(RwLock::new(Self::default()))
     }
 
     /// Register a collection definition, keyed by slug. Overwrites any existing definition.
@@ -119,11 +193,13 @@ impl Registry {
     }
 
     /// Look up a collection definition by slug.
+    #[must_use]
     pub fn get_collection(&self, slug: &str) -> Option<&CollectionDefinition> {
         self.collections.get(slug)
     }
 
     /// Look up a global definition by slug.
+    #[must_use]
     pub fn get_global(&self, slug: &str) -> Option<&GlobalDefinition> {
         self.globals.get(slug)
     }
@@ -136,6 +212,7 @@ impl Registry {
     }
 
     /// Look up a job definition by slug.
+    #[must_use]
     pub fn get_job(&self, slug: &str) -> Option<&JobDefinition> {
         self.jobs.get(slug)
     }
@@ -148,6 +225,7 @@ impl Registry {
     }
 
     /// Look up a custom richtext node definition by name.
+    #[must_use]
     pub fn get_richtext_node(&self, name: &str) -> Option<&RichtextNodeDef> {
         self.richtext_nodes.get(name)
     }
@@ -156,18 +234,103 @@ impl Registry {
     ///
     /// Call once after startup (after all `define()` writes) and pass the snapshot
     /// to hot-path consumers (admin UI, gRPC API) that only read the registry.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the registry's `RwLock` is poisoned (another thread panicked
+    /// while holding the write lock during startup).
     pub fn snapshot(shared: &SharedRegistry) -> Arc<Registry> {
         let reg = shared
             .read()
             .expect("Registry lock poisoned during snapshot");
-        Arc::new(reg.clone())
+        let mut snap = reg.clone();
+        snap.rebuild_strategy_index();
+        Arc::new(snap)
+    }
+
+    /// Recompute [`Self::always_strategies`] and
+    /// [`Self::header_strategies`] from the current `collections`
+    /// state. Idempotent — clears and refills both maps. Called once
+    /// at [`Self::snapshot`] time so runtime callers reuse the same
+    /// indexes for every request. Cost is O(collections × methods),
+    /// paid once at startup instead of per request.
+    pub fn rebuild_strategy_index(&mut self) {
+        self.always_strategies.clear();
+        self.header_strategies.clear();
+
+        for (slug, def) in &self.collections {
+            let Some(auth) = def.auth.as_ref() else {
+                continue;
+            };
+            if !auth.enabled {
+                continue;
+            }
+            for method in &auth.methods {
+                let AuthMethod::Strategy {
+                    name,
+                    authenticate,
+                    activates_on,
+                    surfaces,
+                } = method
+                else {
+                    continue;
+                };
+                let entry = StrategyEntry {
+                    slug: slug.clone(),
+                    name: name.clone(),
+                    authenticate: authenticate.clone(),
+                };
+                for surface in surfaces {
+                    match activates_on {
+                        Activation::Always { .. } => {
+                            self.always_strategies
+                                .entry(*surface)
+                                .or_default()
+                                .push(entry.clone());
+                        }
+                        Activation::Header { header } => {
+                            self.header_strategies
+                                .entry((header.to_ascii_lowercase(), *surface))
+                                .or_default()
+                                .push(entry.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whether any collection's `auth.methods` contains a
+    /// `Strategy` variant. Used by the auth evaluator and the gRPC
+    /// metadata-header extractor to short-circuit per-request work
+    /// when no strategy is configured: an anonymous request on a
+    /// deployment that only uses `password_login` / `bearer` /
+    /// `session_cookie` does not need to walk every collection
+    /// looking for a header-activated strategy, and does not need
+    /// to materialise the request's metadata into a `HashMap` since
+    /// no consumer will read it.
+    ///
+    /// Short-circuiting iterator — returns on the first strategy
+    /// found. With a handful of collections + a handful of methods
+    /// each, this is a few cmp-and-branches per call; cheaper than
+    /// the work it gates by orders of magnitude.
+    #[must_use]
+    pub fn has_any_strategy(&self) -> bool {
+        self.collections.values().any(|def| {
+            def.auth.as_ref().is_some_and(|a| {
+                a.enabled
+                    && a.methods
+                        .iter()
+                        .any(|m| matches!(m, AuthMethod::Strategy { .. }))
+            })
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{FieldDefinition, FieldType, richtext::RichtextNodeDef};
+    use crate::core::{FieldDefinition, FieldTab, FieldType, richtext::RichtextNodeDef};
 
     fn make_collection(slug: &str) -> CollectionDefinition {
         CollectionDefinition::new(slug)
@@ -258,10 +421,8 @@ mod tests {
         assert_eq!(snap.globals.len(), 1);
     }
 
-    /// Wrap a child field inside a layout container for testing field_exists_recursive.
+    /// Wrap a child field inside a layout container for testing `field_exists_recursive`.
     fn wrap_in_container(container_type: FieldType, child_name: &str) -> Vec<FieldDefinition> {
-        use crate::core::field::FieldTab;
-
         let child = FieldDefinition::builder(child_name, FieldType::Text).build();
 
         match container_type {
@@ -285,14 +446,12 @@ mod tests {
 
             assert!(
                 Registry::field_exists_recursive("target", &fields),
-                "Should find field inside {:?}",
-                container
+                "Should find field inside {container:?}"
             );
 
             assert!(
                 !Registry::field_exists_recursive("nonexistent", &fields),
-                "Should not find nonexistent field in {:?}",
-                container
+                "Should not find nonexistent field in {container:?}"
             );
         }
     }

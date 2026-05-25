@@ -31,7 +31,7 @@
             hx-target="body"
             class="form"
             novalidate
-            {{#if collection.is_upload}}enctype="multipart/form-data"{{/if}}
+            {{#if collection.upload}}enctype="multipart/form-data"{{/if}}
             hx-indicator="#upload-loading"
             data-collection-slug="{{collection.slug}}"
             {{#if user}}data-current-user-id="{{user.id}}"{{/if}}

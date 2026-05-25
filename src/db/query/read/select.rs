@@ -10,7 +10,7 @@ use crate::core::Document;
 /// composite `(_status, sort_col, id)` order regardless of caller-provided
 /// `select`). For group fields: selecting `"seo"` includes all `seo__*`
 /// sub-columns.
-pub fn apply_select_filter(
+pub(super) fn apply_select_filter(
     select_exprs: Vec<String>,
     result_names: Vec<String>,
     select: Option<&Vec<String>>,
@@ -20,7 +20,7 @@ pub fn apply_select_filter(
         _ => return (select_exprs, result_names),
     };
 
-    let selected: HashSet<&str> = select.iter().map(|s| s.as_str()).collect();
+    let selected: HashSet<&str> = select.iter().map(std::string::String::as_str).collect();
     let mut out_exprs = Vec::new();
     let mut out_names = Vec::new();
 
@@ -47,7 +47,7 @@ pub fn apply_select_filter(
 /// Strip fields not in `select` from a document. Always keeps `id`.
 /// Used for post-query field stripping (e.g., after `find_by_id`).
 pub fn apply_select_to_document(doc: &mut Document, select: &[String]) {
-    let selected: HashSet<&str> = select.iter().map(|s| s.as_str()).collect();
+    let selected: HashSet<&str> = select.iter().map(std::string::String::as_str).collect();
 
     doc.fields.retain(|key, _| {
         selected.contains(key.as_str())

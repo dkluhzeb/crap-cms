@@ -78,6 +78,7 @@
 
 - [Auth Overview](authentication/overview.md)
 - [Auth Collections](authentication/auth-collections.md)
+- [Auth Methods](authentication/auth-methods.md)
 - [Login Flow](authentication/login-flow.md)
 - [Custom Strategies](authentication/custom-strategies.md)
 - [CLI User Creation](authentication/cli-user-creation.md)
@@ -97,6 +98,7 @@
 - [Overview](lua-api/overview.md)
 - [crap.collections](lua-api/collections.md)
 - [crap.globals](lua-api/globals.md)
+- [crap.any (typing factories)](lua-api/typing-factories.md)
 - [crap.hooks](lua-api/hooks.md)
 - [crap.log](lua-api/log.md)
 - [crap.json](lua-api/json.md)
@@ -174,3 +176,7 @@
 
 - [Deployment](deployment/single-server.md)
 - [Multi-Server](deployment/multi-server.md)
+
+# Upgrade
+
+- [alpha.9](upgrade/alpha-9.md)

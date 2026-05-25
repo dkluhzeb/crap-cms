@@ -7,7 +7,8 @@ use serde_json::Value;
 
 use super::BasePageContext;
 use crate::admin::context::{
-    CollectionContext, DocumentRef, FieldContext, LocaleTemplateData, PaginationContext,
+    CollectionContext, CollectionPermissions, DocumentRef, FieldContext, LocaleTemplateData,
+    PaginationContext,
 };
 
 /// One row on the `/admin/collections` listing page.
@@ -41,6 +42,7 @@ pub struct CollectionItemsListPage {
     pub base: BasePageContext,
 
     pub collection: CollectionContext,
+    pub perms: CollectionPermissions,
     pub docs: Vec<Value>,
     pub pagination: PaginationContext,
 
@@ -109,6 +111,7 @@ pub struct CollectionEditPage {
     pub base: BasePageContext,
 
     pub collection: CollectionContext,
+    pub perms: CollectionPermissions,
     pub document: DocumentRef,
     pub fields: Vec<FieldContext>,
     pub sidebar_fields: Vec<FieldContext>,
@@ -141,6 +144,7 @@ pub struct CollectionCreatePage {
     pub base: BasePageContext,
 
     pub collection: CollectionContext,
+    pub perms: CollectionPermissions,
     pub fields: Vec<FieldContext>,
     pub sidebar_fields: Vec<FieldContext>,
 
@@ -164,6 +168,7 @@ pub struct CollectionFormErrorPage {
     pub base: BasePageContext,
 
     pub collection: CollectionContext,
+    pub perms: CollectionPermissions,
 
     /// Document stub (with `id` only) on edit error; absent on create error.
     #[serde(skip_serializing_if = "Option::is_none")]

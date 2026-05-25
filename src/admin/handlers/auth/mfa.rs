@@ -1,7 +1,7 @@
 //! MFA (Multi-Factor Authentication) handlers for the admin UI.
 
 use axum::{
-    extract::{Form, Query, State},
+    extract::{Form, State},
     http::{HeaderMap, header::COOKIE},
     response::{IntoResponse, Redirect, Response},
 };
@@ -15,10 +15,10 @@ use crate::{
         context::{AuthBasePageContext, PageMeta, PageType, page::auth::MfaPage},
         handlers::{
             auth::{
-                MfaForm, MfaQuery, append_cookies, clear_mfa_pending_cookie, create_session_token,
-                session_redirect,
+                MFA_PENDING_COOKIE, MfaForm, append_cookies, clear_mfa_pending_cookie,
+                create_session_token, session_redirect,
             },
-            shared::render_page,
+            shared::{paths, render_page},
         },
         server::extract_cookie,
     },
@@ -30,7 +30,20 @@ use crate::{
 fn extract_mfa_token(headers: &HeaderMap) -> Option<String> {
     let cookie_header = headers.get(COOKIE)?.to_str().ok()?;
 
-    extract_cookie(cookie_header, "crap_mfa_pending").map(|s| s.to_string())
+    extract_cookie(cookie_header, MFA_PENDING_COOKIE).map(std::string::ToString::to_string)
+}
+
+/// Pull a connection from the pool and run MFA-code verification.
+fn verify_mfa_blocking(
+    pool: &crate::db::DbPool,
+    slug: &str,
+    user_id: &str,
+    code: &str,
+) -> anyhow::Result<bool> {
+    let conn = pool.get()?;
+    let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
+    service::auth::verify_mfa_code(&ctx, user_id, code)
+        .map_err(crate::service::ServiceError::into_anyhow)
 }
 
 /// Render the MFA code entry form with an optional error message.
@@ -47,14 +60,10 @@ fn render_mfa_form(state: &AdminState, error: Option<&str>) -> Response {
 }
 
 /// GET /admin/mfa — show the MFA code entry form.
-pub async fn mfa_page(
-    State(state): State<AdminState>,
-    headers: HeaderMap,
-    Query(_query): Query<MfaQuery>,
-) -> Response {
+pub async fn mfa_page(State(state): State<AdminState>, headers: HeaderMap) -> Response {
     // If there's no pending MFA cookie, redirect to login
     if extract_mfa_token(&headers).is_none() {
-        return Redirect::to("/admin/login").into_response();
+        return Redirect::to(paths::LOGIN).into_response();
     }
 
     render_mfa_form(&state, None)
@@ -67,22 +76,18 @@ pub async fn verify_mfa_action(
     Form(form): Form<MfaForm>,
 ) -> Response {
     // Extract and validate the MFA pending token
-    let mfa_token = match extract_mfa_token(&headers) {
-        Some(t) => t,
-        None => return Redirect::to("/admin/login").into_response(),
+    let Some(mfa_token) = extract_mfa_token(&headers) else {
+        return Redirect::to(paths::LOGIN).into_response();
     };
 
-    let pending_claims = match state.token_provider.validate_token(&mfa_token) {
-        Ok(c) => c,
-        Err(_) => {
-            // Token expired or invalid — clear cookie, redirect to login
-            let cookie = clear_mfa_pending_cookie(state.config.admin.dev_mode);
-            let mut response = Redirect::to("/admin/login").into_response();
+    let Ok(pending_claims) = state.token_provider.validate_token(&mfa_token) else {
+        // Token expired or invalid — clear cookie, redirect to login
+        let cookie = clear_mfa_pending_cookie(state.config.admin.dev_mode);
+        let mut response = Redirect::to(paths::LOGIN).into_response();
 
-            append_cookies(&mut response, &[cookie]);
+        append_cookies(&mut response, &[cookie]);
 
-            return response;
-        }
+        return response;
     };
 
     // Verify the MFA code against the database
@@ -91,12 +96,8 @@ pub async fn verify_mfa_action(
     let user_id = pending_claims.sub.to_string();
     let code = form.code.clone();
 
-    let verify_result = task::spawn_blocking(move || {
-        let conn = pool.get()?;
-        let ctx = ServiceContext::slug_only(&slug).conn(&conn).build();
-        service::auth::verify_mfa_code(&ctx, &user_id, &code).map_err(|e| e.into_anyhow())
-    })
-    .await;
+    let verify_result =
+        task::spawn_blocking(move || verify_mfa_blocking(&pool, &slug, &user_id, &code)).await;
 
     let verified = match verify_result {
         Ok(Ok(v)) => v,
@@ -128,7 +129,7 @@ fn build_mfa_session_response(state: &AdminState, pending: &Claims) -> Response 
         &pending.collection,
         pending.email.clone(),
         pending.session_version,
-        Utc::now().timestamp().max(0) as u64,
+        Utc::now().timestamp().max(0).cast_unsigned(),
     ) {
         Ok(s) => s,
         Err(e) => {

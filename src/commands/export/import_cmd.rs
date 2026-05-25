@@ -1,15 +1,15 @@
 //! `import` command — load collection data from JSON.
 
-use std::{collections::HashMap, fs, path::Path};
+use std::{fs, path::Path};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use serde_json::{Map, Value};
 
 use crate::{
     cli,
-    commands::load_config_and_sync,
+    commands::{export::file::ExportFile, load_config_and_sync},
     config::CrapConfig,
-    core::{CollectionDefinition, FieldDefinition, FieldType},
+    core::{CollectionDefinition, DocumentFields, FieldDefinition, FieldType},
     db::{DbConnection, DbValue, query},
 };
 
@@ -17,10 +17,10 @@ use crate::{
 struct ImportRow {
     parent_cols: Vec<String>,
     parent_vals: Vec<DbValue>,
-    join_data: HashMap<String, Value>,
+    join_data: DocumentFields,
 }
 
-/// Convert a JSON value to a typed DbValue based on the field type.
+/// Convert a JSON value to a typed `DbValue` based on the field type.
 fn json_to_db_value(val: &Value, field_type: &FieldType) -> Option<DbValue> {
     match val {
         Value::Null => None,
@@ -32,7 +32,7 @@ fn json_to_db_value(val: &Value, field_type: &FieldType) -> Option<DbValue> {
                 .map(DbValue::Integer)
                 .or_else(|| n.as_f64().map(DbValue::Real)),
         },
-        Value::Bool(b) => Some(DbValue::Integer(if *b { 1 } else { 0 })),
+        Value::Bool(b) => Some(DbValue::Integer(i64::from(*b))),
         other => Some(DbValue::Text(other.to_string())),
     }
 }
@@ -57,7 +57,7 @@ fn collect_field_columns(
     doc_obj: &Map<String, Value>,
     parent_cols: &mut Vec<String>,
     parent_vals: &mut Vec<DbValue>,
-    join_data: &mut HashMap<String, Value>,
+    join_data: &mut DocumentFields,
 ) {
     match field.field_type {
         FieldType::Group => {
@@ -141,7 +141,7 @@ fn collect_import_columns(
 ) -> ImportRow {
     let mut parent_cols: Vec<String> = vec!["id".to_string()];
     let mut parent_vals: Vec<DbValue> = vec![DbValue::Text(id.to_string())];
-    let mut join_data: HashMap<String, Value> = HashMap::new();
+    let mut join_data = DocumentFields::new();
 
     if def.timestamps {
         if let Some(v) = doc_obj.get("created_at").and_then(|v| v.as_str()) {
@@ -181,12 +181,12 @@ fn import_single_document(
 ) -> Result<()> {
     let doc_obj = doc_val
         .as_object()
-        .ok_or_else(|| anyhow!("Expected document object in '{}'", slug))?;
+        .ok_or_else(|| anyhow!("Expected document object in '{slug}'"))?;
 
     let id = doc_obj
         .get("id")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("Document missing 'id' in '{}'", slug))?;
+        .ok_or_else(|| anyhow!("Document missing 'id' in '{slug}'"))?;
 
     let row = collect_import_columns(doc_obj, def, id);
 
@@ -199,7 +199,7 @@ fn import_single_document(
     let sql = tx.build_upsert(slug, &col_refs, &placeholders.join(", "), "id");
 
     tx.execute(&sql, &row.parent_vals)
-        .with_context(|| format!("Failed to insert document {} into '{}'", id, slug))?;
+        .with_context(|| format!("Failed to insert document {id} into '{slug}'"))?;
 
     if !row.join_data.is_empty() {
         query::save_join_table_data(tx, slug, &def.fields, id, &row.join_data, None)?;
@@ -209,55 +209,48 @@ fn import_single_document(
 }
 
 /// Import collection data from JSON.
+///
+/// # Errors
+///
+/// Returns an error if config loading, file reading, JSON parsing, or any
+/// per-document write fails.
 #[cfg(not(tarpaulin_include))]
-pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>) -> Result<()> {
+pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<&str>) -> Result<()> {
     let (pool, registry) = load_config_and_sync(config_dir)?;
 
     let content =
         fs::read_to_string(file).with_context(|| format!("Failed to read {}", file.display()))?;
 
-    let data: Value = serde_json::from_str(&content).context("Failed to parse JSON")?;
+    let export_file: ExportFile = serde_json::from_str(&content).context("Failed to parse JSON")?;
 
-    if let Some(export_version) = data.get("crap_version").and_then(|v| v.as_str()) {
-        let current = env!("CARGO_PKG_VERSION");
-
-        if let Some(warning) = CrapConfig::check_version_against(Some(export_version), current) {
-            cli::warning(&warning.replace("config requires", "export file was created with"));
-        }
+    let current = env!("CARGO_PKG_VERSION");
+    if let Some(warning) =
+        CrapConfig::check_version_against(Some(&export_file.crap_version), current)
+    {
+        cli::warning(&warning.replace("config requires", "export file was created with"));
     }
 
-    let collections_obj = data
-        .get("collections")
-        .and_then(|v| v.as_object())
-        .ok_or_else(|| anyhow!("Expected top-level \"collections\" object in JSON"))?;
-
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
-    let slugs: Vec<String> = if let Some(ref slug) = collection_filter {
-        if !collections_obj.contains_key(slug) {
-            bail!("Collection '{}' not found in import file", slug);
+    let slugs: Vec<String> = if let Some(slug) = collection_filter {
+        if !export_file.collections.contains_key(slug) {
+            bail!("Collection '{slug}' not found in import file");
         }
-        vec![slug.clone()]
+        vec![slug.to_string()]
     } else {
-        collections_obj.keys().cloned().collect()
+        export_file.collections.keys().cloned().collect()
     };
 
     let mut total_imported = 0usize;
 
     for slug in &slugs {
-        let def = reg.get_collection(slug).ok_or_else(|| {
-            anyhow!(
-                "Collection '{}' exists in import file but not in schema",
-                slug
-            )
+        let def = registry.get_collection(slug).ok_or_else(|| {
+            anyhow!("Collection '{slug}' exists in import file but not in schema")
         })?;
 
-        let docs_array = collections_obj
+        let docs_array = export_file
+            .collections
             .get(slug)
             .and_then(|v| v.as_array())
-            .ok_or_else(|| anyhow!("Expected array for collection '{}'", slug))?;
+            .ok_or_else(|| anyhow!("Expected array for collection '{slug}'"))?;
 
         let mut conn = pool.get().context("Failed to get database connection")?;
         let tx = conn.transaction().context("Failed to begin transaction")?;
@@ -268,7 +261,7 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
         }
 
         tx.commit()
-            .with_context(|| format!("Failed to commit import for '{}'", slug))?;
+            .with_context(|| format!("Failed to commit import for '{slug}'"))?;
 
         cli::success(&format!(
             "Imported {} document(s) into '{}'",
@@ -277,7 +270,7 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
         ));
     }
 
-    cli::success(&format!("Total: {} document(s) imported", total_imported));
+    cli::success(&format!("Total: {total_imported} document(s) imported"));
 
     Ok(())
 }

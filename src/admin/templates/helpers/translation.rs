@@ -8,7 +8,6 @@ use crate::admin::Translations;
 /// Handlebars helper for admin UI translations.
 /// Usage: `{{t "key"}}` or with interpolation: `{{t "key" name=value}}`
 /// Interpolation replaces `{{var}}` placeholders in the translation string.
-#[allow(dead_code)]
 pub(super) struct TranslationHelper {
     pub(super) translations: Arc<Translations>,
 }

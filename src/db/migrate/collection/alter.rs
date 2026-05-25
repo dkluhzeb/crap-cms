@@ -17,63 +17,18 @@ use crate::{
 };
 
 use super::create::{append_default_value_for, create_collection_table};
+use crate::core::collection::Auth;
 
-/// Shared context for ALTER TABLE operations.
+/// Shared context for ALTER TABLE operations. All fields are required and
+/// the struct is constructed in one place (`alter_collection_table`); plain
+/// struct-literal construction is preferred over a panic-on-missing builder.
 struct AlterCtx<'a> {
     conn: &'a dyn DbConnection,
     slug: &'a str,
     def: &'a CollectionDefinition,
     existing: &'a HashSet<String>,
-    /// Column name -> DB type (from PRAGMA table_info) for type mismatch detection.
+    /// Column name -> DB type (from PRAGMA `table_info`) for type mismatch detection.
     column_types: &'a HashMap<String, String>,
-}
-
-impl<'a> AlterCtx<'a> {
-    fn builder(conn: &'a dyn DbConnection, slug: &'a str) -> AlterCtxBuilder<'a> {
-        AlterCtxBuilder {
-            conn,
-            slug,
-            def: None,
-            existing: None,
-            column_types: None,
-        }
-    }
-}
-
-/// Builder for [`AlterCtx`].
-struct AlterCtxBuilder<'a> {
-    conn: &'a dyn DbConnection,
-    slug: &'a str,
-    def: Option<&'a CollectionDefinition>,
-    existing: Option<&'a HashSet<String>>,
-    column_types: Option<&'a HashMap<String, String>>,
-}
-
-impl<'a> AlterCtxBuilder<'a> {
-    fn def(mut self, v: &'a CollectionDefinition) -> Self {
-        self.def = Some(v);
-        self
-    }
-
-    fn existing(mut self, v: &'a HashSet<String>) -> Self {
-        self.existing = Some(v);
-        self
-    }
-
-    fn column_types(mut self, v: &'a HashMap<String, String>) -> Self {
-        self.column_types = Some(v);
-        self
-    }
-
-    fn build(self) -> AlterCtx<'a> {
-        AlterCtx {
-            conn: self.conn,
-            slug: self.slug,
-            def: self.def.expect("AlterCtx requires def"),
-            existing: self.existing.expect("AlterCtx requires existing"),
-            column_types: self.column_types.expect("AlterCtx requires column_types"),
-        }
-    }
 }
 
 /// Warn if an existing column's DB type differs from the expected type.
@@ -106,7 +61,7 @@ fn add_field_column(
     if !spec.companion_text {
         append_default_value_for(
             &mut col_def,
-            &spec.field.default_value,
+            spec.field.default_value.as_ref(),
             &spec.field.field_type,
             ctx.conn.kind(),
         );
@@ -205,7 +160,12 @@ fn add_auth_columns(ctx: &AlterCtx) -> Result<()> {
         ensure_column(ctx, col)?;
     }
 
-    if ctx.def.auth.as_ref().is_some_and(|a| a.verify_email) {
+    if ctx
+        .def
+        .auth
+        .as_ref()
+        .is_some_and(Auth::requires_verify_email)
+    {
         for col in [
             "_verified INTEGER DEFAULT 0",
             "_verification_token TEXT",
@@ -215,7 +175,12 @@ fn add_auth_columns(ctx: &AlterCtx) -> Result<()> {
         }
     }
 
-    if ctx.def.auth.as_ref().is_some_and(|a| a.mfa != MfaMode::Off) {
+    if ctx
+        .def
+        .auth
+        .as_ref()
+        .is_some_and(|a| a.mfa() != MfaMode::Off)
+    {
         for col in ["_mfa_code TEXT", "_mfa_code_exp INTEGER"] {
             ensure_column(ctx, col)?;
         }
@@ -224,7 +189,7 @@ fn add_auth_columns(ctx: &AlterCtx) -> Result<()> {
     Ok(())
 }
 
-/// Add _deleted_at column for soft-delete collections.
+/// Add _`deleted_at` column for soft-delete collections.
 fn add_soft_delete_columns(ctx: &AlterCtx) -> Result<()> {
     if ctx.def.soft_delete && !ctx.existing.contains("_deleted_at") {
         let col_def = format!("_deleted_at {}", ctx.conn.timestamp_column_type());
@@ -234,12 +199,12 @@ fn add_soft_delete_columns(ctx: &AlterCtx) -> Result<()> {
     Ok(())
 }
 
-/// Add _ref_count column for delete protection.
+/// Add _`ref_count` column for delete protection.
 fn add_ref_count_column(ctx: &AlterCtx) -> Result<()> {
     ensure_column(ctx, "_ref_count INTEGER NOT NULL DEFAULT 0")
 }
 
-/// Add created_at/updated_at timestamp columns.
+/// Add `created_at/updated_at` timestamp columns.
 fn add_timestamp_columns(ctx: &AlterCtx) -> Result<()> {
     if !ctx.def.timestamps {
         return Ok(());
@@ -248,7 +213,7 @@ fn add_timestamp_columns(ctx: &AlterCtx) -> Result<()> {
     let ts_type = ctx.conn.timestamp_column_type();
 
     for col_name in ["created_at", "updated_at"] {
-        let col_def = format!("{} {}", col_name, ts_type);
+        let col_def = format!("{col_name} {ts_type}");
         ensure_column(ctx, &col_def)?;
     }
 
@@ -319,11 +284,13 @@ pub(super) fn alter_collection_table(
     let needs_rebuild =
         def.soft_delete && !existing.contains("_deleted_at") && def.fields.iter().any(|f| f.unique);
 
-    let ctx = AlterCtx::builder(conn, slug)
-        .def(def)
-        .existing(&existing)
-        .column_types(&column_types)
-        .build();
+    let ctx = AlterCtx {
+        conn,
+        slug,
+        def,
+        existing: &existing,
+        column_types: &column_types,
+    };
 
     add_field_columns(&ctx, locale_config)?;
     add_system_columns(&ctx)?;
@@ -351,7 +318,7 @@ pub(super) fn alter_collection_table(
 /// Rebuild a table to remove inline UNIQUE constraints, replacing them with
 /// partial unique indexes managed by `sync_indexes`.
 ///
-/// Uses the standard SQLite table rebuild pattern:
+/// Uses the standard `SQLite` table rebuild pattern:
 /// 1. Get column list from old table
 /// 2. Rename old table to a temp name
 /// 3. Create new table via `create_collection_table` (no inline UNIQUE for soft-delete)
@@ -369,9 +336,9 @@ fn rebuild_without_inline_unique(
     );
 
     let old_cols = get_table_columns(conn, slug)?;
-    let temp = format!("_rebuild_{}", slug);
+    let temp = format!("_rebuild_{slug}");
 
-    conn.execute_batch_ddl(&format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", slug, temp))?;
+    conn.execute_batch_ddl(&format!("ALTER TABLE \"{slug}\" RENAME TO \"{temp}\""))?;
 
     create_collection_table(conn, slug, def, locale_config)?;
 
@@ -386,10 +353,7 @@ fn rebuild_without_inline_unique(
         .join(", ");
 
     let copy_result = conn.execute(
-        &format!(
-            "INSERT INTO \"{}\" ({}) SELECT {} FROM \"{}\"",
-            slug, col_list, col_list, temp
-        ),
+        &format!("INSERT INTO \"{slug}\" ({col_list}) SELECT {col_list} FROM \"{temp}\""),
         &[],
     );
 
@@ -399,13 +363,13 @@ fn rebuild_without_inline_unique(
             "Failed to copy data during rebuild of '{}', attempting recovery: {}",
             slug, e
         );
-        let _ = conn.execute_batch_ddl(&format!("DROP TABLE IF EXISTS \"{}\"", slug));
-        let _ = conn.execute_batch_ddl(&format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", temp, slug));
+        let _ = conn.execute_batch_ddl(&format!("DROP TABLE IF EXISTS \"{slug}\""));
+        let _ = conn.execute_batch_ddl(&format!("ALTER TABLE \"{temp}\" RENAME TO \"{slug}\""));
 
-        return Err(e).with_context(|| format!("Failed to copy data during rebuild of '{}'", slug));
+        return Err(e).with_context(|| format!("Failed to copy data during rebuild of '{slug}'"));
     }
 
-    conn.execute_batch_ddl(&format!("DROP TABLE \"{}\"", temp))?;
+    conn.execute_batch_ddl(&format!("DROP TABLE \"{temp}\""))?;
 
     info!("Table '{}' rebuilt successfully", slug);
 
@@ -414,10 +378,11 @@ fn rebuild_without_inline_unique(
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_helpers::*;
     use super::*;
     use crate::core::collection::*;
-    use crate::core::field::{FieldDefinition, FieldTab, FieldType};
+    use crate::core::{FieldDefinition, FieldTab, FieldType};
+    use crate::db::DbValue;
+    use crate::db::migrate::collection::test_helpers::*;
     use crate::db::migrate::helpers::get_table_columns;
 
     #[test]
@@ -443,11 +408,7 @@ mod tests {
 
         // Now make it an auth collection with verify_email
         let mut def2 = simple_collection("users", vec![text_field("email")]);
-        def2.auth = Some(Auth {
-            enabled: true,
-            verify_email: true,
-            ..Default::default()
-        });
+        def2.auth = Some(Auth::enabled().map_password_login(|b| b.verify_email(true)));
         alter_collection_table(&conn, "users", &def2, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "users").unwrap();
@@ -726,8 +687,6 @@ mod tests {
 
     #[test]
     fn alter_rebuilds_table_to_remove_inline_unique_on_soft_delete_transition() {
-        use crate::db::DbValue;
-
         let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
 
@@ -848,7 +807,7 @@ mod tests {
         );
     }
 
-    /// Regression: rebuild_without_inline_unique must restore the original table
+    /// Regression: `rebuild_without_inline_unique` must restore the original table
     /// when the INSERT-SELECT copy step fails, not leave the database with an
     /// empty new table and orphaned temp table.
     #[test]
@@ -900,7 +859,7 @@ mod tests {
         assert!(temp_exists.is_none(), "temp table should be dropped");
     }
 
-    /// Regression: locale-suffixed columns (e.g., title__en) must be recognized
+    /// Regression: locale-suffixed columns (e.g., `title__en`) must be recognized
     /// as expected when the field is localized. Previously they were falsely
     /// reported as orphans.
     #[test]

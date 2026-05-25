@@ -6,13 +6,13 @@ use serde_json::{Map, Value};
 
 use crate::{
     admin::Translations,
-    core::{FieldAdmin, FieldDefinition, FieldType, field, validate::ValidationError},
+    core::{DocumentFields, FieldAdmin, FieldDefinition, FieldType, ValidationError, field},
     db::DbPool,
     hooks::HookRunner,
     service::{ServiceContext, document_info::get_ref_count},
 };
 
-/// Auto-generate a label from a field name (e.g. "my_field" -> "My Field").
+/// Auto-generate a label from a field name (e.g. "`my_field`" -> "My Field").
 pub fn auto_label_from_name(name: &str) -> String {
     field::to_title_case(name)
 }
@@ -55,17 +55,23 @@ pub fn compute_row_label(
 /// Flattens document fields for form rendering. Group fields become `parent__child` keys,
 /// recursively flattening nested groups (e.g. `address: { geo: { lat: "40" } }` →
 /// `address__geo__lat: "40"`).
+///
+/// Tabs / Row / Collapsible are transparent layout wrappers — their inner
+/// fields are still at the table's top level, so Groups nested inside any
+/// of them are recognised the same way as top-level Groups. Without this
+/// pass-through, a `Group("social")` nested in a `Tabs` would be
+/// stringified as JSON instead of expanded into `social__github`,
+/// `social__twitter`, … and the form would render every social field
+/// empty even though the DB has the values.
 pub fn flatten_document_values(
-    fields: &HashMap<String, Value>,
+    fields: &DocumentFields,
     field_defs: &[FieldDefinition],
 ) -> HashMap<String, String> {
     fields
         .iter()
         .flat_map(|(k, v)| {
             if let Value::Object(obj) = v
-                && field_defs
-                    .iter()
-                    .any(|f| f.name == *k && f.field_type == FieldType::Group)
+                && is_group_field(field_defs, k)
             {
                 let mut out = Vec::new();
                 flatten_group_value(k, obj, &mut out);
@@ -77,10 +83,23 @@ pub fn flatten_document_values(
         .collect()
 }
 
+/// True iff `name` refers to a Group field at the effective top level of
+/// `field_defs`. Recurses through Tabs/Row/Collapsible — those wrappers are
+/// transparent for column-naming purposes, so a Group nested in any of
+/// them is still a "top-level Group" for the form-flatten contract.
+fn is_group_field(field_defs: &[FieldDefinition], name: &str) -> bool {
+    field_defs.iter().any(|f| match f.field_type {
+        FieldType::Group => f.name == name,
+        FieldType::Row | FieldType::Collapsible => is_group_field(&f.fields, name),
+        FieldType::Tabs => f.tabs.iter().any(|t| is_group_field(&t.fields, name)),
+        _ => false,
+    })
+}
+
 /// Recursively flatten a group object into `prefix__key` pairs.
 fn flatten_group_value(prefix: &str, obj: &Map<String, Value>, out: &mut Vec<(String, String)>) {
     for (sub_k, sub_v) in obj {
-        let col = format!("{}__{}", prefix, sub_k);
+        let col = format!("{prefix}__{sub_k}");
 
         if let Value::Object(nested) = sub_v {
             flatten_group_value(&col, nested, out);
@@ -90,7 +109,7 @@ fn flatten_group_value(prefix: &str, obj: &Map<String, Value>, out: &mut Vec<(St
     }
 }
 
-/// Convert a serde_json Value to a string suitable for form rendering.
+/// Convert a `serde_json` Value to a string suitable for form rendering.
 fn value_to_form_string(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
@@ -102,7 +121,7 @@ fn value_to_form_string(v: &Value) -> String {
 }
 
 /// Translate validation errors using the translation system.
-/// If a FieldError has a `key`, resolve it through `Translations::get_interpolated`;
+/// If a `FieldError` has a `key`, resolve it through `Translations::get_interpolated`;
 /// otherwise use the raw English `message` (custom Lua validator messages).
 pub fn translate_validation_errors(
     ve: &ValidationError,
@@ -126,23 +145,17 @@ pub fn translate_validation_errors(
 /// Returns 0 on DB errors (fail-open for display only — actual delete protection
 /// is enforced by the DELETE handler).
 pub fn lookup_ref_count(pool: &DbPool, slug: &str, id: &str) -> i64 {
-    pool.get()
-        .ok()
-        .map(|conn| {
-            let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
-            get_ref_count(&ctx, id).unwrap_or(0)
-        })
-        .unwrap_or(0)
+    pool.get().ok().map_or(0, |conn| {
+        let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
+        get_ref_count(&ctx, id).unwrap_or(0)
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use crate::core::{
-        field::{FieldAdmin, FieldDefinition, FieldType},
-        validate::FieldError,
-    };
+    use crate::core::{FieldAdmin, FieldDefinition, FieldType, validate::FieldError};
 
     use super::*;
 
@@ -207,7 +220,7 @@ mod tests {
 
     #[test]
     fn flatten_document_values_simple_fields() {
-        let mut fields = HashMap::new();
+        let mut fields = DocumentFields::new();
         fields.insert("title".to_string(), json!("Hello"));
         fields.insert("count".to_string(), json!(42));
 
@@ -223,7 +236,7 @@ mod tests {
 
     #[test]
     fn flatten_document_values_group_fields() {
-        let mut fields = HashMap::new();
+        let mut fields = DocumentFields::new();
         fields.insert(
             "config".to_string(),
             json!({"label": "My Config", "enabled": true}),
@@ -246,7 +259,7 @@ mod tests {
 
     #[test]
     fn flatten_document_values_nested_groups() {
-        let mut fields = HashMap::new();
+        let mut fields = DocumentFields::new();
         fields.insert("outer".to_string(), json!({"inner": {"deep": "value"}}));
 
         let defs = vec![
@@ -269,7 +282,7 @@ mod tests {
 
     #[test]
     fn flatten_document_values_group_with_array_value() {
-        let mut fields = HashMap::new();
+        let mut fields = DocumentFields::new();
         fields.insert(
             "meta".to_string(),
             json!({"title": "Test", "tags": ["a", "b"]}),
@@ -289,6 +302,80 @@ mod tests {
         assert_eq!(flat.get("meta__tags").unwrap(), "[\"a\",\"b\"]");
     }
 
+    /// Regression: a `Group` nested inside a `Tabs` wrapper (the shape
+    /// `example/globals/site_settings.lua` uses for the Social tab) must
+    /// still flatten to `parent__child` form keys. Before the fix,
+    /// `flatten_document_values` only inspected top-level defs, so the
+    /// Group was treated as an opaque object and stringified to JSON
+    /// — the form rendered every social URL empty even when the DB
+    /// had values.
+    #[test]
+    fn flatten_document_values_group_inside_tabs() {
+        use crate::core::FieldTab;
+
+        let mut fields = DocumentFields::new();
+        fields.insert(
+            "social".to_string(),
+            json!({"github": "https://github.com/crap", "twitter": "https://test.at"}),
+        );
+
+        let defs = vec![
+            FieldDefinition::builder("settings_tabs", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "Social",
+                    vec![
+                        FieldDefinition::builder("social", FieldType::Group)
+                            .fields(vec![
+                                FieldDefinition::builder("github", FieldType::Text).build(),
+                                FieldDefinition::builder("twitter", FieldType::Text).build(),
+                            ])
+                            .build(),
+                    ],
+                )])
+                .build(),
+        ];
+
+        let flat = flatten_document_values(&fields, &defs);
+        assert_eq!(
+            flat.get("social__github").map(String::as_str),
+            Some("https://github.com/crap"),
+            "Group inside Tabs must flatten to __ keys"
+        );
+        assert_eq!(
+            flat.get("social__twitter").map(String::as_str),
+            Some("https://test.at")
+        );
+        assert!(
+            !flat.contains_key("social"),
+            "raw Group key must not survive the flatten when it's nested in Tabs"
+        );
+    }
+
+    /// Same regression shape but with a `Row` layout wrapper. Row and
+    /// Collapsible are transparent: a Group inside them lives at the
+    /// table's top level just like Tabs.
+    #[test]
+    fn flatten_document_values_group_inside_row() {
+        let mut fields = DocumentFields::new();
+        fields.insert("seo".to_string(), json!({"title": "Hello"}));
+
+        let defs = vec![
+            FieldDefinition::builder("row_layout", FieldType::Row)
+                .fields(vec![
+                    FieldDefinition::builder("seo", FieldType::Group)
+                        .fields(vec![
+                            FieldDefinition::builder("title", FieldType::Text).build(),
+                        ])
+                        .build(),
+                ])
+                .build(),
+        ];
+
+        let flat = flatten_document_values(&fields, &defs);
+        assert_eq!(flat.get("seo__title").map(String::as_str), Some("Hello"));
+        assert!(!flat.contains_key("seo"));
+    }
+
     fn test_translations() -> Translations {
         Translations::load(std::path::Path::new("/nonexistent"))
     }
@@ -296,15 +383,11 @@ mod tests {
     #[test]
     fn translate_with_key_uses_translation() {
         let translations = test_translations();
-        let mut params = HashMap::new();
-        params.insert("field".to_string(), "Title".to_string());
 
-        let ve = ValidationError::new(vec![FieldError::with_key(
-            "title",
-            "title is required",
-            "validation.required",
-            params,
-        )]);
+        let ve = ValidationError::new(vec![
+            FieldError::with_key("title", "title is required", "validation.required")
+                .with_param("field", "Title"),
+        ]);
 
         let map = translate_validation_errors(&ve, &translations, "en");
         assert_eq!(map.get("title").unwrap(), "Title is required");
@@ -321,15 +404,11 @@ mod tests {
     #[test]
     fn translate_german_locale() {
         let translations = test_translations();
-        let mut params = HashMap::new();
-        params.insert("field".to_string(), "Titel".to_string());
 
-        let ve = ValidationError::new(vec![FieldError::with_key(
-            "title",
-            "title is required",
-            "validation.required",
-            params,
-        )]);
+        let ve = ValidationError::new(vec![
+            FieldError::with_key("title", "title is required", "validation.required")
+                .with_param("field", "Titel"),
+        ]);
 
         let map = translate_validation_errors(&ve, &translations, "de");
         assert_eq!(map.get("title").unwrap(), "Titel ist erforderlich");
