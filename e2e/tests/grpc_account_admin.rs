@@ -362,3 +362,38 @@ async fn verify_account_returns_failed_precondition_without_verify_email() {
     ctx.shutdown.cancel();
     let _ = ctx.server_handle.await;
 }
+
+// ── account_action_without_auth_does_not_leak_collection_shape ───────────
+//
+// Regression: collection-shape validation (auth-collection check,
+// verify_email check) must run *after* authentication, so an
+// unauthenticated caller can't probe whether a collection exists, is an
+// auth collection, or has verify_email enabled. An unauthenticated
+// `verify_account` on a collection without verify_email must return
+// UNAUTHENTICATED — not the FailedPrecondition shape error.
+
+#[tokio::test(flavor = "multi_thread")]
+async fn account_action_without_auth_does_not_leak_collection_shape() {
+    let ctx = spawn_grpc_server(vec![make_users_def_no_verify_email()], vec![]).await;
+    let mut client = ContentApiClient::new(ctx.channel.clone());
+
+    let status = client
+        .verify_account(AccountActionRequest {
+            collection: "users".to_string(),
+            id: "nonexistent".to_string(),
+        })
+        .await
+        .expect_err("verify_account without auth should fail");
+
+    assert_eq!(
+        status.code(),
+        Code::Unauthenticated,
+        "unauthenticated verify_account must return UNAUTHENTICATED before any \
+         collection-shape error leaks, got {:?}: {}",
+        status.code(),
+        status.message()
+    );
+
+    ctx.shutdown.cancel();
+    let _ = ctx.server_handle.await;
+}

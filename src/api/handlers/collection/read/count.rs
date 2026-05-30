@@ -35,6 +35,7 @@ struct CountBlockingInput {
     locale_ctx: Option<LocaleContext>,
     search: Option<String>,
     include_drafts: bool,
+    trash: bool,
 }
 
 /// Resolve auth, build the filter, and run `count_documents`.
@@ -76,6 +77,7 @@ fn count_blocking(input: CountBlockingInput) -> Result<i64, Status> {
         .locale_ctx(input.locale_ctx.as_ref())
         .search(input.search.as_deref())
         .include_drafts(input.include_drafts)
+        .trash(input.trash)
         .build();
 
     count_documents(&ctx, &count_input).map_err(Status::from)
@@ -112,6 +114,7 @@ impl ContentService {
             locale_ctx,
             search: req.search.clone(),
             include_drafts: req.draft.unwrap_or(false),
+            trash: req.trash.unwrap_or(false),
         };
 
         let count = task::spawn_blocking(move || count_blocking(input))

@@ -381,18 +381,14 @@ async fn delete_document() {
         .document
         .unwrap();
 
-    let del_resp = ts
-        .service
+    ts.service
         .delete(Request::new(content::DeleteRequest {
             collection: "posts".to_string(),
             id: doc.id.clone(),
             force_hard_delete: false,
         }))
         .await
-        .unwrap()
-        .into_inner();
-
-    assert!(del_resp.success);
+        .unwrap();
 
     // Verify gone
     let found = ts

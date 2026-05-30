@@ -8,6 +8,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **gRPC: dropped always-true `success` response fields.**
+  `DeleteResponse.success`, `ForgotPasswordResponse.success`,
+  `ResetPasswordResponse.success`, `VerifyEmailResponse.success`, and
+  `AccountActionResponse.success` were always `true` — failure is always
+  reported as a gRPC `Status` error. The fields are removed; a non-error
+  response is the success signal. `DeleteResponse` keeps `soft_deleted`.
+
+- **gRPC: dropped `JobDefinitionInfo.handler`.** It exposed the internal
+  Lua function reference, which external clients can't use. Removed from
+  `ListJobs`.
+
+- **gRPC: account RPCs authenticate before validating collection shape.**
+  `LockAccount` / `UnlockAccount` / `VerifyAccount` / `UnverifyAccount`
+  previously ran the auth-collection / verify-email checks before the
+  authentication check, letting an unauthenticated caller probe whether a
+  collection exists, is an auth collection, or has verify_email enabled.
+  They now return `UNAUTHENTICATED` first; shape errors surface only to
+  authenticated callers. (Security fix.)
+
 - **Removed the dead `[live] default_mode` config key.** It was
   documented as the default event-delivery mode for collections that
   don't specify one, but nothing ever read it — each collection's
@@ -88,7 +107,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   localized fields failed with a missing-column error. It now passes
   the configured locale, matching the gRPC and admin delete paths.
 
+- **gRPC: corrected the `Create` / `Update` error documentation.** A
+  UNIQUE-constraint conflict maps to `ALREADY_EXISTS` (not
+  `INVALID_ARGUMENT` as the proto comments claimed); the proto now
+  documents both codes separately.
+
 ### Added
+
+- **gRPC `CountRequest.trash`.** `Count` can now count soft-deleted
+  (trashed) documents, mirroring `FindRequest.trash`. Previously you
+  could `Find` trashed docs but not `Count` them.
 
 - **MCP `delete` accepts `force_hard_delete`.** The MCP delete tool
   can now bypass soft-delete and remove a row permanently, matching

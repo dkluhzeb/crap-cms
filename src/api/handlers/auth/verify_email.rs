@@ -88,8 +88,6 @@ impl ContentService {
             return Err(Status::not_found("Invalid verification token"));
         }
 
-        Ok(Response::new(content::VerifyEmailResponse {
-            success: true,
-        }))
+        Ok(Response::new(content::VerifyEmailResponse {}))
     }
 }

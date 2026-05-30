@@ -155,7 +155,6 @@ async fn create_find_update_delete_undelete_full_round_trip() {
         .await
         .expect("delete")
         .into_inner();
-    assert!(del.success, "delete should report success");
     assert!(
         del.soft_deleted,
         "soft-delete collection should soft-delete"
@@ -274,7 +273,6 @@ async fn delete_with_force_hard_delete_removes_permanently() {
         .await
         .expect("hard delete")
         .into_inner();
-    assert!(del.success);
     assert!(
         !del.soft_deleted,
         "force_hard_delete should bypass soft-delete"

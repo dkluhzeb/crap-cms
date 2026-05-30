@@ -610,7 +610,6 @@ async fn list_jobs_authenticated() {
     let resp = ts.service.list_jobs(req).await.unwrap().into_inner();
     assert_eq!(resp.jobs.len(), 1);
     assert_eq!(resp.jobs[0].slug, "cleanup");
-    assert_eq!(resp.jobs[0].handler, "hooks.jobs.cleanup");
     assert_eq!(resp.jobs[0].queue, "maintenance");
     assert_eq!(resp.jobs[0].retries, 3);
 }

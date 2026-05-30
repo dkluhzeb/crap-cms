@@ -500,17 +500,14 @@ async fn forgot_password_non_auth_collection() {
     // leaking collection configuration details to potential attackers.
     let ts = setup_service(vec![make_posts_def()], vec![]);
 
-    let resp = ts
-        .service
+    // A non-error response is the success signal (anti-enumeration).
+    ts.service
         .forgot_password(Request::new(content::ForgotPasswordRequest {
             collection: "posts".to_string(),
             email: "a@b.com".to_string(),
         }))
         .await
-        .unwrap()
-        .into_inner();
-
-    assert!(resp.success);
+        .unwrap();
 }
 
 #[tokio::test]
@@ -518,17 +515,14 @@ async fn forgot_password_always_returns_success() {
     // ForgotPassword always returns success to avoid leaking user existence
     let ts = setup_service(vec![make_users_def()], vec![]);
 
-    let resp = ts
-        .service
+    // A non-error response is the success signal (anti-enumeration).
+    ts.service
         .forgot_password(Request::new(content::ForgotPasswordRequest {
             collection: "users".to_string(),
             email: "nonexistent@example.com".to_string(),
         }))
         .await
-        .unwrap()
-        .into_inner();
-
-    assert!(resp.success);
+        .unwrap();
 }
 
 #[tokio::test]
@@ -541,17 +535,14 @@ async fn forgot_password_not_enabled() {
     }
     let ts = setup_service(vec![def], vec![]);
 
-    let resp = ts
-        .service
+    // A non-error response is the success signal (anti-enumeration).
+    ts.service
         .forgot_password(Request::new(content::ForgotPasswordRequest {
             collection: "users".to_string(),
             email: "a@b.com".to_string(),
         }))
         .await
-        .unwrap()
-        .into_inner();
-
-    assert!(resp.success);
+        .unwrap();
 }
 
 // ── Subscribe Tests ───────────────────────────────────────────────────────
@@ -728,17 +719,14 @@ async fn full_password_reset_flow() {
         .await
         .unwrap();
 
-    // Request password reset (always succeeds)
-    let resp = ts
-        .service
+    // Request password reset (always succeeds — non-error response is the signal)
+    ts.service
         .forgot_password(Request::new(content::ForgotPasswordRequest {
             collection: "users".to_string(),
             email: "reset@example.com".to_string(),
         }))
         .await
-        .unwrap()
-        .into_inner();
-    assert!(resp.success);
+        .unwrap();
 
     // Verify reset_password rejects an invalid token (the real token was
     // stored by forgot_password but we don't extract it here).
@@ -1045,22 +1033,16 @@ async fn login_locked_account_grpc() {
 async fn forgot_password_nonexistent_still_succeeds() {
     let ts = setup_service(vec![make_users_def()], vec![]);
 
-    // Call ForgotPassword with a completely non-existent email
-    let resp = ts
-        .service
+    // Call ForgotPassword with a completely non-existent email. A non-error
+    // response is the success signal — it must not leak that the email is
+    // unknown by erroring.
+    ts.service
         .forgot_password(Request::new(content::ForgotPasswordRequest {
             collection: "users".to_string(),
             email: "does-not-exist@example.com".to_string(),
         }))
         .await
-        .unwrap()
-        .into_inner();
-
-    // Should always return success to avoid leaking user existence
-    assert!(
-        resp.success,
-        "ForgotPassword should always return success, even for non-existent emails"
-    );
+        .unwrap();
 }
 
 #[tokio::test]

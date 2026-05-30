@@ -29,7 +29,7 @@ impl ContentService {
             .map_or_else(|| "unknown".to_string(), |a| a.ip().to_string());
         let req = request.into_inner();
 
-        let ok_response = Response::new(content::ForgotPasswordResponse { success: true });
+        let ok_response = Response::new(content::ForgotPasswordResponse {});
 
         if self.forgot_password_limiter.is_blocked(&req.email)
             || self.ip_forgot_password_limiter.is_blocked(&ip)
@@ -75,7 +75,7 @@ impl ContentService {
             });
         });
 
-        Response::new(content::ForgotPasswordResponse { success: true })
+        Response::new(content::ForgotPasswordResponse {})
     }
 }
 

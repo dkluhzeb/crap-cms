@@ -129,6 +129,29 @@ crap.collections.define("posts", {
 
 If present, config load now fails with `unknown field "default_mode"`.
 
+## gRPC clients (regenerate from `proto/content.proto`)
+
+Wire-contract changes — regenerate your gRPC stubs and adjust:
+
+- **Removed always-true `success` fields** from `DeleteResponse`,
+  `ForgotPasswordResponse`, `ResetPasswordResponse`, `VerifyEmailResponse`,
+  and `AccountActionResponse`. A non-error response is the success signal;
+  drop any `if (!resp.success)` branches. `DeleteResponse.soft_deleted`
+  remains.
+- **Removed `JobDefinitionInfo.handler`** (the internal Lua function
+  reference) from `ListJobs`.
+- **Account RPCs now return `UNAUTHENTICATED` before any collection-shape
+  error.** A client calling `LockAccount`/`VerifyAccount`/etc. without (or
+  with an invalid) token now gets `UNAUTHENTICATED` even when the
+  collection is unknown or lacks `verify_email` — previously it could get
+  `NOT_FOUND` / `INVALID_ARGUMENT` / `FAILED_PRECONDITION` first. Authenticate
+  before relying on those shape errors.
+- **Additive:** `CountRequest.trash` counts soft-deleted documents
+  (mirrors `FindRequest.trash`). Non-breaking.
+- **Doc-only:** `Create`/`Update` now document that a UNIQUE-constraint
+  conflict maps to `ALREADY_EXISTS` (the runtime mapping was already
+  `ALREADY_EXISTS`; only the proto comment was stale).
+
 ## Bug fixes (no action needed)
 
 - **`crap-cms serve --only grpc`** is now accepted (matching the

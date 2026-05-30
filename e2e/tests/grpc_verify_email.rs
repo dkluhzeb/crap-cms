@@ -119,15 +119,14 @@ async fn verify_email_valid_token_marks_verified_and_allows_login() {
     let token = "test-verify-token-abc123";
     plant_token(&ctx.pool, &user_id, token);
 
-    let resp = client
+    // A non-error response is the success signal.
+    client
         .verify_email(VerifyEmailRequest {
             collection: "users".to_string(),
             token: token.to_string(),
         })
         .await
-        .expect("verify_email with valid token")
-        .into_inner();
-    assert!(resp.success, "verify_email should report success=true");
+        .expect("verify_email with valid token");
 
     // After verification: login works.
     client

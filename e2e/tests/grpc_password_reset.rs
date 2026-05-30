@@ -169,19 +169,15 @@ async fn forgot_password_succeeds_for_unknown_email() {
     let ctx = spawn_grpc_server(vec![make_users_def()], vec![]).await;
     let mut client = ContentApiClient::new(ctx.channel.clone());
 
-    let resp = client
+    // A non-error response is the success signal — an unknown email must not
+    // leak its absence by erroring (anti-enumeration).
+    client
         .forgot_password(ForgotPasswordRequest {
             collection: "users".to_string(),
             email: "nobody@example.com".to_string(),
         })
         .await
-        .expect("forgot_password for unknown email should not error")
-        .into_inner();
-
-    assert!(
-        resp.success,
-        "forgot_password should always report success (no email-existence leak)"
-    );
+        .expect("forgot_password for unknown email should not error");
 
     ctx.shutdown.cancel();
     let _ = ctx.server_handle.await;

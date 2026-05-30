@@ -124,7 +124,6 @@ impl ContentService {
             .map_err(|_| Status::internal("Internal error"))??;
 
         Ok(Response::new(content::DeleteResponse {
-            success: true,
             soft_deleted: will_soft_delete,
         }))
     }

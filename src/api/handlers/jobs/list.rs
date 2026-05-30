@@ -79,7 +79,6 @@ impl ContentService {
             .iter()
             .map(|(slug, def)| content::JobDefinitionInfo {
                 slug: slug.to_string(),
-                handler: def.handler.clone(),
                 schedule: def.schedule.clone(),
                 queue: def.queue.clone(),
                 // Surface the effective retry count: explicit

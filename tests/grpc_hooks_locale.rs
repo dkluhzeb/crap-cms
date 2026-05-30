@@ -868,6 +868,7 @@ async fn update_many_with_filter() {
             locale: None,
             draft: None,
             search: None,
+            trash: None,
         }))
         .await
         .unwrap()
@@ -919,6 +920,7 @@ async fn delete_many_with_where() {
             locale: None,
             draft: None,
             search: None,
+            trash: None,
         }))
         .await
         .unwrap()
@@ -962,6 +964,7 @@ async fn count_with_invalid_locale_returns_invalid_argument() {
             r#where: None,
             draft: None,
             search: None,
+            trash: None,
         }))
         .await
         .unwrap_err();

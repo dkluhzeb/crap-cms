@@ -108,9 +108,7 @@ impl ContentService {
             .map_err(|_| Status::internal("Internal error"))??;
 
         match result {
-            Ok(()) => Ok(Response::new(content::ResetPasswordResponse {
-                success: true,
-            })),
+            Ok(()) => Ok(Response::new(content::ResetPasswordResponse {})),
             Err(e) => {
                 self.ip_forgot_password_limiter.record_failure(&ip);
                 Err(Status::from(e))

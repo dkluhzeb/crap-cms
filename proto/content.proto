@@ -68,7 +68,8 @@ service ContentAPI {
   // Errors:
   //   NOT_FOUND         — collection slug not registered
   //   PERMISSION_DENIED — create access denied
-  //   INVALID_ARGUMENT  — validation failure, hook error, or UNIQUE constraint
+  //   INVALID_ARGUMENT  — validation failure or hook error
+  //   ALREADY_EXISTS    — UNIQUE constraint violated
   //   UNAVAILABLE       — transient DB error; retry
   rpc Create (CreateRequest) returns (CreateResponse);
 
@@ -100,7 +101,8 @@ service ContentAPI {
   // Errors:
   //   NOT_FOUND         — collection slug not registered
   //   PERMISSION_DENIED — update access denied
-  //   INVALID_ARGUMENT  — validation failure, hook error, or UNIQUE constraint
+  //   INVALID_ARGUMENT  — validation failure or hook error
+  //   ALREADY_EXISTS    — UNIQUE constraint violated
   //   UNAVAILABLE       — transient DB error; retry
   rpc Update (UpdateRequest) returns (UpdateResponse);
 
@@ -720,11 +722,9 @@ message DeleteRequest {
   bool force_hard_delete = 3;
 }
 
-// DeleteResponse confirms the deletion.
+// DeleteResponse confirms the deletion. Failure is reported as a gRPC
+// status error, so the response is only sent on success.
 message DeleteResponse {
-  // True if the document was successfully deleted (or soft-deleted).
-  bool success = 1;
-
   // True if the document was soft-deleted (moved to trash) rather than permanently deleted.
   bool soft_deleted = 2;
 }
@@ -830,11 +830,10 @@ message ForgotPasswordRequest {
   string email = 2;
 }
 
-// ForgotPasswordResponse always indicates success to prevent user enumeration.
-message ForgotPasswordResponse {
-  // Always true. A false value is never returned — even if the email doesn't exist.
-  bool success = 1;
-}
+// ForgotPasswordResponse is empty: the call always succeeds (to prevent user
+// enumeration), so an empty response signals acceptance and any failure is a
+// gRPC status error.
+message ForgotPasswordResponse {}
 
 // ResetPasswordRequest consumes a reset token to set a new password.
 message ResetPasswordRequest {
@@ -849,11 +848,10 @@ message ResetPasswordRequest {
   string new_password = 3;
 }
 
-// ResetPasswordResponse confirms the password was updated.
-message ResetPasswordResponse {
-  // True if the password was successfully reset.
-  bool success = 1;
-}
+// ResetPasswordResponse is empty: success is signalled by a non-error
+// response; failures (invalid/expired token, policy violation) are gRPC
+// status errors.
+message ResetPasswordResponse {}
 
 // VerifyEmailRequest confirms an email address using a verification token.
 message VerifyEmailRequest {
@@ -865,12 +863,9 @@ message VerifyEmailRequest {
   string token = 2;
 }
 
-// VerifyEmailResponse confirms the verification result.
-message VerifyEmailResponse {
-  // True if verification succeeded. False is not returned (NOT_FOUND is used
-  // for invalid or expired tokens instead).
-  bool success = 1;
-}
+// VerifyEmailResponse is empty: success is signalled by a non-error response;
+// invalid or expired tokens return a NOT_FOUND status error instead.
+message VerifyEmailResponse {}
 
 // CountRequest counts documents matching an optional filter.
 message CountRequest {
@@ -889,6 +884,10 @@ message CountRequest {
   // Full-text search query. When set, only documents matching the search
   // are counted.
   optional string search = 5;
+
+  // When true, counts soft-deleted (trashed) documents instead of live
+  // ones — mirrors FindRequest.trash. Defaults to false.
+  optional bool trash = 6;
 }
 
 // CountResponse returns the number of matching documents.
@@ -1252,9 +1251,6 @@ message JobDefinitionInfo {
   // The job slug used to trigger and identify the job.
   string slug = 1;
 
-  // Lua function reference for the job handler.
-  string handler = 2;
-
   // Cron schedule expression (e.g., "0 * * * *" for hourly).
   // Absent for jobs that are only triggered manually.
   optional string schedule = 3;
@@ -1417,7 +1413,6 @@ message AccountActionRequest {
 }
 
 // AccountActionResponse confirms the account action succeeded.
-message AccountActionResponse {
-  // True when the operation completed successfully.
-  bool success = 1;
-}
+// AccountActionResponse is empty: success is signalled by a non-error
+// response; failures are gRPC status errors.
+message AccountActionResponse {}

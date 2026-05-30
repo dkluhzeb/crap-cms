@@ -19,8 +19,10 @@ use crate::{
 ///
 /// Validates auth token, checks collection is auth-enabled, and calls the
 /// provided service function inside `spawn_blocking`.
-fn validate_auth_collection(service: &ContentService, collection: &str) -> Result<(), Status> {
-    let def = service.get_collection_def(collection)?;
+fn validate_auth_collection(registry: &Registry, collection: &str) -> Result<(), Status> {
+    let def = registry
+        .get_collection(collection)
+        .ok_or_else(|| Status::not_found(format!("Collection '{collection}' not found")))?;
 
     if !def.is_auth_collection() {
         return Err(Status::invalid_argument(format!(
@@ -39,8 +41,10 @@ fn validate_auth_collection(service: &ContentService, collection: &str) -> Resul
 /// the generic `Status::internal("Internal error")`. `FailedPrecondition`
 /// is the correct mapping: the request is well-formed, the server is
 /// healthy, but the collection's schema doesn't support the action.
-fn validate_verify_email_enabled(service: &ContentService, collection: &str) -> Result<(), Status> {
-    let def = service.get_collection_def(collection)?;
+fn validate_verify_email_enabled(registry: &Registry, collection: &str) -> Result<(), Status> {
+    let def = registry
+        .get_collection(collection)
+        .ok_or_else(|| Status::not_found(format!("Collection '{collection}' not found")))?;
 
     let enabled = def.auth.as_ref().is_some_and(Auth::requires_verify_email);
     if !enabled {
@@ -68,6 +72,10 @@ struct AccountActionBlockingInput {
     token: Option<String>,
     headers: HashMap<String, String>,
     invalidation_transport: Option<SharedInvalidationTransport>,
+    /// When true, also require the collection to have `verify_email` enabled
+    /// (the `verify`/`unverify` actions). Checked only after authentication so
+    /// an unauthenticated caller can't probe collection shape.
+    verify_email_required: bool,
 }
 
 /// Resolve auth, then call one of `lock_user`/`unlock_user`/`mark_verified`/
@@ -95,6 +103,14 @@ fn account_action_blocking(
         return Err(Status::unauthenticated("Authentication required"));
     }
 
+    // Collection-shape validation runs only after authentication so an
+    // unauthenticated caller can't probe whether a collection exists, is an
+    // auth collection, or has verify_email enabled.
+    validate_auth_collection(&input.registry, &input.collection)?;
+    if input.verify_email_required {
+        validate_verify_email_enabled(&input.registry, &input.collection)?;
+    }
+
     let ctx = ServiceContext::slug_only(&input.collection)
         .conn(&conn)
         .invalidation_transport(input.invalidation_transport)
@@ -113,6 +129,7 @@ impl ContentService {
         headers: HashMap<String, String>,
         req: &content::AccountActionRequest,
         with_invalidation: bool,
+        verify_email_required: bool,
     ) -> AccountActionBlockingInput {
         AccountActionBlockingInput {
             pool: self.pool.clone(),
@@ -125,6 +142,7 @@ impl ContentService {
             token,
             headers,
             invalidation_transport: with_invalidation.then(|| self.invalidation_transport.clone()),
+            verify_email_required,
         }
     }
 
@@ -137,20 +155,18 @@ impl ContentService {
         let token = Self::extract_token(&metadata);
         let headers = self.metadata_headers(&metadata);
         let req = request.into_inner();
-        validate_auth_collection(self, &req.collection)?;
 
         // Service-layer lock_user publishes the invalidation signal
-        // when a transport is attached to the context.
-        let input = self.account_action_input(token, headers, &req, true);
+        // when a transport is attached to the context. Collection-shape
+        // validation happens after auth inside the blocking body.
+        let input = self.account_action_input(token, headers, &req, true, false);
 
         task::spawn_blocking(move || account_action_blocking(input, service::auth::lock_user))
             .await
             .inspect_err(|e| error!("Task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;
 
-        Ok(Response::new(content::AccountActionResponse {
-            success: true,
-        }))
+        Ok(Response::new(content::AccountActionResponse {}))
     }
 
     /// Unlock a user account, re-enabling login.
@@ -162,18 +178,15 @@ impl ContentService {
         let token = Self::extract_token(&metadata);
         let headers = self.metadata_headers(&metadata);
         let req = request.into_inner();
-        validate_auth_collection(self, &req.collection)?;
 
-        let input = self.account_action_input(token, headers, &req, false);
+        let input = self.account_action_input(token, headers, &req, false, false);
 
         task::spawn_blocking(move || account_action_blocking(input, service::auth::unlock_user))
             .await
             .inspect_err(|e| error!("Task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;
 
-        Ok(Response::new(content::AccountActionResponse {
-            success: true,
-        }))
+        Ok(Response::new(content::AccountActionResponse {}))
     }
 
     /// Mark a user's email as verified.
@@ -185,19 +198,15 @@ impl ContentService {
         let token = Self::extract_token(&metadata);
         let headers = self.metadata_headers(&metadata);
         let req = request.into_inner();
-        validate_auth_collection(self, &req.collection)?;
-        validate_verify_email_enabled(self, &req.collection)?;
 
-        let input = self.account_action_input(token, headers, &req, false);
+        let input = self.account_action_input(token, headers, &req, false, true);
 
         task::spawn_blocking(move || account_action_blocking(input, service::auth::mark_verified))
             .await
             .inspect_err(|e| error!("Task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;
 
-        Ok(Response::new(content::AccountActionResponse {
-            success: true,
-        }))
+        Ok(Response::new(content::AccountActionResponse {}))
     }
 
     /// Mark a user's email as unverified.
@@ -209,10 +218,8 @@ impl ContentService {
         let token = Self::extract_token(&metadata);
         let headers = self.metadata_headers(&metadata);
         let req = request.into_inner();
-        validate_auth_collection(self, &req.collection)?;
-        validate_verify_email_enabled(self, &req.collection)?;
 
-        let input = self.account_action_input(token, headers, &req, false);
+        let input = self.account_action_input(token, headers, &req, false, true);
 
         task::spawn_blocking(move || {
             account_action_blocking(input, service::auth::mark_unverified)
@@ -221,8 +228,6 @@ impl ContentService {
         .inspect_err(|e| error!("Task error: {}", e))
         .map_err(|_| Status::internal("Internal error"))??;
 
-        Ok(Response::new(content::AccountActionResponse {
-            success: true,
-        }))
+        Ok(Response::new(content::AccountActionResponse {}))
     }
 }
