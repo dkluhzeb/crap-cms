@@ -72,6 +72,7 @@ use crate::hooks::lua_api::{
         globals::{
             get::{GlobalGetOptions, render_crap_globals_get_lua},
             update::{GlobalUpdateOptions, render_crap_globals_update_lua},
+            validate::{GlobalValidateOptions, render_crap_globals_validate_lua},
         },
         jobs::queue::render_crap_jobs_queue_lua,
     },
@@ -428,8 +429,10 @@ fn render_crap_globals(out: &mut String) {
     render_crap_globals_init_config_lua(out);
     GlobalGetOptions::render_lua_annotation(out);
     GlobalUpdateOptions::render_lua_annotation(out);
+    GlobalValidateOptions::render_lua_annotation(out);
     render_crap_globals_get_lua(out);
     render_crap_globals_update_lua(out);
+    render_crap_globals_validate_lua(out);
 }
 fn render_crap_hooks(out: &mut String) {
     render_crap_hooks_lua(out);

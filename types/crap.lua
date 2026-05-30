@@ -1129,6 +1129,14 @@ function crap.globals.config.list() end
 --- @field overrideAccess? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass the global's update access function.
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set false to bypass hooks (e.g., for seeding/migrations).
 
+--- Optional options for `crap.globals.validate`. Globals are a singleton
+--- row, so there is no `id` to exclude — validation always runs in update
+--- mode against the fixed `default` row.
+--- @class crap.GlobalValidateOptions
+--- @field locale? string Locale code for localized fields. Nil = default locale.
+--- @field overrideAccess? boolean Skip access control checks (default: `false`).
+--- @field draft? boolean Validate as a draft (relaxes required-field checks for globals with drafts enabled).
+
 --- Get a global's current value.
 --- @param slug string  Global slug.
 --- @param opts crap.GlobalGetOptions  Optional options (e.g., `{ locale = "de" }`).
@@ -1141,6 +1149,16 @@ function crap.globals.get(slug, opts) end
 --- @param opts crap.GlobalUpdateOptions  Optional options (e.g., `{ locale = "de" }`).
 --- @return crap.Document
 function crap.globals.update(slug, data_table, opts) end
+
+--- Validate global field data without persisting. Returns
+--- `{ valid = true }` on success, or `{ valid = false, errors = {...} }`
+--- on validation failure (errors keyed by field name). Globals always
+--- validate in update mode against the singleton `default` row.
+--- @param slug string  Global slug.
+--- @param data_table table<string, any>  Field values to validate.
+--- @param opts crap.GlobalValidateOptions  Optional options.
+--- @return crap.ValidateResult
+function crap.globals.validate(slug, data_table, opts) end
 
 -- ── crap.hooks ───────────────────────────────────────────────
 

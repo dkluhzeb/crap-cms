@@ -582,6 +582,13 @@ impl ContentApi for ContentService {
         self.validate_impl(request).await
     }
 
+    async fn validate_global(
+        &self,
+        request: Request<content::ValidateGlobalRequest>,
+    ) -> Result<Response<content::ValidateResponse>, Status> {
+        self.validate_global_impl(request).await
+    }
+
     async fn lock_account(
         &self,
         request: Request<content::AccountActionRequest>,

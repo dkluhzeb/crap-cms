@@ -113,3 +113,33 @@ crap.globals.site_settings.update({
     site_name = "Neuer Seitenname",
 }, { locale = "de" })
 ```
+
+### `crap.globals.validate(slug, data, opts?)`
+
+Validate global field data **without persisting**. Runs the full
+before-write pipeline (field coercion, validators, `before_validate`
+hooks) and returns `{ valid = true }` or
+`{ valid = false, errors = { field = "message", ... } }`. Globals are a
+singleton document, so validation always runs in update mode against the
+fixed `default` row — there is no create mode and no `id` option. Mirrors
+`crap.collections.validate`.
+
+**Options:**
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `locale` | string | Locale code for localized-field validation; omit for default locale. |
+| `overrideAccess` | boolean | Bypass the global's `access.update` check (default `false`). |
+| `draft` | boolean | Validate as a draft (relaxes required checks for globals with drafts enabled). |
+
+```lua
+local result = crap.globals.validate("site_settings", {
+    tagline = "A tagline that is far too long for the field",
+})
+
+if not result.valid then
+    for field, message in pairs(result.errors) do
+        print(field .. ": " .. message)
+    end
+end
+```

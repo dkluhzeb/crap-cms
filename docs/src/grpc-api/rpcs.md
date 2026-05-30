@@ -472,6 +472,28 @@ grpcurl -plaintext -d '{
 
 **Access:** optional. If a Bearer token is present, the collection's `create`/`update` access function is evaluated (`update` when `id` is set). Field-level write-denied fields are stripped before validation runs.
 
+## ValidateGlobal
+
+Check global field data against its rules without persisting. The global equivalent of `Validate`. Globals are a singleton document, so validation always runs in update mode against the fixed `default` row — there is no create mode and no `id` field. Returns the same `ValidateResponse` as `Validate`.
+
+```protobuf
+message ValidateGlobalRequest {
+  string slug = 1;
+  google.protobuf.Struct data = 2;
+  optional bool draft = 3;              // relaxes required-field checks for globals with drafts enabled
+  optional string locale = 4;           // locale code for localized field validation
+}
+```
+
+```bash
+grpcurl -plaintext -d '{
+    "slug": "settings",
+    "data": { "site_name": "My CMS" }
+}' localhost:50051 crap.ContentAPI/ValidateGlobal
+```
+
+**Access:** optional. If a Bearer token is present, the global's `update` access function is evaluated. Field-level write-denied fields are stripped before validation runs.
+
 ## LockAccount
 
 Prevent a user from logging in. Only valid for auth-enabled collections. Any active live-update streams owned by the locked user are torn down with `PermissionDenied`.

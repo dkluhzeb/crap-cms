@@ -147,6 +147,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `Validate` RPC and the Lua `collections.validate` function; global
   validation previously existed only on the admin surface.
 
+- **Global validation on the gRPC and Lua surfaces.** Validating a
+  global's data without persisting was previously possible only through
+  the admin UI. It is now available as the gRPC `ValidateGlobal` RPC
+  (`ValidateGlobalRequest { slug, data, draft?, locale? }` →
+  `ValidateResponse`) and the Lua `crap.globals.validate(slug, data,
+  opts?)` function. Globals are a singleton, so both always validate in
+  update mode against the `default` row. Together with the new MCP
+  `global_validate_*` tool, global validation now exists on every
+  surface that exposes collection validation.
+
 - **gRPC `CountRequest.trash`.** `Count` can now count soft-deleted
   (trashed) documents, mirroring `FindRequest.trash`. Previously you
   could `Find` trashed docs but not `Count` them.

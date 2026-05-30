@@ -690,6 +690,64 @@ async fn update_global_and_read_back() {
 }
 
 #[tokio::test]
+async fn validate_global_reports_field_errors_without_persisting() {
+    let mut def = GlobalDefinition::new("settings");
+    def.fields = vec![
+        FieldDefinition::builder("site_name", FieldType::Text)
+            .max_length(3)
+            .build(),
+    ];
+    let ts = setup_service(vec![], vec![def]);
+
+    // A value exceeding max_length(3) → invalid with a per-field error.
+    let resp = ts
+        .service
+        .validate_global(Request::new(content::ValidateGlobalRequest {
+            slug: "settings".to_string(),
+            data: Some(make_struct(&[("site_name", "toolong")])),
+            draft: None,
+            locale: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(!resp.valid, "over-length value should be invalid");
+    assert!(
+        resp.errors.contains_key("site_name"),
+        "expected a per-field error for site_name, got: {:?}",
+        resp.errors
+    );
+
+    // Within the limit → valid.
+    let resp = ts
+        .service
+        .validate_global(Request::new(content::ValidateGlobalRequest {
+            slug: "settings".to_string(),
+            data: Some(make_struct(&[("site_name", "ok")])),
+            draft: None,
+            locale: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(resp.valid, "within-limit value should be valid");
+
+    // Validation must not have written the global — it stays at its default.
+    let doc = ts
+        .service
+        .get_global(Request::new(content::GetGlobalRequest {
+            slug: "settings".to_string(),
+            locale: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+    assert_eq!(get_proto_field(&doc, "site_name"), None);
+}
+
+#[tokio::test]
 async fn get_global_nonexistent() {
     let ts = setup_service(vec![], vec![]);
 

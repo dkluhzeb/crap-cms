@@ -565,6 +565,48 @@ fn lua_globals_update_with_blocks() {
     assert_eq!(result, "2:hero:Sign Up");
 }
 
+#[test]
+fn lua_globals_validate_reports_field_errors() {
+    let (_tmp, pool, _reg, runner) = setup_custom_db(
+        &[],
+        &[(
+            "site",
+            r#"
+            crap.globals.define("site", {
+                labels = { singular = "Site" },
+                fields = {
+                    { name = "tagline", type = "text", max_length = 3 },
+                },
+            })
+            "#,
+        )],
+        None,
+    );
+
+    // A value exceeding max_length(3) → invalid with a per-field error.
+    let invalid = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
+        local r = crap.globals.validate("site", { tagline = "toolong" })
+        if r.valid then return "VALID" end
+        return "invalid:" .. tostring(r.errors and r.errors.tagline ~= nil)
+        "#,
+    );
+    assert_eq!(invalid, "invalid:true");
+
+    // Within the limit → valid, and nothing is persisted.
+    let valid = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
+        local r = crap.globals.validate("site", { tagline = "ok" })
+        return tostring(r.valid)
+        "#,
+    );
+    assert_eq!(valid, "true");
+}
+
 // ── Cross-Collection Hooks + Transaction Integrity ──────────────────────
 
 #[test]

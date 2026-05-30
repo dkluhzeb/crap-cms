@@ -385,6 +385,20 @@ service ContentAPI {
   //   UNAVAILABLE       — transient DB error; retry
   rpc Validate (ValidateRequest) returns (ValidateResponse);
 
+  // ValidateGlobal checks global field data against its rules without
+  // persisting. Globals are a singleton document, so validation always runs
+  // in update mode against the fixed `default` row (no create mode, no id).
+  // Returns the same per-field error map as Validate.
+  //
+  // Auth: optional. If present, update access functions are evaluated;
+  // field-level write-denied fields are stripped before validation runs.
+  //
+  // Errors:
+  //   NOT_FOUND         — global slug not registered
+  //   PERMISSION_DENIED — access denied (when auth token is present)
+  //   UNAVAILABLE       — transient DB error; retry
+  rpc ValidateGlobal (ValidateGlobalRequest) returns (ValidateResponse);
+
   // LockAccount prevents a user from logging in.
   // Only valid for auth-enabled collections.
   //
@@ -1447,6 +1461,24 @@ message ValidateResponse {
   // Per-field error messages. Keys are field names, values are human-readable
   // error descriptions. Empty when valid=true.
   map<string, string> errors = 2;
+}
+
+// ValidateGlobalRequest checks global field data without persisting.
+// Globals are a singleton row, so there is no `id` — validation always runs
+// in update mode against the fixed `default` row.
+message ValidateGlobalRequest {
+  // The global slug.
+  string slug = 1;
+
+  // Global field values to validate (same format as UpdateGlobalRequest.data).
+  google.protobuf.Struct data = 2;
+
+  // When true, validate as a draft (relaxes required-field checks for
+  // globals with drafts enabled).
+  optional bool draft = 3;
+
+  // BCP-47 locale code for localized field validation.
+  optional string locale = 4;
 }
 
 // AccountActionRequest identifies a user in an auth collection.
