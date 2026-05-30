@@ -15,7 +15,6 @@ In `crap.toml`:
 ```toml
 [live]
 enabled = true              # default: true
-default_mode = "metadata"   # default: "metadata" — global default for all collections
 transport = "memory"        # default: "memory" — in-process; set to "redis" for multi-node fanout
 channel_capacity = 1024     # default: 1024
 # max_sse_connections = 1000        # max concurrent SSE connections (0 = unlimited)

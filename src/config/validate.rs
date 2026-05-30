@@ -8,7 +8,7 @@ use anyhow::{Result, bail};
 use ipnet::IpNet;
 use tracing::warn;
 
-use crate::config::CrapConfig;
+use crate::config::{CacheBackend, CrapConfig};
 
 /// Minimum character length for `mcp.api_key` when `mcp.http` is enabled.
 /// 32 characters of the typical `base64`/`hex` alphabets give >= 128 bits of
@@ -186,7 +186,7 @@ impl CrapConfig {
 
         if self.auth.password_policy.min_length > self.auth.password_policy.max_length {
             bail!(
-                "auth.password.min_length ({}) must be <= auth.password.max_length ({})",
+                "auth.password_policy.min_length ({}) must be <= auth.password_policy.max_length ({})",
                 self.auth.password_policy.min_length,
                 self.auth.password_policy.max_length
             );
@@ -271,7 +271,7 @@ impl CrapConfig {
 
     /// Validate cache settings.
     pub(super) fn validate_cache(&self) {
-        if self.cache.backend == "memory" && self.cache.max_entries == 0 {
+        if self.cache.backend == CacheBackend::Memory && self.cache.max_entries == 0 {
             warn!(
                 "cache.max_entries = 0 with memory backend -- cache will never store entries (equivalent to backend = \"none\")"
             );

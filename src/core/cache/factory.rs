@@ -2,18 +2,21 @@
 
 use std::sync::Arc;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
+#[cfg(not(feature = "redis"))]
+use anyhow::bail;
 use tracing::info;
 
-use crate::config::CacheConfig;
+use crate::config::{CacheBackend, CacheConfig};
 
-use super::{CacheBackend, MemoryCache, NoneCache, SharedCache};
+// Aliased to disambiguate from the `CacheBackend` config enum imported above.
+use super::{CacheBackend as CacheBackendTrait, MemoryCache, NoneCache, SharedCache};
 
 /// No-op placeholder that reports `kind() = "custom"` for diagnostics.
 /// Used when `backend = "custom"` is selected but Lua init hasn't run yet.
 struct CustomPlaceholder;
 
-impl CacheBackend for CustomPlaceholder {
+impl CacheBackendTrait for CustomPlaceholder {
     fn get(&self, _key: &str) -> Result<Option<Vec<u8>>> {
         Ok(None)
     }
@@ -46,8 +49,8 @@ impl CacheBackend for CustomPlaceholder {
 /// Returns an error if the backend name is unknown or the Redis client
 /// fails to initialize.
 pub fn create_cache(config: &CacheConfig) -> Result<SharedCache> {
-    match config.backend.as_str() {
-        "memory" | "" => {
+    match config.backend {
+        CacheBackend::Memory => {
             info!(
                 max_entries = config.max_entries,
                 "Using memory cache backend"
@@ -55,13 +58,13 @@ pub fn create_cache(config: &CacheConfig) -> Result<SharedCache> {
 
             Ok(Arc::new(MemoryCache::new(config.max_entries)))
         }
-        "none" => {
+        CacheBackend::None => {
             info!("Using no-op cache backend");
 
             Ok(Arc::new(NoneCache))
         }
         #[cfg(feature = "redis")]
-        "redis" => {
+        CacheBackend::Redis => {
             info!(url = %config.redis_url, prefix = %config.prefix, "Using Redis cache backend");
 
             Ok(Arc::new(super::redis::RedisCache::new(
@@ -71,18 +74,17 @@ pub fn create_cache(config: &CacheConfig) -> Result<SharedCache> {
             )?))
         }
         #[cfg(not(feature = "redis"))]
-        "redis" => {
+        CacheBackend::Redis => {
             bail!(
                 "Redis cache backend requires the `redis` feature. \
                  Rebuild with `--features redis`."
             );
         }
-        "custom" => {
+        CacheBackend::Custom => {
             info!("Custom cache backend selected — waiting for Lua init");
 
             Ok(Arc::new(CustomPlaceholder))
         }
-        other => bail!("Unknown cache backend: '{other}'"),
     }
 }
 
@@ -100,7 +102,7 @@ mod tests {
     #[test]
     fn create_none_cache() {
         let config = CacheConfig {
-            backend: "none".to_string(),
+            backend: CacheBackend::None,
             ..Default::default()
         };
         let cache = create_cache(&config).unwrap();
@@ -108,22 +110,9 @@ mod tests {
     }
 
     #[test]
-    fn create_unknown_backend_errors() {
-        let config = CacheConfig {
-            backend: "memcached".to_string(),
-            ..Default::default()
-        };
-        let result = create_cache(&config);
-        assert!(result.is_err());
-
-        let err = result.err().unwrap();
-        assert!(err.to_string().contains("memcached"));
-    }
-
-    #[test]
     fn create_custom_uses_placeholder() {
         let config = CacheConfig {
-            backend: "custom".to_string(),
+            backend: CacheBackend::Custom,
             ..Default::default()
         };
         let cache = create_cache(&config).unwrap();

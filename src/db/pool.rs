@@ -11,7 +11,7 @@ use r2d2_sqlite::SqliteConnectionManager;
 use std::time::Duration;
 use std::{path::Path, sync::Arc};
 
-use crate::config::CrapConfig;
+use crate::config::{CrapConfig, DatabaseBackend};
 
 use super::connection::BoxedConnection;
 #[cfg(feature = "sqlite")]
@@ -99,19 +99,27 @@ pub fn create_pool(config_dir: &Path, config: &CrapConfig) -> Result<DbPool> {
     // Silence unused-param warning when built without the sqlite feature.
     let _ = config_dir;
 
-    match config.database.backend.as_str() {
+    match config.database.backend {
         #[cfg(feature = "sqlite")]
-        "sqlite" => create_sqlite_pool(config_dir, config),
+        DatabaseBackend::Sqlite => create_sqlite_pool(config_dir, config),
+        #[cfg(not(feature = "sqlite"))]
+        DatabaseBackend::Sqlite => anyhow::bail!(
+            "Database backend 'sqlite' requires the `sqlite` feature. Supported in this build: {}",
+            supported_backends()
+        ),
         #[cfg(feature = "postgres")]
-        "postgres" => crate::db::backend::postgres::create_pool(config),
-        other => anyhow::bail!(
-            "Unknown database backend '{}'. Supported: {}",
-            other,
+        DatabaseBackend::Postgres => crate::db::backend::postgres::create_pool(config),
+        #[cfg(not(feature = "postgres"))]
+        DatabaseBackend::Postgres => anyhow::bail!(
+            "Database backend 'postgres' requires the `postgres` feature. Supported in this build: {}",
             supported_backends()
         ),
     }
 }
 
+// Only referenced by the feature-disabled bail arms above, which don't exist
+// when both backends are compiled in.
+#[cfg(not(all(feature = "sqlite", feature = "postgres")))]
 fn supported_backends() -> &'static str {
     #[cfg(all(feature = "sqlite", feature = "postgres"))]
     return "sqlite, postgres";

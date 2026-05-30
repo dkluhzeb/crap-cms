@@ -204,7 +204,6 @@ http_max_response_bytes = "10MB"  # Max HTTP response body size
 
 [live]
 enabled = true           # Enable SSE + gRPC Subscribe for live mutation events
-default_mode = "metadata"  # Default event delivery mode: "metadata" or "full"
 transport = "memory"     # Event transport: "memory" (default, in-process) or "redis" (cross-node fanout)
 channel_capacity = 1024  # Broadcast channel buffer size
 # max_sse_connections = 1000        # Max concurrent SSE connections (0 = unlimited)
@@ -448,7 +447,6 @@ When configured, email enables password reset ("Forgot password?" link on login)
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | boolean | `true` | Enable live event streaming (SSE + gRPC Subscribe). |
-| `default_mode` | string | `"metadata"` | Default event delivery mode. `"metadata"` sends only event type, collection, and document ID. `"full"` sends the complete document payload. |
 | `transport` | string | `"memory"` | Event transport. `"memory"` keeps events in-process (does not cross nodes). `"redis"` fans events out across all servers subscribed to the same Redis instance — requires the `redis` feature and reuses `[cache] redis_url`. |
 | `channel_capacity` | integer | `1024` | Internal broadcast channel buffer size. Increase if subscribers lag. |
 | `max_sse_connections` | integer | `1000` | Maximum concurrent SSE connections. When reached, new connections receive `503 Service Unavailable`. `0` = unlimited. |

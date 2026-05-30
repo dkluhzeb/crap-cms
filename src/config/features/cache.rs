@@ -15,12 +15,26 @@ use serde::{Deserialize, Serialize};
 /// redis_url = "redis://127.0.0.1:6379"
 /// prefix = "crap:"         # key prefix for Redis
 /// ```
+/// Cross-request cache backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheBackend {
+    /// In-process cache (the default).
+    #[default]
+    Memory,
+    /// Redis-backed cache (requires the `redis` feature).
+    Redis,
+    /// Caching disabled.
+    None,
+    /// Backend registered from Lua via `crap.cache.register`.
+    Custom,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CacheConfig {
-    /// Cache backend: `"memory"` (default), `"redis"`, `"none"`, or `"custom"`.
-    #[serde(default = "default_cache_backend")]
-    pub backend: String,
+    /// Cache backend: `memory` (default), `redis`, `none`, or `custom`.
+    pub backend: CacheBackend,
     /// Soft cap on the number of entries for the memory backend.
     /// Once reached, new insertions are skipped until a clear. Default: 10,000.
     #[serde(default = "default_cache_max_entries")]
@@ -35,10 +49,6 @@ pub struct CacheConfig {
     /// Key prefix for the Redis backend. All keys are stored as `{prefix}{key}`.
     #[serde(default = "default_cache_prefix")]
     pub prefix: String,
-}
-
-fn default_cache_backend() -> String {
-    "memory".to_string()
 }
 
 fn default_cache_max_entries() -> usize {
@@ -56,7 +66,7 @@ fn default_cache_prefix() -> String {
 impl Default for CacheConfig {
     fn default() -> Self {
         Self {
-            backend: default_cache_backend(),
+            backend: CacheBackend::default(),
             max_entries: default_cache_max_entries(),
             max_age_secs: 0,
             redis_url: default_redis_url(),
@@ -72,7 +82,7 @@ mod tests {
     #[test]
     fn cache_config_defaults() {
         let cache = CacheConfig::default();
-        assert_eq!(cache.backend, "memory");
+        assert_eq!(cache.backend, CacheBackend::Memory);
         assert_eq!(cache.max_entries, 10_000);
         assert_eq!(cache.max_age_secs, 0);
         assert_eq!(cache.redis_url, "redis://127.0.0.1:6379");
@@ -88,7 +98,7 @@ mod tests {
         )
         .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
-        assert_eq!(config.cache.backend, "none");
+        assert_eq!(config.cache.backend, CacheBackend::None);
         assert_eq!(config.cache.max_entries, 5000);
         assert_eq!(config.cache.max_age_secs, 60);
     }
@@ -102,7 +112,7 @@ mod tests {
         )
         .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
-        assert_eq!(config.cache.backend, "redis");
+        assert_eq!(config.cache.backend, CacheBackend::Redis);
         assert_eq!(config.cache.max_entries, 10_000);
         assert_eq!(config.cache.redis_url, "redis://127.0.0.1:6379");
         assert_eq!(config.cache.prefix, "crap:");

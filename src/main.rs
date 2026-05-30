@@ -61,7 +61,7 @@ enum Command {
         #[arg(long)]
         json: bool,
 
-        /// Start only the specified server (admin or api). Omit to start both.
+        /// Start only the specified server (admin or grpc). Omit to start both.
         #[arg(long, value_enum)]
         only: Option<ServeMode>,
 

@@ -2,8 +2,12 @@
 
 use std::sync::Arc;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
+#[cfg(not(feature = "redis"))]
+use anyhow::bail;
 use tracing::info;
+
+use crate::config::RateLimitBackend;
 
 use super::{MemoryRateLimitBackend, NoneRateLimitBackend, SharedRateLimitBackend};
 
@@ -12,7 +16,7 @@ use super::{MemoryRateLimitBackend, NoneRateLimitBackend, SharedRateLimitBackend
 /// `redis` feature is off — public struct fields don't trigger
 /// unused-warnings the way unused fn parameters do.
 pub struct RateLimitFactoryConfig<'a> {
-    pub backend: &'a str,
+    pub backend: RateLimitBackend,
     pub redis_url: &'a str,
     pub prefix: &'a str,
 }
@@ -21,22 +25,22 @@ pub struct RateLimitFactoryConfig<'a> {
 ///
 /// # Errors
 ///
-/// Returns an error if the backend name is unknown or the Redis client
-/// fails to initialize.
+/// Returns an error if the Redis client fails to initialize (or the Redis
+/// backend is selected without the `redis` feature).
 pub fn create_rate_limit_backend(
     cfg: &RateLimitFactoryConfig<'_>,
 ) -> Result<SharedRateLimitBackend> {
     match cfg.backend {
-        "memory" | "" => {
+        RateLimitBackend::Memory => {
             info!("Using memory rate limit backend");
             Ok(Arc::new(MemoryRateLimitBackend::new()))
         }
-        "none" => {
+        RateLimitBackend::None => {
             info!("Rate limiting disabled (none backend)");
             Ok(Arc::new(NoneRateLimitBackend))
         }
         #[cfg(feature = "redis")]
-        "redis" => {
+        RateLimitBackend::Redis => {
             info!(
                 url = %cfg.redis_url,
                 prefix = %cfg.prefix,
@@ -48,13 +52,12 @@ pub fn create_rate_limit_backend(
             )?))
         }
         #[cfg(not(feature = "redis"))]
-        "redis" => {
+        RateLimitBackend::Redis => {
             bail!(
                 "Redis rate limit backend requires the `redis` feature. \
                  Rebuild with `--features redis`."
             );
         }
-        other => bail!("Unknown rate limit backend: '{other}'"),
     }
 }
 
@@ -62,7 +65,7 @@ pub fn create_rate_limit_backend(
 mod tests {
     use super::*;
 
-    fn cfg(backend: &str) -> RateLimitFactoryConfig<'_> {
+    fn cfg(backend: RateLimitBackend) -> RateLimitFactoryConfig<'static> {
         RateLimitFactoryConfig {
             backend,
             redis_url: "",
@@ -72,19 +75,13 @@ mod tests {
 
     #[test]
     fn create_memory_backend() {
-        let backend = create_rate_limit_backend(&cfg("memory")).unwrap();
+        let backend = create_rate_limit_backend(&cfg(RateLimitBackend::Memory)).unwrap();
         assert_eq!(backend.kind(), "memory");
     }
 
     #[test]
     fn create_none_backend() {
-        let backend = create_rate_limit_backend(&cfg("none")).unwrap();
+        let backend = create_rate_limit_backend(&cfg(RateLimitBackend::None)).unwrap();
         assert_eq!(backend.kind(), "none");
-    }
-
-    #[test]
-    fn create_unknown_backend_errors() {
-        let result = create_rate_limit_backend(&cfg("memcached"));
-        assert!(result.is_err());
     }
 }

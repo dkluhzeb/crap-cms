@@ -48,7 +48,7 @@ pub fn detach(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) ->
         cmd.arg("--only");
         cmd.arg(match mode {
             ServeMode::Admin => "admin",
-            ServeMode::Api => "api",
+            ServeMode::Grpc => "grpc",
         });
     }
 

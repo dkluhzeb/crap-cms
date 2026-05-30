@@ -9,7 +9,7 @@ use std::path::Path;
 use crate::core::collection::Auth;
 use crate::{
     cli,
-    config::{CompressionMode, CrapConfig},
+    config::{CacheBackend, CompressionMode, CrapConfig, EmailProvider},
     core::{CollectionDefinition, Hooks, LiveMode, Registry},
     db::{DbConnection, DbPool, migrate},
 };
@@ -144,7 +144,7 @@ fn check_cache(cfg: &CrapConfig, reg: &Registry, findings: &mut Vec<Finding>) {
             .any(|f| f.field_type.as_str() == "relationship")
     });
 
-    if cfg.cache.backend == "none" && has_relationships && reg.collections.len() > 3 {
+    if cfg.cache.backend == CacheBackend::None && has_relationships && reg.collections.len() > 3 {
         findings.push(
             Finding::new(
                 "Cache is disabled but collections use relationships — populate results are recomputed on every read",
@@ -376,7 +376,7 @@ fn check_email(cfg: &CrapConfig, reg: &Registry, findings: &mut Vec<Finding>) {
         .values()
         .any(|d| d.auth.as_ref().is_some_and(Auth::requires_verify_email));
 
-    if has_verify_email && cfg.email.provider == "log" {
+    if has_verify_email && cfg.email.provider == EmailProvider::Log {
         findings.push(
             Finding::new(
                 "Email provider is \"log\" but auth collections have verify_email enabled — verification emails will not be delivered",

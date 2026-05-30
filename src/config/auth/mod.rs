@@ -4,5 +4,5 @@
 mod config;
 mod password_policy;
 
-pub use config::{AuthConfig, SessionCookieSameSite};
+pub use config::{AuthConfig, RateLimitBackend, SessionCookieSameSite};
 pub use password_policy::PasswordPolicy;

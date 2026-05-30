@@ -20,13 +20,27 @@ pub enum SmtpTls {
     None,
 }
 
+/// Email delivery provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmailProvider {
+    /// SMTP server (the default). Disabled when `smtp_host` is empty.
+    #[default]
+    Smtp,
+    /// POST each message to a webhook URL.
+    Webhook,
+    /// Log messages instead of sending (development).
+    Log,
+    /// Provider registered from Lua via `crap.email.register`.
+    Custom,
+}
+
 /// SMTP email configuration. Empty `smtp_host` disables email (no-op sends).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct EmailConfig {
-    /// Email provider: `"smtp"` (default), `"webhook"`, `"log"`, or `"custom"`.
-    #[serde(default = "default_email_provider")]
-    pub provider: String,
+    /// Email provider: `smtp` (default), `webhook`, `log`, or `custom`.
+    pub provider: EmailProvider,
     /// SMTP server hostname. Empty = email disabled (falls back to log provider).
     pub smtp_host: String,
     /// SMTP server port (default 587).
@@ -52,10 +66,6 @@ pub struct EmailConfig {
     pub webhook_headers: HashMap<String, String>,
 }
 
-fn default_email_provider() -> String {
-    "smtp".to_string()
-}
-
 fn default_smtp_timeout() -> u64 {
     30
 }
@@ -63,7 +73,7 @@ fn default_smtp_timeout() -> u64 {
 impl Default for EmailConfig {
     fn default() -> Self {
         Self {
-            provider: default_email_provider(),
+            provider: EmailProvider::default(),
             smtp_host: String::new(),
             smtp_port: 587,
             smtp_user: String::new(),

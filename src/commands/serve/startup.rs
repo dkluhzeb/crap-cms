@@ -42,7 +42,10 @@ use super::pid::{remove_pid_file, write_pid_file};
 #[derive(Clone, Copy, clap::ValueEnum)]
 pub enum ServeMode {
     Admin,
-    Api,
+    /// The gRPC API server. `api` is kept as a backward-compatible alias so
+    /// the flag vocabulary matches the `[server] grpc_*` config keys.
+    #[value(alias = "api")]
+    Grpc,
 }
 
 /// Bail early if the config directory doesn't look valid.
@@ -274,7 +277,7 @@ fn create_rate_limiters(cfg: &CrapConfig) -> Result<RateLimiters> {
     };
 
     let backend = create_rate_limit_backend(&RateLimitFactoryConfig {
-        backend: &cfg.auth.rate_limit_backend,
+        backend: cfg.auth.rate_limit_backend,
         redis_url: rl_redis_url,
         prefix: &cfg.auth.rate_limit_prefix,
     })?;
@@ -606,7 +609,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
     spawn_shutdown_signal(shutdown.clone(), "");
 
     let run_admin = only.is_none() || matches!(only, Some(ServeMode::Admin));
-    let run_api = only.is_none() || matches!(only, Some(ServeMode::Api));
+    let run_api = only.is_none() || matches!(only, Some(ServeMode::Grpc));
     let run_scheduler_flag = !no_scheduler;
 
     let admin_addr = format!(

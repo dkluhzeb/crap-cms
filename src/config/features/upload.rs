@@ -4,13 +4,25 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{S3SecretKey, parsing::serde_filesize};
 
+/// Upload storage backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UploadStorage {
+    /// Local filesystem (the default).
+    #[default]
+    Local,
+    /// S3-compatible object storage (requires the `s3-storage` feature).
+    S3,
+    /// Backend registered from Lua via `crap.storage.register`.
+    Custom,
+}
+
 /// Global upload settings (per-collection upload config is separate).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct UploadConfig {
-    /// Storage backend: `"local"` (default), `"s3"`, or `"custom"`.
-    #[serde(default = "default_upload_storage")]
-    pub storage: String,
+    /// Storage backend: `local` (default), `s3`, or `custom`.
+    pub storage: UploadStorage,
     /// Global max file size in bytes. Default: 50MB.
     /// Accepts integer bytes or human-readable string ("50MB", "1GB").
     #[serde(with = "serde_filesize")]
@@ -57,14 +69,10 @@ fn default_s3_region() -> String {
     "us-east-1".to_string()
 }
 
-fn default_upload_storage() -> String {
-    "local".to_string()
-}
-
 impl Default for UploadConfig {
     fn default() -> Self {
         Self {
-            storage: default_upload_storage(),
+            storage: UploadStorage::default(),
             max_file_size: 52_428_800, // 50MB
             s3: S3Config::default(),
         }

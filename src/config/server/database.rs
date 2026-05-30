@@ -4,13 +4,23 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::parsing::{serde_duration, serde_duration_ms};
 
+/// Database backend engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DatabaseBackend {
+    /// `SQLite` (the default). Requires the `sqlite` feature.
+    #[default]
+    Sqlite,
+    /// `PostgreSQL`. Requires the `postgres` feature.
+    Postgres,
+}
+
 /// `SQLite` database path and pool configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DatabaseConfig {
-    /// Database backend: `"sqlite"` (default) or `"postgres"`.
-    #[serde(default = "default_backend")]
-    pub backend: String,
+    /// Database backend: `sqlite` (default) or `postgres`.
+    pub backend: DatabaseBackend,
     /// `PostgreSQL` connection URL (only used when `backend = "postgres"`).
     /// e.g., `"host=localhost user=crap dbname=crap_cms"`
     #[serde(default)]
@@ -77,14 +87,10 @@ fn default_stmt_cache_capacity() -> usize {
     128
 }
 
-fn default_backend() -> String {
-    "sqlite".to_string()
-}
-
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
-            backend: default_backend(),
+            backend: DatabaseBackend::default(),
             url: None,
             path: "data/crap.db".to_string(),
             pool_max_size: 64,

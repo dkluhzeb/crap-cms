@@ -2,21 +2,30 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Live event transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LiveTransport {
+    /// In-process broadcast (the default). Events do not cross server nodes.
+    #[default]
+    #[serde(alias = "in_process")]
+    Memory,
+    /// Redis pub/sub (requires the `redis` feature). Events fan out to all
+    /// server nodes subscribed to the same Redis instance.
+    Redis,
+}
+
 /// Live event streaming configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LiveConfig {
     /// Enable live event streaming (SSE + gRPC Subscribe). Default: true.
     pub enabled: bool,
-    /// Default event delivery mode for collections/globals that don't specify one.
-    /// `"metadata"` (default) = id/operation only, `"full"` = `after_read` hooks + data.
-    pub default_mode: String,
-    /// Event transport. `"memory"` (default) -- in-process broadcast, events do
-    /// not cross server nodes. `"redis"` -- Redis pub/sub (requires the `redis`
+    /// Event transport. `memory` (default) -- in-process broadcast, events do
+    /// not cross server nodes. `redis` -- Redis pub/sub (requires the `redis`
     /// feature); events fan out to all server nodes subscribed to the same
     /// Redis instance. The Redis URL is reused from `[cache] redis_url`.
-    #[serde(default = "default_live_transport")]
-    pub transport: String,
+    pub transport: LiveTransport,
     /// Broadcast channel capacity. Default: 1024.
     pub channel_capacity: usize,
     /// Maximum concurrent SSE connections (admin UI). 0 = unlimited. Default: 1000.
@@ -31,16 +40,11 @@ pub struct LiveConfig {
     pub subscriber_send_timeout_ms: u64,
 }
 
-fn default_live_transport() -> String {
-    "memory".to_string()
-}
-
 impl Default for LiveConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            default_mode: "metadata".to_string(),
-            transport: default_live_transport(),
+            transport: LiveTransport::default(),
             channel_capacity: 1024,
             max_sse_connections: 1000,
             max_subscribe_connections: 1000,
@@ -57,7 +61,7 @@ mod tests {
     fn live_config_defaults() {
         let live = LiveConfig::default();
         assert!(live.enabled);
-        assert_eq!(live.transport, "memory");
+        assert_eq!(live.transport, LiveTransport::Memory);
         assert_eq!(live.channel_capacity, 1024);
         assert_eq!(live.max_sse_connections, 1000);
         assert_eq!(live.max_subscribe_connections, 1000);
@@ -73,6 +77,6 @@ mod tests {
         )
         .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
-        assert_eq!(config.live.transport, "redis");
+        assert_eq!(config.live.transport, LiveTransport::Redis);
     }
 }

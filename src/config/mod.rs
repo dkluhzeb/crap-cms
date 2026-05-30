@@ -46,16 +46,17 @@ pub mod smtp_password;
 mod types;
 mod validate;
 
-pub use auth::{AuthConfig, PasswordPolicy, SessionCookieSameSite};
+pub use auth::{AuthConfig, PasswordPolicy, RateLimitBackend, SessionCookieSameSite};
 pub use cors::CorsConfig;
 pub use features::{
-    AccessConfig, CacheConfig, DepthConfig, EmailConfig, HooksConfig, JobsConfig, LiveConfig,
-    LocaleConfig, LogRotation, LoggingConfig, McpConfig, PaginationConfig, PaginationMode,
-    QueueConfig, S3Config, SmtpTls, UpdateConfig, UploadConfig,
+    AccessConfig, CacheBackend, CacheConfig, DepthConfig, EmailConfig, EmailProvider, HooksConfig,
+    JobsConfig, LiveConfig, LiveTransport, LocaleConfig, LogRotation, LoggingConfig, McpConfig,
+    PaginationConfig, PaginationMode, QueueConfig, S3Config, SmtpTls, UpdateConfig, UploadConfig,
+    UploadStorage,
 };
 pub use mcp_api_key::McpApiKey;
 pub(crate) use parsing::{parse_duration_string, parse_filesize_string};
 pub use s3_secret_key::S3SecretKey;
-pub use server::{AdminConfig, CompressionMode, DatabaseConfig, ServerConfig};
+pub use server::{AdminConfig, CompressionMode, DatabaseBackend, DatabaseConfig, ServerConfig};
 pub use smtp_password::SmtpPassword;
 pub use types::CrapConfig;

@@ -3,10 +3,12 @@
 
 use std::sync::Arc;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
+#[cfg(not(feature = "redis"))]
+use anyhow::bail;
 use tracing::info;
 
-use crate::config::LiveConfig;
+use crate::config::{LiveConfig, LiveTransport};
 use crate::core::event::{
     InProcessEventBus, InProcessInvalidationBus, SharedEventTransport, SharedInvalidationTransport,
 };
@@ -29,8 +31,8 @@ pub fn create_event_transport(
         return Ok(None);
     }
 
-    match live.transport.as_str() {
-        "memory" | "" | "in_process" => {
+    match live.transport {
+        LiveTransport::Memory => {
             info!(
                 "Using in-process event transport (capacity: {})",
                 live.channel_capacity
@@ -41,7 +43,7 @@ pub fn create_event_transport(
             ))))
         }
         #[cfg(feature = "redis")]
-        "redis" => {
+        LiveTransport::Redis => {
             info!(url = %redis_url, "Using Redis event transport");
 
             Ok(Some(Arc::new(
@@ -49,15 +51,12 @@ pub fn create_event_transport(
             )))
         }
         #[cfg(not(feature = "redis"))]
-        "redis" => {
+        LiveTransport::Redis => {
             let _ = redis_url;
             bail!(
                 "Redis event transport requires the `redis` feature. \
                  Rebuild with `--features redis`, or set `[live] transport = \"memory\"`."
             );
-        }
-        other => {
-            bail!("Unknown live event transport '{other}'. Valid values: \"memory\", \"redis\"")
         }
     }
 }
@@ -73,22 +72,19 @@ pub fn create_invalidation_transport(
     live: &LiveConfig,
     redis_url: &str,
 ) -> Result<SharedInvalidationTransport> {
-    match live.transport.as_str() {
-        "memory" | "" | "in_process" => Ok(Arc::new(InProcessInvalidationBus::new())),
+    match live.transport {
+        LiveTransport::Memory => Ok(Arc::new(InProcessInvalidationBus::new())),
         #[cfg(feature = "redis")]
-        "redis" => Ok(Arc::new(
+        LiveTransport::Redis => Ok(Arc::new(
             super::redis_transport::RedisInvalidationTransport::new(redis_url)?,
         )),
         #[cfg(not(feature = "redis"))]
-        "redis" => {
+        LiveTransport::Redis => {
             let _ = redis_url;
             bail!(
                 "Redis invalidation transport requires the `redis` feature. \
                  Rebuild with `--features redis`, or set `[live] transport = \"memory\"`."
             );
-        }
-        other => {
-            bail!("Unknown live event transport '{other}'. Valid values: \"memory\", \"redis\"")
         }
     }
 }
@@ -123,23 +119,11 @@ mod tests {
         assert_eq!(t.kind(), "in_process");
     }
 
-    #[test]
-    fn unknown_transport_errors() {
-        let cfg = LiveConfig {
-            transport: "zeromq".to_string(),
-            ..LiveConfig::default()
-        };
-        let Err(err) = create_event_transport(&cfg, "") else {
-            panic!("expected error for unknown transport");
-        };
-        assert!(err.to_string().contains("zeromq"));
-    }
-
     #[cfg(not(feature = "redis"))]
     #[test]
     fn redis_without_feature_errors() {
         let cfg = LiveConfig {
-            transport: "redis".to_string(),
+            transport: LiveTransport::Redis,
             ..LiveConfig::default()
         };
         let Err(err) = create_event_transport(&cfg, "") else {
@@ -155,7 +139,7 @@ mod tests {
     #[test]
     fn redis_invalidation_without_feature_errors() {
         let cfg = LiveConfig {
-            transport: "redis".to_string(),
+            transport: LiveTransport::Redis,
             ..LiveConfig::default()
         };
         let Err(err) = create_invalidation_transport(&cfg, "") else {

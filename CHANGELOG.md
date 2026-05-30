@@ -8,6 +8,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Removed the dead `[live] default_mode` config key.** It was
+  documented as the default event-delivery mode for collections that
+  don't specify one, but nothing ever read it — each collection's
+  `live_mode` always defaulted to `metadata` regardless. Live mode is
+  set per collection via `live = { mode = "full" }`; that remains the
+  only control. A `crap.toml` that set `[live] default_mode` now fails
+  to load (unknown field) instead of silently ignoring it.
+
 - **Lua bulk-op queries no longer accept option keys.**
   `crap.collections.update_many(collection, query, data, opts)` and
   `crap.collections.delete_many(collection, query, opts)` previously
@@ -58,6 +66,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - Corrected the documented default for `overrideAccess` on read
   queries — it is `false` (access enforced), not `true`.
 
+- **`crap-cms serve --only grpc`** is now accepted, matching the
+  `[server] grpc_*` config vocabulary. The previous `--only api`
+  spelling is kept as an alias, so existing scripts keep working.
+
+- **Corrected the `auth.password_policy` validation error message.**
+  When `min_length > max_length`, the error referred to
+  `auth.password.min_length` — a config path that doesn't exist. It now
+  names the real `auth.password_policy.min_length` /
+  `auth.password_policy.max_length` keys.
+
 - **No more spurious orphan-column warning for MFA collections.** The
   `_mfa_code` / `_mfa_code_exp` columns created for collections with
   MFA enabled were missing from the known-system-column list, so every
@@ -84,6 +102,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   sit alongside field values as reserved top-level arguments (like the
   existing `id` / `password`) and are excluded from the document's
   field data.
+
+### Changed
+
+- **Config backend selectors are now typed enums.** The
+  `[database] backend`, `[upload] storage`, `[email] provider`,
+  `[cache] backend`, `[auth] rate_limit_backend`, and `[live] transport`
+  keys were free-form strings validated late (at server startup). They
+  are now enums, so an invalid value (e.g. `backend = "sqlit"`) is
+  rejected at config load with an "unknown variant" error listing the
+  valid values, rather than failing later at startup. The accepted
+  values are unchanged, so valid configs need no edits.
 
 ## [0.1.0-alpha.9] — 2026-05-25
 

@@ -27,6 +27,8 @@
 use std::sync::Arc;
 
 use crap_cms::config::LiveConfig;
+#[cfg(not(feature = "redis"))]
+use crap_cms::config::LiveTransport;
 use crap_cms::core::{
     DocumentFields, DocumentId, Slug,
     event::{
@@ -123,24 +125,11 @@ fn factory_honours_disabled_live() {
     assert!(transport.is_none());
 }
 
-#[test]
-fn factory_rejects_unknown_transport() {
-    let cfg = LiveConfig {
-        transport: "kafka".to_string(),
-        ..LiveConfig::default()
-    };
-
-    let Err(err) = create_event_transport(&cfg, "") else {
-        panic!("expected error for unknown transport");
-    };
-    assert!(err.to_string().contains("kafka"), "unexpected error: {err}");
-}
-
 #[cfg(not(feature = "redis"))]
 #[test]
 fn factory_rejects_redis_without_feature() {
     let cfg = LiveConfig {
-        transport: "redis".to_string(),
+        transport: LiveTransport::Redis,
         ..LiveConfig::default()
     };
 

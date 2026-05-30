@@ -51,10 +51,12 @@ Affected: the option arguments of `create`, `update`, `delete`,
 
 ### 2. Move bulk-op options off the query table
 
-`update_many` / `delete_many` previously *declared* `overrideAccess`,
-`locale`, and `draft` on the query (2nd) argument but never read them —
-the effective values came from the options argument. The query table
-now carries only `where`.
+The `update_many` / `delete_many` query (2nd) argument previously
+*declared* option keys it never read — `overrideAccess` / `locale` /
+`draft` on `update_many`, and `overrideAccess` / `locale` on
+`delete_many`. The effective values came from the options argument all
+along. The query table now carries only `where`; pass the options in
+the options argument.
 
 ```diff
   crap.collections.posts.update_many(
@@ -63,10 +65,16 @@ now carries only `where`.
       { status = "published" },
 +     { overrideAccess = true }
   )
+
+  crap.collections.posts.delete_many(
+-     { where = { status = "archived" }, locale = "de" }
++     { where = { status = "archived" } },
++     { locale = "de" }
+  )
 ```
 
-For `delete_many`, `locale` likewise moves to the options (last)
-argument — single and bulk deletes now take locale the same way.
+`delete_many`'s `locale` now lives in the options argument, so single
+and bulk deletes take locale the same way.
 
 ### 3. Fix unknown hook event names
 
@@ -100,7 +108,39 @@ generate a `posts_tags` table). Boot fails with a clear error instead
 of one definition silently corrupting the other's table during
 migration.
 
+### 5. Remove `[live] default_mode` from `crap.toml`
+
+This key never did anything — every collection's live mode defaulted to
+`metadata` regardless of it. Set the mode per collection instead.
+
+```diff
+  [live]
+  enabled = true
+- default_mode = "full"
+  transport = "memory"
+```
+
+```lua
+-- per-collection live mode (the only control):
+crap.collections.define("posts", {
+    live = { mode = "full" },
+})
+```
+
+If present, config load now fails with `unknown field "default_mode"`.
+
 ## Bug fixes (no action needed)
+
+- **`crap-cms serve --only grpc`** is now accepted (matching the
+  `[server] grpc_*` config keys). `--only api` still works as an alias,
+  so no script changes are required.
+- **`auth.password_policy` validation error** now names the real config
+  path (it previously referred to a non-existent `auth.password.*` key).
+- **Config backend selectors** (`[database] backend`, `[upload] storage`,
+  `[email] provider`, `[cache] backend`, `[auth] rate_limit_backend`,
+  `[live] transport`) are now validated at config load — a typo'd value
+  fails immediately with the list of valid values instead of at server
+  startup. Valid values are unchanged, so no config edits are needed.
 
 - **Lua `find` / `find_by_id` honor `[depth] max_depth`.** Relationship
   population depth was previously clamped to a hardcoded maximum of 10,
