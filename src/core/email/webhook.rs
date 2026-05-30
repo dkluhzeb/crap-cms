@@ -103,3 +103,53 @@ impl EmailProvider for WebhookEmailProvider {
         "webhook"
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{WebhookEmailPayload, WebhookFrom};
+    use serde_json::json;
+
+    #[test]
+    fn payload_serializes_nested_from_and_all_fields() {
+        let payload = WebhookEmailPayload {
+            from: WebhookFrom {
+                email: "noreply@example.com",
+                name: "Crap CMS",
+            },
+            to: "user@example.com",
+            subject: "Welcome",
+            html: "<p>hi</p>",
+            text: Some("hi"),
+        };
+        let v = serde_json::to_value(&payload).expect("serialize");
+        assert_eq!(
+            v,
+            json!({
+                "from": { "email": "noreply@example.com", "name": "Crap CMS" },
+                "to": "user@example.com",
+                "subject": "Welcome",
+                "html": "<p>hi</p>",
+                "text": "hi",
+            })
+        );
+    }
+
+    #[test]
+    fn payload_omits_text_when_none() {
+        let payload = WebhookEmailPayload {
+            from: WebhookFrom {
+                email: "a@b.com",
+                name: "N",
+            },
+            to: "u@b.com",
+            subject: "S",
+            html: "<p>x</p>",
+            text: None,
+        };
+        let v = serde_json::to_value(&payload).expect("serialize");
+        assert!(
+            v.get("text").is_none(),
+            "text must be omitted entirely when None, got: {v}"
+        );
+    }
+}

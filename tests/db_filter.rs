@@ -268,6 +268,45 @@ fn filter_not_in() {
     }
 }
 
+/// Regression: an empty `In([])` is a vacuous match — nothing is "in" the
+/// empty set. `IN ()` is a SQL syntax error, so the builder emits an
+/// always-false condition; this pins that it matches zero rows (and never
+/// produces invalid SQL).
+#[test]
+fn filter_in_empty_matches_nothing() {
+    let (_tmp, pool, def) = seed_posts();
+    let q = query::FindQuery::builder()
+        .filters(vec![query::FilterClause::Single(query::Filter {
+            field: "status".to_string(),
+            op: query::FilterOp::In(vec![]),
+        })])
+        .build();
+    let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
+    assert_eq!(docs.len(), 0, "In([]) must match no rows");
+}
+
+/// Regression: an empty `NotIn([])` is vacuously true — everything is "not
+/// in" the empty set. Unlike a non-empty `NOT IN` (where NULL-status rows
+/// are excluded because `NULL NOT IN (...)` is NULL/falsy), the empty case
+/// emits an always-true condition that matches ALL seeded rows, including
+/// the NULL-status one.
+#[test]
+fn filter_not_in_empty_matches_everything() {
+    let (_tmp, pool, def) = seed_posts();
+    let q = query::FindQuery::builder()
+        .filters(vec![query::FilterClause::Single(query::Filter {
+            field: "status".to_string(),
+            op: query::FilterOp::NotIn(vec![]),
+        })])
+        .build();
+    let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
+    assert_eq!(
+        docs.len(),
+        5,
+        "NotIn([]) must match every row, including NULL status"
+    );
+}
+
 #[test]
 fn filter_exists() {
     let (_tmp, pool, def) = seed_posts();

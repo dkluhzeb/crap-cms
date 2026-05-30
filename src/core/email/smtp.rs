@@ -149,3 +149,62 @@ pub(super) fn send_email_smtp(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg() -> EmailConfig {
+        // Default: from_name "Crap CMS", from_address "noreply@example.com".
+        EmailConfig::default()
+    }
+
+    #[test]
+    fn build_message_html_only_is_singlepart() {
+        let msg = build_message(&cfg(), "user@example.com", "Welcome", "<p>Hi</p>", None)
+            .expect("build_message");
+        let raw = String::from_utf8_lossy(&msg.formatted()).into_owned();
+
+        assert!(raw.contains("Subject: Welcome"), "subject header: {raw}");
+        assert!(raw.contains("noreply@example.com"), "from address present");
+        assert!(raw.contains("user@example.com"), "recipient present");
+        assert!(
+            raw.contains("text/html"),
+            "html-only body should be text/html"
+        );
+        assert!(
+            !raw.contains("multipart/alternative"),
+            "no text alternative was given, so the message must not be multipart"
+        );
+    }
+
+    #[test]
+    fn build_message_with_text_is_multipart_alternative() {
+        let msg = build_message(
+            &cfg(),
+            "user@example.com",
+            "Reset",
+            "<p>HTML</p>",
+            Some("PLAIN"),
+        )
+        .expect("build_message");
+        let raw = String::from_utf8_lossy(&msg.formatted()).into_owned();
+
+        assert!(
+            raw.contains("multipart/alternative"),
+            "text + html must produce a multipart/alternative message: {raw}"
+        );
+        assert!(raw.contains("text/plain"), "plain alternative part present");
+        assert!(raw.contains("text/html"), "html alternative part present");
+    }
+
+    #[test]
+    fn build_message_invalid_recipient_errors() {
+        let err = build_message(&cfg(), "not-an-email", "x", "<p>y</p>", None)
+            .expect_err("invalid recipient must error");
+        assert!(
+            err.to_string().contains("recipient"),
+            "error should name the bad recipient: {err}"
+        );
+    }
+}

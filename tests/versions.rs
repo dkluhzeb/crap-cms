@@ -1388,3 +1388,64 @@ fn bulk_hard_delete_cascades_to_versions_via_service() {
          orphaned versions indicate `PRAGMA foreign_keys` is not active for the delete path"
     );
 }
+
+/// Regression: pool-mode bulk delete must process EVERY matching document
+/// across the `BATCH_SIZE` (500) boundary. The loop runs find→delete→commit
+/// per batch; with 501 rows it must run two batches (500 + 1). An off-by-one
+/// or early-exit would silently leave rows — invisible to every test that
+/// uses a small fixture.
+#[test]
+fn bulk_hard_delete_processes_beyond_one_batch() {
+    use crap_cms::hooks::lifecycle::HookRunner;
+    use crap_cms::service::{DeleteManyOptions, ServiceContext, delete_many};
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    // Plain hard-delete collection ("notes": no versions, soft_delete = false).
+    let def = make_nonversioned_def();
+    let (_tmp, pool, registry) = setup_db(vec![def.clone()]);
+
+    let tmp_runner_dir = tempdir().expect("tempdir for hook runner");
+    let cfg = CrapConfig::test_default();
+    let runner = HookRunner::builder()
+        .config_dir(tmp_runner_dir.path())
+        .registry(Arc::clone(&registry))
+        .config(&cfg)
+        .build()
+        .expect("build hook runner");
+
+    // Seed 501 docs — one past the 500-row batch boundary.
+    let conn = pool.get().unwrap();
+    for i in 0..501 {
+        let data: DocumentFields = [("title".to_string(), json!(format!("Note {i}")))]
+            .into_iter()
+            .collect();
+        query::create(&conn, "notes", &def, &data, None).unwrap();
+    }
+    drop(conn);
+
+    let ctx = ServiceContext::collection("notes", &def)
+        .pool(&pool)
+        .runner(&runner)
+        .build();
+
+    // Empty filter set matches all rows; the batched loop must delete each one.
+    let result = delete_many(&ctx, &[], &cfg.locale, &DeleteManyOptions::default())
+        .expect("delete_many should succeed");
+
+    assert_eq!(
+        result.hard_deleted, 501,
+        "all 501 docs must be deleted across the 500-row batch boundary"
+    );
+    assert_eq!(result.skipped, 0);
+
+    let remaining: i64 = pool
+        .get()
+        .unwrap()
+        .query_one("SELECT COUNT(*) AS c FROM notes", &[])
+        .unwrap()
+        .unwrap()
+        .get_i64("c")
+        .unwrap();
+    assert_eq!(remaining, 0, "no rows should remain after bulk delete");
+}

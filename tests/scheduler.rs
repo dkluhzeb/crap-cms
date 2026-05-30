@@ -59,6 +59,47 @@ fn setup() -> (
     (tmp, db_pool, registry, runner)
 }
 
+// ── cron window claim: multi-server dedup ────────────────────────────────
+//
+// `try_claim_cron_window` is the only guard against a scheduled job firing
+// once per server in a multi-server deployment. It must grant the first
+// claim for a window and deny any subsequent claim for that same window
+// (another node already fired it), then grant again on the next window.
+
+#[test]
+fn try_claim_cron_window_dedups_within_a_window() {
+    let (_tmp, pool, _registry, _runner) = setup();
+    let conn = pool.get().expect("DB connection");
+
+    let window_one = "2026-01-01T00:00:00Z";
+
+    // First claim for a never-fired slug → granted (INSERT path).
+    let first = job_query::try_claim_cron_window(&conn, "sync", "2026-01-01T00:00:01Z", window_one)
+        .expect("claim");
+    assert!(first, "first claim for a new slug must be granted");
+
+    // Second claim in the SAME window → denied: the stored fire time is not
+    // before window_start, so the conditional UPDATE matches nothing.
+    let second =
+        job_query::try_claim_cron_window(&conn, "sync", "2026-01-01T00:00:02Z", window_one)
+            .expect("claim");
+    assert!(
+        !second,
+        "a second claim in the same window must be denied (multi-server dedup)"
+    );
+
+    // A claim for the NEXT window → granted again (UPDATE matches because the
+    // stored fire time is before the new window_start).
+    let next = job_query::try_claim_cron_window(
+        &conn,
+        "sync",
+        "2026-01-01T01:00:01Z",
+        "2026-01-01T01:00:00Z",
+    )
+    .expect("claim");
+    assert!(next, "a claim for a later window must be granted");
+}
+
 // ── execute_job: successful execution ───────────────────────────────────
 
 #[test]
