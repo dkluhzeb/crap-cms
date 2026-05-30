@@ -388,8 +388,8 @@ async fn subscribe_receives_create_event() {
         .expect("stream should not end")
         .expect("event should be ok");
 
-    assert_eq!(event.target, "collection");
-    assert_eq!(event.operation, "create");
+    assert_eq!(event.target(), content::MutationTarget::Collection);
+    assert_eq!(event.operation(), content::MutationOperation::Create);
     assert_eq!(event.collection, "posts");
     assert!(!event.document_id.is_empty());
 }
@@ -450,7 +450,7 @@ async fn subscribe_receives_update_event() {
         .expect("stream should not end")
         .expect("event should be ok");
 
-    assert_eq!(event.operation, "update");
+    assert_eq!(event.operation(), content::MutationOperation::Update);
     assert_eq!(event.document_id, doc.id);
 }
 
@@ -501,7 +501,7 @@ async fn subscribe_receives_delete_event() {
         .expect("stream should not end")
         .expect("event should be ok");
 
-    assert_eq!(event.operation, "delete");
+    assert_eq!(event.operation(), content::MutationOperation::Delete);
     assert_eq!(event.document_id, doc.id);
 }
 
@@ -586,7 +586,7 @@ async fn subscribe_global_events() {
         .expect("stream should not end")
         .expect("event should be ok");
 
-    assert_eq!(event.target, "global");
+    assert_eq!(event.target(), content::MutationTarget::Global);
     assert_eq!(event.collection, "settings");
 }
 
@@ -660,7 +660,7 @@ async fn list_job_runs_authenticated() {
     // List runs
     let mut req = Request::new(content::ListJobRunsRequest {
         slug: Some("sync".to_string()),
-        status: None,
+        status: content::JobRunStatus::Unspecified.into(),
         limit: None,
         offset: None,
     });
@@ -669,5 +669,5 @@ async fn list_job_runs_authenticated() {
     let resp = ts.service.list_job_runs(req).await.unwrap().into_inner();
     assert_eq!(resp.runs.len(), 1, "should have 1 job run");
     assert_eq!(resp.runs[0].slug, "sync");
-    assert_eq!(resp.runs[0].status, "pending");
+    assert_eq!(resp.runs[0].status(), content::JobRunStatus::Pending);
 }

@@ -82,6 +82,8 @@ impl ContentService {
             .inspect_err(|e| error!("GetJobRun task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;
 
-        Ok(Response::new(job_run_to_proto(&run)))
+        Ok(Response::new(content::GetJobRunResponse {
+            run: Some(job_run_to_proto(&run)),
+        }))
     }
 }

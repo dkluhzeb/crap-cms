@@ -29,7 +29,9 @@ use tokio::time::timeout;
 use tokio_stream::StreamExt;
 
 use crap_cms::{
-    api::content::{CreateRequest, SubscribeRequest, content_api_client::ContentApiClient},
+    api::content::{
+        CreateRequest, MutationOperation, SubscribeRequest, content_api_client::ContentApiClient,
+    },
     core::{collection::*, field::*},
 };
 use crap_cms_e2e::spawn_grpc_server;
@@ -101,7 +103,11 @@ async fn subscribe_streams_create_event_over_wire() {
         .expect("event should be ok");
 
     assert_eq!(event.collection, "posts", "event collection should match");
-    assert_eq!(event.operation, "create", "event op should be create");
+    assert_eq!(
+        event.operation(),
+        MutationOperation::Create,
+        "event op should be create"
+    );
     assert!(
         !event.document_id.is_empty(),
         "event should carry the created doc id"

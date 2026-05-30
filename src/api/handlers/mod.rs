@@ -4,6 +4,7 @@ mod auth;
 mod collection;
 mod content_service;
 mod content_service_deps;
+mod enum_mapping;
 mod globals;
 mod jobs;
 pub(crate) mod proto;

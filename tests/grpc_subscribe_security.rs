@@ -443,5 +443,5 @@ async fn anonymous_subscriber_not_affected_by_user_events() {
         .expect("event should be Ok");
 
     assert_eq!(event.collection, "posts");
-    assert_eq!(event.operation, "create");
+    assert_eq!(event.operation(), content::MutationOperation::Create);
 }

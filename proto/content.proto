@@ -1155,6 +1155,46 @@ message SubscribeRequest {
   string token = 4;
 }
 
+// The kind of entity a mutation event targets.
+enum MutationTarget {
+  MUTATION_TARGET_UNSPECIFIED = 0;
+  MUTATION_TARGET_COLLECTION = 1;
+  MUTATION_TARGET_GLOBAL = 2;
+}
+
+// The mutation that produced an event.
+enum MutationOperation {
+  MUTATION_OPERATION_UNSPECIFIED = 0;
+  MUTATION_OPERATION_CREATE = 1;
+  MUTATION_OPERATION_UPDATE = 2;
+  MUTATION_OPERATION_DELETE = 3;
+}
+
+// Publication status of a version snapshot.
+enum VersionStatus {
+  VERSION_STATUS_UNSPECIFIED = 0;
+  VERSION_STATUS_PUBLISHED = 1;
+  VERSION_STATUS_DRAFT = 2;
+}
+
+// Execution status of a job run.
+enum JobRunStatus {
+  JOB_RUN_STATUS_UNSPECIFIED = 0;
+  JOB_RUN_STATUS_PENDING = 1;
+  JOB_RUN_STATUS_RUNNING = 2;
+  JOB_RUN_STATUS_COMPLETED = 3;
+  JOB_RUN_STATUS_FAILED = 4;
+  JOB_RUN_STATUS_STALE = 5;
+}
+
+// How a job run was initiated.
+enum JobScheduledBy {
+  JOB_SCHEDULED_BY_UNSPECIFIED = 0;
+  JOB_SCHEDULED_BY_GRPC = 1;
+  JOB_SCHEDULED_BY_CRON = 2;
+  JOB_SCHEDULED_BY_HOOK = 3;
+}
+
 // MutationEvent is a single real-time event delivered on the Subscribe stream.
 message MutationEvent {
   // Monotonically increasing server-assigned sequence number.
@@ -1164,11 +1204,11 @@ message MutationEvent {
   // ISO-8601 UTC timestamp of when the mutation occurred on the server.
   string timestamp = 2;
 
-  // The target type: "collection" or "global".
-  string target = 3;
+  // Whether a collection or a global was mutated.
+  MutationTarget target = 3;
 
-  // The operation: "create", "update", or "delete".
-  string operation = 4;
+  // The operation that produced this event.
+  MutationOperation operation = 4;
 
   // The collection or global slug that was mutated.
   string collection = 5;
@@ -1209,8 +1249,8 @@ message VersionInfo {
   // Monotonically increasing version number within the document's history.
   int64 version = 2;
 
-  // Publication status at the time this version was saved: "published" or "draft".
-  string status = 3;
+  // Publication status at the time this version was saved.
+  VersionStatus status = 3;
 
   // True if this is the most recent version (the current live snapshot).
   bool latest = 4;
@@ -1301,16 +1341,17 @@ message GetJobRunRequest {
   string id = 1;
 }
 
-// GetJobRunResponse contains the full state of a job execution.
-message GetJobRunResponse {
+// JobRunInfo contains the full state of a job execution. Returned by
+// GetJobRun and as the element type of ListJobRunsResponse.
+message JobRunInfo {
   // Nanoid ID of this job run.
   string id = 1;
 
   // The job slug that produced this run.
   string slug = 2;
 
-  // Current execution status: "pending", "running", "completed", "failed".
-  string status = 3;
+  // Current execution status.
+  JobRunStatus status = 3;
 
   // JSON-serialized input data passed to the handler.
   string data_json = 4;
@@ -1327,8 +1368,8 @@ message GetJobRunResponse {
   // Total allowed attempts (retries + 1).
   uint32 max_attempts = 8;
 
-  // How this run was initiated: "grpc", "cron", or "admin".
-  optional string scheduled_by = 9;
+  // How this run was initiated.
+  JobScheduledBy scheduled_by = 9;
 
   // ISO-8601 UTC timestamp when the job run was created.
   optional string created_at = 10;
@@ -1348,14 +1389,20 @@ message GetJobRunResponse {
   optional string unique_key = 14;
 }
 
+// GetJobRunResponse wraps a single job run. Dedicated response type (like the
+// other RPCs) so fields can be added alongside the run without a wire break.
+message GetJobRunResponse {
+  // The requested job run.
+  JobRunInfo run = 1;
+}
+
 // ListJobRunsRequest filters the job run history.
 message ListJobRunsRequest {
   // Filter by job slug. Absent = all job slugs.
   optional string slug = 1;
 
-  // Filter by status: "pending", "running", "completed", "failed".
-  // Absent = all statuses.
-  optional string status = 2;
+  // Filter by status. UNSPECIFIED = all statuses.
+  JobRunStatus status = 2;
 
   // Maximum runs to return. Defaults to 50.
   optional int64 limit = 3;
@@ -1367,7 +1414,7 @@ message ListJobRunsRequest {
 // ListJobRunsResponse contains a page of job run history.
 message ListJobRunsResponse {
   // Job runs matching the filter, newest first.
-  repeated GetJobRunResponse runs = 1;
+  repeated JobRunInfo runs = 1;
   // Pagination metadata for the job run list.
   PaginationInfo pagination = 2;
 }

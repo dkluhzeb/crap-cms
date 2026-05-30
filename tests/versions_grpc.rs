@@ -1051,9 +1051,12 @@ async fn grpc_full_draft_publish_workflow() {
         .unwrap()
         .into_inner();
     assert_eq!(versions.versions.len(), 3);
-    assert_eq!(versions.versions[0].status, "published");
-    assert_eq!(versions.versions[1].status, "draft");
-    assert_eq!(versions.versions[2].status, "draft");
+    assert_eq!(
+        versions.versions[0].status(),
+        content::VersionStatus::Published
+    );
+    assert_eq!(versions.versions[1].status(), content::VersionStatus::Draft);
+    assert_eq!(versions.versions[2].status(), content::VersionStatus::Draft);
 }
 
 // ── gRPC Unpublish ───────────────────────────────────────────────────────────
@@ -1165,7 +1168,8 @@ async fn grpc_update_unpublish() {
         versions.versions.len()
     );
     assert_eq!(
-        versions.versions[0].status, "draft",
+        versions.versions[0].status(),
+        content::VersionStatus::Draft,
         "latest version should be draft"
     );
 }

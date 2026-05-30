@@ -43,11 +43,14 @@ pub mod content {
     // are written for cross-language consumers (Go/Python/TS); they intentionally
     // don't use Rust-specific Markdown conventions like backticks for identifiers
     // or `# Errors` sections on Result-returning functions. The codegen also
-    // emits `Default::default()` in struct literals, which clippy::pedantic flags.
+    // emits `Default::default()` in struct literals, which clippy::pedantic flags,
+    // and `as_str_name`/`from_str_name` enum helpers that trip
+    // `must_use_candidate`.
     #![allow(
         clippy::doc_markdown,
         clippy::missing_errors_doc,
         clippy::default_trait_access,
+        clippy::must_use_candidate,
         clippy::too_many_lines
     )]
 

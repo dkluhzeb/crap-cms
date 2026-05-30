@@ -19,6 +19,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Lua function reference, which external clients can't use. Removed from
   `ListJobs`.
 
+- **gRPC: job-run shape factored into `JobRunInfo`.** `ListJobRunsResponse`
+  previously reused `GetJobRunResponse` as its repeated element (a proto
+  anti-pattern). The run fields now live in a shared `JobRunInfo` message
+  used by both `ListJobRunsResponse.runs` and a thin
+  `GetJobRunResponse { JobRunInfo run = 1; }` wrapper.
+
+- **gRPC: closed-set string fields are now proto enums.**
+  `MutationEvent.operation` / `.target`, `VersionInfo.status`,
+  `JobRunInfo.status` / `.scheduled_by`, and the `ListJobRunsRequest.status`
+  filter were free-form strings; they are now typed enums
+  (`MutationOperation`, `MutationTarget`, `VersionStatus`, `JobRunStatus`,
+  `JobScheduledBy`). Clients read them via the generated accessor (e.g.
+  `event.operation()`); `*_UNSPECIFIED` is the zero value.
+
 - **gRPC: account RPCs authenticate before validating collection shape.**
   `LockAccount` / `UnlockAccount` / `VerifyAccount` / `UnverifyAccount`
   previously ran the auth-collection / verify-email checks before the

@@ -29,8 +29,8 @@ use tonic::{Code, Request, metadata::MetadataValue};
 
 use crap_cms::{
     api::content::{
-        CreateRequest, GetJobRunRequest, ListJobRunsRequest, ListJobsRequest, LoginRequest,
-        TriggerJobRequest, content_api_client::ContentApiClient,
+        CreateRequest, GetJobRunRequest, JobRunStatus, ListJobRunsRequest, ListJobsRequest,
+        LoginRequest, TriggerJobRequest, content_api_client::ContentApiClient,
     },
     core::{
         collection::*,
@@ -156,11 +156,14 @@ async fn trigger_job_queues_run_visible_via_get_and_list() {
         .get_job_run(with_bearer(GetJobRunRequest { id: job_id.clone() }, &token))
         .await
         .expect("get_job_run")
-        .into_inner();
+        .into_inner()
+        .run
+        .expect("GetJobRunResponse should carry the run");
     assert_eq!(run.id, job_id);
     assert_eq!(run.slug, "cleanup");
     assert_eq!(
-        run.status, "pending",
+        run.status(),
+        JobRunStatus::Pending,
         "scheduler isn't running in tests, run stays pending"
     );
     assert_eq!(

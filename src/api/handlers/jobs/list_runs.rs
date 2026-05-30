@@ -8,7 +8,10 @@ use tracing::error;
 
 use crate::{
     api::handlers::proto::pagination_result_to_proto,
-    api::{content, handlers::ContentService},
+    api::{
+        content,
+        handlers::{ContentService, enum_mapping},
+    },
     core::{JobRun, Registry, SharedTokenProvider},
     db::DbPool,
     hooks::HookRunner,
@@ -89,7 +92,8 @@ impl ContentService {
             token,
             headers,
             slug: req.slug.clone(),
-            status: req.status.clone(),
+            // The proto status filter is an enum; `Unspecified` = no filter.
+            status: enum_mapping::job_status_filter(req.status()).map(|s| s.as_str().to_string()),
             limit: req.limit.unwrap_or(50).min(1000),
             offset: req.offset.unwrap_or(0).max(0),
         };
@@ -100,8 +104,7 @@ impl ContentService {
             .map_err(|_| Status::internal("Internal error"))??;
 
         let pagination = pagination_result_to_proto(&runs.pagination);
-        let proto_runs: Vec<content::GetJobRunResponse> =
-            runs.docs.iter().map(job_run_to_proto).collect();
+        let proto_runs: Vec<content::JobRunInfo> = runs.docs.iter().map(job_run_to_proto).collect();
 
         Ok(Response::new(content::ListJobRunsResponse {
             runs: proto_runs,

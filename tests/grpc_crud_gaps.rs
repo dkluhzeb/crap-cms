@@ -1070,7 +1070,7 @@ async fn list_job_runs_unauthenticated() {
         .service
         .list_job_runs(Request::new(content::ListJobRunsRequest {
             slug: None,
-            status: None,
+            status: content::JobRunStatus::Unspecified.into(),
             limit: None,
             offset: None,
         }))

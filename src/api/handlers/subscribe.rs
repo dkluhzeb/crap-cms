@@ -19,7 +19,7 @@ use tracing::{error, warn};
 use crate::{
     api::{
         content,
-        handlers::{ContentService, proto::json_to_prost_value},
+        handlers::{ContentService, enum_mapping, proto::json_to_prost_value},
     },
     core::{
         Document, EventReceiver, FieldDefinition, LiveMode, MutationEvent, Registry,
@@ -212,16 +212,11 @@ fn process_event(event: &MutationEvent, ctx: &SubscriberCtx) -> Option<content::
         BTreeMap::new()
     };
 
-    let target_str = match event.target {
-        EventTarget::Collection => "collection",
-        EventTarget::Global => "global",
-    };
-
     Some(content::MutationEvent {
         sequence: event.sequence,
         timestamp: event.timestamp.clone(),
-        target: target_str.to_string(),
-        operation: op_str.to_string(),
+        target: enum_mapping::mutation_target(&event.target).into(),
+        operation: enum_mapping::mutation_operation(&event.operation).into(),
         collection: event.collection.to_string(),
         document_id: event.document_id.to_string(),
         data: Some(prost_types::Struct { fields }),

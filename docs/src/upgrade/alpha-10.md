@@ -140,6 +140,15 @@ Wire-contract changes — regenerate your gRPC stubs and adjust:
   remains.
 - **Removed `JobDefinitionInfo.handler`** (the internal Lua function
   reference) from `ListJobs`.
+- **`JobRunInfo` is now the shared job-run message.** `ListJobRuns` returns
+  `repeated JobRunInfo`; `GetJobRun` returns `GetJobRunResponse { run }`
+  wrapping a `JobRunInfo` (was a flat `GetJobRunResponse`). Read a single
+  run via `response.run`.
+- **Closed-set string fields became enums:** `MutationEvent.operation` /
+  `.target`, `VersionInfo.status`, `JobRunInfo.status` / `.scheduled_by`,
+  and the `ListJobRunsRequest.status` filter. Use the generated enum
+  accessors (`event.operation()` etc.); the zero value is `*_UNSPECIFIED`,
+  which for the `ListJobRunsRequest.status` filter means "all statuses".
 - **Account RPCs now return `UNAUTHENTICATED` before any collection-shape
   error.** A client calling `LockAccount`/`VerifyAccount`/etc. without (or
   with an invalid) token now gets `UNAUTHENTICATED` even when the

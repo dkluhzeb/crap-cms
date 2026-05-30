@@ -9,7 +9,10 @@ use tracing::error;
 
 use crate::{
     api::handlers::proto::pagination_result_to_proto,
-    api::{content, handlers::ContentService},
+    api::{
+        content,
+        handlers::{ContentService, enum_mapping},
+    },
     core::{CollectionDefinition, Registry, SharedTokenProvider, document::VersionSnapshot},
     db::DbPool,
     hooks::HookRunner,
@@ -111,7 +114,7 @@ impl ContentService {
             .map(|v| content::VersionInfo {
                 id: v.id.clone(),
                 version: v.version,
-                status: v.status.clone(),
+                status: enum_mapping::version_status(&v.status).into(),
                 latest: v.latest,
                 created_at: v.created_at.clone().unwrap_or_default(),
             })
