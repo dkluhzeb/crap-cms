@@ -126,7 +126,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `INVALID_ARGUMENT` as the proto comments claimed); the proto now
   documents both codes separately.
 
+- **MCP hard-delete now cleans up upload files.** The MCP `delete` and
+  `delete_many` tools never passed a storage backend to the service
+  layer, so permanently deleting a document from an upload collection
+  left its files orphaned on disk. Both tools now thread the storage
+  backend through and delete the files after the delete commits,
+  matching the gRPC and admin surfaces. (Soft-deletes still keep the
+  files, so trashed documents remain restorable.)
+
 ### Added
+
+- **MCP validate tools (`validate_<collection>` and
+  `global_validate_<global>`).** Each collection and global now exposes
+  a validate tool that runs the full before-write pipeline (field
+  coercion, validators, unique checks, `before_validate` hooks) and
+  returns `{ valid, errors }` per field without persisting a row. For
+  collections, pass an `id` to validate in update mode (the row is
+  excluded from unique checks) or omit it for create mode; globals
+  always validate in update mode. The collection tool mirrors the gRPC
+  `Validate` RPC and the Lua `collections.validate` function; global
+  validation previously existed only on the admin surface.
 
 - **gRPC `CountRequest.trash`.** `Count` can now count soft-deleted
   (trashed) documents, mirroring `FindRequest.trash`. Previously you

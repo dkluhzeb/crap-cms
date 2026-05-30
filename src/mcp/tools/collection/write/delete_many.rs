@@ -6,6 +6,7 @@ use serde_json::{Value, to_string_pretty};
 use tracing::info;
 
 use crate::{
+    core::upload,
     mcp::tools::{ToolExecCtx, collection::helpers::parse_where_filters},
     service::{self, DeleteManyOptions, ServiceContext},
 };
@@ -13,8 +14,9 @@ use crate::{
 /// Shape returned to the MCP client for a `delete_many` tool call.
 ///
 /// The internal `DeleteManyResult` also carries `upload_fields_to_clean`
-/// (per-row upload-field maps the caller uses to delete files post-commit);
-/// that's deliberately excluded from the wire response.
+/// (per-row upload-field maps used to delete files post-commit); the
+/// files are cleaned via the storage backend below, but the raw maps are
+/// deliberately excluded from the wire response.
 #[derive(Serialize)]
 struct DeleteManyResponse<'a> {
     hard_deleted: i64,
@@ -67,6 +69,14 @@ pub(in crate::mcp::tools) fn exec_delete_many(
     };
 
     let result = service::delete_many(&svc_ctx, &filters, &ctx.config.locale, &opts)?;
+
+    // Hard-deleted rows leave orphaned upload files — clean them post-commit
+    // when a storage backend is available (mirrors the gRPC/admin surfaces).
+    if let Some(storage) = ctx.storage.as_deref() {
+        for fields in &result.upload_fields_to_clean {
+            upload::delete_upload_files(storage, fields);
+        }
+    }
 
     info!(
         "MCP delete_many {}: {} hard, {} soft, {} skipped [client={}]",

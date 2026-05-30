@@ -27,10 +27,10 @@ use super::{
         versions::{exec_list_versions, exec_restore_version},
         write::{
             exec_create, exec_create_many, exec_delete, exec_delete_many, exec_undelete,
-            exec_unpublish, exec_update, exec_update_many,
+            exec_unpublish, exec_update, exec_update_many, exec_validate,
         },
     },
-    globals::{exec_read_global, exec_update_global},
+    globals::{exec_read_global, exec_update_global, exec_validate_global},
     schema::{
         exec_cli_reference, exec_describe_collection, exec_list_collections,
         exec_list_config_files, exec_list_field_types, exec_read_config_file,
@@ -67,6 +67,7 @@ pub(in crate::mcp) enum ToolOp {
     CreateMany,
     Update,
     UpdateMany,
+    Validate,
     Delete,
     DeleteMany,
     Undelete,
@@ -77,6 +78,8 @@ pub(in crate::mcp) enum ToolOp {
     ReadGlobal,
     /// Update a global
     UpdateGlobal,
+    /// Validate global data without persisting
+    ValidateGlobal,
 }
 
 /// Check if a collection should be exposed via MCP.
@@ -162,6 +165,11 @@ fn collection_tools(slug: &str, def: &CollectionDefinition) -> Vec<ToolDefinitio
             schema(CrudOp::Update),
         ),
         ToolDefinition::new(
+            format!("validate_{slug}"),
+            format!("Validate {label} document data without persisting — returns per-field errors"),
+            schema(CrudOp::Validate),
+        ),
+        ToolDefinition::new(
             format!("delete_{slug}"),
             format!("Delete a {label} document by ID"),
             schema(CrudOp::Delete),
@@ -216,6 +224,11 @@ fn global_tools(slug: &str, def: &GlobalDefinition) -> Vec<ToolDefinition> {
             format!("global_update_{slug}"),
             format!("Update the {label} global document"),
             global_input_schema(def, CrudOp::Update),
+        ),
+        ToolDefinition::new(
+            format!("global_validate_{slug}"),
+            format!("Validate {label} global data without persisting — returns per-field errors"),
+            global_input_schema(def, CrudOp::Validate),
         ),
     ]
 }
@@ -310,6 +323,7 @@ pub(in crate::mcp) fn parse_tool_name(name: &str, registry: &Registry) -> Option
         "create_",
         "update_many_",
         "update_",
+        "validate_",
         "delete_many_",
         "delete_",
         "undelete_",
@@ -328,6 +342,7 @@ pub(in crate::mcp) fn parse_tool_name(name: &str, registry: &Registry) -> Option
                 "create_" => ToolOp::Create,
                 "update_many_" => ToolOp::UpdateMany,
                 "update_" => ToolOp::Update,
+                "validate_" => ToolOp::Validate,
                 "delete_many_" => ToolOp::DeleteMany,
                 "delete_" => ToolOp::Delete,
                 "undelete_" => ToolOp::Undelete,
@@ -345,13 +360,14 @@ pub(in crate::mcp) fn parse_tool_name(name: &str, registry: &Registry) -> Option
     }
 
     // Try global patterns (global_read_<slug>, global_update_<slug>)
-    for prefix in &["global_read_", "global_update_"] {
+    for prefix in &["global_read_", "global_update_", "global_validate_"] {
         if let Some(slug) = name.strip_prefix(prefix)
             && registry.globals.contains_key(slug)
         {
             let op = match *prefix {
                 "global_read_" => ToolOp::ReadGlobal,
                 "global_update_" => ToolOp::UpdateGlobal,
+                "global_validate_" => ToolOp::ValidateGlobal,
                 _ => unreachable!(),
             };
 
@@ -436,6 +452,7 @@ pub(in crate::mcp) fn execute_tool(
         ToolOp::CreateMany => exec_create_many(args, slug, ctx),
         ToolOp::Update => exec_update(args, slug, ctx),
         ToolOp::UpdateMany => exec_update_many(args, slug, ctx),
+        ToolOp::Validate => exec_validate(args, slug, ctx),
         ToolOp::Delete => exec_delete(args, slug, ctx),
         ToolOp::DeleteMany => exec_delete_many(args, slug, ctx),
         ToolOp::Undelete => exec_undelete(args, slug, ctx),
@@ -444,6 +461,7 @@ pub(in crate::mcp) fn execute_tool(
         ToolOp::RestoreVersion => exec_restore_version(args, slug, ctx),
         ToolOp::ReadGlobal => exec_read_global(args, slug, ctx),
         ToolOp::UpdateGlobal => exec_update_global(args, slug, ctx),
+        ToolOp::ValidateGlobal => exec_validate_global(args, slug, ctx),
     }
 }
 
@@ -456,7 +474,11 @@ mod tests {
     use super::*;
     use crate::{
         config::{CrapConfig, McpConfig},
-        core::{CollectionDefinition, Registry},
+        core::{
+            CollectionDefinition, Registry,
+            collection::GlobalDefinition,
+            field::{FieldDefinition, FieldType},
+        },
         db::{migrate, pool},
         hooks::lifecycle::HookRunner,
         mcp::tools::test_helpers::{make_exec_ctx, make_registry},
@@ -467,8 +489,11 @@ mod tests {
         let reg = make_registry();
         let config = McpConfig::default();
         let tools = generate_tools(&reg, &config);
-        // 2 collections * 5 + 1 global * 2 + 4 introspection = 16
-        assert!(tools.len() >= 16);
+        // 2 collections * 10 base CRUD + 1 global * 3 + 4 introspection = 27
+        assert!(tools.len() >= 27);
+        // Collections and globals each expose a non-persisting validate tool.
+        assert!(tools.iter().any(|t| t.name == "validate_posts"));
+        assert!(tools.iter().any(|t| t.name == "global_validate_settings"));
     }
 
     #[test]
@@ -545,10 +570,26 @@ mod tests {
     }
 
     #[test]
+    fn parse_tool_name_validate() {
+        let reg = make_registry();
+        let parsed = parse_tool_name("validate_posts", &reg).unwrap();
+        assert_eq!(parsed.op, ToolOp::Validate);
+        assert_eq!(parsed.slug, "posts");
+    }
+
+    #[test]
     fn parse_tool_name_global() {
         let reg = make_registry();
         let parsed = parse_tool_name("global_read_settings", &reg).unwrap();
         assert_eq!(parsed.op, ToolOp::ReadGlobal);
+        assert_eq!(parsed.slug, "settings");
+    }
+
+    #[test]
+    fn parse_tool_name_validate_global() {
+        let reg = make_registry();
+        let parsed = parse_tool_name("global_validate_settings", &reg).unwrap();
+        assert_eq!(parsed.op, ToolOp::ValidateGlobal);
         assert_eq!(parsed.slug, "settings");
     }
 
@@ -765,5 +806,62 @@ mod tests {
             err.to_string().contains("Tool not available"),
             "Expected 'Tool not available' error for users, got: {err}"
         );
+    }
+
+    #[test]
+    fn execute_tool_global_validate_reports_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = CrapConfig::test_default();
+        config.database.path = "test.db".to_string();
+
+        let shared = Registry::shared();
+        {
+            let mut reg = shared.write().unwrap();
+            let mut settings = GlobalDefinition::new("settings");
+            // Globals always validate in update mode (partial patch), so
+            // required isn't enforced — use a field-level constraint that
+            // fires whenever a value is present.
+            settings.fields = vec![
+                FieldDefinition::builder("site_name", FieldType::Text)
+                    .max_length(3)
+                    .build(),
+            ];
+            reg.register_global(settings);
+        }
+
+        let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+        migrate::sync_all(&db_pool, &shared.read().unwrap(), &config.locale).unwrap();
+        let registry = Registry::snapshot(&shared);
+        let runner = HookRunner::builder()
+            .config_dir(tmp.path())
+            .registry(Arc::clone(&registry))
+            .config(&config)
+            .build()
+            .unwrap();
+
+        let ctx = make_exec_ctx(&db_pool, &registry, &runner, &config);
+
+        // `site_name` exceeds max_length(3) → invalid with a per-field error.
+        let text = execute_tool(
+            "global_validate_settings",
+            &json!({ "site_name": "toolong" }),
+            tmp.path(),
+            &ctx,
+        )
+        .expect("global validate should run");
+        let parsed: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(parsed["valid"], false);
+        assert!(parsed["errors"]["site_name"].is_string());
+
+        // Within the limit → valid:true.
+        let text = execute_tool(
+            "global_validate_settings",
+            &json!({ "site_name": "ok" }),
+            tmp.path(),
+            &ctx,
+        )
+        .expect("global validate should run");
+        let parsed: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(parsed["valid"], true);
     }
 }

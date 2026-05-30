@@ -8,6 +8,7 @@ mod undelete;
 mod unpublish;
 mod update;
 mod update_many;
+mod validate;
 
 pub(in crate::mcp::tools) use create::exec_create;
 pub(in crate::mcp::tools) use create_many::exec_create_many;
@@ -17,3 +18,4 @@ pub(in crate::mcp::tools) use undelete::exec_undelete;
 pub(in crate::mcp::tools) use unpublish::exec_unpublish;
 pub(in crate::mcp::tools) use update::exec_update;
 pub(in crate::mcp::tools) use update_many::exec_update_many;
+pub(in crate::mcp::tools) use validate::exec_validate;

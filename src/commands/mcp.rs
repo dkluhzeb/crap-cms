@@ -10,6 +10,7 @@ use tracing::info;
 
 use crate::{
     config::CrapConfig,
+    core::upload::create_storage,
     db::{migrate, pool},
     hooks::{self, HookRunner},
     mcp,
@@ -46,6 +47,9 @@ pub async fn run(config_dir: &Path) -> Result<()> {
         .config(&cfg)
         .build()?;
 
+    let storage =
+        create_storage(&config_dir, &cfg.upload).context("Failed to create storage backend")?;
+
     info!("MCP server starting (stdio mode)");
 
     let server = mcp::McpServer {
@@ -58,6 +62,8 @@ pub async fn run(config_dir: &Path) -> Result<()> {
         event_transport: None,
         invalidation_transport: None,
         cache: None,
+        // Upload files are still cleaned on hard-delete via the storage backend.
+        storage: Some(storage),
         client_name: OnceLock::new(),
         transport_label: "(stdio)",
     };

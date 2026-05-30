@@ -42,6 +42,7 @@ pub(in crate::mcp::tools) fn make_exec_ctx<'a>(
         event_transport: None,
         invalidation_transport: None,
         cache: None,
+        storage: None,
         client_label: "(test)",
     }
 }

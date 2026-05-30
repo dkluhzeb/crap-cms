@@ -128,6 +128,7 @@ impl AdminState {
             event_transport: self.event_transport.clone(),
             invalidation_transport: Some(self.invalidation_transport.clone()),
             cache: self.cache.clone(),
+            storage: Some(self.storage.clone()),
             // HTTP transport: every request gets a fresh `McpServer`,
             // so `client_name` never gets populated by `initialize`
             // (the request that initialized is a different instance).

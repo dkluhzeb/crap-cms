@@ -51,7 +51,12 @@ pub(in crate::mcp::tools) fn exec_delete(
         .invalidation_transport(ctx.invalidation_transport.clone())
         .cache(ctx.cache.clone())
         .build();
-    delete_document(&svc_ctx, id, None, Some(&ctx.config.locale))?;
+    delete_document(
+        &svc_ctx,
+        id,
+        ctx.storage.as_deref(),
+        Some(&ctx.config.locale),
+    )?;
 
     info!("MCP delete {}: {} [client={}]", slug, id, ctx.client_label);
 

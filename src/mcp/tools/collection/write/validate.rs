@@ -1,0 +1,74 @@
+//! Execute `validate` — check document data against collection rules
+//! without persisting. Mirrors the gRPC `Validate` RPC: runs the full
+//! before-write pipeline (field coercion, validators, unique checks,
+//! `before_validate` hooks) and reports per-field errors instead of
+//! writing a row.
+
+use anyhow::{Context as _, Result};
+use serde_json::{Value, json, to_string_pretty};
+
+use crate::{
+    db::LocaleContext,
+    mcp::tools::{ToolExecCtx, collection::helpers::extract_data_from_args},
+    service::{RunnerWriteHooks, ServiceError, ValidateContext, WriteInput, validate_document},
+};
+
+/// Execute `validate` — returns `{ "valid": bool, "errors": { field: message } }`.
+pub(in crate::mcp::tools) fn exec_validate(
+    args: &Value,
+    slug: &str,
+    ctx: &ToolExecCtx<'_>,
+) -> Result<String> {
+    let def = ctx
+        .registry
+        .collections
+        .get(slug)
+        .context("Collection not found")?;
+
+    let conn = ctx.pool.get().context("DB connection")?;
+
+    // `id`, `locale`, `draft`, and `password` are reserved top-level keys —
+    // excluded from the document field data (mirrors the create/update tools).
+    let locale = args.get("locale").and_then(|v| v.as_str());
+    let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
+    let draft = args.get("draft").and_then(Value::as_bool).unwrap_or(false);
+
+    let exclude_id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(std::string::ToString::to_string);
+    let operation = if exclude_id.is_some() {
+        "update"
+    } else {
+        "create"
+    };
+
+    let data = extract_data_from_args(args, &["id", "password", "locale", "draft"]);
+
+    let write_hooks = RunnerWriteHooks::new(ctx.runner);
+
+    let validate_ctx = ValidateContext {
+        slug,
+        table_name: slug,
+        fields: &def.fields,
+        hooks: &def.hooks,
+        operation,
+        exclude_id: exclude_id.as_deref(),
+        soft_delete: def.soft_delete,
+    };
+
+    let input = WriteInput::builder(data)
+        .locale_ctx(locale_ctx.as_ref())
+        .draft(draft)
+        .build();
+
+    let result = match validate_document(&conn, &write_hooks, &validate_ctx, input, None) {
+        Ok(()) => json!({ "valid": true, "errors": {} }),
+        Err(ServiceError::Validation(ve)) => {
+            json!({ "valid": false, "errors": ve.to_field_map() })
+        }
+        Err(e) => return Err(e.into_anyhow()),
+    };
+
+    Ok(to_string_pretty(&result)?)
+}

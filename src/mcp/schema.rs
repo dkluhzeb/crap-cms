@@ -11,6 +11,7 @@ pub(in crate::mcp) enum CrudOp {
     CreateMany,
     Update,
     UpdateMany,
+    Validate,
     Find,
     FindById,
     Delete,
@@ -261,6 +262,27 @@ fn update_schema(def: &CollectionDefinition) -> Value {
     schema
 }
 
+/// Input schema for collection validate — field data plus an optional
+/// `id`. When `id` is set, validation runs in update mode (the row is
+/// excluded from unique checks); otherwise it runs in create mode.
+/// Only field-level `required` constraints apply — `id` stays optional.
+fn validate_schema(def: &CollectionDefinition) -> Value {
+    let mut schema = fields_to_object_schema(&def.fields);
+
+    if let Some(props) = get_props(&mut schema) {
+        props.insert(
+            "id".to_string(),
+            json!({
+                "type": "string",
+                "description": "Document ID — when set, validates as an update (excludes this row from unique checks)"
+            }),
+        );
+        insert_write_meta_keys(props);
+    }
+
+    schema
+}
+
 /// Schema requiring only an `id` field.
 fn id_only_schema() -> Value {
     json!({
@@ -295,6 +317,7 @@ pub(in crate::mcp) fn collection_input_schema(def: &CollectionDefinition, op: Cr
         CrudOp::CreateMany => create_many_schema(def),
         CrudOp::Update => update_schema(def),
         CrudOp::UpdateMany => update_many_schema(def),
+        CrudOp::Validate => validate_schema(def),
         CrudOp::Delete => delete_schema(),
         CrudOp::Undelete | CrudOp::Unpublish => id_only_schema(),
         CrudOp::DeleteMany => delete_many_schema(),
@@ -464,6 +487,20 @@ pub(in crate::mcp) fn global_input_schema(def: &GlobalDefinition, op: CrudOp) ->
             }
             schema
         }
+        CrudOp::Validate => {
+            let mut schema = fields_to_object_schema(&def.fields);
+            if let Some(props) = get_props(&mut schema) {
+                props.insert("locale".to_string(), locale_prop);
+                props.insert(
+                    "draft".to_string(),
+                    json!({
+                        "type": "boolean",
+                        "description": "Validate as a draft version (default: false)"
+                    }),
+                );
+            }
+            schema
+        }
         _ => json!({ "type": "object", "properties": {} }),
     }
 }
@@ -587,6 +624,22 @@ mod tests {
                 .unwrap()
                 .contains(&Value::String("id".to_string()))
         );
+    }
+
+    #[test]
+    fn collection_validate_schema_optional_id() {
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![required_text("title"), text_field("body")];
+        let s = collection_input_schema(&def, CrudOp::Validate);
+        // Field-level requireds still apply...
+        let req = s["required"].as_array().unwrap();
+        assert!(req.contains(&Value::String("title".to_string())));
+        // ...but `id` is offered and stays optional (create-or-update mode).
+        assert!(s["properties"]["id"].is_object());
+        assert!(!req.contains(&Value::String("id".to_string())));
+        // Reserved write meta-keys are present.
+        assert!(s["properties"]["locale"].is_object());
+        assert!(s["properties"]["draft"].is_object());
     }
 
     #[test]

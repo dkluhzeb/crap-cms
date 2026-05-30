@@ -89,15 +89,28 @@ starts, but the endpoint is effectively inaccessible.
 
 ### Content CRUD (per collection)
 
-For each collection (e.g., `posts`), five tools are generated:
+For each collection (e.g., `posts`), a set of CRUD tools is generated:
 
 | Tool | Description |
 |------|-------------|
 | `find_posts` | Query documents with filters, ordering, pagination |
 | `find_by_id_posts` | Get a single document by ID |
+| `count_posts` | Count documents matching filters |
 | `create_posts` | Create a new document |
+| `create_many_posts` | Bulk create documents in batched transactions |
 | `update_posts` | Update an existing document |
+| `update_many_posts` | Bulk update documents matching a filter |
+| `validate_posts` | Validate document data without persisting — returns per-field errors |
 | `delete_posts` | Delete a document |
+| `delete_many_posts` | Bulk delete documents matching a filter |
+
+Collections with `soft_delete` also get `undelete_posts`; versioned collections
+add `unpublish_posts`, `list_versions_posts`, and `restore_version_posts`.
+
+`validate_*` runs the full before-write pipeline (field coercion, validators,
+unique checks, `before_validate` hooks) and reports per-field errors without
+writing a row. Pass an `id` to validate in update mode (the row is excluded from
+unique checks); omit it to validate in create mode.
 
 Input schemas are generated from your field definitions. Required fields, select
 options, and relationship types are all reflected in the JSON Schema.
@@ -108,8 +121,8 @@ arguments** (excluded from the document's field data, like `id` and
 
 | Argument | Tools | Description |
 |----------|-------|-------------|
-| `locale` | `create_*`, `update_*`, `update_many_*`, `global_read_*`, `global_update_*` | Locale code for localized fields. |
-| `draft` | `create_*`, `update_*`, `update_many_*` | Write as a draft version. |
+| `locale` | `create_*`, `update_*`, `update_many_*`, `validate_*`, `global_read_*`, `global_update_*` | Locale code for localized fields. |
+| `draft` | `create_*`, `update_*`, `update_many_*`, `validate_*` | Write as a draft version. |
 | `force_hard_delete` | `delete_*`, `delete_many_*` | Skip `soft_delete` and remove the row permanently. |
 
 > A collection with a field literally named `locale`, `draft`, or
@@ -124,6 +137,7 @@ For each global (e.g., `settings`):
 |------|-------------|
 | `global_read_settings` | Read the global document |
 | `global_update_settings` | Update the global document |
+| `global_validate_settings` | Validate global data without persisting — returns per-field errors |
 
 ### Schema Introspection
 

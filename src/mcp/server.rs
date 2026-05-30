@@ -11,7 +11,9 @@ use tracing::info;
 
 use crate::{
     config::CrapConfig,
-    core::{Registry, SharedCache, SharedEventTransport, SharedInvalidationTransport},
+    core::{
+        Registry, SharedCache, SharedEventTransport, SharedInvalidationTransport, SharedStorage,
+    },
     db::DbPool,
     hooks::HookRunner,
 };
@@ -40,6 +42,9 @@ pub struct McpServer {
     /// Shared cross-request cache for cache invalidation on write ops.
     /// `None` = no cache invalidation (standalone CLI / tests).
     pub cache: Option<SharedCache>,
+    /// Storage backend for deleting uploaded files on hard-delete.
+    /// `None` = files are left in place (tests without an upload backend).
+    pub storage: Option<SharedStorage>,
     /// Client name from the MCP `initialize` handshake. One-shot — the
     /// spec mandates `initialize` happens exactly once per session, so
     /// later calls are silently ignored. `get()` returns `None` until
@@ -181,6 +186,7 @@ impl McpServer {
             event_transport: self.event_transport.clone(),
             invalidation_transport: self.invalidation_transport.clone(),
             cache: self.cache.clone(),
+            storage: self.storage.clone(),
             client_label: self.audit_label(),
         };
         let result = tools::execute_tool(&call.name, &call.arguments, &self.config_dir, &exec_ctx);
@@ -261,7 +267,12 @@ mod tests {
     use super::*;
     use crate::{
         config::CrapConfig,
-        core::{Registry, collection::CollectionDefinition},
+        core::{
+            Registry,
+            collection::CollectionDefinition,
+            field::{FieldDefinition, FieldType},
+            upload::{CollectionUpload, storage::LocalStorage},
+        },
         db::{migrate, pool},
         hooks::HookRunner,
     };
@@ -310,6 +321,9 @@ mod tests {
             event_transport: None,
             invalidation_transport: None,
             cache: None,
+            // Real local-disk storage rooted at `<tmp>/uploads` so hard-delete
+            // file cleanup is exercised end-to-end (mirrors production wiring).
+            storage: Some(Arc::new(LocalStorage::new(tmp.path().join("uploads")))),
             client_name: OnceLock::new(),
             transport_label: "(test)",
         };
@@ -460,6 +474,135 @@ mod tests {
         assert!(resp.error.is_none());
         let result = resp.result.unwrap();
         assert_eq!(result["isError"], true);
+    }
+
+    #[test]
+    fn handle_tools_call_validate_reports_errors_without_persisting() {
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .required(true)
+                .build(),
+        ];
+        let (_tmp, server) = make_server_with(vec![def]);
+
+        // Missing required `title` → valid:false with a per-field error.
+        let req = make_request(
+            "tools/call",
+            Some(json!(40)),
+            Some(json!({ "name": "validate_posts", "arguments": {} })),
+        );
+        let resp = server.handle_message(req);
+        assert!(resp.error.is_none());
+        let text = resp.result.unwrap()["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let parsed: Value = serde_json::from_str(&text).expect("validate output is JSON");
+        assert_eq!(parsed["valid"], false);
+        assert!(
+            parsed["errors"]["title"].is_string(),
+            "missing required field should surface a per-field error: {parsed}"
+        );
+
+        // Valid data → valid:true.
+        let req = make_request(
+            "tools/call",
+            Some(json!(41)),
+            Some(json!({ "name": "validate_posts", "arguments": { "title": "Hello" } })),
+        );
+        let resp = server.handle_message(req);
+        let text = resp.result.unwrap()["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let parsed: Value = serde_json::from_str(&text).expect("validate output is JSON");
+        assert_eq!(parsed["valid"], true);
+
+        // Validation must not have written a row — count stays 0.
+        let req = make_request(
+            "tools/call",
+            Some(json!(42)),
+            Some(json!({ "name": "count_posts", "arguments": {} })),
+        );
+        let resp = server.handle_message(req);
+        let text = resp.result.unwrap()["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let parsed: Value = serde_json::from_str(&text).expect("count output is JSON");
+        assert_eq!(parsed["count"], 0, "validate must not persist a document");
+    }
+
+    fn make_media_upload_def() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("media");
+        def.fields = vec![
+            FieldDefinition::builder("filename", FieldType::Text)
+                .required(true)
+                .build(),
+            FieldDefinition::builder("url", FieldType::Text).build(),
+        ];
+        def.upload = Some(CollectionUpload::new());
+        def
+    }
+
+    /// Regression: an MCP hard-delete on an upload collection must remove the
+    /// orphaned file from storage. Before storage was threaded into
+    /// `ToolExecCtx`, `exec_delete` passed `None` and left the file behind.
+    #[test]
+    fn handle_tools_call_delete_cleans_upload_files() {
+        let (tmp, server) = make_server_with(vec![make_media_upload_def()]);
+
+        // Place a fake upload file at the storage path the url field points to.
+        let media_dir = tmp.path().join("uploads/media");
+        std::fs::create_dir_all(&media_dir).unwrap();
+        let file = media_dir.join("test.png");
+        std::fs::write(&file, b"fake image").unwrap();
+
+        // Create the document referencing the file.
+        let req = make_request(
+            "tools/call",
+            Some(json!(50)),
+            Some(json!({
+                "name": "create_media",
+                "arguments": { "filename": "test.png", "url": "/uploads/media/test.png" }
+            })),
+        );
+        let resp = server.handle_message(req);
+        assert!(resp.error.is_none());
+        let text = resp.result.unwrap()["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let created: Value = serde_json::from_str(&text).expect("create output is JSON");
+        let id = created["id"]
+            .as_str()
+            .expect("created doc has an id")
+            .to_string();
+
+        assert!(file.exists(), "upload file should exist before delete");
+
+        // Hard-delete via MCP (media has no soft-delete) → file must be cleaned.
+        let req = make_request(
+            "tools/call",
+            Some(json!(51)),
+            Some(json!({
+                "name": "delete_media",
+                "arguments": { "id": id }
+            })),
+        );
+        let resp = server.handle_message(req);
+        assert!(resp.error.is_none());
+        let result = resp.result.unwrap();
+        assert!(
+            result.get("isError").is_none(),
+            "delete should succeed: {result}"
+        );
+
+        assert!(
+            !file.exists(),
+            "upload file should be cleaned up after MCP hard-delete"
+        );
     }
 
     #[test]
