@@ -4,6 +4,87 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — 0.1.0-alpha.10
+
+### Breaking
+
+- **Lua bulk-op queries no longer accept option keys.**
+  `crap.collections.update_many(collection, query, data, opts)` and
+  `crap.collections.delete_many(collection, query, opts)` previously
+  declared `overrideAccess`, `locale`, and `draft` on the *query*
+  table but never read them — the effective values came from the
+  options argument, so an `overrideAccess = true` on the query was
+  silently dropped. The query table now carries only `where`; pass
+  `overrideAccess` / `locale` / `draft` in the options argument
+  instead. `delete_many`'s `locale` moved from the query to the
+  options argument (`crap.DeleteOptions` gained a `locale` field), so
+  single and bulk deletes now take locale the same way.
+
+- **Lua operation option tables reject unknown keys.** Every option
+  table (`crap.collections.create` / `update` / `delete` /
+  `find_by_id` / `validate` / `undelete` / `unpublish`, the version
+  ops, the globals ops, and `crap.jobs.define`) now errors on an
+  unrecognized key, matching the query tables. A typo'd option such
+  as `overrideAcces` previously was silently ignored — defeating the
+  exact access bypass it was meant to request — and now fails loudly.
+
+- **`crap.hooks.register` rejects unknown event names.** Registering a
+  hook for an event that isn't a real lifecycle event (e.g. a typo'd
+  `"on_change"`) was a warning that still created a hook list which
+  never fired. It is now a hard error.
+
+- **Reserved field names are rejected at definition time.** A field
+  whose name collides with an automatically generated column — the
+  primary key / timestamps / join-table foreign key (`id`,
+  `parent_id`, `created_at`, `updated_at`) or any `_`-prefixed system
+  column (`_status`, `_ref_count`, `_deleted_at`, …) — is now rejected
+  when the collection is defined, instead of failing at migration time
+  with a duplicate-column error or silently shadowing a system column.
+
+- **Conflicting generated table names are rejected at startup.** A
+  collection slug that collides with another definition's generated
+  join-table name (e.g. a collection slugged `posts_tags` versus the
+  `tags` array field of a `posts` collection) is now caught at boot
+  rather than silently corrupting one of the two tables during
+  migration.
+
+### Fixed
+
+- **Lua `find` / `find_by_id` honor the configured population depth
+  ceiling.** Relationship-population `depth` was clamped to a
+  hardcoded maximum of 10, ignoring `[depth] max_depth`. It now
+  clamps to the configured value, matching the gRPC read path.
+
+- Corrected the documented default for `overrideAccess` on read
+  queries — it is `false` (access enforced), not `true`.
+
+- **No more spurious orphan-column warning for MFA collections.** The
+  `_mfa_code` / `_mfa_code_exp` columns created for collections with
+  MFA enabled were missing from the known-system-column list, so every
+  migration logged a false "column exists but is not in the Lua
+  definition" warning for them. They are now recognized.
+
+- **MCP `delete` no longer crashes on localized upload collections.**
+  The MCP delete tool passed no locale configuration to the service
+  layer, so deleting a document from an upload collection with
+  localized fields failed with a missing-column error. It now passes
+  the configured locale, matching the gRPC and admin delete paths.
+
+### Added
+
+- **MCP `delete` accepts `force_hard_delete`.** The MCP delete tool
+  can now bypass soft-delete and remove a row permanently, matching
+  the gRPC and Lua delete surfaces.
+
+- **MCP writes accept `locale` and `draft`.** The MCP `create`,
+  `update`, and `update_many` tools now honor a `locale` (and, for
+  single create/update, `draft`) argument, and `read_global` /
+  `update_global` honor `locale` — so localized and draft content is
+  reachable over MCP, matching the gRPC and Lua write surfaces. These
+  sit alongside field values as reserved top-level arguments (like the
+  existing `id` / `password`) and are excluded from the document's
+  field data.
+
 ## [0.1.0-alpha.9] — 2026-05-25
 
 ### Security

@@ -39,13 +39,6 @@ pub(crate) struct DeleteManyQueryInput {
         optional
     )]
     pub(crate) where_: Option<HashMap<String, serde_json::Value>>,
-    /// Locale code for localized fields.
-    #[lua(optional)]
-    pub(crate) locale: Option<String>,
-    /// Skip access control checks (default: `true`).
-    #[serde(rename = "overrideAccess")]
-    #[lua(rename = "overrideAccess", optional)]
-    pub(crate) override_access: Option<bool>,
 }
 
 impl FromLua for DeleteManyQueryInput {
@@ -116,13 +109,18 @@ fn collections_delete_many(
     let def = resolve_collection(reg, &collection)?;
     let soft_delete = def.soft_delete && !opts.force_hard_delete;
 
-    let (filters, _locale_ctx) = build_delete_filters(
+    // Validate the requested locale up front. delete_many matches documents
+    // across locales, so the locale isn't used for filtering — but an invalid
+    // code should still surface as an error rather than be ignored.
+    LocaleContext::from_locale_string(opts.locale.as_deref(), lc)
+        .map_err(|e| RuntimeError(e.to_string()))?;
+
+    let filters = build_delete_filters(
         lua,
         &def,
         &collection,
         soft_delete,
         opts.override_access,
-        lc,
         query,
     )?;
 
@@ -223,12 +221,8 @@ fn build_delete_filters(
     collection: &str,
     soft_delete: bool,
     override_access: bool,
-    lc: &LocaleConfig,
     query: DeleteManyQueryInput,
-) -> LuaResult<(Vec<FilterClause>, Option<LocaleContext>)> {
-    let locale_ctx = LocaleContext::from_locale_string(query.locale.as_deref(), lc)
-        .map_err(|e| RuntimeError(e.to_string()))?;
-
+) -> LuaResult<Vec<FilterClause>> {
     let mut find_query = query.into_find_query()?;
     normalize_filter_fields(&mut find_query.filters, &def.fields);
     validate_user_filters(&find_query.filters).map_err(|e| RuntimeError(format!("{e}")))?;
@@ -248,5 +242,5 @@ fn build_delete_filters(
         &mut find_query.filters,
     )?;
 
-    Ok((find_query.filters, locale_ctx))
+    Ok(find_query.filters)
 }

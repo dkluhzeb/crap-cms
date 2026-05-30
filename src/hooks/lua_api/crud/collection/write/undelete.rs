@@ -18,7 +18,7 @@ use crate::{
 
 /// Optional options for `crap.collections.undelete`.
 #[derive(Default, Deserialize, LuaAnnotation)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 #[lua(class = "crap.UndeleteOptions")]
 pub(crate) struct UndeleteOptions {
     /// Skip access control checks (default: `false`).

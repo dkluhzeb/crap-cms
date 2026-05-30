@@ -22,7 +22,7 @@ use crate::{
 
 /// Optional options for `crap.collections.restore_version`.
 #[derive(Default, Deserialize, LuaAnnotation)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 #[lua(class = "crap.RestoreVersionOptions")]
 pub(crate) struct RestoreVersionOptions {
     /// Skip access control checks (default: `false`). Set to `true` in

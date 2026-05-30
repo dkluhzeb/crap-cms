@@ -13,7 +13,7 @@ use crate::typegen::lua::LuaAnnotation;
 
 /// Typed `config` table passed to `crap.jobs.define(slug, config)`.
 #[derive(Default, Deserialize, LuaAnnotation)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 #[lua(class = "crap.JobDefinitionConfig")]
 pub struct JobDefinitionConfig {
     /// Lua function ref for the job handler (required, e.g.,

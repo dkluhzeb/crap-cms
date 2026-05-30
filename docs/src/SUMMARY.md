@@ -179,4 +179,5 @@
 
 # Upgrade
 
+- [alpha.10](upgrade/alpha-10.md)
 - [alpha.9](upgrade/alpha-9.md)

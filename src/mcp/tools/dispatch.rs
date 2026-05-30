@@ -442,7 +442,7 @@ pub(in crate::mcp) fn execute_tool(
         ToolOp::Unpublish => exec_unpublish(args, slug, ctx),
         ToolOp::ListVersions => exec_list_versions(args, slug, ctx),
         ToolOp::RestoreVersion => exec_restore_version(args, slug, ctx),
-        ToolOp::ReadGlobal => exec_read_global(slug, ctx),
+        ToolOp::ReadGlobal => exec_read_global(args, slug, ctx),
         ToolOp::UpdateGlobal => exec_update_global(args, slug, ctx),
     }
 }

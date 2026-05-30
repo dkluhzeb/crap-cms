@@ -186,9 +186,33 @@ fn get_props(schema: &mut Value) -> Option<&mut Map<String, Value>> {
         .as_object_mut()
 }
 
+/// Insert the reserved write meta-keys (`locale`, `draft`) shared by the
+/// create and update tool schemas. They sit alongside field values as
+/// top-level args and are excluded from the document's field data.
+fn insert_write_meta_keys(props: &mut Map<String, Value>) {
+    props.insert(
+        "locale".to_string(),
+        json!({
+            "type": "string",
+            "description": "Locale code (e.g. 'en', 'de') for localized fields"
+        }),
+    );
+    props.insert(
+        "draft".to_string(),
+        json!({
+            "type": "boolean",
+            "description": "Write as a draft version (default: false)"
+        }),
+    );
+}
+
 /// Input schema for collection create — includes required password for auth collections.
 fn create_schema(def: &CollectionDefinition) -> Value {
     let mut schema = fields_to_object_schema(&def.fields);
+
+    if let Some(props) = get_props(&mut schema) {
+        insert_write_meta_keys(props);
+    }
 
     if !def.is_auth_collection() {
         return schema;
@@ -219,6 +243,7 @@ fn update_schema(def: &CollectionDefinition) -> Value {
         return schema;
     };
     props.insert("id".to_string(), json!({ "type": "string" }));
+    insert_write_meta_keys(props);
 
     if def.is_auth_collection() {
         props.insert(
@@ -245,6 +270,22 @@ fn id_only_schema() -> Value {
     })
 }
 
+/// Schema for delete — `id` plus an optional `force_hard_delete` flag that
+/// bypasses soft-delete and removes the row permanently.
+fn delete_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "id": { "type": "string" },
+            "force_hard_delete": {
+                "type": "boolean",
+                "description": "Bypass soft-delete and remove the row permanently (default: false)"
+            }
+        },
+        "required": ["id"]
+    })
+}
+
 /// Generate the input schema for a collection CRUD tool. Each match arm
 /// delegates to a per-op schema builder so the table-of-contents shape of
 /// this fn matches the `CrudOp` enum 1:1.
@@ -254,7 +295,8 @@ pub(in crate::mcp) fn collection_input_schema(def: &CollectionDefinition, op: Cr
         CrudOp::CreateMany => create_many_schema(def),
         CrudOp::Update => update_schema(def),
         CrudOp::UpdateMany => update_many_schema(def),
-        CrudOp::Delete | CrudOp::Undelete | CrudOp::Unpublish => id_only_schema(),
+        CrudOp::Delete => delete_schema(),
+        CrudOp::Undelete | CrudOp::Unpublish => id_only_schema(),
         CrudOp::DeleteMany => delete_many_schema(),
         CrudOp::FindById => find_by_id_schema(),
         CrudOp::Find => find_schema(),
@@ -305,6 +347,10 @@ fn update_many_schema(def: &CollectionDefinition) -> Value {
             "draft": {
                 "type": "boolean",
                 "description": "Target draft versions (default: false)"
+            },
+            "locale": {
+                "type": "string",
+                "description": "Locale code (e.g. 'en', 'de') for localized fields"
             }
         },
         "required": ["data"]
@@ -402,12 +448,22 @@ fn restore_version_schema() -> Value {
 
 /// Generate the input schema for a global CRUD tool.
 pub(in crate::mcp) fn global_input_schema(def: &GlobalDefinition, op: CrudOp) -> Value {
+    let locale_prop = json!({
+        "type": "string",
+        "description": "Locale code (e.g. 'en', 'de') for localized fields"
+    });
+
     match op {
         CrudOp::Find => {
-            // Read global — no params needed
-            json!({ "type": "object", "properties": {} })
+            json!({ "type": "object", "properties": { "locale": locale_prop } })
         }
-        CrudOp::Update => fields_to_object_schema(&def.fields),
+        CrudOp::Update => {
+            let mut schema = fields_to_object_schema(&def.fields);
+            if let Some(props) = get_props(&mut schema) {
+                props.insert("locale".to_string(), locale_prop);
+            }
+            schema
+        }
         _ => json!({ "type": "object", "properties": {} }),
     }
 }

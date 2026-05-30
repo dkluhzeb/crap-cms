@@ -28,7 +28,7 @@ use crate::{
 
 /// Optional options for `crap.collections.update`.
 #[derive(Deserialize, LuaAnnotation)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 #[lua(class = "crap.UpdateOptions")]
 pub(crate) struct UpdateOptions {
     /// Locale code for localized fields. Nil = default locale.

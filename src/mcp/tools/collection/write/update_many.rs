@@ -6,6 +6,7 @@ use serde_json::{Value, json, to_string_pretty};
 use tracing::info;
 
 use crate::{
+    db::LocaleContext,
     mcp::tools::{
         ToolExecCtx,
         collection::helpers::{extract_data_from_args, parse_where_filters},
@@ -47,6 +48,9 @@ pub(in crate::mcp::tools) fn exec_update_many(
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
 
+    let locale = args.get("locale").and_then(|v| v.as_str());
+    let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
+
     let svc_ctx = ServiceContext::collection(slug, def)
         .pool(ctx.pool)
         .runner(ctx.runner)
@@ -56,7 +60,7 @@ pub(in crate::mcp::tools) fn exec_update_many(
         .build();
 
     let opts = UpdateManyOptions {
-        locale_ctx: None,
+        locale_ctx: locale_ctx.as_ref(),
         run_hooks,
         draft,
         ui_locale: None,

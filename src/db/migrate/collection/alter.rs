@@ -263,6 +263,8 @@ const SYSTEM_COLUMNS: &[&str] = &[
     "_verified",
     "_verification_token",
     "_verification_token_exp",
+    "_mfa_code",
+    "_mfa_code_exp",
     "_locked",
     "_status",
     "_settings",

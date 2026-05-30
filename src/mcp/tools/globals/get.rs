@@ -1,18 +1,26 @@
 //! Execute `read_global` — read a global document.
 
 use anyhow::{Context as _, Result};
-use serde_json::{json, to_string_pretty};
+use serde_json::{Value, json, to_string_pretty};
 
 use crate::{
+    db::LocaleContext,
     mcp::tools::{ToolExecCtx, collection::helpers::doc_to_json},
     service::{GetGlobalInput, RunnerReadHooks, ServiceContext, ServiceError, get_global_document},
 };
 
 /// Execute `read_global` — read a global document.
-pub(in crate::mcp::tools) fn exec_read_global(slug: &str, ctx: &ToolExecCtx<'_>) -> Result<String> {
+pub(in crate::mcp::tools) fn exec_read_global(
+    args: &Value,
+    slug: &str,
+    ctx: &ToolExecCtx<'_>,
+) -> Result<String> {
     let def = ctx.registry.globals.get(slug).context("Global not found")?;
     let conn = ctx.pool.get().context("DB connection")?;
     let hooks = RunnerReadHooks::new(ctx.runner, &conn);
+
+    let locale = args.get("locale").and_then(|v| v.as_str());
+    let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
 
     let svc_ctx = ServiceContext::global(slug, def)
         .pool(ctx.pool)
@@ -21,7 +29,7 @@ pub(in crate::mcp::tools) fn exec_read_global(slug: &str, ctx: &ToolExecCtx<'_>)
         .override_access(true)
         .build();
 
-    let input = GetGlobalInput::new(None, None);
+    let input = GetGlobalInput::new(locale_ctx.as_ref(), None);
 
     match get_global_document(&svc_ctx, &input).map_err(ServiceError::into_anyhow) {
         Ok(d) => Ok(to_string_pretty(&doc_to_json(&d))?),

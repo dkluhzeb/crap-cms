@@ -614,4 +614,4 @@ local result = crap.collections.posts.delete_many({
 | `overrideAccess` | boolean | `false` | Bypass access control checks. |
 | `hooks` | boolean | `true` | Run per-document lifecycle hooks. Set to `false` to skip `before_delete` and `after_delete` hooks. |
 | `locale` | string | `nil` | Locale code for localized fields. |
-| `draft` | boolean | `false` | Include draft documents. |
+| `forceHardDelete` | boolean | `false` | Skip `soft_delete` and remove rows permanently. |

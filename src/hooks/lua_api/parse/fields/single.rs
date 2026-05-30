@@ -21,6 +21,14 @@ use super::super::relationship::parse_field_relationship;
 use super::constraints::{parse_constraints, parse_date_config, parse_default_value};
 use super::top::parse_fields;
 
+/// Field names that collide with automatically generated columns which are
+/// *not* `_`-prefixed: the main-table primary key and timestamps, and the
+/// `parent_id` foreign key on array/blocks join tables. (`_`-prefixed system
+/// columns — `_status`, `_ref_count`, `_deleted_at`, `_order`, `_locale`,
+/// `_block_type`, `_password_hash`, `_mfa_code`, … — are covered by the
+/// leading-underscore rule below.)
+const RESERVED_FIELD_NAMES: &[&str] = &["id", "parent_id", "created_at", "updated_at"];
+
 fn parse_field_name(field_tbl: &Table) -> Result<String> {
     let name: String =
         get_string_val(field_tbl, "name").map_err(|_| anyhow!("Field missing 'name'"))?;
@@ -32,6 +40,18 @@ fn parse_field_name(field_tbl: &Table) -> Result<String> {
     if name.contains("__") {
         bail!(
             "Field name '{name}' must not contain double underscores — reserved for group field separation"
+        );
+    }
+
+    if name.starts_with('_') {
+        bail!(
+            "Field name '{name}' must not start with an underscore — the '_' prefix is reserved for system columns (e.g. _status, _ref_count, _deleted_at)"
+        );
+    }
+
+    if RESERVED_FIELD_NAMES.contains(&name.as_str()) {
+        bail!(
+            "Field name '{name}' is reserved — it collides with an automatically generated column (id, parent_id, created_at, updated_at)"
         );
     }
 
@@ -944,5 +964,55 @@ mod tests {
 
         // Should NOT error — `hero.label` and `footer.label` are distinct columns.
         parse_fields(&lua, &fields_tbl).expect("groups namespace sub-fields independently");
+    }
+
+    /// Helper: parse a single-field collection with the given name/type.
+    fn parse_one(lua: &Lua, name: &str, ty: &str) -> Result<Vec<FieldDefinition>> {
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", name).unwrap();
+        field.set("type", ty).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        parse_fields(lua, &fields_tbl)
+    }
+
+    /// Regression: a field named after a non-`_` system column (`id`,
+    /// `parent_id`, `created_at`, `updated_at`) must be rejected at parse
+    /// time — it would otherwise collide with an auto-generated column.
+    #[test]
+    fn parse_rejects_reserved_system_column_names() {
+        let lua = Lua::new();
+        for name in ["id", "parent_id", "created_at", "updated_at"] {
+            let err = parse_one(&lua, name, "text").unwrap_err().to_string();
+            assert!(
+                err.contains("reserved") && err.contains(name),
+                "expected reserved-name rejection for '{name}', got: {err}"
+            );
+        }
+    }
+
+    /// Regression: a field whose name starts with `_` must be rejected — the
+    /// underscore prefix is reserved for system columns.
+    #[test]
+    fn parse_rejects_underscore_prefixed_field_names() {
+        let lua = Lua::new();
+        for name in ["_status", "_ref_count", "_order", "_internal"] {
+            let err = parse_one(&lua, name, "text").unwrap_err().to_string();
+            assert!(
+                err.contains("underscore"),
+                "expected underscore rejection for '{name}', got: {err}"
+            );
+        }
+    }
+
+    /// A field whose name merely *contains* (but doesn't start with) an
+    /// underscore, or shares a prefix with a reserved name, is still valid.
+    #[test]
+    fn parse_allows_non_reserved_names_near_system_columns() {
+        let lua = Lua::new();
+        for name in ["identifier", "parent", "created", "order", "status"] {
+            parse_one(&lua, name, "text")
+                .unwrap_or_else(|e| panic!("'{name}' should be a valid field name, got: {e}"));
+        }
     }
 }

@@ -22,8 +22,12 @@ Register a hook function for a lifecycle event.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `event` | string | One of the [lifecycle events](lifecycle-events.md) |
+| `event` | string | One of the [lifecycle events](lifecycle-events.md) — an unrecognized name is a hard error |
 | `fn` | function | Hook function receiving a context table |
+
+> Passing an event name that isn't a real lifecycle event (e.g. a typo'd
+> `"on_change"`) raises an error rather than silently registering a hook
+> that never fires.
 
 ### `crap.hooks.remove(event, fn)`
 

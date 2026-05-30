@@ -34,6 +34,10 @@ end)
 | `before_broadcast` | Before live event broadcast (can suppress or transform) |
 | `before_render` | Before rendering admin pages (receives full template context, can modify it; global-only, no CRUD access) |
 
+Registering any other event name is a **hard error** — a typo such as
+`crap.hooks.register("on_change", ...)` would otherwise silently create a
+hook list that never fires, so it is rejected at registration time.
+
 ## crap.hooks.remove(event, fn)
 
 Remove a previously registered hook. Uses `rawequal` for identity matching — you must pass the exact same function reference.

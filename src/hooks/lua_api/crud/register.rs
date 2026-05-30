@@ -6,7 +6,7 @@ use anyhow::Result;
 use mlua::{Lua, Table};
 
 use crate::{
-    config::{JobsConfig, LocaleConfig, PaginationConfig},
+    config::{DepthConfig, JobsConfig, LocaleConfig, PaginationConfig},
     core::Registry,
 };
 
@@ -20,6 +20,7 @@ struct CrudRegisterCtx<'a> {
     registry: &'a Arc<Registry>,
     locale_config: &'a LocaleConfig,
     pagination_config: &'a PaginationConfig,
+    depth_config: &'a DepthConfig,
 }
 
 /// Register the CRUD functions on `crap.collections`, `crap.globals`, and `crap.jobs`.
@@ -33,6 +34,7 @@ pub(crate) fn register_crud_functions(
     registry: Arc<Registry>,
     locale_config: &LocaleConfig,
     pagination_config: &PaginationConfig,
+    depth_config: &DepthConfig,
     jobs_config: &JobsConfig,
 ) -> Result<()> {
     let crap: Table = lua.globals().get("crap")?;
@@ -40,6 +42,7 @@ pub(crate) fn register_crud_functions(
         registry: &registry,
         locale_config,
         pagination_config,
+        depth_config,
     };
 
     register_collection_functions(lua, &crap, &ctx)?;
@@ -56,6 +59,7 @@ fn register_collection_functions(lua: &Lua, crap: &Table, ctx: &CrudRegisterCtx<
         registry,
         locale_config,
         pagination_config,
+        depth_config,
     } = *ctx;
     let collections: Table = crap.get("collections")?;
 
@@ -66,12 +70,14 @@ fn register_collection_functions(lua: &Lua, crap: &Table, ctx: &CrudRegisterCtx<
         Arc::clone(registry),
         locale_config,
         pagination_config,
+        depth_config,
     )?;
     collection::read::find_by_id::register_find_by_id(
         lua,
         &collections,
         Arc::clone(registry),
         locale_config,
+        depth_config,
     )?;
     collection::read::count::register_count(
         lua,

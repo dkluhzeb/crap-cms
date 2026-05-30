@@ -8,7 +8,7 @@ use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, 
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::{LocaleConfig, PaginationConfig},
+    config::{DepthConfig, LocaleConfig, PaginationConfig},
     core::{CollectionDefinition, Document, Registry},
     db::{
         FindQuery, LocaleContext, PaginationResult,
@@ -63,7 +63,7 @@ pub(crate) struct FindQueryInput {
     /// Include draft documents (versioned collections only).
     #[lua(optional)]
     pub(crate) draft: Option<bool>,
-    /// Skip access control checks (default: `true`).
+    /// Skip access control checks (default: `false`).
     #[serde(rename = "overrideAccess")]
     #[lua(rename = "overrideAccess", optional)]
     pub(crate) override_access: Option<bool>,
@@ -154,6 +154,8 @@ pub(crate) struct FindParams {
     default: i64,
     max: i64,
     cursor: bool,
+    /// Upper bound for relationship-population `depth`, from `[depth] max_depth`.
+    max_depth: i32,
 }
 
 /// State threaded into `crap.collections.find`.
@@ -198,11 +200,13 @@ pub(crate) fn register_find(
     registry: Arc<Registry>,
     locale_config: &LocaleConfig,
     pagination_config: &PaginationConfig,
+    depth_config: &DepthConfig,
 ) -> Result<()> {
     let params = FindParams {
         default: pagination_config.default_limit,
         max: pagination_config.max_limit,
         cursor: pagination_config.is_cursor(),
+        max_depth: depth_config.max_depth,
     };
 
     register_crap_collections_find(
@@ -259,7 +263,7 @@ fn find_inner(
 
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
-    let depth = query.depth.unwrap_or(0).clamp(0, 10);
+    let depth = query.depth.unwrap_or(0).clamp(0, params.max_depth);
     let locale_ctx = LocaleContext::from_locale_string(query.locale.as_deref(), lc)
         .map_err(|e| RuntimeError(e.to_string()))?;
     let override_access = query.override_access.unwrap_or(false);

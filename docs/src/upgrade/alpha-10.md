@@ -1,0 +1,136 @@
+# Upgrading to alpha.10
+
+This guide covers the upgrade path from `alpha.9` to `alpha.10`. It
+focuses on operator and plugin-author action items first; additive
+features follow.
+
+alpha.10 is a stabilization release: several Lua-facing contracts that
+were loose or silently-wrong are tightened so they can freeze. Most
+projects need no changes — the items below only bite definitions that
+were already relying on ignored or malformed input.
+
+## TL;DR
+
+- **Replace your binary, restart.** DB schema migrations apply
+  automatically; no manual SQL.
+- **Plugin authors: option typos now error.** Every Lua CRUD option
+  table rejects unknown keys. A previously-ignored typo (e.g.
+  `overrideAcces`) now fails loudly. Fix any stray keys in your
+  `crap.collections.*` / `crap.globals.*` / `crap.jobs.define` calls.
+- **Plugin authors: drop option keys from bulk-op *queries*.** The
+  `update_many` / `delete_many` query table only accepts `where`. Move
+  `overrideAccess` / `locale` / `draft` to the options argument.
+- **Plugin authors: `crap.hooks.register` rejects unknown events.** A
+  typo'd event name is now an error instead of a silent no-op.
+- **Check field names.** A field named `id` / `parent_id` /
+  `created_at` / `updated_at`, or one starting with `_`, is now
+  rejected at definition time (it always collided with a generated
+  column — previously it crashed at migration or silently shadowed).
+
+## Required action items
+
+### 1. Remove unknown keys from Lua CRUD option tables
+
+Every option table now rejects unrecognized keys
+(`deny_unknown_fields`), matching the behavior the query tables already
+had. This catches typos that previously defeated the option they were
+meant to set — most dangerously a misspelled `overrideAccess`, which
+silently left access control **on**.
+
+```diff
+  crap.collections.posts.create(data, {
+-     overrideAcces = true,   -- silently ignored before; now an error
++     overrideAccess = true,
+  })
+```
+
+Affected: the option arguments of `create`, `update`, `delete`,
+`find_by_id`, `validate`, `undelete`, `unpublish`, `list_versions`,
+`restore_version`, the `crap.globals` ops, and the config table of
+`crap.jobs.define`.
+
+### 2. Move bulk-op options off the query table
+
+`update_many` / `delete_many` previously *declared* `overrideAccess`,
+`locale`, and `draft` on the query (2nd) argument but never read them —
+the effective values came from the options argument. The query table
+now carries only `where`.
+
+```diff
+  crap.collections.posts.update_many(
+-     { where = { status = "draft" }, overrideAccess = true },
++     { where = { status = "draft" } },
+      { status = "published" },
++     { overrideAccess = true }
+  )
+```
+
+For `delete_many`, `locale` likewise moves to the options (last)
+argument — single and bulk deletes now take locale the same way.
+
+### 3. Fix unknown hook event names
+
+```diff
+- crap.hooks.register("on_change", fn)   -- not a real event; now errors
++ crap.hooks.register("before_change", fn)
+```
+
+The valid events are listed under
+[crap.hooks](../lua-api/hooks.md#events). An unrecognized name
+previously logged a warning and registered a hook list that never
+fired; it is now a hard error so the typo surfaces immediately.
+
+### 4. Rename reserved field names
+
+A field `name` is rejected at definition time when it collides with an
+automatically generated column:
+
+- starts with `_` (reserved for system columns), or
+- contains `__` (reserved for group-field column nesting), or
+- is exactly `id`, `parent_id`, `created_at`, or `updated_at`.
+
+These names always collided with a generated column — they either
+failed the `CREATE TABLE` with a duplicate-column error or silently
+shadowed a system column. Rename the field.
+
+Collection **slugs** are also checked for collisions with generated
+join-table names at startup: a collection slugged `posts_tags`
+conflicts with the `tags` array field of a `posts` collection (both
+generate a `posts_tags` table). Boot fails with a clear error instead
+of one definition silently corrupting the other's table during
+migration.
+
+## Bug fixes (no action needed)
+
+- **Lua `find` / `find_by_id` honor `[depth] max_depth`.** Relationship
+  population depth was previously clamped to a hardcoded maximum of 10,
+  ignoring the configured ceiling. It now clamps to `[depth] max_depth`,
+  matching the gRPC read path. Deployments with a `max_depth` other than
+  10 will see the configured value take effect on the Lua surface.
+- **No more spurious orphan-column warning for MFA collections.** The
+  `_mfa_code` / `_mfa_code_exp` columns are now recognized as system
+  columns, so migrations no longer log a false "column exists but is not
+  in the Lua definition" warning for them.
+- **MCP `delete` no longer crashes on localized upload collections.**
+  The MCP delete tool now passes the configured locale to the service
+  layer, matching gRPC and admin.
+
+## Additive features (alpha.10)
+
+### MCP writes accept `locale`, `draft`, and `force_hard_delete`
+
+The MCP `create` / `update` / `update_many` tools now accept a `locale`
+and (for single create/update) `draft` argument, `delete` accepts
+`force_hard_delete`, and `global_read` / `global_update` accept
+`locale` — so localized and draft content is reachable over MCP,
+matching the gRPC and Lua write surfaces. These are reserved top-level
+arguments, excluded from the document's field data like the existing
+`id` / `password`. See [MCP overview](../mcp/overview.md).
+
+## Reference
+
+- `CHANGELOG.md` at the project root — the full alpha.10 entry with
+  every change.
+- [crap.collections](../lua-api/collections.md)
+- [crap.hooks](../lua-api/hooks.md)
+- [Fields overview](../fields/overview.md#reserved-field-names)

@@ -19,7 +19,7 @@ use crate::{
 
 /// Optional options for `crap.collections.list_versions`.
 #[derive(Default, Deserialize, LuaAnnotation)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 #[lua(class = "crap.ListVersionsOptions")]
 pub(crate) struct ListVersionsOptions {
     /// Max number of versions to return.

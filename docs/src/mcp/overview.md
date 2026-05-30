@@ -102,6 +102,20 @@ For each collection (e.g., `posts`), five tools are generated:
 Input schemas are generated from your field definitions. Required fields, select
 options, and relationship types are all reflected in the JSON Schema.
 
+Alongside field values, the write tools accept a few **reserved top-level
+arguments** (excluded from the document's field data, like `id` and
+`password`):
+
+| Argument | Tools | Description |
+|----------|-------|-------------|
+| `locale` | `create_*`, `update_*`, `update_many_*`, `global_read_*`, `global_update_*` | Locale code for localized fields. |
+| `draft` | `create_*`, `update_*`, `update_many_*` | Write as a draft version. |
+| `force_hard_delete` | `delete_*`, `delete_many_*` | Skip `soft_delete` and remove the row permanently. |
+
+> A collection with a field literally named `locale`, `draft`, or
+> `force_hard_delete` would have it shadowed by the reserved argument — the
+> same caveat that already applies to `id` and `password`.
+
 ### Global CRUD (per global)
 
 For each global (e.g., `settings`):

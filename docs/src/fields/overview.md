@@ -42,7 +42,7 @@ Every field type accepts these properties:
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `name` | string | **required** | Column name. Must be a valid SQL identifier (alphanumeric + underscore). |
+| `name` | string | **required** | Column name. Must be a valid SQL identifier (alphanumeric + underscore). See the reserved-name rules below. |
 | `required` | boolean | `false` | Validation: must have a non-empty value on create/update. |
 | `unique` | boolean | `false` | Unique constraint. Checked in the current transaction. For [localized](../locale/overview.md#unique--localized) fields, enforced per locale. |
 | `index` | boolean | `false` | Create a B-tree index on this column. Skipped when `unique = true` (already indexed by SQLite). |
@@ -53,6 +53,25 @@ Every field type accepts these properties:
 | `admin` | table | `{}` | Admin UI display options. |
 | `hooks` | table | `{}` | Per-field lifecycle hooks. |
 | `access` | table | `{}` | Per-field access control. |
+
+### Reserved field names
+
+A field `name` is rejected at definition time if it would collide with an
+automatically generated column:
+
+- **Must not start with `_`.** The underscore prefix is reserved for system
+  columns (`_status`, `_ref_count`, `_deleted_at`, `_order`, `_locale`, the
+  auth columns, …).
+- **Must not contain `__`** (double underscore) — that separator is reserved
+  for group-field column nesting (`group__subfield`).
+- **Must not be `id`, `parent_id`, `created_at`, or `updated_at`** — these are
+  the primary key, join-table foreign key, and timestamp columns.
+
+Collection slugs are likewise checked for collisions with generated join-table
+names at startup: a collection slugged `posts_tags` conflicts with the `tags`
+array field of a `posts` collection (both would generate a `posts_tags` table),
+and the conflicting definition is rejected rather than silently corrupting one
+of the tables.
 
 ## Supported Types
 

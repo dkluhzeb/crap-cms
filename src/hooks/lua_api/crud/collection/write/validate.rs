@@ -22,7 +22,7 @@ use crate::{
 
 /// Optional options for `crap.collections.validate`.
 #[derive(Default, Deserialize, LuaAnnotation)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 #[lua(class = "crap.ValidateOptions")]
 pub(crate) struct ValidateOptions {
     /// Locale code for localized fields. Nil = default locale.

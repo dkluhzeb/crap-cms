@@ -25,9 +25,13 @@ use crate::{
 
 /// Optional options for `crap.collections.delete`.
 #[derive(Deserialize, LuaAnnotation)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 #[lua(class = "crap.DeleteOptions")]
 pub(crate) struct DeleteOptions {
+    /// Locale code for localized fields. Nil = default locale. Only
+    /// consulted by `delete_many` (single delete is locale-agnostic).
+    #[lua(optional)]
+    pub(crate) locale: Option<String>,
     /// Skip access control checks (default: `false`). Set to `true` in
     /// trusted internal code to bypass collection-level access for the
     /// current user.
@@ -47,6 +51,7 @@ pub(crate) struct DeleteOptions {
 impl Default for DeleteOptions {
     fn default() -> Self {
         Self {
+            locale: None,
             override_access: false,
             hooks: true,
             force_hard_delete: false,

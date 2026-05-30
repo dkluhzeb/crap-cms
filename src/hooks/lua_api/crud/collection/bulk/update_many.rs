@@ -38,16 +38,6 @@ pub(crate) struct UpdateManyQueryInput {
         optional
     )]
     pub(crate) where_: Option<HashMap<String, serde_json::Value>>,
-    /// Locale code for localized fields.
-    #[lua(optional)]
-    pub(crate) locale: Option<String>,
-    /// Skip access control checks (default: `true`).
-    #[serde(rename = "overrideAccess")]
-    #[lua(rename = "overrideAccess", optional)]
-    pub(crate) override_access: Option<bool>,
-    /// Include draft documents (default: `false`).
-    #[lua(optional)]
-    pub(crate) draft: Option<bool>,
 }
 
 impl FromLua for UpdateManyQueryInput {

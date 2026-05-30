@@ -86,6 +86,11 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
     super::startup_checks::validate_locale_field_collisions(&snapshot, &config.locale.locales)
         .context("Locale/field-name collision detected")?;
 
+    // Reject definitions whose generated table names collide (e.g. a
+    // collection slugged `posts_tags` vs the `tags` array field of `posts`).
+    super::startup_checks::validate_table_name_collisions(&snapshot)
+        .context("Table name collision detected")?;
+
     // Validate per-collection auth.methods configurations: hard errors
     // for structural issues (enabled+empty methods, duplicate password_login,
     // etc.), warnings for footgun patterns (always-active strategies).

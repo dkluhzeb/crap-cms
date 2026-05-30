@@ -1,12 +1,11 @@
 //! Register `crap.hooks` — register/remove global event hooks, plus `_crap_event_hooks` storage.
 
 use anyhow::Result;
-use mlua::{Function, Lua, Result as LuaResult, Table, Value};
-use tracing::warn;
+use mlua::{Error::RuntimeError, Function, Lua, Result as LuaResult, Table, Value};
 
 use crate::typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
-/// Known lifecycle event names. Used to warn on unrecognized event registrations.
+/// Known lifecycle event names. Registering any other event name is a hard error.
 const KNOWN_EVENTS: &[&str] = &[
     "before_validate",
     "before_change",
@@ -35,10 +34,10 @@ fn hooks_register(
     func: Function,
 ) -> LuaResult<()> {
     if !is_known_event(&event) {
-        warn!(
+        return Err(RuntimeError(format!(
             "crap.hooks.register: unknown event '{event}'. Known events: {}",
             KNOWN_EVENTS.join(", ")
-        );
+        )));
     }
     let list = get_or_create_hook_list(lua, &event)?;
     list.set(list.raw_len() + 1, func)
@@ -216,17 +215,25 @@ mod tests {
     }
 
     #[test]
-    fn test_register_unknown_event_still_succeeds() {
-        // Unknown events log a warning but still register (no hard failure)
+    fn test_register_unknown_event_is_hard_error() {
+        // Registering an unrecognized event name is rejected — a typo'd event
+        // (e.g. "on_change") would otherwise create a dead hook that never fires.
         let lua = lua_with_hooks();
         let register_fn: Function = crap_hooks(&lua).get("register").unwrap();
 
         let hook_fn = lua.create_function(|_, ()| Ok(())).unwrap();
-        let result: LuaResult<()> = register_fn.call(("unknown_event", hook_fn));
-        assert!(result.is_ok(), "unknown events should still register");
+        let result: LuaResult<()> = register_fn.call(("on_change", hook_fn));
+        let err = result.expect_err("unknown event must be rejected");
+        assert!(
+            err.to_string().contains("unknown event 'on_change'"),
+            "expected unknown-event error, got: {err}"
+        );
 
+        // Nothing was registered under the bogus name.
         let event_hooks: Table = lua.named_registry_value("_crap_event_hooks").unwrap();
-        let list: Table = event_hooks.get("unknown_event").unwrap();
-        assert_eq!(list.raw_len(), 1);
+        assert!(
+            event_hooks.get::<Value>("on_change").unwrap().is_nil(),
+            "no hook list should be created for an unknown event"
+        );
     }
 }

@@ -7,7 +7,7 @@ use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, 
 use serde::Deserialize;
 
 use crate::{
-    config::LocaleConfig,
+    config::{DepthConfig, LocaleConfig},
     core::Registry,
     db::LocaleContext,
     hooks::{
@@ -23,11 +23,11 @@ use crate::{
 
 /// Optional options for `crap.collections.find_by_id`.
 #[derive(Default, Deserialize, LuaAnnotation)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 #[lua(class = "crap.FindByIdOptions")]
 pub(crate) struct FindByIdOptions {
     /// Population depth for relationship fields (default: `0`). `0` =
-    /// return IDs only. Clamped to the `[0, 10]` range.
+    /// return IDs only. Clamped to the configured `[depth] max_depth`.
     #[lua(optional)]
     pub(crate) depth: i32,
     /// Locale code for localized fields (e.g., `"en"`, `"de"`, `"all"`).
@@ -62,6 +62,8 @@ impl FromLua for FindByIdOptions {
 pub(crate) struct CollectionsFindByIdState {
     pub(crate) registry: Arc<Registry>,
     pub(crate) locale_config: LocaleConfig,
+    /// Upper bound for relationship-population `depth`, from `[depth] max_depth`.
+    pub(crate) max_depth: i32,
 }
 
 /// Find a single document by ID. Returns `nil` if not found.
@@ -90,7 +92,7 @@ fn collections_find_by_id(
 
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
-    let depth = opts.depth.clamp(0, 10);
+    let depth = opts.depth.clamp(0, state.max_depth);
     let locale_ctx = LocaleContext::from_locale_string(opts.locale.as_deref(), lc)
         .map_err(|e| RuntimeError(e.to_string()))?;
     let def = resolve_collection(reg, &collection)?;
@@ -140,12 +142,14 @@ pub(crate) fn register_find_by_id(
     _table: &Table,
     registry: Arc<Registry>,
     locale_config: &LocaleConfig,
+    depth_config: &DepthConfig,
 ) -> Result<()> {
     register_crap_collections_find_by_id(
         lua,
         CollectionsFindByIdState {
             registry,
             locale_config: locale_config.clone(),
+            max_depth: depth_config.max_depth,
         },
     )?;
     Ok(())

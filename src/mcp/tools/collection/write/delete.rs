@@ -25,13 +25,25 @@ pub(in crate::mcp::tools) fn exec_delete(
         .get("id")
         .and_then(|v| v.as_str())
         .context("Missing 'id' argument")?;
+    let force_hard_delete = args
+        .get("force_hard_delete")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
     let def = ctx
         .registry
         .collections
         .get(slug)
         .context("Collection not found")?;
 
-    let svc_ctx = ServiceContext::collection(slug, def)
+    // Force-hard delete is expressed by disabling soft-delete on a local
+    // copy of the definition, mirroring the gRPC/Lua delete handlers.
+    let mut def = def.clone();
+    if force_hard_delete && def.soft_delete {
+        def.soft_delete = false;
+    }
+
+    let svc_ctx = ServiceContext::collection(slug, &def)
         .pool(ctx.pool)
         .runner(ctx.runner)
         .override_access(true)
@@ -39,7 +51,7 @@ pub(in crate::mcp::tools) fn exec_delete(
         .invalidation_transport(ctx.invalidation_transport.clone())
         .cache(ctx.cache.clone())
         .build();
-    delete_document(&svc_ctx, id, None, None)?;
+    delete_document(&svc_ctx, id, None, Some(&ctx.config.locale))?;
 
     info!("MCP delete {}: {} [client={}]", slug, id, ctx.client_label);
 

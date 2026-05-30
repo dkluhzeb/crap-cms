@@ -30,7 +30,7 @@ use crate::{
 
 /// Optional options for `crap.collections.unpublish`.
 #[derive(Deserialize, LuaAnnotation)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 #[lua(class = "crap.UnpublishOptions")]
 pub(crate) struct UnpublishOptions {
     /// Skip access control checks (default: `false`).

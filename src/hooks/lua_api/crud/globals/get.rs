@@ -19,7 +19,7 @@ use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn,
 
 /// Optional options for `crap.globals.get`.
 #[derive(Default, Deserialize, LuaAnnotation)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 #[lua(class = "crap.GlobalGetOptions")]
 pub(crate) struct GlobalGetOptions {
     /// Locale code for localized fields. Nil = default locale.

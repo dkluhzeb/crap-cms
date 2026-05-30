@@ -695,7 +695,7 @@ function crap.fields.join(config) end
 --- @field locale? string Locale code for localized fields (`"en"`, `"de"`, `"all"`).
 --- @field select? string[] Fields to return. Nil/empty = all fields.
 --- @field draft? boolean Include draft documents (versioned collections only).
---- @field overrideAccess? boolean Skip access control checks (default: `true`).
+--- @field overrideAccess? boolean Skip access control checks (default: `false`).
 --- @field trash? boolean Include soft-deleted documents (trash listings).
 --- @field after_cursor? string Forward cursor token (from previous response's `endCursor`).
 --- @field before_cursor? string Backward cursor token (from previous response's `startCursor`).
@@ -859,7 +859,7 @@ function crap.collections.config.list() end
 
 --- Optional options for `crap.collections.find_by_id`.
 --- @class crap.FindByIdOptions
---- @field depth? integer Population depth for relationship fields (default: `0`). `0` = return IDs only. Clamped to the `[0, 10]` range.
+--- @field depth? integer Population depth for relationship fields (default: `0`). `0` = return IDs only. Clamped to the configured `[depth] max_depth`.
 --- @field locale? string Locale code for localized fields (e.g., `"en"`, `"de"`, `"all"`). Nil = default locale.
 --- @field select? string[] Fields to return. Nil or empty = all fields. `id` is always included.
 --- @field draft? boolean When `true` and the collection has `versions.drafts`, returns the latest draft version snapshot instead of the published main-table data.
@@ -899,6 +899,7 @@ function crap.collections.update(collection, id, data, opts) end
 
 --- Optional options for `crap.collections.delete`.
 --- @class crap.DeleteOptions
+--- @field locale? string Locale code for localized fields. Nil = default locale. Only consulted by `delete_many` (single delete is locale-agnostic).
 --- @field overrideAccess? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass collection-level access for the current user.
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set `false` to bypass hooks.
 --- @field forceHardDelete? boolean Bypass `soft_delete` and remove the row permanently. Mirrors the same flag on the gRPC/HTTP delete handlers.
@@ -980,15 +981,10 @@ function crap.collections.count(collection, query) end
 --- Query passed to `crap.collections.update_many(collection, query, data, opts?)`.
 --- @class crap.UpdateManyQuery
 --- @field where? table<string, crap.FilterValue | crap.OrCondition[]>
---- @field locale? string Locale code for localized fields.
---- @field overrideAccess? boolean Skip access control checks (default: `true`).
---- @field draft? boolean Include draft documents (default: `false`).
 
 --- Query passed to `crap.collections.delete_many(collection, query, opts?)`.
 --- @class crap.DeleteManyQuery
 --- @field where? table<string, crap.FilterValue | crap.OrCondition[]>
---- @field locale? string Locale code for localized fields.
---- @field overrideAccess? boolean Skip access control checks (default: `true`).
 
 --- Result of a bulk update operation.
 --- @class crap.UpdateManyResult

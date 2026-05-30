@@ -24,7 +24,7 @@ use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn,
 
 /// Optional options for `crap.globals.update`.
 #[derive(Deserialize, LuaAnnotation)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 #[lua(class = "crap.GlobalUpdateOptions")]
 pub(crate) struct GlobalUpdateOptions {
     /// Locale code for localized fields. Nil = default locale.

@@ -5,6 +5,7 @@ use serde_json::{Value, to_string_pretty};
 use tracing::info;
 
 use crate::{
+    db::LocaleContext,
     mcp::tools::{
         ToolExecCtx,
         collection::helpers::{doc_to_json, extract_data_from_args},
@@ -20,7 +21,11 @@ pub(in crate::mcp::tools) fn exec_update_global(
 ) -> Result<String> {
     let def = ctx.registry.globals.get(slug).context("Global not found")?;
 
-    let data = extract_data_from_args(args, &[]);
+    // `locale` is a reserved top-level key — excluded from field data.
+    let locale = args.get("locale").and_then(|v| v.as_str());
+    let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
+
+    let data = extract_data_from_args(args, &["locale"]);
 
     let svc_ctx = ServiceContext::global(slug, def)
         .pool(ctx.pool)
@@ -30,7 +35,13 @@ pub(in crate::mcp::tools) fn exec_update_global(
         .cache(ctx.cache.clone())
         .build();
 
-    let (doc, _ctx) = update_global_document(&svc_ctx, WriteInput::builder(data).build())?;
+    let (doc, _ctx) = update_global_document(
+        &svc_ctx,
+        WriteInput::builder(data)
+            .locale_ctx(locale_ctx.as_ref())
+            .locale(locale.map(std::string::ToString::to_string))
+            .build(),
+    )?;
 
     info!("MCP update global: {} [client={}]", slug, ctx.client_label);
 
