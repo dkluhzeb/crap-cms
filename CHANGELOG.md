@@ -126,6 +126,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `INVALID_ARGUMENT` as the proto comments claimed); the proto now
   documents both codes separately.
 
+- **Reference counting now recurses into nested relationships.** A
+  relationship nested inside a group within an array (`array → group →
+  rel`), inside a group within a block (`blocks → group → rel`), or a
+  has-many relationship stored directly inside a block were not counted
+  toward `_ref_count` — so delete-protection silently failed for those
+  shapes (the target could be hard-deleted while still referenced, and
+  hard-deleting the referrer left the count stale). A single recursive
+  walker now handles relationships at any nesting depth, shared across
+  the create, update, delete, and backfill paths. The backfill migration
+  is re-gated by a versioned marker, so existing databases recompute
+  their counts once on upgrade. Top-level, group, direct-array, and
+  direct-block relationships were already counted correctly and are
+  unaffected.
+
 - **MCP hard-delete now cleans up upload files.** The MCP `delete` and
   `delete_many` tools never passed a storage backend to the service
   layer, so permanently deleting a document from an upload collection

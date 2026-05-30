@@ -20,7 +20,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use prost_types::{Struct, Value, value::Kind};
+use prost_types::{ListValue, Struct, Value, value::Kind};
 use tonic::Request;
 
 use crap_cms::api::content;
@@ -39,6 +39,22 @@ use crap_cms::hooks::lifecycle::HookRunner;
 fn str_val(s: &str) -> Value {
     Value {
         kind: Some(Kind::StringValue(s.to_string())),
+    }
+}
+
+fn struct_val(pairs: &[(&str, Value)]) -> Value {
+    let mut fields = BTreeMap::new();
+    for (k, v) in pairs {
+        fields.insert((*k).to_string(), v.clone());
+    }
+    Value {
+        kind: Some(Kind::StructValue(Struct { fields })),
+    }
+}
+
+fn list_val(items: Vec<Value>) -> Value {
+    Value {
+        kind: Some(Kind::ListValue(ListValue { values: items })),
     }
 }
 
@@ -160,6 +176,204 @@ fn get_ref_count(setup: &TestSetup, collection: &str, id: &str) -> i64 {
     query::ref_count::get_ref_count(&conn, collection, id)
         .unwrap()
         .expect("document should exist")
+}
+
+// ── Nesting matrix: relationships at every supported nesting depth ───────
+//
+// `_ref_count` must count a referenced document exactly once per incoming
+// reference, no matter how deeply the relationship field is nested. This
+// matrix exercises every supported container combination that can hold a
+// relationship: top-level, Group, Array (direct + Group inside), and
+// Blocks (direct + Group inside + has-many inside). A miss here means
+// delete-protection silently fails for that shape.
+
+fn rel(name: &str, has_many: bool) -> FieldDefinition {
+    FieldDefinition::builder(name, FieldType::Relationship)
+        .relationship(RelationshipConfig::new("tags", has_many))
+        .build()
+}
+
+/// `articles` collection embedding a `tags` relationship at every
+/// supported nesting depth.
+fn make_nesting_matrix_defs() -> Vec<CollectionDefinition> {
+    let mut tags = CollectionDefinition::new("tags");
+    tags.fields = vec![FieldDefinition::builder("name", FieldType::Text).build()];
+
+    let mut articles = CollectionDefinition::new("articles");
+    articles.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text).build(),
+        // top-level has-one
+        rel("tag", false),
+        // Group > has-one
+        FieldDefinition::builder("seo", FieldType::Group)
+            .fields(vec![rel("seo_tag", false)])
+            .build(),
+        // Array > has-one (direct sub-field)
+        FieldDefinition::builder("slides", FieldType::Array)
+            .fields(vec![rel("slide_tag", false)])
+            .build(),
+        // Array > Group > has-one
+        FieldDefinition::builder("variants", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("dims", FieldType::Group)
+                    .fields(vec![rel("dim_tag", false)])
+                    .build(),
+            ])
+            .build(),
+        // Blocks: direct has-one, Group > has-one, and has-many
+        FieldDefinition::builder("content", FieldType::Blocks)
+            .blocks(vec![
+                BlockDefinition::new("promo", vec![rel("promo_tag", false)]),
+                BlockDefinition::new(
+                    "card",
+                    vec![
+                        FieldDefinition::builder("meta", FieldType::Group)
+                            .fields(vec![rel("card_tag", false)])
+                            .build(),
+                    ],
+                ),
+                BlockDefinition::new("list", vec![rel("list_tags", true)]),
+            ])
+            .build(),
+    ];
+
+    vec![tags, articles]
+}
+
+async fn create_tag(setup: &TestSetup, name: &str) -> String {
+    setup
+        .service
+        .create(Request::new(content::CreateRequest {
+            collection: "tags".to_string(),
+            data: Some(make_struct(&[("name", name)])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .expect("create tag")
+        .into_inner()
+        .document
+        .expect("tag document")
+        .id
+}
+
+/// Create one tag per nesting location and an `articles` document that
+/// references each at its depth. Returns the article id plus labelled tag
+/// ids so callers can assert `_ref_count` per location.
+async fn create_matrix_article(setup: &TestSetup) -> (String, Vec<(&'static str, String)>) {
+    let tags = vec![
+        ("top-level", create_tag(setup, "top").await),
+        ("group", create_tag(setup, "group").await),
+        ("array", create_tag(setup, "array").await),
+        ("array>group", create_tag(setup, "array_group").await),
+        ("blocks", create_tag(setup, "block").await),
+        ("blocks>group", create_tag(setup, "block_group").await),
+        ("blocks>has-many", create_tag(setup, "block_hm").await),
+    ];
+    let id_of = |label: &str| tags.iter().find(|(l, _)| *l == label).unwrap().1.clone();
+
+    let data = Struct {
+        fields: BTreeMap::from([
+            ("title".to_string(), str_val("a1")),
+            ("tag".to_string(), str_val(&id_of("top-level"))),
+            (
+                "seo".to_string(),
+                struct_val(&[("seo_tag", str_val(&id_of("group")))]),
+            ),
+            (
+                "slides".to_string(),
+                list_val(vec![struct_val(&[("slide_tag", str_val(&id_of("array")))])]),
+            ),
+            (
+                "variants".to_string(),
+                list_val(vec![struct_val(&[(
+                    "dims",
+                    struct_val(&[("dim_tag", str_val(&id_of("array>group")))]),
+                )])]),
+            ),
+            (
+                "content".to_string(),
+                list_val(vec![
+                    struct_val(&[
+                        ("_block_type", str_val("promo")),
+                        ("promo_tag", str_val(&id_of("blocks"))),
+                    ]),
+                    struct_val(&[
+                        ("_block_type", str_val("card")),
+                        (
+                            "meta",
+                            struct_val(&[("card_tag", str_val(&id_of("blocks>group")))]),
+                        ),
+                    ]),
+                    struct_val(&[
+                        ("_block_type", str_val("list")),
+                        (
+                            "list_tags",
+                            list_val(vec![str_val(&id_of("blocks>has-many"))]),
+                        ),
+                    ]),
+                ]),
+            ),
+        ]),
+    };
+
+    let article_id = setup
+        .service
+        .create(Request::new(content::CreateRequest {
+            collection: "articles".to_string(),
+            data: Some(data),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .expect("create article")
+        .into_inner()
+        .document
+        .expect("article document")
+        .id;
+
+    (article_id, tags)
+}
+
+fn assert_all_counts(setup: &TestSetup, tags: &[(&'static str, String)], expected: i64) {
+    let mut wrong = Vec::new();
+    for (label, id) in tags {
+        let count = get_ref_count(setup, "tags", id);
+        if count != expected {
+            wrong.push(format!("{label} (got {count}, want {expected})"));
+        }
+    }
+    assert!(wrong.is_empty(), "ref_count mismatch at: {wrong:?}");
+}
+
+#[tokio::test]
+async fn ref_count_counts_relationships_at_every_nesting_depth() {
+    let setup = setup(make_nesting_matrix_defs());
+    let (_article_id, tags) = create_matrix_article(&setup).await;
+
+    // Every referenced tag — top-level through array>group, blocks>group,
+    // and blocks>has-many — must register exactly one incoming reference.
+    assert_all_counts(&setup, &tags, 1);
+}
+
+#[tokio::test]
+async fn hard_delete_decrements_relationships_at_every_nesting_depth() {
+    let setup = setup(make_nesting_matrix_defs());
+    let (article_id, tags) = create_matrix_article(&setup).await;
+    assert_all_counts(&setup, &tags, 1);
+
+    setup
+        .service
+        .delete(Request::new(content::DeleteRequest {
+            collection: "articles".to_string(),
+            id: article_id,
+            force_hard_delete: true,
+        }))
+        .await
+        .expect("hard delete article");
+
+    // Hard delete must release every nested reference back to zero.
+    assert_all_counts(&setup, &tags, 0);
 }
 
 // ── Regression: UpdateMany must adjust ref counts ────────────────────────

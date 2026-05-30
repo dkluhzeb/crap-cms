@@ -8,6 +8,7 @@ mod compute;
 mod delta;
 mod outgoing_ref;
 mod read;
+mod walk;
 
 #[cfg(test)]
 mod test_helpers;

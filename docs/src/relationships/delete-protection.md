@@ -17,7 +17,13 @@ Reference counting covers all relationship types:
 | Upload fields | Same as relationship | Yes |
 | Array sub-field refs | Column in array table | Yes |
 | Block sub-field refs | JSON in blocks table | Yes |
+| Has-many inside a block | JSON array in blocks table | Yes |
+| Relationships nested in a group (inside an array or block) | Recursed into nested JSON | Yes |
 | Global outgoing refs | Global table columns | Yes |
+
+Counting recurses through **every** nesting combination — a relationship
+inside a group inside an array, a group inside a block, a has-many list
+inside a block, and so on are all tracked at any depth.
 
 ## Scope
 

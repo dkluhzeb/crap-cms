@@ -1,56 +1,71 @@
 //! One-time backfill of `_ref_count` columns from existing relationship data.
 
-use anyhow::{Context as _, Result};
-use tracing::{debug, info, warn};
+use anyhow::Result;
+use tracing::{info, warn};
 
 use crate::{
     config::LocaleConfig,
-    core::{
-        FieldDefinition, FieldType, Registry,
-        field::{RelationshipConfig, flatten_array_sub_fields},
-    },
+    core::{FieldDefinition, Registry},
     db::{
         DbConnection, DbValue,
-        query::helpers::{global_table, join_table, locale_column},
+        query::{helpers::global_table, ref_count},
     },
 };
 
+/// Legacy "everything is backfilled" meta key.
 const META_KEY: &str = "ref_count_backfilled";
 
-/// Invariant context for a backfill run: shared connection + locale config.
-/// Built once at the top of `backfill_if_needed` and threaded through every
-/// helper so per-fn arg lists stay tight (≤ 4 args).
-struct BackfillCtx<'a> {
-    conn: &'a dyn DbConnection,
-    locale_config: &'a LocaleConfig,
-}
+/// Current backfill computation version. Stored as the meta *value* (not
+/// baked into the key, which stays stable). Bump this whenever the ref-count
+/// computation changes so existing databases recompute once on the next
+/// startup. v2 added recursion into relationships nested in groups/arrays/
+/// blocks and has-many relationships stored inside blocks.
+const BACKFILL_VERSION: &str = "2";
 
 /// Build the per-collection meta key for tracking backfill status.
 fn collection_meta_key(slug: &str) -> String {
     format!("ref_count_backfilled:{slug}")
 }
 
-/// Check if a specific collection/global has been backfilled.
-fn is_backfilled(conn: &dyn DbConnection, slug: &str) -> Result<bool> {
+/// Read a `_crap_meta` value by key.
+fn meta_value(conn: &dyn DbConnection, key: &str) -> Result<Option<String>> {
     let p1 = conn.placeholder(1);
     let row = conn.query_one(
         &format!("SELECT value FROM _crap_meta WHERE key = {p1}"),
-        &[DbValue::Text(collection_meta_key(slug))],
+        &[DbValue::Text(key.to_string())],
     )?;
-    Ok(row.is_some())
+    Ok(row.and_then(|r| r.text_at(0).map(str::to_string)))
 }
 
-/// Mark a collection/global as backfilled.
-fn mark_backfilled(conn: &dyn DbConnection, slug: &str) -> Result<()> {
+/// Upsert a `_crap_meta` key (DELETE + INSERT — backend-agnostic), so a
+/// stale version value from an earlier backfill is replaced cleanly.
+fn upsert_meta(conn: &dyn DbConnection, key: &str, value: &str) -> Result<()> {
+    let p1 = conn.placeholder(1);
+    conn.execute(
+        &format!("DELETE FROM _crap_meta WHERE key = {p1}"),
+        &[DbValue::Text(key.to_string())],
+    )?;
+
     let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
     conn.execute(
         &format!("INSERT INTO _crap_meta (key, value) VALUES ({p1}, {p2})"),
         &[
-            DbValue::Text(collection_meta_key(slug)),
-            DbValue::Text("true".to_string()),
+            DbValue::Text(key.to_string()),
+            DbValue::Text(value.to_string()),
         ],
     )?;
     Ok(())
+}
+
+/// A collection/global is up to date only when its stored value matches the
+/// current backfill version — a missing or stale value triggers a recompute.
+fn is_backfilled(conn: &dyn DbConnection, slug: &str) -> Result<bool> {
+    Ok(meta_value(conn, &collection_meta_key(slug))?.as_deref() == Some(BACKFILL_VERSION))
+}
+
+/// Mark a collection/global as backfilled at the current version.
+fn mark_backfilled(conn: &dyn DbConnection, slug: &str) -> Result<()> {
+    upsert_meta(conn, &collection_meta_key(slug), BACKFILL_VERSION)
 }
 
 /// Run the ref count backfill for any collections/globals not yet backfilled.
@@ -61,14 +76,9 @@ pub(crate) fn backfill_if_needed(
     registry: &Registry,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
-    // Check legacy flag — if present, all collections at that time were covered.
-    let p1 = conn.placeholder(1);
-    let has_legacy_flag = conn
-        .query_one(
-            &format!("SELECT value FROM _crap_meta WHERE key = {p1}"),
-            &[DbValue::Text(META_KEY.to_string())],
-        )?
-        .is_some();
+    // Legacy "all backfilled" flag — only honored when it carries the current
+    // version. An older value (or absence) means everything must recompute.
+    let has_legacy_flag = meta_value(conn, META_KEY)?.as_deref() == Some(BACKFILL_VERSION);
 
     // Collect which collections/globals need backfilling.
     let needs_backfill_collections: Vec<_> = registry
@@ -89,11 +99,6 @@ pub(crate) fn backfill_if_needed(
 
     info!("Backfilling _ref_count columns from existing relationship data...");
 
-    let ctx = BackfillCtx {
-        conn,
-        locale_config,
-    };
-
     // Phase 1: Reset ref counts to 0 for ALL collections (not just new ones),
     // because new collections may be referenced by existing ones.
     for slug in registry.collections.keys() {
@@ -107,15 +112,16 @@ pub(crate) fn backfill_if_needed(
         )?;
     }
 
-    // Phase 2: Walk ALL collections/globals to count outgoing refs.
-    // We must re-walk everything because existing collections may reference
-    // newly added ones.
+    // Phase 2: Recompute outgoing refs per document via the canonical
+    // ref-count walker, so every supported nesting depth is covered. We
+    // re-walk everything because existing collections may reference newly
+    // added ones.
     for (slug, def) in &registry.collections {
-        backfill_collection(&ctx, slug, &def.fields)?;
+        recompute_table(conn, slug, &def.fields, locale_config)?;
     }
 
     for (slug, def) in &registry.globals {
-        backfill_collection(&ctx, &global_table(slug), &def.fields)?;
+        recompute_table(conn, &global_table(slug), &def.fields, locale_config)?;
     }
 
     // Phase 3: Mark newly backfilled collections.
@@ -127,16 +133,10 @@ pub(crate) fn backfill_if_needed(
         mark_backfilled(conn, slug)?;
     }
 
-    // Set legacy flag if not present.
+    // Stamp the legacy flag at the current version so a fully up-to-date
+    // database short-circuits on the next startup.
     if !has_legacy_flag {
-        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-        conn.execute(
-            &format!("INSERT INTO _crap_meta (key, value) VALUES ({p1}, {p2})"),
-            &[
-                DbValue::Text(META_KEY.to_string()),
-                DbValue::Text("true".to_string()),
-            ],
-        )?;
+        upsert_meta(conn, META_KEY, BACKFILL_VERSION)?;
     }
 
     info!("Ref count backfill complete");
@@ -144,322 +144,33 @@ pub(crate) fn backfill_if_needed(
     Ok(())
 }
 
-/// Backfill ref counts for one collection/global table.
-fn backfill_collection(
-    ctx: &BackfillCtx<'_>,
-    table: &str,
-    fields: &[FieldDefinition],
-) -> Result<()> {
-    backfill_fields(ctx, table, fields, "")
-}
-
-use crate::db::query::helpers::prefixed_name as prefixed;
-
-fn backfill_fields(
-    ctx: &BackfillCtx<'_>,
-    table: &str,
-    fields: &[FieldDefinition],
-    prefix: &str,
-) -> Result<()> {
-    for field in fields {
-        match field.field_type {
-            FieldType::Group => {
-                backfill_fields(ctx, table, &field.fields, &prefixed(prefix, &field.name))?;
-            }
-            FieldType::Row | FieldType::Collapsible => {
-                backfill_fields(ctx, table, &field.fields, prefix)?;
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    backfill_fields(ctx, table, &tab.fields, prefix)?;
-                }
-            }
-
-            FieldType::Relationship | FieldType::Upload => {
-                let Some(rc) = &field.relationship else {
-                    continue;
-                };
-
-                let col = prefixed(prefix, &field.name);
-
-                if field.has_parent_column() {
-                    backfill_has_one(ctx, table, &col, field)?;
-                } else {
-                    let junction = join_table(table, &col);
-
-                    backfill_has_many(ctx, &junction, rc)?;
-                }
-            }
-
-            FieldType::Array => {
-                let array_table = join_table(table, &prefixed(prefix, &field.name));
-
-                backfill_array(ctx, &array_table, &field.fields)?;
-            }
-
-            FieldType::Blocks => {
-                let blocks_table = join_table(table, &prefixed(prefix, &field.name));
-
-                backfill_blocks(ctx, &blocks_table, &field.blocks)?;
-            }
-
-            _ => {}
-        }
-    }
-
-    Ok(())
-}
-
-/// Query grouped values from a column and increment ref counts on targets.
-fn backfill_column_refs(
-    ctx: &BackfillCtx<'_>,
-    table: &str,
-    col_name: &str,
-    rc: &RelationshipConfig,
-) -> Result<()> {
-    let sql = format!(
-        "SELECT \"{col_name}\", COUNT(*) FROM \"{table}\" WHERE \"{col_name}\" IS NOT NULL AND \"{col_name}\" != '' GROUP BY \"{col_name}\""
-    );
-
-    let rows = match ctx.conn.query_all(&sql, &[]) {
-        Ok(r) => r,
-        Err(e) => {
-            warn!("Backfill skipping {}.{}: {}", table, col_name, e);
-
-            return Ok(());
-        }
-    };
-
-    for row in &rows {
-        let value = match row.text_at(0) {
-            Some(s) if !s.is_empty() => s.to_string(),
-            _ => continue,
-        };
-        let Some(count) = row.i64_at(1) else { continue };
-
-        if rc.is_polymorphic() {
-            if let Some((target_col, target_id)) = value.split_once('/')
-                && !target_col.is_empty()
-                && !target_id.is_empty()
-            {
-                increment_ref_count(ctx.conn, target_col, target_id, count)?;
-            }
-        } else {
-            increment_ref_count(ctx.conn, &rc.collection, &value, count)?;
-        }
-    }
-
-    Ok(())
-}
-
-/// Backfill has-one: for each distinct non-null value in the column, increment target's ref count.
-fn backfill_has_one(
-    ctx: &BackfillCtx<'_>,
-    table: &str,
-    col: &str,
-    field: &FieldDefinition,
-) -> Result<()> {
-    let Some(rc) = &field.relationship else {
-        return Ok(());
-    };
-
-    let is_localized = field.localized && ctx.locale_config.is_enabled();
-    let columns: Vec<String> = if is_localized {
-        ctx.locale_config
-            .locales
-            .iter()
-            .map(|l| locale_column(col, l))
-            .collect::<Result<Vec<String>>>()?
-    } else {
-        vec![col.to_string()]
-    };
-
-    for col_name in &columns {
-        backfill_column_refs(ctx, table, col_name, rc)?;
-    }
-
-    Ok(())
-}
-
-/// Backfill has-many: count refs in junction table and increment targets.
-fn backfill_has_many(
-    ctx: &BackfillCtx<'_>,
-    junction_table: &str,
-    rc: &RelationshipConfig,
-) -> Result<()> {
-    if rc.is_polymorphic() {
-        backfill_polymorphic_junction(ctx, junction_table)?;
-    } else {
-        backfill_column_refs(ctx, junction_table, "related_id", rc)?;
-    }
-
-    Ok(())
-}
-
-/// Backfill polymorphic junction table refs (`related_collection` + `related_id` pairs).
-fn backfill_polymorphic_junction(ctx: &BackfillCtx<'_>, junction_table: &str) -> Result<()> {
-    let sql = format!(
-        "SELECT related_collection, related_id, COUNT(*) FROM \"{junction_table}\" GROUP BY related_collection, related_id"
-    );
-
-    let rows = match ctx.conn.query_all(&sql, &[]) {
-        Ok(r) => r,
-        Err(e) => {
-            warn!("Backfill skipping {}: {}", junction_table, e);
-
-            return Ok(());
-        }
-    };
-
-    for row in &rows {
-        let target_col = match row.text_at(0) {
-            Some(s) if !s.is_empty() => s.to_string(),
-            _ => continue,
-        };
-        let target_id = match row.text_at(1) {
-            Some(s) if !s.is_empty() => s.to_string(),
-            _ => continue,
-        };
-        let Some(count) = row.i64_at(2) else { continue };
-
-        increment_ref_count(ctx.conn, &target_col, &target_id, count)?;
-    }
-
-    Ok(())
-}
-
-/// Backfill array sub-field refs.
-fn backfill_array(
-    ctx: &BackfillCtx<'_>,
-    array_table: &str,
-    fields: &[FieldDefinition],
-) -> Result<()> {
-    let flat = flatten_array_sub_fields(fields);
-
-    for sub in &flat {
-        if !matches!(sub.field_type, FieldType::Relationship | FieldType::Upload) {
-            continue;
-        }
-
-        let rc = match &sub.relationship {
-            Some(rc) if !rc.has_many => rc,
-            _ => continue,
-        };
-
-        let sql = format!(
-            "SELECT \"{}\", COUNT(*) FROM \"{}\" WHERE \"{}\" IS NOT NULL AND \"{}\" != '' GROUP BY \"{}\"",
-            sub.name, array_table, sub.name, sub.name, sub.name
-        );
-        let rows = match ctx.conn.query_all(&sql, &[]) {
-            Ok(r) => r,
-            Err(e) => {
-                warn!("Backfill skipping {}.{}: {}", array_table, sub.name, e);
-                continue;
-            }
-        };
-
-        for row in &rows {
-            let Some(value) = row.text_at(0).filter(|s| !s.is_empty()) else {
-                continue;
-            };
-            let Some(count) = row.i64_at(1) else {
-                continue;
-            };
-
-            if rc.is_polymorphic() {
-                if let Some((col, id)) = value.split_once('/')
-                    && !col.is_empty()
-                    && !id.is_empty()
-                {
-                    increment_ref_count(ctx.conn, col, id, count)?;
-                }
-            } else {
-                increment_ref_count(ctx.conn, &rc.collection, value, count)?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Backfill blocks sub-field refs.
-fn backfill_blocks(
-    ctx: &BackfillCtx<'_>,
-    blocks_table: &str,
-    blocks: &[crate::core::BlockDefinition],
-) -> Result<()> {
-    for block in blocks {
-        let flat = flatten_array_sub_fields(&block.fields);
-
-        for sub in &flat {
-            if !matches!(sub.field_type, FieldType::Relationship | FieldType::Upload) {
-                continue;
-            }
-
-            let rc = match &sub.relationship {
-                Some(rc) if !rc.has_many => rc,
-                _ => continue,
-            };
-
-            let extract = ctx.conn.json_extract_expr("data", &sub.name);
-            let p1 = ctx.conn.placeholder(1);
-            let sql = format!(
-                "SELECT {extract}, COUNT(*) FROM \"{blocks_table}\" WHERE _block_type = {p1} AND {extract} IS NOT NULL AND {extract} != '' GROUP BY {extract}"
-            );
-            let rows = match ctx
-                .conn
-                .query_all(&sql, &[DbValue::Text(block.block_type.clone())])
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    debug!(
-                        "Backfill skipping {}.{}.{}: {}",
-                        blocks_table, block.block_type, sub.name, e
-                    );
-                    continue;
-                }
-            };
-
-            for row in &rows {
-                let Some(value) = row.text_at(0).filter(|s| !s.is_empty()) else {
-                    continue;
-                };
-                let Some(count) = row.i64_at(1) else {
-                    continue;
-                };
-
-                if rc.is_polymorphic() {
-                    if let Some((col, id)) = value.split_once('/')
-                        && !col.is_empty()
-                        && !id.is_empty()
-                    {
-                        increment_ref_count(ctx.conn, col, id, count)?;
-                    }
-                } else {
-                    increment_ref_count(ctx.conn, &rc.collection, value, count)?;
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Increment _`ref_count` on a target document by the given amount.
-fn increment_ref_count(
+/// Recompute outgoing refs for every row in a table by replaying the
+/// canonical `after_create` walk (a pure increment over the unified
+/// ref-count walker) for each document. Counts must already be reset to 0,
+/// so replaying every document yields correct absolute totals — and inherits
+/// full recursion into groups/arrays/blocks for free.
+fn recompute_table(
     conn: &dyn DbConnection,
-    collection: &str,
-    id: &str,
-    count: i64,
+    table: &str,
+    fields: &[FieldDefinition],
+    locale_config: &LocaleConfig,
 ) -> Result<()> {
-    let p1 = conn.placeholder(1);
-    let p2 = conn.placeholder(2);
-    let sql = format!("UPDATE \"{collection}\" SET _ref_count = _ref_count + {p2} WHERE id = {p1}");
-    conn.execute(
-        &sql,
-        &[DbValue::Text(id.to_string()), DbValue::Integer(count)],
-    )
-    .with_context(|| format!("Failed to increment _ref_count on {collection}/{id}"))?;
+    let rows = match conn.query_all(&format!("SELECT id FROM \"{table}\""), &[]) {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("Backfill skipping {table}: {e}");
+
+            return Ok(());
+        }
+    };
+
+    for row in &rows {
+        let Some(id) = row.text_at(0) else {
+            continue;
+        };
+
+        ref_count::after_create(conn, table, id, fields, locale_config)?;
+    }
 
     Ok(())
 }

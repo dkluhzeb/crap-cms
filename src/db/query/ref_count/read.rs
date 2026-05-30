@@ -1,14 +1,17 @@
 //! Read outgoing refs from existing rows in the database.
 
 use anyhow::Result;
+use serde_json::Value;
 use tracing::debug;
 
 use crate::config::LocaleConfig;
-use crate::core::{BlockDefinition, FieldDefinition, FieldType, field::flatten_array_sub_fields};
+use crate::core::{BlockDefinition, FieldDefinition, FieldType};
 use crate::db::query::helpers::{join_table, locale_column, prefixed_name};
+use crate::db::query::join::{find_array_rows, find_block_rows};
 use crate::db::{DbConnection, DbValue};
 
 use super::outgoing_ref::{OutgoingRef, push_ref};
+use super::walk::{walk_block_values, walk_nested_refs};
 
 /// Read all outgoing references from a single document.
 pub(super) fn read_outgoing_refs(
@@ -101,15 +104,15 @@ fn collect_refs(
             }
 
             FieldType::Array => {
-                let array_table = join_table(table, &prefixed_name(prefix, &field.name));
+                let field_name = prefixed_name(prefix, &field.name);
 
-                collect_array_refs(conn, &array_table, id, &field.fields, refs);
+                collect_array_refs(conn, table, &field_name, id, &field.fields, refs);
             }
 
             FieldType::Blocks => {
-                let blocks_table = join_table(table, &prefixed_name(prefix, &field.name));
+                let field_name = prefixed_name(prefix, &field.name);
 
-                collect_blocks_refs(conn, &blocks_table, id, &field.blocks, refs);
+                collect_blocks_refs(conn, table, &field_name, id, &field.blocks, refs);
             }
 
             _ => {}
@@ -209,133 +212,61 @@ fn collect_has_many_refs(
     }
 }
 
-/// Read outgoing refs from array sub-fields (has-one relationship columns in array rows).
+/// Read outgoing refs from an array field, recursing into nested composites.
 ///
-/// Query errors are swallowed for the same reason as `collect_has_many_refs`.
+/// Loads the array rows exactly as document hydration assembles them (each
+/// row a nested-composite JSON object, every locale included), then walks
+/// them with the shared recursive walker so relationships nested inside
+/// groups/arrays/blocks within a row are counted. Read errors are swallowed
+/// for the same reason as `collect_has_many_refs`.
 fn collect_array_refs(
     conn: &dyn DbConnection,
-    array_table: &str,
+    collection: &str,
+    field_name: &str,
     parent_id: &str,
     fields: &[FieldDefinition],
     refs: &mut Vec<OutgoingRef>,
 ) {
-    let flat = flatten_array_sub_fields(fields);
-
-    // Collect relationship columns we need to read
-    let rel_fields: Vec<(&FieldDefinition, bool, &str)> = flat
-        .iter()
-        .filter_map(|f| {
-            if !matches!(f.field_type, FieldType::Relationship | FieldType::Upload) {
-                return None;
-            }
-
-            let rc = f.relationship.as_ref()?;
-
-            if rc.has_many {
-                return None; // has-many inside array not supported
-            }
-
-            Some((*f, rc.is_polymorphic(), rc.collection.as_ref()))
-        })
-        .collect();
-
-    if rel_fields.is_empty() {
-        return;
-    }
-
-    let col_list = rel_fields
-        .iter()
-        .map(|(f, _, _)| format!("\"{}\"", f.name))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let p1 = conn.placeholder(1);
-    let sql = format!("SELECT {col_list} FROM \"{array_table}\" WHERE parent_id = {p1}");
-
-    let rows = match conn.query_all(&sql, &[DbValue::Text(parent_id.to_string())]) {
+    let rows = match find_array_rows(conn, collection, field_name, parent_id, fields, None) {
         Ok(r) => r,
         Err(e) => {
-            debug!("Ref count scan skipping {}: {}", array_table, e);
+            debug!("Ref count scan skipping array {collection}.{field_name}: {e}");
 
             return;
         }
     };
 
     for row in &rows {
-        for (i, (_, is_poly, default_col)) in rel_fields.iter().enumerate() {
-            if let Some(value) = row.text_at(i) {
-                push_ref(refs, value, *is_poly, default_col);
-            }
+        if let Value::Object(obj) = row {
+            walk_nested_refs(obj, fields, refs);
         }
     }
 }
 
-/// Read outgoing refs from blocks sub-fields (relationship values in JSON data).
+/// Read outgoing refs from a blocks field, recursing into nested composites.
 ///
-/// Query errors are swallowed for the same reason as `collect_has_many_refs`.
+/// Loads each block's reconstructed `data` (all locales) and walks it, so
+/// relationships nested inside groups/arrays within a block — and has-many
+/// relationships stored as JSON arrays in `data` — are counted. Read errors
+/// are swallowed for the same reason as `collect_has_many_refs`.
 fn collect_blocks_refs(
     conn: &dyn DbConnection,
-    blocks_table: &str,
+    collection: &str,
+    field_name: &str,
     parent_id: &str,
     blocks: &[BlockDefinition],
     refs: &mut Vec<OutgoingRef>,
 ) {
-    for block in blocks {
-        let flat = flatten_array_sub_fields(&block.fields);
+    let rows = match find_block_rows(conn, collection, field_name, parent_id, None) {
+        Ok(r) => r,
+        Err(e) => {
+            debug!("Ref count scan skipping blocks {collection}.{field_name}: {e}");
 
-        let rel_fields: Vec<(&FieldDefinition, bool, &str)> = flat
-            .iter()
-            .filter_map(|f| {
-                if !matches!(f.field_type, FieldType::Relationship | FieldType::Upload) {
-                    return None;
-                }
-                let rc = f.relationship.as_ref()?;
-                if rc.has_many {
-                    return None;
-                }
-                Some((*f, rc.is_polymorphic(), rc.collection.as_ref()))
-            })
-            .collect();
-
-        if rel_fields.is_empty() {
-            continue;
+            return;
         }
+    };
 
-        // Build SELECT with json_extract for each relationship field
-        let select_exprs: Vec<String> = rel_fields
-            .iter()
-            .map(|(f, _, _)| conn.json_extract_expr("data", &f.name))
-            .collect();
-
-        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-        let sql = format!(
-            "SELECT {} FROM \"{}\" WHERE parent_id = {p1} AND _block_type = {p2}",
-            select_exprs.join(", "),
-            blocks_table
-        );
-
-        let rows = match conn.query_all(
-            &sql,
-            &[
-                DbValue::Text(parent_id.to_string()),
-                DbValue::Text(block.block_type.clone()),
-            ],
-        ) {
-            Ok(r) => r,
-            Err(e) => {
-                debug!("Ref count scan skipping {}: {}", blocks_table, e);
-                continue;
-            }
-        };
-
-        for row in &rows {
-            for (i, (_, is_poly, default_col)) in rel_fields.iter().enumerate() {
-                if let Some(value) = row.text_at(i) {
-                    push_ref(refs, value, *is_poly, default_col);
-                }
-            }
-        }
-    }
+    walk_block_values(&rows, blocks, refs);
 }
 
 #[cfg(test)]

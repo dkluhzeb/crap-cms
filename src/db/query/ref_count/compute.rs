@@ -9,13 +9,12 @@ use std::collections::HashSet;
 use serde_json::Value;
 
 use crate::config::LocaleConfig;
-use crate::core::{
-    BlockDefinition, DocumentFields, FieldDefinition, FieldType, field::flatten_array_sub_fields,
-};
+use crate::core::{BlockDefinition, DocumentFields, FieldDefinition, FieldType};
 use crate::db::query::helpers::{locale_column, prefixed_name};
 use crate::db::query::join::{parse_id_list, parse_polymorphic_values};
 
 use super::outgoing_ref::{OutgoingRef, push_ref};
+use super::walk::{walk_block_values, walk_nested_refs};
 
 /// Walk the field tree and compute outgoing refs from write data.
 ///
@@ -115,74 +114,27 @@ pub(super) fn compute_refs_from_data(
     }
 }
 
-/// Extract refs from array row data (JSON objects with sub-field values).
+/// Extract refs from array row data, recursing into nested composites.
+///
+/// Each row is a nested-composite JSON object; the shared walker handles
+/// relationships at any depth (Group/Array/Blocks inside the row).
 fn compute_array_refs_from_data(
     rows: &[Value],
     fields: &[FieldDefinition],
     refs: &mut Vec<OutgoingRef>,
 ) {
-    let flat = flatten_array_sub_fields(fields);
-
-    let rel_fields: Vec<(&FieldDefinition, bool, &str)> = flat
-        .iter()
-        .filter_map(|f| {
-            if !matches!(f.field_type, FieldType::Relationship | FieldType::Upload) {
-                return None;
-            }
-            let rc = f.relationship.as_ref()?;
-            if rc.has_many {
-                return None;
-            }
-            Some((*f, rc.is_polymorphic(), rc.collection.as_ref()))
-        })
-        .collect();
-
-    if rel_fields.is_empty() {
-        return;
-    }
-
     for row in rows {
-        for (f, is_poly, default_col) in &rel_fields {
-            if let Some(value) = row.get(&f.name).and_then(|v| v.as_str()) {
-                push_ref(refs, value, *is_poly, default_col);
-            }
+        if let Value::Object(obj) = row {
+            walk_nested_refs(obj, fields, refs);
         }
     }
 }
 
-/// Extract refs from blocks row data (JSON objects with _`block_type` and data fields).
+/// Extract refs from blocks row data, recursing into nested composites.
 fn compute_blocks_refs_from_data(
     rows: &[Value],
     blocks: &[BlockDefinition],
     refs: &mut Vec<OutgoingRef>,
 ) {
-    for row in rows {
-        let Some(block_type) = row.get("_block_type").and_then(|v| v.as_str()) else {
-            continue;
-        };
-
-        let Some(block_def) = blocks.iter().find(|b| b.block_type == block_type) else {
-            continue;
-        };
-
-        let flat = flatten_array_sub_fields(&block_def.fields);
-
-        for f in &flat {
-            if !matches!(f.field_type, FieldType::Relationship | FieldType::Upload) {
-                continue;
-            }
-
-            let Some(rc) = &f.relationship else {
-                continue;
-            };
-
-            if rc.has_many {
-                continue;
-            }
-
-            if let Some(value) = row.get(&f.name).and_then(|v| v.as_str()) {
-                push_ref(refs, value, rc.is_polymorphic(), &rc.collection);
-            }
-        }
-    }
+    walk_block_values(rows, blocks, refs);
 }

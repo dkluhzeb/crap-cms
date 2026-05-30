@@ -13,7 +13,7 @@
 use anyhow::Result;
 
 use crate::config::LocaleConfig;
-use crate::core::{DocumentFields, FieldDefinition, FieldType, field::flatten_array_sub_fields};
+use crate::core::{DocumentFields, FieldDefinition, FieldType};
 use crate::db::query::helpers::prefixed_name;
 use crate::db::{DbConnection, DbValue};
 
@@ -116,34 +116,24 @@ pub fn data_touches_refs(fields: &[FieldDefinition], data: &DocumentFields, pref
             FieldType::Array => {
                 let col = prefixed_name(prefix, &field.name);
 
-                if data.contains_key(&col) {
-                    // Flatten through Row/Collapsible/Tabs wrappers to find
-                    // nested relationship sub-fields (mirrors compute_array_refs_from_data).
-                    let flat = flatten_array_sub_fields(&field.fields);
-                    let has_ref_sub = flat.iter().any(|f| {
-                        matches!(f.field_type, FieldType::Relationship | FieldType::Upload)
-                    });
-
-                    if has_ref_sub {
-                        return true;
-                    }
+                // Recurse the sub-field tree (groups/arrays/blocks at any
+                // depth) so a relationship nested inside a group within the
+                // array still arms ref-count recomputation.
+                if data.contains_key(&col) && fields_contain_relationship(&field.fields) {
+                    return true;
                 }
             }
 
             FieldType::Blocks => {
                 let col = prefixed_name(prefix, &field.name);
 
-                if data.contains_key(&col) {
-                    let has_ref_sub = field.blocks.iter().any(|b| {
-                        let flat = flatten_array_sub_fields(&b.fields);
-                        flat.iter().any(|f| {
-                            matches!(f.field_type, FieldType::Relationship | FieldType::Upload)
-                        })
-                    });
-
-                    if has_ref_sub {
-                        return true;
-                    }
+                if data.contains_key(&col)
+                    && field
+                        .blocks
+                        .iter()
+                        .any(|b| fields_contain_relationship(&b.fields))
+                {
+                    return true;
                 }
             }
 
@@ -152,6 +142,26 @@ pub fn data_touches_refs(fields: &[FieldDefinition], data: &DocumentFields, pref
     }
 
     false
+}
+
+/// Recursively report whether any field in the subtree is a relationship —
+/// descending into every container (Group/Array/Blocks/Row/Collapsible/Tabs).
+fn fields_contain_relationship(fields: &[FieldDefinition]) -> bool {
+    fields.iter().any(|f| match f.field_type {
+        FieldType::Relationship | FieldType::Upload => true,
+        FieldType::Group | FieldType::Array | FieldType::Row | FieldType::Collapsible => {
+            fields_contain_relationship(&f.fields)
+        }
+        FieldType::Blocks => f
+            .blocks
+            .iter()
+            .any(|b| fields_contain_relationship(&b.fields)),
+        FieldType::Tabs => f
+            .tabs
+            .iter()
+            .any(|t| fields_contain_relationship(&t.fields)),
+        _ => false,
+    })
 }
 
 /// Historically this function pre-locked every outgoing ref target with
