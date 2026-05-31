@@ -244,8 +244,9 @@ mod tests {
     use super::*;
     use crate::core::collection::*;
     use crate::core::{FieldDefinition, FieldTab, FieldType};
+    use crate::db::migrate::collection::sync_collection_table;
     use crate::db::migrate::collection::test_helpers::*;
-    use crate::db::migrate::helpers::get_table_columns;
+    use crate::db::migrate::helpers::{get_table_column_types, get_table_columns};
 
     /// Create a collection table and return its column names.
     fn create_and_columns(
@@ -259,6 +260,38 @@ mod tests {
         create_collection_table(&conn, slug, def, locale).unwrap();
 
         get_table_columns(&conn, slug).unwrap()
+    }
+
+    #[test]
+    fn integer_flag_keeps_number_column_real() {
+        // `integer = true` is a validation/UI constraint only — it must not
+        // change the column type, so no migration is implied. A number field
+        // stays REAL whether or not the flag is set, and re-syncing is a
+        // no-op (no spurious ALTER / drift on startup).
+        let def = simple_collection(
+            "metrics",
+            vec![
+                FieldDefinition::builder("count", FieldType::Number)
+                    .integer(true)
+                    .build(),
+            ],
+        );
+
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        create_collection_table(&conn, "metrics", &def, &no_locale()).unwrap();
+
+        let types = get_table_column_types(&conn, "metrics").unwrap();
+        assert_eq!(
+            types.get("count").map(String::as_str),
+            Some("REAL"),
+            "integer-flagged number must stay a REAL column, got {types:?}"
+        );
+
+        // Re-syncing the same definition introduces no schema change.
+        sync_collection_table(&conn, "metrics", &def, &no_locale()).unwrap();
+        let types_after = get_table_column_types(&conn, "metrics").unwrap();
+        assert_eq!(types, types_after, "re-sync should not alter the schema");
     }
 
     #[test]
