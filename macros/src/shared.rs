@@ -333,3 +333,58 @@ fn to_camel_case(s: &str) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn to_snake_case_inserts_underscores_before_inner_uppercase() {
+        assert_eq!(to_snake_case("FooBar"), "foo_bar");
+        assert_eq!(to_snake_case("foo"), "foo");
+        assert_eq!(to_snake_case("ABC"), "a_b_c");
+        // Leading uppercase is lowercased but not prefixed with `_`.
+        assert_eq!(to_snake_case("Foo"), "foo");
+        assert_eq!(to_snake_case(""), "");
+    }
+
+    #[test]
+    fn to_camel_case_handles_pascal_and_snake_inputs() {
+        assert_eq!(to_camel_case("FooBar"), "fooBar");
+        assert_eq!(to_camel_case("foo_bar"), "fooBar");
+        assert_eq!(to_camel_case("foo_bar_baz"), "fooBarBaz");
+        assert_eq!(to_camel_case("foo"), "foo");
+        assert_eq!(to_camel_case(""), "");
+    }
+
+    #[test]
+    fn apply_rename_all_dispatches_each_strategy() {
+        assert_eq!(apply_rename_all("FooBar", Some("snake_case")), "foo_bar");
+        assert_eq!(apply_rename_all("FooBar", Some("lowercase")), "foobar");
+        assert_eq!(apply_rename_all("foo_bar", Some("camelCase")), "fooBar");
+        assert_eq!(apply_rename_all("FooBar", Some("kebab-case")), "foo-bar");
+        // Unknown strategy and no strategy both pass the name through.
+        assert_eq!(apply_rename_all("FooBar", Some("???")), "FooBar");
+        assert_eq!(apply_rename_all("FooBar", None), "FooBar");
+    }
+
+    #[test]
+    fn push_doc_line_blank_vs_text() {
+        let mut s = String::new();
+        push_doc_line(&mut s, "");
+        push_doc_line(&mut s, "hello");
+        assert_eq!(s, "---\n--- hello\n");
+    }
+
+    #[test]
+    fn build_class_header_composes_docs_class_and_extends() {
+        assert_eq!(
+            build_class_header("crap.Foo", None, &["Doc line".to_string()]),
+            "--- Doc line\n--- @class crap.Foo\n"
+        );
+        assert_eq!(
+            build_class_header("crap.Foo", Some("crap.Base"), &[]),
+            "--- @class crap.Foo : crap.Base\n"
+        );
+    }
+}

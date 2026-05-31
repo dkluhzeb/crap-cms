@@ -9,9 +9,50 @@ use crate::{
     cli::{self, Table},
     commands::{JobsAction, helpers::init_stack},
     config::{CrapConfig, JobsConfig, parse_duration_string},
-    core::{Registry, job::JobStatus},
+    core::{
+        Registry,
+        job::{JobRun, JobStatus},
+    },
     db::{DbPool, pool, query},
 };
+
+/// Summarize a batch of recent job runs as a compact `Nok/Mfail/Ppend/Qrun`
+/// string, or `"none"` when the batch is empty. Only non-zero buckets appear,
+/// always in completed→failed→pending→running order.
+fn summarize_recent_runs(runs: &[JobRun]) -> String {
+    if runs.is_empty() {
+        return "none".to_string();
+    }
+
+    let count = |status: JobStatus| runs.iter().filter(|r| r.status == status).count();
+
+    let buckets = [
+        (count(JobStatus::Completed), "ok"),
+        (count(JobStatus::Failed), "fail"),
+        (count(JobStatus::Pending), "pend"),
+        (count(JobStatus::Running), "run"),
+    ];
+
+    buckets
+        .iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, label)| format!("{n}{label}"))
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Truncate `s` to at most `max_chars` characters, appending `…` when the
+/// string was actually shortened. Counts characters (not bytes), so it never
+/// splits a multi-byte char.
+fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
+    let truncated: String = s.chars().take(max_chars).collect();
+
+    if truncated.len() < s.len() {
+        format!("{truncated}…")
+    } else {
+        truncated
+    }
+}
 
 /// List all defined jobs with recent run status summary.
 fn run_list(registry: &Registry, pool: &DbPool) -> Result<()> {
@@ -32,46 +73,7 @@ fn run_list(registry: &Registry, pool: &DbPool) -> Result<()> {
         let def = &registry.jobs[slug];
         let schedule = def.schedule.as_deref().unwrap_or("-").to_string();
         let recent = query::jobs::list_job_runs(&conn, Some(slug), None, 5, 0).unwrap_or_default();
-
-        let status_summary = if recent.is_empty() {
-            "none".to_string()
-        } else {
-            let completed = recent
-                .iter()
-                .filter(|r| r.status == JobStatus::Completed)
-                .count();
-            let failed = recent
-                .iter()
-                .filter(|r| r.status == JobStatus::Failed)
-                .count();
-            let pending = recent
-                .iter()
-                .filter(|r| r.status == JobStatus::Pending)
-                .count();
-            let running = recent
-                .iter()
-                .filter(|r| r.status == JobStatus::Running)
-                .count();
-            let mut parts = Vec::new();
-
-            if completed > 0 {
-                parts.push(format!("{completed}ok"));
-            }
-
-            if failed > 0 {
-                parts.push(format!("{failed}fail"));
-            }
-
-            if pending > 0 {
-                parts.push(format!("{pending}pend"));
-            }
-
-            if running > 0 {
-                parts.push(format!("{running}run"));
-            }
-
-            parts.join("/")
-        };
+        let status_summary = summarize_recent_runs(&recent);
 
         table.row(vec![slug, &schedule, &def.queue, &status_summary]);
     }
@@ -130,14 +132,7 @@ fn run_status(pool: &DbPool, id: Option<&str>, slug: Option<&str>, limit: i64) -
             let error = run
                 .error
                 .as_deref()
-                .map(|e| {
-                    let truncated: String = e.chars().take(50).collect();
-                    if truncated.len() < e.len() {
-                        format!("{truncated}…")
-                    } else {
-                        truncated
-                    }
-                })
+                .map(|e| truncate_with_ellipsis(e, 50))
                 .unwrap_or_default();
 
             table.row(vec![
@@ -348,5 +343,62 @@ pub fn run(config_dir: &Path, action: JobsAction) -> Result<()> {
             let (cfg, registry, pool) = init_stack(config_dir)?;
             run_healthcheck(&cfg, &registry, &pool)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(status: JobStatus) -> JobRun {
+        JobRun::builder("r", "cleanup").status(status).build()
+    }
+
+    #[test]
+    fn empty_batch_summarizes_as_none() {
+        assert_eq!(summarize_recent_runs(&[]), "none");
+    }
+
+    #[test]
+    fn buckets_appear_in_fixed_order_with_counts() {
+        let runs = [
+            run(JobStatus::Completed),
+            run(JobStatus::Completed),
+            run(JobStatus::Failed),
+            run(JobStatus::Running),
+        ];
+        // completed→failed→pending→running; pending bucket is omitted (zero).
+        assert_eq!(summarize_recent_runs(&runs), "2ok/1fail/1run");
+    }
+
+    #[test]
+    fn single_status_has_no_separator() {
+        assert_eq!(summarize_recent_runs(&[run(JobStatus::Pending)]), "1pend");
+    }
+
+    #[test]
+    fn truncate_leaves_short_strings_untouched() {
+        assert_eq!(truncate_with_ellipsis("boom", 50), "boom");
+        assert_eq!(truncate_with_ellipsis("", 50), "");
+    }
+
+    #[test]
+    fn truncate_shortens_and_appends_ellipsis() {
+        let long = "x".repeat(60);
+        let out = truncate_with_ellipsis(&long, 50);
+        assert_eq!(out.chars().filter(|&c| c == 'x').count(), 50);
+        assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn truncate_at_exact_length_adds_no_ellipsis() {
+        let s = "x".repeat(50);
+        assert_eq!(truncate_with_ellipsis(&s, 50), s);
+    }
+
+    #[test]
+    fn truncate_counts_characters_not_bytes() {
+        // 4 multi-byte chars, limit 2 → keep 2 chars + ellipsis (never splits).
+        assert_eq!(truncate_with_ellipsis("héllo", 2), "hé…");
     }
 }

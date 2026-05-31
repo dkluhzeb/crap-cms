@@ -333,3 +333,63 @@ pub(super) fn load_field_infos_from_registry(
             .collect(),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::core::{
+        CollectionDefinition,
+        field::{FieldDefinition, LocalizedString, SelectOption},
+    };
+
+    use super::*;
+
+    fn registry_with_posts() -> Arc<Registry> {
+        let select = FieldDefinition::builder("status", FieldType::Select)
+            .options(vec![
+                SelectOption::new(LocalizedString::Plain("Draft".into()), "draft"),
+                SelectOption::new(LocalizedString::Plain("Published".into()), "published"),
+            ])
+            .build();
+
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text).build(),
+            select,
+            // Container fields are excluded from condition-field info.
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![FieldDefinition::builder("x", FieldType::Text).build()])
+                .build(),
+        ];
+
+        let mut reg = Registry::new();
+        reg.register_collection(def);
+        Arc::new(reg)
+    }
+
+    #[test]
+    fn none_registry_yields_none() {
+        assert!(load_field_infos_from_registry(None, "posts").is_none());
+    }
+
+    #[test]
+    fn unknown_collection_yields_none() {
+        let reg = registry_with_posts();
+        assert!(load_field_infos_from_registry(Some(&reg), "missing").is_none());
+    }
+
+    #[test]
+    fn collects_leaf_fields_excludes_containers_and_lowercases_type() {
+        let reg = registry_with_posts();
+        let infos = load_field_infos_from_registry(Some(&reg), "posts").unwrap();
+
+        // "meta" (Group) is excluded — only the two leaf fields remain.
+        let names: Vec<&str> = infos.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names, vec!["title", "status"]);
+
+        assert_eq!(infos[0].field_type, "text");
+        assert!(infos[0].select_options.is_empty());
+
+        assert_eq!(infos[1].field_type, "select");
+        assert_eq!(infos[1].select_options, vec!["draft", "published"]);
+    }
+}

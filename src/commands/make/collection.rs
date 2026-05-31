@@ -7,6 +7,7 @@ use std::path::Path;
 use crate::{
     cli::crap_theme,
     commands::MakeAction,
+    db::query::validate_slug,
     scaffold::{self, CollectionOptions},
 };
 
@@ -73,24 +74,9 @@ fn resolve_slug(slug: Option<String>, interactive: bool) -> Result<String> {
         Some(s) => Ok(s),
         None if interactive => Input::with_theme(&crap_theme())
             .with_prompt("Collection slug")
-            .validate_with(|input: &String| -> Result<(), String> {
-                if input.is_empty() {
-                    return Err("Slug cannot be empty".into());
-                }
-
-                if !input
-                    .chars()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-                {
-                    return Err("Use lowercase letters, digits, and underscores only".into());
-                }
-
-                if input.starts_with('_') {
-                    return Err("Slug cannot start with underscore".into());
-                }
-
-                Ok(())
-            })
+            // Delegate to the canonical slug rule (the same check config
+            // parsing applies) so the interactive prompt can't drift from it.
+            .validate_with(|input: &String| validate_slug(input).map_err(|e| e.to_string()))
             .interact_text()
             .context("Failed to read collection slug"),
         None => {
