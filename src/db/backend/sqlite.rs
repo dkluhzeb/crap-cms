@@ -766,6 +766,50 @@ mod tests {
     }
 
     #[test]
+    fn greatest_expr_uses_sqlite_max() {
+        let (_dir, conn) = temp_conn();
+        assert_eq!(conn.greatest_expr("a", "b"), "MAX(a, b)");
+    }
+
+    #[test]
+    fn column_type_maps_number_checkbox_else_text() {
+        let (_dir, conn) = temp_conn();
+        assert_eq!(conn.column_type_for(&FieldType::Number), "REAL");
+        assert_eq!(conn.column_type_for(&FieldType::Checkbox), "INTEGER");
+        assert_eq!(conn.column_type_for(&FieldType::Text), "TEXT");
+    }
+
+    #[test]
+    fn json_extract_and_each_use_sqlite_json_functions() {
+        let (_dir, conn) = temp_conn();
+        assert_eq!(
+            conn.json_extract_expr("data", "title"),
+            "json_extract(data, '$.title')"
+        );
+        assert_eq!(conn.json_each_source("col", "x"), "json_each(col) AS x");
+    }
+
+    #[test]
+    fn insert_ignore_uses_insert_or_ignore() {
+        let (_dir, conn) = temp_conn();
+        assert_eq!(
+            conn.build_insert_ignore("t", "a, b", "?1, ?2"),
+            "INSERT OR IGNORE INTO \"t\" (a, b) VALUES (?1, ?2)"
+        );
+    }
+
+    #[test]
+    fn upsert_uses_insert_or_replace_with_all_columns() {
+        // SQLite's REPLACE rewrites the whole row, so every column is listed
+        // and the key column is not special-cased (unlike Postgres' upsert).
+        let (_dir, conn) = temp_conn();
+        assert_eq!(
+            conn.build_upsert("t", &["id", "name"], "?1, ?2", "id"),
+            "INSERT OR REPLACE INTO \"t\" (\"id\", \"name\") VALUES (?1, ?2)"
+        );
+    }
+
+    #[test]
     fn null_and_blob_values() {
         let (_dir, conn) = temp_conn();
         conn.execute_batch("CREATE TABLE t (id TEXT, data BLOB, empty TEXT)")

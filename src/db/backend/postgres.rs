@@ -33,15 +33,15 @@ use crate::{
 macro_rules! pg_shared_methods {
     () => {
         fn placeholder(&self, n: usize) -> String {
-            format!("${n}")
+            pg_placeholder(n)
         }
 
         fn now_expr(&self) -> &'static str {
-            "to_char(NOW(), 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')"
+            pg_now_expr()
         }
 
         fn greatest_expr(&self, a: &str, b: &str) -> String {
-            format!("GREATEST({a}, {b})")
+            pg_greatest_expr(a, b)
         }
 
         fn kind(&self) -> &'static str {
@@ -110,42 +110,23 @@ macro_rules! pg_shared_methods {
         }
 
         fn column_type_for(&self, ft: &FieldType) -> &'static str {
-            match ft {
-                FieldType::Number => "DOUBLE PRECISION",
-                FieldType::Checkbox => "BIGINT",
-                _ => "TEXT",
-            }
+            pg_column_type_for(ft)
         }
 
         fn date_offset_expr(&self, seconds: i64, param_pos: usize) -> (String, DbValue) {
-            // Build the offset expression using make_interval() which takes
-            // an integer (seconds), avoiding the TEXT→interval cast issue.
-            // We pass seconds as an integer param, which tokio-postgres handles.
-            //
-            // Callers pass token/session expiries (hours/days as seconds, far
-            // below `2^53`), so the i64→f64 precision-loss lint doesn't bite in
-            // practice. Allow at the call site rather than wrap in `f64::from(
-            // i32::try_from(...))` which would silently saturate a future
-            // larger-interval caller.
-            #[allow(clippy::cast_precision_loss)]
-            let secs_real = seconds as f64;
-            let sql = format!(
-                "to_char(NOW() + make_interval(secs => ${param_pos}), \
-                 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')"
-            );
-            (sql, DbValue::Real(secs_real))
+            pg_date_offset_expr(seconds, param_pos)
         }
 
         fn json_extract_expr(&self, column: &str, field: &str) -> String {
-            format!("{column}::jsonb->>'{field}'")
+            pg_json_extract_expr(column, field)
         }
 
         fn json_each_source(&self, source: &str, alias: &str) -> String {
-            format!("jsonb_array_elements_text({source}) AS {alias}")
+            pg_json_each_source(source, alias)
         }
 
         fn build_insert_ignore(&self, table: &str, columns: &str, values: &str) -> String {
-            format!("INSERT INTO \"{table}\" ({columns}) VALUES ({values}) ON CONFLICT DO NOTHING")
+            pg_build_insert_ignore(table, columns, values)
         }
 
         fn build_upsert(
@@ -155,21 +136,7 @@ macro_rules! pg_shared_methods {
             values: &str,
             key_col: &str,
         ) -> String {
-            let cols = columns
-                .iter()
-                .map(|c| format!("\"{}\"", c))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let updates = columns
-                .iter()
-                .filter(|c| **c != key_col)
-                .map(|c| format!("\"{}\" = EXCLUDED.\"{}\"", c, c))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!(
-                "INSERT INTO \"{table}\" ({cols}) VALUES ({values}) \
-                 ON CONFLICT (\"{key_col}\") DO UPDATE SET {updates}"
-            )
+            pg_build_upsert(table, columns, values, key_col)
         }
 
         fn supports_fts(&self) -> bool {
@@ -208,9 +175,89 @@ macro_rules! pg_shared_methods {
         }
 
         fn normalize_timestamp(&self, ts: &str) -> String {
-            ts.to_string()
+            pg_normalize_timestamp(ts)
         }
     };
+}
+
+// ── Pure SQL builders ────────────────────────────────────────────────────
+//
+// Extracted from `pg_shared_methods!` so they are unit-testable without a
+// live connection (the macro stamps the trait methods into every connection
+// /transaction impl, where they would otherwise only run against a real PG).
+// Mirrors the `sqlite_*` free-function layout in `sqlite.rs`.
+
+fn pg_placeholder(n: usize) -> String {
+    format!("${n}")
+}
+
+fn pg_now_expr() -> &'static str {
+    "to_char(NOW(), 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')"
+}
+
+fn pg_greatest_expr(a: &str, b: &str) -> String {
+    format!("GREATEST({a}, {b})")
+}
+
+fn pg_column_type_for(ft: &FieldType) -> &'static str {
+    match ft {
+        FieldType::Number => "DOUBLE PRECISION",
+        FieldType::Checkbox => "BIGINT",
+        _ => "TEXT",
+    }
+}
+
+/// Build an offset-timestamp expression `now - seconds`, matching the
+/// backend-agnostic contract (positive `seconds` → a timestamp in the past,
+/// negative → future). `SQLite`'s `sqlite_date_offset_expr` computes the same
+/// `now - seconds`; this must stay in lockstep with it.
+///
+/// `make_interval(secs => $n)` takes a numeric seconds argument, which
+/// `tokio-postgres` binds from a `DbValue::Real`.
+fn pg_date_offset_expr(seconds: i64, param_pos: usize) -> (String, DbValue) {
+    // Callers pass token/session/retention windows (hours/days as seconds,
+    // far below 2^53), so the i64→f64 conversion is lossless in practice.
+    #[allow(clippy::cast_precision_loss)]
+    let secs_real = seconds as f64;
+    let sql = format!(
+        "to_char(NOW() - make_interval(secs => ${param_pos}), \
+         'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')"
+    );
+    (sql, DbValue::Real(secs_real))
+}
+
+fn pg_json_extract_expr(column: &str, field: &str) -> String {
+    format!("{column}::jsonb->>'{field}'")
+}
+
+fn pg_json_each_source(source: &str, alias: &str) -> String {
+    format!("jsonb_array_elements_text({source}) AS {alias}")
+}
+
+fn pg_build_insert_ignore(table: &str, columns: &str, values: &str) -> String {
+    format!("INSERT INTO \"{table}\" ({columns}) VALUES ({values}) ON CONFLICT DO NOTHING")
+}
+
+fn pg_build_upsert(table: &str, columns: &[&str], values: &str, key_col: &str) -> String {
+    let cols = columns
+        .iter()
+        .map(|c| format!("\"{c}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let updates = columns
+        .iter()
+        .filter(|c| **c != key_col)
+        .map(|c| format!("\"{c}\" = EXCLUDED.\"{c}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "INSERT INTO \"{table}\" ({cols}) VALUES ({values}) \
+         ON CONFLICT (\"{key_col}\") DO UPDATE SET {updates}"
+    )
+}
+
+fn pg_normalize_timestamp(ts: &str) -> String {
+    ts.to_string()
 }
 
 // ── Statement-cached pool ────────────────────────────────────────────────
@@ -570,5 +617,102 @@ fn pg_column_to_dbvalue(row: &tokio_postgres::Row, idx: usize, ty: &Type) -> DbV
             Ok(Some(v)) => DbValue::Text(v),
             _ => DbValue::Null,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn placeholder_uses_dollar_n() {
+        assert_eq!(pg_placeholder(1), "$1");
+        assert_eq!(pg_placeholder(42), "$42");
+    }
+
+    #[test]
+    fn now_expr_formats_iso_utc() {
+        // Mirrors sqlite's now_expr test; pins the ISO-8601 `…Z` shape so the
+        // two backends stay format-compatible.
+        assert_eq!(
+            pg_now_expr(),
+            "to_char(NOW(), 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')"
+        );
+    }
+
+    #[test]
+    fn greatest_expr_wraps_in_greatest() {
+        assert_eq!(pg_greatest_expr("a", "b"), "GREATEST(a, b)");
+    }
+
+    #[test]
+    fn column_type_maps_number_checkbox_else_text() {
+        assert_eq!(pg_column_type_for(&FieldType::Number), "DOUBLE PRECISION");
+        assert_eq!(pg_column_type_for(&FieldType::Checkbox), "BIGINT");
+        assert_eq!(pg_column_type_for(&FieldType::Text), "TEXT");
+    }
+
+    /// Regression: the offset must SUBTRACT (`now - seconds`), matching
+    /// `SQLite` and every caller (retention/purge/since use positive = past). A `+`
+    /// here silently made "older than" queries match future rows → mass
+    /// deletion, and inverted retry backoff.
+    #[test]
+    fn date_offset_expr_subtracts_the_interval() {
+        let (sql, param) = pg_date_offset_expr(30, 1);
+        assert!(
+            sql.contains("NOW() - make_interval(secs => $1)"),
+            "offset must be now - seconds, got: {sql}"
+        );
+        assert!(
+            !sql.contains('+'),
+            "offset must not add the interval: {sql}"
+        );
+        assert_eq!(param, DbValue::Real(30.0));
+    }
+
+    #[test]
+    fn date_offset_expr_negative_input_is_future_via_same_subtraction() {
+        // now - (-delay) = now + delay (future). Same SQL, negative param.
+        let (sql, param) = pg_date_offset_expr(-30, 9);
+        assert!(sql.contains("NOW() - make_interval(secs => $9)"));
+        assert_eq!(param, DbValue::Real(-30.0));
+    }
+
+    #[test]
+    fn json_extract_and_each_use_jsonb() {
+        assert_eq!(
+            pg_json_extract_expr("data", "title"),
+            "data::jsonb->>'title'"
+        );
+        assert_eq!(
+            pg_json_each_source("col", "x"),
+            "jsonb_array_elements_text(col) AS x"
+        );
+    }
+
+    #[test]
+    fn insert_ignore_uses_on_conflict_do_nothing() {
+        assert_eq!(
+            pg_build_insert_ignore("t", "a, b", "$1, $2"),
+            "INSERT INTO \"t\" (a, b) VALUES ($1, $2) ON CONFLICT DO NOTHING"
+        );
+    }
+
+    #[test]
+    fn upsert_excludes_key_column_from_update_set() {
+        // `id` is the conflict key and must not appear in the DO UPDATE SET.
+        assert_eq!(
+            pg_build_upsert("t", &["id", "name"], "$1, $2", "id"),
+            "INSERT INTO \"t\" (\"id\", \"name\") VALUES ($1, $2) \
+             ON CONFLICT (\"id\") DO UPDATE SET \"name\" = EXCLUDED.\"name\""
+        );
+    }
+
+    #[test]
+    fn normalize_timestamp_is_passthrough() {
+        assert_eq!(
+            pg_normalize_timestamp("2026-01-01T00:00:00.000Z"),
+            "2026-01-01T00:00:00.000Z"
+        );
     }
 }

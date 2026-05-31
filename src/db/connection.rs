@@ -137,11 +137,14 @@ pub trait DbConnection {
 
     // ── DML helpers ──────────────────────────────────────────────────
 
-    /// SQL expression for `now() - N seconds` and the parameter value to bind.
-    /// Backend controls both SQL syntax and parameter format.
+    /// SQL expression for `now() - seconds` and the parameter value to bind.
+    /// A positive `seconds` yields a timestamp in the **past**; a negative
+    /// `seconds` yields one in the **future**. Both backends must agree on
+    /// this `now - seconds` contract. Backend controls SQL syntax and param
+    /// format.
     ///
-    /// `SQLite`: `("datetime('now', ?N)", Text("-30 seconds"))`
-    /// Postgres: `("NOW() + $N::interval", Text("-30 seconds"))`
+    /// `SQLite`: `("datetime('now', ?N)", Text("-30 seconds"))` for `seconds = 30`.
+    /// Postgres: `("to_char(NOW() - make_interval(secs => $N), …)", Real(30.0))`.
     fn date_offset_expr(&self, seconds: i64, param_pos: usize) -> (String, DbValue);
 
     // ── JSON functions ───────────────────────────────────────────────

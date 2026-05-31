@@ -290,11 +290,12 @@ pub fn fail_job(
     if should_retry {
         let delay = backoff_seconds(attempt);
 
-        // Use the date_offset_expr SQL template but with a positive offset (future time).
-        // date_offset_expr returns e.g. ("datetime('now', ?3)", _) — we override the
-        // param to "+N seconds" instead of the default "-N seconds".
-        let (offset_sql, _) = conn.date_offset_expr(delay, 3);
-        let offset_param = DbValue::Text(format!("+{delay} seconds"));
+        // retry_after = now + delay (a future time). A negative offset yields
+        // a future timestamp under `date_offset_expr`'s `now - seconds`
+        // contract; use its returned param so this works on every backend
+        // (the previous hardcoded "+N seconds" text param was SQLite-only and
+        // is a type error against Postgres `make_interval`).
+        let (offset_sql, offset_param) = conn.date_offset_expr(-delay, 3);
 
         conn.execute(
             &format!(
