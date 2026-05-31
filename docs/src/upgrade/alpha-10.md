@@ -186,6 +186,29 @@ Wire-contract changes — regenerate your gRPC stubs and adjust:
 - **MCP `delete` no longer crashes on localized upload collections.**
   The MCP delete tool now passes the configured locale to the service
   layer, matching gRPC and admin.
+- **Reference counting now recurses into nested relationships.** A
+  relationship nested inside a group within an array, a group within a
+  block, or a has-many relationship inside a block was not counted
+  toward delete-protection — so a referenced document could be
+  hard-deleted while still in use, and counts could drift. All nesting
+  depths are now counted. Existing databases recompute their
+  `_ref_count` values once on the next startup (the backfill is
+  version-gated); no action needed.
+- **MCP hard-delete now cleans up upload files.** The MCP `delete` /
+  `delete_many` tools now delete a removed document's uploaded files,
+  matching gRPC and admin. (Soft-deletes still keep the files.)
+
+## Behavior changes (likely no action)
+
+- **Whole-valued `number` fields now serialize as integers.** Because
+  `number` is stored as floating-point, an integer round-tripped through
+  the database as `42.0` and was emitted that way on every read surface
+  (REST/Lua/MCP/admin). Whole values now serialize as `42`; genuine
+  fractions are unchanged (`42.5` stays `42.5`). JSON treats `42` and
+  `42.0` as the same number, so virtually all clients are unaffected —
+  the only thing that changes is a consumer that *string-matched*
+  `"42.0"`, which will now see `"42"`. (gRPC is unaffected — it always
+  carried numbers as `double`.)
 
 ## Additive features (alpha.10)
 
@@ -198,6 +221,34 @@ and (for single create/update) `draft` argument, `delete` accepts
 matching the gRPC and Lua write surfaces. These are reserved top-level
 arguments, excluded from the document's field data like the existing
 `id` / `password`. See [MCP overview](../mcp/overview.md).
+
+### Validate without persisting, on every surface
+
+Collections and globals can now be validated without writing:
+
+- **Collections** — gRPC `Validate` (existing), Lua
+  `crap.collections.validate`, and the MCP `validate_<collection>` tool.
+- **Globals** — newly added: gRPC `ValidateGlobal`, Lua
+  `crap.globals.validate`, and the MCP `global_validate_<global>` tool.
+  Global validation previously existed only in the admin UI.
+
+All run the full before-write pipeline (coercion, validators, unique
+checks, `before_validate` hooks) and return per-field errors. Globals
+always validate in update mode against their singleton row.
+
+### `number` fields accept `integer = true`
+
+A `number` field can be restricted to whole values:
+`{ type = "number", integer = true }`. Fractional input is rejected at
+validation and the admin renders an integer stepper. Storage is
+unchanged (floating-point — no migration), and whole values already
+serialize as integers (see *Behavior changes* above). Composes with
+`min` / `max` / `has_many`.
+
+### gRPC `CountRequest.trash`
+
+`Count` can now count soft-deleted (trashed) documents via a `trash`
+flag, mirroring `FindRequest.trash`.
 
 ## Reference
 
