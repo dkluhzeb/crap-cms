@@ -65,3 +65,106 @@ pub(in crate::api::handlers) fn job_status_filter(
         content::JobRunStatus::Stale => Some(JobStatus::Stale),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mutation_operation_maps_every_variant() {
+        assert_eq!(
+            mutation_operation(&EventOperation::Create),
+            content::MutationOperation::Create
+        );
+        assert_eq!(
+            mutation_operation(&EventOperation::Update),
+            content::MutationOperation::Update
+        );
+        assert_eq!(
+            mutation_operation(&EventOperation::Delete),
+            content::MutationOperation::Delete
+        );
+    }
+
+    #[test]
+    fn mutation_target_maps_every_variant() {
+        assert_eq!(
+            mutation_target(&EventTarget::Collection),
+            content::MutationTarget::Collection
+        );
+        assert_eq!(
+            mutation_target(&EventTarget::Global),
+            content::MutationTarget::Global
+        );
+    }
+
+    #[test]
+    fn job_run_status_maps_every_variant() {
+        let cases = [
+            (JobStatus::Pending, content::JobRunStatus::Pending),
+            (JobStatus::Running, content::JobRunStatus::Running),
+            (JobStatus::Completed, content::JobRunStatus::Completed),
+            (JobStatus::Failed, content::JobRunStatus::Failed),
+            (JobStatus::Stale, content::JobRunStatus::Stale),
+        ];
+        for (internal, proto) in cases {
+            assert_eq!(job_run_status(&internal), proto);
+        }
+    }
+
+    #[test]
+    fn job_scheduled_by_known_and_unknown() {
+        assert_eq!(
+            job_scheduled_by(Some("grpc")),
+            content::JobScheduledBy::Grpc
+        );
+        assert_eq!(
+            job_scheduled_by(Some("cron")),
+            content::JobScheduledBy::Cron
+        );
+        assert_eq!(
+            job_scheduled_by(Some("hook")),
+            content::JobScheduledBy::Hook
+        );
+        // Absent or unrecognized → Unspecified.
+        assert_eq!(job_scheduled_by(None), content::JobScheduledBy::Unspecified);
+        assert_eq!(
+            job_scheduled_by(Some("api")),
+            content::JobScheduledBy::Unspecified
+        );
+    }
+
+    #[test]
+    fn version_status_known_and_unknown() {
+        assert_eq!(
+            version_status("published"),
+            content::VersionStatus::Published
+        );
+        assert_eq!(version_status("draft"), content::VersionStatus::Draft);
+        assert_eq!(version_status(""), content::VersionStatus::Unspecified);
+        assert_eq!(
+            version_status("archived"),
+            content::VersionStatus::Unspecified
+        );
+    }
+
+    #[test]
+    fn job_status_filter_unspecified_means_no_filter() {
+        assert_eq!(job_status_filter(content::JobRunStatus::Unspecified), None);
+    }
+
+    /// `job_status_filter` is the inverse of `job_run_status` for every
+    /// concrete status — a value round-trips losslessly.
+    #[test]
+    fn job_status_filter_round_trips_job_run_status() {
+        for status in [
+            JobStatus::Pending,
+            JobStatus::Running,
+            JobStatus::Completed,
+            JobStatus::Failed,
+            JobStatus::Stale,
+        ] {
+            assert_eq!(job_status_filter(job_run_status(&status)), Some(status));
+        }
+    }
+}

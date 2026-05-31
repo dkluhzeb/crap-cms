@@ -144,3 +144,46 @@ impl HooksBuilder {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_hooks_are_all_empty() {
+        let h = Hooks::new();
+        assert!(h.before_validate.is_empty());
+        assert!(h.before_change.is_empty());
+        assert!(h.after_change.is_empty());
+        assert!(h.before_read.is_empty());
+        assert!(h.after_read.is_empty());
+        assert!(h.before_delete.is_empty());
+        assert!(h.after_delete.is_empty());
+        assert!(h.before_broadcast.is_empty());
+    }
+
+    /// Distinct value per phase, so a cross-wired assignment in `build()`
+    /// would surface as a mismatch on the corresponding field.
+    #[test]
+    fn builder_wires_each_phase_to_its_own_field() {
+        let h = Hooks::builder()
+            .before_validate(vec!["bv".into()])
+            .before_change(vec!["bc".into()])
+            .after_change(vec!["ac".into()])
+            .before_read(vec!["br".into()])
+            .after_read(vec!["ar".into()])
+            .before_delete(vec!["bd".into()])
+            .after_delete(vec!["ad".into()])
+            .before_broadcast(vec!["bb".into()])
+            .build();
+
+        assert_eq!(h.before_validate, vec!["bv"]);
+        assert_eq!(h.before_change, vec!["bc"]);
+        assert_eq!(h.after_change, vec!["ac"]);
+        assert_eq!(h.before_read, vec!["br"]);
+        assert_eq!(h.after_read, vec!["ar"]);
+        assert_eq!(h.before_delete, vec!["bd"]);
+        assert_eq!(h.after_delete, vec!["ad"]);
+        assert_eq!(h.before_broadcast, vec!["bb"]);
+    }
+}

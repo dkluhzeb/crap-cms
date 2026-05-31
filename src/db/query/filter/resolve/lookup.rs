@@ -106,3 +106,124 @@ pub(super) fn find_field_recursive<'a>(
 
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::field::{FieldDefinition, FieldTab, RelationshipConfig};
+
+    fn scalar(name: &str, ft: FieldType) -> FieldDefinition {
+        FieldDefinition::builder(name, ft).build()
+    }
+
+    fn group(name: &str, subs: Vec<FieldDefinition>) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Group)
+            .fields(subs)
+            .build()
+    }
+
+    #[test]
+    fn top_level_scalars_resolve_to_their_type() {
+        let fields = vec![
+            scalar("status", FieldType::Text),
+            scalar("count", FieldType::Number),
+        ];
+        assert_eq!(
+            lookup_column_field_type("status", &fields),
+            Some(FieldType::Text)
+        );
+        assert_eq!(
+            lookup_column_field_type("count", &fields),
+            Some(FieldType::Number)
+        );
+    }
+
+    #[test]
+    fn unknown_column_resolves_to_none() {
+        let fields = vec![scalar("status", FieldType::Text)];
+        assert_eq!(lookup_column_field_type("nope", &fields), None);
+    }
+
+    #[test]
+    fn non_scalar_columns_resolve_to_none_for_text_fallback() {
+        // Relationship/Array/Blocks/bare-Group are not plain scalar columns;
+        // callers fall back to Text binding, so these must return None.
+        let fields = vec![
+            FieldDefinition::builder("author", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("users", false))
+                .build(),
+            FieldDefinition::builder("rows", FieldType::Array)
+                .fields(vec![scalar("x", FieldType::Text)])
+                .build(),
+            FieldDefinition::builder("content", FieldType::Blocks).build(),
+            group("meta", vec![scalar("title", FieldType::Text)]),
+        ];
+        assert_eq!(lookup_column_field_type("author", &fields), None);
+        assert_eq!(lookup_column_field_type("rows", &fields), None);
+        assert_eq!(lookup_column_field_type("content", &fields), None);
+        assert_eq!(lookup_column_field_type("meta", &fields), None);
+    }
+
+    #[test]
+    fn group_and_nested_group_columns_resolve_the_leaf() {
+        let fields = vec![group(
+            "meta",
+            vec![
+                scalar("title", FieldType::Text),
+                group("inner", vec![scalar("rank", FieldType::Number)]),
+            ],
+        )];
+        assert_eq!(
+            lookup_column_field_type("meta__title", &fields),
+            Some(FieldType::Text)
+        );
+        assert_eq!(
+            lookup_column_field_type("meta__inner__rank", &fields),
+            Some(FieldType::Number)
+        );
+    }
+
+    #[test]
+    fn trailing_locale_suffix_is_stripped() {
+        let fields = vec![
+            scalar("title", FieldType::Text),
+            group("meta", vec![scalar("desc", FieldType::Textarea)]),
+        ];
+        // Top-level localized column: `title__en`.
+        assert_eq!(
+            lookup_column_field_type("title__en", &fields),
+            Some(FieldType::Text)
+        );
+        // Group sub-field localized column: `meta__desc__de`.
+        assert_eq!(
+            lookup_column_field_type("meta__desc__de", &fields),
+            Some(FieldType::Textarea)
+        );
+    }
+
+    #[test]
+    fn layout_wrappers_are_transparent_in_lookup() {
+        let fields = vec![
+            FieldDefinition::builder("row", FieldType::Row)
+                .fields(vec![scalar("first", FieldType::Text)])
+                .build(),
+            FieldDefinition::builder("tabs", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "SEO",
+                    vec![scalar("meta_title", FieldType::Text)],
+                )])
+                .build(),
+        ];
+        // Children of Row/Tabs resolve at the top level (no prefix).
+        assert_eq!(
+            lookup_column_field_type("first", &fields),
+            Some(FieldType::Text)
+        );
+        assert_eq!(
+            lookup_column_field_type("meta_title", &fields),
+            Some(FieldType::Text)
+        );
+        assert!(find_field_recursive("first", &fields).is_some());
+        assert!(find_field_recursive("missing", &fields).is_none());
+    }
+}

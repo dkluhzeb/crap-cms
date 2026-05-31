@@ -48,3 +48,32 @@ pub(super) fn get_fts_table_columns(
         if cols.is_empty() { None } else { Some(cols) }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::InMemoryConn;
+
+    #[test]
+    fn missing_table_returns_none() {
+        let conn = InMemoryConn::open();
+        assert_eq!(get_fts_table_columns(&conn, "nope_fts"), None);
+    }
+
+    #[test]
+    fn returns_columns_in_order_excluding_id() {
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE posts_fts (id TEXT, title TEXT, body TEXT);");
+        assert_eq!(
+            get_fts_table_columns(&conn, "posts_fts"),
+            Some(vec!["title".to_string(), "body".to_string()])
+        );
+    }
+
+    #[test]
+    fn id_only_table_returns_none() {
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE bare_fts (id TEXT);");
+        assert_eq!(get_fts_table_columns(&conn, "bare_fts"), None);
+    }
+}

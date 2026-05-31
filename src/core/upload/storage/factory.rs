@@ -41,3 +41,51 @@ pub fn create_storage(config_dir: &Path, config: &UploadConfig) -> Result<Shared
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_backend_is_created_and_usable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = UploadConfig {
+            storage: UploadStorage::Local,
+            ..Default::default()
+        };
+        let storage = create_storage(tmp.path(), &config).unwrap();
+        storage.put("k/x.txt", b"hi", "text/plain").unwrap();
+        assert!(storage.exists("k/x.txt").unwrap());
+    }
+
+    #[test]
+    fn custom_backend_falls_back_to_a_working_local_placeholder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = UploadConfig {
+            storage: UploadStorage::Custom,
+            ..Default::default()
+        };
+        // Until Lua's `crap.storage.register()` runs, Custom is a working
+        // local backend rather than a failure.
+        let storage = create_storage(tmp.path(), &config).unwrap();
+        storage.put("a.txt", b"x", "text/plain").unwrap();
+        assert!(storage.exists("a.txt").unwrap());
+    }
+
+    #[cfg(not(feature = "s3-storage"))]
+    #[test]
+    fn s3_without_feature_errors_with_guidance() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = UploadConfig {
+            storage: UploadStorage::S3,
+            ..Default::default()
+        };
+        let result = create_storage(tmp.path(), &config);
+        assert!(result.is_err(), "S3 without the feature should error");
+        let msg = result.err().unwrap().to_string();
+        assert!(
+            msg.contains("s3-storage"),
+            "error should name the missing feature, got: {msg}"
+        );
+    }
+}

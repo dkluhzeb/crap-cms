@@ -83,3 +83,47 @@ impl JoinConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_sets_single_target_with_defaults() {
+        let rc = RelationshipConfig::new("posts", true);
+        assert_eq!(rc.collection.as_ref(), "posts");
+        assert!(rc.has_many);
+        assert_eq!(rc.max_depth, None);
+        assert!(!rc.is_polymorphic());
+        assert_eq!(rc.all_collections(), vec!["posts"]);
+    }
+
+    #[test]
+    fn single_target_is_not_polymorphic() {
+        let rc = RelationshipConfig::new("media", false);
+        assert!(!rc.is_polymorphic());
+        // With no polymorphic targets, `all_collections` falls back to the
+        // single `collection`.
+        assert_eq!(rc.all_collections(), vec!["media"]);
+    }
+
+    #[test]
+    fn polymorphic_reports_every_target_in_order() {
+        let rc = RelationshipConfig {
+            collection: "posts".into(),
+            has_many: false,
+            max_depth: Some(2),
+            polymorphic: vec!["posts".into(), "pages".into()],
+        };
+        assert!(rc.is_polymorphic());
+        // Polymorphic wins over the single `collection`, preserving order.
+        assert_eq!(rc.all_collections(), vec!["posts", "pages"]);
+    }
+
+    #[test]
+    fn join_config_new_sets_collection_and_on() {
+        let jc = JoinConfig::new("comments", "post_id");
+        assert_eq!(jc.collection.as_ref(), "comments");
+        assert_eq!(jc.on, "post_id");
+    }
+}

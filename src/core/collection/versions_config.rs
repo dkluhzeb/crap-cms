@@ -28,3 +28,23 @@ impl VersionsConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn new_sets_fields() {
+        let c = VersionsConfig::new(true, 5);
+        assert!(c.drafts);
+        assert_eq!(c.max_versions, 5);
+    }
+
+    #[test]
+    fn serde_defaults_to_no_drafts_and_unlimited_versions() {
+        let c: VersionsConfig = serde_json::from_value(json!({})).unwrap();
+        assert!(!c.drafts);
+        assert_eq!(c.max_versions, 0, "0 means unlimited");
+    }
+}

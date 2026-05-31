@@ -26,3 +26,23 @@ impl IndexDefinition {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn new_defaults_to_non_unique() {
+        let idx = IndexDefinition::new(vec!["a".into(), "b".into()]);
+        assert_eq!(idx.fields, vec!["a", "b"]);
+        assert!(!idx.unique);
+    }
+
+    #[test]
+    fn serde_unique_defaults_false() {
+        let idx: IndexDefinition = serde_json::from_value(json!({ "fields": ["x"] })).unwrap();
+        assert_eq!(idx.fields, vec!["x"]);
+        assert!(!idx.unique);
+    }
+}

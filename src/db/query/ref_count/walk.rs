@@ -128,3 +128,145 @@ fn push_has_many(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::core::field::{BlockDefinition, FieldDefinition, FieldType, RelationshipConfig};
+
+    use super::*;
+
+    /// A relationship sub-field pointing at the `tags` collection.
+    fn rel(name: &str, has_many: bool) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Relationship)
+            .relationship(RelationshipConfig::new("tags", has_many))
+            .build()
+    }
+
+    /// Walk `obj` and return the collected refs as sorted `(collection, id)`
+    /// pairs so assertions are order-independent.
+    fn collect(obj: &Value, fields: &[FieldDefinition]) -> Vec<(String, String)> {
+        let mut refs = Vec::new();
+        walk_nested_refs(obj.as_object().unwrap(), fields, &mut refs);
+        let mut pairs: Vec<(String, String)> = refs
+            .into_iter()
+            .map(|r| (r.target_collection, r.target_id))
+            .collect();
+        pairs.sort();
+        pairs
+    }
+
+    #[test]
+    fn has_one_relationship_is_collected() {
+        let fields = vec![rel("tag", false)];
+        assert_eq!(
+            collect(&json!({ "tag": "t1" }), &fields),
+            vec![("tags".into(), "t1".into())]
+        );
+    }
+
+    #[test]
+    fn has_many_relationship_collects_all_and_dedups() {
+        let fields = vec![rel("tags", true)];
+        // duplicates collapse — `_ref_count` is an edge set, not a multiset.
+        assert_eq!(
+            collect(&json!({ "tags": ["t1", "t2", "t1"] }), &fields),
+            vec![("tags".into(), "t1".into()), ("tags".into(), "t2".into())]
+        );
+    }
+
+    #[test]
+    fn recurses_into_nested_group() {
+        let fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![rel("tag", false)])
+                .build(),
+        ];
+        assert_eq!(
+            collect(&json!({ "meta": { "tag": "t1" } }), &fields),
+            vec![("tags".into(), "t1".into())]
+        );
+    }
+
+    #[test]
+    fn recurses_into_array_rows() {
+        let fields = vec![
+            FieldDefinition::builder("rows", FieldType::Array)
+                .fields(vec![rel("tag", false)])
+                .build(),
+        ];
+        assert_eq!(
+            collect(
+                &json!({ "rows": [{ "tag": "t1" }, { "tag": "t2" }] }),
+                &fields
+            ),
+            vec![("tags".into(), "t1".into()), ("tags".into(), "t2".into())]
+        );
+    }
+
+    #[test]
+    fn recurses_into_matching_block_only() {
+        let fields = vec![
+            FieldDefinition::builder("content", FieldType::Blocks)
+                .blocks(vec![BlockDefinition::new("card", vec![rel("tag", false)])])
+                .build(),
+        ];
+        // Only the block whose `_block_type` matches a definition contributes;
+        // an unknown block type is skipped.
+        let data = json!({
+            "content": [
+                { "_block_type": "card", "tag": "t1" },
+                { "_block_type": "mystery", "tag": "t2" }
+            ]
+        });
+        assert_eq!(collect(&data, &fields), vec![("tags".into(), "t1".into())]);
+    }
+
+    #[test]
+    fn layout_wrappers_are_transparent() {
+        // Row/Collapsible add no nesting — their children read from the same
+        // object, so `tag` sits at the top level, not under "layout".
+        let fields = vec![
+            FieldDefinition::builder("layout", FieldType::Row)
+                .fields(vec![rel("tag", false)])
+                .build(),
+        ];
+        assert_eq!(
+            collect(&json!({ "tag": "t1" }), &fields),
+            vec![("tags".into(), "t1".into())]
+        );
+    }
+
+    #[test]
+    fn deep_combination_array_group_and_block_group() {
+        // array → group → rel, plus blocks → group → rel, in one object.
+        let fields = vec![
+            FieldDefinition::builder("rows", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("g", FieldType::Group)
+                        .fields(vec![rel("tag", false)])
+                        .build(),
+                ])
+                .build(),
+            FieldDefinition::builder("content", FieldType::Blocks)
+                .blocks(vec![BlockDefinition::new(
+                    "card",
+                    vec![
+                        FieldDefinition::builder("meta", FieldType::Group)
+                            .fields(vec![rel("tag", false)])
+                            .build(),
+                    ],
+                )])
+                .build(),
+        ];
+        let data = json!({
+            "rows": [{ "g": { "tag": "a" } }],
+            "content": [{ "_block_type": "card", "meta": { "tag": "b" } }]
+        });
+        assert_eq!(
+            collect(&data, &fields),
+            vec![("tags".into(), "a".into()), ("tags".into(), "b".into())]
+        );
+    }
+}

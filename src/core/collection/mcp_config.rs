@@ -19,3 +19,19 @@ impl McpConfig {
         Self { description }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn new_sets_description_and_serde_defaults_to_none() {
+        assert_eq!(
+            McpConfig::new(Some("desc".into())).description.as_deref(),
+            Some("desc")
+        );
+        let c: McpConfig = serde_json::from_value(json!({})).unwrap();
+        assert!(c.description.is_none());
+    }
+}

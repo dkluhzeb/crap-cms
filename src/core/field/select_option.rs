@@ -23,3 +23,15 @@ impl SelectOption {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_sets_label_and_value() {
+        let opt = SelectOption::new(LocalizedString::Plain("Draft".into()), "draft");
+        assert_eq!(opt.value, "draft");
+        assert_eq!(opt.label.resolve_default(), "Draft");
+    }
+}

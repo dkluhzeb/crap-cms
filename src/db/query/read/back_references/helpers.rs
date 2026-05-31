@@ -71,3 +71,107 @@ pub(super) fn query_ids_simple_params(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::LocalizedString;
+    use crate::core::field::{FieldAdmin, FieldType};
+    use crate::db::InMemoryConn;
+
+    fn labelled(name: &str, label: Option<&str>) -> FieldDefinition {
+        let mut b = FieldDefinition::builder(name, FieldType::Text);
+        if let Some(l) = label {
+            b = b.admin(
+                FieldAdmin::builder()
+                    .label(LocalizedString::Plain(l.to_string()))
+                    .build(),
+            );
+        }
+        b.build()
+    }
+
+    #[test]
+    fn label_prefers_non_empty_admin_label() {
+        assert_eq!(
+            field_display_label(&labelled("first_name", Some("Given Name"))),
+            "Given Name"
+        );
+    }
+
+    #[test]
+    fn label_falls_back_to_title_cased_name_when_absent() {
+        assert_eq!(
+            field_display_label(&labelled("first_name", None)),
+            "First Name"
+        );
+    }
+
+    #[test]
+    fn empty_admin_label_falls_back_to_name() {
+        assert_eq!(
+            field_display_label(&labelled("first_name", Some(""))),
+            "First Name"
+        );
+    }
+
+    fn refs_conn() -> InMemoryConn {
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE refs (id TEXT); INSERT INTO refs VALUES ('a'), ('b'), ('t1');");
+        conn
+    }
+
+    #[test]
+    fn query_ids_drops_self_reference_same_collection_and_id() {
+        let conn = refs_conn();
+        // owner == target collection AND a row id == target id → that row is
+        // the document itself, so it's filtered out.
+        let ids = query_ids(
+            &conn,
+            "SELECT id FROM refs ORDER BY id",
+            &[],
+            "posts",
+            "t1",
+            "posts",
+            false,
+        );
+        assert_eq!(ids, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn query_ids_keeps_same_id_from_a_different_collection() {
+        let conn = refs_conn();
+        let ids = query_ids(
+            &conn,
+            "SELECT id FROM refs ORDER BY id",
+            &[],
+            "posts",
+            "t1",
+            "tags",
+            false,
+        );
+        assert_eq!(ids, vec!["a", "b", "t1"]);
+    }
+
+    #[test]
+    fn query_ids_global_keeps_everything() {
+        let conn = refs_conn();
+        let ids = query_ids(
+            &conn,
+            "SELECT id FROM refs ORDER BY id",
+            &[],
+            "settings",
+            "t1",
+            "settings",
+            true,
+        );
+        assert_eq!(ids, vec!["a", "b", "t1"]);
+    }
+
+    #[test]
+    fn query_ids_simple_collects_the_id_column() {
+        let conn = refs_conn();
+        let ids = query_ids_simple(&conn, "SELECT id FROM refs WHERE id != ?1 ORDER BY id", "a");
+        assert_eq!(ids, vec!["b", "t1"]);
+    }
+}

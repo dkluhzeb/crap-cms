@@ -68,3 +68,35 @@ impl BlockDefinition {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::field::FieldType;
+
+    fn text(name: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Text).build()
+    }
+
+    #[test]
+    fn field_tab_new_sets_label_and_fields_without_description() {
+        let tab = FieldTab::new("SEO", vec![text("title")]);
+        assert_eq!(tab.label, "SEO");
+        assert!(tab.description.is_none());
+        assert_eq!(tab.fields.len(), 1);
+        assert_eq!(tab.fields[0].name, "title");
+    }
+
+    #[test]
+    fn block_definition_new_sets_type_and_fields_defaulting_the_rest() {
+        let block = BlockDefinition::new("hero", vec![text("heading")]);
+        assert_eq!(block.block_type, "hero");
+        assert_eq!(block.fields.len(), 1);
+        assert_eq!(block.fields[0].name, "heading");
+        // Optional presentation fields must default to None.
+        assert!(block.label.is_none());
+        assert!(block.label_field.is_none());
+        assert!(block.group.is_none());
+        assert!(block.image_url.is_none());
+    }
+}

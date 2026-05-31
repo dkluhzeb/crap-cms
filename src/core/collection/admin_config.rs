@@ -90,3 +90,32 @@ impl AdminConfigBuilder {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_is_empty_and_visible() {
+        let c = AdminConfig::new();
+        assert!(c.use_as_title.is_none());
+        assert!(c.default_sort.is_none());
+        assert!(!c.hidden);
+        assert!(c.list_searchable_fields.is_empty());
+    }
+
+    /// Distinct value per field guards against a cross-wired `build()`.
+    #[test]
+    fn builder_wires_each_field_to_its_own_slot() {
+        let c = AdminConfig::builder()
+            .use_as_title(Some("title".into()))
+            .default_sort(Some("-created_at".into()))
+            .hidden(true)
+            .list_searchable_fields(vec!["title".into(), "body".into()])
+            .build();
+        assert_eq!(c.use_as_title.as_deref(), Some("title"));
+        assert_eq!(c.default_sort.as_deref(), Some("-created_at"));
+        assert!(c.hidden);
+        assert_eq!(c.list_searchable_fields, vec!["title", "body"]);
+    }
+}

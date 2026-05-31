@@ -164,3 +164,50 @@ impl FindQueryBuilder {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn find_query_default_is_entirely_empty() {
+        let q = FindQuery::default();
+        assert!(q.filters.is_empty());
+        assert!(q.order_by.is_none());
+        assert!(q.limit.is_none());
+        assert!(q.offset.is_none());
+        assert!(q.select.is_none());
+        assert!(q.after_cursor.is_none());
+        assert!(q.before_cursor.is_none());
+        assert!(q.search.is_none());
+        assert!(!q.include_deleted);
+    }
+
+    /// Distinct values per field — notably `limit` ≠ `offset` — so a swapped
+    /// or cross-wired assignment in `build()` surfaces as a mismatch.
+    #[test]
+    fn builder_wires_each_field_to_its_own_slot() {
+        let q = FindQuery::builder()
+            .filters(vec![FilterClause::Single(Filter {
+                field: "status".into(),
+                op: FilterOp::Equals("published".into()),
+            })])
+            .order_by(Some("-created_at".into()))
+            .limit(Some(10))
+            .offset(Some(20))
+            .select(Some(vec!["title".into()]))
+            .search(Some("hello".into()))
+            .include_deleted(true)
+            .build();
+
+        assert_eq!(q.filters.len(), 1);
+        assert_eq!(q.order_by.as_deref(), Some("-created_at"));
+        assert_eq!(q.limit, Some(10));
+        assert_eq!(q.offset, Some(20));
+        assert_eq!(q.select, Some(vec!["title".to_string()]));
+        assert_eq!(q.search.as_deref(), Some("hello"));
+        assert!(q.include_deleted);
+        assert!(q.after_cursor.is_none());
+        assert!(q.before_cursor.is_none());
+    }
+}

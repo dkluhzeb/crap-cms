@@ -30,3 +30,24 @@ pub enum LiveMode {
     /// Full data — runs `after_read` hooks, includes document data with field stripping.
     Full,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_mode_defaults_to_metadata() {
+        // Safety invariant: the default must stay Metadata. Full would run
+        // after_read hooks and broadcast document data on every event.
+        assert_eq!(LiveMode::default(), LiveMode::Metadata);
+    }
+
+    #[test]
+    fn live_mode_serde_round_trips() {
+        for mode in [LiveMode::Metadata, LiveMode::Full] {
+            let json = serde_json::to_string(&mode).unwrap();
+            let back: LiveMode = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, mode);
+        }
+    }
+}
