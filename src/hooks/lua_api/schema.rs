@@ -167,6 +167,9 @@ pub(crate) struct SchemaField {
     max: Option<f64>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     #[lua(optional)]
+    integer: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[lua(optional)]
     has_many: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[lua(optional)]
@@ -292,6 +295,7 @@ fn build_field(f: &FieldDefinition) -> SchemaField {
         max_length: f.max_length,
         min: f.min,
         max: f.max,
+        integer: f.integer,
         has_many: f.has_many,
         min_date: f.min_date.clone(),
         max_date: f.max_date.clone(),

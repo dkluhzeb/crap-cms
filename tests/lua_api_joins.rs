@@ -607,6 +607,49 @@ fn lua_globals_validate_reports_field_errors() {
     assert_eq!(valid, "true");
 }
 
+#[test]
+fn lua_number_integer_flag_round_trips_and_rejects_fractions() {
+    let (_tmp, pool, _reg, runner) = setup_custom_db(
+        &[(
+            "counters",
+            r#"
+            crap.collections.define("counters", {
+                labels = { singular = "Counter" },
+                fields = {
+                    { name = "count", type = "number", integer = true, min = 0 },
+                },
+            })
+            "#,
+        )],
+        &[],
+        None,
+    );
+
+    // A whole value round-trips as a Lua integer (not a float) — the number
+    // is stored as REAL but reads back as an integer JSON number end to end.
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
+        local doc = crap.collections.create("counters", { count = 42 })
+        local found = crap.collections.find_by_id("counters", doc.id)
+        return math.type(found.count) .. ":" .. tostring(found.count)
+        "#,
+    );
+    assert_eq!(result, "integer:42");
+
+    // A fractional value is rejected by the integer-flag validation.
+    let invalid = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
+        local r = crap.collections.validate("counters", { count = 42.5 })
+        return tostring(r.valid) .. ":" .. tostring(r.errors and r.errors.count ~= nil)
+        "#,
+    );
+    assert_eq!(invalid, "false:true");
+}
+
 // ── Cross-Collection Hooks + Transaction Integrity ──────────────────────
 
 #[test]

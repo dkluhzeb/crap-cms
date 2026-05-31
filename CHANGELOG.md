@@ -150,6 +150,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`number` fields accept `integer = true`.** A whole-number
+  constraint on the existing `number` field: fractional input is
+  rejected at validation (`42.5` errors) and the admin renders an
+  integer stepper (`step = 1`). Storage stays floating-point — exact
+  across the realistic `±2^53` range — and whole values already
+  serialize as integers (see the representation fix below), so no
+  separate type is needed. Composes with `min` / `max` / `has_many`.
+
 - **MCP validate tools (`validate_<collection>` and
   `global_validate_<global>`).** Each collection and global now exposes
   a validate tool that runs the full before-write pipeline (field
@@ -189,6 +197,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   field data.
 
 ### Changed
+
+- **Whole-valued `number` fields now serialize as integers.** A
+  `number` field is stored as floating-point, so an integer value
+  round-tripped through the database as `42.0` and serialized that way
+  on every read surface (REST/Lua/MCP/admin). Whole values now serialize
+  as `42`; genuine fractions are unchanged (`42.5` stays `42.5`). JSON
+  treats `42` and `42.0` as the same number, so most clients are
+  unaffected — but a consumer that string-matched `"42.0"` will now see
+  `"42"`. (For guaranteed integer semantics and storage, use the new
+  `integer` field type.)
 
 - **Config backend selectors are now typed enums.** The
   `[database] backend`, `[upload] storage`, `[email] provider`,

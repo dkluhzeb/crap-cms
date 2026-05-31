@@ -233,6 +233,12 @@ pub struct FieldDefinition {
     #[serde(default)]
     #[lua(applies_to = "number", optional)]
     pub max: Option<f64>,
+    /// Restrict a `number` field to whole values: fractional input is rejected
+    /// at validation and the admin renders an integer stepper. Storage stays
+    /// floating-point (exact for the realistic `±2^53` range).
+    #[serde(default)]
+    #[lua(applies_to = "number", optional)]
+    pub integer: bool,
     /// Multi-value tag input. Stored as JSON array in TEXT column (text/number) or multi-select dropdown (select).
     #[serde(default)]
     #[lua(applies_to = "text, number, select", optional)]
@@ -521,6 +527,13 @@ impl FieldDefinitionBuilder {
     #[must_use]
     pub fn max(mut self, v: f64) -> Self {
         self.inner.max = Some(v);
+        self
+    }
+
+    /// Restrict a `number` field to whole values (reject fractional input).
+    #[must_use]
+    pub fn integer(mut self, v: bool) -> Self {
+        self.inner.integer = v;
         self
     }
 

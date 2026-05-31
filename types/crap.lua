@@ -183,6 +183,7 @@ crap = {}
 --- @class crap.NumberField : crap.BaseField
 --- @field min? number Minimum value. Validated server-side + HTML min attr.
 --- @field max? number Maximum value. Validated server-side + HTML max attr.
+--- @field integer? boolean Restrict a `number` field to whole values: fractional input is rejected at validation and the admin renders an integer stepper. Storage stays floating-point (exact for the realistic `±2^53` range).
 --- @field has_many? boolean Multi-value tag input. Stored as JSON array in TEXT column (text/number) or multi-select dropdown (select).
 
 --- @class crap.TextareaField : crap.BaseField
@@ -274,6 +275,7 @@ crap = {}
 --- @field max_length? integer Maximum string length. Validated server-side + HTML maxlength.
 --- @field min? number Minimum value. Validated server-side + HTML min attr.
 --- @field max? number Maximum value. Validated server-side + HTML max attr.
+--- @field integer? boolean Restrict a `number` field to whole values: fractional input is rejected at validation and the admin renders an integer stepper. Storage stays floating-point (exact for the realistic `±2^53` range).
 --- @field has_many? boolean Multi-value tag input. Stored as JSON array in TEXT column (text/number) or multi-select dropdown (select).
 --- @field min_date? string Minimum date (ISO "YYYY-MM-DD").
 --- @field max_date? string Maximum date (ISO "YYYY-MM-DD").
@@ -1706,6 +1708,7 @@ function crap.schema.list_globals() end
 --- @field max_length? integer
 --- @field min? number
 --- @field max? number
+--- @field integer? boolean
 --- @field has_many? boolean
 --- @field min_date? string
 --- @field max_date? string

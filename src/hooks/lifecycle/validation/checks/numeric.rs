@@ -1,9 +1,11 @@
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, validate::FieldError};
+use crate::db::f64_to_exact_i64;
 
-/// Validate min / max bounds for number fields.
-/// Skipped for `has_many` fields (validated per-element in `check_has_many_elements`).
+/// Validate min / max bounds for number fields, plus whole-number rejection
+/// for `Integer` fields. Skipped for `has_many` fields (validated per-element
+/// in `check_has_many_elements`).
 pub(crate) fn check_numeric_bounds(
     field: &FieldDefinition,
     data_key: &str,
@@ -11,7 +13,11 @@ pub(crate) fn check_numeric_bounds(
     is_empty: bool,
     errors: &mut Vec<FieldError>,
 ) {
-    if is_empty || field.has_many || (field.min.is_none() && field.max.is_none()) {
+    // `integer = true` on a number field forces whole-number validation even
+    // when no min/max bounds are set.
+    let is_integer = field.integer;
+
+    if is_empty || field.has_many || (!is_integer && field.min.is_none() && field.max.is_none()) {
         return;
     }
 
@@ -36,6 +42,20 @@ pub(crate) fn check_numeric_bounds(
                 data_key.to_owned(),
                 format!("{} must be a finite number", field.name),
                 "validation.finite_number",
+            )
+            .with_param("field", field.name.clone()),
+        );
+        return;
+    }
+
+    // Integer fields reject fractional input — `f64_to_exact_i64` returns
+    // `None` for a non-whole value (or one outside `i64` range).
+    if is_integer && f64_to_exact_i64(v).is_none() {
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} must be a whole number", field.name),
+                "validation.whole_number",
             )
             .with_param("field", field.name.clone()),
         );
@@ -234,6 +254,53 @@ mod tests {
                 msg.contains("finite"),
                 "expected finite-number error for {bad:?}, got: {msg}",
             );
+        }
+    }
+
+    /// A `number` field with `integer = true` rejects fractional input but
+    /// accepts whole numbers (including whole-valued floats like `42.0`).
+    #[test]
+    fn integer_flag_rejects_fractions() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, qty REAL)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("qty", FieldType::Number)
+                .integer(true)
+                .build(),
+        ];
+
+        // Fractional → rejected.
+        for bad in [json!(42.5), json!("42.5"), json!("3.14")] {
+            let mut data = DocumentFields::new();
+            data.insert("qty".to_string(), bad.clone());
+            let result = validate_fields_inner(
+                &lua,
+                &fields,
+                &data,
+                &ValidationCtx::builder(&conn, "test").build(),
+            );
+            assert!(result.is_err(), "input {bad:?} must be rejected");
+            assert!(
+                result.unwrap_err().errors[0]
+                    .message
+                    .contains("whole number"),
+                "expected whole-number error for {bad:?}",
+            );
+        }
+
+        // Whole values (int, whole float, whole string) → accepted.
+        for ok in [json!(42), json!(42.0), json!("42"), json!(-7)] {
+            let mut data = DocumentFields::new();
+            data.insert("qty".to_string(), ok.clone());
+            let result = validate_fields_inner(
+                &lua,
+                &fields,
+                &data,
+                &ValidationCtx::builder(&conn, "test").build(),
+            );
+            assert!(result.is_ok(), "input {ok:?} should pass: {result:?}");
         }
     }
 

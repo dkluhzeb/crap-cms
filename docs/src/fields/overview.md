@@ -78,7 +78,7 @@ of the tables.
 | Type | SQLite Column | Description |
 |------|---------------|-------------|
 | `text` | TEXT | Single-line string (`has_many` for tag input) |
-| `number` | REAL | Integer or float (`has_many` for tag input) |
+| `number` | REAL | Integer or float (`integer = true` rejects fractions; `has_many` for tag input) |
 | `textarea` | TEXT | Multi-line text |
 | `richtext` | TEXT | Rich text (HTML string) |
 | `select` | TEXT | Single value from predefined options |

@@ -50,6 +50,7 @@ pub use query::{
     AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, LocaleMode,
     PaginationResult, SharedPopulateSingleflight, Singleflight,
 };
+pub(crate) use types::f64_to_exact_i64;
 pub use types::{DbRow, DbValue};
 
 #[cfg(all(test, feature = "sqlite"))]

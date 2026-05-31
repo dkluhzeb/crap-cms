@@ -22,15 +22,44 @@ impl DbValue {
     }
 
     /// Convert to a JSON value.
+    #[must_use]
     pub fn to_json(&self) -> Value {
         match self {
             DbValue::Null => Value::Null,
             DbValue::Integer(i) => Value::Number((*i).into()),
-            DbValue::Real(f) => Number::from_f64(*f).map_or(Value::Null, Value::Number),
+            DbValue::Real(f) => real_to_json_number(*f),
             DbValue::Text(s) => Value::String(s.clone()),
             DbValue::Blob(b) => Value::String(STANDARD.encode(b)),
         }
     }
+}
+
+/// Convert an `f64` to an exact `i64` when it is a finite whole number in
+/// range, else `None`. Uses Rust's float `Display` (whole values render
+/// without a trailing `.0`: `42.0` → `"42"`, `42.5` → `"42.5"`) plus integer
+/// parsing — no lossy `as` cast and no float-equality check. Out-of-range or
+/// fractional values fail the integer parse and return `None`.
+pub(crate) fn f64_to_exact_i64(f: f64) -> Option<i64> {
+    if !f.is_finite() {
+        return None;
+    }
+
+    f.to_string().parse::<i64>().ok()
+}
+
+/// Convert an `f64` from a numeric column to a JSON number, emitting an
+/// integer when the value is whole. Number fields are stored as
+/// floating-point (`REAL` / `DOUBLE PRECISION`), so an integer like `42`
+/// round-trips through the DB as `42.0`; without this it would serialize as
+/// `42.0` on every read surface (REST/Lua/MCP/admin). Fractions and values
+/// beyond the exact-integer range keep the float form; non-finite values
+/// become `Null` (JSON has no NaN/∞).
+fn real_to_json_number(f: f64) -> Value {
+    if let Some(i) = f64_to_exact_i64(f) {
+        return Value::Number(Number::from(i));
+    }
+
+    Number::from_f64(f).map_or(Value::Null, Value::Number)
 }
 
 /// An owned database row — replaces the `rusqlite::Row` callback pattern.
@@ -313,5 +342,29 @@ mod tests {
             DbValue::Blob(vec![1, 2]).to_json(),
             Value::String("AQI=".into())
         );
+    }
+
+    #[test]
+    fn real_whole_values_serialize_as_integers() {
+        // A whole value stored in a REAL/DOUBLE column (e.g. an integer
+        // entered into a Number field) reads back as `42`, not `42.0`.
+        let whole = DbValue::Real(42.0).to_json();
+        assert_eq!(whole, json!(42));
+        assert!(
+            whole.as_i64().is_some(),
+            "whole Real should be an integer JSON number, got {whole}"
+        );
+
+        assert_eq!(DbValue::Real(-7.0).to_json(), json!(-7));
+        assert_eq!(DbValue::Real(0.0).to_json(), json!(0));
+
+        // Genuine fractions keep their float form.
+        let frac = DbValue::Real(42.5).to_json();
+        assert_eq!(frac, json!(42.5));
+        assert!(frac.as_i64().is_none());
+
+        // Non-finite values are not representable in JSON → Null.
+        assert_eq!(DbValue::Real(f64::NAN).to_json(), Value::Null);
+        assert_eq!(DbValue::Real(f64::INFINITY).to_json(), Value::Null);
     }
 }

@@ -217,10 +217,22 @@ fn construct_textarea(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext 
     })
 }
 
+/// Default HTML `step` for a number field: `1` when restricted to whole
+/// numbers (`integer = true`), else `any`. An explicit `admin.step` wins.
+fn number_step(fc: &SingleFieldCtx) -> String {
+    let default = if fc.field.integer { "1" } else { "any" };
+    fc.field
+        .admin
+        .step
+        .as_deref()
+        .unwrap_or(default)
+        .to_string()
+}
+
 fn construct_number(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
     FieldContext::Number(NumberField {
         base,
-        step: fc.field.admin.step.as_deref().unwrap_or("any").to_string(),
+        step: number_step(fc),
         has_many: None,
         tags: None,
     })
@@ -232,7 +244,7 @@ fn construct_number_tags(mut base: BaseFieldData, fc: &SingleFieldCtx) -> FieldC
 
     FieldContext::Number(NumberField {
         base,
-        step: fc.field.admin.step.as_deref().unwrap_or("any").to_string(),
+        step: number_step(fc),
         has_many: Some(true),
         tags: Some(tags),
     })

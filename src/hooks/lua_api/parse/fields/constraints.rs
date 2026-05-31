@@ -109,6 +109,7 @@ pub(super) struct Constraints {
     pub(super) max_length: Option<usize>,
     pub(super) min: Option<f64>,
     pub(super) max: Option<f64>,
+    pub(super) integer: bool,
 }
 
 pub(super) fn validate_constraints(name: &str, c: &Constraints) -> Result<()> {
@@ -151,6 +152,12 @@ pub(super) fn parse_constraints(field_tbl: &Table, name: &str) -> Result<Constra
         _ => None,
     };
 
+    let integer = field_tbl
+        .get::<Option<bool>>("integer")
+        .ok()
+        .flatten()
+        .unwrap_or(false);
+
     let constraints = Constraints {
         min_rows,
         max_rows,
@@ -158,6 +165,7 @@ pub(super) fn parse_constraints(field_tbl: &Table, name: &str) -> Result<Constra
         max_length,
         min,
         max,
+        integer,
     };
 
     validate_constraints(name, &constraints)?;

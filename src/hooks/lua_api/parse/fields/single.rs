@@ -273,6 +273,9 @@ fn apply_constraint_bounds(
     if let Some(v) = constraints.max {
         builder = builder.max(v);
     }
+    if constraints.integer {
+        builder = builder.integer(true);
+    }
     builder
 }
 
