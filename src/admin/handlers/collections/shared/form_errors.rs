@@ -200,3 +200,45 @@ pub(in crate::admin::handlers::collections) fn render_form_validation_errors(
         toast_msg,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::core::field::{FieldAdmin, FieldType};
+
+    use super::*;
+
+    fn hidden_field(name: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Text)
+            .admin(FieldAdmin::builder().hidden(true).build())
+            .build()
+    }
+
+    fn visible_field(name: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Text).build()
+    }
+
+    #[test]
+    fn collects_only_hidden_fields_present_in_form_data() {
+        let fields = vec![
+            hidden_field("upload_id"),
+            hidden_field("upload_url"), // hidden but absent from form data → skipped
+            visible_field("title"),     // present but not hidden → skipped
+        ];
+        let mut form_data = HashMap::new();
+        form_data.insert("upload_id".to_string(), "u-123".to_string());
+        form_data.insert("title".to_string(), "My post".to_string());
+
+        let out = collect_upload_hidden_fields(&fields, &form_data);
+
+        assert_eq!(out, json!([{ "name": "upload_id", "value": "u-123" }]));
+    }
+
+    #[test]
+    fn empty_when_no_hidden_fields_match() {
+        let fields = vec![visible_field("title")];
+        let mut form_data = HashMap::new();
+        form_data.insert("title".to_string(), "x".to_string());
+
+        assert_eq!(collect_upload_hidden_fields(&fields, &form_data), json!([]));
+    }
+}

@@ -170,3 +170,63 @@ fn write_nested_tabs(lua: &mut String, field: &FieldStub, level: usize) {
 
     line!(lua, level + 1, "}},");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::write_field_lua;
+    use crate::scaffold::collection::stubs::FieldStub;
+
+    fn render(field: &FieldStub) -> String {
+        let mut s = String::new();
+        write_field_lua(&mut s, field, 0);
+        s
+    }
+
+    #[test]
+    fn simple_text_field_has_name_and_no_flags() {
+        let out = render(&FieldStub::builder("title", "text").build());
+        assert!(out.contains("crap.fields.text({"));
+        assert!(out.contains("name = \"title\","));
+        assert!(!out.contains("required"));
+        assert!(!out.contains("localized"));
+    }
+
+    #[test]
+    fn required_and_localized_flags_are_emitted() {
+        let out = render(
+            &FieldStub::builder("body", "text")
+                .required(true)
+                .localized(true)
+                .build(),
+        );
+        assert!(out.contains("required = true,"));
+        assert!(out.contains("localized = true,"));
+    }
+
+    #[test]
+    fn relationship_field_emits_its_type_specific_stub() {
+        let out = render(&FieldStub::builder("author", "relationship").build());
+        assert!(out.contains("crap.fields.relationship({"));
+        assert!(out.contains("relationship = { collection ="));
+    }
+
+    #[test]
+    fn empty_container_gets_a_default_item_stub() {
+        let out = render(&FieldStub::builder("meta", "group").build());
+        assert!(out.contains("crap.fields.group({"));
+        assert!(out.contains(r#"fields = { crap.fields.text({ name = "item" }) }"#));
+    }
+
+    #[test]
+    fn nested_fields_recurse() {
+        let out = render(
+            &FieldStub::builder("address", "group")
+                .fields(vec![FieldStub::builder("street", "text").build()])
+                .build(),
+        );
+        assert!(out.contains("crap.fields.group({"));
+        assert!(out.contains("fields = {"));
+        assert!(out.contains("crap.fields.text({"));
+        assert!(out.contains("name = \"street\","));
+    }
+}

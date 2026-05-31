@@ -36,3 +36,52 @@ fn check_duplicate_field_names(fields: &[FieldDefinition]) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::field::FieldType;
+
+    fn text(name: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Text).build()
+    }
+
+    #[test]
+    fn unique_names_pass() {
+        assert!(check_duplicate_field_names(&[text("a"), text("b"), text("c")]).is_ok());
+    }
+
+    #[test]
+    fn duplicate_top_level_name_errors() {
+        let err = check_duplicate_field_names(&[text("a"), text("a")])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Duplicate field name"), "{err}");
+    }
+
+    #[test]
+    fn duplicate_across_a_transparent_layout_wrapper_errors() {
+        // Row is transparent — its child shares the parent scope, so `x`
+        // collides with the top-level `x`.
+        let row = FieldDefinition::builder("row", FieldType::Row)
+            .fields(vec![text("x")])
+            .build();
+        let err = check_duplicate_field_names(&[text("x"), row])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Duplicate field name"), "{err}");
+    }
+
+    #[test]
+    fn same_name_in_separate_group_scopes_is_allowed() {
+        // Groups are opaque scopes — their inner names aren't compared at
+        // this level (each group's scope is checked when it's parsed).
+        let ga = FieldDefinition::builder("a", FieldType::Group)
+            .fields(vec![text("x")])
+            .build();
+        let gb = FieldDefinition::builder("b", FieldType::Group)
+            .fields(vec![text("x")])
+            .build();
+        assert!(check_duplicate_field_names(&[ga, gb]).is_ok());
+    }
+}

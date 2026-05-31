@@ -138,3 +138,150 @@ fn compute_blocks_refs_from_data(
 ) {
     walk_block_values(rows, blocks, refs);
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::core::field::{BlockDefinition, FieldDefinition, FieldType, RelationshipConfig};
+
+    use super::*;
+
+    /// A relationship field pointing at the `tags` collection.
+    fn rel(name: &str, has_many: bool) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Relationship)
+            .relationship(RelationshipConfig::new("tags", has_many))
+            .build()
+    }
+
+    /// A polymorphic relationship (`has_many` controls cardinality).
+    fn poly(name: &str, has_many: bool) -> FieldDefinition {
+        let mut rc = RelationshipConfig::new("posts", has_many);
+        rc.polymorphic = vec!["posts".into(), "pages".into()];
+        FieldDefinition::builder(name, FieldType::Relationship)
+            .relationship(rc)
+            .build()
+    }
+
+    /// Run the walker over a `{col: value}` data map and return sorted
+    /// `(collection, id)` pairs so assertions are order-independent.
+    fn collect(data: serde_json::Value, fields: &[FieldDefinition]) -> Vec<(String, String)> {
+        let map: std::collections::HashMap<String, Value> = serde_json::from_value(data).unwrap();
+        let data = DocumentFields::from(map);
+
+        let mut refs = Vec::new();
+        compute_refs_from_data(fields, &data, &LocaleConfig::default(), "", &mut refs);
+
+        let mut pairs: Vec<(String, String)> = refs
+            .into_iter()
+            .map(|r| (r.target_collection, r.target_id))
+            .collect();
+        pairs.sort();
+        pairs
+    }
+
+    #[test]
+    fn has_one_relationship_reads_scalar_column() {
+        assert_eq!(
+            collect(json!({ "tag": "t1" }), &[rel("tag", false)]),
+            vec![("tags".into(), "t1".into())]
+        );
+    }
+
+    #[test]
+    fn has_many_relationship_dedups_to_an_edge_set() {
+        // Junction tables can carry duplicate rows; the ref set must not.
+        assert_eq!(
+            collect(json!({ "tags": ["t1", "t2", "t1"] }), &[rel("tags", true)]),
+            vec![("tags".into(), "t1".into()), ("tags".into(), "t2".into())]
+        );
+    }
+
+    #[test]
+    fn group_field_reads_double_underscore_prefixed_column() {
+        // A relationship inside group `meta` lives at column `meta__tag`.
+        let fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![rel("tag", false)])
+                .build(),
+        ];
+        assert_eq!(
+            collect(json!({ "meta__tag": "t1" }), &fields),
+            vec![("tags".into(), "t1".into())]
+        );
+    }
+
+    #[test]
+    fn layout_wrappers_are_transparent_no_prefix() {
+        // Row adds no column prefix — its child reads the top-level `tag`.
+        let fields = vec![
+            FieldDefinition::builder("layout", FieldType::Row)
+                .fields(vec![rel("tag", false)])
+                .build(),
+        ];
+        assert_eq!(
+            collect(json!({ "tag": "t1" }), &fields),
+            vec![("tags".into(), "t1".into())]
+        );
+    }
+
+    #[test]
+    fn polymorphic_has_one_parses_collection_slash_id() {
+        assert_eq!(
+            collect(json!({ "ref": "pages/pg1" }), &[poly("ref", false)]),
+            vec![("pages".into(), "pg1".into())]
+        );
+    }
+
+    #[test]
+    fn polymorphic_has_many_dedups_across_collections() {
+        assert_eq!(
+            collect(
+                json!({ "refs": ["posts/p1", "pages/pg1", "posts/p1"] }),
+                &[poly("refs", true)]
+            ),
+            vec![
+                ("pages".into(), "pg1".into()),
+                ("posts".into(), "p1".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn array_rows_recurse_into_nested_relationships() {
+        let fields = vec![
+            FieldDefinition::builder("rows", FieldType::Array)
+                .fields(vec![rel("tag", false)])
+                .build(),
+        ];
+        assert_eq!(
+            collect(
+                json!({ "rows": [{ "tag": "t1" }, { "tag": "t2" }] }),
+                &fields
+            ),
+            vec![("tags".into(), "t1".into()), ("tags".into(), "t2".into())]
+        );
+    }
+
+    #[test]
+    fn blocks_collect_only_from_matching_block_type() {
+        let fields = vec![
+            FieldDefinition::builder("content", FieldType::Blocks)
+                .blocks(vec![BlockDefinition::new("card", vec![rel("tag", false)])])
+                .build(),
+        ];
+        let data = json!({
+            "content": [
+                { "_block_type": "card", "tag": "t1" },
+                { "_block_type": "mystery", "tag": "t2" }
+            ]
+        });
+        assert_eq!(collect(data, &fields), vec![("tags".into(), "t1".into())]);
+    }
+
+    #[test]
+    fn missing_and_null_columns_contribute_nothing() {
+        assert!(collect(json!({}), &[rel("tag", false)]).is_empty());
+        assert!(collect(json!({ "tag": null }), &[rel("tag", false)]).is_empty());
+    }
+}

@@ -130,3 +130,46 @@ fn reg(hbs: &mut Handlebars, name: &str, content: &str) {
 pub fn render(template: &str, ctx: &impl Serialize) -> Result<String> {
     registry().render(template, ctx).map_err(Into::into)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Every compiled-in scaffold template must parse (the registry panics
+    /// otherwise) and render with a permissive (empty) context — catching a
+    /// malformed `.hbs` at test time rather than when a user runs `make_*`.
+    #[test]
+    fn all_registered_templates_parse_and_render() {
+        let names = [
+            "collection",
+            "global",
+            "hook_collection",
+            "hook_field",
+            "hook_access",
+            "hook_condition_boolean",
+            "hook_condition_table",
+            "job",
+            "crap_toml",
+            "migration",
+            "component",
+            "theme",
+            "node",
+            "field_template",
+            "field_plugin",
+            "page",
+            "slot",
+        ];
+        for name in names {
+            assert!(
+                render(name, &json!({})).is_ok(),
+                "template '{name}' failed to render"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_template_name_errors() {
+        assert!(render("does_not_exist", &json!({})).is_err());
+    }
+}

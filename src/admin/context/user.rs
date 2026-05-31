@@ -24,3 +24,22 @@ impl UserContext {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_claims_maps_sub_email_and_collection() {
+        let claims = Claims::builder("user-1", "admins")
+            .email("a@example.com")
+            .exp(9_999_999_999)
+            .build()
+            .unwrap();
+
+        let ctx = UserContext::from_claims(&claims);
+        assert_eq!(ctx.id, "user-1");
+        assert_eq!(ctx.email, "a@example.com");
+        assert_eq!(ctx.collection, "admins");
+    }
+}

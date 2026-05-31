@@ -25,3 +25,19 @@ impl AuthUser {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_defaults_ui_locale_to_en() {
+        let claims = Claims::builder("u1", "users")
+            .email("u@example.com")
+            .exp(9_999_999_999)
+            .build()
+            .unwrap();
+        let user = AuthUser::new(claims, Document::new("u1"));
+        assert_eq!(user.ui_locale, "en");
+    }
+}

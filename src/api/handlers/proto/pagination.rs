@@ -18,3 +18,42 @@ pub fn pagination_result_to_proto(pr: &query::PaginationResult) -> content::Pagi
         end_cursor: pr.end_cursor.clone(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every field gets a distinct value so a swapped assignment in the
+    /// hand-written conversion (e.g. `page`/`page_start`, `prev`/`next`,
+    /// `has_prev`/`has_next`, `start`/`end` cursor) surfaces as a mismatch.
+    #[test]
+    fn conversion_maps_each_field_to_its_own_slot() {
+        let pr = query::PaginationResult {
+            total_docs: 100,
+            limit: 20,
+            has_next_page: true,
+            has_prev_page: false,
+            total_pages: Some(5),
+            page: Some(2),
+            page_start: Some(21),
+            prev_page: Some(1),
+            next_page: Some(3),
+            start_cursor: Some("start".into()),
+            end_cursor: Some("end".into()),
+        };
+
+        let p = pagination_result_to_proto(&pr);
+
+        assert_eq!(p.total_docs, 100);
+        assert_eq!(p.limit, 20);
+        assert!(p.has_next_page);
+        assert!(!p.has_prev_page);
+        assert_eq!(p.total_pages, Some(5));
+        assert_eq!(p.page, Some(2));
+        assert_eq!(p.page_start, Some(21));
+        assert_eq!(p.prev_page, Some(1));
+        assert_eq!(p.next_page, Some(3));
+        assert_eq!(p.start_cursor.as_deref(), Some("start"));
+        assert_eq!(p.end_cursor.as_deref(), Some("end"));
+    }
+}

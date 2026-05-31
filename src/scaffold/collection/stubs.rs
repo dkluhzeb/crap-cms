@@ -127,3 +127,44 @@ impl TabStub {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn field_stub_builder_defaults_and_distinct_flags() {
+        let stub = FieldStub::builder("title", "text").build();
+        assert_eq!(stub.name, "title");
+        assert_eq!(stub.field_type, "text");
+        assert!(!stub.required);
+        assert!(!stub.localized);
+        assert!(stub.fields.is_empty());
+        assert!(stub.blocks.is_empty());
+        assert!(stub.tabs.is_empty());
+
+        // Distinct flag values so a swapped assignment in `build()` shows up.
+        let stub2 = FieldStub::builder("body", "richtext")
+            .required(true)
+            .localized(false)
+            .build();
+        assert!(stub2.required);
+        assert!(!stub2.localized);
+    }
+
+    #[test]
+    fn block_and_tab_stub_constructors() {
+        let b = BlockStub::new(
+            "hero",
+            "Hero",
+            vec![FieldStub::builder("x", "text").build()],
+        );
+        assert_eq!(b.block_type, "hero");
+        assert_eq!(b.label, "Hero");
+        assert_eq!(b.fields.len(), 1);
+
+        let t = TabStub::new("SEO", vec![FieldStub::builder("y", "text").build()]);
+        assert_eq!(t.label, "SEO");
+        assert_eq!(t.fields.len(), 1);
+    }
+}

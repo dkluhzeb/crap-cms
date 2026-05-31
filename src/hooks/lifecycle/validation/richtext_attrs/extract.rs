@@ -118,3 +118,60 @@ pub(super) fn extract_nodes_from_html(
 
     instances
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn known() -> HashMap<&'static str, &'static [FieldDefinition]> {
+        let mut m: HashMap<&str, &[FieldDefinition]> = HashMap::new();
+        m.insert("callout", &[]);
+        m
+    }
+
+    #[test]
+    fn json_extracts_known_nodes_recursively_with_per_type_indices() {
+        let content = json!({
+            "type": "doc",
+            "content": [
+                { "type": "callout", "attrs": { "color": "red" } },
+                { "type": "paragraph", "content": [
+                    { "type": "callout", "attrs": { "color": "blue" } }
+                ]},
+                { "type": "unknown_node", "attrs": {} }
+            ]
+        })
+        .to_string();
+
+        let nodes = extract_nodes_from_json(&content, &known());
+        assert_eq!(nodes.len(), 2, "two callouts, unknown node ignored");
+        assert_eq!(nodes[0].node_type, "callout");
+        assert_eq!(nodes[0].index, 0);
+        assert_eq!(nodes[0].attrs.get("color"), Some(&json!("red")));
+        // The nested callout keeps the per-type counter going.
+        assert_eq!(nodes[1].index, 1);
+        assert_eq!(nodes[1].attrs.get("color"), Some(&json!("blue")));
+    }
+
+    #[test]
+    fn json_malformed_returns_empty() {
+        assert!(extract_nodes_from_json("not json", &known()).is_empty());
+    }
+
+    #[test]
+    fn html_extracts_known_nodes_with_attrs_and_indices() {
+        let html = concat!(
+            "<p>hi</p>",
+            "<crap-node data-type=\"callout\" data-attrs='{\"color\":\"red\"}'></crap-node>",
+            "<crap-node data-type=\"callout\" data-attrs='{\"color\":\"blue\"}' />",
+            "<crap-node data-type=\"other\" data-attrs='{}'></crap-node>",
+        );
+        let nodes = extract_nodes_from_html(html, &known());
+        assert_eq!(nodes.len(), 2, "two callouts, 'other' ignored");
+        assert_eq!(nodes[0].index, 0);
+        assert_eq!(nodes[0].attrs.get("color"), Some(&json!("red")));
+        assert_eq!(nodes[1].index, 1);
+        assert_eq!(nodes[1].attrs.get("color"), Some(&json!("blue")));
+    }
+}

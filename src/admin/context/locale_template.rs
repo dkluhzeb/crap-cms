@@ -54,3 +54,44 @@ impl LocaleTemplateData {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn enabled() -> LocaleConfig {
+        LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn disabled_config_contributes_nothing() {
+        assert!(LocaleTemplateData::for_locale(&LocaleConfig::default(), Some("en")).is_none());
+    }
+
+    #[test]
+    fn marks_requested_locale_selected_and_uppercases_labels() {
+        let d = LocaleTemplateData::for_locale(&enabled(), Some("de")).unwrap();
+        assert!(d.has_locales);
+        assert_eq!(d.current_locale, "de");
+        assert_eq!(
+            (
+                d.locales[0].value.as_str(),
+                d.locales[0].label.as_str(),
+                d.locales[0].selected
+            ),
+            ("en", "EN", false)
+        );
+        assert!(d.locales[1].selected); // de
+    }
+
+    #[test]
+    fn falls_back_to_default_locale_when_none_requested() {
+        let d = LocaleTemplateData::for_locale(&enabled(), None).unwrap();
+        assert_eq!(d.current_locale, "en");
+        assert!(d.locales[0].selected);
+    }
+}

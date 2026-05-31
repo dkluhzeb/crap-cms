@@ -97,3 +97,50 @@ pub struct LocaleForm {
     /// The selected locale identifier.
     pub locale: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn login_form_debug_redacts_password_but_keeps_identity() {
+        let form = LoginForm {
+            collection: "users".into(),
+            email: "a@example.com".into(),
+            password: "hunter2-secret".into(),
+        };
+        let dbg = format!("{form:?}");
+
+        assert!(dbg.contains("users"));
+        assert!(dbg.contains("a@example.com"));
+        assert!(dbg.contains("[REDACTED]"));
+        assert!(!dbg.contains("hunter2-secret"));
+    }
+
+    #[test]
+    fn reset_password_form_debug_redacts_token_and_both_passwords() {
+        let form = ResetPasswordForm {
+            token: "tok-abc-secret".into(),
+            password: "new-pw-secret".into(),
+            password_confirm: "new-pw-secret".into(),
+        };
+        let dbg = format!("{form:?}");
+
+        assert!(dbg.contains("[REDACTED]"));
+        assert!(!dbg.contains("tok-abc-secret"));
+        assert!(!dbg.contains("new-pw-secret"));
+    }
+
+    #[test]
+    fn mfa_form_debug_redacts_code() {
+        let dbg = format!(
+            "{:?}",
+            MfaForm {
+                code: "123456".into()
+            }
+        );
+
+        assert!(dbg.contains("[REDACTED]"));
+        assert!(!dbg.contains("123456"));
+    }
+}

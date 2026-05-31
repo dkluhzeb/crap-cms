@@ -197,3 +197,49 @@ fn build_explain_sql(
 
     Ok((sql, params))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::InMemoryConn;
+
+    #[test]
+    fn collect_read_hooks_gathers_access_then_before_then_after() {
+        let mut def = CollectionDefinition::new("posts");
+        def.access.read = Some("access.can_read".into());
+        def.hooks.before_read = vec!["hooks.br1".into(), "hooks.br2".into()];
+        def.hooks.after_read = vec!["hooks.ar1".into()];
+        assert_eq!(
+            collect_read_hooks(&def),
+            vec![
+                "access.read: access.can_read".to_string(),
+                "before_read: hooks.br1".to_string(),
+                "before_read: hooks.br2".to_string(),
+                "after_read: hooks.ar1".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn collect_read_hooks_is_empty_with_no_hooks() {
+        assert!(collect_read_hooks(&CollectionDefinition::new("posts")).is_empty());
+    }
+
+    #[test]
+    fn build_explain_sql_base_and_soft_delete_variants() {
+        let conn = InMemoryConn::open();
+        let fq = FindQuery::default();
+        let mut def = CollectionDefinition::new("posts");
+
+        let (sql, params) = build_explain_sql(&conn, "posts", &fq, &def).unwrap();
+        assert_eq!(sql, "EXPLAIN QUERY PLAN SELECT * FROM \"posts\"");
+        assert!(params.is_empty());
+
+        def.soft_delete = true;
+        let (sql2, _) = build_explain_sql(&conn, "posts", &fq, &def).unwrap();
+        assert_eq!(
+            sql2,
+            "EXPLAIN QUERY PLAN SELECT * FROM \"posts\" WHERE _deleted_at IS NULL"
+        );
+    }
+}

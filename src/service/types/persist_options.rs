@@ -62,3 +62,27 @@ impl<'a> PersistOptionsBuilder<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builder_default_is_empty() {
+        let o = PersistOptions::builder().build();
+        assert!(o.password.is_none());
+        assert!(o.locale_ctx.is_none());
+        assert!(o.locale_config.is_none());
+        assert!(!o.is_draft);
+    }
+
+    #[test]
+    fn builder_passes_through_password_and_draft() {
+        let o = PersistOptions::builder()
+            .password(Some("pw"))
+            .draft(true)
+            .build();
+        assert_eq!(o.password, Some("pw"));
+        assert!(o.is_draft);
+    }
+}

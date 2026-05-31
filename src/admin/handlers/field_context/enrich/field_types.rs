@@ -800,3 +800,156 @@ pub(super) fn sub_number_has_many_tags(nf: &mut NumberField, val: &str) {
     nf.has_many = Some(true);
     nf.tags = Some(tags);
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::core::field::{LocalizedString, SelectOption as CoreSelectOption};
+
+    use super::*;
+
+    fn plain(s: &str) -> LocalizedString {
+        LocalizedString::Plain(s.to_string())
+    }
+
+    #[test]
+    fn sub_checkbox_truthy_strings_check_the_box() {
+        for truthy in ["1", "true", "on", "yes"] {
+            let mut cf = CheckboxField::default();
+            sub_checkbox(&mut cf, truthy);
+            assert!(cf.checked, "{truthy:?} should be checked");
+        }
+        for falsy in ["0", "false", "off", "", "no", "TRUE"] {
+            let mut cf = CheckboxField::default();
+            sub_checkbox(&mut cf, falsy);
+            assert!(!cf.checked, "{falsy:?} should not be checked");
+        }
+    }
+
+    #[test]
+    fn sub_text_has_many_parses_json_array_into_tags_and_csv_value() {
+        let mut tf = TextField::default();
+        sub_text_has_many_tags(&mut tf, r#"["a","b","c"]"#);
+
+        assert_eq!(tf.tags, Some(vec!["a".into(), "b".into(), "c".into()]));
+        assert_eq!(tf.base.value, json!("a,b,c"));
+        assert_eq!(tf.has_many, Some(true));
+    }
+
+    #[test]
+    fn sub_text_has_many_invalid_json_yields_empty_tags() {
+        let mut tf = TextField::default();
+        sub_text_has_many_tags(&mut tf, "not json");
+        assert_eq!(tf.tags, Some(vec![]));
+        assert_eq!(tf.base.value, json!(""));
+    }
+
+    #[test]
+    fn sub_number_has_many_parses_json_array_into_tags() {
+        let mut nf = NumberField::default();
+        sub_number_has_many_tags(&mut nf, r#"["1","2"]"#);
+        assert_eq!(nf.tags, Some(vec!["1".into(), "2".into()]));
+        assert_eq!(nf.base.value, json!("1,2"));
+        assert_eq!(nf.has_many, Some(true));
+    }
+
+    #[test]
+    fn group_child_name_brackets_leaves_and_suffixes_wrappers() {
+        let leaf = FieldDefinition::builder("title", FieldType::Text).build();
+        assert_eq!(
+            group_child_name("items[0][meta]", &leaf),
+            "items[0][meta][0][title]"
+        );
+
+        let wrapper = FieldDefinition::builder("row", FieldType::Row).build();
+        assert_eq!(
+            group_child_name("items[0][meta]", &wrapper),
+            "items[0][meta][0]"
+        );
+    }
+
+    #[test]
+    fn group_child_value_stringifies_scalars_and_blanks_composites() {
+        let leaf = FieldDefinition::builder("n", FieldType::Number).build();
+        assert_eq!(group_child_value(Some(&json!(42)), &leaf), "42");
+        assert_eq!(group_child_value(Some(&json!("hi")), &leaf), "hi");
+        assert_eq!(group_child_value(Some(&Value::Null), &leaf), "");
+        assert_eq!(group_child_value(None, &leaf), "");
+
+        // Composite children never carry a scalar value, even with array data.
+        let arr = FieldDefinition::builder("rows", FieldType::Array).build();
+        assert_eq!(group_child_value(Some(&json!([1, 2])), &arr), "");
+    }
+
+    #[test]
+    fn extract_nested_value_is_transparent_for_wrappers() {
+        let row = json!({ "title": "hi" });
+        let obj = row.as_object();
+
+        let leaf = FieldDefinition::builder("title", FieldType::Text).build();
+        assert_eq!(extract_nested_value(&leaf, &row, obj), Some(&json!("hi")));
+
+        // A wrapper reads the whole row object, not a named key.
+        let wrapper = FieldDefinition::builder("row", FieldType::Row).build();
+        assert_eq!(extract_nested_value(&wrapper, &row, obj), Some(&row));
+    }
+
+    #[test]
+    fn sub_select_radio_single_marks_the_matching_option() {
+        let sf = FieldDefinition::builder("color", FieldType::Select)
+            .options(vec![
+                CoreSelectOption::new(plain("Red"), "red"),
+                CoreSelectOption::new(plain("Blue"), "blue"),
+            ])
+            .build();
+        let mut cf = ChoiceField::default();
+        sub_select_radio(&mut cf, &sf, "blue");
+
+        assert_eq!(cf.options.len(), 2);
+        assert!(!cf.options[0].selected); // red
+        assert!(cf.options[1].selected); // blue
+        assert_eq!(cf.has_many, None);
+    }
+
+    #[test]
+    fn sub_select_radio_has_many_marks_all_in_the_json_set() {
+        let sf = FieldDefinition::builder("tags", FieldType::Select)
+            .has_many(true)
+            .options(vec![
+                CoreSelectOption::new(plain("A"), "a"),
+                CoreSelectOption::new(plain("B"), "b"),
+                CoreSelectOption::new(plain("C"), "c"),
+            ])
+            .build();
+        let mut cf = ChoiceField::default();
+        sub_select_radio(&mut cf, &sf, r#"["a","c"]"#);
+
+        assert!(cf.options[0].selected); // a
+        assert!(!cf.options[1].selected); // b
+        assert!(cf.options[2].selected); // c
+        assert_eq!(cf.has_many, Some(true));
+    }
+
+    #[test]
+    fn sub_upload_picker_none_disables_the_picker() {
+        let sf = FieldDefinition::builder("file", FieldType::Upload)
+            .admin(
+                crate::core::field::FieldAdmin::builder()
+                    .picker("none")
+                    .build(),
+            )
+            .build();
+        let mut uf = UploadField::default();
+        sub_upload(&mut uf, &sf);
+        assert_eq!(uf.picker, None);
+    }
+
+    #[test]
+    fn sub_upload_defaults_picker_to_drawer() {
+        let sf = FieldDefinition::builder("file", FieldType::Upload).build();
+        let mut uf = UploadField::default();
+        sub_upload(&mut uf, &sf);
+        assert_eq!(uf.picker.as_deref(), Some("drawer"));
+    }
+}

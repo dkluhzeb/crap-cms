@@ -61,3 +61,43 @@ pub fn try_claim_cron_window(
 
     Ok(updated > 0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::InMemoryConn;
+
+    fn conn() -> InMemoryConn {
+        let c = InMemoryConn::open();
+        c.setup("CREATE TABLE _crap_cron_fired (slug TEXT PRIMARY KEY, fired_at TEXT);");
+        c
+    }
+
+    fn claim(c: &InMemoryConn, fired_at: &str, window_start: &str) -> bool {
+        try_claim_cron_window(c, "cleanup", fired_at, window_start).unwrap()
+    }
+
+    #[test]
+    fn first_claim_for_a_new_slug_wins() {
+        let c = conn();
+        assert!(claim(&c, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn second_claim_in_the_same_window_loses() {
+        let c = conn();
+        assert!(claim(&c, "2026-01-01T00:05:00Z", "2026-01-01T00:00:00Z"));
+        // Same window: the stored fire (00:05) is not before window_start
+        // (00:00), so the update is blocked and the second worker loses.
+        assert!(!claim(&c, "2026-01-01T00:06:00Z", "2026-01-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn a_claim_in_the_next_window_wins_again() {
+        let c = conn();
+        assert!(claim(&c, "2026-01-01T00:05:00Z", "2026-01-01T00:00:00Z"));
+        // Next window: window_start advances past the stored fire (00:05 <
+        // 00:10), so the update succeeds.
+        assert!(claim(&c, "2026-01-01T00:15:00Z", "2026-01-01T00:10:00Z"));
+    }
+}

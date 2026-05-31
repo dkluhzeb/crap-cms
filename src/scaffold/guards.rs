@@ -20,3 +20,32 @@ pub(crate) fn refuse_file_overwrite(path: &Path, force: bool) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allows_when_file_is_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("new.lua");
+        assert!(refuse_file_overwrite(&p, false).is_ok());
+    }
+
+    #[test]
+    fn refuses_existing_file_without_force() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("exists.lua");
+        std::fs::write(&p, "x").unwrap();
+        let err = refuse_file_overwrite(&p, false).unwrap_err().to_string();
+        assert!(err.contains("already exists"), "{err}");
+    }
+
+    #[test]
+    fn allows_existing_file_with_force() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("exists.lua");
+        std::fs::write(&p, "x").unwrap();
+        assert!(refuse_file_overwrite(&p, true).is_ok());
+    }
+}

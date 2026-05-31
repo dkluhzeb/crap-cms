@@ -54,3 +54,47 @@ impl EditorLocaleContext {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn enabled() -> LocaleConfig {
+        LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn disabled_config_contributes_nothing() {
+        assert!(EditorLocaleContext::for_locale(Some("en"), &LocaleConfig::default()).is_none());
+    }
+
+    #[test]
+    fn marks_the_current_locale_selected_and_uppercases_labels() {
+        let ctx = EditorLocaleContext::for_locale(Some("de"), &enabled()).unwrap();
+        assert!(ctx.has_editor_locales);
+        assert_eq!(ctx.editor_locale, "de");
+        assert_eq!(ctx.editor_locales.len(), 2);
+
+        let en = &ctx.editor_locales[0];
+        assert_eq!(
+            (en.value.as_str(), en.label.as_str(), en.selected),
+            ("en", "EN", false)
+        );
+        let de = &ctx.editor_locales[1];
+        assert_eq!(
+            (de.value.as_str(), de.label.as_str(), de.selected),
+            ("de", "DE", true)
+        );
+    }
+
+    #[test]
+    fn falls_back_to_default_locale_when_none_given() {
+        let ctx = EditorLocaleContext::for_locale(None, &enabled()).unwrap();
+        assert_eq!(ctx.editor_locale, "en");
+        assert!(ctx.editor_locales[0].selected); // en is default → selected
+    }
+}

@@ -103,3 +103,20 @@ fn render_client(registry: &Registry, lang: Language) -> String {
         Language::Rust => rust_types::render(registry),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_types_dir_defaults_to_config_dir_types_subdir() {
+        let dir = resolve_types_dir(Path::new("/project"), None);
+        assert_eq!(dir, PathBuf::from("/project/types"));
+    }
+
+    #[test]
+    fn resolve_types_dir_uses_explicit_override_verbatim() {
+        let dir = resolve_types_dir(Path::new("/project"), Some(Path::new("/out/gen")));
+        assert_eq!(dir, PathBuf::from("/out/gen"));
+    }
+}

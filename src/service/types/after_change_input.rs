@@ -81,3 +81,35 @@ impl<'a> AfterChangeInputBuilder<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builder_defaults_are_empty() {
+        let aci = AfterChangeInput::builder("posts", "update").build();
+        assert_eq!(aci.slug, "posts");
+        assert_eq!(aci.operation, "update");
+        assert!(aci.locale.is_none());
+        assert!(!aci.is_draft);
+        assert!(aci.user.is_none());
+        assert!(aci.ui_locale.is_none());
+    }
+
+    /// `slug` and `operation` are distinct strings, so a swap in `build()`
+    /// would surface here.
+    #[test]
+    fn builder_wires_each_field() {
+        let aci = AfterChangeInput::builder("posts", "create")
+            .locale(Some("de".into()))
+            .draft(true)
+            .ui_locale(Some("en"))
+            .build();
+        assert_eq!(aci.slug, "posts");
+        assert_eq!(aci.operation, "create");
+        assert_eq!(aci.locale.as_deref(), Some("de"));
+        assert!(aci.is_draft);
+        assert_eq!(aci.ui_locale, Some("en"));
+    }
+}

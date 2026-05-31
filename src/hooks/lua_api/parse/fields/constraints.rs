@@ -172,3 +172,120 @@ pub(super) fn parse_constraints(field_tbl: &Table, name: &str) -> Result<Constra
 
     Ok(constraints)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mlua::Lua;
+    use serde_json::json;
+
+    fn empty() -> Constraints {
+        Constraints {
+            min_rows: None,
+            max_rows: None,
+            min_length: None,
+            max_length: None,
+            min: None,
+            max: None,
+            integer: false,
+        }
+    }
+
+    #[test]
+    fn min_rows_exceeding_max_rows_errors() {
+        let c = Constraints {
+            min_rows: Some(5),
+            max_rows: Some(3),
+            ..empty()
+        };
+        let err = validate_constraints("items", &c).unwrap_err().to_string();
+        assert!(err.contains("min_rows"), "{err}");
+    }
+
+    #[test]
+    fn min_length_exceeding_max_length_errors() {
+        let c = Constraints {
+            min_length: Some(10),
+            max_length: Some(2),
+            ..empty()
+        };
+        let err = validate_constraints("title", &c).unwrap_err().to_string();
+        assert!(err.contains("min_length"), "{err}");
+    }
+
+    #[test]
+    fn min_exceeding_max_errors() {
+        let c = Constraints {
+            min: Some(10.0),
+            max: Some(5.0),
+            ..empty()
+        };
+        let err = validate_constraints("score", &c).unwrap_err().to_string();
+        assert!(err.contains("min"), "{err}");
+    }
+
+    #[test]
+    fn equal_ordered_and_absent_bounds_pass() {
+        // equal is allowed (not strictly greater)
+        assert!(
+            validate_constraints(
+                "x",
+                &Constraints {
+                    min: Some(5.0),
+                    max: Some(5.0),
+                    ..empty()
+                }
+            )
+            .is_ok()
+        );
+        // properly ordered
+        assert!(
+            validate_constraints(
+                "x",
+                &Constraints {
+                    min_length: Some(1),
+                    max_length: Some(9),
+                    ..empty()
+                }
+            )
+            .is_ok()
+        );
+        // no bounds at all
+        assert!(validate_constraints("x", &empty()).is_ok());
+    }
+
+    #[test]
+    fn default_value_type_must_match_field_type() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+
+        // Number default on a Number field is accepted.
+        tbl.set("default_value", 42_i64).unwrap();
+        assert_eq!(
+            parse_default_value(&tbl, "count", &FieldType::Number).unwrap(),
+            Some(json!(42))
+        );
+
+        // Number default on a Text field is a type mismatch.
+        let err = parse_default_value(&tbl, "title", &FieldType::Text)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("type mismatch"), "{err}");
+
+        // String default on a Text field is accepted.
+        tbl.set("default_value", "hello").unwrap();
+        assert_eq!(
+            parse_default_value(&tbl, "title", &FieldType::Text).unwrap(),
+            Some(json!("hello"))
+        );
+
+        // Bool fits Checkbox; a string does not.
+        tbl.set("default_value", true).unwrap();
+        assert_eq!(
+            parse_default_value(&tbl, "active", &FieldType::Checkbox).unwrap(),
+            Some(json!(true))
+        );
+        tbl.set("default_value", "yes").unwrap();
+        assert!(parse_default_value(&tbl, "active", &FieldType::Checkbox).is_err());
+    }
+}

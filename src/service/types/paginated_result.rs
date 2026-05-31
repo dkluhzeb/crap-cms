@@ -24,3 +24,17 @@ impl<T> Default for PaginatedResult<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_is_an_empty_first_page() {
+        let r: PaginatedResult<i64> = PaginatedResult::default();
+        assert!(r.docs.is_empty());
+        assert_eq!(r.total, 0);
+        assert_eq!(r.pagination.total_docs, 0);
+        assert_eq!(r.pagination.page, Some(1));
+    }
+}

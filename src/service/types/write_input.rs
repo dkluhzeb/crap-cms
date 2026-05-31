@@ -106,3 +106,45 @@ impl<'a> WriteInputBuilder<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn values_from_strings_wraps_each_value_as_a_json_string() {
+        let mut m = HashMap::new();
+        m.insert("a".to_string(), "1".to_string());
+        m.insert("b".to_string(), "2".to_string());
+        let df = values_from_strings(m);
+        assert_eq!(df.get("a"), Some(&json!("1")));
+        assert_eq!(df.get("b"), Some(&json!("2")));
+        assert_eq!(df.len(), 2);
+    }
+
+    #[test]
+    fn values_from_strings_empty_map_is_empty() {
+        assert!(values_from_strings(HashMap::new()).is_empty());
+    }
+
+    /// Distinct value per field so a swapped assignment in `build()` shows up.
+    #[test]
+    fn builder_wires_each_field_to_its_own_slot() {
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("hi"));
+        let wi = WriteInput::builder(data)
+            .password(Some("pw"))
+            .locale(Some("de".to_string()))
+            .draft(true)
+            .ui_locale(Some("en".to_string()))
+            .build();
+
+        assert_eq!(wi.data.get("title"), Some(&json!("hi")));
+        assert_eq!(wi.password, Some("pw"));
+        assert_eq!(wi.locale.as_deref(), Some("de"));
+        assert!(wi.draft);
+        assert_eq!(wi.ui_locale.as_deref(), Some("en"));
+        assert!(wi.locale_ctx.is_none());
+    }
+}

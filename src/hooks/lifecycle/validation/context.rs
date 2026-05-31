@@ -86,3 +86,42 @@ impl<'a> ValidationCtxBuilder<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::InMemoryConn;
+
+    #[test]
+    fn builder_defaults_to_no_exclusions_and_false_flags() {
+        let conn = InMemoryConn::open();
+        let ctx = ValidationCtx::builder(&conn, "posts").build();
+
+        assert_eq!(ctx.table, "posts");
+        assert!(ctx.exclude_id.is_none());
+        assert!(!ctx.is_draft);
+        assert!(!ctx.soft_delete);
+        assert!(ctx.locale_ctx.is_none());
+        assert!(ctx.registry.is_none());
+    }
+
+    /// `is_draft` and `soft_delete` are both `bool` — distinct values catch a
+    /// swapped assignment in `build()` that would silently change query scoping.
+    #[test]
+    fn builder_wires_each_field_to_its_own_slot() {
+        let conn = InMemoryConn::open();
+        let registry = Registry::new();
+
+        let ctx = ValidationCtx::builder(&conn, "posts")
+            .exclude_id(Some("doc-7"))
+            .draft(true)
+            .soft_delete(false)
+            .registry(&registry)
+            .build();
+
+        assert_eq!(ctx.exclude_id, Some("doc-7"));
+        assert!(ctx.is_draft);
+        assert!(!ctx.soft_delete);
+        assert!(ctx.registry.is_some());
+    }
+}

@@ -50,3 +50,37 @@ pub(super) struct BackRefScan<'a> {
     pub(super) owner_label: &'a str,
     pub(super) is_global: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_derives_count_from_document_ids() {
+        let br = BackReference::new(
+            "posts".into(),
+            "Posts".into(),
+            "tag".into(),
+            "Tag".into(),
+            vec!["a".into(), "b".into(), "c".into()],
+            false,
+        );
+        assert_eq!(br.count, 3, "count must mirror document_ids length");
+        assert_eq!(br.document_ids.len(), 3);
+        assert!(!br.is_global);
+    }
+
+    #[test]
+    fn new_with_no_ids_has_zero_count() {
+        let br = BackReference::new(
+            "settings".into(),
+            "Settings".into(),
+            "f".into(),
+            "F".into(),
+            vec![],
+            true,
+        );
+        assert_eq!(br.count, 0);
+        assert!(br.is_global);
+    }
+}

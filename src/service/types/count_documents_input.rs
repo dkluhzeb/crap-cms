@@ -77,3 +77,33 @@ impl<'a> CountDocumentsInputBuilder<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builder_defaults_are_off() {
+        let f: &[FilterClause] = &[];
+        let c = CountDocumentsInput::builder(f).build();
+        assert!(c.locale_ctx.is_none());
+        assert!(c.search.is_none());
+        assert!(!c.trash);
+        assert!(!c.include_drafts);
+    }
+
+    /// `trash` and `include_drafts` set to distinct values — a swap in
+    /// `build()` would surface here.
+    #[test]
+    fn builder_wires_distinct_flags() {
+        let f: &[FilterClause] = &[];
+        let c = CountDocumentsInput::builder(f)
+            .search(Some("hello"))
+            .trash(true)
+            .include_drafts(false)
+            .build();
+        assert_eq!(c.search, Some("hello"));
+        assert!(c.trash);
+        assert!(!c.include_drafts);
+    }
+}

@@ -99,3 +99,49 @@ pub(crate) fn prune_versions(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::InMemoryConn;
+
+    #[test]
+    fn builder_defaults_to_empty_fields_no_config_no_drafts() {
+        let ctx = VersionSnapshotCtx::builder("posts", "doc-1").build();
+        assert_eq!(ctx.table, "posts");
+        assert_eq!(ctx.parent_id, "doc-1");
+        assert!(ctx.fields.is_empty());
+        assert!(ctx.versions.is_none());
+        assert!(!ctx.has_drafts);
+    }
+
+    #[test]
+    fn builder_wires_each_field_to_its_own_slot() {
+        let vc = VersionsConfig::new(true, 5);
+        let ctx = VersionSnapshotCtx::builder("pages", "doc-9")
+            .versions(Some(&vc))
+            .has_drafts(true)
+            .build();
+
+        assert_eq!(ctx.table, "pages");
+        assert_eq!(ctx.parent_id, "doc-9");
+        assert!(ctx.has_drafts);
+        assert_eq!(ctx.versions.map(|v| v.max_versions), Some(5));
+    }
+
+    /// The guard must short-circuit before touching the DB. The bare in-memory
+    /// connection has no `_versions` table, so any actual prune query would
+    /// error — `Ok` proves the short-circuit fired.
+    #[test]
+    fn prune_short_circuits_without_a_config() {
+        let conn = InMemoryConn::open();
+        assert!(prune_versions(&conn, "posts", "doc-1", None).is_ok());
+    }
+
+    #[test]
+    fn prune_short_circuits_when_max_versions_is_zero() {
+        let conn = InMemoryConn::open();
+        let vc = VersionsConfig::new(true, 0);
+        assert!(prune_versions(&conn, "posts", "doc-1", Some(&vc)).is_ok());
+    }
+}

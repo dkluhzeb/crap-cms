@@ -19,3 +19,20 @@ impl Default for UpdateConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{from_value, json};
+
+    #[test]
+    fn default_enables_startup_check() {
+        assert!(UpdateConfig::default().check_on_startup);
+    }
+
+    #[test]
+    fn empty_table_keeps_startup_check_on() {
+        let c: UpdateConfig = from_value(json!({})).unwrap();
+        assert!(c.check_on_startup);
+    }
+}

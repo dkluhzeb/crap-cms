@@ -467,3 +467,64 @@ pub fn build_enriched_children_from_data(
         .map(|child| build_child(child, data, data_obj, parent_name, &opts))
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    /// Resolve a leaf field's (name, raw, value) from a parent data object.
+    fn resolve_leaf(name: &str, ft: FieldType, data: &Value, parent: &str) -> (String, String) {
+        let field = FieldDefinition::builder(name, ft).build();
+        let obj = data.as_object();
+        let (child_name, _raw, child_val) =
+            resolve_child_name_and_value(&field, Some(data), obj, parent);
+        (child_name, child_val)
+    }
+
+    #[test]
+    fn leaf_field_gets_bracketed_name_and_its_own_value() {
+        let data = json!({ "title": "Hello" });
+        let (name, val) = resolve_leaf("title", FieldType::Text, &data, "items[0]");
+        assert_eq!(name, "items[0][title]");
+        assert_eq!(val, "Hello");
+    }
+
+    #[test]
+    fn leaf_null_value_becomes_empty_string() {
+        let data = json!({ "title": null });
+        let (_name, val) = resolve_leaf("title", FieldType::Text, &data, "items[0]");
+        assert_eq!(val, "");
+    }
+
+    #[test]
+    fn leaf_non_string_value_is_stringified() {
+        let data = json!({ "count": 42 });
+        let (_name, val) = resolve_leaf("count", FieldType::Number, &data, "items[0]");
+        assert_eq!(val, "42");
+    }
+
+    #[test]
+    fn leaf_missing_from_data_yields_empty_value() {
+        let data = json!({ "other": "x" });
+        let (name, val) = resolve_leaf("title", FieldType::Text, &data, "items[0]");
+        assert_eq!(name, "items[0][title]");
+        assert_eq!(val, "");
+    }
+
+    /// Layout wrappers are transparent: they inherit the parent's bracketed
+    /// name (no `[row]` segment) and carry the full data object, with an empty
+    /// scalar value.
+    #[test]
+    fn layout_wrapper_inherits_parent_name_and_is_transparent() {
+        let field = FieldDefinition::builder("row", FieldType::Row).build();
+        let data = json!({ "title": "Hello" });
+        let (child_name, raw, child_val) =
+            resolve_child_name_and_value(&field, Some(&data), data.as_object(), "items[0]");
+
+        assert_eq!(child_name, "items[0]");
+        assert_eq!(child_val, "");
+        assert!(raw.is_some_and(serde_json::Value::is_object));
+    }
+}

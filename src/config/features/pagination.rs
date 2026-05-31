@@ -41,3 +41,47 @@ pub enum PaginationMode {
     /// Keyset-based pagination (cursors).
     Cursor,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{from_value, json};
+
+    #[test]
+    fn default_is_offset_paging_with_sane_limits() {
+        let c = PaginationConfig::default();
+        assert_eq!(c.default_limit, 20);
+        assert_eq!(c.max_limit, 1000);
+        assert_eq!(c.mode, PaginationMode::Page);
+        assert!(!c.is_cursor());
+    }
+
+    #[test]
+    fn is_cursor_reflects_the_mode() {
+        let c = PaginationConfig {
+            mode: PaginationMode::Cursor,
+            ..Default::default()
+        };
+        assert!(c.is_cursor());
+    }
+
+    #[test]
+    fn mode_deserializes_from_lowercase_strings() {
+        assert_eq!(
+            from_value::<PaginationMode>(json!("cursor")).unwrap(),
+            PaginationMode::Cursor
+        );
+        assert_eq!(
+            from_value::<PaginationMode>(json!("page")).unwrap(),
+            PaginationMode::Page
+        );
+        assert!(from_value::<PaginationMode>(json!("Cursor")).is_err());
+    }
+
+    #[test]
+    fn empty_table_uses_all_defaults() {
+        let c: PaginationConfig = from_value(json!({})).unwrap();
+        assert_eq!(c.default_limit, 20);
+        assert_eq!(c.mode, PaginationMode::Page);
+    }
+}

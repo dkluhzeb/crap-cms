@@ -153,3 +153,45 @@ fn document_from_snapshot(id: &str, snapshot: &Value) -> Option<Document> {
             .build(),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn snapshot_object_lifts_timestamps_out_of_fields() {
+        let snapshot = json!({
+            "title": "Hello",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-02T00:00:00Z"
+        });
+
+        let doc = document_from_snapshot("doc-1", &snapshot).unwrap();
+
+        assert_eq!(&*doc.id, "doc-1");
+        assert_eq!(doc.created_at.as_deref(), Some("2026-01-01T00:00:00Z"));
+        assert_eq!(doc.updated_at.as_deref(), Some("2026-01-02T00:00:00Z"));
+
+        // Timestamps are lifted into Document metadata, not left in `fields`.
+        assert_eq!(doc.fields.get_str("title"), Some("Hello"));
+        assert!(!doc.fields.contains_key("created_at"));
+        assert!(!doc.fields.contains_key("updated_at"));
+    }
+
+    #[test]
+    fn snapshot_without_timestamps_yields_none_metadata() {
+        let doc = document_from_snapshot("doc-2", &json!({ "title": "x" })).unwrap();
+        assert!(doc.created_at.is_none());
+        assert!(doc.updated_at.is_none());
+        assert_eq!(doc.fields.get_str("title"), Some("x"));
+    }
+
+    #[test]
+    fn non_object_snapshot_is_rejected() {
+        assert!(document_from_snapshot("doc-3", &json!(null)).is_none());
+        assert!(document_from_snapshot("doc-3", &json!([1, 2, 3])).is_none());
+        assert!(document_from_snapshot("doc-3", &json!("scalar")).is_none());
+    }
+}

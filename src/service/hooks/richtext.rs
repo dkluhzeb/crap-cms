@@ -78,3 +78,71 @@ fn collect_richtext_fields<'a>(
 
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::core::field::FieldAdmin;
+
+    use super::*;
+
+    /// A richtext field with a custom node registered (so it qualifies).
+    fn richtext_with_nodes(name: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Richtext)
+            .admin(FieldAdmin::builder().nodes(vec!["callout".into()]).build())
+            .build()
+    }
+
+    fn plain_richtext(name: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Richtext).build()
+    }
+
+    fn keys(fields: &[FieldDefinition]) -> Vec<String> {
+        collect_richtext_fields(fields, "")
+            .into_iter()
+            .map(|(_, key)| key)
+            .collect()
+    }
+
+    #[test]
+    fn collects_top_level_richtext_with_nodes_only() {
+        let fields = vec![
+            richtext_with_nodes("body"),
+            plain_richtext("notes"), // no custom nodes → skipped
+            FieldDefinition::builder("title", FieldType::Text).build(),
+        ];
+        assert_eq!(keys(&fields), vec!["body".to_string()]);
+    }
+
+    #[test]
+    fn group_richtext_uses_double_underscore_data_key() {
+        let fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![richtext_with_nodes("body")])
+                .build(),
+        ];
+        assert_eq!(keys(&fields), vec!["meta__body".to_string()]);
+    }
+
+    #[test]
+    fn layout_wrappers_are_transparent_no_prefix() {
+        let fields = vec![
+            FieldDefinition::builder("row", FieldType::Row)
+                .fields(vec![richtext_with_nodes("body")])
+                .build(),
+        ];
+        assert_eq!(keys(&fields), vec!["body".to_string()]);
+    }
+
+    #[test]
+    fn recurses_into_tabs() {
+        let fields = vec![
+            FieldDefinition::builder("tabs", FieldType::Tabs)
+                .tabs(vec![crate::core::field::FieldTab::new(
+                    "Content",
+                    vec![richtext_with_nodes("body")],
+                )])
+                .build(),
+        ];
+        assert_eq!(keys(&fields), vec!["body".to_string()]);
+    }
+}

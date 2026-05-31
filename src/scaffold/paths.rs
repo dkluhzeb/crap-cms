@@ -98,3 +98,59 @@ pub(crate) fn static_themes_dir(root: &Path) -> PathBuf {
 pub(crate) fn richtext_nodes_dir(root: &Path) -> PathBuf {
     root.join(LUA).join(RICHTEXT_NODES)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn nested_builders_have_the_expected_structure() {
+        let root = Path::new("/cfg");
+        assert_eq!(
+            collection_hooks_dir(root, "posts"),
+            PathBuf::from("/cfg/hooks/posts")
+        );
+        assert_eq!(
+            templates_pages_dir(root),
+            PathBuf::from("/cfg/templates/pages")
+        );
+        assert_eq!(
+            templates_fields_dir(root),
+            PathBuf::from("/cfg/templates/fields")
+        );
+        assert_eq!(
+            templates_slot_dir(root, "dashboard"),
+            PathBuf::from("/cfg/templates/slots/dashboard")
+        );
+        assert_eq!(
+            static_components_dir(root),
+            PathBuf::from("/cfg/static/components")
+        );
+        assert_eq!(
+            static_themes_dir(root),
+            PathBuf::from("/cfg/static/styles/themes")
+        );
+        assert_eq!(
+            richtext_nodes_dir(root),
+            PathBuf::from("/cfg/lua/richtext_nodes")
+        );
+    }
+
+    #[test]
+    fn top_level_builders_join_their_subdir() {
+        let root = Path::new("/cfg");
+        assert_eq!(collections_dir(root), PathBuf::from("/cfg/collections"));
+        assert_eq!(globals_dir(root), PathBuf::from("/cfg/globals"));
+        assert_eq!(migrations_dir(root), PathBuf::from("/cfg/migrations"));
+    }
+
+    #[test]
+    fn init_subdirs_cover_the_top_level_set_but_not_on_demand_dirs() {
+        assert!(INIT_SUBDIRS.contains(&COLLECTIONS));
+        assert!(INIT_SUBDIRS.contains(&GLOBALS));
+        assert!(INIT_SUBDIRS.contains(&TYPES));
+        // `lua/` is created on demand by generators, not by `init`.
+        assert!(!INIT_SUBDIRS.contains(&LUA));
+    }
+}

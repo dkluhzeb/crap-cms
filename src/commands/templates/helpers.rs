@@ -32,3 +32,45 @@ pub(super) fn lookup_embedded(kind: &str, sub_path: &str) -> Option<&'static [u8
 
     dir.get_file(sub_path).map(include_dir::File::contents)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_kind_recognizes_both_overlay_roots() {
+        assert_eq!(
+            split_kind("templates/layout/base.hbs"),
+            Some(("templates", "layout/base.hbs"))
+        );
+        assert_eq!(
+            split_kind("static/styles.css"),
+            Some(("static", "styles.css"))
+        );
+    }
+
+    #[test]
+    fn split_kind_rejects_paths_outside_known_roots() {
+        assert_eq!(split_kind("config/crap.toml"), None);
+        assert_eq!(split_kind("templates"), None); // prefix is "templates/", bare dir has no slash
+        assert_eq!(split_kind(""), None);
+    }
+
+    #[test]
+    fn lookup_embedded_returns_none_for_unknown_kind() {
+        assert!(lookup_embedded("collections", "anything").is_none());
+    }
+
+    #[test]
+    fn lookup_embedded_returns_none_for_missing_file() {
+        assert!(lookup_embedded("templates", "does/not/exist.hbs").is_none());
+        assert!(lookup_embedded("static", "no-such-file.css").is_none());
+    }
+
+    #[test]
+    fn lookup_embedded_finds_a_known_compiled_in_template() {
+        // base.hbs is the root layout — guaranteed compiled in.
+        let bytes = lookup_embedded("templates", "layout/base.hbs");
+        assert!(bytes.is_some_and(|b| !b.is_empty()));
+    }
+}
