@@ -241,3 +241,21 @@ fn delete_many_conn(
         upload_fields_to_clean,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// SAFE-DEFAULT GUARD: bulk delete must run lifecycle hooks (access,
+    /// hooks, ref-count decrement) per document by default, and must not
+    /// include soft-deleted rows unless explicitly emptying the trash.
+    #[test]
+    fn delete_many_options_default_runs_hooks_and_excludes_deleted() {
+        let opts = DeleteManyOptions::default();
+        assert!(opts.run_hooks, "bulk delete must run hooks by default");
+        assert!(
+            !opts.include_deleted,
+            "soft-deleted rows excluded by default"
+        );
+    }
+}

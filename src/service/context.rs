@@ -625,4 +625,20 @@ mod tests {
         let ctx = ServiceContext::collection("users", &def).build();
         assert!(ctx.invalidation_transport.is_none());
     }
+
+    /// SAFE-DEFAULT GUARD (most critical): `override_access` bypasses ALL
+    /// access checks. It must default to `false` so a surface that forgets to
+    /// set it enforces access rather than skipping it. A regression flipping
+    /// this default to `true` would silently disable authorization on every
+    /// surface that builds a context without opting out.
+    #[test]
+    fn builder_does_not_override_access_by_default() {
+        let def = CollectionDefinition::new("users");
+        assert!(
+            !ServiceContext::collection("users", &def)
+                .build()
+                .override_access
+        );
+        assert!(!ServiceContext::slug_only("users").build().override_access);
+    }
 }

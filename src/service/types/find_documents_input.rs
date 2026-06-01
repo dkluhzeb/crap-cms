@@ -238,4 +238,16 @@ mod tests {
         assert!(input.singleflight.is_none());
         assert!(PostProcessOpts::singleflight(&input).is_none());
     }
+
+    /// SAFE-DEFAULT GUARD: a surface that builds `FindDocumentsInput` without
+    /// opting in must get the restrictive behavior — drafts hidden, trash
+    /// excluded. Flipping either default to `true` would silently leak
+    /// unpublished/trashed rows across *every* surface.
+    #[test]
+    fn builder_defaults_are_restrictive() {
+        let fq = FindQuery::default();
+        let input = FindDocumentsInput::builder(&fq).build();
+        assert!(!input.include_drafts, "drafts must be hidden by default");
+        assert!(!input.trash, "trash must be excluded by default");
+    }
 }

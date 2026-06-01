@@ -184,4 +184,17 @@ mod tests {
         assert!(input.singleflight.is_none());
         assert!(PostProcessOpts::singleflight(&input).is_none());
     }
+
+    /// SAFE-DEFAULT GUARD: by default a by-id read must not surface a draft
+    /// overlay or a soft-deleted row. Flipping these defaults would leak
+    /// unpublished/trashed documents on every surface that uses the builder.
+    #[test]
+    fn builder_defaults_are_restrictive() {
+        let input = FindByIdInput::builder("id").build();
+        assert!(!input.use_draft, "draft overlay must be off by default");
+        assert!(
+            !input.include_deleted,
+            "soft-deleted rows excluded by default"
+        );
+    }
 }

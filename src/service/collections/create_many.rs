@@ -172,3 +172,19 @@ fn create_many_on_conn(
 
     Ok(CreateManyResult { created, documents })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// SAFE-DEFAULT GUARD: bulk create must run lifecycle hooks (validation,
+    /// hooks, ref-counting) per document by default, and not create drafts.
+    /// Flipping `run_hooks` to `false` here would silently let bulk create
+    /// bypass validation that single create always applies.
+    #[test]
+    fn create_many_options_default_runs_hooks_and_is_not_draft() {
+        let opts = CreateManyOptions::default();
+        assert!(opts.run_hooks, "bulk create must run hooks by default");
+        assert!(!opts.draft, "bulk create is not a draft by default");
+    }
+}
