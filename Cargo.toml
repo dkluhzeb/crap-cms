@@ -52,7 +52,9 @@ toml = "1.0"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `float_roundtrip`: correctly-rounded f64 parsing so Number-field values
+# round-trip through JSON exactly (API/gRPC responses, blocks `data`, cursors).
+serde_json = { version = "1", features = ["float_roundtrip"] }
 schemars = { version = "1", features = ["chrono04", "preserve_order"] }
 
 # Auth
@@ -128,6 +130,7 @@ redis = { version = "1", features = ["tokio-comp"] }
 tempfile = "3"
 http-body-util = "0.1"
 scraper = "0.26"
+proptest = "1"
 
 # Build
 tonic-prost-build = "0.14"
@@ -304,6 +307,7 @@ redis = ["dep:redis"]
 tempfile.workspace = true
 http-body-util.workspace = true
 scraper.workspace = true
+proptest.workspace = true
 
 [build-dependencies]
 tonic-prost-build.workspace = true

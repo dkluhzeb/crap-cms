@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 010fd217ecda3ae81a4217307dfa124dae145875206669242bfee24862cf7c76 # shrinks to cursor = CursorData { sort_col: "0", sort_dir: Asc, sort_val: Real(2.1586137130314077e-308), id: "𝒞", status_val: None }
+cc 92278ee4100a0483283cc3005aa1ca5b8dc55d5facb53c16efbbf55f558f0f79 # shrinks to cursor = CursorData { sort_col: "𑪰", sort_dir: Asc, sort_val: Real(7.85408966888125e-273), id: " ", status_val: None }

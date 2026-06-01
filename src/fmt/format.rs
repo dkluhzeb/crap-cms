@@ -18,7 +18,30 @@ pub fn format(src: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
+
+    proptest! {
+        /// Property: the formatter never panics on arbitrary input — a
+        /// malformed template must surface as `Err`, never a crash (it runs in
+        /// the pre-commit hook and CI on whatever is on disk).
+        #[test]
+        fn format_never_panics_on_arbitrary_input(s in any::<String>()) {
+            let _ = format(&s);
+        }
+
+        /// Property: formatting is idempotent — once a template formats
+        /// successfully, re-formatting its output is a fixed point. A
+        /// non-idempotent formatter would thrash `fmt --check` in CI.
+        #[test]
+        fn format_is_idempotent_on_success(s in any::<String>()) {
+            if let Ok(once) = format(&s) {
+                let twice = format(&once).expect("formatted output must re-format");
+                prop_assert_eq!(once, twice);
+            }
+        }
+    }
 
     /// The formatter is documented as idempotent (CI gates on
     /// `crap-cms fmt --check`): formatting already-formatted output must be a

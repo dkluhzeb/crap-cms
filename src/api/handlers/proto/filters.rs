@@ -155,9 +155,47 @@ pub(in crate::api::handlers) fn value_to_string(v: &JsonValue) -> Result<String,
     clippy::used_underscore_binding
 )]
 mod tests {
+    use proptest::prelude::*;
+    use serde_json::Value;
+
     use super::*;
     use crate::db::{FilterClause, FilterOp};
     use serde_json::json;
+
+    /// Strategy producing arbitrary JSON values (objects, arrays, scalars,
+    /// nested) to exercise the structured parse paths — operator objects,
+    /// `or` groups, dotted fields, deep nesting.
+    fn arbitrary_json() -> impl Strategy<Value = Value> {
+        let leaf = prop_oneof![
+            Just(Value::Null),
+            any::<bool>().prop_map(Value::Bool),
+            any::<i64>().prop_map(Value::from),
+            any::<String>().prop_map(Value::String),
+        ];
+        leaf.prop_recursive(4, 48, 6, |inner| {
+            prop_oneof![
+                prop::collection::vec(inner.clone(), 0..6).prop_map(Value::Array),
+                prop::collection::vec((any::<String>(), inner), 0..6)
+                    .prop_map(|kvs| Value::Object(kvs.into_iter().collect())),
+            ]
+        })
+    }
+
+    proptest! {
+        /// Property: parsing an arbitrary JSON `where` clause never panics — it
+        /// must always return Ok or Err. A panic here would be a DoS via the
+        /// untrusted `where` request parameter.
+        #[test]
+        fn parse_where_json_never_panics_on_arbitrary_json(v in arbitrary_json()) {
+            let _ = parse_where_json(&v.to_string());
+        }
+
+        /// Property: even raw, possibly-non-JSON input never panics.
+        #[test]
+        fn parse_where_json_never_panics_on_arbitrary_text(s in any::<String>()) {
+            let _ = parse_where_json(&s);
+        }
+    }
 
     // ── parse_where_json ───────────────────────────────────────────────────
 

@@ -210,6 +210,15 @@ Wire-contract changes — regenerate your gRPC stubs and adjust:
   `"42.0"`, which will now see `"42"`. (gRPC is unaffected — it always
   carried numbers as `double`.)
 
+- **JSON-decoded floats now keep full precision.** crap-cms now uses a
+  correctly-rounded JSON float parser, so a `number` value read back
+  from a JSON-backed path — the `blocks` `data` column, MCP arguments,
+  keyset pagination cursors — is bit-identical to what was written.
+  Previously the parser could be off by up to one ULP for some
+  magnitudes (very large/small exponents). This only makes values *more*
+  exact, so no action is needed. (gRPC is unaffected — it carries
+  numbers as protobuf `double`, not JSON.)
+
 ## Additive features (alpha.10)
 
 ### MCP writes accept `locale`, `draft`, and `force_hard_delete`

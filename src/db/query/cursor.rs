@@ -280,9 +280,85 @@ fn cursor_from_doc(
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
     use serde_json::json;
 
     use super::*;
+
+    fn nonempty() -> impl Strategy<Value = String> {
+        any::<String>().prop_filter("non-empty", |s| !s.is_empty())
+    }
+
+    fn sort_value_strategy() -> impl Strategy<Value = SortValue> {
+        prop_oneof![
+            Just(SortValue::Null),
+            any::<bool>().prop_map(SortValue::Bool),
+            any::<i64>().prop_map(SortValue::Integer),
+            // Any finite f64 round-trips exactly thanks to serde_json's
+            // `float_roundtrip` feature (correctly-rounded parsing). JSON still
+            // can't represent NaN/Infinity, so those are excluded.
+            any::<f64>()
+                .prop_filter("finite", |f| f.is_finite())
+                .prop_map(SortValue::Real),
+            any::<String>().prop_map(SortValue::Text),
+        ]
+    }
+
+    fn cursor_strategy() -> impl Strategy<Value = CursorData> {
+        (
+            nonempty(), // sort_col — decode requires non-empty
+            prop_oneof![Just(SortDirection::Asc), Just(SortDirection::Desc)],
+            sort_value_strategy(),
+            nonempty(), // id — decode requires non-empty
+            prop::option::of(any::<String>()),
+        )
+            .prop_map(
+                |(sort_col, sort_dir, sort_val, id, status_val)| CursorData {
+                    sort_col,
+                    sort_dir,
+                    sort_val,
+                    id,
+                    status_val,
+                },
+            )
+    }
+
+    proptest! {
+        /// Property: any well-formed cursor survives `encode` → `decode` unchanged.
+        #[test]
+        fn cursor_encode_decode_roundtrips(cursor in cursor_strategy()) {
+            let encoded = cursor.encode().expect("encode never fails for finite cursor");
+            let decoded = CursorData::decode(&encoded).expect("decode of own output");
+            prop_assert_eq!(cursor, decoded);
+        }
+
+        /// Property: `decode` never panics on arbitrary input — only Ok/Err.
+        #[test]
+        fn cursor_decode_never_panics(s in any::<String>()) {
+            let _ = CursorData::decode(&s);
+        }
+
+        /// Property: every finite f64 sort value round-trips *bit-exactly*
+        /// (guarded by serde_json's `float_roundtrip` feature). A regression
+        /// that dropped the feature would resurface ≤1-ULP drift and fail here.
+        #[test]
+        fn real_cursor_roundtrips_exactly(
+            a in any::<f64>().prop_filter("finite", |f| f.is_finite()),
+        ) {
+            let cursor = CursorData {
+                sort_col: "c".to_string(),
+                sort_dir: SortDirection::Asc,
+                sort_val: SortValue::Real(a),
+                id: "i".to_string(),
+                status_val: None,
+            };
+            let decoded = CursorData::decode(&cursor.encode().unwrap()).unwrap();
+            let SortValue::Real(b) = decoded.sort_val else {
+                panic!("expected Real, got {:?}", decoded.sort_val);
+            };
+            prop_assert_eq!(a.to_bits(), b.to_bits(), "real {} did not round-trip exactly: got {}", a, b);
+        }
+    }
 
     #[test]
     fn encode_decode_roundtrip() {

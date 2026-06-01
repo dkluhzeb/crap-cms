@@ -611,4 +611,47 @@ mod tests {
         assert!(!is_safe_url(""));
         assert!(!is_safe_url("  javascript:alert(1)"));
     }
+
+    mod fuzz {
+        use proptest::prelude::*;
+        use serde_json::Value;
+
+        use super::super::render_prosemirror_to_html;
+
+        /// Arbitrary JSON values — objects/arrays/scalars, nested — to stress
+        /// the recursive node walker with malformed/extra/missing fields.
+        fn arbitrary_json() -> impl Strategy<Value = Value> {
+            let leaf = prop_oneof![
+                Just(Value::Null),
+                any::<bool>().prop_map(Value::Bool),
+                any::<i64>().prop_map(Value::from),
+                any::<String>().prop_map(Value::String),
+            ];
+            leaf.prop_recursive(5, 64, 8, |inner| {
+                prop_oneof![
+                    prop::collection::vec(inner.clone(), 0..6).prop_map(Value::Array),
+                    prop::collection::vec((any::<String>(), inner), 0..6)
+                        .prop_map(|kvs| Value::Object(kvs.into_iter().collect())),
+                ]
+            })
+        }
+
+        proptest! {
+            /// Property: rendering arbitrary ProseMirror-shaped JSON never
+            /// panics — the recursive walker must tolerate missing/extra
+            /// fields, wrong types, and deep nesting from untrusted content.
+            #[test]
+            fn render_never_panics_on_arbitrary_json(v in arbitrary_json()) {
+                let noop = |_t: &str, _a: &Value| -> Option<String> { None };
+                let _ = render_prosemirror_to_html(&v.to_string(), &noop);
+            }
+
+            /// Property: even raw, possibly-non-JSON input never panics.
+            #[test]
+            fn render_never_panics_on_arbitrary_text(s in any::<String>()) {
+                let noop = |_t: &str, _a: &Value| -> Option<String> { None };
+                let _ = render_prosemirror_to_html(&s, &noop);
+            }
+        }
+    }
 }

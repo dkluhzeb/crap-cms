@@ -217,6 +217,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   valid values, rather than failing later at startup. The accepted
   values are unchanged, so valid configs need no edits.
 
+- **Floating-point values decoded from JSON now preserve full
+  precision.** Enabled serde_json's correctly-rounded float parser
+  (`float_roundtrip`). A `number` value round-tripped through any
+  JSON-backed path — the `blocks` `data` column, MCP arguments, and
+  keyset pagination cursors — is now bit-identical to what was stored;
+  the previous default parser could be off by up to one ULP for some
+  magnitudes (very large/small exponents). This only makes values *more*
+  exact, so no action is required. Float *parsing* is marginally slower.
+  (gRPC is unaffected — it carries numbers as protobuf `double`, not
+  JSON.)
+
 ## [0.1.0-alpha.9] — 2026-05-25
 
 ### Security
