@@ -170,3 +170,33 @@ pub async fn create_form(
 
     render_page(&state, "collections/edit", &ctx)
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::core::upload::CollectionUpload;
+
+    use super::*;
+
+    #[test]
+    fn accept_joins_declared_mime_types() {
+        let mut def = CollectionDefinition::new("media");
+        def.upload = Some(CollectionUpload {
+            mime_types: vec!["image/png".into(), "image/jpeg".into()],
+            ..Default::default()
+        });
+        assert_eq!(
+            upload_accept_context(&def).accept.as_deref(),
+            Some("image/png,image/jpeg")
+        );
+    }
+
+    #[test]
+    fn accept_is_none_without_upload_or_with_no_mime_types() {
+        let no_upload = CollectionDefinition::new("posts");
+        assert!(upload_accept_context(&no_upload).accept.is_none());
+
+        let mut empty = CollectionDefinition::new("media");
+        empty.upload = Some(CollectionUpload::default()); // no mime types declared
+        assert!(upload_accept_context(&empty).accept.is_none());
+    }
+}

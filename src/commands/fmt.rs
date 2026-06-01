@@ -147,3 +147,17 @@ fn walk_dir(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_hbs_matches_only_the_lowercase_hbs_extension() {
+        assert!(is_hbs(Path::new("templates/base.hbs")));
+        assert!(!is_hbs(Path::new("styles.css")));
+        assert!(!is_hbs(Path::new("README"))); // no extension
+        assert!(!is_hbs(Path::new("base.HBS"))); // case-sensitive
+        assert!(!is_hbs(Path::new("base.hbs.bak")));
+    }
+}

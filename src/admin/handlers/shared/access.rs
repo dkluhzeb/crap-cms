@@ -227,3 +227,47 @@ pub fn has_read_access(
 
     allowed
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::core::field::{FieldAdmin, FieldTab, FieldType};
+
+    use super::*;
+
+    fn with_condition(name: &str, cond: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Text)
+            .admin(FieldAdmin::builder().condition(cond).build())
+            .build()
+    }
+
+    #[test]
+    fn collects_condition_refs_recursively_and_dedups() {
+        let fields = vec![
+            with_condition("a", "cond.show_a"),
+            FieldDefinition::builder("plain", FieldType::Text).build(), // no condition
+            FieldDefinition::builder("grp", FieldType::Group)
+                .fields(vec![
+                    with_condition("b", "cond.show_b"),
+                    with_condition("c", "cond.show_a"), // duplicate ref
+                ])
+                .build(),
+        ];
+
+        let mut refs: Vec<&str> = collect_condition_refs(&fields).into_iter().collect();
+        refs.sort_unstable();
+        assert_eq!(refs, vec!["cond.show_a", "cond.show_b"]);
+    }
+
+    #[test]
+    fn recurses_into_tabs() {
+        let fields = vec![
+            FieldDefinition::builder("tabs", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "T",
+                    vec![with_condition("x", "cond.x")],
+                )])
+                .build(),
+        ];
+        assert!(collect_condition_refs(&fields).contains("cond.x"));
+    }
+}

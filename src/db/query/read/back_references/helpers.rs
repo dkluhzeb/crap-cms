@@ -72,7 +72,7 @@ pub(super) fn query_ids_simple_params(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
     use crate::core::LocalizedString;

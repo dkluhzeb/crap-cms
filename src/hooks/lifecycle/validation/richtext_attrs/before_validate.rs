@@ -252,3 +252,47 @@ fn run_attr_before_validate_hooks(
     }
     current
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::core::field::{FieldAdmin, FieldType};
+
+    use super::*;
+
+    fn richtext_field(nodes: Vec<String>) -> FieldDefinition {
+        FieldDefinition::builder("body", FieldType::Richtext)
+            .admin(FieldAdmin::builder().nodes(nodes).build())
+            .build()
+    }
+
+    /// With no custom nodes, the short-circuit returns the content verbatim —
+    /// crucially WITHOUT parsing it, so even invalid JSON/HTML passes through
+    /// untouched (and no Lua runs).
+    #[test]
+    fn no_custom_nodes_returns_content_verbatim() {
+        let lua = Lua::new();
+        let registry = Registry::new();
+        let field = richtext_field(vec![]);
+
+        let garbage = "{ this is not valid json <crap-node";
+        assert_eq!(
+            run_before_validate_on_node_attrs(&lua, garbage, &field, &registry, "posts"),
+            garbage
+        );
+    }
+
+    /// A node name is declared on the field but the registry has no matching
+    /// node definition (hence no `before_validate` hooks) → still a pass-through.
+    #[test]
+    fn declared_node_absent_from_registry_is_pass_through() {
+        let lua = Lua::new();
+        let registry = Registry::new();
+        let field = richtext_field(vec!["callout".into()]);
+
+        let content = r#"{"type":"doc","content":[]}"#;
+        assert_eq!(
+            run_before_validate_on_node_attrs(&lua, content, &field, &registry, "posts"),
+            content
+        );
+    }
+}

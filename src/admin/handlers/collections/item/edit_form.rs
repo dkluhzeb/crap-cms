@@ -467,3 +467,74 @@ fn build_edit_page_context(input: EditPageContextInput<'_>) -> CollectionEditPag
         upload,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use serde_json::{Value, json};
+
+    use crate::core::document::DocumentBuilder;
+    use crate::core::upload::CollectionUpload;
+
+    use super::*;
+
+    fn media_def(thumb: Option<&str>) -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("media");
+        def.upload = Some(CollectionUpload {
+            mime_types: vec!["image/png".into()],
+            admin_thumbnail: thumb.map(str::to_string),
+            ..Default::default()
+        });
+        def
+    }
+
+    fn doc(fields: Value) -> Document {
+        let map: HashMap<String, Value> = serde_json::from_value(fields).unwrap();
+        DocumentBuilder::new("u1").fields(map).build()
+    }
+
+    #[test]
+    fn image_with_thumbnail_uses_sized_preview_and_formats_dimensions() {
+        let def = media_def(Some("card"));
+        let d = doc(json!({
+            "url": "/orig.png", "mime_type": "image/png", "filename": "p.png",
+            "filesize": 2048, "width": 800, "height": 600,
+            "focal_x": 0.5, "focal_y": 0.25,
+            "sizes": { "card": { "url": "/card.png" } }
+        }));
+
+        let ctx = build_upload_context(&def, &d);
+
+        assert_eq!(ctx.accept.as_deref(), Some("image/png"));
+        assert_eq!(ctx.focal_x, Some(0.5));
+        assert_eq!(ctx.focal_y, Some(0.25));
+        assert_eq!(ctx.preview.as_deref(), Some("/card.png"));
+
+        let info = ctx.info.expect("info present when filename set");
+        assert_eq!(info.filename, "p.png");
+        assert_eq!(info.dimensions.as_deref(), Some("800x600"));
+        assert!(info.filesize_display.is_some());
+    }
+
+    #[test]
+    fn image_without_thumbnail_falls_back_to_original_url() {
+        let def = media_def(None);
+        let d = doc(json!({ "url": "/orig.png", "mime_type": "image/jpeg", "filename": "p.jpg" }));
+
+        let ctx = build_upload_context(&def, &d);
+        assert_eq!(ctx.preview.as_deref(), Some("/orig.png"));
+        // No width/height → no dimensions string.
+        assert_eq!(ctx.info.expect("info").dimensions, None);
+    }
+
+    #[test]
+    fn non_image_has_no_preview() {
+        let def = media_def(Some("card"));
+        let d =
+            doc(json!({ "url": "/f.pdf", "mime_type": "application/pdf", "filename": "f.pdf" }));
+
+        let ctx = build_upload_context(&def, &d);
+        assert!(ctx.preview.is_none());
+    }
+}

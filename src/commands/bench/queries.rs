@@ -198,7 +198,7 @@ fn build_explain_sql(
     Ok((sql, params))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
     use crate::db::InMemoryConn;

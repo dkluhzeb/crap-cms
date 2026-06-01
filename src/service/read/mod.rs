@@ -4,6 +4,7 @@
 //! shared across admin, gRPC, MCP, and Lua CRUD surfaces.
 
 mod count;
+mod draft_visibility;
 mod find;
 mod find_by_id;
 mod get_global;

@@ -541,3 +541,54 @@ fn build_item_row(doc: &Document, table_columns: &[Value], def: &CollectionDefin
 
     item
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::admin::handlers::query::url::ListUrlContext;
+
+    use super::*;
+
+    fn titled_def() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("posts");
+        def.admin.use_as_title = Some("title".to_string());
+        def
+    }
+
+    fn ctx(sort: Option<&'static str>) -> ListUrlContext<'static> {
+        ListUrlContext {
+            base_url: "/admin/collections/posts",
+            search: None,
+            sort,
+            where_params: "",
+        }
+    }
+
+    #[test]
+    fn no_title_field_yields_no_sort() {
+        let (url, asc, desc) = compute_title_sort(&CollectionDefinition::new("posts"), &ctx(None));
+        assert!(url.is_none());
+        assert!(!asc && !desc);
+    }
+
+    #[test]
+    fn unsorted_offers_ascending_toggle() {
+        let (url, asc, desc) = compute_title_sort(&titled_def(), &ctx(None));
+        assert!(url.is_some());
+        assert!(!asc && !desc); // not currently sorted by title
+    }
+
+    #[test]
+    fn ascending_active_next_toggles_to_descending() {
+        let (url, asc, desc) = compute_title_sort(&titled_def(), &ctx(Some("title")));
+        assert!(asc && !desc);
+        // next link flips to descending.
+        assert!(url.unwrap().contains("sort=-title"));
+    }
+
+    #[test]
+    fn descending_active_next_toggles_back_to_ascending() {
+        let (url, asc, desc) = compute_title_sort(&titled_def(), &ctx(Some("-title")));
+        assert!(desc && !asc);
+        assert!(url.unwrap().contains("sort=title"));
+    }
+}

@@ -244,3 +244,25 @@ fn build_delete_filters(
 
     Ok(find_query.filters)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn picks_trash_access_when_soft_deleting_else_delete() {
+        let mut def = CollectionDefinition::new("posts");
+        def.access.delete = Some("can_delete".into());
+        def.access.trash = Some("can_trash".into());
+
+        assert_eq!(resolve_delete_access(&def, false), Some("can_delete"));
+        assert_eq!(resolve_delete_access(&def, true), Some("can_trash"));
+    }
+
+    #[test]
+    fn none_when_access_unset() {
+        let def = CollectionDefinition::new("posts");
+        assert_eq!(resolve_delete_access(&def, false), None);
+        assert_eq!(resolve_delete_access(&def, true), None);
+    }
+}

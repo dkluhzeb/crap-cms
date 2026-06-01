@@ -72,3 +72,59 @@ fn merge_join_data_into_snapshot(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::core::field::RelationshipConfig;
+
+    use super::*;
+
+    #[test]
+    fn copies_join_field_values_recurses_layout_ignores_scalars_and_groups() {
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("tags", true))
+                .build(),
+            FieldDefinition::builder("items", FieldType::Array).build(),
+            FieldDefinition::builder("title", FieldType::Text).build(), // scalar → ignored
+            FieldDefinition::builder("row", FieldType::Row)
+                .fields(vec![
+                    FieldDefinition::builder("rows", FieldType::Blocks).build(),
+                ])
+                .build(),
+            // Group is NOT a transparent layout here — its join children are
+            // not merged by this function.
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("ignored", FieldType::Array).build(),
+                ])
+                .build(),
+        ];
+
+        let mut data = DocumentFields::new();
+        data.insert("tags".into(), json!(["t1"]));
+        data.insert("items".into(), json!([{ "x": 1 }]));
+        data.insert("title".into(), json!("Hello"));
+        data.insert("rows".into(), json!([{ "_block_type": "hero" }]));
+        data.insert("ignored".into(), json!([{ "y": 2 }]));
+
+        let mut obj = serde_json::Map::new();
+        merge_join_data_into_snapshot(&mut obj, &fields, &data);
+
+        assert_eq!(obj.get("tags"), Some(&json!(["t1"])));
+        assert_eq!(obj.get("items"), Some(&json!([{ "x": 1 }])));
+        assert_eq!(obj.get("rows"), Some(&json!([{ "_block_type": "hero" }]))); // via Row
+        assert!(!obj.contains_key("title")); // scalar
+        assert!(!obj.contains_key("ignored")); // inside Group → not merged
+    }
+
+    #[test]
+    fn absent_data_keys_are_skipped() {
+        let fields = vec![FieldDefinition::builder("items", FieldType::Array).build()];
+        let mut obj = serde_json::Map::new();
+        merge_join_data_into_snapshot(&mut obj, &fields, &DocumentFields::new());
+        assert!(obj.is_empty());
+    }
+}

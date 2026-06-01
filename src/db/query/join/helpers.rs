@@ -35,7 +35,7 @@ pub(super) fn delete_junction_rows(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
     use crate::db::InMemoryConn;

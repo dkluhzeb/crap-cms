@@ -250,3 +250,16 @@ pub fn check_existing_pid(config_dir: &Path, filename: &str) {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pid_file_path_lives_under_the_data_subdir() {
+        assert_eq!(
+            pid_file_path(Path::new("/app"), "server.pid"),
+            PathBuf::from("/app/data/server.pid")
+        );
+    }
+}

@@ -140,3 +140,18 @@ pub async fn empty_trash_action(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trash_filters_select_only_soft_deleted_rows() {
+        let filters = trash_filters();
+        assert_eq!(filters.len(), 1);
+        assert!(matches!(
+            &filters[0],
+            FilterClause::Single(f) if f.field == "_deleted_at" && matches!(f.op, FilterOp::Exists)
+        ));
+    }
+}

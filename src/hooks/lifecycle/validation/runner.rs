@@ -37,3 +37,29 @@ pub(in crate::hooks::lifecycle::validation) fn is_empty_value(value: Option<&Val
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn absent_null_and_empty_string_are_empty() {
+        assert!(is_empty_value(None));
+        assert!(is_empty_value(Some(&Value::Null)));
+        assert!(is_empty_value(Some(&json!(""))));
+    }
+
+    #[test]
+    fn present_values_are_not_empty() {
+        assert!(!is_empty_value(Some(&json!("x"))));
+        // Non-string types are never "empty" — including the falsy/zero/blank
+        // shapes, so a `0`, `false`, `[]` or `{}` still counts as provided.
+        assert!(!is_empty_value(Some(&json!(0))));
+        assert!(!is_empty_value(Some(&json!(false))));
+        assert!(!is_empty_value(Some(&json!([]))));
+        assert!(!is_empty_value(Some(&json!({}))));
+        assert!(!is_empty_value(Some(&json!(" "))));
+    }
+}

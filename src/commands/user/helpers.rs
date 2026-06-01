@@ -193,3 +193,33 @@ pub(super) fn prompt_required_fields(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use serde_json::{Value, json};
+
+    use crate::core::document::DocumentBuilder;
+
+    use super::*;
+
+    #[test]
+    fn get_user_email_returns_email_or_unknown() {
+        let map: HashMap<String, Value> =
+            serde_json::from_value(json!({ "email": "a@example.com" })).unwrap();
+        let with_email = DocumentBuilder::new("u1").fields(map).build();
+        assert_eq!(get_user_email(&with_email), "a@example.com");
+
+        let without = DocumentBuilder::new("u2").build();
+        assert_eq!(get_user_email(&without), "unknown");
+    }
+
+    #[test]
+    fn default_value_string_unquotes_strings_but_renders_others_as_json() {
+        assert_eq!(default_value_string(&json!("hello")), "hello"); // no surrounding quotes
+        assert_eq!(default_value_string(&json!(42)), "42");
+        assert_eq!(default_value_string(&json!(true)), "true");
+        assert_eq!(default_value_string(&Value::Null), "null");
+    }
+}

@@ -612,3 +612,45 @@ fn spawn_job_execution(s: &SpawnJobInput<'_>) {
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::config::{JobsConfig, QueueConfig};
+
+    use super::*;
+
+    #[test]
+    fn build_queue_maps_applies_a_distinct_gate_per_map() {
+        let mut config = JobsConfig::default();
+        config.queues.insert(
+            "fast".into(),
+            QueueConfig {
+                concurrency: Some(5),
+                timeout: None,
+                retries: Some(0),
+            },
+        );
+        config.queues.insert(
+            "slow".into(),
+            QueueConfig {
+                concurrency: Some(0),
+                timeout: Some(30),
+                retries: None,
+            },
+        );
+
+        let maps = build_queue_maps(&config);
+
+        // concurrency map: only effective > 0 (so Some(0) and None are excluded).
+        assert_eq!(maps.queue_concurrency.get("fast"), Some(&5));
+        assert!(!maps.queue_concurrency.contains_key("slow"));
+
+        // timeout map: only effective > 0.
+        assert_eq!(maps.queue_timeouts.get("slow"), Some(&30));
+        assert!(!maps.queue_timeouts.contains_key("fast"));
+
+        // retries map: any `Some(_)` is included — including Some(0); None excluded.
+        assert_eq!(maps.queue_retries.get("fast"), Some(&0));
+        assert!(!maps.queue_retries.contains_key("slow"));
+    }
+}

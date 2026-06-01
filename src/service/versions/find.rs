@@ -93,3 +93,48 @@ fn strip_nested_snapshot(map: &mut serde_json::Map<String, Value>, segments: &[&
         strip_nested_snapshot(inner, rest);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn strips_top_level_denied_fields() {
+        let mut snap = json!({ "title": "Hi", "secret": "x", "body": "text" });
+        strip_snapshot_fields(&mut snap, &["secret".to_string()]);
+        assert_eq!(snap, json!({ "title": "Hi", "body": "text" }));
+    }
+
+    #[test]
+    fn strips_nested_group_subfield_via_double_underscore_path() {
+        // `meta__token` removes `token` inside the nested `meta` object,
+        // leaving the group's other subfields intact.
+        let mut snap = json!({
+            "meta": { "token": "secret", "author": "ada" },
+            "title": "Hi"
+        });
+        strip_snapshot_fields(&mut snap, &["meta__token".to_string()]);
+        assert_eq!(snap, json!({ "meta": { "author": "ada" }, "title": "Hi" }));
+    }
+
+    #[test]
+    fn strips_deeply_nested_subfield() {
+        let mut snap = json!({ "a": { "b": { "c": 1, "d": 2 } } });
+        strip_snapshot_fields(&mut snap, &["a__b__c".to_string()]);
+        assert_eq!(snap, json!({ "a": { "b": { "d": 2 } } }));
+    }
+
+    #[test]
+    fn missing_paths_and_non_objects_are_no_ops() {
+        let mut snap = json!({ "title": "Hi" });
+        strip_snapshot_fields(&mut snap, &["nope".to_string(), "a__b".to_string()]);
+        assert_eq!(snap, json!({ "title": "Hi" }));
+
+        // A non-object snapshot is left untouched.
+        let mut arr = json!([1, 2, 3]);
+        strip_snapshot_fields(&mut arr, &["x".to_string()]);
+        assert_eq!(arr, json!([1, 2, 3]));
+    }
+}

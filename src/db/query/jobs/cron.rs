@@ -62,7 +62,7 @@ pub fn try_claim_cron_window(
     Ok(updated > 0)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
     use crate::db::InMemoryConn;

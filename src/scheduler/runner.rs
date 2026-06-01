@@ -609,6 +609,25 @@ mod tests {
     use super::*;
     use crate::core::{Registry, job::JobStatus};
 
+    // ── normalize_cron ────────────────────────────────────────────────────
+
+    #[test]
+    fn normalize_cron_prepends_seconds_to_5_field_expr() {
+        // A 5-field (minute-granularity) cron gets a leading "0 " seconds field.
+        assert_eq!(normalize_cron("*/5 * * * *"), "0 */5 * * * *");
+    }
+
+    #[test]
+    fn normalize_cron_passes_through_6_field_expr() {
+        // Already 6 fields (seconds present) → unchanged (whitespace collapsed).
+        assert_eq!(normalize_cron("30 */5 * * * *"), "30 */5 * * * *");
+    }
+
+    #[test]
+    fn normalize_cron_collapses_whitespace() {
+        assert_eq!(normalize_cron("  */5   *  * * *  "), "0 */5 * * * *");
+    }
+
     // ── parse_retention_seconds ───────────────────────────────────────────
 
     #[test]

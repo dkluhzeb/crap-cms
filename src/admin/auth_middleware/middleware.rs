@@ -239,3 +239,35 @@ pub(in crate::admin) async fn auth_middleware(
     }
     next.run(request).await
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::http::{HeaderMap, HeaderValue};
+
+    use super::*;
+
+    #[test]
+    fn maps_header_names_to_string_values() {
+        let mut h = HeaderMap::new();
+        h.insert("content-type", "application/json".parse().unwrap());
+        h.insert("x-custom", "abc".parse().unwrap());
+
+        let m = headers_to_map(&h);
+        assert_eq!(
+            m.get("content-type").map(String::as_str),
+            Some("application/json")
+        );
+        assert_eq!(m.get("x-custom").map(String::as_str), Some("abc"));
+    }
+
+    #[test]
+    fn skips_non_utf8_header_values() {
+        let mut h = HeaderMap::new();
+        h.insert("x-bin", HeaderValue::from_bytes(&[0xff, 0xfe]).unwrap());
+        h.insert("x-ok", "v".parse().unwrap());
+
+        let m = headers_to_map(&h);
+        assert!(!m.contains_key("x-bin")); // non-UTF8 value dropped
+        assert_eq!(m.get("x-ok").map(String::as_str), Some("v"));
+    }
+}

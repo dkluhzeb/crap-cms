@@ -49,7 +49,7 @@ pub(super) fn get_fts_table_columns(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
     use crate::db::InMemoryConn;

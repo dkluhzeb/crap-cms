@@ -99,3 +99,53 @@ pub async fn save_user_settings(
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use crate::core::CollectionDefinition;
+    use crate::core::field::{FieldDefinition, FieldType};
+
+    use super::*;
+
+    fn def_with(fields: Vec<(&str, FieldType)>) -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = fields
+            .into_iter()
+            .map(|(n, t)| FieldDefinition::builder(n, t).build())
+            .collect();
+        def
+    }
+
+    fn form(columns: &str) -> HashMap<String, String> {
+        let mut m = HashMap::new();
+        m.insert("columns".to_string(), columns.to_string());
+        m
+    }
+
+    #[test]
+    fn keeps_only_schema_eligible_and_whitelisted_columns() {
+        let def = def_with(vec![
+            ("title", FieldType::Text),
+            ("body", FieldType::Blocks),
+        ]);
+        // title (Text, eligible) + created_at (always allowed) kept;
+        // body (Blocks, not eligible) and unknown column dropped.
+        let cols = parse_valid_columns(&form(" title , created_at , body , evil "), &def);
+        assert_eq!(cols, vec!["title".to_string(), "created_at".to_string()]);
+    }
+
+    #[test]
+    fn always_allows_meta_columns_even_without_matching_fields() {
+        let def = def_with(vec![]);
+        let cols = parse_valid_columns(&form("created_at,updated_at,_status"), &def);
+        assert_eq!(cols, vec!["created_at", "updated_at", "_status"]);
+    }
+
+    #[test]
+    fn missing_columns_key_yields_empty() {
+        let def = def_with(vec![("title", FieldType::Text)]);
+        assert!(parse_valid_columns(&HashMap::new(), &def).is_empty());
+    }
+}

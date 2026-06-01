@@ -100,7 +100,7 @@ pub(crate) fn prune_versions(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
     use crate::db::InMemoryConn;

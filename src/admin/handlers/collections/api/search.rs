@@ -147,3 +147,41 @@ pub async fn search_collection(
 
     Json(json!(results))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use serde_json::Value;
+
+    use crate::core::document::DocumentBuilder;
+
+    use super::*;
+
+    fn doc(fields: serde_json::Value) -> Document {
+        let map: HashMap<String, Value> = serde_json::from_value(fields).unwrap();
+        DocumentBuilder::new("id-1").fields(map).build()
+    }
+
+    #[test]
+    fn upload_prefers_filename_then_title_then_id() {
+        let with_file = doc(json!({ "filename": "pic.png", "name": "Pic" }));
+        assert_eq!(doc_label(&with_file, Some("name"), true), "pic.png");
+
+        let no_file = doc(json!({ "name": "Pic" }));
+        assert_eq!(doc_label(&no_file, Some("name"), true), "Pic");
+
+        let bare = doc(json!({}));
+        assert_eq!(doc_label(&bare, Some("name"), true), "id-1");
+    }
+
+    #[test]
+    fn non_upload_uses_title_field_then_id() {
+        let d = doc(json!({ "title": "Hello" }));
+        assert_eq!(doc_label(&d, Some("title"), false), "Hello");
+
+        // title_field missing from doc, or no title_field → fall back to id.
+        assert_eq!(doc_label(&d, Some("absent"), false), "id-1");
+        assert_eq!(doc_label(&d, None, false), "id-1");
+    }
+}
