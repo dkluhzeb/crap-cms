@@ -9,6 +9,9 @@ crap.collections.define("posts", {
     use_as_title = "title",
     default_sort = "-published_at",
     list_searchable_fields = { "title", "slug", "excerpt" },
+    -- Default columns for the admin list view (title is always shown as the
+    -- row label). Each admin user can still customize their own selection.
+    list_columns = { "post_type", "author", "published_at", "_status" },
   },
   fields = {
     crap.fields.text({

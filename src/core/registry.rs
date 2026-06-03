@@ -163,6 +163,16 @@ impl Registry {
                 );
             }
         }
+
+        for name in &def.admin.list_columns {
+            let is_meta = matches!(name.as_str(), "created_at" | "updated_at" | "_status");
+            if !is_meta && !Self::field_exists_recursive(name, &def.fields) {
+                warn!(
+                    "Collection '{}': list_columns references '{}' which is not a field",
+                    slug, name
+                );
+            }
+        }
     }
 
     /// Check if a field name exists, recursing into layout wrappers.

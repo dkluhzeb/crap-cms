@@ -426,6 +426,7 @@ function crap.fields.join(config) end
 --- @field default_sort? string Default sort field (prefix with "-" for desc).
 --- @field hidden? boolean Hide from admin sidebar (default: false).
 --- @field list_searchable_fields? string[] Fields searchable in the list view.
+--- @field list_columns? string[] Default columns shown in the list view, in order. Empty = the built-in default (`_status` if the collection has drafts, plus `created_at`). A per-user column selection overrides this. Entries may be field names or the meta columns `created_at` / `updated_at` / `_status`.
 
 --- Lua function references for lifecycle hooks.
 --- @class crap.Hooks

@@ -36,11 +36,20 @@ fn parse_admin_config(config: &Table) -> Result<AdminConfig> {
         Vec::new()
     };
 
+    let list_columns = if let Ok(tbl) = get_table(&admin_tbl, "list_columns") {
+        tbl.sequence_values::<String>()
+            .filter_map(std::result::Result::ok)
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     Ok(AdminConfig::builder()
         .use_as_title(get_string(&admin_tbl, "use_as_title"))
         .default_sort(get_string(&admin_tbl, "default_sort"))
         .hidden(get_bool(&admin_tbl, "hidden", false)?)
         .list_searchable_fields(list_searchable_fields)
+        .list_columns(list_columns)
         .build())
 }
 
@@ -150,6 +159,24 @@ mod tests {
         let def = parse_collection_definition(&lua, "posts", &config).unwrap();
         assert_eq!(def.admin.use_as_title.as_deref(), Some("title"));
         assert_eq!(def.admin.list_searchable_fields, vec!["title", "body"]);
+    }
+
+    #[test]
+    fn test_parse_collection_definition_admin_list_columns() {
+        let lua = Lua::new();
+        let config = lua.create_table().unwrap();
+        let admin_tbl = lua.create_table().unwrap();
+        let lc = lua.create_table().unwrap();
+        lc.set(1, "title").unwrap();
+        lc.set(2, "_status").unwrap();
+        lc.set(3, "created_at").unwrap();
+        admin_tbl.set("list_columns", lc).unwrap();
+        config.set("admin", admin_tbl).unwrap();
+        let def = parse_collection_definition(&lua, "posts", &config).unwrap();
+        assert_eq!(
+            def.admin.list_columns,
+            vec!["title", "_status", "created_at"]
+        );
     }
 
     #[test]

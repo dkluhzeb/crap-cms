@@ -118,6 +118,16 @@ pub(crate) fn collection_config_to_lua(lua: &Lua, def: &CollectionDefinition) ->
         admin.set("list_searchable_fields", lsf)?;
     }
 
+    if !def.admin.list_columns.is_empty() {
+        let lc = lua.create_table()?;
+
+        for (i, c) in def.admin.list_columns.iter().enumerate() {
+            lc.set(i + 1, c.as_str())?;
+        }
+
+        admin.set("list_columns", lc)?;
+    }
+
     tbl.set("admin", admin)?;
 
     fields_to_lua(lua, &tbl, &def.fields)?;
@@ -297,6 +307,7 @@ mod tests {
             default_sort: Some("-created_at".to_string()),
             hidden: true,
             list_searchable_fields: vec!["title".to_string(), "body".to_string()],
+            list_columns: vec!["title".to_string(), "_status".to_string()],
         };
         let tbl = collection_config_to_lua(&lua, &def).unwrap();
         let admin: mlua::Table = tbl.get("admin").unwrap();
@@ -305,6 +316,8 @@ mod tests {
         assert!(admin.get::<bool>("hidden").unwrap());
         let lsf: mlua::Table = admin.get("list_searchable_fields").unwrap();
         assert_eq!(lsf.raw_len(), 2);
+        let lc: mlua::Table = admin.get("list_columns").unwrap();
+        assert_eq!(lc.raw_len(), 2);
     }
 
     #[test]

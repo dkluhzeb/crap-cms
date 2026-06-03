@@ -196,6 +196,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   existing `id` / `password`) and are excluded from the document's
   field data.
 
+- **`admin.list_columns` — default list-view columns per collection.** A
+  collection can declare which columns its admin list view shows, in
+  order, via `admin = { list_columns = { "title", "author", "_status" } }`.
+  Entries are field names or the meta columns `created_at` / `updated_at`
+  / `_status`; unknown entries are ignored (and warned about at startup).
+  A per-user column selection still overrides it; with neither set, the
+  built-in default applies (`_status` if the collection has drafts, plus
+  `created_at`).
+
 ### Changed
 
 - **Whole-valued `number` fields now serialize as integers.** A

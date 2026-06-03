@@ -28,12 +28,11 @@ pub(super) fn resolve_columns(
     user_cols: Option<&[String]>,
     url_ctx: &ListUrlContext,
 ) -> Vec<Value> {
-    let mut keys: Vec<String> = if let Some(cols) = user_cols {
+    // Keep only columns that exist: a meta column or an eligible field.
+    let valid = |cols: &[String]| -> Vec<String> {
         cols.iter()
             .filter(|k| {
-                k.as_str() == "created_at"
-                    || k.as_str() == "updated_at"
-                    || k.as_str() == "_status"
+                matches!(k.as_str(), "created_at" | "updated_at" | "_status")
                     || def
                         .fields
                         .iter()
@@ -41,6 +40,14 @@ pub(super) fn resolve_columns(
             })
             .cloned()
             .collect()
+    };
+
+    // Precedence: a per-user column selection wins; then the collection's
+    // configured `admin.list_columns` default; then the built-in fallback.
+    let mut keys: Vec<String> = if let Some(cols) = user_cols {
+        valid(cols)
+    } else if !def.admin.list_columns.is_empty() {
+        valid(&def.admin.list_columns)
     } else {
         let mut defaults = Vec::new();
 
@@ -462,6 +469,31 @@ mod tests {
     fn resolve_columns_filters_invalid() {
         let def = test_collection();
         let user_cols = vec!["title".to_string(), "body".to_string(), "views".to_string()];
+        let cols = resolve_columns(&def, Some(&user_cols), &test_url_ctx(None));
+        assert_eq!(cols.len(), 1);
+        assert_eq!(cols[0]["key"], "views");
+    }
+
+    /// With no per-user selection, the collection's configured
+    /// `admin.list_columns` is used as the default (in order), overriding the
+    /// built-in `created_at`-only fallback.
+    #[test]
+    fn resolve_columns_uses_collection_list_columns_default() {
+        let mut def = test_collection();
+        def.admin.list_columns = vec!["status".into(), "views".into(), "created_at".into()];
+
+        let cols = resolve_columns(&def, None, &test_url_ctx(None));
+        let keys: Vec<&str> = cols.iter().map(|c| c["key"].as_str().unwrap()).collect();
+        assert_eq!(keys, vec!["status", "views", "created_at"]);
+    }
+
+    /// A per-user column selection wins over the collection's default.
+    #[test]
+    fn resolve_columns_user_selection_overrides_collection_default() {
+        let mut def = test_collection();
+        def.admin.list_columns = vec!["status".into()];
+        let user_cols = vec!["views".to_string()];
+
         let cols = resolve_columns(&def, Some(&user_cols), &test_url_ctx(None));
         assert_eq!(cols.len(), 1);
         assert_eq!(cols[0]["key"], "views");

@@ -22,6 +22,13 @@ pub struct AdminConfig {
     #[serde(default)]
     #[lua(optional)]
     pub list_searchable_fields: Vec<String>,
+    /// Default columns shown in the list view, in order. Empty = the built-in
+    /// default (`_status` if the collection has drafts, plus `created_at`). A
+    /// per-user column selection overrides this. Entries may be field names or
+    /// the meta columns `created_at` / `updated_at` / `_status`.
+    #[serde(default)]
+    #[lua(optional)]
+    pub list_columns: Vec<String>,
 }
 
 impl AdminConfig {
@@ -45,6 +52,7 @@ pub struct AdminConfigBuilder {
     default_sort: Option<String>,
     hidden: bool,
     list_searchable_fields: Vec<String>,
+    list_columns: Vec<String>,
 }
 
 impl AdminConfigBuilder {
@@ -81,12 +89,20 @@ impl AdminConfigBuilder {
     }
 
     #[must_use]
+    pub fn list_columns(mut self, v: Vec<String>) -> Self {
+        self.list_columns = v;
+
+        self
+    }
+
+    #[must_use]
     pub fn build(self) -> AdminConfig {
         AdminConfig {
             use_as_title: self.use_as_title,
             default_sort: self.default_sort,
             hidden: self.hidden,
             list_searchable_fields: self.list_searchable_fields,
+            list_columns: self.list_columns,
         }
     }
 }
@@ -102,6 +118,7 @@ mod tests {
         assert!(c.default_sort.is_none());
         assert!(!c.hidden);
         assert!(c.list_searchable_fields.is_empty());
+        assert!(c.list_columns.is_empty());
     }
 
     /// Distinct value per field guards against a cross-wired `build()`.
@@ -112,10 +129,12 @@ mod tests {
             .default_sort(Some("-created_at".into()))
             .hidden(true)
             .list_searchable_fields(vec!["title".into(), "body".into()])
+            .list_columns(vec!["title".into(), "_status".into()])
             .build();
         assert_eq!(c.use_as_title.as_deref(), Some("title"));
         assert_eq!(c.default_sort.as_deref(), Some("-created_at"));
         assert!(c.hidden);
         assert_eq!(c.list_searchable_fields, vec!["title", "body"]);
+        assert_eq!(c.list_columns, vec!["title", "_status"]);
     }
 }

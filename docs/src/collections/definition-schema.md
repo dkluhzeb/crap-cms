@@ -31,6 +31,7 @@ Full reference for every property accepted by `crap.collections.define(slug, con
 | `default_sort` | string | `nil` | Default sort field. Prefix with `-` for descending (e.g., `"-created_at"`) |
 | `hidden` | boolean | `false` | Hide this collection from the admin sidebar |
 | `list_searchable_fields` | string[] | `{}` | Fields to search when using the admin list search bar |
+| `list_columns` | string[] | `{}` | Default columns shown in the admin list view, in order. Entries are field names or the meta columns `created_at` / `updated_at` / `_status`. Empty = built-in default (`_status` if the collection has drafts, plus `created_at`). A per-user column selection overrides it. |
 
 ## `hooks`
 
@@ -178,6 +179,7 @@ crap.collections.define("posts", {
         default_sort = "-created_at",
         hidden = false,
         list_searchable_fields = { "title", "slug", "content" },
+        list_columns = { "title", "_status", "created_at" },
     },
     fields = {
         crap.fields.text({
