@@ -13,11 +13,57 @@ use crate::core::{
 
 use super::{
     fields::parse_fields,
-    helpers::{get_bool, get_localized_string, get_string, get_table, parse_hooks},
+    helpers::{
+        deny_unknown_keys, get_bool, get_localized_string, get_string, get_table, parse_hooks,
+    },
 };
 
 /// Admin UI max nesting depth for rendering fields (must match `MAX_FIELD_DEPTH` in `field_context.rs`).
 const ADMIN_MAX_FIELD_DEPTH: usize = 5;
+
+/// Lifecycle hook keys accepted on a collection/global `hooks` sub-table.
+pub(super) const COLLECTION_HOOK_KEYS: &[&str] = &[
+    "before_validate",
+    "before_change",
+    "after_change",
+    "before_read",
+    "after_read",
+    "before_delete",
+    "after_delete",
+    "before_broadcast",
+];
+
+/// Access-control operation keys accepted on an `access` sub-table.
+pub(super) const ACCESS_KEYS: &[&str] = &["read", "create", "update", "delete", "trash"];
+
+/// Reject unknown keys in the nested sub-tables shared by collections and
+/// globals (`labels`, `hooks`, `access`, `mcp`, `versions`, `indexes`). Each
+/// `get_table` quietly skips when the key is absent or not a table (e.g.
+/// `versions = true`), so only present sub-tables are validated.
+pub(super) fn validate_shared_nested_keys(config: &Table) -> Result<()> {
+    if let Ok(t) = get_table(config, "labels") {
+        deny_unknown_keys(&t, "labels", &["singular", "plural"])?;
+    }
+    if let Ok(t) = get_table(config, "hooks") {
+        deny_unknown_keys(&t, "hooks", COLLECTION_HOOK_KEYS)?;
+    }
+    if let Ok(t) = get_table(config, "access") {
+        deny_unknown_keys(&t, "access", ACCESS_KEYS)?;
+    }
+    if let Ok(t) = get_table(config, "mcp") {
+        deny_unknown_keys(&t, "mcp", &["description", "operations"])?;
+    }
+    if let Ok(t) = get_table(config, "versions") {
+        deny_unknown_keys(&t, "versions", &["drafts", "max_versions"])?;
+    }
+    if let Ok(t) = get_table(config, "indexes") {
+        for entry in t.sequence_values::<Table>().flatten() {
+            deny_unknown_keys(&entry, "index", &["fields", "unique"])?;
+        }
+    }
+
+    Ok(())
+}
 
 /// Compute the maximum nesting depth of a field list.
 /// Top-level fields are depth 1, their sub-fields are depth 2, etc.

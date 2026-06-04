@@ -11,6 +11,7 @@ my-project/
 ├── .luarc.json            # LuaLS config for IDE support
 ├── .gitignore             # Ignores data/, uploads/, types/ by default
 ├── stylua.toml            # StyLua formatter config for Lua files
+├── .mcp.json              # MCP client config (points an MCP client at `crap-cms mcp`)
 ├── collections/           # One .lua file per collection
 │   ├── posts.lua
 │   ├── users.lua

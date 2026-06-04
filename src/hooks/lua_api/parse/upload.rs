@@ -23,6 +23,11 @@ pub(super) fn parse_collection_upload(config: &Table) -> LuaResult<Option<Collec
     match val {
         Value::Boolean(true) => Ok(Some(CollectionUpload::new())),
         Value::Table(tbl) => {
+            // `enabled = false` disables upload, mirroring `upload = false`.
+            if !get_bool(&tbl, "enabled", true)? {
+                return Ok(None);
+            }
+
             let mime_types = if let Ok(mt_tbl) = get_table(&tbl, "mime_types") {
                 mt_tbl
                     .sequence_values::<String>()
@@ -414,6 +419,28 @@ mod tests {
         assert_eq!(upload.admin_thumbnail.as_deref(), Some("thumb"));
         assert_eq!(upload.image_sizes.len(), 1);
         assert_eq!(upload.image_sizes[0].name, "thumb");
+    }
+
+    #[test]
+    fn test_parse_collection_upload_enabled_false_disables() {
+        // Regression: `upload = { enabled = false }` must disable upload,
+        // matching `upload = false`. Previously `enabled` was silently ignored.
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let upload_tbl = lua.create_table().unwrap();
+        upload_tbl.set("enabled", false).unwrap();
+        tbl.set("upload", upload_tbl).unwrap();
+        assert!(parse_collection_upload(&tbl).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_parse_collection_upload_enabled_true_is_accepted() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let upload_tbl = lua.create_table().unwrap();
+        upload_tbl.set("enabled", true).unwrap();
+        tbl.set("upload", upload_tbl).unwrap();
+        assert!(parse_collection_upload(&tbl).unwrap().unwrap().enabled);
     }
 
     #[test]

@@ -51,6 +51,20 @@ crap.fields.number({
 
 Valid values: `"1"` (integers only), `"0.01"` (cents), `"any"` (no step constraint). Defaults to browser default (`"1"`).
 
+## Integer-Only
+
+Set `integer = true` to reject fractional values at validation time. The column stays `REAL`, but any value with a fractional part (e.g. `1.5`) is rejected on create/update.
+
+```lua
+crap.fields.number({
+    name = "quantity",
+    integer = true,
+    min = 1,
+})
+```
+
+Pair it with `admin = { step = "1" }` so the admin input also steps in whole numbers. `integer` is validated server-side regardless of the admin step.
+
 ## Admin Rendering
 
 Renders as an `<input type="number">` element. When `has_many = true`, renders as a tag input where users type and press Enter to add number chips.

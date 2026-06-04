@@ -15,7 +15,8 @@ use crate::{
 use super::super::admin::parse_field_admin;
 use super::super::blocks::{parse_block_definitions, parse_tab_definitions};
 use super::super::helpers::{
-    get_bool, get_string, get_string_val, get_table, parse_select_options, parse_string_list,
+    deny_unknown_keys, get_bool, get_string, get_string_val, get_table, parse_select_options,
+    parse_string_list,
 };
 use super::super::relationship::parse_field_relationship;
 use super::constraints::{parse_constraints, parse_date_config, parse_default_value};
@@ -28,6 +29,79 @@ use super::top::parse_fields;
 /// `_block_type`, `_password_hash`, `_mfa_code`, … — are covered by the
 /// leading-underscore rule below.)
 const RESERVED_FIELD_NAMES: &[&str] = &["id", "parent_id", "created_at", "updated_at"];
+
+/// Keys accepted on every field table regardless of type. Type-specific keys
+/// are appended by [`type_specific_field_keys`]. Unknown keys are rejected
+/// (parity with the strict jobs config), so a typo like `requird` or a
+/// misplaced key like `options` on a text field fails loudly at load time.
+const COMMON_FIELD_KEYS: &[&str] = &[
+    "name",
+    "type",
+    "required",
+    "unique",
+    "index",
+    "localized",
+    "hidden",
+    "validate",
+    "default_value",
+    "admin",
+    "hooks",
+    "access",
+    "mcp",
+];
+
+/// Keys valid only on specific field types, appended to [`COMMON_FIELD_KEYS`].
+/// `min_rows`/`max_rows` bound the count of multi-value fields; the string
+/// length bounds apply to text-backed types; `relation_to` is the legacy flat
+/// relationship syntax kept for back-compat.
+fn type_specific_field_keys(field_type: &FieldType) -> &'static [&'static str] {
+    match field_type {
+        FieldType::Text => &[
+            "has_many",
+            "min_length",
+            "max_length",
+            "min_rows",
+            "max_rows",
+        ],
+        FieldType::Number => &["has_many", "min", "max", "integer", "min_rows", "max_rows"],
+        FieldType::Textarea | FieldType::Richtext | FieldType::Email | FieldType::Code => {
+            &["min_length", "max_length"]
+        }
+        FieldType::Select | FieldType::Radio => &["options", "has_many", "min_rows", "max_rows"],
+        FieldType::Checkbox | FieldType::Json => &[],
+        FieldType::Date => &[
+            "min_date",
+            "max_date",
+            "picker_appearance",
+            "timezone",
+            "default_timezone",
+        ],
+        FieldType::Relationship | FieldType::Upload => &[
+            "relationship",
+            "relation_to",
+            "has_many",
+            "min_rows",
+            "max_rows",
+        ],
+        FieldType::Array => &["fields", "min_rows", "max_rows"],
+        FieldType::Group | FieldType::Row | FieldType::Collapsible => &["fields"],
+        FieldType::Tabs => &["tabs"],
+        FieldType::Blocks => &["blocks", "min_rows", "max_rows"],
+        FieldType::Join => &["collection", "on"],
+    }
+}
+
+/// Reject any key on a field table that is not valid for its type.
+fn validate_field_keys(field_tbl: &Table, field_type: &FieldType) -> Result<()> {
+    let mut allowed: Vec<&str> = COMMON_FIELD_KEYS.to_vec();
+    allowed.extend_from_slice(type_specific_field_keys(field_type));
+
+    deny_unknown_keys(
+        field_tbl,
+        &format!("{} field", field_type.as_str()),
+        &allowed,
+    )
+}
 
 fn parse_field_name(field_tbl: &Table) -> Result<String> {
     let name: String =
@@ -109,6 +183,8 @@ fn parse_field_parts(lua: &Lua, field_tbl: &Table) -> Result<ParsedFieldParts> {
     let type_str: String = get_string_val(field_tbl, "type").unwrap_or_else(|_| "text".to_string());
     let field_type = FieldType::parse_lossy(&type_str);
 
+    validate_field_keys(field_tbl, &field_type)?;
+
     let default_value = parse_default_value(field_tbl, &name, &field_type)?;
     let relationship = parse_field_relationship(field_tbl, &field_type)?;
     let (picker_appearance, timezone, default_timezone) =
@@ -124,15 +200,19 @@ fn parse_field_parts(lua: &Lua, field_tbl: &Table) -> Result<ParsedFieldParts> {
     let hooks = get_table(field_tbl, "hooks")
         .map_or(Ok(FieldHooks::default()), |tbl| parse_field_hooks(&tbl))?;
 
-    let access = get_table(field_tbl, "access")
-        .map(|tbl| parse_field_access(&tbl))
-        .unwrap_or_default();
+    let access = match get_table(field_tbl, "access") {
+        Ok(tbl) => {
+            deny_unknown_keys(&tbl, "field access", &["read", "create", "update"])?;
+            parse_field_access(&tbl)
+        }
+        Err(_) => FieldAccess::default(),
+    };
 
     let sub_fields = parse_sub_fields(lua, field_tbl, &field_type)?;
     let block_defs = parse_block_defs(lua, field_tbl, &field_type)?;
     let tab_defs = parse_tab_defs(lua, field_tbl, &field_type)?;
     let join = parse_join(field_tbl, &field_type);
-    let mcp = parse_mcp(field_tbl);
+    let mcp = parse_mcp(field_tbl)?;
 
     Ok(ParsedFieldParts {
         name,
@@ -191,12 +271,16 @@ fn parse_join(field_tbl: &Table, field_type: &FieldType) -> Option<JoinConfig> {
 }
 
 /// Parse the optional `mcp` sub-table for MCP introspection metadata.
-fn parse_mcp(field_tbl: &Table) -> McpFieldConfig {
-    get_table(field_tbl, "mcp")
-        .map(|tbl| McpFieldConfig {
-            description: get_string(&tbl, "description"),
-        })
-        .unwrap_or_default()
+fn parse_mcp(field_tbl: &Table) -> Result<McpFieldConfig> {
+    let Ok(tbl) = get_table(field_tbl, "mcp") else {
+        return Ok(McpFieldConfig::default());
+    };
+
+    deny_unknown_keys(&tbl, "field mcp", &["description"])?;
+
+    Ok(McpFieldConfig {
+        description: get_string(&tbl, "description"),
+    })
 }
 
 /// Phase 2 — fold parsed parts into a [`FieldDefinition`] via the builder.
@@ -302,6 +386,17 @@ pub(in crate::hooks::lua_api::parse) fn parse_field_access(access_tbl: &Table) -
 }
 
 fn parse_field_hooks(hooks_tbl: &Table) -> Result<FieldHooks> {
+    deny_unknown_keys(
+        hooks_tbl,
+        "field hooks",
+        &[
+            "before_validate",
+            "before_change",
+            "after_change",
+            "after_read",
+        ],
+    )?;
+
     Ok(FieldHooks {
         before_validate: parse_string_list(hooks_tbl, "before_validate")?,
         before_change: parse_string_list(hooks_tbl, "before_change")?,
@@ -326,6 +421,204 @@ mod tests {
         assert_eq!(access.read.as_deref(), Some("hooks.access.check_role"));
         assert_eq!(access.create.as_deref(), Some("hooks.access.admin_only"));
         assert!(access.update.is_none());
+    }
+
+    fn field_with(lua: &Lua, set: impl FnOnce(&Table)) -> Result<()> {
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "f").unwrap();
+        set(&field);
+        fields_tbl.set(1, field).unwrap();
+        parse_fields(lua, &fields_tbl).map(|_| ())
+    }
+
+    #[test]
+    fn test_unknown_field_key_is_rejected() {
+        let lua = Lua::new();
+        // `requird` is a typo for `required`.
+        let err = field_with(&lua, |f| {
+            f.set("type", "text").unwrap();
+            f.set("requird", true).unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("requird"), "{err}");
+        assert!(
+            err.contains("required"),
+            "should suggest closest key: {err}"
+        );
+    }
+
+    #[test]
+    fn test_misplaced_key_rejected_per_type() {
+        let lua = Lua::new();
+        // `options` is valid on select, not on text — per-type check must reject it.
+        let err = field_with(&lua, |f| {
+            f.set("type", "text").unwrap();
+            let opts = lua.create_table().unwrap();
+            f.set("options", opts).unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("options"), "{err}");
+    }
+
+    #[test]
+    fn test_type_specific_key_accepted_on_right_type() {
+        let lua = Lua::new();
+        // `options` on a select field is valid.
+        assert!(
+            field_with(&lua, |f| {
+                f.set("type", "select").unwrap();
+                let opts = lua.create_table().unwrap();
+                f.set("options", opts).unwrap();
+            })
+            .is_ok()
+        );
+        // Legacy `relation_to` on a relationship field stays valid.
+        assert!(
+            field_with(&lua, |f| {
+                f.set("type", "relationship").unwrap();
+                f.set("relation_to", "users").unwrap();
+            })
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_unknown_admin_key_is_rejected() {
+        let lua = Lua::new();
+        let err = field_with(&lua, |f| {
+            f.set("type", "text").unwrap();
+            let admin = lua.create_table().unwrap();
+            admin.set("lable", "Title").unwrap(); // typo for `label`
+            f.set("admin", admin).unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("lable"), "{err}");
+    }
+
+    #[test]
+    fn test_admin_extra_escape_hatch_allows_custom_keys() {
+        let lua = Lua::new();
+        // Arbitrary keys under admin.extra are the plugin escape hatch.
+        assert!(
+            field_with(&lua, |f| {
+                f.set("type", "text").unwrap();
+                let admin = lua.create_table().unwrap();
+                let extra = lua.create_table().unwrap();
+                extra.set("max_stars", 5).unwrap();
+                admin.set("extra", extra).unwrap();
+                f.set("admin", admin).unwrap();
+            })
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_unknown_field_nested_keys_rejected() {
+        let lua = Lua::new();
+
+        // field hooks
+        let err = field_with(&lua, |f| {
+            f.set("type", "text").unwrap();
+            let hooks = lua.create_table().unwrap();
+            hooks
+                .set("before_save", lua.create_table().unwrap())
+                .unwrap(); // not a real field hook
+            f.set("hooks", hooks).unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("before_save"), "{err}");
+
+        // field access
+        assert!(
+            field_with(&lua, |f| {
+                f.set("type", "text").unwrap();
+                let access = lua.create_table().unwrap();
+                access.set("delete", "hooks.x").unwrap(); // field access has no `delete`
+                f.set("access", access).unwrap();
+            })
+            .is_err()
+        );
+
+        // field mcp
+        assert!(
+            field_with(&lua, |f| {
+                f.set("type", "text").unwrap();
+                let mcp = lua.create_table().unwrap();
+                mcp.set("desc", "x").unwrap(); // not `description`
+                f.set("mcp", mcp).unwrap();
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_unknown_relationship_key_rejected() {
+        let lua = Lua::new();
+        let err = field_with(&lua, |f| {
+            f.set("type", "relationship").unwrap();
+            let rel = lua.create_table().unwrap();
+            rel.set("collection", "users").unwrap();
+            rel.set("depth", 2).unwrap(); // not `max_depth`
+            f.set("relationship", rel).unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("depth"), "{err}");
+    }
+
+    #[test]
+    fn test_unknown_select_option_key_rejected() {
+        let lua = Lua::new();
+        let err = field_with(&lua, |f| {
+            f.set("type", "select").unwrap();
+            let opts = lua.create_table().unwrap();
+            let opt = lua.create_table().unwrap();
+            opt.set("label", "Draft").unwrap();
+            opt.set("val", "draft").unwrap(); // not `value`
+            opts.set(1, opt).unwrap();
+            f.set("options", opts).unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("val"), "{err}");
+    }
+
+    #[test]
+    fn test_unknown_block_and_tab_keys_rejected() {
+        let lua = Lua::new();
+
+        // block definition
+        let err = field_with(&lua, |f| {
+            f.set("type", "blocks").unwrap();
+            let blocks = lua.create_table().unwrap();
+            let block = lua.create_table().unwrap();
+            block.set("type", "hero").unwrap();
+            block.set("labl", "Hero").unwrap(); // typo for `label`
+            blocks.set(1, block).unwrap();
+            f.set("blocks", blocks).unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("labl"), "{err}");
+
+        // tab definition
+        assert!(
+            field_with(&lua, |f| {
+                f.set("type", "tabs").unwrap();
+                let tabs = lua.create_table().unwrap();
+                let tab = lua.create_table().unwrap();
+                tab.set("label", "General").unwrap();
+                tab.set("desc", "x").unwrap(); // not `description`
+                tabs.set(1, tab).unwrap();
+                f.set("tabs", tabs).unwrap();
+            })
+            .is_err()
+        );
     }
 
     #[test]
@@ -495,7 +788,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_fields_non_date_picker_appearance_ignored() {
+    fn test_parse_fields_non_date_picker_appearance_rejected() {
+        // Strict per-type validation: `picker_appearance` is a date-only key,
+        // so it is rejected (not silently ignored) on a text field.
         let lua = Lua::new();
         let fields_tbl = lua.create_table().unwrap();
         let field = lua.create_table().unwrap();
@@ -503,8 +798,8 @@ mod tests {
         field.set("type", "text").unwrap();
         field.set("picker_appearance", "dayAndTime").unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&lua, &fields_tbl).unwrap();
-        assert!(fields[0].picker_appearance.is_none());
+        let err = parse_fields(&lua, &fields_tbl).unwrap_err().to_string();
+        assert!(err.contains("picker_appearance"), "{err}");
     }
 
     #[test]
@@ -784,7 +1079,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_fields_timezone_ignored_for_non_date() {
+    fn test_parse_fields_timezone_rejected_for_non_date() {
+        // Strict per-type validation: `timezone` is a date-only key, so it is
+        // rejected (not silently ignored) on a text field.
         let lua = Lua::new();
         let fields_tbl = lua.create_table().unwrap();
         let field = lua.create_table().unwrap();
@@ -792,11 +1089,8 @@ mod tests {
         field.set("type", "text").unwrap();
         field.set("timezone", true).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&lua, &fields_tbl).unwrap();
-        assert!(
-            !fields[0].timezone,
-            "timezone should be ignored for non-date fields"
-        );
+        let err = parse_fields(&lua, &fields_tbl).unwrap_err().to_string();
+        assert!(err.contains("timezone"), "{err}");
     }
 
     /// Regression: boolean default on a text field must be rejected.

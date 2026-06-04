@@ -257,6 +257,9 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 # api_key = ""            # API key for HTTP transport
 # include_collections = [] # Only expose these collections
 # exclude_collections = [] # Hide these collections
+
+[update]
+check_on_startup = true   # Print a one-line notice on `serve` startup when a newer release is cached
 ```
 
 ## Section Details
@@ -569,6 +572,14 @@ See [MCP Overview](../mcp/overview.md) for usage details.
 | `path` | string | `"data/logs"` | Log directory path. Relative paths are resolved from the config directory. Use an absolute path to log elsewhere. |
 | `rotation` | string | `"daily"` | Log rotation strategy: `"daily"` (one file per day), `"hourly"` (one file per hour), or `"never"` (single file, no rotation). |
 | `max_files` | integer | `30` | Maximum rotated log files to keep. Old files are pruned on startup. |
+
+### `[update]`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `check_on_startup` | boolean | `true` | On `crap-cms serve` startup, print a one-line notice when the cached update-check shows a newer release. Startup never performs a network request — the cache is populated by `crap-cms update check` (24h TTL). Set to `false` to silence the notice. |
+
+See [Installation › Managing Versions](../getting-started/installation.md#managing-versions) for the `crap-cms update` subcommands.
 
 File logging writes to rotating files in the configured directory. Each project has its own log directory, so multiple instances on the same machine are naturally isolated.
 

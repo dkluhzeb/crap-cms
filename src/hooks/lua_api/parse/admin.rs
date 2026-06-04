@@ -8,7 +8,37 @@ use crate::{
     hooks::lua_api::lua_to_json,
 };
 
-use super::helpers::{get_bool, get_localized_string, get_string, get_table};
+use super::helpers::{deny_unknown_keys, get_bool, get_localized_string, get_string, get_table};
+
+/// Every key accepted in a field's `admin = {...}` sub-table. Mirrors the
+/// `FieldAdmin` struct (Lua key names). Plugin/custom-template config goes
+/// under `extra` — the one open-ended escape hatch — so the rest can be
+/// strictly validated, rejecting typos like `lable` or `readony`.
+const FIELD_ADMIN_KEYS: &[&str] = &[
+    "label",
+    "placeholder",
+    "description",
+    "hidden",
+    "readonly",
+    "width",
+    "collapsed",
+    "label_field",
+    "row_label",
+    "labels",
+    "position",
+    "condition",
+    "step",
+    "rows",
+    "language",
+    "languages",
+    "features",
+    "picker",
+    "format",
+    "nodes",
+    "resizable",
+    "template",
+    "extra",
+];
 
 /// Parse the `admin` subtable of a field Lua definition into a `FieldAdmin`.
 ///
@@ -17,6 +47,9 @@ use super::helpers::{get_bool, get_localized_string, get_string, get_table};
 /// template-ref string, the freeform `extra` map) are applied in turn by
 /// per-section helpers.
 pub(super) fn parse_field_admin(admin_tbl: &Table) -> LuaResult<FieldAdmin> {
+    deny_unknown_keys(admin_tbl, "field admin", FIELD_ADMIN_KEYS)
+        .map_err(|e| RuntimeError(e.to_string()))?;
+
     let mut builder = parse_admin_booleans(admin_tbl)?;
     builder = apply_localized_strings(builder, admin_tbl);
     builder = apply_identifier_strings(builder, admin_tbl);

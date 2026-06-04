@@ -2,10 +2,75 @@
 
 use std::collections::HashMap;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use mlua::{Table, Value};
 
 use crate::core::{LocalizedString, SelectOption, collection::Hooks};
+
+/// Reject any named key in `table` that is not present in `allowed`.
+///
+/// Brings hand-parsed Lua schema tables to parity with the strict
+/// `#[serde(deny_unknown_fields)]` behavior of serde-backed config (jobs):
+/// a typo'd key (`timestamp`, `requird`, `localised`) becomes a hard error
+/// at load time instead of being silently dropped. Only string keys are
+/// validated — integer/array entries are skipped. When the unknown key is a
+/// near-miss of a valid one, the error suggests it.
+pub(super) fn deny_unknown_keys(table: &Table, context: &str, allowed: &[&str]) -> Result<()> {
+    for pair in table.clone().pairs::<Value, Value>() {
+        let (key, _) = pair?;
+
+        let Value::String(key) = key else { continue };
+        let key = key.to_str()?;
+        let name: &str = &key;
+
+        if allowed.contains(&name) {
+            continue;
+        }
+
+        let suggestion = closest_key(name, allowed)
+            .map(|c| format!(" (did you mean '{c}'?)"))
+            .unwrap_or_default();
+
+        bail!(
+            "Unknown {context} config key '{name}'{suggestion}. Valid keys: {}",
+            allowed.join(", ")
+        );
+    }
+
+    Ok(())
+}
+
+/// Closest valid key to `key` within an edit distance of 2, for typo hints.
+fn closest_key<'a>(key: &str, allowed: &[&'a str]) -> Option<&'a str> {
+    allowed
+        .iter()
+        .map(|cand| (levenshtein(key, cand), *cand))
+        .filter(|(dist, _)| *dist <= 2)
+        .min_by_key(|(dist, _)| *dist)
+        .map(|(_, cand)| cand)
+}
+
+/// Classic two-row Levenshtein edit distance over Unicode scalar values.
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr: Vec<usize> = vec![0; b.len() + 1];
+
+    for (i, ca) in a.iter().enumerate() {
+        curr[0] = i + 1;
+
+        for (j, cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
+        }
+
+        std::mem::swap(&mut prev, &mut curr);
+    }
+
+    prev[b.len()]
+}
 
 pub(super) fn get_table(tbl: &Table, key: &str) -> mlua::Result<Table> {
     tbl.get(key)
@@ -116,6 +181,7 @@ pub(super) fn parse_select_options(opts_tbl: &Table) -> Result<Vec<SelectOption>
 
     for pair in opts_tbl.clone().sequence_values::<Table>() {
         let opt = pair?;
+        deny_unknown_keys(&opt, "select option", &["label", "value"])?;
         let label = get_localized_string(&opt, "label")
             .unwrap_or_else(|| LocalizedString::Plain(String::new()));
         let value = get_string_val(&opt, "value").unwrap_or_default();

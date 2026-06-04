@@ -13,14 +13,95 @@ use crate::{
 
 use super::{
     auth::parse_collection_auth,
-    helpers::{get_bool, get_string, get_table},
+    helpers::{deny_unknown_keys, get_bool, get_string, get_table},
     shared::{
         parse_access_config, parse_fields_section, parse_hooks_section, parse_indexes,
         parse_labels, parse_live_setting, parse_mcp_section, parse_versions_config,
-        warn_deep_nesting,
+        validate_shared_nested_keys, warn_deep_nesting,
     },
     upload::{inject_upload_fields, parse_collection_upload},
 };
+
+/// Keys accepted on a collection's `admin` sub-table (mirrors `AdminConfig`).
+const COLLECTION_ADMIN_KEYS: &[&str] = &[
+    "use_as_title",
+    "default_sort",
+    "hidden",
+    "list_searchable_fields",
+    "list_columns",
+];
+
+/// Reject unknown keys in the collection's nested sub-tables: the shared ones
+/// plus the collection-only `admin` and `upload` (with its `image_sizes` and
+/// `format_options` entries).
+fn validate_collection_nested_keys(config: &Table) -> Result<()> {
+    validate_shared_nested_keys(config)?;
+
+    if let Ok(admin_tbl) = get_table(config, "admin") {
+        deny_unknown_keys(&admin_tbl, "collection admin", COLLECTION_ADMIN_KEYS)?;
+    }
+
+    if let Ok(upload_tbl) = get_table(config, "upload") {
+        validate_upload_keys(&upload_tbl)?;
+    }
+
+    Ok(())
+}
+
+/// Reject unknown keys in the `upload` sub-table and its nested `image_sizes`
+/// entries and `format_options` (`webp`/`avif` quality tables).
+fn validate_upload_keys(upload_tbl: &Table) -> Result<()> {
+    deny_unknown_keys(
+        upload_tbl,
+        "upload",
+        &[
+            "enabled",
+            "mime_types",
+            "max_file_size",
+            "image_sizes",
+            "admin_thumbnail",
+            "format_options",
+        ],
+    )?;
+
+    if let Ok(sizes_tbl) = get_table(upload_tbl, "image_sizes") {
+        for entry in sizes_tbl.sequence_values::<Table>().flatten() {
+            deny_unknown_keys(&entry, "image_size", &["name", "width", "height", "fit"])?;
+        }
+    }
+
+    if let Ok(fo_tbl) = get_table(upload_tbl, "format_options") {
+        deny_unknown_keys(&fo_tbl, "format_options", &["webp", "avif"])?;
+
+        for fmt in ["webp", "avif"] {
+            if let Ok(quality_tbl) = get_table(&fo_tbl, fmt) {
+                deny_unknown_keys(&quality_tbl, "format_options entry", &["quality", "queue"])?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Every key accepted at the top level of `crap.collections.define(slug, {...})`.
+/// Unknown keys are rejected (parity with the strict jobs config), so typos
+/// like `timestamp` or `version` fail loudly instead of being silently ignored.
+const COLLECTION_CONFIG_KEYS: &[&str] = &[
+    "labels",
+    "timestamps",
+    "admin",
+    "fields",
+    "hooks",
+    "auth",
+    "upload",
+    "access",
+    "live",
+    "versions",
+    "indexes",
+    "mcp",
+    "soft_delete",
+    "soft_delete_retention",
+];
 
 /// Parse the `admin` subtable from a Lua config table.
 fn parse_admin_config(config: &Table) -> Result<AdminConfig> {
@@ -86,6 +167,8 @@ pub fn parse_collection_definition(
     config: &Table,
 ) -> Result<CollectionDefinition> {
     query::validate_slug(slug)?;
+    deny_unknown_keys(config, "collection", COLLECTION_CONFIG_KEYS)?;
+    validate_collection_nested_keys(config)?;
 
     let labels = parse_labels(config);
     let timestamps = get_bool(config, "timestamps", true)?;
@@ -235,6 +318,96 @@ mod tests {
         config.set("hooks", hooks_tbl).unwrap();
         let def = parse_collection_definition(&lua, "posts", &config).unwrap();
         assert_eq!(def.hooks.before_broadcast, vec!["hooks.filter_broadcast"]);
+    }
+
+    #[test]
+    fn test_unknown_top_level_key_is_rejected() {
+        let lua = Lua::new();
+        let config = lua.create_table().unwrap();
+        // `timestamp` (singular) is a typo for `timestamps` — must error, not be ignored.
+        config.set("timestamp", false).unwrap();
+        let err = parse_collection_definition(&lua, "posts", &config)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("timestamp"),
+            "error should name the key: {err}"
+        );
+        assert!(
+            err.contains("timestamps"),
+            "error should suggest the closest valid key: {err}"
+        );
+    }
+
+    #[test]
+    fn test_unknown_nested_keys_are_rejected() {
+        // access sub-table
+        let lua = Lua::new();
+        let config = lua.create_table().unwrap();
+        let access = lua.create_table().unwrap();
+        access.set("raed", "hooks.access.x").unwrap(); // typo for `read`
+        config.set("access", access).unwrap();
+        let err = parse_collection_definition(&lua, "posts", &config)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("raed"), "{err}");
+
+        // admin sub-table
+        let config = lua.create_table().unwrap();
+        let admin = lua.create_table().unwrap();
+        admin.set("use_title", "name").unwrap(); // not `use_as_title`
+        config.set("admin", admin).unwrap();
+        assert!(parse_collection_definition(&lua, "posts", &config).is_err());
+
+        // versions sub-table
+        let config = lua.create_table().unwrap();
+        let versions = lua.create_table().unwrap();
+        versions.set("draft", true).unwrap(); // not `drafts`
+        config.set("versions", versions).unwrap();
+        assert!(parse_collection_definition(&lua, "posts", &config).is_err());
+
+        // index entry
+        let config = lua.create_table().unwrap();
+        let indexes = lua.create_table().unwrap();
+        let entry = lua.create_table().unwrap();
+        let cols = lua.create_table().unwrap();
+        cols.set(1, "status").unwrap();
+        entry.set("fields", cols).unwrap();
+        entry.set("uniq", true).unwrap(); // not `unique`
+        indexes.set(1, entry).unwrap();
+        config.set("indexes", indexes).unwrap();
+        assert!(parse_collection_definition(&lua, "posts", &config).is_err());
+    }
+
+    #[test]
+    fn test_unknown_upload_nested_key_rejected() {
+        let lua = Lua::new();
+        let config = lua.create_table().unwrap();
+        let upload = lua.create_table().unwrap();
+        let sizes = lua.create_table().unwrap();
+        let size = lua.create_table().unwrap();
+        size.set("name", "thumb").unwrap();
+        size.set("width", 100).unwrap();
+        size.set("height", 100).unwrap();
+        size.set("crop", "center").unwrap(); // unknown image_size key (it's `fit`)
+        sizes.set(1, size).unwrap();
+        upload.set("image_sizes", sizes).unwrap();
+        config.set("upload", upload).unwrap();
+        let err = parse_collection_definition(&lua, "media", &config)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("crop"), "{err}");
+    }
+
+    #[test]
+    fn test_all_documented_keys_are_accepted() {
+        let lua = Lua::new();
+        let config = lua.create_table().unwrap();
+        config.set("timestamps", true).unwrap();
+        config.set("soft_delete", true).unwrap();
+        config.set("soft_delete_retention", "30d").unwrap();
+        // Should parse without an unknown-key error.
+        assert!(parse_collection_definition(&lua, "posts", &config).is_ok());
     }
 
     #[test]

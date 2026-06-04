@@ -7,7 +7,7 @@ use crate::core::{BlockDefinition, FieldTab};
 
 use super::{
     fields::parse_fields,
-    helpers::{get_localized_string, get_string, get_string_val, get_table},
+    helpers::{deny_unknown_keys, get_localized_string, get_string, get_string_val, get_table},
 };
 
 pub(super) fn parse_block_definitions(
@@ -18,6 +18,18 @@ pub(super) fn parse_block_definitions(
 
     for entry in blocks_tbl.clone().sequence_values::<Table>() {
         let def = entry?;
+        deny_unknown_keys(
+            &def,
+            "block",
+            &[
+                "type",
+                "label",
+                "label_field",
+                "group",
+                "image_url",
+                "fields",
+            ],
+        )?;
         let block_type: String =
             get_string_val(&def, "type").map_err(|_| anyhow!("Block definition missing 'type'"))?;
         let label = get_localized_string(&def, "label");
@@ -46,6 +58,7 @@ pub(super) fn parse_tab_definitions(lua: &Lua, tabs_tbl: &Table) -> Result<Vec<F
 
     for entry in tabs_tbl.clone().sequence_values::<Table>() {
         let def = entry?;
+        deny_unknown_keys(&def, "tab", &["label", "description", "fields"])?;
         let label = get_string(&def, "label").unwrap_or_default();
         let description = get_string(&def, "description");
         let fields = if let Ok(fields_tbl) = get_table(&def, "fields") {

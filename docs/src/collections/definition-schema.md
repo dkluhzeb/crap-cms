@@ -2,6 +2,11 @@
 
 Full reference for every property accepted by `crap.collections.define(slug, config)`.
 
+> **Unknown keys are rejected.** The collection config table — and its nested
+> field/`admin` tables — only accept the documented keys. A typo like
+> `timestamp` (for `timestamps`) or `version` (for `versions`) fails loudly at
+> load time rather than being silently ignored.
+
 ## Top-Level Properties
 
 | Property | Type | Default | Description |
@@ -101,8 +106,9 @@ See [Uploads](../uploads/overview.md) for the full schema.
 | `create` | string | Lua function ref for create access. |
 | `update` | string | Lua function ref for update access. |
 | `delete` | string | Lua function ref for delete access. |
+| `trash` | string | Lua function ref for soft-delete (trash) and restore access. Falls back to `update` when omitted, so most collections don't set it explicitly. |
 
-If a property is omitted, that operation is allowed for everyone.
+When a property is omitted, the behavior depends on `[access] default_deny` in `crap.toml`: with the default `default_deny = true`, that operation is **denied** for everyone; with `default_deny = false`, it is **allowed** for everyone.
 
 See [Access Control](../access-control/overview.md) for full details.
 

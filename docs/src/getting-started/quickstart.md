@@ -29,6 +29,7 @@ my-project/
 ├── .luarc.json
 ├── .gitignore
 ├── stylua.toml
+├── .mcp.json
 ├── collections/
 │   ├── users.lua
 │   └── media.lua

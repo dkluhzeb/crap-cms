@@ -17,7 +17,7 @@ crap.collections.define("test_nesting", {
     -- Data is stored flat in the join table (title, description, color columns).
     crap.fields.array({
       name = "tabbed_items",
-      admin = { labels_singular = "Tabbed Item" },
+      admin = { labels = { singular = "Tabbed Item" } },
       fields = {
         crap.fields.tabs({
           name = "item_tabs",
@@ -52,7 +52,7 @@ crap.collections.define("test_nesting", {
     -- Row groups fields horizontally in the admin UI.
     crap.fields.array({
       name = "coordinates",
-      admin = { labels_singular = "Point" },
+      admin = { labels = { singular = "Point" } },
       fields = {
         crap.fields.row({
           name = "coord_row",
@@ -69,7 +69,7 @@ crap.collections.define("test_nesting", {
     -- ─── Array with Collapsible sub-fields ──────────────────────────────
     crap.fields.array({
       name = "faq_items",
-      admin = { labels_singular = "FAQ" },
+      admin = { labels = { singular = "FAQ" } },
       fields = {
         crap.fields.text({ name = "question", required = true }),
         crap.fields.collapsible({
@@ -87,7 +87,7 @@ crap.collections.define("test_nesting", {
     -- Tabs containing Rows — tests recursive layout flattening.
     crap.fields.array({
       name = "team_members",
-      admin = { labels_singular = "Member", label_field = "first_name" },
+      admin = { labels = { singular = "Member" }, label_field = "first_name" },
       fields = {
         crap.fields.tabs({
           name = "member_tabs",
@@ -127,7 +127,7 @@ crap.collections.define("test_nesting", {
     -- Block type whose fields are organized with tabs.
     crap.fields.blocks({
       name = "sections",
-      admin = { labels_singular = "Section" },
+      admin = { labels = { singular = "Section" } },
       blocks = {
         {
           type = "feature_card",

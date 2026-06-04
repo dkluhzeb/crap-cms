@@ -55,6 +55,12 @@ Every field type accepts these properties:
 | `access` | table | `{}` | Per-field access control. |
 | `mcp` | table | `{}` | MCP-specific options. `{ description = "..." }` sets this field's description in MCP tool input schemas (so AI assistants know what the field means). Falls back to `admin.description` when unset. See [MCP — field level](../mcp/overview.md#field-level). |
 
+> **Unknown keys are rejected.** Each field is validated against the keys valid
+> for its type. A typo (`requird`), a misplaced key (`options` on a `text`
+> field), or an unknown `admin` key (`lable`) fails loudly at load time instead
+> of being silently ignored. Plugin/custom-template config goes under
+> `admin.extra`, which is the one open-ended escape hatch.
+
 ### Reserved field names
 
 A field `name` is rejected at definition time if it would collide with an

@@ -5,7 +5,9 @@ use tracing::warn;
 
 use crate::core::{FieldType, RelationshipConfig};
 
-use super::helpers::{get_bool, get_string, get_table, parse_relationship_collection};
+use super::helpers::{
+    deny_unknown_keys, get_bool, get_string, get_table, parse_relationship_collection,
+};
 
 /// Parse the relationship config for a field, handling both `Relationship` and `Upload` field types.
 /// Returns `None` for field types that don't have a relationship config.
@@ -32,6 +34,13 @@ fn parse_relationship_table(
     rel_tbl: &Table,
     field_type: &FieldType,
 ) -> LuaResult<Option<RelationshipConfig>> {
+    deny_unknown_keys(
+        rel_tbl,
+        "relationship",
+        &["collection", "has_many", "max_depth"],
+    )
+    .map_err(|e| RuntimeError(e.to_string()))?;
+
     let (collection, polymorphic) = if *field_type == FieldType::Relationship {
         parse_relationship_collection(rel_tbl)
     } else {

@@ -72,7 +72,7 @@ pub enum MakeAction {
         /// Hook function name (e.g., "`auto_slug`"). Prompted if omitted.
         name: Option<String>,
 
-        /// Hook type: collection, field, or access
+        /// Hook type: collection, field, access, or condition
         #[arg(short = 't', long = "type")]
         hook_type: Option<String>,
 
@@ -84,7 +84,7 @@ pub enum MakeAction {
         #[arg(short = 'l', long)]
         position: Option<String>,
 
-        /// Target field name (field hooks only)
+        /// Target field name (field hooks; watched field for condition hooks)
         #[arg(short = 'F', long)]
         field: Option<String>,
 

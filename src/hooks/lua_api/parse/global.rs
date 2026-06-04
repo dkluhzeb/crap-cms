@@ -9,10 +9,19 @@ use crate::{
     db::query,
 };
 
+use super::helpers::deny_unknown_keys;
 use super::shared::{
     parse_access_config, parse_fields_section, parse_hooks_section, parse_labels,
-    parse_live_setting, parse_mcp_section, parse_versions_config, warn_deep_nesting,
+    parse_live_setting, parse_mcp_section, parse_versions_config, validate_shared_nested_keys,
+    warn_deep_nesting,
 };
+
+/// Every key accepted at the top level of `crap.globals.define(slug, {...})`.
+/// Globals are single-row, so they take a subset of the collection keys —
+/// no `timestamps`, `admin`, `auth`, `upload`, `indexes`, or soft-delete.
+const GLOBAL_CONFIG_KEYS: &[&str] = &[
+    "labels", "fields", "hooks", "access", "live", "versions", "mcp",
+];
 
 /// Parse a Lua table into a `GlobalDefinition`, extracting fields, hooks, and access config.
 ///
@@ -22,6 +31,8 @@ use super::shared::{
 /// fields/hooks/versions spec fails to parse.
 pub fn parse_global_definition(lua: &Lua, slug: &str, config: &Table) -> Result<GlobalDefinition> {
     query::validate_slug(slug)?;
+    deny_unknown_keys(config, "global", GLOBAL_CONFIG_KEYS)?;
+    validate_shared_nested_keys(config)?;
 
     let labels = parse_labels(config);
     let fields = parse_fields_section(lua, config)?;
@@ -82,6 +93,21 @@ mod tests {
         config.set("mcp", mcp_tbl).unwrap();
         let def = parse_global_definition(&lua, "site_settings", &config).unwrap();
         assert_eq!(def.mcp.description.as_deref(), Some("Site settings"));
+    }
+
+    #[test]
+    fn test_global_unknown_top_level_key_is_rejected() {
+        let lua = Lua::new();
+        let config = lua.create_table().unwrap();
+        // `timestamps` is a collection-only key — invalid on a global.
+        config.set("timestamps", true).unwrap();
+        let err = parse_global_definition(&lua, "site_settings", &config)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("timestamps"),
+            "error should name the offending key: {err}"
+        );
     }
 
     #[test]
