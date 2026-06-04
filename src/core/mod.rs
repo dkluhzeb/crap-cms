@@ -47,6 +47,7 @@ pub mod email;
 pub mod event;
 pub mod field;
 pub mod job;
+pub mod lua_lease;
 pub mod rate_limit;
 pub mod registry;
 pub mod req_context;
@@ -73,6 +74,7 @@ pub use field::{
     ValidateFunction, to_title_case, validate_template_name,
 };
 pub use job::{JobDefinition, JobLabels, JobRun, JobStatus};
+pub use lua_lease::{LocalLease, LuaVmLease};
 pub(crate) use registry::RegistryRead;
 pub use registry::{Registry, SharedRegistry, StrategyEntry};
 pub use req_context::ReqContext;

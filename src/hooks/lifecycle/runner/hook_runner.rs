@@ -2,7 +2,7 @@
 
 use std::{collections::HashSet, sync::Arc};
 
-use crate::core::Registry;
+use crate::core::{Registry, lua_lease::LuaVmLease};
 
 use super::HookRunnerBuilder;
 use super::vm_pool::VmPool;
@@ -41,5 +41,16 @@ impl HookRunner {
     #[must_use]
     pub fn has_registered_hooks_for(&self, event: &str) -> bool {
         self.registered_events.contains(event)
+    }
+
+    /// A pooled [`LuaVmLease`] over this runner's VM pool — each
+    /// `with_vm` call checks a VM out of the pool. Used to back custom
+    /// Lua providers (email / storage) for callers that are NOT already
+    /// executing inside a pool VM (the scheduler, HTTP upload handlers),
+    /// so their operations run concurrently rather than serializing on a
+    /// single VM.
+    #[must_use]
+    pub fn lua_lease(&self) -> Arc<dyn LuaVmLease> {
+        self.pool.clone()
     }
 }

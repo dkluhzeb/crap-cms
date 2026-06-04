@@ -16,7 +16,7 @@ mod local;
 mod s3;
 
 pub use crate::config::UploadConfig;
-pub use backend::{SharedStorage, StorageBackend};
+pub use backend::{SharedStorage, StorageBackend, StorageNotFound};
 pub use custom::CustomStorage;
-pub use factory::create_storage;
+pub use factory::{create_storage, create_storage_with_lease};
 pub use local::LocalStorage;

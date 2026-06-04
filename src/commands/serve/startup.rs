@@ -22,12 +22,12 @@ use crate::{
         SharedTokenProvider,
         auth::{Argon2PasswordProvider, JwtTokenProvider},
         cache::create_cache,
-        email::create_email_provider,
+        email::create_email_provider_with_lease,
         event::{create_event_transport, create_invalidation_transport},
         rate_limit::{
             LoginRateLimiter, RateLimitBackend, RateLimitFactoryConfig, create_rate_limit_backend,
         },
-        upload::{create_storage, format_filesize},
+        upload::{create_storage_with_lease, format_filesize},
     },
     db::{DbConnection, DbPool, SharedPopulateSingleflight, Singleflight, migrate, pool},
     hooks::{self, HookRunner},
@@ -463,7 +463,10 @@ fn bootstrap_startup(config_dir: std::path::PathBuf) -> Result<StartupResources>
     log_update_notice(&config);
     log_health_check_nudge(&config, &registry, &pool, &config_dir);
 
-    let storage = create_storage(&config_dir, &config.upload)?;
+    // Pool-backed for `storage = "custom"`: external callers (upload
+    // handlers, image-convert jobs) get concurrency via the hook-runner
+    // VM pool. In-VM callers use a LocalLease set up in the pool builder.
+    let storage = create_storage_with_lease(&config_dir, &config.upload, hook_runner.lua_lease())?;
     let cache = create_cache(&config.cache)?;
     let token_provider: SharedTokenProvider = Arc::new(JwtTokenProvider::new(&jwt_secret));
     let password_provider: SharedPasswordProvider = Arc::new(Argon2PasswordProvider);
@@ -580,7 +583,10 @@ async fn run_scheduler_task(
         shutdown,
         storage: res.storage.clone(),
         locale_config: res.config.locale.clone(),
-        email_provider: Some(create_email_provider(&res.config.email)?),
+        email_provider: Some(create_email_provider_with_lease(
+            &res.config.email,
+            res.hook_runner.lua_lease(),
+        )?),
     })
     .await
 }

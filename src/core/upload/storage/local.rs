@@ -1,10 +1,10 @@
 //! Local filesystem storage backend.
 
-use std::{fs, path::PathBuf};
+use std::{fs, io, path::PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 
-use super::StorageBackend;
+use super::{StorageBackend, StorageNotFound};
 
 /// Local filesystem storage backend.
 ///
@@ -97,7 +97,13 @@ impl StorageBackend for LocalStorage {
     fn get(&self, key: &str) -> Result<Vec<u8>> {
         let path = self.key_to_path(key)?;
 
-        fs::read(&path).with_context(|| format!("Failed to read file: {}", path.display()))
+        match fs::read(&path) {
+            Ok(data) => Ok(data),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                Err(StorageNotFound(key.to_string()).into())
+            }
+            Err(e) => Err(e).with_context(|| format!("Failed to read file: {}", path.display())),
+        }
     }
 
     fn delete(&self, key: &str) -> Result<()> {
@@ -200,6 +206,31 @@ mod tests {
         );
         assert!(storage.get("../escape.txt").is_err());
         assert!(storage.delete("../escape.txt").is_err());
+    }
+
+    /// A missing key must surface as a typed `StorageNotFound` so the serve
+    /// handler can answer 404 (vs 503 for a transient/infra failure).
+    #[test]
+    fn get_missing_key_returns_not_found() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = LocalStorage::new(tmp.path());
+
+        let err = storage.get("media/nope.txt").unwrap_err();
+        assert!(
+            err.downcast_ref::<StorageNotFound>().is_some(),
+            "missing key must map to StorageNotFound, got: {err:#}"
+        );
+    }
+
+    /// An invalid key (path traversal) is rejected as a transient/validation
+    /// error, NOT classified as a not-found (it must not become a 404).
+    #[test]
+    fn get_invalid_key_is_not_storage_not_found() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = LocalStorage::new(tmp.path());
+
+        let err = storage.get("../escape.txt").unwrap_err();
+        assert!(err.downcast_ref::<StorageNotFound>().is_none());
     }
 
     #[test]

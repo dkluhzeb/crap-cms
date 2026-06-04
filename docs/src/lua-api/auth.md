@@ -78,6 +78,53 @@ crap.hooks.register("after_read", function(ctx)
 end)
 ```
 
+### `crap.auth.default_methods()`
+
+Return the standard three-method auth set, ready to drop into a collection's `auth.methods`:
+`password_login` + `bearer` (gRPC and admin surfaces) + `session_cookie` (admin only).
+
+**Returns:** `crap.AuthMethod[]` — the ordered default method list.
+
+```lua
+crap.collections.define("users", {
+    auth = {
+        enabled = true,
+        methods = crap.auth.default_methods(),
+    },
+    fields = { ... },
+})
+```
+
+See [Auth Methods](../authentication/auth-methods.md) for the full method shape.
+
+### `crap.auth.with_defaults(extras?)`
+
+Return `default_methods()` with `extras` appended — the common "standard auth plus my own
+strategy" shape. Called with no argument it is equivalent to `default_methods()`.
+
+**Parameters:**
+- `extras` (`crap.AuthMethod[]`, optional) — Methods to append after the defaults.
+
+**Returns:** `crap.AuthMethod[]` — the default methods followed by `extras`.
+
+```lua
+crap.collections.define("users", {
+    auth = {
+        enabled = true,
+        methods = crap.auth.with_defaults({
+            {
+                type = "strategy",
+                name = "api-key",
+                authenticate = "hooks.auth.api_key",
+                activates_on = { header = "x-api-key" },
+                surfaces = { "grpc" },
+            },
+        }),
+    },
+    fields = { ... },
+})
+```
+
 ## Notes
 
 - Available in both init.lua and hooks.

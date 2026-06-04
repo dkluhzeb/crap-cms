@@ -7,8 +7,8 @@ use mlua::{Lua, LuaOptions, StdLib};
 use tracing::{debug, info};
 
 use crate::{
-    config::CrapConfig,
-    core::{Registry, SharedInvalidationTransport, upload},
+    config::{CrapConfig, UploadStorage},
+    core::{LocalLease, Registry, SharedInvalidationTransport, upload},
     db::query::SharedPopulateSingleflight,
     hooks::{
         self, HookRunner,
@@ -259,8 +259,18 @@ fn init_app_data(
     lua.set_app_data(MaxInstructions(config.hooks.max_instructions));
     lua.set_app_data(LuaLocaleConfig(config.locale.clone()));
 
-    let storage = upload::create_storage(config_dir, &config.upload)
-        .context("Failed to create storage backend for Lua VM")?;
+    // Inside a pool VM, a custom backend delegates to `crap._storage`
+    // (set by `crap.storage.register` during this VM's init.lua). Back it
+    // with a `LocalLease` over the current VM so CRUD-delete reuses that
+    // VM rather than re-acquiring from the pool (which would deadlock).
+    let storage: upload::SharedStorage = if matches!(config.upload.storage, UploadStorage::Custom) {
+        Arc::new(upload::storage::CustomStorage::new(Arc::new(
+            LocalLease::new(lua),
+        )))
+    } else {
+        upload::create_storage(config_dir, &config.upload)
+            .context("Failed to create storage backend for Lua VM")?
+    };
 
     lua.set_app_data(LuaStorage(storage));
 

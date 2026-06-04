@@ -82,6 +82,8 @@ local job_id = crap.email.queue({
 
 Register a custom email provider. Only used when `[email] provider = "custom"` in `crap.toml`. Call in `init.lua`.
 
+The `handler.send(opts)` function receives `opts.to`, `opts.subject`, `opts.html`, and (when present) `opts.text`. It should send the message and return normally on success, or **raise an error** on failure — the queued-email job is then retried with backoff. `send` runs in a pooled Lua VM (`init.lua` runs once per VM), so keep it stateless: do the work over `crap.http` and read secrets from `crap.env`.
+
 ```lua
 crap.email.register({
     send = function(opts)

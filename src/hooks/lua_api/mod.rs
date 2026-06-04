@@ -41,6 +41,7 @@ pub(crate) mod register;
 pub(crate) mod richtext;
 pub(crate) mod schema;
 mod serializers;
+pub(crate) mod storage;
 pub(crate) mod template_data;
 pub(crate) mod transaction;
 pub(crate) mod utils;

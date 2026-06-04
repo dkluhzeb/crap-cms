@@ -10,7 +10,7 @@ use tracing::info;
 
 use crate::{
     config::CrapConfig,
-    core::upload::create_storage,
+    core::upload::create_storage_with_lease,
     db::{migrate, pool},
     hooks::{self, HookRunner},
     mcp,
@@ -47,8 +47,8 @@ pub async fn run(config_dir: &Path) -> Result<()> {
         .config(&cfg)
         .build()?;
 
-    let storage =
-        create_storage(&config_dir, &cfg.upload).context("Failed to create storage backend")?;
+    let storage = create_storage_with_lease(&config_dir, &cfg.upload, hook_runner.lua_lease())
+        .context("Failed to create storage backend")?;
 
     info!("MCP server starting (stdio mode)");
 

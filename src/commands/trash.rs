@@ -1,6 +1,6 @@
 //! `trash` command — manage soft-deleted documents.
 
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 
@@ -8,9 +8,13 @@ use super::TrashAction;
 use crate::{
     cli::{self, Table},
     commands::helpers::init_stack,
-    config::CrapConfig,
-    core::{CollectionDefinition, Document, Registry, upload, upload::StorageBackend},
+    config::{CrapConfig, UploadStorage},
+    core::{
+        CollectionDefinition, Document, Registry, upload,
+        upload::{StorageBackend, create_storage_with_lease},
+    },
     db::{DbConnection, DbPool, DbValue, query},
+    hooks::HookRunner,
 };
 
 /// Validate that a collection exists and has `soft_delete` enabled.
@@ -396,7 +400,20 @@ pub fn run(action: TrashAction, config_dir: &Path) -> Result<()> {
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
     let (cfg, registry, pool) = init_stack(&config_dir)?;
-    let storage = upload::create_storage(&config_dir, &cfg.upload)?;
+
+    // A custom storage backend delegates to Lua, so it needs a VM pool.
+    // Build a hook runner only in that case; the lease keeps the pool
+    // alive after the runner is dropped (it holds an Arc to the pool).
+    let storage = if matches!(cfg.upload.storage, UploadStorage::Custom) {
+        let hook_runner = HookRunner::builder()
+            .config_dir(&config_dir)
+            .registry(Arc::clone(&registry))
+            .config(&cfg)
+            .build()?;
+        create_storage_with_lease(&config_dir, &cfg.upload, hook_runner.lua_lease())?
+    } else {
+        upload::create_storage(&config_dir, &cfg.upload)?
+    };
 
     match action {
         TrashAction::List { collection } => run_list(&registry, &pool, &cfg, collection.as_deref()),

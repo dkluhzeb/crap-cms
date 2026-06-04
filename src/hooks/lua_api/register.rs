@@ -27,6 +27,7 @@ use super::{
     pages::register_pages,
     richtext::{register_richtext_init, register_richtext_pool_init},
     schema::{register_schema_init, register_schema_pool},
+    storage::register_storage,
     template_data::register_template_data,
     transaction::register_transaction,
     utils::{load_lua_helpers, register_util},
@@ -57,6 +58,7 @@ pub fn register_api(lua: &Lua, registry: &SharedRegistry, config: &CrapConfig) -
     register_common(lua, registry, config)?;
     register_jobs_init(lua, Arc::clone(registry))?;
     register_email(lua, config)?;
+    register_storage(lua)?;
     register_richtext_init(lua, Arc::clone(registry))?;
     register_fields(lua)?;
     register_template_data(lua)?;
@@ -112,6 +114,7 @@ pub fn register_api_pool_init(
     register_common_with_arc(lua, &registry, config)?;
     register_jobs_pool_init(lua, Arc::clone(&registry))?;
     register_email(lua, config)?;
+    register_storage(lua)?;
     register_richtext_pool_init(lua, registry)?;
     register_fields(lua)?;
     register_template_data(lua)?;

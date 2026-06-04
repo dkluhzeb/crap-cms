@@ -35,7 +35,7 @@ pub(crate) struct CountQueryInput {
     /// Locale code for localized fields.
     #[lua(optional)]
     pub(crate) locale: Option<String>,
-    /// Skip access control checks (default: `true`).
+    /// Skip access control checks (default: `false`).
     #[serde(rename = "overrideAccess")]
     #[lua(rename = "overrideAccess", optional)]
     pub(crate) override_access: Option<bool>,

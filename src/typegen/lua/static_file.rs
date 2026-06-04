@@ -89,6 +89,7 @@ use crate::hooks::lua_api::{
     parse::JobDefinitionConfig,
     richtext::{RichtextNodeSpec, render_crap_richtext_init_lua, render_crap_richtext_render_lua},
     schema::{SchemaCollection, SchemaField, render_crap_schema_init_lua},
+    storage::render_crap_storage_lua,
     template_data::render_crap_template_data_lua,
     transaction::render_crap_transaction_lua,
     utils::{render_crap_json_lua, render_crap_util_lua},
@@ -123,6 +124,7 @@ const BLOCK_RENDERS: &[BlockRender] = &[
     render_crap_env,
     render_crap_http,
     render_crap_email,
+    render_crap_storage,
     render_crap_config,
     render_crap_locale,
     render_crap_crypto,
@@ -491,6 +493,10 @@ fn render_crap_email(out: &mut String) {
     EmailOptions::render_lua_annotation(out);
     out.push('\n');
 }
+fn render_crap_storage(out: &mut String) {
+    render_crap_storage_lua(out);
+    out.push('\n');
+}
 fn render_crap_config(out: &mut String) {
     render_crap_config_lua(out);
     out.push('\n');
@@ -558,10 +564,10 @@ mod tests {
 
     #[test]
     fn block_render_count_matches_section_count() {
-        // Sanity check: 28 section renderers. If a future PR adds a
+        // Sanity check: 30 section renderers. If a future PR adds a
         // namespace but forgets to add a renderer, this catches it
         // before the diff test does.
-        assert_eq!(BLOCK_RENDERS.len(), 29);
+        assert_eq!(BLOCK_RENDERS.len(), 30);
     }
 
     #[test]

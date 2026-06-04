@@ -67,8 +67,11 @@ pub(crate) struct CollectionsUpdateManyState {
 
 /// Update multiple documents matching a query. All-or-nothing: checks
 /// update access for every matched document first; if any fails, returns
-/// an error and nothing is modified. Does NOT fire per-document hooks.
-/// Inside hooks, runs within the parent operation's transaction.
+/// an error and nothing is modified. Runs the full per-document lifecycle
+/// (`before_validate`, field validation, `before_change`, `after_change`)
+/// by default; pass `hooks = false` in opts to skip hooks and validation for
+/// large batches. Inside hooks, runs within the parent operation's
+/// transaction.
 #[lua_fn(
     path = "crap.collections.update_many",
     returns = "crap.UpdateManyResult",

@@ -880,7 +880,7 @@ function crap.collections.config.list() end
 --- Inside hooks, runs within the parent operation's transaction.
 --- @param collection string  Collection slug.
 --- @param data table<string, any>  Field values.
---- @param opts crap.CreateOptions  Optional options (e.g., `{ locale = "de" }`).
+--- @param opts crap.CreateOptions?  Optional options (e.g., `{ locale = "de" }`).
 --- @return crap.Document
 function crap.collections.create(collection, data, opts) end
 
@@ -897,7 +897,7 @@ function crap.collections.create(collection, data, opts) end
 --- @param collection string  Collection slug.
 --- @param id string  Document ID.
 --- @param data table<string, any>  Fields to update (partial).
---- @param opts crap.UpdateOptions  Optional options (e.g., `{ locale = "de" }`).
+--- @param opts crap.UpdateOptions?  Optional options (e.g., `{ locale = "de" }`).
 --- @return crap.Document
 function crap.collections.update(collection, id, data, opts) end
 
@@ -912,7 +912,7 @@ function crap.collections.update(collection, id, data, opts) end
 --- Inside hooks, runs within the parent operation's transaction.
 --- @param collection string  Collection slug.
 --- @param id string  Document ID.
---- @param opts crap.DeleteOptions  Optional options.
+--- @param opts crap.DeleteOptions?  Optional options.
 --- @return boolean # True on successful delete.
 function crap.collections.delete(collection, id, opts) end
 
@@ -927,7 +927,7 @@ function crap.collections.delete(collection, id, opts) end
 --- Inside hooks, runs within the parent operation's transaction.
 --- @param collection string  Collection slug.
 --- @param id string  Document ID.
---- @param opts crap.UnpublishOptions  Optional options.
+--- @param opts crap.UnpublishOptions?  Optional options.
 --- @return crap.Document
 function crap.collections.unpublish(collection, id, opts) end
 
@@ -940,7 +940,7 @@ function crap.collections.unpublish(collection, id, opts) end
 --- Inside hooks, runs within the parent operation's transaction.
 --- @param collection string  Collection slug.
 --- @param id string  Document ID.
---- @param opts crap.UndeleteOptions  Optional options.
+--- @param opts crap.UndeleteOptions?  Optional options.
 --- @return boolean # True when the document was successfully restored.
 function crap.collections.undelete(collection, id, opts) end
 
@@ -963,7 +963,7 @@ function crap.collections.undelete(collection, id, opts) end
 --- Inside hooks, runs within the parent operation's transaction.
 --- @param collection string  Collection slug.
 --- @param data table<string, any>  Field values to validate.
---- @param opts crap.ValidateOptions  Optional options.
+--- @param opts crap.ValidateOptions?  Optional options.
 --- @return crap.ValidateResult
 function crap.collections.validate(collection, data, opts) end
 
@@ -971,14 +971,14 @@ function crap.collections.validate(collection, data, opts) end
 --- @class crap.CountQuery
 --- @field where? table<string, crap.FilterValue | crap.OrCondition[]>
 --- @field locale? string Locale code for localized fields.
---- @field overrideAccess? boolean Skip access control checks (default: `true`).
+--- @field overrideAccess? boolean Skip access control checks (default: `false`).
 --- @field draft? boolean Include draft documents (default: `false`).
 --- @field search? string FTS5 full-text search query.
 
 --- Count documents matching a query.
 --- Inside hooks, runs within the parent operation's transaction.
 --- @param collection string  Collection slug.
---- @param query crap.CountQuery  Optional query parameters.
+--- @param query crap.CountQuery?  Optional query parameters.
 --- @return integer # Number of matching documents.
 function crap.collections.count(collection, query) end
 
@@ -1027,29 +1027,34 @@ function crap.collections.count(collection, query) end
 --- Inside hooks, runs within the parent operation's transaction.
 --- @param collection string  Collection slug.
 --- @param items table<string, any>[]  Array of field-value tables — one per document.
---- @param opts crap.CreateOptions  Optional options applied to every document.
+--- @param opts crap.CreateOptions?  Optional options applied to every document.
 --- @return crap.CreateManyResult
 function crap.collections.create_many(collection, items, opts) end
 
 --- Update multiple documents matching a query. All-or-nothing: checks
 --- update access for every matched document first; if any fails, returns
---- an error and nothing is modified. Does NOT fire per-document hooks.
---- Inside hooks, runs within the parent operation's transaction.
+--- an error and nothing is modified. Runs the full per-document lifecycle
+--- (`before_validate`, field validation, `before_change`, `after_change`)
+--- by default; pass `hooks = false` in opts to skip hooks and validation for
+--- large batches. Inside hooks, runs within the parent operation's
+--- transaction.
 --- @param collection string  Collection slug.
 --- @param query crap.UpdateManyQuery  Query to match documents.
 --- @param data table<string, any>  Fields to update on all matched documents.
---- @param opts crap.UpdateOptions  Optional options.
+--- @param opts crap.UpdateOptions?  Optional options.
 --- @return crap.UpdateManyResult
 function crap.collections.update_many(collection, query, data, opts) end
 
 --- Delete multiple documents matching a query. All-or-nothing: checks
 --- delete access for every matched document first; if any fails, returns
---- an error and nothing is modified. Does NOT fire per-document hooks.
---- Referenced documents are skipped (counted in `skipped`), not errored.
---- Inside hooks, runs within the parent operation's transaction.
+--- an error and nothing is modified. Fires per-document delete hooks
+--- (`before_delete`, `after_delete`) by default; pass `hooks = false` in opts
+--- to skip them for large batches. Referenced documents are skipped
+--- (counted in `skipped`), not errored. Inside hooks, runs within the
+--- parent operation's transaction.
 --- @param collection string  Collection slug.
 --- @param query crap.DeleteManyQuery  Query to match documents.
---- @param opts crap.DeleteOptions  Optional options.
+--- @param opts crap.DeleteOptions?  Optional options.
 --- @return crap.DeleteManyResult
 function crap.collections.delete_many(collection, query, opts) end
 
@@ -1066,7 +1071,7 @@ function crap.collections.delete_many(collection, query, opts) end
 --- Inside hooks, runs within the parent operation's transaction.
 --- @param collection string  Collection slug.
 --- @param id string  Parent document ID.
---- @param opts crap.ListVersionsOptions  Optional options.
+--- @param opts crap.ListVersionsOptions?  Optional options.
 --- @return crap.ListVersionsResult
 function crap.collections.list_versions(collection, id, opts) end
 
@@ -1081,7 +1086,7 @@ function crap.collections.list_versions(collection, id, opts) end
 --- @param collection string  Collection slug.
 --- @param id string  Parent document ID.
 --- @param version_id string  Version row ID to restore.
---- @param opts crap.RestoreVersionOptions  Optional options.
+--- @param opts crap.RestoreVersionOptions?  Optional options.
 --- @return crap.Document
 function crap.collections.restore_version(collection, id, version_id, opts) end
 
@@ -1143,14 +1148,14 @@ function crap.globals.config.list() end
 
 --- Get a global's current value.
 --- @param slug string  Global slug.
---- @param opts crap.GlobalGetOptions  Optional options (e.g., `{ locale = "de" }`).
+--- @param opts crap.GlobalGetOptions?  Optional options (e.g., `{ locale = "de" }`).
 --- @return crap.Document
 function crap.globals.get(slug, opts) end
 
 --- Update a global's value.
 --- @param slug string  Global slug.
 --- @param data_table table<string, any>  Fields to update.
---- @param opts crap.GlobalUpdateOptions  Optional options (e.g., `{ locale = "de" }`).
+--- @param opts crap.GlobalUpdateOptions?  Optional options (e.g., `{ locale = "de" }`).
 --- @return crap.Document
 function crap.globals.update(slug, data_table, opts) end
 
@@ -1160,7 +1165,7 @@ function crap.globals.update(slug, data_table, opts) end
 --- validate in update mode against the singleton `default` row.
 --- @param slug string  Global slug.
 --- @param data_table table<string, any>  Field values to validate.
---- @param opts crap.GlobalValidateOptions  Optional options.
+--- @param opts crap.GlobalValidateOptions?  Optional options.
 --- @return crap.ValidateResult
 function crap.globals.validate(slug, data_table, opts) end
 
@@ -1461,7 +1466,7 @@ function crap.auth.default_methods() end
 ---   }),
 --- }
 --- ```
---- @param extras crap.AuthMethod[]  Methods to append after the defaults.
+--- @param extras crap.AuthMethod[]?  Methods to append after the defaults.
 --- @return crap.AuthMethod[]
 function crap.auth.with_defaults(extras) end
 
@@ -1558,6 +1563,12 @@ function crap.email.send(opts) end
 --- @return string # Queued job ID.
 function crap.email.queue(opts) end
 
+--- Register a custom email provider's handler. **Init-only** — call from
+--- `init.lua` when `[email] provider = "custom"`. Stores `handler.send`
+--- as `crap._email_send`; the custom provider delegates every send to it.
+--- @param handler { send: fun(opts: crap.EmailOptions) }  Provider handler. Must have a `send(opts)` function.
+function crap.email.register(handler) end
+
 --- Options table for `crap.email.send` / `crap.email.queue`.
 --- @class crap.EmailOptions
 --- @field to string Recipient email address.
@@ -1565,6 +1576,19 @@ function crap.email.queue(opts) end
 --- @field html string HTML email body.
 --- @field text? string Plain-text fallback body.
 --- @field retries? integer Per-call override of the queue retry count (only honoured by `crap.email.queue`).
+
+
+-- ── crap.storage ─────────────────────────────────────────────
+
+--- Register a custom upload-storage backend (for `[upload] storage = "custom"`).
+--- @class crap.storage
+crap.storage = {}
+
+--- Register a custom storage backend's handler. **Init-only** — call from
+--- `init.lua` when `[upload] storage = "custom"`. Stores the handler as
+--- `crap._storage`; the custom backend delegates every operation to it.
+--- @param handler { put: fun(key: string, data: string, content_type: string), get: fun(key: string): string?, delete: fun(key: string), url?: fun(key: string): string, exists?: fun(key: string): boolean }  Storage handler. `put`/`get`/`delete` required; `url`/`exists` optional. `get` returns nil for a missing key.
+function crap.storage.register(handler) end
 
 
 -- ── crap.config ──────────────────────────────────────────────
@@ -1624,18 +1648,18 @@ function crap.crypto.hmac_sha256(data, key) end
 --- Constant-time byte-string equality. Use this — never `==` — to compare
 --- HMAC tags, tokens, or any secret value. Length mismatch and content
 --- mismatch are indistinguishable from the return value.
---- @param a string
---- @param b string
+--- @param a string  First value.
+--- @param b string  Second value.
 --- @return boolean # True iff `a` equals `b`.
 function crap.crypto.constant_time_eq(a, b) end
 
 --- Base64-encode a string.
---- @param str string
+--- @param str string  String to encode.
 --- @return string
 function crap.crypto.base64_encode(str) end
 
 --- Base64-decode a string.
---- @param str string
+--- @param str string  Base64 string to decode.
 --- @return string
 function crap.crypto.base64_decode(str) end
 

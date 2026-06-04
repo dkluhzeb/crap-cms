@@ -65,6 +65,10 @@ Queue a job for background execution. Only available inside hooks with transacti
     that job's id instead of inserting a duplicate. Completed/failed
     jobs don't block re-enqueue (only pending/running are "active").
 
+  The options table is strict: `priority`, `delay`, and `unique` are the
+  only accepted keys. An unknown key (e.g. a typo'd `priorty`) is a hard
+  error, not silently ignored.
+
 **Returns:** `string` — The queued job run ID (either freshly inserted
 or, when `unique` matched, the existing one).
 

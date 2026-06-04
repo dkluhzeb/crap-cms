@@ -11,7 +11,7 @@ use tokio::task::block_in_place;
 
 use crate::config::S3Config;
 
-use super::{SharedStorage, StorageBackend};
+use super::{SharedStorage, StorageBackend, StorageNotFound};
 
 /// S3-compatible storage backend.
 pub struct S3Storage {
@@ -64,8 +64,12 @@ impl StorageBackend for S3Storage {
         })
         .with_context(|| format!("S3 get failed: {full_key}"))?;
 
+        // A genuine miss arrives as an `Ok` response with status 404 (the
+        // bucket client is built without `fail-on-err`, so non-2xx is not
+        // an `Err`); map it to the typed not-found. Network/other failures
+        // surface via the `?` above and stay transient.
         if response.status_code() == 404 {
-            bail!("Object not found: {full_key}");
+            return Err(StorageNotFound(key.to_string()).into());
         }
 
         Ok(response.to_vec())

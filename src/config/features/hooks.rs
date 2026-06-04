@@ -16,8 +16,12 @@ pub struct HooksConfig {
     /// Max hook recursion depth for Lua CRUD -> hook -> CRUD chains.
     /// 0 = disable hooks from Lua CRUD entirely. Default: 3.
     pub max_depth: u32,
-    /// Number of Lua VMs in the hook runner pool. Default: `max(available_parallelism`, 4), capped at 32.
-    /// Higher values allow more concurrent hook execution.
+    /// Number of Lua VMs in the hook runner pool. Default: the number of
+    /// available CPU cores (`available_parallelism`), or 4 if that can't be
+    /// detected; the effective value is floored at 1. Higher values allow
+    /// more concurrent hook execution — raise it when using a custom
+    /// (`crap.storage`/`crap.email`) provider, whose ops hold a VM for the
+    /// duration of a network round-trip.
     pub vm_pool_size: usize,
     /// Maximum Lua instructions per hook invocation. 0 = unlimited. Default: `10_000_000`.
     pub max_instructions: u64,

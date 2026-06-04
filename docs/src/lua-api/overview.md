@@ -19,7 +19,8 @@ The `crap` global table is the entry point for all CMS operations in Lua. It's a
 | `crap.http` | Outbound HTTP requests (blocking) |
 | `crap.config` | Read-only access to crap.toml values |
 | `crap.locale` | Locale configuration queries |
-| `crap.email` | Send email via configured SMTP |
+| `crap.email` | Send/queue email via the configured provider; register a custom provider (`crap.email.register`) |
+| `crap.storage` | Register a custom upload-storage backend (`crap.storage.register`, for `[upload] storage = "custom"`) |
 | `crap.crypto` | Cryptographic utilities (HMAC, random bytes, hashing) |
 | `crap.schema` | Runtime schema introspection |
 | `crap.richtext` | Custom rich text node registration |

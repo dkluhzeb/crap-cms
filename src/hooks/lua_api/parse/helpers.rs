@@ -15,7 +15,7 @@ use crate::core::{LocalizedString, SelectOption, collection::Hooks};
 /// at load time instead of being silently dropped. Only string keys are
 /// validated — integer/array entries are skipped. When the unknown key is a
 /// near-miss of a valid one, the error suggests it.
-pub(super) fn deny_unknown_keys(table: &Table, context: &str, allowed: &[&str]) -> Result<()> {
+pub(crate) fn deny_unknown_keys(table: &Table, context: &str, allowed: &[&str]) -> Result<()> {
     for pair in table.clone().pairs::<Value, Value>() {
         let (key, _) = pair?;
 

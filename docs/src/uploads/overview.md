@@ -133,6 +133,14 @@ Files are served through the CMS via `/uploads/...` (proxied from S3) so access 
 
 For exotic storage providers, register custom functions in `init.lua`:
 
+> **The handlers must be stateless** — they have to delegate to an external
+> store (over `crap.http`), not keep files in Lua memory. The hook runner
+> uses a *pool* of independent Lua VMs (one per `[hooks] vm_pool_size`), each
+> running `init.lua` separately, and a different VM may serve each request.
+> A handler that stashed bytes in a Lua table would `put` into one VM and
+> `get` a miss from another. Use `crap.env` for credentials and
+> `crap.crypto` (HMAC/SHA-256) if the provider needs request signing.
+
 ```lua
 crap.storage.register({
   put = function(key, data, content_type)
@@ -147,6 +155,12 @@ crap.storage.register({
     local resp = crap.http.request({
       url = "https://storage.example.com/" .. key,
     })
+    -- Return nil for a missing key (the CMS serves a 404). Raise an
+    -- error only for a real/transient failure (served as a 503), so a
+    -- transient outage isn't cached as a permanent "not found".
+    if resp.status == 404 then
+      return nil
+    end
     return resp.body
   end,
   delete = function(key)

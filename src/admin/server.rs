@@ -56,7 +56,7 @@ use crate::{
     core::{
         CollectionDefinition, JwtSecret, Registry, SharedCache, SharedEventTransport,
         SharedInvalidationTransport, SharedPasswordProvider, SharedStorage, SharedTokenProvider,
-        email::{EmailRenderer, create_email_provider},
+        email::{EmailRenderer, create_email_provider_with_lease},
         event::InProcessInvalidationBus,
         rate_limit::LoginRateLimiter,
     },
@@ -138,7 +138,10 @@ pub async fn start(
         hook_runner.extract_custom_pages(),
     );
     let email_renderer = Arc::new(EmailRenderer::new(&config_dir)?);
-    let email_provider = create_email_provider(&config.email)?;
+    // Pool-backed for `provider = "custom"`: admin-sent mail (password
+    // reset, verification) delegates to the registered Lua handler via the
+    // hook-runner VM pool.
+    let email_provider = create_email_provider_with_lease(&config.email, hook_runner.lua_lease())?;
 
     // Check if any auth collections exist
     let has_auth = registry

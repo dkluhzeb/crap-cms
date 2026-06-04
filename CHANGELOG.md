@@ -69,6 +69,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   as `overrideAcces` previously was silently ignored — defeating the
   exact access bypass it was meant to request — and now fails loudly.
 
+- **`crap.jobs.queue` rejects unknown option keys.** The third
+  options argument now accepts only `priority`, `delay`, and `unique`;
+  any other key (e.g. a typo'd `priorty`) is a hard error instead of
+  being silently ignored. Matches the strictness of the other Lua
+  option tables.
+
 - **`crap.hooks.register` rejects unknown event names.** Registering a
   hook for an event that isn't a real lifecycle event (e.g. a typo'd
   `"on_change"`) was a warning that still created a hook list which
@@ -101,6 +107,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `max_file_size` still inherits the global default.
 
 ### Fixed
+
+- **Custom email provider and custom storage backend now work.** Both
+  `[email] provider = "custom"` and `[upload] storage = "custom"` were
+  documented but non-functional: the registration entry points didn't
+  exist and the providers silently fell back to the log/local
+  placeholders. `crap.email.register({ send = ... })` and the new
+  `crap.storage` namespace (`crap.storage.register({ put, get, delete,
+  url })`) are now implemented (init-only), and the providers are backed
+  by the hook-runner VM pool so the registered Lua handlers run with real
+  concurrency. Selecting `custom` without registering a handler now fails
+  loudly instead of silently logging/using local disk.
+
+- **Upload serving no longer blocks the async runtime for remote storage
+  backends.** When serving an upload from a non-local backend (S3 or
+  custom), the file read now runs on a blocking thread instead of a tokio
+  worker, so a slow remote read can't stall the runtime. Local-filesystem
+  serving is unchanged (it streams via `ServeFile`).
+
+- **Transient storage failures serve 503, not a false 404.** Serving an
+  upload from a remote backend (S3 / custom) now distinguishes a genuine
+  missing key (404) from a transient/infrastructure failure — network
+  error, VM-pool-acquire timeout under load — which returns a retryable
+  503 instead of a cacheable 404 for a file that exists. Custom storage
+  `get` handlers should return `nil` for a missing key and raise only on
+  real failures (see Uploads → custom storage).
+
+- **Lua type defs: optional function arguments are now marked optional.**
+  In `types/crap.lua`, optional trailing arguments with an explicit type
+  (the `opts` / `query` tables on `crap.collections.*` and
+  `crap.globals.*`, and `crap.auth.with_defaults`'s `extras`) were
+  generated as required params, so LuaLS flagged correct calls that
+  omitted them. They are now emitted as `opts?` / `extras?`. Editor
+  hints only — no runtime change.
 
 - **Lua `find` / `find_by_id` honor the configured population depth
   ceiling.** Relationship-population `depth` was clamped to a

@@ -15,3 +15,5 @@ mod upload;
 pub use collection::parse_collection_definition;
 pub use global::parse_global_definition;
 pub use job::{JobDefinitionConfig, parse_job_definition};
+
+pub(crate) use helpers::deny_unknown_keys;

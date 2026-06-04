@@ -24,7 +24,7 @@ use crate::commands::helpers::{is_process_running, read_pid, send_signal};
 use crate::{
     cli,
     commands::helpers::{self, load_and_validate_config, run_on_init_hooks, spawn_shutdown_signal},
-    core::{email::create_email_provider, upload::create_storage},
+    core::{email::create_email_provider_with_lease, upload::create_storage_with_lease},
     db::{migrate, pool},
     hooks::{self, HookRunner},
     scheduler::{self, SchedulerParams},
@@ -248,8 +248,8 @@ pub async fn run(
 
     run_on_init_hooks(&cfg, &db_pool, &hook_runner)?;
 
-    let storage = create_storage(config_dir, &cfg.upload)?;
-    let email_provider = create_email_provider(&cfg.email)?;
+    let storage = create_storage_with_lease(config_dir, &cfg.upload, hook_runner.lua_lease())?;
+    let email_provider = create_email_provider_with_lease(&cfg.email, hook_runner.lua_lease())?;
 
     helpers::write_pid_file(config_dir, PID_FILENAME, process::id())?;
     let pid_config_dir = config_dir.to_path_buf();

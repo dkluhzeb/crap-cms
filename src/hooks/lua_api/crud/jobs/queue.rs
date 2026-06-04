@@ -13,6 +13,7 @@ use crate::db::{AccessResult, query};
 use crate::hooks::lifecycle::access::check_access_with_lua;
 use crate::hooks::lua_api;
 use crate::hooks::lua_api::crud::{get_tx_conn, helpers::hook_user};
+use crate::hooks::lua_api::parse::deny_unknown_keys;
 use crate::typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
 /// State threaded into `crap.jobs.queue` — the loaded `Registry` plus a
@@ -81,6 +82,14 @@ fn queue_job_inner(
 ) -> LuaResult<String> {
     let reg = state.registry.as_ref();
     let conn = get_tx_conn(lua)?;
+
+    // Reject unknown option keys (parity with the strict schema config):
+    // a typo like `{ priorty = 5 }` errors loudly instead of being
+    // silently ignored.
+    if let Some(opts) = opts {
+        deny_unknown_keys(opts, "jobs.queue options", &["priority", "delay", "unique"])
+            .map_err(|e| RuntimeError(format!("{e}")))?;
+    }
 
     let job_def = reg
         .get_job(slug)
@@ -257,6 +266,31 @@ mod tests {
         let t = opts_from_lua(&lua, "return { priority = 'high' }");
         let err = parse_priority_opt(Some(&t)).unwrap_err().to_string();
         assert!(err.contains("priority must be an integer"), "got: {err}");
+    }
+
+    // ── strict opts (unknown-key rejection) ───────────────────────
+
+    /// Regression: `crap.jobs.queue` rejects unknown option keys instead
+    /// of silently ignoring them. A typo'd `priorty` must error and
+    /// suggest the intended key.
+    #[test]
+    fn unknown_opts_key_rejected_with_suggestion() {
+        let lua = Lua::new();
+        let t = opts_from_lua(&lua, "return { priorty = 5 }");
+        let err = deny_unknown_keys(&t, "jobs.queue options", &["priority", "delay", "unique"])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("priorty"), "names the bad key: {err}");
+        assert!(err.contains("priority"), "suggests the real key: {err}");
+    }
+
+    #[test]
+    fn known_opts_keys_accepted() {
+        let lua = Lua::new();
+        let t = opts_from_lua(&lua, "return { priority = 1, delay = '5m', unique = 'k' }");
+        assert!(
+            deny_unknown_keys(&t, "jobs.queue options", &["priority", "delay", "unique"]).is_ok()
+        );
     }
 
     // ── parse_delay_opt ────────────────────────────────────────────

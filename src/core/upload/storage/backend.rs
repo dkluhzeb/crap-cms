@@ -1,12 +1,31 @@
 //! `StorageBackend` trait + `SharedStorage` type alias — the
 //! abstraction every upload-storage backend in this module satisfies.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{fmt, path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 
 /// Thread-safe shared reference to a storage backend.
 pub type SharedStorage = Arc<dyn StorageBackend>;
+
+/// Error returned by [`StorageBackend::get`] when a key genuinely does not
+/// exist — as opposed to a transient/infrastructure failure (network
+/// error, pool-acquire timeout, permission error, …).
+///
+/// Backends return this (via `anyhow::Error`) for a confirmed miss;
+/// callers `downcast_ref::<StorageNotFound>()` to tell "missing" (serve a
+/// 404) from "try again" (serve a 503). Anything that is *not* a
+/// `StorageNotFound` is treated as transient.
+#[derive(Debug)]
+pub struct StorageNotFound(pub String);
+
+impl fmt::Display for StorageNotFound {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "storage key not found: {}", self.0)
+    }
+}
+
+impl std::error::Error for StorageNotFound {}
 
 /// Object-safe storage backend trait.
 ///
@@ -25,7 +44,10 @@ pub trait StorageBackend: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns an error if the key is missing or the backend fails.
+    /// Returns [`StorageNotFound`] (wrapped in `anyhow::Error`) when the
+    /// key genuinely does not exist, and any other error for a transient
+    /// or infrastructure failure. Callers distinguish the two by
+    /// downcasting.
     fn get(&self, key: &str) -> Result<Vec<u8>>;
 
     /// Delete a file. No error if the key doesn't exist.

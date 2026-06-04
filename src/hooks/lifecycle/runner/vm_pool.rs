@@ -10,12 +10,24 @@ use std::{
     time::Duration,
 };
 
+use crate::core::lua_lease::LuaVmLease;
 use crate::hooks::lifecycle::types::MaxInstructions;
 
 /// Pool of Lua VMs for concurrent hook execution.
 pub(super) struct VmPool {
     vms: Mutex<Vec<Lua>>,
     available: Condvar,
+}
+
+impl LuaVmLease for VmPool {
+    /// Check a VM out of the pool for the duration of `f`. Gives external
+    /// callers (scheduler, HTTP handlers) real concurrency on custom Lua
+    /// providers. Never call from inside a pool VM — that would re-enter
+    /// the pool and can deadlock; use a `LocalLease` there instead.
+    fn with_vm(&self, f: &mut dyn FnMut(&Lua) -> anyhow::Result<()>) -> anyhow::Result<()> {
+        let guard = self.acquire()?;
+        f(&guard)
+    }
 }
 
 impl VmPool {
@@ -83,12 +95,23 @@ impl std::ops::Deref for VmGuard<'_> {
 
 impl Drop for VmGuard<'_> {
     fn drop(&mut self) {
-        if let Some(vm) = self.vm.take()
-            && let Ok(mut pool) = self.pool.vms.lock()
-        {
-            vm.remove_hook();
-            pool.push(vm);
-            self.pool.available.notify_one();
+        let Some(vm) = self.vm.take() else { return };
+
+        match self.pool.vms.lock() {
+            Ok(mut pool) => {
+                vm.remove_hook();
+                pool.push(vm);
+                self.pool.available.notify_one();
+            }
+            // A poisoned lock means a thread panicked while holding it. We
+            // can't return the VM, so it's dropped — permanently shrinking
+            // the pool. Log it rather than fail silently; repeated hits
+            // eventually starve `acquire`.
+            Err(_) => {
+                tracing::error!(
+                    "VM pool mutex poisoned; dropping a Lua VM (pool capacity reduced by one)"
+                );
+            }
         }
     }
 }

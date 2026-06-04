@@ -1,99 +1,135 @@
 //! Custom Lua-delegated storage backend.
 //!
 //! Delegates all storage operations to user-provided Lua functions
-//! registered via `crap.storage.register({ put, get, delete, url })`.
+//! registered via `crap.storage.register({ put, get, delete, url })`. The
+//! VM that runs the functions is supplied by a [`LuaVmLease`] — a
+//! `LocalLease` when used from inside a pool VM (e.g. CRUD delete), or the
+//! hook runner's pooled lease for external callers (upload-serving
+//! handlers, the image-conversion job worker).
+
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use mlua::{Function, Lua, Table};
 
-use super::StorageBackend;
+use super::{StorageBackend, StorageNotFound};
+use crate::core::lua_lease::LuaVmLease;
 
 /// Custom storage backend that delegates to Lua functions.
-///
-/// The Lua functions are stored in the Lua registry and called
-/// synchronously via the hook runner's Lua VM pool.
 pub struct CustomStorage {
-    lua: Lua,
+    lease: Arc<dyn LuaVmLease>,
 }
 
 impl CustomStorage {
-    /// Create a new custom storage backend.
-    /// The Lua state must have `crap.storage` functions registered.
+    /// Create a new custom storage backend backed by `lease`. The leased
+    /// VM must have `crap._storage` registered (via `init.lua`).
     #[must_use]
-    pub fn new(lua: Lua) -> Self {
-        Self { lua }
+    pub fn new(lease: Arc<dyn LuaVmLease>) -> Self {
+        Self { lease }
     }
+}
 
-    /// Get a registered storage function from the Lua state.
-    fn get_fn(&self, name: &str) -> Result<Function> {
-        let crap: Table = self
-            .lua
-            .globals()
-            .get("crap")
-            .map_err(|e| anyhow!("crap global not found: {e}"))?;
+/// Look up a registered `crap._storage.<name>` function on a VM.
+fn storage_fn(lua: &Lua, name: &str) -> Result<Function> {
+    let crap: Table = lua
+        .globals()
+        .get("crap")
+        .map_err(|e| anyhow!("crap global not found: {e}"))?;
 
-        let storage: Table = crap
-            .get("_storage")
-            .map_err(|e| anyhow!("crap._storage not found: {e}"))?;
+    let storage: Table = crap.get("_storage").map_err(|e| {
+        anyhow!("crap._storage not registered — call crap.storage.register in init.lua: {e}")
+    })?;
 
-        storage
-            .get(name)
-            .map_err(|e| anyhow!("crap._storage.{name} not found: {e}"))
-    }
+    storage
+        .get(name)
+        .map_err(|e| anyhow!("crap._storage.{name} not found: {e}"))
 }
 
 impl StorageBackend for CustomStorage {
     fn put(&self, key: &str, data: &[u8], content_type: &str) -> Result<()> {
-        let func = self.get_fn("put")?;
-        // Pass binary data as Lua string (mlua handles Vec<u8> <-> Lua string natively)
-        func.call::<()>((
-            key.to_string(),
-            self.lua.create_string(data)?,
-            content_type.to_string(),
-        ))
-        .map_err(|e| anyhow::anyhow!("custom storage put error: {e:#}"))
+        self.lease.with_vm(&mut |lua| {
+            let func = storage_fn(lua, "put")?;
+            // Pass binary data as a Lua string (mlua maps Vec<u8> <-> Lua string).
+            func.call::<()>((
+                key.to_string(),
+                lua.create_string(data)?,
+                content_type.to_string(),
+            ))
+            .map_err(|e| anyhow!("custom storage put error: {e:#}"))?;
+            Ok(())
+        })
     }
 
     fn get(&self, key: &str) -> Result<Vec<u8>> {
-        let func = self.get_fn("get")?;
-        let result: mlua::String = func
-            .call(key.to_string())
-            .map_err(|e| anyhow::anyhow!("custom storage get error: {e:#}"))?;
-        Ok(result.as_bytes().to_vec())
+        // Contract: the handler returns the bytes (string) on hit, `nil`
+        // for a missing key, and *raises* only on a real failure. So a
+        // `nil` return maps to `StorageNotFound` (→ 404) while a raised
+        // error or a lease failure (e.g. pool-acquire timeout) propagates
+        // as a transient error (→ 503).
+        let mut out: Option<Vec<u8>> = None;
+        self.lease.with_vm(&mut |lua| {
+            let func = storage_fn(lua, "get")?;
+            let result: Option<mlua::String> = func
+                .call(key.to_string())
+                .map_err(|e| anyhow!("custom storage get error: {e:#}"))?;
+            out = result.map(|s| s.as_bytes().to_vec());
+            Ok(())
+        })?;
+        out.ok_or_else(|| StorageNotFound(key.to_string()).into())
     }
 
     fn delete(&self, key: &str) -> Result<()> {
-        let func = self.get_fn("delete")?;
-        func.call::<()>(key.to_string())
-            .map_err(|e| anyhow::anyhow!("custom storage delete error: {e:#}"))
+        self.lease.with_vm(&mut |lua| {
+            let func = storage_fn(lua, "delete")?;
+            func.call::<()>(key.to_string())
+                .map_err(|e| anyhow!("custom storage delete error: {e:#}"))?;
+            Ok(())
+        })
     }
 
     fn exists(&self, key: &str) -> Result<bool> {
-        // If no exists function registered, fall back to trying get
-        match self.get_fn("exists") {
-            Ok(func) => {
-                let result: bool = func
+        let mut out = false;
+        self.lease.with_vm(&mut |lua| {
+            // Prefer an explicit `exists`; otherwise fall back to probing `get`.
+            if let Ok(func) = storage_fn(lua, "exists") {
+                out = func
                     .call(key.to_string())
-                    .map_err(|e| anyhow::anyhow!("custom storage exists error: {e:#}"))?;
-                Ok(result)
+                    .map_err(|e| anyhow!("custom storage exists error: {e:#}"))?;
+                return Ok(());
             }
-            Err(_) => {
-                // No exists function — try get and check for error
-                match self.get(key) {
-                    Ok(_) => Ok(true),
-                    Err(_) => Ok(false),
-                }
-            }
-        }
+
+            // No `exists` handler: probe `get`. A nil return means absent;
+            // a raised error is transient and must propagate so exists()
+            // agrees with get()'s nil-vs-raise classification rather than
+            // reporting a transient failure as "absent".
+            out = match storage_fn(lua, "get") {
+                Ok(getf) => getf
+                    .call::<Option<mlua::String>>(key.to_string())
+                    .map_err(|e| anyhow!("custom storage exists (get probe) error: {e:#}"))?
+                    .is_some(),
+                Err(_) => false,
+            };
+            Ok(())
+        })?;
+        Ok(out)
     }
 
     fn public_url(&self, key: &str) -> String {
-        match self.get_fn("url") {
-            Ok(func) => func
-                .call::<String>(key.to_string())
-                .unwrap_or_else(|_| format!("/uploads/{key}")),
-            Err(_) => format!("/uploads/{key}"),
+        // `public_url` can't return an error, so fall back to the served
+        // path on any failure. A lease failure (e.g. pool-acquire timeout)
+        // is logged rather than silently swallowed, to aid diagnosis.
+        let mut url = format!("/uploads/{key}");
+        if let Err(e) = self.lease.with_vm(&mut |lua| {
+            if let Ok(func) = storage_fn(lua, "url")
+                && let Ok(u) = func.call::<String>(key.to_string())
+            {
+                url = u;
+            }
+            Ok(())
+        }) {
+            tracing::debug!("custom storage public_url lease failed for '{key}': {e:#}");
         }
+        url
     }
 
     fn kind(&self) -> &'static str {
@@ -104,10 +140,13 @@ impl StorageBackend for CustomStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::lua_lease::LocalLease;
     use crate::core::upload::StorageBackend;
 
-    /// Create a Lua state with an in-memory storage implementation.
-    fn setup_lua() -> Lua {
+    /// Returns the owning `Lua` alongside a lease over a Lua state with an
+    /// in-memory storage impl. The caller must keep the VM alive (the
+    /// lease holds only a weak handle).
+    fn setup_lease() -> (Lua, Arc<dyn LuaVmLease>) {
         let lua = Lua::new();
         lua.load(
             r#"
@@ -123,7 +162,7 @@ mod tests {
 
             crap._storage.get = function(key)
                 local entry = files[key]
-                if not entry then error("not found: " .. key) end
+                if not entry then return nil end
                 return entry.data
             end
 
@@ -142,13 +181,14 @@ mod tests {
         )
         .exec()
         .expect("Lua setup failed");
-        lua
+        let lease: Arc<dyn LuaVmLease> = Arc::new(LocalLease::new(&lua));
+        (lua, lease)
     }
 
     #[test]
     fn put_get_roundtrip() {
-        let lua = setup_lua();
-        let storage = CustomStorage::new(lua);
+        let (_lua, lease) = setup_lease();
+        let storage = CustomStorage::new(lease);
 
         storage
             .put("media/test.txt", b"hello world", "text/plain")
@@ -159,18 +199,44 @@ mod tests {
     }
 
     #[test]
-    fn get_nonexistent_returns_error() {
-        let lua = setup_lua();
-        let storage = CustomStorage::new(lua);
+    fn get_missing_returns_not_found() {
+        let (_lua, lease) = setup_lease();
+        let storage = CustomStorage::new(lease);
 
-        let result = storage.get("nonexistent.txt");
-        assert!(result.is_err());
+        // Handler returns nil → typed StorageNotFound (so callers serve 404).
+        let err = storage.get("nonexistent.txt").unwrap_err();
+        assert!(
+            err.downcast_ref::<StorageNotFound>().is_some(),
+            "nil return must map to StorageNotFound, got: {err:#}"
+        );
+    }
+
+    #[test]
+    fn get_handler_error_is_transient_not_not_found() {
+        // A handler that *raises* signals a real failure, not a miss —
+        // it must NOT be classified as StorageNotFound (callers serve 503).
+        let lua = Lua::new();
+        lua.load(
+            r#"
+            crap = { _storage = {} }
+            crap._storage.get = function(key) error("backend exploded") end
+            "#,
+        )
+        .exec()
+        .unwrap();
+        let storage = CustomStorage::new(Arc::new(LocalLease::new(&lua)));
+
+        let err = storage.get("any.txt").unwrap_err();
+        assert!(
+            err.downcast_ref::<StorageNotFound>().is_none(),
+            "a raised handler error must be transient, not StorageNotFound"
+        );
     }
 
     #[test]
     fn delete_removes_file() {
-        let lua = setup_lua();
-        let storage = CustomStorage::new(lua);
+        let (_lua, lease) = setup_lease();
+        let storage = CustomStorage::new(lease);
 
         storage
             .put("media/file.txt", b"data", "text/plain")
@@ -183,8 +249,8 @@ mod tests {
 
     #[test]
     fn delete_nonexistent_is_ok() {
-        let lua = setup_lua();
-        let storage = CustomStorage::new(lua);
+        let (_lua, lease) = setup_lease();
+        let storage = CustomStorage::new(lease);
 
         // Should not error
         storage.delete("nonexistent.txt").unwrap();
@@ -192,8 +258,8 @@ mod tests {
 
     #[test]
     fn exists_returns_correct_value() {
-        let lua = setup_lua();
-        let storage = CustomStorage::new(lua);
+        let (_lua, lease) = setup_lease();
+        let storage = CustomStorage::new(lease);
 
         assert!(!storage.exists("media/nope.txt").unwrap());
 
@@ -203,8 +269,8 @@ mod tests {
 
     #[test]
     fn public_url_delegates_to_lua() {
-        let lua = setup_lua();
-        let storage = CustomStorage::new(lua);
+        let (_lua, lease) = setup_lease();
+        let storage = CustomStorage::new(lease);
 
         assert_eq!(
             storage.public_url("media/photo.jpg"),
@@ -214,15 +280,15 @@ mod tests {
 
     #[test]
     fn kind_returns_custom() {
-        let lua = setup_lua();
-        let storage = CustomStorage::new(lua);
+        let (_lua, lease) = setup_lease();
+        let storage = CustomStorage::new(lease);
         assert_eq!(storage.kind(), "custom");
     }
 
     #[test]
     fn binary_data_roundtrip() {
-        let lua = setup_lua();
-        let storage = CustomStorage::new(lua);
+        let (_lua, lease) = setup_lease();
+        let storage = CustomStorage::new(lease);
 
         // Binary data with null bytes, high bytes, etc.
         let binary: Vec<u8> = (0..=255).collect();
@@ -247,7 +313,7 @@ mod tests {
                 files[key] = data
             end
             crap._storage.get = function(key)
-                if not files[key] then error("not found") end
+                if not files[key] then return nil end
                 return files[key]
             end
             crap._storage.delete = function(key) files[key] = nil end
@@ -258,12 +324,31 @@ mod tests {
         .exec()
         .expect("Lua setup failed");
 
-        let storage = CustomStorage::new(lua);
+        let storage = CustomStorage::new(Arc::new(LocalLease::new(&lua)));
 
         assert!(!storage.exists("nope.txt").unwrap());
 
         storage.put("yes.txt", b"data", "text/plain").unwrap();
         assert!(storage.exists("yes.txt").unwrap());
+    }
+
+    /// Regression: with no `exists` handler, a `get`-probe that *raises*
+    /// (a transient failure) must propagate as an error, not be reported as
+    /// a confident "absent" — keeping `exists()` consistent with `get()`.
+    #[test]
+    fn exists_fallback_propagates_transient_error() {
+        let lua = Lua::new();
+        lua.load(
+            r#"
+            crap = { _storage = {} }
+            crap._storage.get = function(key) error("backend down") end
+            "#,
+        )
+        .exec()
+        .unwrap();
+        let storage = CustomStorage::new(Arc::new(LocalLease::new(&lua)));
+
+        assert!(storage.exists("any.txt").is_err());
     }
 
     #[test]
@@ -273,7 +358,7 @@ mod tests {
             .exec()
             .expect("Lua setup failed");
 
-        let storage = CustomStorage::new(lua);
+        let storage = CustomStorage::new(Arc::new(LocalLease::new(&lua)));
 
         assert!(storage.put("k", b"d", "t").is_err());
         assert!(storage.get("k").is_err());

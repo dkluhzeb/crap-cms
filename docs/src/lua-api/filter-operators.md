@@ -184,8 +184,8 @@ See [Query & Filters](../query-and-filters/overview.md#nested-field-filters-dot-
 Filter values are coerced to a SQL bind type based on the **field's declared type**, so
 comparisons run on the right kind of column (REAL for numbers, INTEGER for booleans,
 TEXT for ISO date strings, etc.). Coercion only applies to comparison operators —
-text-pattern operators (`like`, `contains`, `starts_with`, `ends_with`, `regex`) always
-bind as TEXT regardless of the field type.
+text-pattern operators (`like`, `contains`) always bind as TEXT regardless of the field
+type.
 
 | Field type | Comparison bind type | Notes |
 |------------|---------------------|-------|

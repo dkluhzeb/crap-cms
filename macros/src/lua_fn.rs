@@ -142,7 +142,16 @@ fn expand(attr: &LuaFnAttr, item_fn: &mut ItemFn) -> darling::Result<TokenStream
         let info = extract_param_info(arg)?;
         let name = info.name.to_string();
         let lua_ty = if let Some(over) = &info.attr.ty {
-            over.clone()
+            // A `ty` override replaces the whole mapped type, but it must
+            // still carry the optionality of an `Option<T>` param — otherwise
+            // the generated `--- @param` lies (marks an optional arg as
+            // required). Mirror `map_type_to_string`'s `Option<T>` → `T?`.
+            let is_opt = unwrap_path("Option", strip_ref(&info.ty)).is_some();
+            if is_opt && !over.ends_with('?') {
+                format!("{over}?")
+            } else {
+                over.clone()
+            }
         } else {
             map_type_to_string(&info.ty)?
         };

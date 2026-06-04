@@ -3,14 +3,19 @@
 //! - `crap.email.send(opts)` — immediate, blocking send
 //! - `crap.email.queue(opts)` — async, queued with retries via job system
 
+use std::sync::Arc;
+
 use anyhow::Result;
-use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Value};
+use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::Deserialize;
 
-use crate::config::CrapConfig;
+use crate::config::{CrapConfig, EmailProvider};
 use crate::core::email::{
-    EmailJobData, SharedEmailProvider, create_email_provider, queue_email, validate_no_crlf,
+    CustomEmailProvider, EmailJobData, SharedEmailProvider, create_email_provider, queue_email,
+    validate_no_crlf,
 };
+use crate::core::lua_lease::LocalLease;
+use crate::hooks::lifecycle::InitPhase;
 use crate::hooks::lua_api::crud::get_tx_conn;
 use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
@@ -112,22 +117,136 @@ fn email_queue(
     Ok(job_id)
 }
 
+/// Register a custom email provider's handler. **Init-only** — call from
+/// `init.lua` when `[email] provider = "custom"`. Stores `handler.send`
+/// as `crap._email_send`; the custom provider delegates every send to it.
+#[lua_fn(path = "crap.email.register")]
+fn email_register(
+    _state: &EmailState,
+    lua: &Lua,
+    #[lua(
+        ty = "{ send: fun(opts: crap.EmailOptions) }",
+        doc = "Provider handler. Must have a `send(opts)` function."
+    )]
+    handler: Table,
+) -> LuaResult<()> {
+    if lua.app_data_ref::<InitPhase>().is_none() {
+        return Err(RuntimeError(
+            "crap.email.register must be called from init.lua \
+             (the custom provider is wired once at startup)"
+                .into(),
+        ));
+    }
+
+    let send: Value = handler.get("send")?;
+    if !matches!(send, Value::Function(_)) {
+        return Err(RuntimeError(
+            "crap.email.register: handler.send must be a function".into(),
+        ));
+    }
+
+    let crap: Table = lua.globals().get("crap")?;
+    crap.set("_email_send", send)?;
+
+    Ok(())
+}
+
 lua_table! {
     name: crap_email,
     path: "crap.email",
     state: EmailState,
     header: "Email sending (requires SMTP configuration in crap.toml).",
-    fns: [email_send, email_queue],
+    fns: [email_send, email_queue, email_register],
 }
 
 /// Register `crap.email` — outbound email sending via the configured
 /// provider. The parent `crap` table must already be in globals.
 pub(super) fn register_email(lua: &Lua, config: &CrapConfig) -> Result<()> {
-    let provider = create_email_provider(&config.email)?;
+    let provider: SharedEmailProvider = if matches!(config.email.provider, EmailProvider::Custom) {
+        // Delegates to `crap._email_send`, set by `crap.email.register`
+        // during this VM's `init.lua`. A `LocalLease` over the current VM
+        // means `crap.email.send` from a hook reuses that VM rather than
+        // re-acquiring from the pool.
+        Arc::new(CustomEmailProvider::new(Arc::new(LocalLease::new(lua))))
+    } else {
+        create_email_provider(&config.email)?
+    };
+
     let state = EmailState {
         provider,
         queue_max_attempts: config.jobs.system_email_max_attempts(),
     };
     register_crap_email(lua, state)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::CrapConfig;
+
+    /// A VM with `crap.email` registered and the `InitPhase` marker set,
+    /// mimicking the state while `init.lua` runs.
+    fn lua_in_init_phase() -> Lua {
+        let lua = Lua::new();
+        lua.globals()
+            .set("crap", lua.create_table().unwrap())
+            .unwrap();
+        register_email(&lua, &CrapConfig::test_default()).unwrap();
+        lua.set_app_data(InitPhase);
+        lua
+    }
+
+    #[test]
+    fn register_stores_email_send() {
+        let lua = lua_in_init_phase();
+        lua.load(r"crap.email.register({ send = function(opts) end })")
+            .exec()
+            .unwrap();
+
+        let crap: Table = lua.globals().get("crap").unwrap();
+        assert!(matches!(
+            crap.get::<Value>("_email_send").unwrap(),
+            Value::Function(_)
+        ));
+    }
+
+    #[test]
+    fn missing_send_is_rejected() {
+        let lua = lua_in_init_phase();
+        let err = lua
+            .load(r"crap.email.register({})")
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("send"), "should name the missing fn: {err}");
+    }
+
+    #[test]
+    fn non_function_send_is_rejected() {
+        let lua = lua_in_init_phase();
+        let err = lua
+            .load(r"crap.email.register({ send = 'not a function' })")
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("send"), "should name the bad key: {err}");
+    }
+
+    #[test]
+    fn register_outside_init_phase_is_rejected() {
+        let lua = Lua::new();
+        lua.globals()
+            .set("crap", lua.create_table().unwrap())
+            .unwrap();
+        register_email(&lua, &CrapConfig::test_default()).unwrap();
+        // No InitPhase — simulate a runtime call.
+
+        let err = lua
+            .load(r"crap.email.register({ send = function(opts) end })")
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("init.lua"), "expected init-only error: {err}");
+    }
 }

@@ -8,8 +8,9 @@ use anyhow::bail;
 use tracing::info;
 
 use crate::config::{UploadConfig, UploadStorage};
+use crate::core::lua_lease::LuaVmLease;
 
-use super::{LocalStorage, SharedStorage};
+use super::{CustomStorage, LocalStorage, SharedStorage};
 
 /// Create the appropriate storage backend from config.
 ///
@@ -31,15 +32,38 @@ pub fn create_storage(config_dir: &Path, config: &UploadConfig) -> Result<Shared
              Rebuild with `--features s3-storage`."
         ),
         UploadStorage::Custom => {
-            // Custom storage is initialized after Lua init via crap.storage.register().
-            // Use local as placeholder — Lua will replace it when init.lua runs.
-            info!("Custom storage selected — waiting for Lua init");
+            // No lease available here (config-only call site). The
+            // pool/local-backed custom backend is built via
+            // `create_storage_with_lease`; this placeholder only fires if
+            // a caller forgot to use that path.
+            info!("Custom storage selected without a Lua lease — using local placeholder");
 
             let base_dir = config_dir.join("uploads");
 
             Ok(Arc::new(LocalStorage::new(base_dir)))
         }
     }
+}
+
+/// Create a storage backend, backing a `custom` backend with `lease`.
+///
+/// Use this at call sites that have a Lua VM lease (a hook-runner pool
+/// lease, or a per-VM local lease) so `[upload] storage = "custom"`
+/// resolves to a working [`CustomStorage`] instead of the local
+/// placeholder. Non-custom backends ignore the lease.
+///
+/// # Errors
+///
+/// Returns an error if the underlying backend fails to initialize.
+pub fn create_storage_with_lease(
+    config_dir: &Path,
+    config: &UploadConfig,
+    lease: Arc<dyn LuaVmLease>,
+) -> Result<SharedStorage> {
+    if matches!(config.storage, UploadStorage::Custom) {
+        return Ok(Arc::new(CustomStorage::new(lease)));
+    }
+    create_storage(config_dir, config)
 }
 
 #[cfg(test)]

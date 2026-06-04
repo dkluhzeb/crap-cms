@@ -49,19 +49,29 @@ fn crypto_hmac_sha256(
     path = "crap.crypto.constant_time_eq",
     returns_doc = "True iff `a` equals `b`."
 )]
-fn crypto_constant_time_eq(_: &Lua, a: String, b: String) -> LuaResult<bool> {
+fn crypto_constant_time_eq(
+    _: &Lua,
+    #[lua(doc = "First value.")] a: String,
+    #[lua(doc = "Second value.")] b: String,
+) -> LuaResult<bool> {
     Ok(constant_time_eq(&a, &b))
 }
 
 /// Base64-encode a string.
 #[lua_fn(path = "crap.crypto.base64_encode")]
-fn crypto_base64_encode(_: &Lua, str: String) -> LuaResult<String> {
+fn crypto_base64_encode(
+    _: &Lua,
+    #[lua(doc = "String to encode.")] str: String,
+) -> LuaResult<String> {
     Ok(b64_encode(&str))
 }
 
 /// Base64-decode a string.
 #[lua_fn(path = "crap.crypto.base64_decode")]
-fn crypto_base64_decode(_: &Lua, str: String) -> LuaResult<String> {
+fn crypto_base64_decode(
+    _: &Lua,
+    #[lua(doc = "Base64 string to decode.")] str: String,
+) -> LuaResult<String> {
     b64_decode(&str)
 }
 

@@ -6,8 +6,9 @@ use anyhow::Result;
 use tracing::{info, warn};
 
 use crate::config::{EmailConfig, EmailProvider, SmtpTls};
+use crate::core::lua_lease::LuaVmLease;
 
-use super::{SharedEmailProvider, log::LogEmailProvider, smtp, webhook};
+use super::{CustomEmailProvider, SharedEmailProvider, log::LogEmailProvider, smtp, webhook};
 
 /// Check if email sending is configured.
 /// Returns false if SMTP host is empty and provider is smtp (the default).
@@ -43,13 +44,34 @@ pub fn create_email_provider(config: &EmailConfig) -> Result<SharedEmailProvider
         EmailProvider::Webhook => Ok(Arc::new(webhook::WebhookEmailProvider::new(config)?)),
         EmailProvider::Log => Ok(Arc::new(LogEmailProvider)),
         EmailProvider::Custom => {
-            // Custom provider is initialized via crap.email.register() in Lua init.
-            // At config load time, use log provider as placeholder — the Lua VM
-            // will replace it when init.lua runs.
-            info!("Custom email provider selected — waiting for Lua init");
+            // No lease available here (config-only call site). The
+            // pool/local-backed custom provider is built via
+            // `create_email_provider_with_lease`; this placeholder only
+            // fires if a caller forgot to use that path.
+            info!("Custom email provider selected without a Lua lease — using log placeholder");
             Ok(Arc::new(LogEmailProvider))
         }
     }
+}
+
+/// Create an email provider, backing a `custom` provider with `lease`.
+///
+/// Use this at call sites that have a Lua VM lease (a hook-runner pool
+/// lease, or a per-VM local lease) so `[email] provider = "custom"`
+/// resolves to a working [`CustomEmailProvider`] instead of the log
+/// placeholder. Non-custom providers ignore the lease.
+///
+/// # Errors
+///
+/// Returns an error if the underlying backend fails to initialize.
+pub fn create_email_provider_with_lease(
+    config: &EmailConfig,
+    lease: Arc<dyn LuaVmLease>,
+) -> Result<SharedEmailProvider> {
+    if matches!(config.provider, EmailProvider::Custom) {
+        return Ok(Arc::new(CustomEmailProvider::new(lease)));
+    }
+    create_email_provider(config)
 }
 
 /// Emit a startup warning when plaintext SMTP (`smtp_tls = none`) is paired

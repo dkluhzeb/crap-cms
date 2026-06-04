@@ -24,10 +24,22 @@ use crate::{
         handlers::auth::SESSION_COOKIE,
         server::{extract_cookie, load_auth_user},
     },
-    core::{AuthUser, Document},
+    core::{
+        AuthUser, Document,
+        upload::{SharedStorage, StorageNotFound},
+    },
     db::{AccessResult, DbPool},
     hooks::HookRunner,
 };
+
+/// Read a key off the async runtime. Local storage never reaches here (it
+/// serves via `local_path` + `ServeFile`); S3 and custom backends do
+/// blocking work — network I/O for S3, a pooled Lua VM call for custom —
+/// so the read must run on a blocking thread, never on a tokio worker.
+async fn storage_get_blocking(storage: &SharedStorage, key: String) -> anyhow::Result<Vec<u8>> {
+    let storage = storage.clone();
+    task::spawn_blocking(move || storage.get(&key)).await?
+}
 
 /// Check if a path segment contains traversal characters.
 fn has_path_traversal(segment: &str) -> bool {
@@ -183,7 +195,7 @@ async fn serve_file(
                 return serve_with_headers(&local_path, req, cache_control, true, variant_mime)
                     .await;
             }
-        } else if let Ok(data) = storage.get(&variant_key) {
+        } else if let Ok(data) = storage_get_blocking(&state.storage, variant_key).await {
             return serve_bytes(data, cache_control, true, variant_mime);
         }
     }
@@ -204,9 +216,15 @@ async fn serve_file(
         let req = build_serve_request(&conditional_headers);
         serve_with_headers(&local_path, req, cache_control, is_image, &requested_mime).await
     } else {
-        match storage.get(&original_key) {
+        match storage_get_blocking(&state.storage, original_key).await {
             Ok(data) => serve_bytes(data, cache_control, is_image, &requested_mime),
-            Err(_) => StatusCode::NOT_FOUND.into_response(),
+            Err(e) if e.downcast_ref::<StorageNotFound>().is_some() => {
+                StatusCode::NOT_FOUND.into_response()
+            }
+            // Transient / infrastructure failure (remote network error,
+            // VM-pool-acquire timeout under load, …): a retryable 503, not
+            // a cacheable 404 for a file that exists.
+            Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
         }
     }
 }

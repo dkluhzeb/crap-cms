@@ -81,9 +81,11 @@ pub(crate) struct CollectionsDeleteManyState {
 
 /// Delete multiple documents matching a query. All-or-nothing: checks
 /// delete access for every matched document first; if any fails, returns
-/// an error and nothing is modified. Does NOT fire per-document hooks.
-/// Referenced documents are skipped (counted in `skipped`), not errored.
-/// Inside hooks, runs within the parent operation's transaction.
+/// an error and nothing is modified. Fires per-document delete hooks
+/// (`before_delete`, `after_delete`) by default; pass `hooks = false` in opts
+/// to skip them for large batches. Referenced documents are skipped
+/// (counted in `skipped`), not errored. Inside hooks, runs within the
+/// parent operation's transaction.
 #[lua_fn(
     path = "crap.collections.delete_many",
     returns = "crap.DeleteManyResult",
