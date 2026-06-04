@@ -89,6 +89,7 @@ async fn subscribe_streams_create_event_over_wire() {
 
     writer
         .create(CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(proto_struct(&[("title", "Streamed Post")])),
             ..Default::default()

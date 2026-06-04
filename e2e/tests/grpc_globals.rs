@@ -99,6 +99,7 @@ async fn update_global_round_trips_through_get() {
 
     client
         .update_global(UpdateGlobalRequest {
+            events: None,
             slug: "settings".to_string(),
             data: Some(proto_struct(&[
                 ("site_name", "Crap CMS"),
@@ -134,6 +135,7 @@ async fn update_global_round_trips_through_get() {
     // Partial update: only site_name; tagline should remain.
     client
         .update_global(UpdateGlobalRequest {
+            events: None,
             slug: "settings".to_string(),
             data: Some(proto_struct(&[("site_name", "New Name")])),
             ..Default::default()

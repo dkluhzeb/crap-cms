@@ -21,6 +21,9 @@ struct CrudRegisterCtx<'a> {
     locale_config: &'a LocaleConfig,
     pagination_config: &'a PaginationConfig,
     depth_config: &'a DepthConfig,
+    /// `server.bulk_max_documents` — max docs a bulk update/delete may match
+    /// (0 = unlimited), enforced in the service layer.
+    bulk_max_documents: i64,
 }
 
 /// Register the CRUD functions on `crap.collections`, `crap.globals`, and `crap.jobs`.
@@ -36,6 +39,7 @@ pub(crate) fn register_crud_functions(
     pagination_config: &PaginationConfig,
     depth_config: &DepthConfig,
     jobs_config: &JobsConfig,
+    bulk_max_documents: i64,
 ) -> Result<()> {
     let crap: Table = lua.globals().get("crap")?;
     let ctx = CrudRegisterCtx {
@@ -43,6 +47,7 @@ pub(crate) fn register_crud_functions(
         locale_config,
         pagination_config,
         depth_config,
+        bulk_max_documents,
     };
 
     register_collection_functions(lua, &crap, &ctx)?;
@@ -60,6 +65,7 @@ fn register_collection_functions(lua: &Lua, crap: &Table, ctx: &CrudRegisterCtx<
         locale_config,
         pagination_config,
         depth_config,
+        bulk_max_documents,
     } = *ctx;
     let collections: Table = crap.get("collections")?;
 
@@ -115,18 +121,25 @@ fn register_collection_functions(lua: &Lua, crap: &Table, ctx: &CrudRegisterCtx<
     )?;
 
     // Bulk operations
-    collection::bulk::create_many::register_create_many(lua, &collections, Arc::clone(registry))?;
+    collection::bulk::create_many::register_create_many(
+        lua,
+        &collections,
+        Arc::clone(registry),
+        bulk_max_documents,
+    )?;
     collection::bulk::update_many::register_update_many(
         lua,
         &collections,
         Arc::clone(registry),
         locale_config,
+        bulk_max_documents,
     )?;
     collection::bulk::delete_many::register_delete_many(
         lua,
         &collections,
         Arc::clone(registry),
         locale_config,
+        bulk_max_documents,
     )?;
 
     // Version operations

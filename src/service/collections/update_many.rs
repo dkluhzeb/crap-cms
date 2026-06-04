@@ -16,12 +16,10 @@ use crate::{
     typegen::lua::LuaAnnotation,
 };
 
-const CHUNK_SIZE: usize = 500;
-
 type Result<T> = std::result::Result<T, ServiceError>;
 
 /// Result of a bulk update operation.
-#[derive(crate::typegen::lua::LuaAnnotation)]
+#[derive(Debug, crate::typegen::lua::LuaAnnotation)]
 #[lua(class = "crap.UpdateManyResult")]
 pub struct UpdateManyResult {
     /// Number of documents updated.
@@ -32,15 +30,6 @@ pub struct UpdateManyResult {
     pub updated_ids: Vec<String>,
 }
 
-/// Update multiple documents matching the given filters.
-///
-/// **Pool mode** (`ctx.pool` set): two-phase approach — first find all matching
-/// document IDs (updated docs still match the filter, so IDs must be collected
-/// upfront to avoid infinite re-processing), then update in chunked transactions.
-///
-/// **Conn mode** (`ctx.conn` set, Lua path): finds all matching docs on the
-/// existing connection and updates them one by one.
-///
 /// Options controlling bulk update behavior.
 pub struct UpdateManyOptions<'a> {
     /// Locale context for the update.
@@ -51,9 +40,35 @@ pub struct UpdateManyOptions<'a> {
     pub draft: bool,
     /// UI locale string for hook context.
     pub ui_locale: Option<String>,
+    /// Maximum number of documents the operation may match before it is
+    /// rejected (from `server.bulk_max_documents`). `0` = no limit.
+    pub max_documents: i64,
+}
+
+/// Reject a bulk operation whose match-set exceeds `max_documents`
+/// (`server.bulk_max_documents`). `0` disables the limit. Checked before
+/// any write, so an over-limit operation changes nothing.
+pub(super) fn enforce_bulk_limit(verb: &str, matched: usize, max_documents: i64) -> Result<()> {
+    if max_documents > 0 && i64::try_from(matched).unwrap_or(i64::MAX) > max_documents {
+        return Err(ServiceError::LimitExceeded(format!(
+            "{verb} matched {matched} documents, exceeding the configured limit of \
+             {max_documents} (server.bulk_max_documents). Narrow the filter or raise the limit."
+        )));
+    }
+    Ok(())
 }
 
 /// Update multiple documents matching `filters` with the partial `data`.
+///
+/// **Pool mode** (`ctx.pool` set): collects every matching document ID up front
+/// (projecting IDs only — updated rows still match the filter, so the match-set
+/// must be gathered once rather than re-queried) and applies all per-document
+/// updates in a SINGLE transaction. The operation is atomic: a failure on any
+/// document rolls the whole batch back. Events, queued side-effects, and cache
+/// invalidation run after the commit.
+///
+/// **Conn mode** (`ctx.conn` set, Lua path): runs on the caller's existing
+/// transaction (already atomic with it), updating each matching document in turn.
 ///
 /// # Errors
 ///
@@ -73,7 +88,8 @@ pub fn update_many(
     }
 }
 
-/// Pool-based bulk update: phase 1 finds IDs, phase 2 updates in chunks.
+/// Pool-based bulk update: collect matching IDs, then update them all in one
+/// atomic transaction (commit once).
 fn update_many_pool(
     ctx: &ServiceContext,
     filters: &[FilterClause],
@@ -85,90 +101,85 @@ fn update_many_pool(
     let runner = ctx.runner()?;
     let def = ctx.collection_def()?;
 
-    // Phase 1: Find all matching doc IDs in a single read transaction.
-    // Unlike DeleteMany (which re-queries because deleted docs leave the
-    // result set), updated docs still match the same filter, so we must
-    // collect IDs upfront to avoid re-updating in an infinite loop.
-    let doc_ids = {
-        let mut conn = pool.get().context("DB connection")?;
-        let tx = conn
-            .transaction_immediate()
-            .context("Start read transaction")?;
+    // The whole bulk update runs in ONE transaction so it is atomic: a
+    // per-document failure rolls the entire operation back rather than
+    // leaving some rows changed. We open the write transaction up front and
+    // collect the matching IDs inside it (projecting only IDs, not full
+    // documents, so the match-set is bounded by the ID-list size). Unlike
+    // DeleteMany — which re-queries because deleted rows leave the result
+    // set — updated rows still match the filter, so the IDs must be
+    // collected once; the per-document deep update then runs from the ID.
+    let mut conn = pool.get().context("DB connection")?;
+    let tx = conn
+        .transaction_immediate()
+        .context("Start bulk update transaction")?;
 
-        let find_query = FindQuery::builder().filters(filters.to_vec()).build();
+    let find_query = FindQuery::builder().filters(filters.to_vec()).build();
+    let doc_ids = query::find_ids(&tx, ctx.slug, def, &find_query, opts.locale_ctx)
+        .context("Find matching IDs for update")?;
 
-        let docs = query::find(&tx, ctx.slug, def, &find_query, opts.locale_ctx)
-            .context("Find docs for update")?;
+    enforce_bulk_limit("update_many", doc_ids.len(), opts.max_documents)?;
 
-        tx.commit().context("Commit read transaction")?;
+    let queue = Rc::new(RefCell::new(Vec::new()));
+    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), None);
 
-        docs.into_iter().map(|d| d.id).collect::<Vec<_>>()
-    };
+    let mut wh = RunnerWriteHooks::new(runner)
+        .with_hooks_enabled(opts.run_hooks)
+        .with_conn(&tx)
+        .with_infra(infra);
 
-    // Phase 2: Update in chunks to keep transactions short.
-    let mut count = 0i64;
-    let mut ids = Vec::new();
-
-    for chunk in doc_ids.chunks(CHUNK_SIZE) {
-        let mut conn = pool.get().context("DB connection")?;
-        let tx = conn
-            .transaction_immediate()
-            .context("Start update transaction")?;
-
-        let queue = Rc::new(RefCell::new(Vec::new()));
-
-        let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), None);
-
-        let mut wh = RunnerWriteHooks::new(runner)
-            .with_hooks_enabled(opts.run_hooks)
-            .with_conn(&tx)
-            .with_infra(infra);
-
-        if ctx.override_access {
-            wh = wh.with_override_access();
-        }
-
-        let inner_ctx = ServiceContext::collection(ctx.slug, def)
-            .conn(&tx)
-            .write_hooks(&wh)
-            .user(ctx.user)
-            .override_access(ctx.override_access)
-            .event_transport(ctx.event_transport.clone())
-            .cache(ctx.cache.clone())
-            .event_queue(queue.clone())
-            .build();
-
-        let mut chunk_results = Vec::with_capacity(chunk.len());
-
-        for doc_id in chunk {
-            let input = WriteInput::builder(data.clone())
-                .locale_ctx(opts.locale_ctx)
-                .draft(opts.draft)
-                .ui_locale(opts.ui_locale.clone())
-                .build();
-
-            let (doc, _) = update_many_single_in_conn(&inner_ctx, doc_id, input, locale_config)?;
-
-            chunk_results.push((doc_id.to_string(), doc.fields.clone()));
-            ids.push(doc_id.to_string());
-            count += 1;
-        }
-
-        drop(inner_ctx);
-
-        tx.commit().context("Commit update transaction")?;
-
-        ctx.clear_cache();
-
-        // Publish events for this chunk after commit.
-        for (id, fields) in chunk_results {
-            ctx.publish_mutation_event(EventOperation::Update, &id, &fields);
-        }
-        flush_queue(ctx, &queue);
+    if ctx.override_access {
+        wh = wh.with_override_access();
     }
 
+    let inner_ctx = ServiceContext::collection(ctx.slug, def)
+        .conn(&tx)
+        .write_hooks(&wh)
+        .user(ctx.user)
+        .override_access(ctx.override_access)
+        .event_transport(ctx.event_transport.clone())
+        .cache(ctx.cache.clone())
+        .event_queue(queue.clone())
+        .build();
+
+    let mut results = Vec::with_capacity(doc_ids.len());
+    let mut ids = Vec::with_capacity(doc_ids.len());
+    let mut modified = 0i64;
+
+    for doc_id in &doc_ids {
+        let input = WriteInput::builder(data.clone())
+            .locale_ctx(opts.locale_ctx)
+            .draft(opts.draft)
+            .ui_locale(opts.ui_locale.clone())
+            .build();
+
+        // A failure here returns via `?`; `tx` is dropped without commit,
+        // rolling back every change made so far.
+        let (doc, _) = update_many_single_in_conn(&inner_ctx, doc_id, input, locale_config)?;
+
+        results.push((doc_id.clone(), doc.fields.clone()));
+        ids.push(doc_id.clone());
+        modified += 1;
+    }
+
+    // Release the borrows of `tx` before committing it.
+    drop(inner_ctx);
+    drop(wh);
+
+    tx.commit().context("Commit bulk update transaction")?;
+
+    ctx.clear_cache();
+
+    // Per-doc events are gated by `ctx.emit_events` (set by the surface;
+    // bulk defaults to off). Nested-hook events queued during the op always
+    // flush.
+    for (id, fields) in &results {
+        ctx.publish_mutation_event(EventOperation::Update, id, fields);
+    }
+    flush_queue(ctx, &queue);
+
     Ok(UpdateManyResult {
-        modified: count,
+        modified,
         updated_ids: ids,
     })
 }
@@ -188,23 +199,30 @@ fn update_many_conn(
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
 
-    let docs = query::find(conn, ctx.slug, def, &find_query, opts.locale_ctx)
-        .context("Find docs for update")?;
+    // Runs on the caller's existing connection/transaction (the Lua hook's
+    // tx), so it is already atomic with that transaction. Collect IDs only
+    // (bounded memory) and apply the same bulk limit as the pool path.
+    let doc_ids = query::find_ids(conn, ctx.slug, def, &find_query, opts.locale_ctx)
+        .context("Find matching IDs for update")?;
 
+    enforce_bulk_limit("update_many", doc_ids.len(), opts.max_documents)?;
+
+    let mut updated_ids = Vec::with_capacity(doc_ids.len());
     let mut modified = 0i64;
-    let mut updated_ids = Vec::new();
 
-    for doc in &docs {
+    for doc_id in &doc_ids {
         let input = WriteInput::builder(data.clone())
             .locale_ctx(opts.locale_ctx)
             .draft(opts.draft)
             .ui_locale(opts.ui_locale.clone())
             .build();
 
-        let (updated_doc, _) = update_many_single_in_conn(ctx, &doc.id, input, locale_config)?;
+        let (updated_doc, _) = update_many_single_in_conn(ctx, doc_id, input, locale_config)?;
 
-        ctx.publish_mutation_event(EventOperation::Update, &doc.id, &updated_doc.fields);
-        updated_ids.push(doc.id.to_string());
+        // Gated by `ctx.emit_events`; in conn mode the enqueued event flushes
+        // after the caller's tx commits.
+        ctx.publish_mutation_event(EventOperation::Update, doc_id, &updated_doc.fields);
+        updated_ids.push(doc_id.clone());
         modified += 1;
     }
 

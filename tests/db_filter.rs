@@ -118,6 +118,33 @@ fn filter_equals() {
 }
 
 #[test]
+fn find_ids_matches_find_for_filtered_query() {
+    // The bulk-update phase-1 ID projection must return exactly the same
+    // match-set as a full `find` (just without materializing the documents).
+    let (_tmp, pool, def) = seed_posts();
+    let q = query::FindQuery::builder()
+        .filters(vec![query::FilterClause::Single(query::Filter {
+            field: "status".to_string(),
+            op: query::FilterOp::Equals("published".to_string()),
+        })])
+        .build();
+
+    let mut expected: Vec<String> = ops::find_documents(&pool, "posts", &def, &q, None)
+        .expect("find")
+        .into_iter()
+        .map(|d| d.id.to_string())
+        .collect();
+
+    let conn = pool.get().expect("conn");
+    let mut got = query::find_ids(&conn, "posts", &def, &q, None).expect("find_ids");
+
+    expected.sort();
+    got.sort();
+    assert_eq!(got, expected, "find_ids must match find's id set");
+    assert_eq!(got.len(), 2);
+}
+
+#[test]
 fn filter_not_equals() {
     let (_tmp, pool, def) = seed_posts();
     let q = query::FindQuery::builder()

@@ -81,6 +81,7 @@ async fn forgot_password_reset_login_full_flow() {
 
     client
         .create(CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(proto_struct(&[
                 ("email", "carol@example.com"),

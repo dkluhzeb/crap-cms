@@ -38,6 +38,7 @@ struct UpdateGlobalBlockingInput {
     token: Option<String>,
     data: DocumentFields,
     locale_ctx: Option<LocaleContext>,
+    events: bool,
 }
 
 /// Resolve auth, build the context, and run `update_global_document`.
@@ -69,6 +70,7 @@ fn update_global_blocking(input: UpdateGlobalBlockingInput) -> Result<content::D
         .runner(&input.runner)
         .user(user_doc.as_ref())
         .event_transport(input.event_transport)
+        .emit_events(input.events)
         .cache(input.cache)
         .build();
 
@@ -121,6 +123,7 @@ impl ContentService {
             headers,
             data,
             locale_ctx,
+            events: req.events.unwrap_or(true),
         };
 
         let proto_doc = task::spawn_blocking(move || update_global_blocking(input))

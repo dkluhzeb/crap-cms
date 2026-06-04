@@ -123,6 +123,7 @@ async fn strategy_authenticates_when_password_is_wrong() {
     // Seed a single user so the strategy has something to return.
     client
         .create(CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(proto_struct(&[
                 ("email", "real@x.com"),
@@ -175,6 +176,7 @@ async fn always_nil_strategy_does_not_rescue_wrong_password() {
 
     client
         .create(CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(proto_struct(&[
                 ("email", "lock@x.com"),
@@ -223,6 +225,7 @@ async fn correct_password_works_alongside_strategy() {
 
     client
         .create(CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(proto_struct(&[
                 ("email", "happy@x.com"),

@@ -430,6 +430,7 @@ fn make_section_block(heading: &str, author: &str) -> Value {
 async fn create_product(ts: &TestSetup, data: Struct) -> content::Document {
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "products".to_string(),
             data: Some(data),
             locale: None,
@@ -660,6 +661,7 @@ async fn grpc_update_replaces_array_rows() {
     );
     ts.service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "products".to_string(),
             id: doc.id.clone(),
             data: Some(Struct {
@@ -710,6 +712,7 @@ async fn grpc_update_replaces_blocks() {
     );
     ts.service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "products".to_string(),
             id: doc.id.clone(),
             data: Some(Struct {
@@ -756,6 +759,7 @@ async fn grpc_update_group_subfield() {
     );
     ts.service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "products".to_string(),
             id: doc.id.clone(),
             data: Some(Struct {
@@ -785,6 +789,7 @@ async fn grpc_validation_required_in_group() {
     let result = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "products".to_string(),
             data: Some(make_struct(&[("name", "NoSEO")])),
             locale: None,
@@ -888,6 +893,7 @@ async fn grpc_localized_array_crud() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "products".to_string(),
             data: Some(Struct { fields }),
             locale: Some("en".to_string()),
@@ -927,6 +933,7 @@ async fn grpc_localized_array_crud() {
     );
     ts.service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "products".to_string(),
             id: doc.id.clone(),
             data: Some(Struct { fields: de_fields }),

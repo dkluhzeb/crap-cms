@@ -62,6 +62,13 @@ pub struct ServiceContext<'a> {
     /// Transport for publishing mutation events to live-update subscribers.
     /// `None` = event publishing is a no-op.
     pub event_transport: Option<SharedEventTransport>,
+    /// Whether this operation emits its own per-document mutation events.
+    /// `true` (default) for single ops; surfaces set it from the `events`
+    /// flag (single default `true`, bulk default `false`). When `false`,
+    /// `publish_mutation_event` is a no-op for this op — but nested-hook
+    /// events (drained via `flush_queue`) and user/session invalidation
+    /// still fire.
+    pub emit_events: bool,
     /// Queue for events accumulated during a transaction. When set,
     /// `publish_mutation_event` pushes to this queue instead of publishing
     /// immediately. The caller flushes after commit via `flush_event_queue`.
@@ -312,6 +319,10 @@ impl<'a> ServiceContext<'a> {
         doc_id: &str,
         data: &DocumentFields,
     ) {
+        if !self.emit_events {
+            return;
+        }
+
         if self.event_transport.is_none() {
             return;
         }
@@ -418,6 +429,7 @@ pub struct ServiceContextBuilder<'a> {
     email_ctx: Option<EmailContext>,
     cache: Option<SharedCache>,
     event_transport: Option<SharedEventTransport>,
+    emit_events: bool,
     event_queue: Option<EventQueue>,
     verification_queue: Option<VerificationQueue>,
     invalidation_transport: Option<SharedInvalidationTransport>,
@@ -439,6 +451,7 @@ impl<'a> ServiceContextBuilder<'a> {
             email_ctx: None,
             cache: None,
             event_transport: None,
+            emit_events: true,
             event_queue: None,
             verification_queue: None,
             invalidation_transport: None,
@@ -498,6 +511,15 @@ impl<'a> ServiceContextBuilder<'a> {
     /// operations publish events to all Subscribe/SSE clients.
     pub fn event_transport(mut self, transport: Option<SharedEventTransport>) -> Self {
         self.event_transport = transport;
+        self
+    }
+
+    /// Set whether this operation emits its own per-document mutation events.
+    /// Defaults to `true`. Surfaces pass the `events` flag here — single ops
+    /// default `true`, bulk ops default `false`. Does not affect nested-hook
+    /// events or user/session invalidation.
+    pub fn emit_events(mut self, emit: bool) -> Self {
+        self.emit_events = emit;
         self
     }
 
@@ -569,6 +591,7 @@ impl<'a> ServiceContextBuilder<'a> {
             email_ctx: self.email_ctx,
             cache: self.cache,
             event_transport: self.event_transport,
+            emit_events: self.emit_events,
             event_queue: self.event_queue,
             verification_queue: self.verification_queue,
             invalidation_transport: self.invalidation_transport,
@@ -584,8 +607,8 @@ mod tests {
     use std::sync::Arc;
 
     use crate::core::{
-        CollectionDefinition,
-        event::{InProcessInvalidationBus, SharedInvalidationTransport},
+        CollectionDefinition, DocumentFields,
+        event::{InProcessInvalidationBus, SharedEventTransport, SharedInvalidationTransport},
     };
 
     use super::*;
@@ -624,6 +647,67 @@ mod tests {
         let def = CollectionDefinition::new("users");
         let ctx = ServiceContext::collection("users", &def).build();
         assert!(ctx.invalidation_transport.is_none());
+    }
+
+    /// SAFE-DEFAULT GUARD: `emit_events` defaults to `true` so single ops keep
+    /// publishing their mutation events unless a surface explicitly opts out.
+    #[test]
+    fn builder_emits_events_by_default() {
+        let def = CollectionDefinition::new("posts");
+        assert!(
+            ServiceContext::collection("posts", &def)
+                .build()
+                .emit_events
+        );
+    }
+
+    /// `emit_events(true)` (the default) enqueues the mutation event.
+    #[test]
+    fn emit_events_true_enqueues_mutation_event() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::core::event::InProcessEventBus;
+
+        let transport: SharedEventTransport = Arc::new(InProcessEventBus::new(16));
+        let queue = Rc::new(RefCell::new(Vec::new()));
+        let def = CollectionDefinition::new("posts");
+        let ctx = ServiceContext::collection("posts", &def)
+            .event_transport(Some(transport))
+            .event_queue(queue.clone())
+            .build();
+
+        ctx.publish_mutation_event(EventOperation::Update, "doc-1", &DocumentFields::new());
+        assert_eq!(
+            queue.borrow().len(),
+            1,
+            "default emit_events should enqueue"
+        );
+    }
+
+    /// `emit_events(false)` makes `publish_mutation_event` a no-op — nothing is
+    /// enqueued even with a transport and queue attached.
+    #[test]
+    fn emit_events_false_suppresses_mutation_event() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::core::event::InProcessEventBus;
+
+        let transport: SharedEventTransport = Arc::new(InProcessEventBus::new(16));
+        let queue = Rc::new(RefCell::new(Vec::new()));
+        let def = CollectionDefinition::new("posts");
+        let ctx = ServiceContext::collection("posts", &def)
+            .event_transport(Some(transport))
+            .event_queue(queue.clone())
+            .emit_events(false)
+            .build();
+
+        ctx.publish_mutation_event(EventOperation::Update, "doc-1", &DocumentFields::new());
+        assert!(
+            queue.borrow().is_empty(),
+            "emit_events=false must suppress the event"
+        );
     }
 
     /// SAFE-DEFAULT GUARD (most critical): `override_access` bypasses ALL

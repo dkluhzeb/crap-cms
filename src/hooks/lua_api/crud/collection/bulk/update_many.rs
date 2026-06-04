@@ -13,7 +13,6 @@ use crate::{
     hooks::{
         lifecycle::converters::{lua_table_to_hashmap, lua_table_to_json_map},
         lua_api::crud::{
-            collection::write::update::UpdateOptions,
             filter::convert_where_clause,
             get_tx_conn,
             helpers::{
@@ -59,10 +58,57 @@ impl UpdateManyQueryInput {
     }
 }
 
+/// Optional options for `crap.collections.update_many`. Standalone from the
+/// single-update options so the bulk-only `events` default (`false`) is
+/// explicit (and bulk-irrelevant keys like `unpublish` are not accepted).
+#[derive(Deserialize, LuaAnnotation)]
+#[serde(default, deny_unknown_fields)]
+#[lua(class = "crap.UpdateManyOptions")]
+pub(crate) struct UpdateManyOpts {
+    /// Locale code for localized fields. Nil = default locale.
+    pub(crate) locale: Option<String>,
+    /// Skip access control checks (default: `false`).
+    #[serde(rename = "overrideAccess")]
+    #[lua(rename = "overrideAccess", optional)]
+    pub(crate) override_access: bool,
+    /// Apply changes to draft versions (default: `false`).
+    #[lua(optional)]
+    pub(crate) draft: bool,
+    /// Run lifecycle hooks (default: `true`). Set `false` to bypass.
+    #[lua(optional)]
+    pub(crate) hooks: bool,
+    /// Emit a live-update event per modified document (default: `false` —
+    /// bulk operations are quiet). Set `true` to notify subscribers.
+    #[lua(optional)]
+    pub(crate) events: bool,
+}
+
+impl Default for UpdateManyOpts {
+    fn default() -> Self {
+        Self {
+            locale: None,
+            override_access: false,
+            draft: false,
+            hooks: true,
+            events: false,
+        }
+    }
+}
+
+impl FromLua for UpdateManyOpts {
+    fn from_lua(value: Value, lua: &Lua) -> LuaResult<Self> {
+        match value {
+            Value::Nil => Ok(Self::default()),
+            other => lua.from_value(other),
+        }
+    }
+}
+
 /// State threaded into `crap.collections.update_many`.
 pub(crate) struct CollectionsUpdateManyState {
     pub(crate) registry: Arc<Registry>,
     pub(crate) locale_config: LocaleConfig,
+    pub(crate) bulk_max_documents: i64,
 }
 
 /// Update multiple documents matching a query. All-or-nothing: checks
@@ -88,7 +134,7 @@ fn collections_update_many(
         doc = "Fields to update on all matched documents."
     )]
     data: Table,
-    #[lua(ty = "crap.UpdateOptions", doc = "Optional options.")] opts: Option<UpdateOptions>,
+    #[lua(ty = "crap.UpdateManyOptions", doc = "Optional options.")] opts: Option<UpdateManyOpts>,
 ) -> LuaResult<Table> {
     let opts = opts.unwrap_or_default();
     let reg = &state.registry;
@@ -137,6 +183,7 @@ fn collections_update_many(
         .write_hooks(&write_hooks)
         .user(user.as_ref())
         .override_access(opts.override_access)
+        .emit_events(opts.events)
         .lua_infra(lua_infra.as_ref())
         .build();
 
@@ -145,6 +192,7 @@ fn collections_update_many(
         run_hooks: hooks_enabled,
         draft: opts.draft,
         ui_locale: ui_locale.clone(),
+        max_documents: state.bulk_max_documents,
     };
 
     let svc_result = service::update_many(&ctx, &filters, &data_map, lc, &update_opts)
@@ -171,12 +219,14 @@ pub(crate) fn register_update_many(
     _table: &Table,
     registry: Arc<Registry>,
     locale_config: &LocaleConfig,
+    bulk_max_documents: i64,
 ) -> anyhow::Result<()> {
     register_crap_collections_update_many(
         lua,
         CollectionsUpdateManyState {
             registry,
             locale_config: locale_config.clone(),
+            bulk_max_documents,
         },
     )?;
     Ok(())

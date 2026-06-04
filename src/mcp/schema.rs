@@ -230,6 +230,20 @@ fn insert_write_meta_keys(props: &mut Map<String, Value>) {
     );
 }
 
+/// Insert the single-op `events` meta-key (default `true`). Kept separate from
+/// `insert_write_meta_keys` because `create_schema` is reused as the per-item
+/// schema for `create_many`, where a per-item `events` key would be wrong (bulk
+/// ops declare one `events` flag at the operation level, defaulting to false).
+fn insert_single_events_key(props: &mut Map<String, Value>) {
+    props.insert(
+        "events".to_string(),
+        json!({
+            "type": "boolean",
+            "description": "Emit a live-update event for this document (default: true)"
+        }),
+    );
+}
+
 /// Input schema for collection create — includes required password for auth collections.
 fn create_schema(def: &CollectionDefinition) -> Value {
     let mut schema = fields_to_object_schema(&def.fields);
@@ -268,6 +282,7 @@ fn update_schema(def: &CollectionDefinition) -> Value {
     };
     props.insert("id".to_string(), json!({ "type": "string" }));
     insert_write_meta_keys(props);
+    insert_single_events_key(props);
 
     if def.is_auth_collection() {
         props.insert(
@@ -325,6 +340,10 @@ fn delete_schema() -> Value {
             "force_hard_delete": {
                 "type": "boolean",
                 "description": "Bypass soft-delete and remove the row permanently (default: false)"
+            },
+            "events": {
+                "type": "boolean",
+                "description": "Emit a live-update event for this document (default: true)"
             }
         },
         "required": ["id"]
@@ -336,7 +355,15 @@ fn delete_schema() -> Value {
 /// this fn matches the `CrudOp` enum 1:1.
 pub(in crate::mcp) fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value {
     match op {
-        CrudOp::Create => create_schema(def),
+        CrudOp::Create => {
+            // `create_schema` is shared with `create_many` items, so add the
+            // single-op `events` key only here, not inside `create_schema`.
+            let mut schema = create_schema(def);
+            if let Some(props) = get_props(&mut schema) {
+                insert_single_events_key(props);
+            }
+            schema
+        }
         CrudOp::CreateMany => create_many_schema(def),
         CrudOp::Update => update_schema(def),
         CrudOp::UpdateMany => update_many_schema(def),
@@ -368,6 +395,10 @@ fn create_many_schema(def: &CollectionDefinition) -> Value {
             "draft": {
                 "type": "boolean",
                 "description": "Create documents as drafts (default: false)"
+            },
+            "events": {
+                "type": "boolean",
+                "description": "Emit a live-update event per created document (default: false — bulk ops are quiet)"
             }
         },
         "required": ["documents"]
@@ -397,6 +428,10 @@ fn update_many_schema(def: &CollectionDefinition) -> Value {
             "locale": {
                 "type": "string",
                 "description": "Locale code (e.g. 'en', 'de') for localized fields"
+            },
+            "events": {
+                "type": "boolean",
+                "description": "Emit a live-update event per modified document (default: false — bulk ops are quiet)"
             }
         },
         "required": ["data"]
@@ -418,6 +453,10 @@ fn delete_many_schema() -> Value {
             "force_hard_delete": {
                 "type": "boolean",
                 "description": "Force hard delete even on soft-delete collections (default: false)"
+            },
+            "events": {
+                "type": "boolean",
+                "description": "Emit a live-update event per deleted document (default: false — bulk ops are quiet)"
             }
         }
     })
@@ -507,6 +546,7 @@ pub(in crate::mcp) fn global_input_schema(def: &GlobalDefinition, op: CrudOp) ->
             let mut schema = fields_to_object_schema(&def.fields);
             if let Some(props) = get_props(&mut schema) {
                 props.insert("locale".to_string(), locale_prop);
+                insert_single_events_key(props);
             }
             schema
         }

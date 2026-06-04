@@ -260,8 +260,8 @@ impl GrpcStartParamsBuilder {
     }
 }
 
-/// Start the gRPC server. Reflection is enabled by default but can be
-/// disabled via `config.server.grpc_reflection`.
+/// Start the gRPC server. Reflection is disabled by default and can be
+/// enabled via `config.server.grpc_reflection`.
 ///
 /// # Errors
 ///

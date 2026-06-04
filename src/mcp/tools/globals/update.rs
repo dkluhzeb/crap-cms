@@ -25,13 +25,16 @@ pub(in crate::mcp::tools) fn exec_update_global(
     let locale = args.get("locale").and_then(|v| v.as_str());
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
 
-    let data = extract_data_from_args(args, &["locale"]);
+    let events = args.get("events").and_then(Value::as_bool).unwrap_or(true);
+
+    let data = extract_data_from_args(args, &["locale", "events"]);
 
     let svc_ctx = ServiceContext::global(slug, def)
         .pool(ctx.pool)
         .runner(ctx.runner)
         .override_access(true)
         .event_transport(ctx.event_transport.clone())
+        .emit_events(events)
         .cache(ctx.cache.clone())
         .build();
 

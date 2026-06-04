@@ -875,6 +875,7 @@ function crap.collections.config.list() end
 --- @field overrideAccess? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass collection-level and field-level access for the current user.
 --- @field draft? boolean When `true` and the collection has `versions.drafts`, creates the document with `_status = 'draft'` and skips required-field validation.
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set `false` to bypass hooks (e.g., for seeding/migrations).
+--- @field events? boolean Emit a live-update event for the created document (default: `true`). Set `false` for a quiet write (e.g., seeding/migrations).
 
 --- Create a new document.
 --- Inside hooks, runs within the parent operation's transaction.
@@ -891,6 +892,7 @@ function crap.collections.create(collection, data, opts) end
 --- @field draft? boolean When `true` and the collection has `versions.drafts`, performs a version-only save (main table unchanged, only a draft version snapshot is created).
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set `false` to bypass hooks.
 --- @field unpublish? boolean When `true` and the collection has `versions`, sets `_status` to `"draft"` (unpublishes). Data is not modified.
+--- @field events? boolean Emit a live-update event for the updated document (default: `true`). Set `false` for a quiet write.
 
 --- Update an existing document.
 --- Inside hooks, runs within the parent operation's transaction.
@@ -903,10 +905,11 @@ function crap.collections.update(collection, id, data, opts) end
 
 --- Optional options for `crap.collections.delete`.
 --- @class crap.DeleteOptions
---- @field locale? string Locale code for localized fields. Nil = default locale. Only consulted by `delete_many` (single delete is locale-agnostic).
+--- @field locale? string Locale code. Currently a no-op for single delete (rows are deleted whole, across all locales); reserved pending a possible per-locale delete feature. Nil = default locale.
 --- @field overrideAccess? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass collection-level access for the current user.
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set `false` to bypass hooks.
 --- @field forceHardDelete? boolean Bypass `soft_delete` and remove the row permanently. Mirrors the same flag on the gRPC/HTTP delete handlers.
+--- @field events? boolean Emit a live-update event for the deleted document (default: `true`). Set `false` for a quiet delete.
 
 --- Delete a document.
 --- Inside hooks, runs within the parent operation's transaction.
@@ -990,6 +993,35 @@ function crap.collections.count(collection, query) end
 --- @class crap.DeleteManyQuery
 --- @field where? table<string, crap.FilterValue | crap.OrCondition[]>
 
+--- Optional options for `crap.collections.create_many`. Standalone from the
+--- single-create options so the bulk-only `events` default (`false`) is
+--- explicit.
+--- @class crap.CreateManyOptions
+--- @field overrideAccess? boolean Skip access control checks (default: `false`).
+--- @field draft? boolean Create documents as drafts (default: `false`).
+--- @field hooks? boolean Run lifecycle hooks (default: `true`). Set `false` to bypass.
+--- @field events? boolean Emit a live-update event per created document (default: `false` — bulk operations are quiet). Set `true` to notify subscribers.
+
+--- Optional options for `crap.collections.update_many`. Standalone from the
+--- single-update options so the bulk-only `events` default (`false`) is
+--- explicit (and bulk-irrelevant keys like `unpublish` are not accepted).
+--- @class crap.UpdateManyOptions
+--- @field locale? string Locale code for localized fields. Nil = default locale.
+--- @field overrideAccess? boolean Skip access control checks (default: `false`).
+--- @field draft? boolean Apply changes to draft versions (default: `false`).
+--- @field hooks? boolean Run lifecycle hooks (default: `true`). Set `false` to bypass.
+--- @field events? boolean Emit a live-update event per modified document (default: `false` — bulk operations are quiet). Set `true` to notify subscribers.
+
+--- Optional options for `crap.collections.delete_many`. Standalone from the
+--- single-delete options so the bulk-only `events` default (`false`) is
+--- explicit.
+--- @class crap.DeleteManyOptions
+--- @field locale? string Locale code. Validated but not used for matching (`delete_many` spans locales). Nil = default locale.
+--- @field overrideAccess? boolean Skip access control checks (default: `false`).
+--- @field hooks? boolean Run lifecycle hooks (default: `true`). Set `false` to bypass.
+--- @field forceHardDelete? boolean Bypass `soft_delete` and remove rows permanently (default: `false`).
+--- @field events? boolean Emit a live-update event per deleted document (default: `false` — bulk operations are quiet). Set `true` to notify subscribers.
+
 --- Result of a bulk update operation.
 --- @class crap.UpdateManyResult
 --- @field modified integer Number of documents updated.
@@ -1027,7 +1059,7 @@ function crap.collections.count(collection, query) end
 --- Inside hooks, runs within the parent operation's transaction.
 --- @param collection string  Collection slug.
 --- @param items table<string, any>[]  Array of field-value tables — one per document.
---- @param opts crap.CreateOptions?  Optional options applied to every document.
+--- @param opts crap.CreateManyOptions?  Optional options applied to every document.
 --- @return crap.CreateManyResult
 function crap.collections.create_many(collection, items, opts) end
 
@@ -1041,7 +1073,7 @@ function crap.collections.create_many(collection, items, opts) end
 --- @param collection string  Collection slug.
 --- @param query crap.UpdateManyQuery  Query to match documents.
 --- @param data table<string, any>  Fields to update on all matched documents.
---- @param opts crap.UpdateOptions?  Optional options.
+--- @param opts crap.UpdateManyOptions?  Optional options.
 --- @return crap.UpdateManyResult
 function crap.collections.update_many(collection, query, data, opts) end
 
@@ -1054,7 +1086,7 @@ function crap.collections.update_many(collection, query, data, opts) end
 --- parent operation's transaction.
 --- @param collection string  Collection slug.
 --- @param query crap.DeleteManyQuery  Query to match documents.
---- @param opts crap.DeleteOptions?  Optional options.
+--- @param opts crap.DeleteManyOptions?  Optional options.
 --- @return crap.DeleteManyResult
 function crap.collections.delete_many(collection, query, opts) end
 
@@ -1137,6 +1169,7 @@ function crap.globals.config.list() end
 --- @field locale? string Locale code for localized fields. Nil = default locale.
 --- @field overrideAccess? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass the global's update access function.
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set false to bypass hooks (e.g., for seeding/migrations).
+--- @field events? boolean Emit a live-update event for the updated global (default: `true`). Set `false` for a quiet write.
 
 --- Optional options for `crap.globals.validate`. Globals are a singleton
 --- row, so there is no `id` to exclude — validation always runs in update

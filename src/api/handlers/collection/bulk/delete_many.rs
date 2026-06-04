@@ -39,6 +39,8 @@ struct DeleteManyBlockingInput {
     cache: Option<SharedCache>,
     token: Option<String>,
     run_hooks: bool,
+    bulk_max_documents: i64,
+    events: bool,
 }
 
 fn delete_many_blocking(input: DeleteManyBlockingInput) -> Result<DeleteManyResult, Status> {
@@ -87,11 +89,13 @@ fn delete_many_blocking(input: DeleteManyBlockingInput) -> Result<DeleteManyResu
         .user(user_doc)
         .invalidation_transport(Some(input.invalidation_transport))
         .event_transport(input.event_transport)
+        .emit_events(input.events)
         .cache(input.cache)
         .build();
 
     let delete_opts = DeleteManyOptions {
         run_hooks: input.run_hooks,
+        max_documents: input.bulk_max_documents,
         ..Default::default()
     };
 
@@ -140,6 +144,8 @@ impl ContentService {
             token,
             headers,
             run_hooks,
+            bulk_max_documents: self.server_config.bulk_max_documents,
+            events: req.events.unwrap_or(false),
         };
 
         let result = task::spawn_blocking(move || delete_many_blocking(input))

@@ -40,6 +40,7 @@ struct UnpublishBlockingInput {
     /// the SELECT references bare names instead of `__en`/`__de`.
     locale_config: LocaleConfig,
     token: Option<String>,
+    events: bool,
 }
 
 fn unpublish_blocking(input: UnpublishBlockingInput) -> Result<content::Document, Status> {
@@ -66,6 +67,7 @@ fn unpublish_blocking(input: UnpublishBlockingInput) -> Result<content::Document
         .runner(&input.runner)
         .user(user_doc.as_ref())
         .event_transport(input.event_transport)
+        .emit_events(input.events)
         .cache(input.cache)
         .locale_config(Some(&input.locale_config))
         .build();
@@ -100,6 +102,7 @@ impl ContentService {
             locale_config: self.locale_config.clone(),
             token,
             headers,
+            events: req.events.unwrap_or(true),
         };
 
         let proto_doc = task::spawn_blocking(move || unpublish_blocking(input))

@@ -14,11 +14,12 @@ use crate::{
     },
 };
 
-const BATCH_SIZE: i64 = 500;
+use super::update_many::enforce_bulk_limit;
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
 /// Result of a bulk delete operation.
+#[derive(Debug)]
 pub struct DeleteManyResult {
     pub hard_deleted: i64,
     pub soft_deleted: i64,
@@ -34,6 +35,9 @@ pub struct DeleteManyOptions {
     /// Whether to include soft-deleted rows in the query. Required when
     /// emptying the trash (finding rows with `_deleted_at EXISTS`).
     pub include_deleted: bool,
+    /// Maximum number of documents the operation may match before it is
+    /// rejected (from `server.bulk_max_documents`). `0` = no limit.
+    pub max_documents: i64,
 }
 
 impl Default for DeleteManyOptions {
@@ -41,18 +45,24 @@ impl Default for DeleteManyOptions {
         Self {
             run_hooks: true,
             include_deleted: false,
+            max_documents: 0,
         }
     }
 }
 
 /// Delete multiple documents matching the given filters.
 ///
-/// **Pool mode** (`ctx.pool` set): processes in batches — find → delete → commit → repeat.
-/// Each batch gets its own transaction and write hooks. Events are published after each
-/// batch commit.
+/// **Pool mode** (`ctx.pool` set): collects the whole match-set up front (IDs
+/// only) and deletes every document in a SINGLE transaction. The operation is
+/// atomic: a real per-document failure rolls the whole batch back. Documents
+/// blocked by an incoming reference are skipped individually (best-effort,
+/// counted in `skipped`), not errored. Events, queued side-effects, and cache
+/// invalidation run after the commit; upload files are returned for the caller
+/// to delete post-commit (a crash then leaves orphaned files — safe — rather
+/// than orphaned DB rows pointing at deleted files).
 ///
-/// **Conn mode** (`ctx.conn` set, Lua path): finds all matching docs on the existing
-/// connection and deletes them one by one.
+/// **Conn mode** (`ctx.conn` set, Lua path): runs on the caller's existing
+/// transaction (already atomic with it), deleting each matching document in turn.
 ///
 /// # Errors
 ///
@@ -71,7 +81,8 @@ pub fn delete_many(
     }
 }
 
-/// Pool-based bulk delete: batched transactions with event publishing after each commit.
+/// Pool-based bulk delete: collect the match-set, then delete every document in
+/// one atomic transaction (commit once), publishing events after the commit.
 fn delete_many_pool(
     ctx: &ServiceContext,
     filters: &[FilterClause],
@@ -82,101 +93,92 @@ fn delete_many_pool(
     let runner = ctx.runner()?;
     let def = ctx.collection_def()?;
 
+    let mut conn = pool.get().context("DB connection")?;
+    let tx = conn
+        .transaction_immediate()
+        .context("Start bulk delete transaction")?;
+
+    // Collect the whole match-set up front (IDs only) so the entire delete
+    // runs in ONE transaction and is atomic — a per-document failure rolls
+    // everything back. Referenced documents are skipped individually
+    // (best-effort, counted in `skipped`), not errored.
+    let find_query = FindQuery::builder()
+        .filters(filters.to_vec())
+        .include_deleted(opts.include_deleted)
+        .build();
+    let doc_ids = query::find_ids(&tx, ctx.slug, def, &find_query, None)
+        .context("Find matching IDs for delete")?;
+
+    enforce_bulk_limit("delete_many", doc_ids.len(), opts.max_documents)?;
+
+    let queue = Rc::new(RefCell::new(Vec::new()));
+    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), None);
+
+    let mut wh = RunnerWriteHooks::new(runner)
+        .with_hooks_enabled(opts.run_hooks)
+        .with_conn(&tx)
+        .with_infra(infra);
+
+    if ctx.override_access {
+        wh = wh.with_override_access();
+    }
+
+    let inner_ctx = ServiceContext::collection(ctx.slug, def)
+        .conn(&tx)
+        .write_hooks(&wh)
+        .user(ctx.user)
+        .override_access(ctx.override_access)
+        .invalidation_transport(ctx.invalidation_transport.clone())
+        .event_transport(ctx.event_transport.clone())
+        .cache(ctx.cache.clone())
+        .event_queue(queue.clone())
+        .build();
+
     let mut hard_count = 0i64;
     let mut soft_count = 0i64;
     let mut skipped_count = 0i64;
     let mut upload_fields_to_clean = Vec::new();
     let mut deleted_ids = Vec::new();
 
-    loop {
-        let mut conn = pool.get().context("DB connection")?;
-        let tx = conn
-            .transaction_immediate()
-            .context("Start delete transaction")?;
-
-        let batch_query = FindQuery::builder()
-            .filters(filters.to_vec())
-            .limit(Some(BATCH_SIZE))
-            .include_deleted(opts.include_deleted)
-            .build();
-
-        let docs =
-            query::find(&tx, ctx.slug, def, &batch_query, None).context("Find batch for delete")?;
-
-        if docs.is_empty() {
-            tx.commit().context("Commit final transaction")?;
-            break;
-        }
-
-        let queue = Rc::new(RefCell::new(Vec::new()));
-
-        let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), None);
-
-        let mut wh = RunnerWriteHooks::new(runner)
-            .with_hooks_enabled(opts.run_hooks)
-            .with_conn(&tx)
-            .with_infra(infra);
-
-        if ctx.override_access {
-            wh = wh.with_override_access();
-        }
-
-        let inner_ctx = ServiceContext::collection(ctx.slug, def)
-            .conn(&tx)
-            .write_hooks(&wh)
-            .user(ctx.user)
-            .override_access(ctx.override_access)
-            .invalidation_transport(ctx.invalidation_transport.clone())
-            .event_transport(ctx.event_transport.clone())
-            .cache(ctx.cache.clone())
-            .event_queue(queue.clone())
-            .build();
-
-        let batch_len = docs.len();
-        let mut batch_deleted = 0usize;
-
-        for doc in &docs {
-            match delete_document_in_conn(&inner_ctx, &doc.id, Some(locale_config)) {
-                Ok(result) => {
-                    if def.soft_delete {
-                        soft_count += 1;
-                    } else {
-                        hard_count += 1;
-                        if let Some(fields) = result.upload_doc_fields {
-                            upload_fields_to_clean.push(fields);
-                        }
+    for id in &doc_ids {
+        match delete_document_in_conn(&inner_ctx, id, Some(locale_config)) {
+            Ok(result) => {
+                if def.soft_delete {
+                    soft_count += 1;
+                } else {
+                    hard_count += 1;
+                    if let Some(fields) = result.upload_doc_fields {
+                        upload_fields_to_clean.push(fields);
                     }
-                    deleted_ids.push(doc.id.to_string());
-                    batch_deleted += 1;
                 }
-                Err(ServiceError::Referenced { .. }) => {
-                    skipped_count += 1;
-                }
-                Err(e) => return Err(e),
+                deleted_ids.push(id.clone());
             }
-        }
-
-        drop(inner_ctx);
-
-        tx.commit().context("Commit delete transaction")?;
-
-        ctx.clear_cache();
-
-        // Publish events for this batch after commit.
-        for id in deleted_ids.iter().skip(deleted_ids.len() - batch_deleted) {
-            ctx.publish_mutation_event(EventOperation::Delete, id, &DocumentFields::new());
-        }
-        flush_queue(ctx, &queue);
-
-        // If nothing was deleted in this batch, all remaining matches are
-        // referenced — stop to avoid an infinite loop.
-        if batch_deleted == 0 {
-            // batch_len comes from `docs.len()`; saturate at i64::MAX for the
-            // unreachable case so we still break out of the loop.
-            skipped_count = i64::try_from(batch_len).unwrap_or(i64::MAX);
-            break;
+            // A referenced document is skipped (best-effort), not a failure.
+            Err(ServiceError::Referenced { .. }) => {
+                skipped_count += 1;
+            }
+            // A real error aborts the whole op via `?`; `tx` drops without
+            // commit, rolling back every delete made so far.
+            Err(e) => return Err(e),
         }
     }
+
+    // Release the borrows of `tx` before committing it.
+    drop(inner_ctx);
+    drop(wh);
+
+    tx.commit().context("Commit bulk delete transaction")?;
+
+    ctx.clear_cache();
+
+    // Per-doc events are gated by `ctx.emit_events` (bulk defaults to off).
+    // Nested-hook events queued during the op always flush; user/session
+    // invalidation is handled inside `delete_document_in_conn` and is
+    // unaffected.
+    for id in &deleted_ids {
+        ctx.publish_mutation_event(EventOperation::Delete, id, &DocumentFields::new());
+    }
+    flush_queue(ctx, &queue);
 
     Ok(DeleteManyResult {
         hard_deleted: hard_count,
@@ -204,8 +206,13 @@ fn delete_many_conn(
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
 
-    let docs =
-        query::find(conn, ctx.slug, def, &find_query, None).context("Find docs for delete")?;
+    // Runs on the caller's existing connection/transaction (the Lua hook's
+    // tx), so it is already atomic with that transaction. Collect IDs only
+    // (bounded memory) and apply the same bulk limit as the pool path.
+    let doc_ids = query::find_ids(conn, ctx.slug, def, &find_query, None)
+        .context("Find matching IDs for delete")?;
+
+    enforce_bulk_limit("delete_many", doc_ids.len(), opts.max_documents)?;
 
     let mut hard_count = 0i64;
     let mut soft_count = 0i64;
@@ -213,8 +220,8 @@ fn delete_many_conn(
     let mut upload_fields_to_clean = Vec::new();
     let mut deleted_ids = Vec::new();
 
-    for doc in &docs {
-        match delete_document_in_conn(ctx, &doc.id, Some(locale_config)) {
+    for id in &doc_ids {
+        match delete_document_in_conn(ctx, id, Some(locale_config)) {
             Ok(result) => {
                 if def.soft_delete {
                     soft_count += 1;
@@ -224,7 +231,11 @@ fn delete_many_conn(
                         upload_fields_to_clean.push(fields);
                     }
                 }
-                deleted_ids.push(doc.id.to_string());
+
+                // Gated by `ctx.emit_events`; in conn mode the enqueued event
+                // flushes after the caller's tx commits.
+                ctx.publish_mutation_event(EventOperation::Delete, id, &DocumentFields::new());
+                deleted_ids.push(id.clone());
             }
             Err(ServiceError::Referenced { .. }) => {
                 skipped_count += 1;

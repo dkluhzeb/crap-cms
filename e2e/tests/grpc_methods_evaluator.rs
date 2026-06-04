@@ -268,6 +268,7 @@ async fn default_methods_collection_login_and_find_work() {
 
     client
         .create(CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(proto_struct(&[
                 ("email", "a@x.com"),
@@ -356,6 +357,7 @@ async fn api_key_strategy_authenticates_when_header_present() {
     // Seed a user the strategy can authenticate as.
     client
         .create(CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(proto_struct(&[
                 ("email", "key@x.com"),
@@ -403,6 +405,7 @@ async fn api_key_strategy_skipped_without_header() {
 
     client
         .create(CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(proto_struct(&[
                 ("email", "key@x.com"),
@@ -455,6 +458,7 @@ async fn admin_only_strategy_does_not_fire_over_grpc() {
 
     client
         .create(CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(proto_struct(&[
                 ("email", "key@x.com"),
@@ -509,6 +513,7 @@ async fn bearer_admin_only_jwt_not_accepted_over_grpc() {
 
     client
         .create(CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(proto_struct(&[
                 ("email", "a@x.com"),
@@ -618,6 +623,7 @@ async fn unaccepted_bearer_returns_unauthenticated() {
 
     client
         .create(CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(proto_struct(&[
                 ("email", "a@x.com"),

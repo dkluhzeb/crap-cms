@@ -43,12 +43,15 @@ pub(in crate::mcp::tools) fn exec_delete(
         def.soft_delete = false;
     }
 
+    let events = args.get("events").and_then(Value::as_bool).unwrap_or(true);
+
     let svc_ctx = ServiceContext::collection(slug, &def)
         .pool(ctx.pool)
         .runner(ctx.runner)
         .override_access(true)
         .event_transport(ctx.event_transport.clone())
         .invalidation_transport(ctx.invalidation_transport.clone())
+        .emit_events(events)
         .cache(ctx.cache.clone())
         .build();
     delete_document(

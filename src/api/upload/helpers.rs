@@ -215,9 +215,10 @@ pub fn service_error_to_response(err: &ServiceError) -> Response {
         ServiceError::Validation(_) | ServiceError::HookError(_) => {
             (StatusCode::BAD_REQUEST, err.to_string())
         }
-        ServiceError::UniqueViolation(_) | ServiceError::Referenced { .. } => {
-            (StatusCode::CONFLICT, err.to_string())
-        }
+        // Same "refused due to data state" class as Referenced → 409.
+        ServiceError::UniqueViolation(_)
+        | ServiceError::Referenced { .. }
+        | ServiceError::LimitExceeded(_) => (StatusCode::CONFLICT, err.to_string()),
         ServiceError::AccountLocked
         | ServiceError::EmailNotVerified
         | ServiceError::InvalidCredentials

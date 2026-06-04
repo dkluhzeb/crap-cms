@@ -28,8 +28,9 @@ use crate::{
 #[serde(default, deny_unknown_fields)]
 #[lua(class = "crap.DeleteOptions")]
 pub(crate) struct DeleteOptions {
-    /// Locale code for localized fields. Nil = default locale. Only
-    /// consulted by `delete_many` (single delete is locale-agnostic).
+    /// Locale code. Currently a no-op for single delete (rows are deleted
+    /// whole, across all locales); reserved pending a possible per-locale
+    /// delete feature. Nil = default locale.
     #[lua(optional)]
     pub(crate) locale: Option<String>,
     /// Skip access control checks (default: `false`). Set to `true` in
@@ -46,6 +47,10 @@ pub(crate) struct DeleteOptions {
     #[serde(rename = "forceHardDelete")]
     #[lua(rename = "forceHardDelete", optional)]
     pub(crate) force_hard_delete: bool,
+    /// Emit a live-update event for the deleted document (default: `true`).
+    /// Set `false` for a quiet delete.
+    #[lua(optional)]
+    pub(crate) events: bool,
 }
 
 impl Default for DeleteOptions {
@@ -55,6 +60,7 @@ impl Default for DeleteOptions {
             override_access: false,
             hooks: true,
             force_hard_delete: false,
+            events: true,
         }
     }
 }
@@ -120,6 +126,7 @@ fn collections_delete(
         .user(user.as_ref())
         .override_access(opts.override_access)
         .invalidation_transport(invalidation_transport)
+        .emit_events(opts.events)
         .lua_infra(lua_infra.as_ref())
         .build();
 

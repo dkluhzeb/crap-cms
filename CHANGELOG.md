@@ -61,6 +61,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   options argument (`crap.DeleteOptions` gained a `locale` field), so
   single and bulk deletes now take locale the same way.
 
+- **Lua bulk ops have dedicated option types.**
+  `crap.collections.create_many` / `update_many` / `delete_many` now take
+  their own option tables (`crap.CreateManyOptions` / `crap.UpdateManyOptions`
+  / `crap.DeleteManyOptions`) instead of reusing the single-op option types.
+  Each declares exactly the keys the op honors plus the new `events` flag, so
+  keys that were silently ignored before are now rejected: `create_many` no
+  longer accepts `locale` (it never localized bulk creates), and `update_many`
+  no longer accepts `unpublish` (it never unpublished). The honored keys
+  (`overrideAccess`, `draft`, `hooks`, and `locale` for update/delete) are
+  unchanged.
+
 - **Lua operation option tables reject unknown keys.** Every option
   table (`crap.collections.create` / `update` / `delete` /
   `find_by_id` / `validate` / `undelete` / `unpublish`, the version
@@ -119,6 +130,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `max_file_size` still inherits the global default.
 
 ### Fixed
+
+- **Bulk operations are now atomic.** `create_many`, `update_many`, and
+  `delete_many` each run in a single transaction across every surface
+  (gRPC, Lua, admin, MCP). Previously they committed in batches of 500, so
+  a failure partway through (a validation error, a hook error, a constraint
+  violation) left earlier batches committed — partial state. Now any
+  failure rolls the whole operation back. `update_many` also no longer
+  loads every matching document into memory up front — it collects only the
+  matching IDs — bounding memory for large match-sets. `delete_many` still
+  skips documents referenced by others (counted in `skipped`), which is not
+  treated as a failure.
 
 - **Custom email provider and custom storage backend now work.** Both
   `[email] provider = "custom"` and `[upload] storage = "custom"` were
@@ -211,6 +233,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   files, so trashed documents remain restorable.)
 
 ### Added
+
+- **`events` flag on write operations** — every write op can now control
+  whether it emits live-update events to event-stream (SSE) subscribers.
+  Single `create` / `update` / `delete` (and global update) default to
+  `events = true` (unchanged behavior); the bulk `create_many` /
+  `update_many` / `delete_many` default to `events = false` — bulk ops are
+  **quiet** by default, so a large bulk write no longer floods subscribers
+  with one event per affected document. Set `events = true` on a bulk op to
+  emit per-document events, or `events = false` on a single op for a quiet
+  write (e.g. seeding/migrations). Available identically on all surfaces:
+  Lua opts (`{ events = true }`), gRPC (`optional bool events`), and MCP
+  (`events` tool arg). The flag governs only the operation's own per-document
+  events — nested-hook events and user/session invalidation always fire.
+  Bulk gating is the same on all surfaces (admin trash-purge stays quiet).
+
+- **`[server] bulk_max_documents`** — optional cap on how many documents a
+  single `create_many` / `update_many` / `delete_many` may affect (default
+  `0` = no limit). Because bulk operations are atomic, a very large one
+  holds the database write-lock for its whole duration and accumulates
+  per-document state in memory; set a positive cap to reject a runaway or
+  over-broad bulk op before it locks the DB or exhausts memory. Over-limit
+  operations fail (gRPC `FAILED_PRECONDITION` / HTTP `409`) and change
+  nothing. Enforced identically on all surfaces (gRPC, Lua, admin, MCP).
 
 - **`number` fields accept `integer = true`.** A whole-number
   constraint on the existing `number` field: fractional input is

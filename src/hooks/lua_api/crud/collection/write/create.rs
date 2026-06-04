@@ -46,6 +46,10 @@ pub(crate) struct CreateOptions {
     /// hooks (e.g., for seeding/migrations).
     #[lua(optional)]
     pub(crate) hooks: bool,
+    /// Emit a live-update event for the created document (default: `true`).
+    /// Set `false` for a quiet write (e.g., seeding/migrations).
+    #[lua(optional)]
+    pub(crate) events: bool,
 }
 
 impl Default for CreateOptions {
@@ -55,6 +59,7 @@ impl Default for CreateOptions {
             override_access: false,
             draft: false,
             hooks: true,
+            events: true,
         }
     }
 }
@@ -126,6 +131,7 @@ fn collections_create(
         .write_hooks(&write_hooks)
         .user(user.as_ref())
         .override_access(opts.override_access)
+        .emit_events(opts.events)
         .lua_infra(lua_infra.as_ref())
         .build();
 

@@ -86,6 +86,22 @@ pub struct ServerConfig {
     /// Accepts integer bytes or human-readable string ("16MB", "32MB").
     #[serde(default = "default_grpc_max_message_size", with = "serde_filesize")]
     pub grpc_max_message_size: u64,
+
+    /// Maximum number of documents a single `update_many` / `delete_many`
+    /// may match. `0` (the default) means **no limit**.
+    ///
+    /// Bulk update/delete are **atomic**: the whole operation runs in one
+    /// transaction, so a failure partway through rolls everything back
+    /// instead of leaving half the rows changed. The trade-off is that a
+    /// very large match-set holds the database write-lock for the entire
+    /// operation and accumulates per-document event state in memory until
+    /// it commits. Set a positive cap to reject a runaway bulk op (an
+    /// over-broad `where` clause, a buggy client) before it locks the DB or
+    /// exhausts memory; matches above the cap fail with an error and change
+    /// nothing. Enforced identically across every surface (gRPC, Lua,
+    /// admin, MCP).
+    #[serde(default)]
+    pub bulk_max_documents: i64,
 }
 
 fn default_grpc_rate_limit_window() -> u64 {
@@ -113,6 +129,7 @@ impl Default for ServerConfig {
             request_timeout: None,
             grpc_timeout: None,
             grpc_max_message_size: default_grpc_max_message_size(),
+            bulk_max_documents: 0,
         }
     }
 }

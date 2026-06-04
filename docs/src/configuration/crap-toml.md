@@ -281,6 +281,7 @@ check_on_startup = true   # Print a one-line notice on `serve` startup when a ne
 | `grpc_max_message_size` | integer/string | `16777216` (`"16MB"`) | Maximum gRPC message size in bytes (applies to both send and receive). Tonic's built-in default is 4MB, which can be exceeded by large `Find` responses with deep population. Accepts bytes or file size string (`"16MB"`, `"32MB"`). |
 | `request_timeout` | integer/string | — (none) | Admin HTTP request timeout. When set, requests exceeding this duration return `408 Request Timeout`. SSE streams are exempt (handled by shutdown). Accepts seconds or human-readable (`"30s"`, `"5m"`). |
 | `grpc_timeout` | integer/string | — (none) | gRPC request timeout. When set, RPCs exceeding this duration return `DEADLINE_EXCEEDED`. Applies to all RPCs including Subscribe streams. Accepts seconds or human-readable (`"30s"`, `"5m"`). |
+| `bulk_max_documents` | integer | `0` (no limit) | Maximum documents a single `create_many` / `update_many` / `delete_many` may affect before it is rejected. Bulk ops are **atomic** (one transaction), so a very large operation holds the database write-lock for its whole duration and accumulates per-document state in memory; set a positive cap to reject a runaway/over-broad bulk op before it locks the DB or exhausts memory. An over-limit op fails (gRPC `FAILED_PRECONDITION` / HTTP `409`) and changes nothing. `0` disables the limit. Enforced identically on every surface (gRPC, Lua, admin, MCP). |
 
 ### `[database]`
 

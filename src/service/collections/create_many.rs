@@ -1,10 +1,12 @@
 //! Bulk create -- create multiple documents in a single operation.
 //!
-//! **Pool mode** (`ctx.pool` set): chunks documents into batched transactions
-//! (500 per batch). Events and cache are handled after each commit.
+//! **Pool mode** (`ctx.pool` set): all documents are created in a single
+//! transaction, so the operation is atomic — a failure on any document rolls
+//! the whole batch back. Events and cache are handled after the commit.
 //!
 //! **Conn mode** (`ctx.conn` set, Lua path): creates all documents on the
-//! existing connection. Events are queued for later flush by the caller.
+//! existing connection (atomic with the caller's transaction). Events are
+//! queued for later flush by the caller.
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -20,7 +22,7 @@ use crate::{
     typegen::lua::LuaAnnotation,
 };
 
-const BATCH_SIZE: usize = 500;
+use super::update_many::enforce_bulk_limit;
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -36,6 +38,9 @@ pub struct CreateManyOptions {
     pub run_hooks: bool,
     /// Whether documents are created as drafts.
     pub draft: bool,
+    /// Maximum number of documents the operation may create before it is
+    /// rejected (from `server.bulk_max_documents`). `0` = no limit.
+    pub max_documents: i64,
 }
 
 impl Default for CreateManyOptions {
@@ -43,12 +48,13 @@ impl Default for CreateManyOptions {
         Self {
             run_hooks: true,
             draft: false,
+            max_documents: 0,
         }
     }
 }
 
 /// Result of a bulk create operation.
-#[derive(crate::typegen::lua::LuaAnnotation)]
+#[derive(Debug, crate::typegen::lua::LuaAnnotation)]
 #[lua(class = "crap.CreateManyResult")]
 pub struct CreateManyResult {
     /// Number of documents created.
@@ -80,7 +86,8 @@ pub fn create_many(
     }
 }
 
-/// Pool mode: chunk into transactions.
+/// Pool mode: create every document in a SINGLE transaction so the operation
+/// is atomic — a failure on any document rolls the whole batch back.
 fn create_many_pooled(
     ctx: &ServiceContext,
     pool: &crate::db::DbPool,
@@ -90,59 +97,68 @@ fn create_many_pooled(
     let runner = ctx.runner()?;
     let def = ctx.collection_def()?;
 
-    let mut created = 0i64;
+    enforce_bulk_limit("create_many", items.len(), opts.max_documents)?;
+
+    let mut conn = pool.get().context("DB connection")?;
+    let tx = conn
+        .transaction_immediate()
+        .context("Start bulk create transaction")?;
+
+    let queue = Rc::new(RefCell::new(Vec::new()));
+    let vqueue = Rc::new(RefCell::new(Vec::new()));
+
+    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
+
+    let mut wh = RunnerWriteHooks::new(runner)
+        .with_conn(&tx)
+        .with_infra(infra);
+    if !opts.run_hooks {
+        wh = wh.with_hooks_enabled(false);
+    }
+
+    let inner_ctx = ServiceContext::collection(ctx.slug, def)
+        .conn(&tx)
+        .write_hooks(&wh)
+        .user(ctx.user)
+        .override_access(ctx.override_access)
+        .event_transport(ctx.event_transport.clone())
+        .event_queue(queue.clone())
+        .verification_queue(vqueue.clone())
+        .cache(ctx.cache.clone())
+        .email_ctx(ctx.email_ctx.clone())
+        .build();
+
     let mut documents = Vec::with_capacity(items.len());
+    let mut created = 0i64;
 
-    for chunk in items.chunks(BATCH_SIZE) {
-        let mut conn = pool.get().context("DB connection")?;
-        let tx = conn.transaction_immediate().context("Start transaction")?;
-
-        let queue = Rc::new(RefCell::new(Vec::new()));
-        let vqueue = Rc::new(RefCell::new(Vec::new()));
-
-        let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
-
-        let mut wh = RunnerWriteHooks::new(runner)
-            .with_conn(&tx)
-            .with_infra(infra);
-        if !opts.run_hooks {
-            wh = wh.with_hooks_enabled(false);
-        }
-
-        let inner_ctx = ServiceContext::collection(ctx.slug, def)
-            .conn(&tx)
-            .write_hooks(&wh)
-            .user(ctx.user)
-            .override_access(ctx.override_access)
-            .event_transport(ctx.event_transport.clone())
-            .event_queue(queue.clone())
-            .verification_queue(vqueue.clone())
-            .cache(ctx.cache.clone())
-            .email_ctx(ctx.email_ctx.clone())
+    for item in items {
+        let input = WriteInput::builder(item.data.clone())
+            .password(item.password.as_deref())
+            .draft(opts.draft)
             .build();
 
-        for item in chunk {
-            let input = WriteInput::builder(item.data.clone())
-                .password(item.password.as_deref())
-                .draft(opts.draft)
-                .build();
-
-            let (doc, _after_ctx) = create_document_in_conn(&inner_ctx, input)?;
-            documents.push(doc);
-            created += 1;
-        }
-
-        drop(inner_ctx);
-        tx.commit().context("Commit transaction")?;
-
-        ctx.clear_cache();
-        for doc in documents.iter().skip(documents.len() - chunk.len()) {
-            ctx.publish_mutation_event(EventOperation::Create, &doc.id, &doc.fields);
-            ctx.maybe_send_verification(doc);
-        }
-        flush_queue(ctx, &queue);
-        flush_verification_queue(ctx, &vqueue);
+        // A failure here returns via `?`; `tx` drops without commit, rolling
+        // back every document created so far.
+        let (doc, _after_ctx) = create_document_in_conn(&inner_ctx, input)?;
+        documents.push(doc);
+        created += 1;
     }
+
+    // Release the borrows of `tx` before committing it.
+    drop(inner_ctx);
+    drop(wh);
+    tx.commit().context("Commit bulk create transaction")?;
+
+    ctx.clear_cache();
+
+    // Per-doc events are gated by `ctx.emit_events` (bulk defaults to off).
+    // Verification emails and nested-hook events always flush.
+    for doc in &documents {
+        ctx.publish_mutation_event(EventOperation::Create, &doc.id, &doc.fields);
+        ctx.maybe_send_verification(doc);
+    }
+    flush_queue(ctx, &queue);
+    flush_verification_queue(ctx, &vqueue);
 
     Ok(CreateManyResult { created, documents })
 }
@@ -153,6 +169,8 @@ fn create_many_on_conn(
     items: &[CreateManyItem],
     opts: &CreateManyOptions,
 ) -> Result<CreateManyResult> {
+    enforce_bulk_limit("create_many", items.len(), opts.max_documents)?;
+
     let mut created = 0i64;
     let mut documents = Vec::with_capacity(items.len());
 
@@ -164,6 +182,7 @@ fn create_many_on_conn(
 
         let (doc, _after_ctx) = create_document_in_conn(ctx, input)?;
 
+        // Gated by `ctx.emit_events`; verification emails always send.
         ctx.publish_mutation_event(EventOperation::Create, &doc.id, &doc.fields);
         ctx.maybe_send_verification(&doc);
         documents.push(doc);

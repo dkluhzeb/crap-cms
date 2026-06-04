@@ -95,6 +95,7 @@ message CreateRequest {
   google.protobuf.Struct data = 2;
   optional string locale = 3;           // locale code for localized fields
   optional bool draft = 4;              // true = create as draft (versioned collections)
+  optional bool events = 5;             // default: true. false = quiet write (no live-update event)
 }
 
 message CreateResponse {
@@ -115,6 +116,36 @@ grpcurl -plaintext -d '{
 
 For auth collections, include `password` in the data to set the user's password.
 
+## CreateMany
+
+Bulk-create multiple documents in a single call. The whole batch is created in **one transaction** (atomic) — if any document fails, the entire batch rolls back and nothing is created. Per-document lifecycle hooks run by default — set `hooks=false` to skip them. The number of documents one call may create is capped by `[server] bulk_max_documents` (default `0` = unlimited); exceeding it errors and creates nothing. Returns the created count plus the created documents (with server-assigned IDs).
+
+```protobuf
+message CreateManyRequest {
+  string collection = 1;
+  repeated google.protobuf.Struct documents = 2;  // documents to create
+  optional string locale = 3;           // locale code for localized fields
+  optional bool draft = 4;              // true = create as drafts
+  optional bool hooks = 5;              // default: true. Set false to skip hooks.
+  optional bool events = 6;             // default: false (bulk is quiet). true = emit per-doc events
+}
+
+message CreateManyResponse {
+  int64 created = 1;                     // number of documents created
+  repeated Document documents = 2;       // the created documents
+}
+```
+
+```bash
+grpcurl -plaintext -d '{
+    "collection": "posts",
+    "documents": [
+        { "title": "First", "slug": "first" },
+        { "title": "Second", "slug": "second" }
+    ]
+}' localhost:50051 crap.ContentAPI/CreateMany
+```
+
 ## Update
 
 Update an existing document.
@@ -127,6 +158,7 @@ message UpdateRequest {
   optional string locale = 4;           // locale code for localized fields
   optional bool draft = 5;              // true = version-only save (main table unchanged)
   optional bool unpublish = 6;          // true = set status to draft
+  optional bool events = 7;             // default: true. false = quiet write (no live-update event)
 }
 
 message UpdateResponse {
@@ -151,10 +183,10 @@ message DeleteRequest {
   string collection = 1;
   string id = 2;
   bool force_hard_delete = 3;  // permanently delete even with soft_delete
+  optional bool events = 4;    // default: true. false = quiet delete (no live-update event)
 }
 
 message DeleteResponse {
-  bool success = 1;
   bool soft_deleted = 2;       // true if moved to trash (not permanently deleted)
 }
 ```
@@ -207,6 +239,7 @@ message CountRequest {
   optional string locale = 3;           // locale code for localized field filtering
   optional bool draft = 4;              // true = include drafts
   optional string search = 5;           // FTS5 full-text search query
+  optional bool trash = 6;              // true = count soft-deleted (trashed) docs instead of live; default false
 }
 
 message CountResponse {
@@ -237,6 +270,7 @@ message UpdateManyRequest {
   optional string locale = 4;           // locale code for localized fields
   optional bool draft = 5;              // true = save as drafts
   optional bool hooks = 6;              // default: true. Set false to skip hooks & validation.
+  optional bool events = 7;             // default: false (bulk is quiet). true = emit per-doc events
 }
 
 message UpdateManyResponse {
@@ -252,7 +286,7 @@ grpcurl -plaintext -d '{
 }' localhost:50051 crap.ContentAPI/UpdateMany
 ```
 
-> **Limit:** A single `UpdateMany` call processes at most **10,000** documents. Use paginated calls (with a `where` clause) for larger datasets.
+By default there is no per-call document limit; set `[server] bulk_max_documents` to cap how many documents a single bulk op may match (`0` = unlimited). Only the matching IDs are held in memory (not the full documents). A request matching more than the cap is rejected with `FAILED_PRECONDITION` and changes nothing.
 
 ## DeleteMany
 
@@ -264,6 +298,7 @@ message DeleteManyRequest {
   optional string where = 2;            // JSON where clause (omit = all docs)
   optional bool hooks = 3;              // default: true. Set false to skip hooks.
   bool force_hard_delete = 4;           // permanently delete even if soft_delete is enabled
+  optional bool events = 5;             // default: false (bulk is quiet). true = emit per-doc events
 }
 
 message DeleteManyResponse {
@@ -280,7 +315,7 @@ grpcurl -plaintext -d '{
 }' localhost:50051 crap.ContentAPI/DeleteMany
 ```
 
-> **Limit:** A single `DeleteMany` call processes at most **10,000** documents. Use paginated calls (with a `where` clause) for larger datasets.
+The operation is atomic — a real failure rolls everything back — while documents still referenced by others are **skipped** (counted in `skipped`), not failed. By default there is no per-call document limit; set `[server] bulk_max_documents` to cap how many documents a single bulk op may match (`0` = unlimited). A request matching more than the cap is rejected with `FAILED_PRECONDITION` and changes nothing.
 
 ## GetGlobal
 
@@ -311,6 +346,7 @@ message UpdateGlobalRequest {
   string slug = 1;
   google.protobuf.Struct data = 2;
   optional string locale = 3;           // locale code for localized fields
+  optional bool events = 4;             // default: true. false = quiet write (no live-update event)
 }
 
 message UpdateGlobalResponse {
@@ -372,7 +408,7 @@ grpcurl -plaintext -d '{
 
 ## ForgotPassword
 
-Initiate a password reset flow. Generates a reset token and sends a reset email. Always returns success to prevent user enumeration.
+Initiate a password reset flow. Generates a reset token and sends a reset email. Always returns an empty (non-error) response regardless of whether the email exists, to prevent user enumeration.
 
 ```protobuf
 message ForgotPasswordRequest {
@@ -380,9 +416,7 @@ message ForgotPasswordRequest {
   string email = 2;
 }
 
-message ForgotPasswordResponse {
-  bool success = 1;  // always true
-}
+message ForgotPasswordResponse {}
 ```
 
 ```bash
@@ -405,9 +439,7 @@ message ResetPasswordRequest {
   string new_password = 3;
 }
 
-message ResetPasswordResponse {
-  bool success = 1;
-}
+message ResetPasswordResponse {}
 ```
 
 ```bash
@@ -430,9 +462,7 @@ message VerifyEmailRequest {
   string token = 2;
 }
 
-message VerifyEmailResponse {
-  bool success = 1;
-}
+message VerifyEmailResponse {}
 ```
 
 ```bash
@@ -504,9 +534,7 @@ message AccountActionRequest {
   string id = 2;                        // target user's nanoid ID
 }
 
-message AccountActionResponse {
-  bool success = 1;
-}
+message AccountActionResponse {}
 ```
 
 ```bash
@@ -518,6 +546,8 @@ grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
 
 **Access:** authentication required. Returns `INVALID_ARGUMENT` if the collection is not an auth collection, `NOT_FOUND` if the user ID is missing, and `UNAUTHENTICATED` if no valid Bearer token is provided.
 
+`AccountActionResponse` is empty: success is signalled by a non-error response. Failures are reported as gRPC status errors.
+
 ## UnlockAccount
 
 Re-enable login for a previously locked account. Only valid for auth-enabled collections.
@@ -528,9 +558,7 @@ message AccountActionRequest {
   string id = 2;
 }
 
-message AccountActionResponse {
-  bool success = 1;
-}
+message AccountActionResponse {}
 ```
 
 ```bash
@@ -552,9 +580,7 @@ message AccountActionRequest {
   string id = 2;
 }
 
-message AccountActionResponse {
-  bool success = 1;
-}
+message AccountActionResponse {}
 ```
 
 ```bash
@@ -576,9 +602,7 @@ message AccountActionRequest {
   string id = 2;
 }
 
-message AccountActionResponse {
-  bool success = 1;
-}
+message AccountActionResponse {}
 ```
 
 ```bash
@@ -652,12 +676,19 @@ message ListVersionsRequest {
 
 message ListVersionsResponse {
   repeated VersionInfo versions = 1;
+  PaginationInfo pagination = 2;
+}
+
+enum VersionStatus {
+  VERSION_STATUS_UNSPECIFIED = 0;
+  VERSION_STATUS_PUBLISHED = 1;
+  VERSION_STATUS_DRAFT = 2;
 }
 
 message VersionInfo {
   string id = 1;
   int64 version = 2;
-  string status = 3;      // "published" or "draft"
+  VersionStatus status = 3;
   bool latest = 4;
   string created_at = 5;
 }
@@ -711,11 +742,24 @@ message SubscribeRequest {
   string token = 4;                 // auth token
 }
 
+enum MutationTarget {
+  MUTATION_TARGET_UNSPECIFIED = 0;
+  MUTATION_TARGET_COLLECTION = 1;
+  MUTATION_TARGET_GLOBAL = 2;
+}
+
+enum MutationOperation {
+  MUTATION_OPERATION_UNSPECIFIED = 0;
+  MUTATION_OPERATION_CREATE = 1;
+  MUTATION_OPERATION_UPDATE = 2;
+  MUTATION_OPERATION_DELETE = 3;
+}
+
 message MutationEvent {
   uint64 sequence = 1;
   string timestamp = 2;
-  string target = 3;
-  string operation = 4;
+  MutationTarget target = 3;       // COLLECTION or GLOBAL
+  MutationOperation operation = 4; // CREATE, UPDATE, or DELETE
   string collection = 5;
   string document_id = 6;
   google.protobuf.Struct data = 7;
@@ -748,7 +792,6 @@ message ListJobsResponse {
 
 message JobDefinitionInfo {
   string slug = 1;
-  string handler = 2;
   optional string schedule = 3;
   string queue = 4;
   uint32 retries = 5;
@@ -797,21 +840,34 @@ message GetJobRunRequest {
   string id = 1;
 }
 
-message GetJobRunResponse {
+enum JobRunStatus {
+  JOB_RUN_STATUS_UNSPECIFIED = 0;
+  JOB_RUN_STATUS_PENDING = 1;
+  JOB_RUN_STATUS_RUNNING = 2;
+  JOB_RUN_STATUS_COMPLETED = 3;
+  JOB_RUN_STATUS_FAILED = 4;
+  JOB_RUN_STATUS_STALE = 5;
+}
+
+message JobRunInfo {
   string id = 1;
   string slug = 2;
-  string status = 3;
+  JobRunStatus status = 3;            // was a string; now a JobRunStatus enum
   string data_json = 4;
   optional string result_json = 5;
   optional string error = 6;
   uint32 attempt = 7;
   uint32 max_attempts = 8;
-  optional string scheduled_by = 9;
+  JobScheduledBy scheduled_by = 9;    // enum, NOT optional
   optional string created_at = 10;
   optional string started_at = 11;
   optional string completed_at = 12;
   int32 priority = 13;
   optional string unique_key = 14;
+}
+
+message GetJobRunResponse {
+  JobRunInfo run = 1;
 }
 ```
 
@@ -828,13 +884,14 @@ List job runs with optional filters. Requires authentication.
 ```protobuf
 message ListJobRunsRequest {
   optional string slug = 1;
-  optional string status = 2;
+  JobRunStatus status = 2;             // UNSPECIFIED = all statuses
   optional int64 limit = 3;
   optional int64 offset = 4;
 }
 
 message ListJobRunsResponse {
-  repeated GetJobRunResponse runs = 1;
+  repeated JobRunInfo runs = 1;
+  PaginationInfo pagination = 2;
 }
 ```
 
@@ -846,7 +903,7 @@ grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{}' \
 # Filter by slug and status
 grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
     "slug": "cleanup_expired",
-    "status": "completed",
+    "status": "JOB_RUN_STATUS_COMPLETED",
     "limit": "20"
 }' localhost:50051 crap.ContentAPI/ListJobRuns
 ```

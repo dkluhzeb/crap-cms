@@ -354,6 +354,7 @@ async fn grpc_update_localized_field() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "Hello"), ("body", "English body")])),
             locale: Some("en".to_string()),
@@ -368,6 +369,7 @@ async fn grpc_update_localized_field() {
     // Update German locale
     ts.service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "posts".to_string(),
             id: doc.id.clone(),
             data: Some(make_struct(&[
@@ -434,6 +436,7 @@ async fn grpc_unpublish_via_update() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "Published Post")])),
             locale: None,
@@ -460,6 +463,7 @@ async fn grpc_unpublish_via_update() {
     // Unpublish
     ts.service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "posts".to_string(),
             id: doc.id.clone(),
             data: None,
@@ -513,6 +517,7 @@ async fn grpc_unpublish_response_has_draft_status() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "Will Unpublish")])),
             locale: None,
@@ -527,6 +532,7 @@ async fn grpc_unpublish_response_has_draft_status() {
     let resp = ts
         .service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "posts".to_string(),
             id: doc.id.clone(),
             data: None,
@@ -565,6 +571,7 @@ async fn grpc_find_pagination_page_based() {
     for i in 0..5 {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", &format!("Post {i}"))])),
                 locale: None,
@@ -647,6 +654,7 @@ async fn grpc_find_pagination_single_page() {
     for i in 0..3 {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", &format!("Post {i}"))])),
                 locale: None,
@@ -688,6 +696,7 @@ async fn grpc_validation_error_message_includes_field() {
     let result = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("status", "draft")])),
             locale: None,
@@ -716,6 +725,7 @@ async fn grpc_create_and_update_has_many() {
     let tag1 = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "tags".to_string(),
             data: Some(make_struct(&[("name", "rust")])),
             locale: None,
@@ -730,6 +740,7 @@ async fn grpc_create_and_update_has_many() {
     let tag2 = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "tags".to_string(),
             data: Some(make_struct(&[("name", "web")])),
             locale: None,
@@ -744,6 +755,7 @@ async fn grpc_create_and_update_has_many() {
     let tag3 = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "tags".to_string(),
             data: Some(make_struct(&[("name", "go")])),
             locale: None,
@@ -765,6 +777,7 @@ async fn grpc_create_and_update_has_many() {
     let post = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(Struct {
                 fields: post_fields,
@@ -801,6 +814,7 @@ async fn grpc_create_and_update_has_many() {
     update_fields.insert("tags".to_string(), list_val(vec![str_val(&tag3.id)]));
     ts.service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "posts".to_string(),
             id: post.id.clone(),
             data: Some(Struct {
@@ -845,6 +859,7 @@ async fn grpc_find_with_depth_populates_group_relationship() {
     let cat = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "categories".to_string(),
             data: Some(make_struct(&[("name", "Technology")])),
             locale: None,
@@ -871,6 +886,7 @@ async fn grpc_find_with_depth_populates_group_relationship() {
     let post = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(Struct {
                 fields: post_fields,
@@ -953,6 +969,7 @@ async fn grpc_update_many_with_nested_array() {
 
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "products".to_string(),
                 data: Some(Struct { fields }),
                 locale: None,
@@ -976,6 +993,7 @@ async fn grpc_update_many_with_nested_array() {
     let resp = ts
         .service
         .update_many(Request::new(content::UpdateManyRequest {
+            events: None,
             collection: "products".to_string(),
             r#where: None,
             data: Some(Struct {
@@ -1038,6 +1056,7 @@ async fn update_many_rejects_password_field() {
     // Create a user (password is handled by single-doc Create)
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(make_struct(&[
                 ("email", "test@example.com"),
@@ -1054,6 +1073,7 @@ async fn update_many_rejects_password_field() {
     let result = ts
         .service
         .update_many(Request::new(content::UpdateManyRequest {
+            events: None,
             collection: "users".to_string(),
             r#where: None,
             data: Some(make_struct(&[
@@ -1113,6 +1133,7 @@ async fn delete_many_cleans_up_upload_files() {
     // Create two documents with url fields pointing to the files
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "media".to_string(),
             data: Some(make_struct(&[
                 ("filename", "file1.png"),
@@ -1126,6 +1147,7 @@ async fn delete_many_cleans_up_upload_files() {
 
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "media".to_string(),
             data: Some(make_struct(&[
                 ("filename", "file2.png"),
@@ -1145,6 +1167,7 @@ async fn delete_many_cleans_up_upload_files() {
     let resp = ts
         .service
         .delete_many(Request::new(content::DeleteManyRequest {
+            events: None,
             collection: "media".to_string(),
             r#where: None,
             hooks: None,

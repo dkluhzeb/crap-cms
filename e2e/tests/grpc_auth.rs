@@ -78,6 +78,7 @@ async fn login_returns_jwt_and_me_identifies_same_user() {
 
     client
         .create(CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(proto_struct(&[
                 ("email", "alice@example.com"),
@@ -168,6 +169,7 @@ async fn login_wrong_password_returns_non_internal_error() {
 
     client
         .create(CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(proto_struct(&[
                 ("email", "bob@example.com"),

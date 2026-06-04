@@ -88,6 +88,7 @@ async fn verify_email_valid_token_marks_verified_and_allows_login() {
 
     let user_id = client
         .create(CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(proto_struct(&[
                 ("email", "verify@x.com"),

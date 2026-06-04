@@ -52,6 +52,10 @@ impl CrapConfig {
             bail!("server.grpc_rate_limit_window must be > 0 when grpc_rate_limit_requests > 0");
         }
 
+        if self.server.bulk_max_documents < 0 {
+            bail!("server.bulk_max_documents must be >= 0 (0 = no limit)");
+        }
+
         self.validate_trusted_proxies()?;
 
         Ok(())

@@ -244,6 +244,7 @@ async fn create_tag(setup: &TestSetup, name: &str) -> String {
     setup
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "tags".to_string(),
             data: Some(make_struct(&[("name", name)])),
             locale: None,
@@ -320,6 +321,7 @@ async fn create_matrix_article(setup: &TestSetup) -> (String, Vec<(&'static str,
     let article_id = setup
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "articles".to_string(),
             data: Some(data),
             locale: None,
@@ -365,6 +367,7 @@ async fn hard_delete_decrements_relationships_at_every_nesting_depth() {
     setup
         .service
         .delete(Request::new(content::DeleteRequest {
+            events: None,
             collection: "articles".to_string(),
             id: article_id,
             force_hard_delete: true,
@@ -386,6 +389,7 @@ async fn update_many_adjusts_ref_counts() {
     let tag_a_id = setup
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "tags".into(),
             data: Some(make_struct(&[("name", "Tag A")])),
             ..Default::default()
@@ -400,6 +404,7 @@ async fn update_many_adjusts_ref_counts() {
     let tag_b_id = setup
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "tags".into(),
             data: Some(make_struct(&[("name", "Tag B")])),
             ..Default::default()
@@ -415,6 +420,7 @@ async fn update_many_adjusts_ref_counts() {
     setup
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".into(),
             data: Some(make_struct(&[("title", "Post 1"), ("tag", &tag_a_id)])),
             ..Default::default()
@@ -429,6 +435,7 @@ async fn update_many_adjusts_ref_counts() {
     setup
         .service
         .update_many(Request::new(content::UpdateManyRequest {
+            events: None,
             collection: "posts".into(),
             data: Some(make_struct(&[("tag", &tag_b_id)])),
             ..Default::default()
@@ -457,6 +464,7 @@ async fn delete_many_adjusts_ref_counts() {
     let tag_id = setup
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "tags".into(),
             data: Some(make_struct(&[("name", "Tag")])),
             ..Default::default()
@@ -473,6 +481,7 @@ async fn delete_many_adjusts_ref_counts() {
         setup
             .service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".into(),
                 data: Some(make_struct(&[
                     ("title", &format!("Post {i}")),
@@ -490,6 +499,7 @@ async fn delete_many_adjusts_ref_counts() {
     setup
         .service
         .delete_many(Request::new(content::DeleteManyRequest {
+            events: None,
             collection: "posts".into(),
             ..Default::default()
         }))
@@ -512,6 +522,7 @@ async fn delete_many_skips_referenced_documents() {
     let tag_id = setup
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "tags".into(),
             data: Some(make_struct(&[("name", "Protected Tag")])),
             ..Default::default()
@@ -527,6 +538,7 @@ async fn delete_many_skips_referenced_documents() {
     setup
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".into(),
             data: Some(make_struct(&[("title", "Post"), ("tag", &tag_id)])),
             ..Default::default()
@@ -540,6 +552,7 @@ async fn delete_many_skips_referenced_documents() {
     let resp = setup
         .service
         .delete_many(Request::new(content::DeleteManyRequest {
+            events: None,
             collection: "tags".into(),
             ..Default::default()
         }))
@@ -572,6 +585,7 @@ async fn version_restore_adjusts_ref_counts() {
     let tag_a_id = setup
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "tags".into(),
             data: Some(make_struct(&[("name", "A")])),
             ..Default::default()
@@ -586,6 +600,7 @@ async fn version_restore_adjusts_ref_counts() {
     let tag_b_id = setup
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "tags".into(),
             data: Some(make_struct(&[("name", "B")])),
             ..Default::default()
@@ -601,6 +616,7 @@ async fn version_restore_adjusts_ref_counts() {
     let post_id = setup
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".into(),
             data: Some(make_struct(&[("title", "Post"), ("tag", &tag_a_id)])),
             ..Default::default()
@@ -619,6 +635,7 @@ async fn version_restore_adjusts_ref_counts() {
     setup
         .service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "posts".into(),
             id: post_id.clone(),
             data: Some(make_struct(&[("tag", &tag_b_id)])),
@@ -683,6 +700,7 @@ async fn create_with_dangling_reference_fails() {
     let tag_id = setup
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "tags".into(),
             data: Some(make_struct(&[("name", "Doomed")])),
             ..Default::default()
@@ -708,6 +726,7 @@ async fn create_with_dangling_reference_fails() {
     let result = setup
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".into(),
             data: Some(make_struct(&[("title", "Ghost Post"), ("tag", &tag_id)])),
             ..Default::default()

@@ -43,6 +43,7 @@ struct UpdateBlockingInput {
     password: Option<String>,
     locale_ctx: Option<LocaleContext>,
     draft: bool,
+    events: bool,
 }
 
 fn update_blocking(input: UpdateBlockingInput) -> Result<content::Document, Status> {
@@ -78,6 +79,7 @@ fn update_blocking(input: UpdateBlockingInput) -> Result<content::Document, Stat
         .runner(&input.runner)
         .user(user_doc.as_ref())
         .event_transport(input.event_transport)
+        .emit_events(input.events)
         .cache(input.cache)
         .build();
 
@@ -138,6 +140,7 @@ impl ContentService {
             password,
             locale_ctx,
             draft: req.draft.unwrap_or(false),
+            events: req.events.unwrap_or(true),
         };
 
         let proto_doc = task::spawn_blocking(move || update_blocking(input))

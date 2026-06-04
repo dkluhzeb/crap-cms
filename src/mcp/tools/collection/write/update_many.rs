@@ -48,6 +48,11 @@ pub(in crate::mcp::tools) fn exec_update_many(
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
 
+    let events = args
+        .get("events")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
     let locale = args.get("locale").and_then(|v| v.as_str());
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
 
@@ -56,6 +61,7 @@ pub(in crate::mcp::tools) fn exec_update_many(
         .runner(ctx.runner)
         .override_access(true)
         .event_transport(ctx.event_transport.clone())
+        .emit_events(events)
         .cache(ctx.cache.clone())
         .build();
 
@@ -64,6 +70,7 @@ pub(in crate::mcp::tools) fn exec_update_many(
         run_hooks,
         draft,
         ui_locale: None,
+        max_documents: ctx.config.server.bulk_max_documents,
     };
 
     let result = service::update_many(&svc_ctx, &filters, &data, &ctx.config.locale, &opts)?;

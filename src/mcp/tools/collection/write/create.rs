@@ -42,14 +42,16 @@ pub(in crate::mcp::tools) fn exec_create(
     let locale = args.get("locale").and_then(|v| v.as_str());
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
     let draft = args.get("draft").and_then(Value::as_bool).unwrap_or(false);
+    let events = args.get("events").and_then(Value::as_bool).unwrap_or(true);
 
-    let data = extract_data_from_args(args, &["password", "locale", "draft"]);
+    let data = extract_data_from_args(args, &["password", "locale", "draft", "events"]);
 
     let svc_ctx = ServiceContext::collection(slug, def)
         .pool(ctx.pool)
         .runner(ctx.runner)
         .override_access(true)
         .event_transport(ctx.event_transport.clone())
+        .emit_events(events)
         .cache(ctx.cache.clone())
         .build();
 

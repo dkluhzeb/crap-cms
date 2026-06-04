@@ -89,6 +89,7 @@ async fn tokens_are_scoped_to_their_issuing_collection() {
     // Create + login on `users`.
     client
         .create(CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(proto_struct(&[
                 ("email", "u@x.com"),
@@ -113,6 +114,7 @@ async fn tokens_are_scoped_to_their_issuing_collection() {
     // Create + login on `service_accounts`.
     client
         .create(CreateRequest {
+            events: None,
             collection: "service_accounts".to_string(),
             data: Some(proto_struct(&[
                 ("email", "svc@x.com"),

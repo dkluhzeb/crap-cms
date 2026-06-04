@@ -117,6 +117,7 @@ async fn create_user_login(
 ) -> String {
     client
         .create(CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(proto_struct(&[
                 ("email", email),
@@ -174,6 +175,7 @@ async fn read_denied_field_stripped_from_response_for_non_admin() {
     let post_id = client
         .create(with_bearer(
             CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(proto_struct(&[("title", "headline"), ("secret", "shhh")])),
                 ..Default::default()
@@ -257,6 +259,7 @@ async fn write_denied_field_silently_stripped_on_create() {
     let post_id = client
         .create(with_bearer(
             CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(proto_struct(&[
                     ("title", "viewer-post"),
@@ -318,6 +321,7 @@ async fn write_denied_field_silently_stripped_on_update() {
     let post_id = client
         .create(with_bearer(
             CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(proto_struct(&[
                     ("title", "Original"),
@@ -338,6 +342,7 @@ async fn write_denied_field_silently_stripped_on_update() {
     client
         .update(with_bearer(
             UpdateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 id: post_id.clone(),
                 data: Some(proto_struct(&[("flag", "viewer-tampered")])),

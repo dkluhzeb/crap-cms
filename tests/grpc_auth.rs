@@ -225,6 +225,7 @@ async fn login_valid_credentials() {
     // Create a user with password
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(make_struct(&[
                 ("email", "alice@example.com"),
@@ -270,6 +271,7 @@ async fn login_token_carries_auth_time() {
 
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(make_struct(&[
                 ("email", "authtime@example.com"),
@@ -317,6 +319,7 @@ async fn login_invalid_password() {
 
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(make_struct(&[
                 ("email", "bob@example.com"),
@@ -364,6 +367,7 @@ async fn me_valid_token() {
 
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(make_struct(&[
                 ("email", "carol@example.com"),
@@ -574,6 +578,7 @@ async fn authenticated_crud_with_bearer_token() {
     // Create user and login
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(make_struct(&[
                 ("email", "admin@test.com"),
@@ -599,6 +604,7 @@ async fn authenticated_crud_with_bearer_token() {
 
     // Create a post with Bearer token in metadata
     let mut req = Request::new(content::CreateRequest {
+        events: None,
         collection: "posts".to_string(),
         data: Some(make_struct(&[("title", "Authenticated Post")])),
         locale: None,
@@ -627,6 +633,7 @@ async fn find_with_order_by() {
     for title in &["Charlie", "Alice", "Bob"] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title)])),
                 locale: None,
@@ -669,6 +676,7 @@ async fn find_with_order_by_desc() {
     for title in &["A", "B", "C"] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title)])),
                 locale: None,
@@ -708,6 +716,7 @@ async fn full_password_reset_flow() {
     // Create a user
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(make_struct(&[
                 ("email", "reset@example.com"),
@@ -752,6 +761,7 @@ async fn reset_password_expired_token() {
     // Create a user
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(make_struct(&[
                 ("email", "expired@example.com"),
@@ -816,6 +826,7 @@ async fn login_blocked_when_unverified() {
     // Create user (unverified)
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "members".to_string(),
             data: Some(make_struct(&[
                 ("email", "unverified@example.com"),
@@ -856,6 +867,7 @@ async fn update_password_via_grpc() {
     // Create user
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(make_struct(&[
                 ("email", "pwchange@example.com"),
@@ -884,6 +896,7 @@ async fn update_password_via_grpc() {
     // Update password (must include required email field)
     ts.service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "users".to_string(),
             id: user_id,
             data: Some(make_struct(&[
@@ -929,6 +942,7 @@ async fn password_hash_not_in_response() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(make_struct(&[
                 ("email", "hidden@example.com"),
@@ -989,6 +1003,7 @@ async fn login_locked_account_grpc() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(make_struct(&[
                 ("email", "locked@example.com"),
@@ -1053,6 +1068,7 @@ async fn login_locked_account() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(make_struct(&[
                 ("email", "locked@example.com"),

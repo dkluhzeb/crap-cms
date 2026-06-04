@@ -35,6 +35,7 @@ struct EmptyTrashInput<'a> {
     invalidation_transport: Option<SharedInvalidationTransport>,
     event_transport: Option<SharedEventTransport>,
     cache: Option<SharedCache>,
+    bulk_max_documents: i64,
 }
 
 /// Build trash filters: match only soft-deleted documents.
@@ -58,12 +59,15 @@ fn empty_trash(input: EmptyTrashInput<'_>) -> Result<usize, ServiceError> {
         .user(input.user_doc)
         .invalidation_transport(input.invalidation_transport)
         .event_transport(input.event_transport)
+        // Bulk trash purge is quiet — no per-document live-update events.
+        .emit_events(false)
         .cache(input.cache)
         .build();
 
     let delete_opts = DeleteManyOptions {
         run_hooks: true,
         include_deleted: true,
+        max_documents: input.bulk_max_documents,
     };
 
     let result = delete_many(&ctx, &filters, input.locale_cfg, &delete_opts)?;
@@ -97,6 +101,7 @@ pub async fn empty_trash_action(
     let pool = state.pool.clone();
     let storage = state.storage.clone();
     let locale_cfg = state.config.locale.clone();
+    let bulk_max_documents = state.config.server.bulk_max_documents;
     let runner = state.hook_runner.clone();
     let user_doc = auth_user.as_ref().map(|Extension(au)| au.user_doc.clone());
     let invalidation_transport = state.invalidation_transport.clone();
@@ -115,6 +120,7 @@ pub async fn empty_trash_action(
             invalidation_transport: Some(invalidation_transport),
             event_transport,
             cache,
+            bulk_max_documents,
         })
     })
     .await;

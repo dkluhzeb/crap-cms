@@ -15,6 +15,9 @@ impl From<ServiceError> for Status {
             )),
             ServiceError::Validation(ve) => Status::invalid_argument(ve.to_string()),
             ServiceError::HookError(msg) => Status::invalid_argument(msg),
+            // Rejection depends on how many rows match (data state), not on a
+            // malformed argument — so FAILED_PRECONDITION, matching `Referenced`.
+            ServiceError::LimitExceeded(msg) => Status::failed_precondition(msg),
             ServiceError::UniqueViolation(field) => {
                 // Per gRPC spec, conflict-with-existing-resource is
                 // `ALREADY_EXISTS` (code 6), not `INVALID_ARGUMENT` (3).

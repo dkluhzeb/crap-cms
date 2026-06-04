@@ -130,6 +130,7 @@ async fn create_missing_required_field_returns_invalid_argument() {
     // posts.title is required; sending nothing should fail validation.
     let status = client
         .create(CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(Struct {
                 fields: BTreeMap::new(),
@@ -178,6 +179,7 @@ async fn update_unknown_id_returns_not_found() {
 
     let status = client
         .update(UpdateRequest {
+            events: None,
             collection: "posts".to_string(),
             id: "does-not-exist".to_string(),
             data: Some(proto_struct(&[("title", "Whatever")])),

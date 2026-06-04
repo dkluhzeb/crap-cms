@@ -231,6 +231,7 @@ fn register_apis(lua: &Lua, registry: &Arc<Registry>, config: &CrapConfig) -> Re
         &config.pagination,
         &config.depth,
         &config.jobs,
+        config.server.bulk_max_documents,
     )?;
     // Per-collection / per-global accessors at `crap.collections.<slug>`
     // / `crap.globals.<slug>` — typed wrappers that bind the slug and

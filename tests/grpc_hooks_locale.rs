@@ -377,6 +377,7 @@ async fn create_and_find_with_locale() {
     // Create with locale=en
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "Hello"), ("body", "English body")])),
             locale: Some("en".to_string()),
@@ -412,6 +413,7 @@ async fn create_and_find_with_locale_fallback() {
     // Create with locale=en only
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "English Only")])),
             locale: Some("en".to_string()),
@@ -448,6 +450,7 @@ async fn create_and_find_with_locale_all() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "English Title")])),
             locale: Some("en".to_string()),
@@ -462,6 +465,7 @@ async fn create_and_find_with_locale_all() {
     // Update with German version
     ts.service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "posts".to_string(),
             id: doc.id.clone(),
             data: Some(make_struct(&[("title", "Deutscher Titel")])),
@@ -518,6 +522,7 @@ async fn create_draft_and_find() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "Draft Post"), ("body", "WIP")])),
             locale: None,
@@ -572,6 +577,7 @@ async fn draft_skips_required_validation() {
     let resp = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("body", "Just a body")])),
             locale: None,
@@ -593,6 +599,7 @@ async fn publish_draft() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[
                 ("title", "Draft to Publish"),
@@ -610,6 +617,7 @@ async fn publish_draft() {
     // Publish it by updating with draft=false
     ts.service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "posts".to_string(),
             id: doc.id.clone(),
             data: Some(make_struct(&[("title", "Draft to Publish")])),
@@ -670,6 +678,7 @@ async fn update_global_with_nested_fields() {
 
     ts.service
         .update_global(Request::new(content::UpdateGlobalRequest {
+            events: None,
             slug: "site_config".to_string(),
             data: Some(Struct {
                 fields: data_fields,
@@ -733,6 +742,7 @@ async fn find_with_has_many_relationship_filter() {
     let tag_rust = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "tags".to_string(),
             data: Some(make_struct(&[("name", "rust")])),
             locale: None,
@@ -747,6 +757,7 @@ async fn find_with_has_many_relationship_filter() {
     let tag_web = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "tags".to_string(),
             data: Some(make_struct(&[("name", "web")])),
             locale: None,
@@ -764,6 +775,7 @@ async fn find_with_has_many_relationship_filter() {
     post1_fields.insert("tags".to_string(), list_val(vec![str_val(&tag_rust.id)]));
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(Struct {
                 fields: post1_fields,
@@ -779,6 +791,7 @@ async fn find_with_has_many_relationship_filter() {
     post2_fields.insert("tags".to_string(), list_val(vec![str_val(&tag_web.id)]));
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(Struct {
                 fields: post2_fields,
@@ -797,6 +810,7 @@ async fn find_with_has_many_relationship_filter() {
     );
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(Struct {
                 fields: post3_fields,
@@ -834,6 +848,7 @@ async fn update_many_with_filter() {
     for (title, status) in &[("A", "draft"), ("B", "draft"), ("C", "published")] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title), ("status", status)])),
                 locale: None,
@@ -847,6 +862,7 @@ async fn update_many_with_filter() {
     let resp = ts
         .service
         .update_many(Request::new(content::UpdateManyRequest {
+            events: None,
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "draft"}"#.to_string()),
             data: Some(make_struct(&[("status", "published")])),
@@ -888,6 +904,7 @@ async fn delete_many_with_where() {
     ] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title), ("status", status)])),
                 locale: None,
@@ -901,6 +918,7 @@ async fn delete_many_with_where() {
     let resp = ts
         .service
         .delete_many(Request::new(content::DeleteManyRequest {
+            events: None,
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "draft"}"#.to_string()),
             hooks: None,
@@ -984,6 +1002,7 @@ async fn create_with_invalid_locale_returns_invalid_argument() {
     let err = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "Hello")])),
             locale: Some("zz".to_string()),
@@ -1008,6 +1027,7 @@ async fn update_with_invalid_locale_returns_invalid_argument() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "Hello")])),
             locale: Some("en".to_string()),
@@ -1022,6 +1042,7 @@ async fn update_with_invalid_locale_returns_invalid_argument() {
     let err = ts
         .service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "posts".to_string(),
             id: doc.id.clone(),
             data: Some(make_struct(&[("title", "Updated")])),

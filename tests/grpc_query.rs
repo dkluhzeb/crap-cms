@@ -390,6 +390,7 @@ async fn find_with_depth_1_populates_relationship() {
     let cat_doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "categories".to_string(),
             data: Some(make_struct(&[("name", "Tech")])),
             locale: None,
@@ -404,6 +405,7 @@ async fn find_with_depth_1_populates_relationship() {
     // Create a post with the category relationship
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[
                 ("title", "Rust Post"),
@@ -457,6 +459,7 @@ async fn find_by_id_default_depth_populates() {
     let cat_doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "categories".to_string(),
             data: Some(make_struct(&[("name", "Science")])),
             locale: None,
@@ -472,6 +475,7 @@ async fn find_by_id_default_depth_populates() {
     let post_doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[
                 ("title", "Science Post"),
@@ -541,6 +545,7 @@ async fn find_with_where_dot_notation() {
     );
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "products".to_string(),
             data: Some(widget_data),
             locale: None,
@@ -564,6 +569,7 @@ async fn find_with_where_dot_notation() {
     );
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "products".to_string(),
             data: Some(gadget_data),
             locale: None,
@@ -732,6 +738,7 @@ async fn before_change_hook_modifies_array_data() {
     );
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "products".to_string(),
             data: Some(data),
             locale: None,

@@ -160,6 +160,7 @@ async fn create_user_and_login(ts: &TestSetup, email: &str, password: &str) -> (
     let created = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(make_struct(&[("email", email), ("password", password)])),
             locale: None,
@@ -221,6 +222,7 @@ async fn subscriber_dropped_on_lagged() {
     for i in 0..20 {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", &format!("post {i}"))])),
                 locale: None,
@@ -278,6 +280,7 @@ async fn subscriber_dropped_on_send_timeout() {
     for i in 0..128 {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", &format!("p{i}"))])),
                 locale: None,
@@ -371,6 +374,7 @@ async fn subscriber_dropped_when_user_deleted() {
 
     // Hard-delete the user.
     let mut del_req = Request::new(content::DeleteRequest {
+        events: None,
         collection: "users".to_string(),
         id: user_id.clone(),
         force_hard_delete: true,
@@ -427,6 +431,7 @@ async fn anonymous_subscriber_not_affected_by_user_events() {
     // Publish a posts event that anon is allowed to see.
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "after-lock")])),
             locale: None,

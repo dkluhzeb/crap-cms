@@ -184,6 +184,7 @@ async fn field_level_before_change_derives_slug_from_name() {
 
     let doc = client
         .create(CreateRequest {
+            events: None,
             collection: "articles".to_string(),
             data: Some(proto_struct(&[("name", "Hello World")])),
             ..Default::default()
@@ -224,6 +225,7 @@ async fn collection_before_change_mutation_persists() {
 
     let post_id = client
         .create(CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(proto_struct(&[("title", "Hello")])),
             ..Default::default()
@@ -278,6 +280,7 @@ async fn before_validate_error_maps_to_invalid_argument() {
     // Allowed title.
     client
         .create(CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(proto_struct(&[("title", "OK")])),
             ..Default::default()
@@ -288,6 +291,7 @@ async fn before_validate_error_maps_to_invalid_argument() {
     // Forbidden title.
     let status = client
         .create(CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(proto_struct(&[("title", "FORBIDDEN word here")])),
             ..Default::default()
@@ -327,6 +331,7 @@ async fn after_read_adds_computed_field_visible_on_wire() {
 
     let post_id = client
         .create(CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(proto_struct(&[("title", "Headline")])),
             ..Default::default()
@@ -388,6 +393,7 @@ async fn before_read_hook_runs_without_breaking_find() {
 
     client
         .create(CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(proto_struct(&[("title", "A")])),
             ..Default::default()

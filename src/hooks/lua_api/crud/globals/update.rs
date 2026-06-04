@@ -38,6 +38,10 @@ pub(crate) struct GlobalUpdateOptions {
     /// (e.g., for seeding/migrations).
     #[lua(optional)]
     pub(crate) hooks: bool,
+    /// Emit a live-update event for the updated global (default: `true`).
+    /// Set `false` for a quiet write.
+    #[lua(optional)]
+    pub(crate) events: bool,
 }
 
 impl Default for GlobalUpdateOptions {
@@ -46,6 +50,7 @@ impl Default for GlobalUpdateOptions {
             locale: None,
             override_access: false,
             hooks: true,
+            events: true,
         }
     }
 }
@@ -119,6 +124,7 @@ fn globals_update(
         .write_hooks(&write_hooks)
         .user(user.as_ref())
         .override_access(opts.override_access)
+        .emit_events(opts.events)
         .lua_infra(lua_infra.as_ref())
         .build();
 

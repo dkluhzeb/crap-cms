@@ -60,15 +60,25 @@ pub(in crate::mcp::tools) fn exec_create_many(
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
 
+    let events = args
+        .get("events")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
     let svc_ctx = ServiceContext::collection(slug, def)
         .pool(ctx.pool)
         .runner(ctx.runner)
         .override_access(true)
         .event_transport(ctx.event_transport.clone())
+        .emit_events(events)
         .cache(ctx.cache.clone())
         .build();
 
-    let opts = CreateManyOptions { run_hooks, draft };
+    let opts = CreateManyOptions {
+        run_hooks,
+        draft,
+        max_documents: ctx.config.server.bulk_max_documents,
+    };
 
     let result = service::create_many(&svc_ctx, &items, &opts)?;
 

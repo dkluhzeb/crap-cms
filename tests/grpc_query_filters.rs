@@ -274,6 +274,7 @@ async fn find_with_where_operators() {
     ] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "items".to_string(),
                 data: Some(make_item(name, score, tag)),
                 locale: None,
@@ -484,6 +485,7 @@ async fn find_with_unique_constraint_violation() {
     // First create succeeds
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "First"), ("slug", "my-slug")])),
             locale: None,
@@ -496,6 +498,7 @@ async fn find_with_unique_constraint_violation() {
     let err = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "Second"), ("slug", "my-slug")])),
             locale: None,
@@ -624,6 +627,7 @@ return M
     let resp = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "scored".to_string(),
             data: Some(make_struct(&[("name", "Good"), ("score", "42")])),
             locale: None,
@@ -636,6 +640,7 @@ return M
     let err = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "scored".to_string(),
             data: Some(make_struct(&[("name", "Bad"), ("score", "-5")])),
             locale: None,
@@ -764,6 +769,7 @@ return M
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "pages".to_string(),
             data: Some(make_struct(&[("name", "Hello World")])),
             locale: None,
@@ -883,6 +889,7 @@ return M
 
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "entries".to_string(),
             data: Some(make_struct(&[("name", "hello world")])),
             locale: None,
@@ -1015,6 +1022,7 @@ return M
 
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "notes".to_string(),
             data: Some(make_struct(&[("title", "Test Note")])),
             locale: None,
@@ -1142,6 +1150,7 @@ return M
     let resp = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "moderated".to_string(),
             data: Some(make_struct(&[("title", "Good Title")])),
             locale: None,
@@ -1154,6 +1163,7 @@ return M
     let err = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "moderated".to_string(),
             data: Some(make_struct(&[("title", "FORBIDDEN content")])),
             locale: None,
@@ -1181,6 +1191,7 @@ async fn find_depth_0_returns_id_only() {
     let cat_doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "categories".to_string(),
             data: Some(make_struct(&[("name", "Art")])),
             locale: None,
@@ -1196,6 +1207,7 @@ async fn find_depth_0_returns_id_only() {
     let post_doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[
                 ("title", "Depth Zero Test"),

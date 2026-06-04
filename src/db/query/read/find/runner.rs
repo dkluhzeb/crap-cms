@@ -87,6 +87,57 @@ pub fn find(
     map_rows(conn, &rows, locale_ctx, def, using_before)
 }
 
+/// Find only the **IDs** of documents matching `query`'s filters — no sort,
+/// cursor, limit, or nested hydration.
+///
+/// Reuses the exact same filter/FTS/soft-delete logic as [`find`] (so deep
+/// filters on array/block/relationship sub-fields still match via their
+/// EXISTS subqueries), but selects a single `id` column and skips the
+/// per-document join-table hydration that [`find`] performs. Used by bulk
+/// update to collect the match-set upfront without materializing every
+/// matching document in memory.
+///
+/// # Errors
+///
+/// Returns an error if any filter field is invalid, or a backend error if
+/// the query fails.
+pub fn find_ids(
+    conn: &dyn DbConnection,
+    slug: &str,
+    def: &CollectionDefinition,
+    query: &FindQuery,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<Vec<String>> {
+    validate_query_fields(def, query, locale_ctx)?;
+
+    let mut sql = format!("SELECT id FROM \"{slug}\"");
+    let mut params: Vec<DbValue> = Vec::new();
+    let mut has_where = false;
+
+    let resolved_filters = resolve_filters(&query.filters, def, locale_ctx)?;
+    let where_clause = build_where_clause(
+        conn,
+        &resolved_filters,
+        slug,
+        &def.fields,
+        locale_ctx,
+        &mut params,
+    )?;
+    if !where_clause.is_empty() {
+        sql.push_str(&where_clause);
+        has_where = true;
+    }
+
+    apply_fts(conn, slug, query, &mut sql, &mut has_where, &mut params);
+    apply_soft_delete(def, query, &mut sql, &mut has_where);
+
+    let rows = conn
+        .query_all(&sql, &params)
+        .with_context(|| format!("Failed to execute id query on '{slug}'"))?;
+
+    rows.iter().map(|row| row.get_string("id")).collect()
+}
+
 /// Build the SELECT column list.
 fn build_select(
     def: &CollectionDefinition,
@@ -475,6 +526,77 @@ mod tests {
         let query = FindQuery::builder().include_deleted(true).build();
         let docs = find(&conn, "articles", &def, &query, None).unwrap();
         assert_eq!(docs.len(), 2);
+    }
+
+    /// Regression: `find_ids` must apply the same soft-delete predicate as
+    /// `find`. If it didn't, bulk delete/update would silently act on trashed
+    /// documents. Asserts parity against `find` in BOTH modes.
+    #[test]
+    fn find_ids_matches_find_for_soft_delete() {
+        let (_tmp, pool) = setup_soft_delete_db();
+        let conn = pool.get().unwrap();
+        let def = soft_delete_def();
+
+        conn.execute(
+            "INSERT INTO articles (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
+            &[
+                DbValue::Text("id-live".into()),
+                DbValue::Text("Live Post".into()),
+                DbValue::Text("2026-01-01 00:00:00".into()),
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO articles (id, title, _deleted_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+            &[
+                DbValue::Text("id-deleted".into()),
+                DbValue::Text("Deleted Post".into()),
+                DbValue::Text("2026-01-02 00:00:00".into()),
+                DbValue::Text("2026-01-01 00:00:00".into()),
+            ],
+        )
+        .unwrap();
+
+        // Default: soft-deleted rows are excluded by both.
+        let default_q = FindQuery::default();
+        let find_ids_default = sorted_ids(&conn, &def, &default_q);
+        assert_eq!(find_ids_default, vec!["id-live".to_string()]);
+        assert_eq!(find_ids_default, find_id_set(&conn, &def, &default_q));
+
+        // include_deleted: trashed rows surface in both.
+        let all_q = FindQuery::builder().include_deleted(true).build();
+        let find_ids_all = sorted_ids(&conn, &def, &all_q);
+        assert_eq!(
+            find_ids_all,
+            vec!["id-deleted".to_string(), "id-live".to_string()]
+        );
+        assert_eq!(find_ids_all, find_id_set(&conn, &def, &all_q));
+    }
+
+    /// `find_ids` result, sorted for stable comparison.
+    fn sorted_ids(
+        conn: &dyn DbConnection,
+        def: &CollectionDefinition,
+        query: &FindQuery,
+    ) -> Vec<String> {
+        let mut ids = find_ids(conn, "articles", def, query, None).unwrap();
+        ids.sort();
+        ids
+    }
+
+    /// `find`'s result projected to a sorted id set, for parity comparison.
+    fn find_id_set(
+        conn: &dyn DbConnection,
+        def: &CollectionDefinition,
+        query: &FindQuery,
+    ) -> Vec<String> {
+        let mut ids: Vec<String> = find(conn, "articles", def, query, None)
+            .unwrap()
+            .into_iter()
+            .map(|d| d.id.to_string())
+            .collect();
+        ids.sort();
+        ids
     }
 
     // ── Drafts surface to the top in admin-style listings ───────────────

@@ -36,6 +36,7 @@ struct DeleteBlockingInput {
     event_transport: Option<SharedEventTransport>,
     cache: Option<SharedCache>,
     token: Option<String>,
+    events: bool,
 }
 
 fn delete_blocking(input: DeleteBlockingInput) -> Result<(), Status> {
@@ -63,6 +64,7 @@ fn delete_blocking(input: DeleteBlockingInput) -> Result<(), Status> {
         .user(user_doc.as_ref())
         .invalidation_transport(Some(input.invalidation_transport))
         .event_transport(input.event_transport)
+        .emit_events(input.events)
         .cache(input.cache)
         .build();
 
@@ -116,6 +118,7 @@ impl ContentService {
             cache: Some(self.cache.clone()),
             token,
             headers,
+            events: req.events.unwrap_or(true),
         };
 
         task::spawn_blocking(move || delete_blocking(input))

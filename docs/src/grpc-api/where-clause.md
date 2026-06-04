@@ -32,7 +32,7 @@ Multiple fields are combined with AND.
 | `exists` | `{"field": {"exists": true}}` | `field IS NOT NULL` |
 | `not_exists` | `{"field": {"not_exists": true}}` | `field IS NULL` |
 
-> **Note:** For `exists`/`not_exists`, the value is ignored — only the key matters. Field values must be strings or operator objects — numeric/boolean shorthand (e.g., `{"count": 42}`) is not supported in the gRPC JSON `where` clause (use `{"count": {"equals": "42"}}` instead).
+> **Note:** For `exists`/`not_exists`, the value is ignored — only the key matters. A bare scalar shorthand is treated as `equals`, and JSON numbers and booleans are accepted as well as strings: `{"count": 42}`, `{"active": true}`, and `{"title": "hello"}` all mean `equals`. An unknown operator name is rejected with an `INVALID_ARGUMENT` error (it is never silently dropped).
 
 ## Field-Type-Aware Coercion
 
@@ -44,7 +44,7 @@ Even though filter values are always sent as JSON strings, they are **coerced to
 | Checkbox | `INTEGER` | Accepts `"true"`/`"false"`/`"1"`/`"0"` (and `"yes"`/`"no"`/`"on"`/`"off"`); unknown values fall back to `TEXT` |
 | Date | `TEXT` | Normalized via ISO so lexicographic comparison works |
 | Text-like fields | `TEXT` | Default for everything else |
-| Text-only operators (`like`, `contains`, `starts_with`, `ends_with`, `regex`) | `TEXT` | Always bound as text even on numeric columns |
+| Text-only operators (`like`, `contains`) | `TEXT` | Always bound as text even on numeric columns |
 
 See [Filter Operators](../lua-api/filter-operators.md) for the full per-operator table — the same coercion rules apply to Lua, gRPC, admin URL query params, and MCP.
 

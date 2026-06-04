@@ -209,6 +209,7 @@ async fn list_and_restore_versions() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[
                 ("title", "Version 1"),
@@ -226,6 +227,7 @@ async fn list_and_restore_versions() {
     // Update to version 2
     ts.service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "posts".to_string(),
             id: doc.id.clone(),
             data: Some(make_struct(&[
@@ -242,6 +244,7 @@ async fn list_and_restore_versions() {
     // Update to version 3
     ts.service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "posts".to_string(),
             id: doc.id.clone(),
             data: Some(make_struct(&[
@@ -317,6 +320,7 @@ async fn create_returns_document_with_fields() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[
                 ("title", "Field Check"),
@@ -374,6 +378,7 @@ async fn find_with_pagination() {
     for i in 0..5 {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", &format!("Page {i}"))])),
                 locale: None,
@@ -451,6 +456,7 @@ async fn count_with_documents() {
     for title in &["A", "B", "C"] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title)])),
                 locale: None,
@@ -480,6 +486,7 @@ async fn count_with_where() {
     for (title, status) in &[("A", "draft"), ("B", "published"), ("C", "published")] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title), ("status", status)])),
                 locale: None,
@@ -510,6 +517,7 @@ async fn count_with_where_json() {
     for (title, status) in &[("A", "draft"), ("B", "published")] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title), ("status", status)])),
                 locale: None,
@@ -560,6 +568,7 @@ async fn update_many_basic() {
     for title in &["X", "Y", "Z"] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title), ("status", "draft")])),
                 locale: None,
@@ -572,6 +581,7 @@ async fn update_many_basic() {
     let resp = ts
         .service
         .update_many(Request::new(content::UpdateManyRequest {
+            events: None,
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "draft"}"#.to_string()),
             data: Some(make_struct(&[("status", "published")])),
@@ -591,6 +601,7 @@ async fn update_many_with_where_partial() {
     for (title, status) in &[("A", "draft"), ("B", "published"), ("C", "draft")] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title), ("status", status)])),
                 locale: None,
@@ -603,6 +614,7 @@ async fn update_many_with_where_partial() {
     let resp = ts
         .service
         .update_many(Request::new(content::UpdateManyRequest {
+            events: None,
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "draft"}"#.to_string()),
             data: Some(make_struct(&[("status", "published")])),
@@ -622,6 +634,7 @@ async fn update_many_no_matches() {
     let resp = ts
         .service
         .update_many(Request::new(content::UpdateManyRequest {
+            events: None,
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "nonexistent"}"#.to_string()),
             data: Some(make_struct(&[("status", "published")])),
@@ -641,6 +654,7 @@ async fn delete_many_basic() {
     for title in &["A", "B", "C"] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title), ("status", "draft")])),
                 locale: None,
@@ -653,6 +667,7 @@ async fn delete_many_basic() {
     let resp = ts
         .service
         .delete_many(Request::new(content::DeleteManyRequest {
+            events: None,
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "draft"}"#.to_string()),
             hooks: None,
@@ -685,6 +700,7 @@ async fn delete_many_with_where_partial() {
     for (title, status) in &[("A", "draft"), ("B", "published"), ("C", "draft")] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title), ("status", status)])),
                 locale: None,
@@ -697,6 +713,7 @@ async fn delete_many_with_where_partial() {
     let resp = ts
         .service
         .delete_many(Request::new(content::DeleteManyRequest {
+            events: None,
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "draft"}"#.to_string()),
             hooks: None,
@@ -716,6 +733,7 @@ async fn delete_many_no_matches() {
     let resp = ts
         .service
         .delete_many(Request::new(content::DeleteManyRequest {
+            events: None,
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "nonexistent"}"#.to_string()),
             hooks: None,
@@ -742,6 +760,7 @@ async fn delete_many_soft_deletes_when_collection_has_soft_delete() {
     for title in &["A", "B", "C"] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title), ("status", "draft")])),
                 locale: None,
@@ -755,6 +774,7 @@ async fn delete_many_soft_deletes_when_collection_has_soft_delete() {
     let resp = ts
         .service
         .delete_many(Request::new(content::DeleteManyRequest {
+            events: None,
             collection: "posts".to_string(),
             r#where: None,
             hooks: None,
@@ -789,6 +809,7 @@ async fn delete_many_force_hard_delete_on_soft_delete_collection() {
     for title in &["X", "Y"] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title), ("status", "draft")])),
                 locale: None,
@@ -802,6 +823,7 @@ async fn delete_many_force_hard_delete_on_soft_delete_collection() {
     let resp = ts
         .service
         .delete_many(Request::new(content::DeleteManyRequest {
+            events: None,
             collection: "posts".to_string(),
             r#where: None,
             hooks: None,
@@ -829,6 +851,7 @@ async fn find_trash_returns_soft_deleted_documents() {
     for title in &["Keep", "Trash1", "Trash2"] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title)])),
                 locale: None,
@@ -854,6 +877,7 @@ async fn find_trash_returns_soft_deleted_documents() {
     for doc in &all.documents[1..] {
         ts.service
             .delete(Request::new(content::DeleteRequest {
+                events: None,
                 collection: "posts".to_string(),
                 id: doc.id.clone(),
                 force_hard_delete: false,
@@ -906,6 +930,7 @@ async fn find_by_id_trash_finds_soft_deleted() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "Will Delete")])),
             locale: None,
@@ -920,6 +945,7 @@ async fn find_by_id_trash_finds_soft_deleted() {
     // Soft-delete it
     ts.service
         .delete(Request::new(content::DeleteRequest {
+            events: None,
             collection: "posts".to_string(),
             id: doc.id.clone(),
             force_hard_delete: false,
@@ -971,6 +997,7 @@ async fn list_versions_no_versioning() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "V Test")])),
             locale: None,
@@ -1091,6 +1118,7 @@ async fn find_by_id_with_select() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[
                 ("title", "Select Me"),
@@ -1138,6 +1166,7 @@ async fn update_global_nonexistent() {
     let err = ts
         .service
         .update_global(Request::new(content::UpdateGlobalRequest {
+            events: None,
             slug: "nonexistent".to_string(),
             data: Some(make_struct(&[("key", "value")])),
             locale: None,
@@ -1209,6 +1238,7 @@ async fn delete_nonexistent_collection() {
     let err = ts
         .service
         .delete(Request::new(content::DeleteRequest {
+            events: None,
             collection: "nonexistent".to_string(),
             id: "some-id".to_string(),
             force_hard_delete: false,
@@ -1226,6 +1256,7 @@ async fn update_nonexistent_collection() {
     let err = ts
         .service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "nonexistent".to_string(),
             id: "some-id".to_string(),
             data: Some(make_struct(&[("title", "Test")])),
@@ -1253,6 +1284,7 @@ async fn find_with_search() {
     ] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title)])),
                 locale: None,
@@ -1293,6 +1325,7 @@ async fn find_with_search_no_results() {
 
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "Hello World")])),
             locale: None,
@@ -1328,6 +1361,7 @@ async fn find_with_search_and_where() {
     ] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title), ("status", status)])),
                 locale: None,
@@ -1365,6 +1399,7 @@ async fn count_with_search() {
     for title in &["Rust Guide", "Rust Tutorial", "Python Guide"] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title)])),
                 locale: None,
@@ -1399,6 +1434,7 @@ async fn count_with_search_and_where() {
     ] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title), ("status", status)])),
                 locale: None,
@@ -1430,6 +1466,7 @@ async fn find_with_search_empty_string_returns_all() {
     for title in &["A", "B"] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title)])),
                 locale: None,

@@ -325,6 +325,7 @@ fn make_simple_global_def() -> GlobalDefinition {
 async fn create_user_and_login(ts: &TestSetup) -> String {
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(make_struct(&[
                 ("email", "admin@test.com"),
@@ -374,6 +375,7 @@ async fn subscribe_receives_create_event() {
     // Create a post — should trigger an event
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "Event Post")])),
             locale: None,
@@ -405,6 +407,7 @@ async fn subscribe_receives_update_event() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "To Update")])),
             locale: None,
@@ -434,6 +437,7 @@ async fn subscribe_receives_update_event() {
     // Update the post
     ts.service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "posts".to_string(),
             id: doc.id.clone(),
             data: Some(make_struct(&[("title", "Updated")])),
@@ -461,6 +465,7 @@ async fn subscribe_receives_delete_event() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "To Delete")])),
             locale: None,
@@ -488,6 +493,7 @@ async fn subscribe_receives_delete_event() {
 
     ts.service
         .delete(Request::new(content::DeleteRequest {
+            events: None,
             collection: "posts".to_string(),
             id: doc.id.clone(),
             force_hard_delete: false,
@@ -524,6 +530,7 @@ async fn subscribe_filters_by_collection() {
     // Create a tag (should NOT trigger event for posts subscriber)
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "tags".to_string(),
             data: Some(make_struct(&[("name", "rust")])),
             locale: None,
@@ -535,6 +542,7 @@ async fn subscribe_filters_by_collection() {
     // Create a post (SHOULD trigger event)
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "Only Post")])),
             locale: None,
@@ -573,6 +581,7 @@ async fn subscribe_global_events() {
     // Update the global
     ts.service
         .update_global(Request::new(content::UpdateGlobalRequest {
+            events: None,
             slug: "settings".to_string(),
             data: Some(make_struct(&[("site_name", "My Site")])),
             locale: None,

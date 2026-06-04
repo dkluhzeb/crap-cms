@@ -82,6 +82,7 @@ async fn create_user_and_token(
 ) -> String {
     client
         .create(CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(proto_struct(&[
                 ("email", email),

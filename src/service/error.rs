@@ -15,6 +15,9 @@ pub enum ServiceError {
     NotFound(String),
     /// Ref count protection: document is referenced by others.
     Referenced { id: String, count: i64 },
+    /// A bulk operation matched more documents than the configured limit
+    /// (`server.bulk_max_documents`). Nothing was changed.
+    LimitExceeded(String),
     /// Structured per-field validation errors (required, unique, custom Lua validators).
     Validation(ValidationError),
     /// Hook execution error with a user-facing message.
@@ -41,7 +44,10 @@ pub enum ServiceError {
 impl fmt::Display for ServiceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::AccessDenied(msg) | Self::NotFound(msg) | Self::HookError(msg) => {
+            Self::AccessDenied(msg)
+            | Self::NotFound(msg)
+            | Self::HookError(msg)
+            | Self::LimitExceeded(msg) => {
                 write!(f, "{msg}")
             }
             Self::Referenced { id, count } => {

@@ -51,6 +51,10 @@ pub(crate) struct UpdateOptions {
     /// `"draft"` (unpublishes). Data is not modified.
     #[lua(optional)]
     pub(crate) unpublish: bool,
+    /// Emit a live-update event for the updated document (default: `true`).
+    /// Set `false` for a quiet write.
+    #[lua(optional)]
+    pub(crate) events: bool,
 }
 
 impl Default for UpdateOptions {
@@ -61,6 +65,7 @@ impl Default for UpdateOptions {
             draft: false,
             hooks: true,
             unpublish: false,
+            events: true,
         }
     }
 }
@@ -146,6 +151,7 @@ fn collections_update(
         .write_hooks(&write_hooks)
         .user(user.as_ref())
         .override_access(opts.override_access)
+        .emit_events(opts.events)
         .lua_infra(lua_infra.as_ref())
         .build();
 

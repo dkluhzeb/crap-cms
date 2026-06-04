@@ -40,11 +40,14 @@ use crate::hooks::lua_api::{
     crud::{
         collection::{
             bulk::{
-                create_many::render_crap_collections_create_many_lua,
+                create_many::{CreateManyOpts, render_crap_collections_create_many_lua},
                 delete_many::{
-                    DeleteManyQueryInput, DeleteManyResult, render_crap_collections_delete_many_lua,
+                    DeleteManyOpts, DeleteManyQueryInput, DeleteManyResult,
+                    render_crap_collections_delete_many_lua,
                 },
-                update_many::{UpdateManyQueryInput, render_crap_collections_update_many_lua},
+                update_many::{
+                    UpdateManyOpts, UpdateManyQueryInput, render_crap_collections_update_many_lua,
+                },
             },
             read::{
                 count::{CountQueryInput, render_crap_collections_count_lua},
@@ -410,6 +413,9 @@ fn render_crap_collections(out: &mut String) {
     render_crap_collections_count_lua(out);
     UpdateManyQueryInput::render_lua_annotation(out);
     DeleteManyQueryInput::render_lua_annotation(out);
+    CreateManyOpts::render_lua_annotation(out);
+    UpdateManyOpts::render_lua_annotation(out);
+    DeleteManyOpts::render_lua_annotation(out);
     UpdateManyResult::render_lua_annotation(out);
     DeleteManyResult::render_lua_annotation(out);
     CreateManyResult::render_lua_annotation(out);

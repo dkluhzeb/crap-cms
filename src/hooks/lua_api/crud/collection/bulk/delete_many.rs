@@ -14,7 +14,6 @@ use crate::{
     hooks::{
         lifecycle::LuaStorage,
         lua_api::crud::{
-            collection::write::delete::DeleteOptions,
             filter::convert_where_clause,
             get_tx_conn,
             helpers::{
@@ -73,10 +72,59 @@ pub(crate) struct DeleteManyResult {
     pub(crate) skipped: i64,
 }
 
+/// Optional options for `crap.collections.delete_many`. Standalone from the
+/// single-delete options so the bulk-only `events` default (`false`) is
+/// explicit.
+#[derive(Deserialize, LuaAnnotation)]
+#[serde(default, deny_unknown_fields)]
+#[lua(class = "crap.DeleteManyOptions")]
+pub(crate) struct DeleteManyOpts {
+    /// Locale code. Validated but not used for matching (`delete_many` spans
+    /// locales). Nil = default locale.
+    pub(crate) locale: Option<String>,
+    /// Skip access control checks (default: `false`).
+    #[serde(rename = "overrideAccess")]
+    #[lua(rename = "overrideAccess", optional)]
+    pub(crate) override_access: bool,
+    /// Run lifecycle hooks (default: `true`). Set `false` to bypass.
+    #[lua(optional)]
+    pub(crate) hooks: bool,
+    /// Bypass `soft_delete` and remove rows permanently (default: `false`).
+    #[serde(rename = "forceHardDelete")]
+    #[lua(rename = "forceHardDelete", optional)]
+    pub(crate) force_hard_delete: bool,
+    /// Emit a live-update event per deleted document (default: `false` —
+    /// bulk operations are quiet). Set `true` to notify subscribers.
+    #[lua(optional)]
+    pub(crate) events: bool,
+}
+
+impl Default for DeleteManyOpts {
+    fn default() -> Self {
+        Self {
+            locale: None,
+            override_access: false,
+            hooks: true,
+            force_hard_delete: false,
+            events: false,
+        }
+    }
+}
+
+impl FromLua for DeleteManyOpts {
+    fn from_lua(value: Value, lua: &Lua) -> LuaResult<Self> {
+        match value {
+            Value::Nil => Ok(Self::default()),
+            other => lua.from_value(other),
+        }
+    }
+}
+
 /// State threaded into `crap.collections.delete_many`.
 pub(crate) struct CollectionsDeleteManyState {
     pub(crate) registry: Arc<Registry>,
     pub(crate) locale_config: LocaleConfig,
+    pub(crate) bulk_max_documents: i64,
 }
 
 /// Delete multiple documents matching a query. All-or-nothing: checks
@@ -97,7 +145,7 @@ fn collections_delete_many(
     #[lua(doc = "Collection slug.")] collection: String,
     #[lua(ty = "crap.DeleteManyQuery", doc = "Query to match documents.")]
     query: DeleteManyQueryInput,
-    #[lua(ty = "crap.DeleteOptions", doc = "Optional options.")] opts: Option<DeleteOptions>,
+    #[lua(ty = "crap.DeleteManyOptions", doc = "Optional options.")] opts: Option<DeleteManyOpts>,
 ) -> LuaResult<Table> {
     let opts = opts.unwrap_or_default();
     let reg = &state.registry;
@@ -149,11 +197,13 @@ fn collections_delete_many(
         .user(user.as_ref())
         .override_access(opts.override_access)
         .invalidation_transport(invalidation_transport)
+        .emit_events(opts.events)
         .lua_infra(lua_infra.as_ref())
         .build();
 
     let delete_opts = DeleteManyOptions {
         run_hooks: hooks_enabled,
+        max_documents: state.bulk_max_documents,
         ..Default::default()
     };
 
@@ -196,12 +246,14 @@ pub(crate) fn register_delete_many(
     _table: &Table,
     registry: Arc<Registry>,
     locale_config: &LocaleConfig,
+    bulk_max_documents: i64,
 ) -> Result<()> {
     register_crap_collections_delete_many(
         lua,
         CollectionsDeleteManyState {
             registry,
             locale_config: locale_config.clone(),
+            bulk_max_documents,
         },
     )?;
     Ok(())

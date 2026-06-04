@@ -7,4 +7,4 @@ mod sort;
 #[cfg(test)]
 mod test_helpers;
 
-pub use runner::find;
+pub use runner::{find, find_ids};

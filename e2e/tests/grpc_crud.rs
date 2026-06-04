@@ -85,6 +85,7 @@ async fn create_find_update_delete_undelete_full_round_trip() {
     // CREATE
     let created = client
         .create(CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(proto_struct(&[("title", "Original"), ("body", "v1")])),
             ..Default::default()
@@ -115,6 +116,7 @@ async fn create_find_update_delete_undelete_full_round_trip() {
     // UPDATE — partial: only title; body should remain unchanged.
     client
         .update(UpdateRequest {
+            events: None,
             collection: "posts".to_string(),
             id: id.clone(),
             data: Some(proto_struct(&[("title", "Updated")])),
@@ -148,6 +150,7 @@ async fn create_find_update_delete_undelete_full_round_trip() {
     // DELETE — soft-delete (collection has soft_delete = true).
     let del = client
         .delete(DeleteRequest {
+            events: None,
             collection: "posts".to_string(),
             id: id.clone(),
             force_hard_delete: false,
@@ -221,6 +224,7 @@ async fn count_reflects_collection_size() {
     for i in 0..5 {
         client
             .create(CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(proto_struct(&[("title", &format!("Post {i}"))])),
                 ..Default::default()
@@ -253,6 +257,7 @@ async fn delete_with_force_hard_delete_removes_permanently() {
 
     let id = client
         .create(CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(proto_struct(&[("title", "Doomed")])),
             ..Default::default()
@@ -266,6 +271,7 @@ async fn delete_with_force_hard_delete_removes_permanently() {
 
     let del = client
         .delete(DeleteRequest {
+            events: None,
             collection: "posts".to_string(),
             id: id.clone(),
             force_hard_delete: true,

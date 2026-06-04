@@ -104,6 +104,7 @@ async fn list_jobs_with_bearer_metadata_succeeds() {
 
     client
         .create(CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(proto_struct(&[
                 ("email", "alice@example.com"),

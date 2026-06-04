@@ -82,6 +82,7 @@ async fn list_versions_returns_snapshots_for_each_update() {
 
     let id = client
         .create(CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(proto_struct(&[("title", "v1"), ("body", "first")])),
             ..Default::default()
@@ -95,6 +96,7 @@ async fn list_versions_returns_snapshots_for_each_update() {
 
     client
         .update(UpdateRequest {
+            events: None,
             collection: "posts".to_string(),
             id: id.clone(),
             data: Some(proto_struct(&[("title", "v2"), ("body", "second")])),
@@ -105,6 +107,7 @@ async fn list_versions_returns_snapshots_for_each_update() {
 
     client
         .update(UpdateRequest {
+            events: None,
             collection: "posts".to_string(),
             id: id.clone(),
             data: Some(proto_struct(&[("title", "v3"), ("body", "third")])),
@@ -147,6 +150,7 @@ async fn restore_version_reverts_document_fields() {
 
     let id = client
         .create(CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(proto_struct(&[("title", "Original"), ("body", "v1 body")])),
             ..Default::default()
@@ -160,6 +164,7 @@ async fn restore_version_reverts_document_fields() {
 
     client
         .update(UpdateRequest {
+            events: None,
             collection: "posts".to_string(),
             id: id.clone(),
             data: Some(proto_struct(&[("title", "Modified"), ("body", "v2 body")])),

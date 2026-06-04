@@ -105,6 +105,7 @@ async fn create_and_login(
 ) -> (String, String) {
     let id = client
         .create(CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(proto_struct(&[
                 ("email", email),
@@ -301,6 +302,7 @@ async fn verify_account_returns_failed_precondition_without_verify_email() {
     // verify_email is off on this collection (login is unconditional).
     let create_resp = client
         .create(CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(proto_struct(&[
                 ("email", "preflight@x.com"),

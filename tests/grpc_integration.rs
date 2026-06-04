@@ -251,6 +251,7 @@ async fn create_and_find() {
     let create_resp = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "Hello"), ("status", "published")])),
             locale: None,
@@ -287,6 +288,7 @@ async fn create_and_find_by_id() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "Test Post")])),
             locale: None,
@@ -329,6 +331,7 @@ async fn update_document() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "Original"), ("status", "draft")])),
             locale: None,
@@ -343,6 +346,7 @@ async fn update_document() {
     let updated = ts
         .service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "posts".to_string(),
             id: doc.id.clone(),
             data: Some(make_struct(&[("title", "Updated")])),
@@ -370,6 +374,7 @@ async fn delete_document() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "To Delete")])),
             locale: None,
@@ -383,6 +388,7 @@ async fn delete_document() {
 
     ts.service
         .delete(Request::new(content::DeleteRequest {
+            events: None,
             collection: "posts".to_string(),
             id: doc.id.clone(),
             force_hard_delete: false,
@@ -415,6 +421,7 @@ async fn find_with_where() {
     for (title, status) in &[("A", "draft"), ("B", "published"), ("C", "published")] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title), ("status", status)])),
                 locale: None,
@@ -447,6 +454,7 @@ async fn find_with_where_json() {
     for (title, status) in &[("X", "draft"), ("Y", "published"), ("Z", "published")] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title), ("status", status)])),
                 locale: None,
@@ -482,6 +490,7 @@ async fn find_with_where_or() {
     for title in &["Alpha", "Beta", "Gamma"] {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title)])),
                 locale: None,
@@ -512,6 +521,7 @@ async fn find_with_limit_and_offset() {
     for i in 0..5 {
         ts.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", &format!("Post {i}"))])),
                 locale: None,
@@ -543,6 +553,7 @@ async fn find_with_select() {
 
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "Selectable"), ("status", "live")])),
             locale: None,
@@ -592,6 +603,7 @@ async fn create_nonexistent_collection() {
     let err = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "nonexistent".to_string(),
             data: Some(make_struct(&[("title", "Nope")])),
             locale: None,
@@ -664,6 +676,7 @@ async fn update_global_and_read_back() {
 
     ts.service
         .update_global(Request::new(content::UpdateGlobalRequest {
+            events: None,
             slug: "settings".to_string(),
             data: Some(make_struct(&[("site_name", "My CMS")])),
             locale: None,
@@ -926,6 +939,7 @@ async fn grpc_create_rejects_empty_required_in_nested_array() {
     let err = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "nested_test".to_string(),
             data: Some(Struct { fields }),
             locale: None,
@@ -966,6 +980,7 @@ async fn grpc_global_read_access_denied_returns_permission_denied() {
     // `ctx.user.role == "admin"`, so this user must be denied.
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(make_struct(&[
                 ("email", "editor-grpc@test.com"),
@@ -1021,6 +1036,7 @@ async fn grpc_create_accepts_valid_nested_array() {
     let resp = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "nested_test".to_string(),
             data: Some(Struct { fields }),
             locale: None,

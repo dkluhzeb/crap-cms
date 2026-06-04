@@ -43,6 +43,7 @@ struct CreateBlockingInput {
     password: Option<String>,
     locale_ctx: Option<LocaleContext>,
     draft: bool,
+    events: bool,
 }
 
 fn create_blocking(input: CreateBlockingInput) -> Result<content::Document, Status> {
@@ -69,6 +70,7 @@ fn create_blocking(input: CreateBlockingInput) -> Result<content::Document, Stat
         .runner(&input.runner)
         .user(user_doc.as_ref())
         .event_transport(input.event_transport)
+        .emit_events(input.events)
         .cache(input.cache)
         .email_ctx(input.email_ctx)
         .build();
@@ -134,6 +136,7 @@ impl ContentService {
             password,
             locale_ctx,
             draft: req.draft.unwrap_or(false),
+            events: req.events.unwrap_or(true),
         };
 
         let proto_doc = task::spawn_blocking(move || create_blocking(input))

@@ -138,6 +138,7 @@ impl ParityHarness {
     async fn grpc_create_ok(&self, pairs: &[(&str, &str)]) -> bool {
         self.service
             .create(Request::new(content::CreateRequest {
+                events: None,
                 collection: "articles".to_string(),
                 data: Some(make_struct(pairs)),
                 ..Default::default()

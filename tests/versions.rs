@@ -1229,6 +1229,7 @@ async fn grpc_create_draft_sets_status() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "Draft Article")])),
             locale: None,
@@ -1253,6 +1254,7 @@ async fn grpc_create_published_sets_status() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "Published Article")])),
             locale: None,

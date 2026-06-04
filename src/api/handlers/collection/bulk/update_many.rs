@@ -43,6 +43,8 @@ struct UpdateManyBlockingInput {
     locale_ctx: Option<LocaleContext>,
     run_hooks: bool,
     draft: bool,
+    bulk_max_documents: i64,
+    events: bool,
 }
 
 fn update_many_blocking(input: UpdateManyBlockingInput) -> Result<i64, Status> {
@@ -90,6 +92,7 @@ fn update_many_blocking(input: UpdateManyBlockingInput) -> Result<i64, Status> {
         .runner(&input.hook_runner)
         .user(user_doc)
         .event_transport(input.event_transport)
+        .emit_events(input.events)
         .cache(input.cache)
         .build();
 
@@ -98,6 +101,7 @@ fn update_many_blocking(input: UpdateManyBlockingInput) -> Result<i64, Status> {
         run_hooks: input.run_hooks,
         draft: input.draft,
         ui_locale: None,
+        max_documents: input.bulk_max_documents,
     };
 
     let result = service::update_many(
@@ -163,6 +167,8 @@ impl ContentService {
             locale_ctx,
             run_hooks: req.hooks.unwrap_or(true),
             draft: req.draft.unwrap_or(false),
+            bulk_max_documents: self.server_config.bulk_max_documents,
+            events: req.events.unwrap_or(false),
         };
 
         let modified = task::spawn_blocking(move || update_many_blocking(input))

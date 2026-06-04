@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
+use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
+use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
 use crate::{
@@ -13,7 +14,6 @@ use crate::{
             document_to_lua_table, lua_table_to_hashmap, lua_table_to_json_map,
         },
         lua_api::crud::{
-            collection::write::create::CreateOptions,
             get_tx_conn,
             helpers::{
                 check_hook_depth, hook_lua_infra, hook_ui_locale, hook_user, resolve_collection,
@@ -21,8 +21,51 @@ use crate::{
         },
     },
     service::{self, CreateManyItem, CreateManyOptions, LuaWriteHooks, ServiceContext},
-    typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
+    typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
+
+/// Optional options for `crap.collections.create_many`. Standalone from the
+/// single-create options so the bulk-only `events` default (`false`) is
+/// explicit.
+#[derive(Deserialize, LuaAnnotation)]
+#[serde(default, deny_unknown_fields)]
+#[lua(class = "crap.CreateManyOptions")]
+pub(crate) struct CreateManyOpts {
+    /// Skip access control checks (default: `false`).
+    #[serde(rename = "overrideAccess")]
+    #[lua(rename = "overrideAccess", optional)]
+    pub(crate) override_access: bool,
+    /// Create documents as drafts (default: `false`).
+    #[lua(optional)]
+    pub(crate) draft: bool,
+    /// Run lifecycle hooks (default: `true`). Set `false` to bypass.
+    #[lua(optional)]
+    pub(crate) hooks: bool,
+    /// Emit a live-update event per created document (default: `false` —
+    /// bulk operations are quiet). Set `true` to notify subscribers.
+    #[lua(optional)]
+    pub(crate) events: bool,
+}
+
+impl Default for CreateManyOpts {
+    fn default() -> Self {
+        Self {
+            override_access: false,
+            draft: false,
+            hooks: true,
+            events: false,
+        }
+    }
+}
+
+impl FromLua for CreateManyOpts {
+    fn from_lua(value: Value, lua: &Lua) -> LuaResult<Self> {
+        match value {
+            Value::Nil => Ok(Self::default()),
+            other => lua.from_value(other),
+        }
+    }
+}
 
 /// Bulk create multiple documents from an array of data tables.
 /// All-or-nothing: a single transaction wraps every insert.
@@ -33,7 +76,7 @@ use crate::{
     auto_tx
 )]
 fn collections_create_many(
-    state: &Arc<Registry>,
+    state: &CollectionsCreateManyState,
     lua: &Lua,
     #[lua(doc = "Collection slug.")] collection: String,
     #[lua(
@@ -42,10 +85,10 @@ fn collections_create_many(
     )]
     items: Table,
     #[lua(
-        ty = "crap.CreateOptions",
+        ty = "crap.CreateManyOptions",
         doc = "Optional options applied to every document."
     )]
-    opts: Option<CreateOptions>,
+    opts: Option<CreateManyOpts>,
 ) -> LuaResult<Table> {
     let opts = opts.unwrap_or_default();
     let conn = get_tx_conn(lua)?;
@@ -53,7 +96,7 @@ fn collections_create_many(
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
     let lua_infra = hook_lua_infra(lua);
-    let def = resolve_collection(state, &collection)?;
+    let def = resolve_collection(&state.registry, &collection)?;
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, opts.hooks, &collection, "create_many");
 
@@ -74,7 +117,7 @@ fn collections_create_many(
         .user(user.as_ref())
         .ui_locale(ui_locale.as_deref())
         .override_access(opts.override_access)
-        .registry(Some(state.as_ref()))
+        .registry(Some(state.registry.as_ref()))
         .hooks_enabled(hooks_enabled)
         .run_validation(opts.hooks)
         .build();
@@ -84,12 +127,14 @@ fn collections_create_many(
         .write_hooks(&write_hooks)
         .user(user.as_ref())
         .override_access(opts.override_access)
+        .emit_events(opts.events)
         .lua_infra(lua_infra.as_ref())
         .build();
 
     let create_opts = CreateManyOptions {
         run_hooks: hooks_enabled,
         draft: opts.draft,
+        max_documents: state.bulk_max_documents,
     };
 
     let svc_result = service::create_many(&ctx, &parsed_items, &create_opts)
@@ -108,10 +153,17 @@ fn collections_create_many(
     Ok(result)
 }
 
+/// State threaded into `crap.collections.create_many` — the loaded registry
+/// plus the `server.bulk_max_documents` cap enforced by the service layer.
+pub(crate) struct CollectionsCreateManyState {
+    pub(crate) registry: Arc<Registry>,
+    pub(crate) bulk_max_documents: i64,
+}
+
 lua_table! {
     name: crap_collections_create_many,
     path: "crap.collections",
-    state: Arc<Registry>,
+    state: CollectionsCreateManyState,
     fns: [collections_create_many],
 }
 
@@ -122,8 +174,15 @@ pub(crate) fn register_create_many(
     lua: &Lua,
     _table: &Table,
     registry: Arc<Registry>,
+    bulk_max_documents: i64,
 ) -> Result<()> {
-    register_crap_collections_create_many(lua, registry)?;
+    register_crap_collections_create_many(
+        lua,
+        CollectionsCreateManyState {
+            registry,
+            bulk_max_documents,
+        },
+    )?;
     Ok(())
 }
 

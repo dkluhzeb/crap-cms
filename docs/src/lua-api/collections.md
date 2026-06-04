@@ -176,6 +176,7 @@ local draft = crap.collections.articles.create({
 | `draft` | boolean | `false` | Create as draft. Skips required-field validation (versioned + `drafts = true`). |
 | `overrideAccess` | boolean | `false` | Bypass collection/field access checks. |
 | `hooks` | boolean | `true` | Run lifecycle hooks. Set `false` to skip all hooks and validation; DB write still runs. |
+| `events` | boolean | `true` | Emit a live-update event for the created document. Set `false` for a quiet write (e.g. seeding/migrations). |
 
 #### Auth collections
 
@@ -212,6 +213,7 @@ crap.collections.articles.update("abc123", {
 | `unpublish` | boolean | `false` | Set status to `draft` and create a draft version snapshot. Ignores `data` when unpublishing. Versioned collections only. |
 | `overrideAccess` | boolean | `false` | Bypass collection/field access checks. |
 | `hooks` | boolean | `true` | Run lifecycle hooks. |
+| `events` | boolean | `true` | Emit a live-update event for the updated document. Set `false` for a quiet write. |
 
 ### `crap.collections.<slug>.delete(id, opts?)`
 
@@ -238,6 +240,7 @@ crap.collections.posts.delete("abc123", { overrideAccess = true })
 | `overrideAccess` | boolean | `false` | Bypass `access.trash` (soft) or `access.delete` (permanent). |
 | `hooks` | boolean | `true` | Run `before_delete` / `after_delete` hooks. |
 | `forceHardDelete` | boolean | `false` | Skip `soft_delete` and remove the row permanently. Still requires `access.delete` when `overrideAccess = false`. |
+| `events` | boolean | `true` | Emit a live-update event for the deleted document. Set `false` for a quiet delete. |
 
 ### `crap.collections.<slug>.undelete(id)` (and others)
 
@@ -469,7 +472,7 @@ local published = crap.collections.posts.count({
 
 Update multiple documents matching a query. Returns `{ modified = N }`.
 
-**All-or-nothing semantics:** finds all matching documents, checks update access for each (if `overrideAccess = false`), and only proceeds if all pass. If any document fails access, an error is returned and nothing is modified.
+**Atomic, all-or-nothing:** the entire operation runs in a single transaction. Access is checked for every matched document first (if `overrideAccess = false`), and if a write then fails partway through — a validation error, a hook error, a constraint violation — the whole operation rolls back, leaving nothing modified. The number of documents a single bulk op may match is capped by `[server] bulk_max_documents` (default `0` = unlimited); exceeding it errors and changes nothing.
 
 Runs the full per-document lifecycle by default: `before_validate` → field validation → `before_change` → DB update → `after_change` — the same pipeline as single-document `update`. Set `hooks = false` in opts to skip hooks and validation for performance on large batch operations.
 
@@ -507,6 +510,7 @@ local result = crap.collections.posts.update_many({
 | `overrideAccess` | boolean | `false` | Bypass access control checks. |
 | `draft` | boolean | `false` | Include draft documents. |
 | `hooks` | boolean | `true` | Run per-document lifecycle hooks. Set to `false` to skip all hooks (`before_validate`, `before_change`, `after_change`) and field validation. |
+| `events` | boolean | `false` | Emit a per-document live-update event for each modified document. Bulk ops are **quiet by default** to avoid flooding subscribers; set `true` to notify event-stream subscribers. |
 
 ### Data (3rd argument)
 
@@ -577,7 +581,7 @@ crap.collections.posts.restore_version("post-1", "v2-abc", { overrideAccess = tr
 
 Delete multiple documents matching a query. Returns `{ deleted = N, skipped = N }`. For upload collections, associated files are automatically cleaned up from disk for each deleted document. Documents that are still referenced by other documents are skipped (hard delete only) and reported in `skipped`.
 
-**All-or-nothing semantics:** finds all matching documents, checks delete access for each (if `overrideAccess = false`), and only proceeds if all pass.
+**Atomic, all-or-nothing:** the entire operation runs in a single transaction. Access is checked for every matched document first (if `overrideAccess = false`); a real failure partway through rolls everything back. Documents still referenced by others are **skipped** (counted in `skipped`), not treated as failures. The match size is capped by `[server] bulk_max_documents` (default `0` = unlimited); exceeding it errors and changes nothing.
 
 Fires per-document lifecycle hooks (`before_delete`, `after_delete`) by default. Set `hooks = false` in opts to skip for performance on large batch operations.
 
@@ -615,3 +619,4 @@ local result = crap.collections.posts.delete_many({
 | `hooks` | boolean | `true` | Run per-document lifecycle hooks. Set to `false` to skip `before_delete` and `after_delete` hooks. |
 | `locale` | string | `nil` | Locale code for localized fields. |
 | `forceHardDelete` | boolean | `false` | Skip `soft_delete` and remove rows permanently. |
+| `events` | boolean | `false` | Emit a per-document live-update event for each deleted document. Bulk ops are **quiet by default**; set `true` to notify event-stream subscribers. |

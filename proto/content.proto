@@ -654,6 +654,10 @@ message CreateRequest {
   // When true, saves the document as a draft (status=draft) rather than
   // publishing it immediately. Only applies when drafts are enabled.
   optional bool draft = 4;
+
+  // Emit a live-update event for the created document. Default: true.
+  // Set false for a quiet write (e.g. seeding/migrations).
+  optional bool events = 5;
 }
 
 // CreateResponse returns the newly created document with its assigned ID.
@@ -679,6 +683,10 @@ message CreateManyRequest {
   // Run per-document lifecycle hooks.
   // Default: true. Set to false to skip for performance.
   optional bool hooks = 5;
+
+  // Emit a live-update event per created document. Default: false (bulk
+  // operations are quiet). Set true to notify event-stream subscribers.
+  optional bool events = 6;
 }
 
 // CreateManyResponse reports the number of documents created.
@@ -712,6 +720,10 @@ message UpdateRequest {
   // When true, transitions a published document back to draft status without
   // modifying field data. Ignored if the collection does not have versions enabled.
   optional bool unpublish = 6;
+
+  // Emit a live-update event for the updated document. Default: true.
+  // Set false for a quiet write.
+  optional bool events = 7;
 }
 
 // UpdateResponse returns the document after applying the update.
@@ -734,6 +746,10 @@ message DeleteRequest {
   // When true, permanently delete even if the collection has soft_delete enabled.
   // Requires `access.delete` permission (not just `access.trash`).
   bool force_hard_delete = 3;
+
+  // Emit a live-update event for the deleted document. Default: true.
+  // Set false for a quiet delete.
+  optional bool events = 4;
 }
 
 // DeleteResponse confirms the deletion. Failure is reported as a gRPC
@@ -785,6 +801,10 @@ message UpdateGlobalRequest {
 
   // BCP-47 locale for localized field writes.
   optional string locale = 3;
+
+  // Emit a live-update event for the updated global. Default: true.
+  // Set false for a quiet write.
+  optional bool events = 4;
 }
 
 // UpdateGlobalResponse returns the global document after the update.
@@ -931,6 +951,10 @@ message UpdateManyRequest {
   // Run per-document lifecycle hooks (before_change, after_change).
   // Default: true (hooks run). Set to false to skip for performance.
   optional bool hooks = 6;
+
+  // Emit a live-update event per modified document. Default: false (bulk
+  // operations are quiet). Set true to notify event-stream subscribers.
+  optional bool events = 7;
 }
 
 // UpdateManyResponse reports the number of documents modified.
@@ -955,6 +979,10 @@ message DeleteManyRequest {
   // When true, permanently delete even if the collection has soft_delete enabled.
   // Requires `access.delete` permission (not just `access.trash`).
   bool force_hard_delete = 4;
+
+  // Emit a live-update event per deleted document. Default: false (bulk
+  // operations are quiet). Set true to notify event-stream subscribers.
+  optional bool events = 5;
 }
 
 // DeleteManyResponse reports the number of documents deleted.

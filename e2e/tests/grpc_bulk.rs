@@ -74,6 +74,7 @@ async fn create_many_inserts_all_documents() {
 
     let resp = client
         .create_many(CreateManyRequest {
+            events: None,
             collection: "posts".to_string(),
             documents: docs,
             ..Default::default()
@@ -110,6 +111,7 @@ async fn update_many_applies_to_all_matching() {
         .collect();
     client
         .create_many(CreateManyRequest {
+            events: None,
             collection: "posts".to_string(),
             documents: docs,
             ..Default::default()
@@ -120,6 +122,7 @@ async fn update_many_applies_to_all_matching() {
     // Update all to status = published.
     let resp = client
         .update_many(UpdateManyRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(proto_struct(&[("status", "published")])),
             ..Default::default()
@@ -145,6 +148,7 @@ async fn delete_many_removes_all_matching() {
         .collect();
     client
         .create_many(CreateManyRequest {
+            events: None,
             collection: "posts".to_string(),
             documents: docs,
             ..Default::default()
@@ -154,6 +158,7 @@ async fn delete_many_removes_all_matching() {
 
     let resp = client
         .delete_many(DeleteManyRequest {
+            events: None,
             collection: "posts".to_string(),
             force_hard_delete: true,
             ..Default::default()

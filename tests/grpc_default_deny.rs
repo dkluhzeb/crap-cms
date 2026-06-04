@@ -188,6 +188,7 @@ async fn default_deny_blocks_create() {
     let err = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(data),
             locale: None,
@@ -212,6 +213,7 @@ async fn default_deny_blocks_delete() {
     let err = ts
         .service
         .delete(Request::new(content::DeleteRequest {
+            events: None,
             collection: "posts".to_string(),
             id: "doc1".to_string(),
             force_hard_delete: false,

@@ -211,6 +211,7 @@ async fn grpc_find_where_published_status() {
     // Create one published and one draft
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "Published")])),
             locale: None,
@@ -221,6 +222,7 @@ async fn grpc_find_where_published_status() {
 
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "Draft")])),
             locale: None,
@@ -253,6 +255,7 @@ async fn grpc_find_with_draft_returns_all() {
 
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "Published")])),
             locale: None,
@@ -263,6 +266,7 @@ async fn grpc_find_with_draft_returns_all() {
 
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "Draft")])),
             locale: None,
@@ -341,6 +345,7 @@ async fn grpc_draft_update_is_version_only() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "Original")])),
             locale: None,
@@ -355,6 +360,7 @@ async fn grpc_draft_update_is_version_only() {
     // Draft update
     ts.service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "articles".to_string(),
             id: doc.id.clone(),
             data: Some(make_struct(&[("title", "Draft Change")])),
@@ -391,6 +397,7 @@ async fn grpc_find_by_id_draft_returns_latest_version() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "Original")])),
             locale: None,
@@ -405,6 +412,7 @@ async fn grpc_find_by_id_draft_returns_latest_version() {
     // Draft update (version only)
     ts.service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "articles".to_string(),
             id: doc.id.clone(),
             data: Some(make_struct(&[("title", "Draft Title")])),
@@ -445,6 +453,7 @@ async fn grpc_find_by_id_no_draft_returns_main_table() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "Main Table")])),
             locale: None,
@@ -459,6 +468,7 @@ async fn grpc_find_by_id_no_draft_returns_main_table() {
     // Draft update
     ts.service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "articles".to_string(),
             id: doc.id.clone(),
             data: Some(make_struct(&[("title", "Draft Only")])),
@@ -499,6 +509,7 @@ async fn grpc_list_versions() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "Versioned")])),
             locale: None,
@@ -514,6 +525,7 @@ async fn grpc_list_versions() {
     for title in &["V2", "V3"] {
         ts.service
             .update(Request::new(content::UpdateRequest {
+                events: None,
                 collection: "articles".to_string(),
                 id: doc.id.clone(),
                 data: Some(make_struct(&[("title", title)])),
@@ -553,6 +565,7 @@ async fn grpc_list_versions_with_limit() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "Many Versions")])),
             locale: None,
@@ -567,6 +580,7 @@ async fn grpc_list_versions_with_limit() {
     for i in 0..5 {
         ts.service
             .update(Request::new(content::UpdateRequest {
+                events: None,
                 collection: "articles".to_string(),
                 id: doc.id.clone(),
                 data: Some(make_struct(&[("title", &format!("Update {i}"))])),
@@ -599,6 +613,7 @@ async fn grpc_list_versions_nonversioned_fails() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "notes".to_string(),
             data: Some(make_struct(&[("title", "Note")])),
             locale: None,
@@ -631,6 +646,7 @@ async fn grpc_restore_version() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "Version 1")])),
             locale: None,
@@ -658,6 +674,7 @@ async fn grpc_restore_version() {
     // Update to create v2
     ts.service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "articles".to_string(),
             id: doc.id.clone(),
             data: Some(make_struct(&[("title", "Version 2")])),
@@ -778,6 +795,7 @@ async fn grpc_draft_create_skips_required_validation() {
     let result = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "articles".to_string(),
             data: Some(make_struct(&[("body", "Just a body, no title")])),
             locale: None,
@@ -800,6 +818,7 @@ async fn grpc_publish_enforces_required_validation() {
     let result = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "articles".to_string(),
             data: Some(make_struct(&[("body", "No title")])),
             locale: None,
@@ -821,6 +840,7 @@ async fn grpc_versioned_no_drafts_does_not_filter_by_status() {
 
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "docs".to_string(),
             data: Some(make_struct(&[("title", "Doc 1")])),
             locale: None,
@@ -831,6 +851,7 @@ async fn grpc_versioned_no_drafts_does_not_filter_by_status() {
 
     ts.service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "docs".to_string(),
             data: Some(make_struct(&[("title", "Doc 2")])),
             locale: None,
@@ -860,6 +881,7 @@ async fn grpc_versioned_no_drafts_still_creates_versions() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "docs".to_string(),
             data: Some(make_struct(&[("title", "Versioned Doc")])),
             locale: None,
@@ -893,6 +915,7 @@ async fn grpc_max_versions_prunes_old() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "docs".to_string(),
             data: Some(make_struct(&[("title", "Prunable")])),
             locale: None,
@@ -908,6 +931,7 @@ async fn grpc_max_versions_prunes_old() {
     for i in 0..7 {
         ts.service
             .update(Request::new(content::UpdateRequest {
+                events: None,
                 collection: "docs".to_string(),
                 id: doc.id.clone(),
                 data: Some(make_struct(&[("title", &format!("Update {i}"))])),
@@ -944,6 +968,7 @@ async fn grpc_full_draft_publish_workflow() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "articles".to_string(),
             data: Some(make_struct(&[
                 ("title", "New Article"),
@@ -994,6 +1019,7 @@ async fn grpc_full_draft_publish_workflow() {
     // 4. Make a draft update
     ts.service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "articles".to_string(),
             id: doc.id.clone(),
             data: Some(make_struct(&[
@@ -1010,6 +1036,7 @@ async fn grpc_full_draft_publish_workflow() {
     // 5. Publish the article
     ts.service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "articles".to_string(),
             id: doc.id.clone(),
             data: Some(make_struct(&[
@@ -1069,6 +1096,7 @@ async fn grpc_update_unpublish() {
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
+            events: None,
             collection: "articles".to_string(),
             data: Some(make_struct(&[
                 ("title", "To Unpublish"),
@@ -1103,6 +1131,7 @@ async fn grpc_update_unpublish() {
     let unpublished = ts
         .service
         .update(Request::new(content::UpdateRequest {
+            events: None,
             collection: "articles".to_string(),
             id: doc.id.clone(),
             data: None,

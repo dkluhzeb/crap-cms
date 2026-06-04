@@ -9,11 +9,15 @@ service ContentAPI {
   rpc Find (FindRequest) returns (FindResponse);
   rpc FindByID (FindByIDRequest) returns (FindByIDResponse);
   rpc Create (CreateRequest) returns (CreateResponse);
+  rpc CreateMany (CreateManyRequest) returns (CreateManyResponse);
   rpc Update (UpdateRequest) returns (UpdateResponse);
   rpc Delete (DeleteRequest) returns (DeleteResponse);
+  rpc Undelete (UndeleteRequest) returns (UndeleteResponse);
   rpc Count (CountRequest) returns (CountResponse);
   rpc UpdateMany (UpdateManyRequest) returns (UpdateManyResponse);
   rpc DeleteMany (DeleteManyRequest) returns (DeleteManyResponse);
+  rpc Validate (ValidateRequest) returns (ValidateResponse);
+  rpc ValidateGlobal (ValidateGlobalRequest) returns (ValidateResponse);
   rpc GetGlobal (GetGlobalRequest) returns (GetGlobalResponse);
   rpc UpdateGlobal (UpdateGlobalRequest) returns (UpdateGlobalResponse);
   rpc Login (LoginRequest) returns (LoginResponse);
@@ -21,6 +25,10 @@ service ContentAPI {
   rpc ForgotPassword (ForgotPasswordRequest) returns (ForgotPasswordResponse);
   rpc ResetPassword (ResetPasswordRequest) returns (ResetPasswordResponse);
   rpc VerifyEmail (VerifyEmailRequest) returns (VerifyEmailResponse);
+  rpc LockAccount (AccountActionRequest) returns (AccountActionResponse);
+  rpc UnlockAccount (AccountActionRequest) returns (AccountActionResponse);
+  rpc VerifyAccount (AccountActionRequest) returns (AccountActionResponse);
+  rpc UnverifyAccount (AccountActionRequest) returns (AccountActionResponse);
   rpc ListCollections (ListCollectionsRequest) returns (ListCollectionsResponse);
   rpc DescribeCollection (DescribeCollectionRequest) returns (DescribeCollectionResponse);
   rpc Subscribe (SubscribeRequest) returns (stream MutationEvent);
@@ -55,9 +63,11 @@ An optional request timeout can be set via `grpc_timeout` in `[server]`. When se
 grpc_timeout = "30s"
 ```
 
-## Bulk Operation Limits
+## Bulk Operations
 
-`UpdateMany` and `DeleteMany` process at most **10,000** documents per call. This prevents unbounded memory usage when a broad filter matches a very large dataset. For larger operations, use paginated calls with a `where` clause to process documents in batches.
+`UpdateMany` and `DeleteMany` are **atomic**: the whole operation runs in a single transaction, so a failure partway through (a validation error, a hook error, a constraint violation) rolls everything back — there is no partial-update state. They process the entire set the `where` clause matches; only the matching IDs are held in memory, not the full documents. Per-document lifecycle hooks run by default (set `hooks = false` to skip them).
+
+Because the operation is atomic, a very large match-set holds the database write-lock for the whole operation. Set `[server] bulk_max_documents` to a positive value to cap how many documents a single bulk op may match (default `0` = no limit); a request matching more than the cap is rejected (gRPC `FAILED_PRECONDITION`) and changes nothing. See [crap.toml](../configuration/crap-toml.md).
 
 ## Server Reflection
 

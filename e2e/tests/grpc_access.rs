@@ -166,6 +166,7 @@ async fn create_user_login(
 ) -> (String, String) {
     let id = client
         .create(CreateRequest {
+            events: None,
             collection: "users".to_string(),
             data: Some(proto_struct(&[
                 ("email", email),
@@ -215,6 +216,7 @@ async fn read_access_denied_anonymous_allowed_authenticated() {
     client
         .create(with_bearer(
             CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(proto_struct(&[("title", "secret")])),
                 ..Default::default()
@@ -278,6 +280,7 @@ async fn create_access_denies_non_admin_role() {
     let denied = client
         .create(with_bearer(
             CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(proto_struct(&[("title", "should fail")])),
                 ..Default::default()
@@ -318,6 +321,7 @@ async fn update_and_delete_access_deny_non_admin() {
     let post_id = client
         .create(with_bearer(
             CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(proto_struct(&[("title", "Original")])),
                 ..Default::default()
@@ -334,6 +338,7 @@ async fn update_and_delete_access_deny_non_admin() {
     let update_denied = client
         .update(with_bearer(
             UpdateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 id: post_id.clone(),
                 data: Some(proto_struct(&[("title", "Hacked")])),
@@ -348,6 +353,7 @@ async fn update_and_delete_access_deny_non_admin() {
     let delete_denied = client
         .delete(with_bearer(
             DeleteRequest {
+                events: None,
                 collection: "posts".to_string(),
                 id: post_id,
                 force_hard_delete: false,
@@ -423,6 +429,7 @@ async fn constrained_access_filters_rows_to_owner() {
     client
         .create(with_bearer(
             CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(proto_struct(&[
                     ("title", "alice doc"),
@@ -437,6 +444,7 @@ async fn constrained_access_filters_rows_to_owner() {
     client
         .create(with_bearer(
             CreateRequest {
+                events: None,
                 collection: "posts".to_string(),
                 data: Some(proto_struct(&[
                     ("title", "bob doc"),

@@ -42,6 +42,8 @@ struct CreateManyBlockingInput {
     items: Vec<CreateManyItem>,
     run_hooks: bool,
     draft: bool,
+    bulk_max_documents: i64,
+    events: bool,
 }
 
 fn create_many_blocking(
@@ -68,6 +70,7 @@ fn create_many_blocking(
         .runner(&input.hook_runner)
         .user(user_doc)
         .event_transport(input.event_transport)
+        .emit_events(input.events)
         .cache(input.cache)
         .email_ctx(input.email_ctx)
         .build();
@@ -75,6 +78,7 @@ fn create_many_blocking(
     let opts = CreateManyOptions {
         run_hooks: input.run_hooks,
         draft: input.draft,
+        max_documents: input.bulk_max_documents,
     };
 
     let result = service::create_many(&ctx, &input.items, &opts)
@@ -127,6 +131,8 @@ impl ContentService {
             items,
             run_hooks: req.hooks.unwrap_or(true),
             draft: req.draft.unwrap_or(false),
+            bulk_max_documents: self.server_config.bulk_max_documents,
+            events: req.events.unwrap_or(false),
         };
 
         let result = task::spawn_blocking(move || create_many_blocking(input))

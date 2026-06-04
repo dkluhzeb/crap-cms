@@ -122,6 +122,7 @@ async fn lifecycle_hook_error_maps_to_invalid_argument() {
 
     let status = client
         .create(CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(proto_struct(&[("title", "anything")])),
             ..Default::default()
@@ -208,6 +209,7 @@ async fn structured_validation_error_includes_field_name() {
 
     let status = client
         .create(CreateRequest {
+            events: None,
             collection: "posts".to_string(),
             data: Some(Struct {
                 fields: BTreeMap::new(),
