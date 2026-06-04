@@ -18,11 +18,63 @@
 //! }
 //! ```
 
+use anyhow::{Result, bail};
 use mlua::{Table, Value};
 
 use crate::core::collection::{Activation, Auth, AuthMethod, MfaMode, Surface, SurfaceSet};
 
-use super::helpers::get_table;
+use super::helpers::{deny_unknown_keys, get_table};
+
+/// Keys accepted on the top-level `auth = { ... }` table.
+const AUTH_KEYS: &[&str] = &["enabled", "token_expiry", "methods"];
+
+/// Reject unknown keys in the `auth` sub-table, its `methods` entries (validated
+/// per method `type`), and each strategy's `activates_on` discriminator. A typo'd
+/// or removed key (the old `disable_local` / `strategies`) fails loudly instead of
+/// being silently ignored. `auth = true`/`false` (boolean form) is skipped.
+pub(super) fn validate_auth_keys(config: &Table) -> Result<()> {
+    let Ok(auth_tbl) = get_table(config, "auth") else {
+        return Ok(());
+    };
+
+    deny_unknown_keys(&auth_tbl, "auth", AUTH_KEYS)?;
+
+    let Ok(methods_tbl) = get_table(&auth_tbl, "methods") else {
+        return Ok(());
+    };
+
+    for method in methods_tbl.sequence_values::<Table>().flatten() {
+        validate_method_keys(&method)?;
+    }
+
+    Ok(())
+}
+
+/// Validate one `methods` entry against the keys valid for its `type`.
+fn validate_method_keys(method: &Table) -> Result<()> {
+    let ty: String = method
+        .get::<Option<String>>("type")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
+    let allowed: &[&str] = match ty.as_str() {
+        "password_login" => &["type", "mfa", "verify_email", "forgot_password"],
+        "bearer" | "session_cookie" => &["type", "surfaces"],
+        "strategy" => &["type", "name", "authenticate", "activates_on", "surfaces"],
+        other => bail!(
+            "Unknown auth method type '{other}'. Valid types: password_login, bearer, session_cookie, strategy"
+        ),
+    };
+
+    deny_unknown_keys(method, &format!("{ty} auth method"), allowed)?;
+
+    if let Ok(activation) = get_table(method, "activates_on") {
+        deny_unknown_keys(&activation, "activates_on", &["header", "always"])?;
+    }
+
+    Ok(())
+}
 
 pub(super) fn parse_collection_auth(config: &Table) -> Option<Auth> {
     let val: Value = config.get("auth").ok()?;
@@ -241,6 +293,80 @@ mod tests {
             }
             _ => panic!("expected Strategy"),
         }
+    }
+
+    fn auth_config(lua: &Lua, build: impl FnOnce(&Table)) -> Result<()> {
+        let config = lua.create_table().unwrap();
+        let auth = lua.create_table().unwrap();
+        build(&auth);
+        config.set("auth", auth).unwrap();
+        validate_auth_keys(&config)
+    }
+
+    #[test]
+    fn validate_rejects_old_top_level_keys() {
+        let lua = Lua::new();
+        // `disable_local` / `strategies` were removed in the methods migration.
+        let err = auth_config(&lua, |a| {
+            a.set("disable_local", true).unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("disable_local"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_unknown_method_key_per_type() {
+        let lua = Lua::new();
+        // `surfaces` is not valid on password_login.
+        let err = auth_config(&lua, |a| {
+            let methods = lua.create_table().unwrap();
+            let m = lua.create_table().unwrap();
+            m.set("type", "password_login").unwrap();
+            let s = lua.create_table().unwrap();
+            s.set(1, "grpc").unwrap();
+            m.set("surfaces", s).unwrap();
+            methods.set(1, m).unwrap();
+            a.set("methods", methods).unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("surfaces"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_unknown_method_type() {
+        let lua = Lua::new();
+        let err = auth_config(&lua, |a| {
+            let methods = lua.create_table().unwrap();
+            let m = lua.create_table().unwrap();
+            m.set("type", "password").unwrap(); // typo for password_login
+            methods.set(1, m).unwrap();
+            a.set("methods", methods).unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("password"), "{err}");
+    }
+
+    #[test]
+    fn validate_accepts_default_method_shape() {
+        let lua = Lua::new();
+        let result = auth_config(&lua, |a| {
+            a.set("enabled", true).unwrap();
+            a.set("token_expiry", 3600).unwrap();
+            let methods = lua.create_table().unwrap();
+            let m = lua.create_table().unwrap();
+            m.set("type", "strategy").unwrap();
+            m.set("name", "api-key").unwrap();
+            m.set("authenticate", "hooks.auth.api_key").unwrap();
+            let act = lua.create_table().unwrap();
+            act.set("header", "x-api-key").unwrap();
+            m.set("activates_on", act).unwrap();
+            methods.set(1, m).unwrap();
+            a.set("methods", methods).unwrap();
+        });
+        assert!(result.is_ok(), "{result:?}");
     }
 
     #[test]

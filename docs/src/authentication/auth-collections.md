@@ -13,17 +13,24 @@ crap.collections.define("users", {
 
 ## Auth Config Table
 
+An auth collection declares an ordered **`methods`** list describing how a request can
+prove identity. See [Auth Methods](auth-methods.md) for the full method reference.
+
 ```lua
 crap.collections.define("users", {
     auth = {
+        enabled = true,
         token_expiry = 3600,       -- 1 hour (default: 7200 = 2 hours)
-        disable_local = false,      -- set true to disable password login
-        strategies = {
+        methods = crap.auth.with_defaults({
+            -- standard password_login + bearer + session_cookie, plus:
             {
+                type = "strategy",
                 name = "api-key",
                 authenticate = "hooks.auth.api_key_check",
+                activates_on = { header = "x-api-key" },
+                surfaces = { "grpc" },
             },
-        },
+        }),
     },
     -- ...
 })
@@ -33,11 +40,14 @@ crap.collections.define("users", {
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
+| `enabled` | boolean | `true` | Whether auth is active for this collection. Set `false` to disable. |
 | `token_expiry` | integer | `7200` | JWT token lifetime in seconds. Overrides the global `[auth] token_expiry`. |
-| `disable_local` | boolean | `false` | When `true`, the password login form is hidden. Only custom strategies can authenticate. |
-| `verify_email` | boolean | `false` | When `true`, new users must verify their email before logging in. Requires email configuration. |
-| `forgot_password` | boolean | `true` | When `true`, enables the "Forgot password?" flow. Requires email configuration. |
-| `strategies` | AuthStrategy[] | `{}` | Custom auth strategies. See [Custom Strategies](custom-strategies.md). |
+| `methods` | AuthMethod[] | default set | Ordered list of auth methods (`password_login`, `bearer`, `session_cookie`, `strategy`). When `enabled = true` and `methods` is empty, the default set is used. See [Auth Methods](auth-methods.md). |
+
+> The password-only knobs (`mfa`, `verify_email`, `forgot_password`) now live on the
+> `password_login` **method** entry, not at the top level. To disable password login,
+> omit the `password_login` method instead of the former `disable_local` flag; custom
+> authenticators are `strategy` methods rather than a top-level `strategies` list.
 
 ## Email Auto-Injection
 

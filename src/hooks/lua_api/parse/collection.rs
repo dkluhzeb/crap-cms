@@ -12,7 +12,7 @@ use crate::{
 };
 
 use super::{
-    auth::parse_collection_auth,
+    auth::{parse_collection_auth, validate_auth_keys},
     helpers::{deny_unknown_keys, get_bool, get_string, get_table},
     shared::{
         parse_access_config, parse_fields_section, parse_hooks_section, parse_indexes,
@@ -44,6 +44,8 @@ fn validate_collection_nested_keys(config: &Table) -> Result<()> {
     if let Ok(upload_tbl) = get_table(config, "upload") {
         validate_upload_keys(&upload_tbl)?;
     }
+
+    validate_auth_keys(config)?;
 
     Ok(())
 }

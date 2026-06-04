@@ -65,15 +65,19 @@ auth = true
 
 -- With options
 auth = {
+    enabled = true,
     token_expiry = 3600,
-    disable_local = false,
-    strategies = {
-        { name = "api-key", authenticate = "hooks.auth.api_key_check" },
-    },
+    methods = crap.auth.with_defaults({
+        { type = "strategy",
+          name = "api-key",
+          authenticate = "hooks.auth.api_key_check",
+          activates_on = { header = "x-api-key" },
+          surfaces = { "grpc" } },
+    }),
 }
 ```
 
-See [Auth Collections](../authentication/auth-collections.md) for the full schema.
+See [Auth Collections](../authentication/auth-collections.md) and [Auth Methods](../authentication/auth-methods.md) for the full schema.
 
 ## `upload`
 

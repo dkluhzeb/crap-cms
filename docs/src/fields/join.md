@@ -33,13 +33,12 @@ Given an `authors` collection and a `posts` collection where each post has a `re
 
 ```lua
 -- collections/authors.lua
-return {
-    slug = "authors",
+crap.collections.define("authors", {
     fields = {
         crap.fields.text({ name = "name", required = true }),
         crap.fields.join({ name = "posts", collection = "posts", on = "author" }),
     },
-}
+})
 ```
 
 When editing an author, the "posts" join field displays all posts where `posts.author` equals the current author's ID.
