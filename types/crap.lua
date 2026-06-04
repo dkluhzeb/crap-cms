@@ -150,6 +150,7 @@ crap = {}
 --- MCP-specific configuration for a collection or global.
 --- @class crap.McpCollectionConfig
 --- @field description? string Description used in MCP tool descriptions for this collection/global.
+--- @field operations? table<string, string> Per-operation description overrides, keyed by operation name (e.g. `"create"`, `"delete"`, `"find"`; for globals `"read"` / `"update"` / `"validate"`). Overrides the auto-generated description for that tool.
 
 --- Custom singular/plural labels for row items (arrays/blocks).
 --- @class crap.FieldAdminLabels

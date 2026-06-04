@@ -85,7 +85,16 @@ pub(super) fn parse_mcp_section(config: &Table) -> McpConfig {
     let Ok(mcp_tbl) = get_table(config, "mcp") else {
         return McpConfig::default();
     };
-    McpConfig::new(get_string(&mcp_tbl, "description"))
+
+    let mut mcp = McpConfig::new(get_string(&mcp_tbl, "description"));
+
+    if let Ok(ops_tbl) = get_table(&mcp_tbl, "operations") {
+        for (k, v) in ops_tbl.pairs::<String, String>().flatten() {
+            mcp.operations.insert(k, v);
+        }
+    }
+
+    mcp
 }
 
 /// Parse result for the `live` config field.
@@ -228,6 +237,40 @@ mod tests {
         collection::LiveSetting,
     };
     use mlua::Lua;
+
+    #[test]
+    fn test_parse_mcp_section_absent() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let mcp = parse_mcp_section(&tbl);
+        assert!(mcp.description.is_none());
+        assert!(mcp.operations.is_empty());
+    }
+
+    #[test]
+    fn test_parse_mcp_section_description_and_operations() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let mcp_tbl = lua.create_table().unwrap();
+        mcp_tbl.set("description", "Blog posts").unwrap();
+
+        let ops = lua.create_table().unwrap();
+        ops.set("delete", "Purges permanently").unwrap();
+        ops.set("create", "Drafts a new post").unwrap();
+        mcp_tbl.set("operations", ops).unwrap();
+        tbl.set("mcp", mcp_tbl).unwrap();
+
+        let mcp = parse_mcp_section(&tbl);
+        assert_eq!(mcp.description.as_deref(), Some("Blog posts"));
+        assert_eq!(
+            mcp.operations.get("delete").map(String::as_str),
+            Some("Purges permanently")
+        );
+        assert_eq!(
+            mcp.operations.get("create").map(String::as_str),
+            Some("Drafts a new post")
+        );
+    }
 
     #[test]
     fn test_parse_versions_config_true() {

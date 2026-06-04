@@ -5,6 +5,15 @@ crap.collections.define("posts", {
   live = true,
   soft_delete = true,
   soft_delete_retention = "30d",
+  -- MCP tool context for AI assistants. `description` is appended to every
+  -- generated tool; `operations` overrides the description of individual
+  -- tools (drafts/soft-delete hints are added automatically otherwise).
+  mcp = {
+    description = "Blog posts with title, content, author, and publishing metadata.",
+    operations = {
+      delete = "Soft-delete a post (recoverable for 30 days). Pass force_hard_delete=true to purge it immediately.",
+    },
+  },
   admin = {
     use_as_title = "title",
     default_sort = "-published_at",

@@ -119,64 +119,143 @@ pub(in crate::mcp) fn generate_tools(
     tools
 }
 
+/// Append the collection/global-level `mcp.description` (when set) to an
+/// operation description, so the collection's context reaches every tool.
+fn append_collection_desc(mut s: String, collection_desc: Option<&str>) -> String {
+    if let Some(d) = collection_desc {
+        if !s.ends_with('.') {
+            s.push('.');
+        }
+        s.push(' ');
+        s.push_str(d);
+    }
+    s
+}
+
+/// Auto-generated description for a collection CRUD op, enriched with the
+/// collection's own semantics (drafts, soft-delete) so an MCP client knows the
+/// non-obvious behavior without configuration.
+fn default_op_description(op: CrudOp, def: &CollectionDefinition, label: &str) -> String {
+    let drafts = ". Pass draft=true to save as an unpublished draft";
+    let hard = ". Soft-deletes by default; pass force_hard_delete=true to remove permanently";
+    match op {
+        CrudOp::Find => format!("Query {label} documents"),
+        CrudOp::FindById => format!("Get a single {label} document by ID"),
+        CrudOp::Create => {
+            let mut s = format!("Create a new {label} document");
+            if def.has_drafts() {
+                s.push_str(drafts);
+            }
+            s
+        }
+        CrudOp::CreateMany => {
+            let mut s = format!("Bulk create multiple {label} documents in batched transactions");
+            if def.has_drafts() {
+                s.push_str(drafts);
+            }
+            s
+        }
+        CrudOp::UpdateMany => format!("Bulk update multiple {label} documents matching a filter"),
+        CrudOp::DeleteMany => {
+            let mut s = format!("Bulk delete multiple {label} documents matching a filter");
+            if def.has_soft_delete() {
+                s.push_str(hard);
+            }
+            s
+        }
+        CrudOp::Update => {
+            let mut s = format!("Update an existing {label} document");
+            if def.has_drafts() {
+                s.push_str(drafts);
+            }
+            s
+        }
+        CrudOp::Validate => {
+            format!("Validate {label} document data without persisting — returns per-field errors")
+        }
+        CrudOp::Delete => {
+            let mut s = format!("Delete a {label} document by ID");
+            if def.has_soft_delete() {
+                s.push_str(hard);
+            }
+            s
+        }
+        CrudOp::Count => format!("Count {label} documents matching filters"),
+        CrudOp::Undelete => format!("Restore a soft-deleted {label} document"),
+        CrudOp::Unpublish => format!("Unpublish a {label} document (set to draft)"),
+        CrudOp::ListVersions => format!("List version history for a {label} document"),
+        CrudOp::RestoreVersion => format!("Restore a {label} document to a specific version"),
+    }
+}
+
+/// Description for one collection tool: a per-operation override
+/// (`mcp.operations`) if present, else the auto-generated default — then the
+/// collection-level `mcp.description` appended for context.
+fn collection_tool_desc(op: CrudOp, def: &CollectionDefinition, label: &str) -> String {
+    let body = def
+        .mcp
+        .operations
+        .get(op.name())
+        .cloned()
+        .unwrap_or_else(|| default_op_description(op, def, label));
+    append_collection_desc(body, def.mcp.description.as_deref())
+}
+
 /// All MCP tools for a single collection: CRUD + soft-delete/version variants.
 fn collection_tools(slug: &str, def: &CollectionDefinition) -> Vec<ToolDefinition> {
     let label = def.display_name();
-    let base_desc = def.mcp.description.as_deref().map_or_else(
-        || format!("CRUD operations on {label}"),
-        std::string::ToString::to_string,
-    );
+    let desc = |op| collection_tool_desc(op, def, label);
     let schema = |op| collection_input_schema(def, op);
 
     let mut tools = vec![
         ToolDefinition::new(
             format!("find_{slug}"),
-            format!("Query {label} documents. {base_desc}"),
+            desc(CrudOp::Find),
             schema(CrudOp::Find),
         ),
         ToolDefinition::new(
             format!("find_by_id_{slug}"),
-            format!("Get a single {label} document by ID"),
+            desc(CrudOp::FindById),
             schema(CrudOp::FindById),
         ),
         ToolDefinition::new(
             format!("create_{slug}"),
-            format!("Create a new {label} document"),
+            desc(CrudOp::Create),
             schema(CrudOp::Create),
         ),
         ToolDefinition::new(
             format!("create_many_{slug}"),
-            format!("Bulk create multiple {label} documents in batched transactions"),
+            desc(CrudOp::CreateMany),
             schema(CrudOp::CreateMany),
         ),
         ToolDefinition::new(
             format!("update_many_{slug}"),
-            format!("Bulk update multiple {label} documents matching a filter"),
+            desc(CrudOp::UpdateMany),
             schema(CrudOp::UpdateMany),
         ),
         ToolDefinition::new(
             format!("delete_many_{slug}"),
-            format!("Bulk delete multiple {label} documents matching a filter"),
+            desc(CrudOp::DeleteMany),
             schema(CrudOp::DeleteMany),
         ),
         ToolDefinition::new(
             format!("update_{slug}"),
-            format!("Update an existing {label} document"),
+            desc(CrudOp::Update),
             schema(CrudOp::Update),
         ),
         ToolDefinition::new(
             format!("validate_{slug}"),
-            format!("Validate {label} document data without persisting — returns per-field errors"),
+            desc(CrudOp::Validate),
             schema(CrudOp::Validate),
         ),
         ToolDefinition::new(
             format!("delete_{slug}"),
-            format!("Delete a {label} document by ID"),
+            desc(CrudOp::Delete),
             schema(CrudOp::Delete),
         ),
         ToolDefinition::new(
             format!("count_{slug}"),
-            format!("Count {label} documents matching filters"),
+            desc(CrudOp::Count),
             schema(CrudOp::Count),
         ),
     ];
@@ -184,7 +263,7 @@ fn collection_tools(slug: &str, def: &CollectionDefinition) -> Vec<ToolDefinitio
     if def.has_soft_delete() {
         tools.push(ToolDefinition::new(
             format!("undelete_{slug}"),
-            format!("Restore a soft-deleted {label} document"),
+            desc(CrudOp::Undelete),
             schema(CrudOp::Undelete),
         ));
     }
@@ -192,17 +271,17 @@ fn collection_tools(slug: &str, def: &CollectionDefinition) -> Vec<ToolDefinitio
     if def.versions.is_some() {
         tools.push(ToolDefinition::new(
             format!("unpublish_{slug}"),
-            format!("Unpublish a {label} document (set to draft)"),
+            desc(CrudOp::Unpublish),
             schema(CrudOp::Unpublish),
         ));
         tools.push(ToolDefinition::new(
             format!("list_versions_{slug}"),
-            format!("List version history for a {label} document"),
+            desc(CrudOp::ListVersions),
             schema(CrudOp::ListVersions),
         ));
         tools.push(ToolDefinition::new(
             format!("restore_version_{slug}"),
-            format!("Restore a {label} document to a specific version"),
+            desc(CrudOp::RestoreVersion),
             schema(CrudOp::RestoreVersion),
         ));
     }
@@ -214,20 +293,34 @@ fn collection_tools(slug: &str, def: &CollectionDefinition) -> Vec<ToolDefinitio
 /// avoid name collisions with collection tools).
 fn global_tools(slug: &str, def: &GlobalDefinition) -> Vec<ToolDefinition> {
     let label = def.display_name();
+    let collection_desc = def.mcp.description.as_deref();
+
+    // Per-operation override (keyed by `read` / `update` / `validate`) else the
+    // default, then the global-level `mcp.description` appended for context.
+    let desc = |key: &str, default: String| {
+        let body = def.mcp.operations.get(key).cloned().unwrap_or(default);
+        append_collection_desc(body, collection_desc)
+    };
+
     vec![
         ToolDefinition::new(
             format!("global_read_{slug}"),
-            format!("Read the {label} global document"),
+            desc("read", format!("Read the {label} global document")),
             global_input_schema(def, CrudOp::Find),
         ),
         ToolDefinition::new(
             format!("global_update_{slug}"),
-            format!("Update the {label} global document"),
+            desc("update", format!("Update the {label} global document")),
             global_input_schema(def, CrudOp::Update),
         ),
         ToolDefinition::new(
             format!("global_validate_{slug}"),
-            format!("Validate {label} global data without persisting — returns per-field errors"),
+            desc(
+                "validate",
+                format!(
+                    "Validate {label} global data without persisting — returns per-field errors"
+                ),
+            ),
             global_input_schema(def, CrudOp::Validate),
         ),
     ]
@@ -863,5 +956,120 @@ mod tests {
         .expect("global validate should run");
         let parsed: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(parsed["valid"], true);
+    }
+
+    fn collection_desc(def: &CollectionDefinition, op: CrudOp) -> String {
+        collection_tool_desc(op, def, def.display_name())
+    }
+
+    #[test]
+    fn default_op_description_adds_draft_and_soft_delete_hints() {
+        use crate::core::collection::VersionsConfig;
+
+        let mut def = CollectionDefinition::new("posts");
+        def.versions = Some(VersionsConfig::new(true, 0));
+        def.soft_delete = true;
+
+        assert!(collection_desc(&def, CrudOp::Create).contains("draft=true"));
+        assert!(collection_desc(&def, CrudOp::CreateMany).contains("draft=true"));
+        assert!(collection_desc(&def, CrudOp::Update).contains("draft=true"));
+        let del = collection_desc(&def, CrudOp::Delete);
+        assert!(del.contains("force_hard_delete=true"), "{del}");
+        assert!(collection_desc(&def, CrudOp::DeleteMany).contains("force_hard_delete=true"));
+    }
+
+    #[test]
+    fn default_op_description_omits_hints_without_features() {
+        let def = CollectionDefinition::new("posts");
+
+        assert!(!collection_desc(&def, CrudOp::Create).contains("draft=true"));
+        assert!(!collection_desc(&def, CrudOp::Delete).contains("force_hard_delete"));
+    }
+
+    #[test]
+    fn collection_description_is_appended_to_every_tool() {
+        let mut def = CollectionDefinition::new("posts");
+        def.mcp.description = Some("Blog posts.".to_string());
+
+        for op in [CrudOp::Find, CrudOp::Create, CrudOp::Delete, CrudOp::Count] {
+            assert!(
+                collection_desc(&def, op).ends_with("Blog posts."),
+                "{op:?} did not carry the collection description"
+            );
+        }
+    }
+
+    #[test]
+    fn per_operation_override_replaces_default_then_appends_description() {
+        let mut def = CollectionDefinition::new("posts");
+        def.mcp.description = Some("Blog posts.".to_string());
+        def.mcp
+            .operations
+            .insert("delete".to_string(), "Purges permanently".to_string());
+
+        let del = collection_desc(&def, CrudOp::Delete);
+        assert_eq!(del, "Purges permanently. Blog posts.");
+        // Other ops keep their auto-generated body.
+        assert!(collection_desc(&def, CrudOp::Find).starts_with("Query posts documents"));
+    }
+
+    #[test]
+    fn global_tools_honor_override_and_description() {
+        let mut def = GlobalDefinition::new("settings");
+        def.mcp.description = Some("Site settings.".to_string());
+        def.mcp
+            .operations
+            .insert("read".to_string(), "Fetch the live config".to_string());
+
+        let tools = global_tools("settings", &def);
+        let read = tools
+            .iter()
+            .find(|t| t.name == "global_read_settings")
+            .unwrap();
+        assert_eq!(
+            read.description.as_deref(),
+            Some("Fetch the live config. Site settings.")
+        );
+        let update = tools
+            .iter()
+            .find(|t| t.name == "global_update_settings")
+            .unwrap();
+        assert!(
+            update
+                .description
+                .as_deref()
+                .unwrap()
+                .ends_with("Site settings.")
+        );
+    }
+
+    #[test]
+    fn collection_operation_names_stay_in_sync_with_crud_ops() {
+        use crate::core::collection::COLLECTION_OPERATIONS;
+
+        let ops = [
+            CrudOp::Create,
+            CrudOp::CreateMany,
+            CrudOp::Update,
+            CrudOp::UpdateMany,
+            CrudOp::Validate,
+            CrudOp::Find,
+            CrudOp::FindById,
+            CrudOp::Delete,
+            CrudOp::DeleteMany,
+            CrudOp::Undelete,
+            CrudOp::Unpublish,
+            CrudOp::Count,
+            CrudOp::ListVersions,
+            CrudOp::RestoreVersion,
+        ];
+        for op in ops {
+            assert!(
+                COLLECTION_OPERATIONS.contains(&op.name()),
+                "CrudOp::{op:?} name '{}' is not a valid operation key",
+                op.name()
+            );
+        }
+        assert_eq!(ops.len(), COLLECTION_OPERATIONS.len(), "op count drift");
     }
 }

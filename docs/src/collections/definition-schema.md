@@ -20,7 +20,7 @@ Full reference for every property accepted by `crap.collections.define(slug, con
 | `soft_delete` | boolean | `false` | Enable soft deletes (see [Soft Deletes](soft-deletes.md)) |
 | `soft_delete_retention` | string | `nil` | Auto-purge retention period (e.g., `"30d"`). Requires `soft_delete = true`. |
 | `live` | boolean or string | `nil` | Live update broadcasting (see [Live Updates](../live-updates/overview.md)) |
-| `mcp` | table | `{}` | MCP tool config. `{ description = "..." }` for MCP tool descriptions. |
+| `mcp` | table | `{}` | MCP tool config. `description` is appended to every generated tool; `operations` is an optional `{ op = "..." }` map of per-operation description overrides (see [MCP overview](../mcp/overview.md#per-operation-descriptions)). |
 | `indexes` | IndexDefinition[] | `{}` | Compound indexes (see [Indexes](#indexes) below) |
 
 ## `admin`

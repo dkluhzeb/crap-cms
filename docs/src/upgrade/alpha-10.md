@@ -231,6 +231,19 @@ matching the gRPC and Lua write surfaces. These are reserved top-level
 arguments, excluded from the document's field data like the existing
 `id` / `password`. See [MCP overview](../mcp/overview.md).
 
+### Per-operation MCP tool descriptions
+
+A collection or global can override the description of an individual MCP
+tool via `mcp = { operations = { delete = "...", create = "..." } }`
+(keyed by `find` / `create` / `delete` / … for collections, `read` /
+`update` / `validate` for globals). The collection-level `mcp.description`
+now also folds into **every** generated tool (not just `find`), and the
+auto-generated descriptions mention `draft=true` (drafts) and
+`force_hard_delete` (soft-delete) where applicable — so no configuration
+is needed to surface the non-obvious behavior. See
+[MCP overview](../mcp/overview.md#per-operation-descriptions). Additive;
+no action needed.
+
 ### Validate without persisting, on every surface
 
 Collections and globals can now be validated without writing:

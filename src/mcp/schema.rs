@@ -23,6 +23,29 @@ pub(in crate::mcp) enum CrudOp {
     RestoreVersion,
 }
 
+impl CrudOp {
+    /// Canonical operation key — matches the tool-name verb and the key used
+    /// for per-operation MCP description overrides (`mcp.operations`).
+    pub(in crate::mcp) fn name(self) -> &'static str {
+        match self {
+            CrudOp::Create => "create",
+            CrudOp::CreateMany => "create_many",
+            CrudOp::Update => "update",
+            CrudOp::UpdateMany => "update_many",
+            CrudOp::Validate => "validate",
+            CrudOp::Find => "find",
+            CrudOp::FindById => "find_by_id",
+            CrudOp::Delete => "delete",
+            CrudOp::DeleteMany => "delete_many",
+            CrudOp::Undelete => "undelete",
+            CrudOp::Unpublish => "unpublish",
+            CrudOp::Count => "count",
+            CrudOp::ListVersions => "list_versions",
+            CrudOp::RestoreVersion => "restore_version",
+        }
+    }
+}
+
 /// Schema for Select/Radio fields, handling empty options, single, and has-many variants.
 fn select_radio_schema(field: &FieldDefinition) -> Value {
     if field.options.is_empty() {

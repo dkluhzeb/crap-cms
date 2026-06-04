@@ -205,6 +205,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   built-in default applies (`_status` if the collection has drafts, plus
   `created_at`).
 
+- **Per-operation MCP tool descriptions.** A collection or global can now
+  override the description of an individual MCP tool via
+  `mcp = { operations = { delete = "...", create = "..." } }`, keyed by
+  operation name (`find`, `create`, `delete`, … for collections;
+  `read` / `update` / `validate` for globals). An unknown operation key
+  is ignored with a startup warning. Two related improvements land
+  alongside it: the collection-level `mcp.description` is now appended to
+  **every** generated tool for that collection (previously only `find`
+  carried it), and the auto-generated descriptions now mention the
+  collection's own semantics — `create`/`update` note `draft=true` when
+  drafts are enabled, and `delete`/`delete_many` note `force_hard_delete`
+  when soft-delete is enabled — so an AI client learns the non-obvious
+  behavior without any configuration.
+
 ### Changed
 
 - **Whole-valued `number` fields now serialize as integers.** A

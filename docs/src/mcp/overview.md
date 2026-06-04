@@ -178,6 +178,10 @@ return {
 }
 ```
 
+The collection `description` is appended to **every** generated tool for
+that collection (`find`, `create`, `delete`, …), not just one — so the
+AI sees the collection's context whichever operation it is calling.
+
 ### Field level
 
 ```lua
@@ -192,6 +196,43 @@ crap.fields.select({
 
 If no `mcp.description` is set, the tool falls back to `admin.description`
 (for fields) or a generated description based on the collection label.
+
+### Per-operation descriptions
+
+Each generated tool gets an auto-written description from the collection
+label, enriched with the collection's own semantics so the AI knows the
+non-obvious behavior without configuration:
+
+- **drafts enabled** → `create` / `create_many` / `update` note that
+  `draft=true` saves an unpublished draft.
+- **soft-delete enabled** → `delete` / `delete_many` note that the
+  default is a soft delete and `force_hard_delete=true` removes
+  permanently.
+
+To override the description for a specific operation, set
+`mcp.operations` keyed by operation name. The override replaces the
+auto-generated body; the collection-level `description` is still
+appended after it.
+
+```lua
+return {
+  slug = "posts",
+  mcp = {
+    description = "Blog posts.",
+    operations = {
+      delete = "Archive a post. Soft-deletes by default; force_hard_delete purges it.",
+      create = "Draft a new post — pass draft=true to keep it unpublished.",
+    },
+  },
+  fields = { ... }
+}
+```
+
+Valid collection operation keys: `find`, `find_by_id`, `create`,
+`create_many`, `update`, `update_many`, `validate`, `delete`,
+`delete_many`, `count`, `undelete`, `unpublish`, `list_versions`,
+`restore_version`. For **globals** the keys are `read`, `update`, and
+`validate`. An unknown key is ignored with a startup warning.
 
 ## Collection Filtering
 

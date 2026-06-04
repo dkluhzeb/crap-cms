@@ -72,9 +72,7 @@ mod tests {
     fn test_global_config_to_lua_mcp_description() {
         let lua = Lua::new();
         let mut def = GlobalDefinition::new("settings");
-        def.mcp = McpConfig {
-            description: Some("Global site settings".to_string()),
-        };
+        def.mcp = McpConfig::new(Some("Global site settings".to_string()));
         let tbl = global_config_to_lua(&lua, &def).unwrap();
         let mcp: mlua::Table = tbl.get("mcp").unwrap();
         assert_eq!(

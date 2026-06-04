@@ -24,5 +24,5 @@ pub use hooks::{Hooks, HooksBuilder};
 pub use index_definition::IndexDefinition;
 pub use labels::Labels;
 pub use live::{LiveMode, LiveSetting};
-pub use mcp_config::McpConfig;
+pub use mcp_config::{COLLECTION_OPERATIONS, GLOBAL_OPERATIONS, McpConfig};
 pub use versions_config::VersionsConfig;

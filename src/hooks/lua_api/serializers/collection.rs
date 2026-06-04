@@ -65,11 +65,25 @@ pub(super) fn live_to_lua(tbl: &Table, live: Option<&LiveSetting>) -> LuaResult<
 
 /// Serialize MCP config to a Lua table.
 pub(super) fn mcp_to_lua(lua: &Lua, tbl: &Table, mcp: &McpConfig) -> LuaResult<()> {
-    if let Some(ref desc) = mcp.description {
-        let mcp_tbl = lua.create_table()?;
-        mcp_tbl.set("description", desc.as_str())?;
-        tbl.set("mcp", mcp_tbl)?;
+    if mcp.description.is_none() && mcp.operations.is_empty() {
+        return Ok(());
     }
+
+    let mcp_tbl = lua.create_table()?;
+
+    if let Some(ref desc) = mcp.description {
+        mcp_tbl.set("description", desc.as_str())?;
+    }
+
+    if !mcp.operations.is_empty() {
+        let ops = lua.create_table()?;
+        for (k, v) in &mcp.operations {
+            ops.set(k.as_str(), v.as_str())?;
+        }
+        mcp_tbl.set("operations", ops)?;
+    }
+
+    tbl.set("mcp", mcp_tbl)?;
 
     Ok(())
 }
@@ -325,15 +339,28 @@ mod tests {
         let lua = Lua::new();
         let mut def = CollectionDefinition::new("posts");
         def.timestamps = false;
-        def.mcp = McpConfig {
-            description: Some("Manages blog posts".to_string()),
-        };
+        def.mcp = McpConfig::new(Some("Manages blog posts".to_string()));
         let tbl = collection_config_to_lua(&lua, &def).unwrap();
         let mcp: mlua::Table = tbl.get("mcp").unwrap();
         assert_eq!(
             mcp.get::<String>("description").unwrap(),
             "Manages blog posts"
         );
+    }
+
+    #[test]
+    fn test_collection_config_to_lua_mcp_operations() {
+        let lua = Lua::new();
+        let mut def = CollectionDefinition::new("posts");
+        def.timestamps = false;
+        def.mcp
+            .operations
+            .insert("delete".to_string(), "Purges permanently".to_string());
+
+        let tbl = collection_config_to_lua(&lua, &def).unwrap();
+        let mcp: mlua::Table = tbl.get("mcp").unwrap();
+        let ops: mlua::Table = mcp.get("operations").unwrap();
+        assert_eq!(ops.get::<String>("delete").unwrap(), "Purges permanently");
     }
 
     #[test]
