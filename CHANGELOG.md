@@ -89,6 +89,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   rather than silently corrupting one of the two tables during
   migration.
 
+- **Malformed upload config is rejected at definition time.** Several
+  upload-config inputs that were previously silently dropped or coerced
+  now fail loudly when a collection is defined: an `image_sizes` entry
+  missing `name`/`width`/`height` (the whole entry used to vanish), an
+  unknown image `fit` value such as `"covr"` (used to fall back to
+  `cover`), and a malformed `upload.max_file_size` — a negative integer,
+  an unparseable size string like `"10MBB"`, or a wrong-typed value
+  (used to silently inherit the global `[upload] max_file_size`). Valid
+  `fit` values remain `cover` / `contain` / `inside` / `fill`; an absent
+  `max_file_size` still inherits the global default.
+
 ### Fixed
 
 - **Lua `find` / `find_by_id` honor the configured population depth

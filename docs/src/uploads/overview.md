@@ -30,6 +30,7 @@ crap.collections.define("media", {
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
+| `enabled` | boolean | `true` | Set to `false` to disable uploads while keeping the config table (equivalent to `upload = false`). |
 | `mime_types` | string[] | `{}` (any) | MIME type allowlist. Supports glob patterns (`"image/*"`). Empty = allow all. |
 | `max_file_size` | integer/string | global default | Max file size. Accepts bytes (integer) or human-readable (`"10MB"`, `"1GB"`). Overrides `[upload] max_file_size` in `crap.toml`. |
 | `image_sizes` | ImageSize[] | `{}` | Resize definitions for image uploads. See [Image Processing](image-processing.md). |

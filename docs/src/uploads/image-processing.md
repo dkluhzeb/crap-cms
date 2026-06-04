@@ -64,11 +64,11 @@ format_options = {
 When `queue = true`:
 
 1. The upload completes immediately without generating that format variant
-2. A queue entry is inserted into the `_crap_image_queue` table
-3. The scheduler picks up pending entries and processes them in the background
+2. A `_system_image_convert` job is enqueued on the `images` queue (stored in the unified `_crap_jobs` table, with the same retry/heartbeat/recovery story as every other job)
+3. The scheduler picks up pending jobs and processes them in the background
 4. Once complete, the document's URL column is updated with the new file path
 
-This is useful for AVIF which is significantly slower to encode than WebP. The `queue` option is per-format — you can queue AVIF while keeping WebP synchronous.
+This is useful for AVIF which is significantly slower to encode than WebP. The `queue` option is per-format — you can queue AVIF while keeping WebP synchronous. Give image work its own concurrency knob with `[jobs.queues.images]` in `crap.toml`.
 
 Use the [`images` CLI command](../cli/flags.md#images--manage-image-processing-queue) to inspect and manage the queue:
 
@@ -93,17 +93,24 @@ Non-image files (PDFs, etc.) skip steps 2-4.
 
 ## Decompression Bomb Protection
 
-Before any resizing or format conversion, image dimensions are checked against a hard
-limit of **100 megapixels** total (`width × height`). Images exceeding this limit are
-rejected with an error like `Image too large: 12000x9000 exceeds pixel limit`.
+Before any resizing or format conversion, image dimensions are checked against two
+guards. Both protect the server from "decompression bomb" inputs — small, highly
+compressed files that decode into enormous bitmaps, which would otherwise consume
+gigabytes of RAM during resizing.
 
-This protects the server from "decompression bomb" inputs — small, highly compressed
-files that decode into enormous bitmaps (e.g. a 50 KB PNG decoding to a 50,000 × 50,000
-canvas), which would otherwise consume gigabytes of RAM during resizing.
+1. **Absolute pixel limit — 100 megapixels** (`width × height`). Images exceeding this
+   are rejected with `Image too large: 12000x9000 exceeds pixel limit`. For reference: a
+   12,000 × 8,000 pixel image (96 MP) is accepted; a 12,000 × 9,000 image (108 MP) is
+   rejected.
+2. **Compression-ratio cap — 500 pixels per byte.** If the decoded pixel count divided by
+   the file's byte length exceeds 500, the image is rejected with
+   `Image compression ratio too high: ... Likely a decompression bomb.` This catches files
+   that stay under 100 MP but still decode far out of proportion to their size (e.g. a tiny
+   header-only stream claiming 8,000 × 8,000). Real photographs sit in the single-digit
+   pixels-per-byte range, so normal uploads pass.
 
-The limit is fixed at 100 megapixels and is not configurable. For reference: a 12,000 ×
-8,000 pixel image (96 MP) is accepted; a 12,000 × 9,000 image (108 MP) is rejected.
-File-size and MIME-type checks are independent and run alongside this check.
+Both limits are fixed and not configurable. File-size and MIME-type checks are independent
+and run alongside these checks.
 
 ## Admin Thumbnail
 

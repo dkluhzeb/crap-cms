@@ -1,6 +1,6 @@
 //! Parsing functions for collection upload configuration.
 
-use mlua::{Result as LuaResult, Table, Value};
+use mlua::{Error::RuntimeError, Result as LuaResult, Table, Value};
 
 use crate::{
     config::parse_filesize_string,
@@ -37,19 +37,10 @@ pub(super) fn parse_collection_upload(config: &Table) -> LuaResult<Option<Collec
                 Vec::new()
             };
 
-            let max_file_size = match tbl.get::<mlua::Value>("max_file_size") {
-                // Negative integer max_file_size is malformed; reject rather
-                // than wrapping into a giant u64 limit.
-                Ok(mlua::Value::Integer(n)) => u64::try_from(n).ok(),
-                Ok(mlua::Value::String(s)) => {
-                    let text = s.to_str().ok().map(|s| s.to_string());
-                    text.and_then(|t| parse_filesize_string(&t))
-                }
-                _ => None,
-            };
+            let max_file_size = parse_max_file_size(&tbl)?;
 
             let image_sizes = if let Ok(sizes_tbl) = get_table(&tbl, "image_sizes") {
-                parse_image_sizes(&sizes_tbl)
+                parse_image_sizes(&sizes_tbl)?
             } else {
                 Vec::new()
             };
@@ -71,27 +62,94 @@ pub(super) fn parse_collection_upload(config: &Table) -> LuaResult<Option<Collec
     }
 }
 
-pub(super) fn parse_image_sizes(tbl: &Table) -> Vec<ImageSize> {
+/// Parse `upload.max_file_size`. Absent (`nil`) means "inherit the global
+/// `[upload] max_file_size`". A present-but-malformed value (negative integer,
+/// unparseable string, wrong type) is a hard error rather than a silent
+/// fall-back to the global default — parity with the strict schema-key checks.
+fn parse_max_file_size(tbl: &Table) -> LuaResult<Option<u64>> {
+    match tbl.get::<Value>("max_file_size")? {
+        Value::Nil => Ok(None),
+        Value::Integer(n) => u64::try_from(n).map(Some).map_err(|_| {
+            RuntimeError(format!(
+                "upload max_file_size must be a non-negative byte count, got {n}"
+            ))
+        }),
+        Value::String(s) => {
+            let text = s.to_str().map(|t| t.to_string()).map_err(|_| {
+                RuntimeError("upload max_file_size string is not valid UTF-8".to_string())
+            })?;
+
+            parse_filesize_string(&text).map(Some).ok_or_else(|| {
+                RuntimeError(format!(
+                    "upload max_file_size '{text}' is not a valid size \
+                     (use a byte count or a string like \"10MB\", \"1GB\")"
+                ))
+            })
+        }
+        other => Err(RuntimeError(format!(
+            "upload max_file_size must be an integer or string, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// Read a required positive pixel dimension (`width`/`height`) from an image
+/// size entry. Missing, non-integer, or non-positive values are hard errors
+/// instead of silently dropping the whole size entry.
+fn require_dimension(tbl: &Table, key: &str, size_name: &str) -> LuaResult<u32> {
+    let value = tbl.get::<Option<u32>>(key).map_err(|_| {
+        RuntimeError(format!(
+            "image size '{size_name}' has an invalid '{key}' (expected a positive integer)"
+        ))
+    })?;
+
+    match value {
+        Some(v) if v > 0 => Ok(v),
+        _ => Err(RuntimeError(format!(
+            "image size '{size_name}' is missing a positive '{key}'"
+        ))),
+    }
+}
+
+/// Parse the optional `fit` mode of an image size entry. An unknown value is a
+/// hard error (it used to silently fall back to `cover`, hiding typos).
+fn parse_fit(tbl: &Table, size_name: &str) -> LuaResult<ImageFit> {
+    match get_string(tbl, "fit").as_deref() {
+        None | Some("cover") => Ok(ImageFit::Cover),
+        Some("contain") => Ok(ImageFit::Contain),
+        Some("inside") => Ok(ImageFit::Inside),
+        Some("fill") => Ok(ImageFit::Fill),
+        Some(other) => Err(RuntimeError(format!(
+            "image size '{size_name}' has an unknown fit '{other}'. \
+             Valid values: cover, contain, inside, fill"
+        ))),
+    }
+}
+
+pub(super) fn parse_image_sizes(tbl: &Table) -> LuaResult<Vec<ImageSize>> {
     let mut sizes = Vec::new();
 
-    for size_tbl in tbl.sequence_values::<Table>().flatten() {
-        let Some(name) = get_string(&size_tbl, "name") else {
-            continue;
-        };
-        let width = size_tbl.get::<u32>("width").unwrap_or(0);
-        let height = size_tbl.get::<u32>("height").unwrap_or(0);
+    for (idx, item) in tbl.sequence_values::<Table>().enumerate() {
+        let pos = idx + 1;
 
-        if width == 0 || height == 0 {
-            continue;
-        }
+        let size_tbl = item.map_err(|_| {
+            RuntimeError(format!(
+                "image_sizes[{pos}] must be a table with name/width/height"
+            ))
+        })?;
 
-        let fit = match get_string(&size_tbl, "fit").as_deref() {
-            Some("contain") => ImageFit::Contain,
-            Some("inside") => ImageFit::Inside,
-            Some("fill") => ImageFit::Fill,
-            // "cover" or unspecified — default
-            _ => ImageFit::Cover,
+        let name = match get_string(&size_tbl, "name") {
+            Some(name) if !name.is_empty() => name,
+            _ => {
+                return Err(RuntimeError(format!(
+                    "image_sizes[{pos}] is missing a non-empty 'name'"
+                )));
+            }
         };
+
+        let width = require_dimension(&size_tbl, "width", &name)?;
+        let height = require_dimension(&size_tbl, "height", &name)?;
+        let fit = parse_fit(&size_tbl, &name)?;
 
         sizes.push(
             ImageSizeBuilder::new(name)
@@ -102,7 +160,7 @@ pub(super) fn parse_image_sizes(tbl: &Table) -> Vec<ImageSize> {
         );
     }
 
-    sizes
+    Ok(sizes)
 }
 
 pub(super) fn parse_format_options(tbl: &Table) -> LuaResult<FormatOptions> {
@@ -215,7 +273,7 @@ mod tests {
         s1.set("width", 200u32).unwrap();
         s1.set("height", 200u32).unwrap();
         tbl.set(1, s1).unwrap();
-        let sizes = parse_image_sizes(&tbl);
+        let sizes = parse_image_sizes(&tbl).unwrap();
         assert_eq!(sizes.len(), 1);
         assert_eq!(sizes[0].name, "thumbnail");
         assert_eq!(sizes[0].width, 200);
@@ -242,7 +300,7 @@ mod tests {
             s.set("fit", *fit).unwrap();
             tbl.set(i + 1, s).unwrap();
         }
-        let sizes = parse_image_sizes(&tbl);
+        let sizes = parse_image_sizes(&tbl).unwrap();
         assert_eq!(sizes.len(), 4);
         assert!(matches!(sizes[0].fit, ImageFit::Cover));
         assert!(matches!(sizes[1].fit, ImageFit::Contain));
@@ -250,20 +308,24 @@ mod tests {
         assert!(matches!(sizes[3].fit, ImageFit::Fill));
     }
 
+    /// Regression: an image size entry missing `name` is a hard error, not a
+    /// silently dropped entry. `name` is documented as required.
     #[test]
-    fn test_parse_image_sizes_skips_missing_name() {
+    fn test_parse_image_sizes_rejects_missing_name() {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         let s1 = lua.create_table().unwrap();
         s1.set("width", 200u32).unwrap();
         s1.set("height", 200u32).unwrap();
         tbl.set(1, s1).unwrap();
-        let sizes = parse_image_sizes(&tbl);
-        assert!(sizes.is_empty());
+        let err = parse_image_sizes(&tbl).unwrap_err();
+        assert!(err.to_string().contains("name"), "{err}");
     }
 
+    /// Regression: a zero/missing `width` is a hard error, not a silently
+    /// dropped entry.
     #[test]
-    fn test_parse_image_sizes_skips_zero_dimensions() {
+    fn test_parse_image_sizes_rejects_zero_width() {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         let s1 = lua.create_table().unwrap();
@@ -271,8 +333,21 @@ mod tests {
         s1.set("width", 0u32).unwrap();
         s1.set("height", 200u32).unwrap();
         tbl.set(1, s1).unwrap();
-        let sizes = parse_image_sizes(&tbl);
-        assert!(sizes.is_empty());
+        let err = parse_image_sizes(&tbl).unwrap_err();
+        assert!(err.to_string().contains("width"), "{err}");
+    }
+
+    /// Regression: a missing `width` key (not merely zero) is also rejected.
+    #[test]
+    fn test_parse_image_sizes_rejects_missing_width() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let s1 = lua.create_table().unwrap();
+        s1.set("name", "bad").unwrap();
+        s1.set("height", 200u32).unwrap();
+        tbl.set(1, s1).unwrap();
+        let err = parse_image_sizes(&tbl).unwrap_err();
+        assert!(err.to_string().contains("width"), "{err}");
     }
 
     #[test]
@@ -465,6 +540,55 @@ mod tests {
         assert_eq!(upload.max_file_size, Some(10 * 1024 * 1024));
     }
 
+    /// Absent `max_file_size` inherits the global `[upload]` default (None here).
+    #[test]
+    fn test_parse_collection_upload_max_file_size_absent_is_none() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let upload_tbl = lua.create_table().unwrap();
+        tbl.set("upload", upload_tbl).unwrap();
+        let upload = parse_collection_upload(&tbl).unwrap().unwrap();
+        assert_eq!(upload.max_file_size, None);
+    }
+
+    /// Regression: a malformed `max_file_size` string is a hard error, not a
+    /// silent fall-back to the global default.
+    #[test]
+    fn test_parse_collection_upload_max_file_size_bad_string_errors() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let upload_tbl = lua.create_table().unwrap();
+        upload_tbl.set("max_file_size", "10MBB").unwrap();
+        tbl.set("upload", upload_tbl).unwrap();
+        let err = parse_collection_upload(&tbl).unwrap_err();
+        assert!(err.to_string().contains("max_file_size"), "{err}");
+    }
+
+    /// Regression: a negative `max_file_size` is a hard error rather than
+    /// silently using the global default.
+    #[test]
+    fn test_parse_collection_upload_max_file_size_negative_errors() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let upload_tbl = lua.create_table().unwrap();
+        upload_tbl.set("max_file_size", -1i64).unwrap();
+        tbl.set("upload", upload_tbl).unwrap();
+        let err = parse_collection_upload(&tbl).unwrap_err();
+        assert!(err.to_string().contains("max_file_size"), "{err}");
+    }
+
+    /// Regression: a wrong-typed `max_file_size` (e.g. boolean) is a hard error.
+    #[test]
+    fn test_parse_collection_upload_max_file_size_wrong_type_errors() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let upload_tbl = lua.create_table().unwrap();
+        upload_tbl.set("max_file_size", true).unwrap();
+        tbl.set("upload", upload_tbl).unwrap();
+        let err = parse_collection_upload(&tbl).unwrap_err();
+        assert!(err.to_string().contains("max_file_size"), "{err}");
+    }
+
     #[test]
     fn test_parse_collection_upload_other_value_returns_none() {
         let lua = Lua::new();
@@ -509,8 +633,10 @@ mod tests {
         assert_eq!(fo.avif.as_ref().unwrap().quality, 55);
     }
 
+    /// Regression: a zero `height` is a hard error, not a silently dropped
+    /// entry.
     #[test]
-    fn test_parse_image_sizes_skips_zero_height() {
+    fn test_parse_image_sizes_rejects_zero_height() {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         let s1 = lua.create_table().unwrap();
@@ -518,12 +644,14 @@ mod tests {
         s1.set("width", 200u32).unwrap();
         s1.set("height", 0u32).unwrap();
         tbl.set(1, s1).unwrap();
-        let sizes = parse_image_sizes(&tbl);
-        assert!(sizes.is_empty());
+        let err = parse_image_sizes(&tbl).unwrap_err();
+        assert!(err.to_string().contains("height"), "{err}");
     }
 
+    /// Regression: an unknown `fit` value is a hard error. It used to silently
+    /// fall back to `cover`, hiding typos like `"covr"`.
     #[test]
-    fn test_parse_image_sizes_unknown_fit_defaults_to_cover() {
+    fn test_parse_image_sizes_rejects_unknown_fit() {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         let s = lua.create_table().unwrap();
@@ -532,9 +660,10 @@ mod tests {
         s.set("height", 400u32).unwrap();
         s.set("fit", "stretch").unwrap();
         tbl.set(1, s).unwrap();
-        let sizes = parse_image_sizes(&tbl);
-        assert_eq!(sizes.len(), 1);
-        assert!(matches!(sizes[0].fit, ImageFit::Cover));
+        let err = parse_image_sizes(&tbl).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("stretch"), "should name the bad value: {msg}");
+        assert!(msg.contains("fit"), "should mention fit: {msg}");
     }
 
     #[test]
