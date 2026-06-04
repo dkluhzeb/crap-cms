@@ -53,6 +53,7 @@ Every field type accepts these properties:
 | `admin` | table | `{}` | Admin UI display options. |
 | `hooks` | table | `{}` | Per-field lifecycle hooks. |
 | `access` | table | `{}` | Per-field access control. |
+| `mcp` | table | `{}` | MCP-specific options. `{ description = "..." }` sets this field's description in MCP tool input schemas (so AI assistants know what the field means). Falls back to `admin.description` when unset. See [MCP — field level](../mcp/overview.md#field-level). |
 
 ### Reserved field names
 
