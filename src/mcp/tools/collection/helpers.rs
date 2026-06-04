@@ -1,7 +1,7 @@
 //! Shared helpers for collection CRUD tool implementations.
 
+use anyhow::{Result, bail};
 use serde_json::{Map, Value};
-use tracing::warn;
 
 use crate::{
     core::{Document, DocumentFields},
@@ -10,9 +10,16 @@ use crate::{
 
 /// Parse JSON `where` object into filter clauses.
 /// Supports `{ field: "value" }` (equals) and `{ field: { op: value } }` (operator-based).
-pub(in crate::mcp::tools) fn parse_where_filters(args: &Value) -> Vec<query::FilterClause> {
+///
+/// # Errors
+///
+/// Returns an error for an unknown filter operator (or a malformed value for
+/// a scalar operator) rather than silently dropping the condition — a
+/// dropped filter on an AI-driven surface would return more rows than the
+/// caller asked for.
+pub(in crate::mcp::tools) fn parse_where_filters(args: &Value) -> Result<Vec<query::FilterClause>> {
     let Some(where_obj) = args.get("where").and_then(|v| v.as_object()) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
 
     let mut clauses = Vec::new();
@@ -29,13 +36,13 @@ pub(in crate::mcp::tools) fn parse_where_filters(args: &Value) -> Vec<query::Fil
                 clauses.push(make_equals_clause(field, bool_to_string(*b)));
             }
             Value::Object(ops) => {
-                parse_operator_filters(field, ops, &mut clauses);
+                parse_operator_filters(field, ops, &mut clauses)?;
             }
             _ => {}
         }
     }
 
-    clauses
+    Ok(clauses)
 }
 
 /// Create an Equals filter clause for a field.
@@ -51,7 +58,7 @@ fn parse_operator_filters(
     field: &str,
     ops: &Map<String, Value>,
     clauses: &mut Vec<query::FilterClause>,
-) {
+) -> Result<()> {
     for (op_name, op_value) in ops {
         match op_name.as_str() {
             "in" | "not_in" => {
@@ -93,11 +100,12 @@ fn parse_operator_filters(
                     Value::String(s) => s.clone(),
                     Value::Number(n) => n.to_string(),
                     Value::Bool(b) => bool_to_string(*b),
-                    _ => continue,
+                    _ => bail!(
+                        "MCP where: filter operator '{op_name}' on field '{field}' needs a \
+                         string, number, or boolean value"
+                    ),
                 };
-                let Some(op) = parse_scalar_op(op_name, val_str) else {
-                    continue;
-                };
+                let op = parse_scalar_op(op_name, val_str)?;
                 clauses.push(query::FilterClause::Single(query::Filter {
                     field: field.to_string(),
                     op,
@@ -105,27 +113,35 @@ fn parse_operator_filters(
             }
         }
     }
+
+    Ok(())
 }
 
 /// Parse a scalar filter operator name into a `FilterOp`.
-fn parse_scalar_op(op_name: &str, val: String) -> Option<query::FilterOp> {
-    match op_name {
-        "equals" => Some(query::FilterOp::Equals(val)),
-        "not_equals" => Some(query::FilterOp::NotEquals(val)),
-        "contains" => Some(query::FilterOp::Contains(val)),
-        "greater_than" => Some(query::FilterOp::GreaterThan(val)),
-        "greater_than_equal" | "greater_than_or_equal" => {
-            Some(query::FilterOp::GreaterThanOrEqual(val))
-        }
-        "less_than" => Some(query::FilterOp::LessThan(val)),
-        "less_than_equal" | "less_than_or_equal" => Some(query::FilterOp::LessThanOrEqual(val)),
-        "like" => Some(query::FilterOp::Like(val)),
-        unknown => {
-            warn!("Unknown MCP filter operator '{}', skipping", unknown);
+///
+/// # Errors
+///
+/// Returns an error for an unrecognized operator name, so a typo'd or
+/// hallucinated operator fails loudly instead of silently dropping the
+/// filter condition.
+fn parse_scalar_op(op_name: &str, val: String) -> Result<query::FilterOp> {
+    let op = match op_name {
+        "equals" => query::FilterOp::Equals(val),
+        "not_equals" => query::FilterOp::NotEquals(val),
+        "contains" => query::FilterOp::Contains(val),
+        "greater_than" => query::FilterOp::GreaterThan(val),
+        "greater_than_equal" | "greater_than_or_equal" => query::FilterOp::GreaterThanOrEqual(val),
+        "less_than" => query::FilterOp::LessThan(val),
+        "less_than_equal" | "less_than_or_equal" => query::FilterOp::LessThanOrEqual(val),
+        "like" => query::FilterOp::Like(val),
+        unknown => bail!(
+            "MCP where: unknown filter operator '{unknown}'. Valid operators: equals, \
+             not_equals, greater_than, greater_than_equal, less_than, less_than_equal, like, \
+             contains, in, not_in, exists, not_exists"
+        ),
+    };
 
-            None
-        }
-    }
+    Ok(op)
 }
 
 /// Convert a bool to a SQLite-compatible `"1"` or `"0"` string.
@@ -201,7 +217,7 @@ mod tests {
                 "status": { "in": ["draft", "review"] }
             }
         });
-        let clauses = parse_where_filters(&args);
+        let clauses = parse_where_filters(&args).unwrap();
         assert_eq!(clauses.len(), 1);
         match &clauses[0] {
             query::FilterClause::Single(f) => {
@@ -222,7 +238,7 @@ mod tests {
                 "role": { "not_in": ["banned", "suspended"] }
             }
         });
-        let clauses = parse_where_filters(&args);
+        let clauses = parse_where_filters(&args).unwrap();
         assert_eq!(clauses.len(), 1);
         match &clauses[0] {
             query::FilterClause::Single(f) => {
@@ -240,7 +256,7 @@ mod tests {
                 "avatar": { "exists": true }
             }
         });
-        let clauses = parse_where_filters(&args);
+        let clauses = parse_where_filters(&args).unwrap();
         assert_eq!(clauses.len(), 1);
         match &clauses[0] {
             query::FilterClause::Single(f) => {
@@ -258,7 +274,7 @@ mod tests {
                 "deleted_at": { "not_exists": true }
             }
         });
-        let clauses = parse_where_filters(&args);
+        let clauses = parse_where_filters(&args).unwrap();
         assert_eq!(clauses.len(), 1);
         match &clauses[0] {
             query::FilterClause::Single(f) => {
@@ -274,7 +290,7 @@ mod tests {
     fn parse_where_string_shorthand() {
         // { "field": "value" } → Equals
         let args = json!({ "where": { "title": "hello" } });
-        let clauses = parse_where_filters(&args);
+        let clauses = parse_where_filters(&args).unwrap();
         assert_eq!(clauses.len(), 1);
         match &clauses[0] {
             query::FilterClause::Single(f) => {
@@ -288,7 +304,7 @@ mod tests {
     #[test]
     fn parse_where_number_shorthand() {
         let args = json!({ "where": { "count": 5 } });
-        let clauses = parse_where_filters(&args);
+        let clauses = parse_where_filters(&args).unwrap();
         assert_eq!(clauses.len(), 1);
         match &clauses[0] {
             query::FilterClause::Single(f) => {
@@ -302,7 +318,7 @@ mod tests {
     #[test]
     fn parse_where_bool_shorthand_true() {
         let args = json!({ "where": { "active": true } });
-        let clauses = parse_where_filters(&args);
+        let clauses = parse_where_filters(&args).unwrap();
         assert_eq!(clauses.len(), 1);
         match &clauses[0] {
             query::FilterClause::Single(f) => {
@@ -315,7 +331,7 @@ mod tests {
     #[test]
     fn parse_where_bool_shorthand_false() {
         let args = json!({ "where": { "active": false } });
-        let clauses = parse_where_filters(&args);
+        let clauses = parse_where_filters(&args).unwrap();
         assert_eq!(clauses.len(), 1);
         match &clauses[0] {
             query::FilterClause::Single(f) => {
@@ -345,7 +361,7 @@ mod tests {
                 root.insert("where".to_string(), Value::Object(where_obj));
                 Value::Object(root)
             };
-            let clauses = parse_where_filters(&args);
+            let clauses = parse_where_filters(&args).unwrap();
             assert_eq!(
                 clauses.len(),
                 1,
@@ -377,7 +393,7 @@ mod tests {
     #[test]
     fn parse_where_scalar_op_with_number() {
         let args = json!({ "where": { "age": { "greater_than": 18 } } });
-        let clauses = parse_where_filters(&args);
+        let clauses = parse_where_filters(&args).unwrap();
         assert_eq!(clauses.len(), 1);
         match &clauses[0] {
             query::FilterClause::Single(f) => {
@@ -390,7 +406,7 @@ mod tests {
     #[test]
     fn parse_where_scalar_op_with_bool() {
         let args = json!({ "where": { "active": { "equals": true } } });
-        let clauses = parse_where_filters(&args);
+        let clauses = parse_where_filters(&args).unwrap();
         assert_eq!(clauses.len(), 1);
         match &clauses[0] {
             query::FilterClause::Single(f) => {
@@ -401,40 +417,45 @@ mod tests {
     }
 
     #[test]
-    fn parse_where_unknown_op_skipped() {
-        // Unknown operator name → clause is skipped (no panic)
+    fn parse_where_unknown_op_errors() {
+        // Unknown operator name → hard error (not silently skipped), so a
+        // typo'd or hallucinated operator can't return unfiltered results.
         let args = json!({ "where": { "field": { "unknown_op": "val" } } });
-        let clauses = parse_where_filters(&args);
-        assert_eq!(clauses.len(), 0);
+        let err = parse_where_filters(&args).unwrap_err().to_string();
+        assert!(
+            err.contains("unknown_op"),
+            "should name the bad operator: {err}"
+        );
     }
 
     #[test]
     fn parse_where_null_value_skipped() {
-        // Null field value → skipped
+        // A bare null field value (not an operator object) is a no-op.
         let args = json!({ "where": { "field": null } });
-        let clauses = parse_where_filters(&args);
+        let clauses = parse_where_filters(&args).unwrap();
         assert_eq!(clauses.len(), 0);
     }
 
     #[test]
-    fn parse_where_null_op_value_skipped() {
-        // Op value is null → skipped (neither scalar nor array)
+    fn parse_where_null_op_value_errors() {
+        // A null value for a scalar operator is malformed → hard error,
+        // rather than silently dropping the condition.
         let args = json!({ "where": { "field": { "equals": null } } });
-        let clauses = parse_where_filters(&args);
-        assert_eq!(clauses.len(), 0);
+        let err = parse_where_filters(&args).unwrap_err().to_string();
+        assert!(err.contains("equals"), "should name the operator: {err}");
     }
 
     #[test]
     fn parse_where_no_where_key() {
         let args = json!({ "limit": 10 });
-        let clauses = parse_where_filters(&args);
+        let clauses = parse_where_filters(&args).unwrap();
         assert!(clauses.is_empty());
     }
 
     #[test]
     fn parse_where_non_object_where() {
         let args = json!({ "where": "not-an-object" });
-        let clauses = parse_where_filters(&args);
+        let clauses = parse_where_filters(&args).unwrap();
         assert!(clauses.is_empty());
     }
 

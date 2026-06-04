@@ -6,7 +6,7 @@ use mlua::{Lua, Table};
 use crate::{
     core::{
         CollectionDefinition, FieldAdmin, FieldDefinition, FieldType, LocalizedString,
-        collection::{AdminConfig, Auth},
+        collection::{AdminConfig, Auth, COLLECTION_OPERATIONS},
     },
     db::query,
 };
@@ -183,7 +183,7 @@ pub fn parse_collection_definition(
     let live = parse_live_setting(config);
     let versions = parse_versions_config(config)?;
     let indexes = parse_indexes(config)?;
-    let mcp = parse_mcp_section(config);
+    let mcp = parse_mcp_section(config, COLLECTION_OPERATIONS)?;
 
     warn_deep_nesting("Collection", slug, &fields);
 

@@ -15,7 +15,7 @@ Add an `[mcp]` section to `crap.toml`:
 enabled = true              # Enable MCP server (default: false)
 http = false                # Enable HTTP transport on /mcp (default: false)
 config_tools = false        # Enable config generation tools (default: false)
-api_key = ""                # API key for HTTP auth (required when http = true)
+api_key = ""                # API key for HTTP auth (required, min 32 chars, when http = true)
 include_collections = []    # Whitelist (empty = all)
 exclude_collections = []    # Blacklist (takes precedence over include)
 ```
@@ -80,10 +80,12 @@ For **Claude Desktop**, add to your `claude_desktop_config.json`:
 When `mcp.http = true`, the admin server exposes a `POST /mcp` endpoint.
 Send JSON-RPC 2.0 requests as the request body.
 
-An `api_key` is **required** when HTTP transport is enabled. Requests must include
-an `Authorization: Bearer <key>` header. If `mcp.http = true` and `api_key` is empty,
-every request to `POST /mcp` is rejected with `401 Unauthorized` — the server still
-starts, but the endpoint is effectively inaccessible.
+An `api_key` is **required** when HTTP transport is enabled, and must be at least
+32 characters. If `mcp.http = true` and `api_key` is empty or too short, the server
+**fails to start** with a config-validation error (generate a key with
+`openssl rand -hex 32`). Requests must include an `Authorization: Bearer <key>`
+header; a missing or wrong key is answered with a JSON-RPC error (code `-32600`,
+"Invalid or missing API key") over HTTP `200`, not an HTTP `401`.
 
 ## Auto-Generated Tools
 
@@ -121,8 +123,8 @@ arguments** (excluded from the document's field data, like `id` and
 
 | Argument | Tools | Description |
 |----------|-------|-------------|
-| `locale` | `create_*`, `update_*`, `update_many_*`, `validate_*`, `global_read_*`, `global_update_*` | Locale code for localized fields. |
-| `draft` | `create_*`, `update_*`, `update_many_*`, `validate_*` | Write as a draft version. |
+| `locale` | `create_*`, `update_*`, `update_many_*`, `validate_*`, `global_read_*`, `global_update_*`, `global_validate_*` | Locale code for localized fields. |
+| `draft` | `create_*`, `create_many_*`, `update_*`, `update_many_*`, `validate_*`, `global_validate_*` | Write as a draft version. |
 | `force_hard_delete` | `delete_*`, `delete_many_*` | Skip `soft_delete` and remove the row permanently. |
 
 > A collection with a field literally named `locale`, `draft`, or
@@ -169,13 +171,12 @@ Add optional `mcp` tables to your Lua definitions to provide context for AI assi
 ### Collection level
 
 ```lua
-return {
-  slug = "posts",
+crap.collections.define("posts", {
   mcp = {
     description = "Blog posts with title, content, and author relationship",
   },
   fields = { ... }
-}
+})
 ```
 
 The collection `description` is appended to **every** generated tool for
@@ -215,8 +216,7 @@ auto-generated body; the collection-level `description` is still
 appended after it.
 
 ```lua
-return {
-  slug = "posts",
+crap.collections.define("posts", {
   mcp = {
     description = "Blog posts.",
     operations = {
@@ -225,14 +225,15 @@ return {
     },
   },
   fields = { ... }
-}
+})
 ```
 
 Valid collection operation keys: `find`, `find_by_id`, `create`,
 `create_many`, `update`, `update_many`, `validate`, `delete`,
 `delete_many`, `count`, `undelete`, `unpublish`, `list_versions`,
 `restore_version`. For **globals** the keys are `read`, `update`, and
-`validate`. An unknown key is ignored with a startup warning.
+`validate`. An unknown key is **rejected at load time** (the definition
+fails to load), matching the strict validation used elsewhere in the schema.
 
 ## Collection Filtering
 
@@ -254,12 +255,12 @@ functions are not applied. This is by design: MCP is a machine-to-machine API su
 (equivalent to Lua's `overrideAccess = true`), gated by transport-level authentication:
 
 - **stdio:** Access is controlled by who can run the process.
-- **HTTP:** Access is controlled by the `api_key` setting. An API key is **required**
-  when `http = true` — set it in `[mcp]` in `crap.toml` before enabling HTTP. If
-  `http = true` but `api_key` is empty, the server still starts and registers the
-  route, but every request to `POST /mcp` is rejected with `401 Unauthorized`. The
-  check is per-request, not at startup; operators should verify `api_key` is set
-  before exposing the endpoint externally.
+- **HTTP:** Access is controlled by the `api_key` setting (minimum 32 characters).
+  An API key is **required** when `http = true`: if it is empty or too short,
+  `crap-cms` refuses to start with a config-validation error, so a misconfigured
+  HTTP endpoint cannot come up unprotected. At runtime a request with a missing or
+  wrong key receives a JSON-RPC error response ("Invalid or missing API key"), and
+  the key is compared in constant time.
 
 To restrict which collections are accessible, use `include_collections` /
 `exclude_collections`. These filters are enforced both in tool listing (`tools/list`)
@@ -276,7 +277,7 @@ The MCP server also exposes read-only resources:
 |-----|-------------|
 | `crap://schema/collections` | Full schema of all collections as JSON |
 | `crap://schema/globals` | Full schema of all globals as JSON |
-| `crap://config` | Current configuration (secrets sanitized: `auth.secret`, `email.smtp_pass`, `mcp.api_key`) |
+| `crap://config` | Current configuration (secrets sanitized: `auth.secret`, `email.smtp_pass`, `mcp.api_key`, `upload.s3.secret_key`) |
 
 ## Query Parameters
 
@@ -337,4 +338,6 @@ Supported operators: `equals`, `not_equals`, `greater_than`, `greater_than_equal
 `less_than`, `less_than_equal`, `like`, `contains`, `in` (array), `not_in` (array),
 `exists`, `not_exists`.
 
-> **Note:** MCP uses shortened operator names (`greater_than_equal`, `less_than_equal`) compared to the gRPC/Lua API which uses `greater_than_or_equal` and `less_than_or_equal`.
+> **Note:** The shortened names `greater_than_equal` / `less_than_equal` are MCP's
+> canonical spelling; the gRPC/Lua API uses `greater_than_or_equal` /
+> `less_than_or_equal`. For convenience MCP also accepts the long `_or_equal` forms.

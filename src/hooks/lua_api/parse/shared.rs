@@ -126,21 +126,31 @@ pub(super) fn parse_hooks_section(config: &Table) -> Result<Hooks> {
     parse_hooks(&hooks_tbl)
 }
 
-/// Parse the `mcp` subtable from a Lua config table.
-pub(super) fn parse_mcp_section(config: &Table) -> McpConfig {
+/// Parse the `mcp` subtable from a Lua config table. `valid_operations` is
+/// the set of operation keys allowed in `mcp.operations` for this kind of
+/// definition (collection vs global).
+///
+/// # Errors
+///
+/// Returns an error if `mcp.operations` contains an unknown operation key —
+/// matching the strict-schema rejection used everywhere else, so a typo'd
+/// override fails at load instead of being silently ignored.
+pub(super) fn parse_mcp_section(config: &Table, valid_operations: &[&str]) -> Result<McpConfig> {
     let Ok(mcp_tbl) = get_table(config, "mcp") else {
-        return McpConfig::default();
+        return Ok(McpConfig::default());
     };
 
     let mut mcp = McpConfig::new(get_string(&mcp_tbl, "description"));
 
     if let Ok(ops_tbl) = get_table(&mcp_tbl, "operations") {
+        deny_unknown_keys(&ops_tbl, "mcp.operations", valid_operations)?;
+
         for (k, v) in ops_tbl.pairs::<String, String>().flatten() {
             mcp.operations.insert(k, v);
         }
     }
 
-    mcp
+    Ok(mcp)
 }
 
 /// Parse result for the `live` config field.
@@ -280,7 +290,7 @@ mod tests {
     use super::*;
     use crate::core::{
         BlockDefinition, FieldDefinition, FieldTab, FieldType, LocalizedString,
-        collection::LiveSetting,
+        collection::{COLLECTION_OPERATIONS, LiveSetting},
     };
     use mlua::Lua;
 
@@ -288,7 +298,7 @@ mod tests {
     fn test_parse_mcp_section_absent() {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
-        let mcp = parse_mcp_section(&tbl);
+        let mcp = parse_mcp_section(&tbl, COLLECTION_OPERATIONS).unwrap();
         assert!(mcp.description.is_none());
         assert!(mcp.operations.is_empty());
     }
@@ -306,7 +316,7 @@ mod tests {
         mcp_tbl.set("operations", ops).unwrap();
         tbl.set("mcp", mcp_tbl).unwrap();
 
-        let mcp = parse_mcp_section(&tbl);
+        let mcp = parse_mcp_section(&tbl, COLLECTION_OPERATIONS).unwrap();
         assert_eq!(mcp.description.as_deref(), Some("Blog posts"));
         assert_eq!(
             mcp.operations.get("delete").map(String::as_str),
@@ -316,6 +326,24 @@ mod tests {
             mcp.operations.get("create").map(String::as_str),
             Some("Drafts a new post")
         );
+    }
+
+    #[test]
+    fn test_parse_mcp_section_rejects_unknown_operation() {
+        // A typo'd operation key is a hard error, not a silently-ignored
+        // override — parity with the rest of the strict-schema config.
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let mcp_tbl = lua.create_table().unwrap();
+        let ops = lua.create_table().unwrap();
+        ops.set("delte", "typo").unwrap();
+        mcp_tbl.set("operations", ops).unwrap();
+        tbl.set("mcp", mcp_tbl).unwrap();
+
+        let err = parse_mcp_section(&tbl, COLLECTION_OPERATIONS)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("delte"), "should name the bad key: {err}");
     }
 
     #[test]

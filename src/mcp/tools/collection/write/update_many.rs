@@ -33,7 +33,7 @@ pub(in crate::mcp::tools) fn exec_update_many(
         .get(slug)
         .context("Collection not found")?;
 
-    let filters = parse_where_filters(args);
+    let filters = parse_where_filters(args)?;
 
     let data_obj = args.get("data").cloned().unwrap_or(json!({}));
     let data = extract_data_from_args(&data_obj, &[]);

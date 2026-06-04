@@ -8,10 +8,7 @@ use tracing::{debug, warn};
 
 use crate::core::{
     CollectionDefinition, FieldDefinition, FieldType, Slug,
-    collection::{
-        Activation, AuthMethod, COLLECTION_OPERATIONS, GLOBAL_OPERATIONS, GlobalDefinition,
-        McpConfig, Surface,
-    },
+    collection::{Activation, AuthMethod, GlobalDefinition, Surface},
     job::JobDefinition,
     richtext::RichtextNodeDef,
 };
@@ -127,25 +124,8 @@ impl Registry {
         debug!("Registering collection '{}'", def.slug);
 
         Self::warn_invalid_field_refs(&def);
-        Self::warn_unknown_mcp_operations(&def.slug, &def.mcp, COLLECTION_OPERATIONS);
 
         self.collections.insert(def.slug.clone(), def);
-    }
-
-    /// Log a warning for any `mcp.operations` key that is not a recognized
-    /// operation for this kind of definition (so the override is silently
-    /// dropped rather than mysteriously ignored).
-    fn warn_unknown_mcp_operations(slug: &str, mcp: &McpConfig, valid: &[&str]) {
-        for key in mcp.operations.keys() {
-            if !valid.contains(&key.as_str()) {
-                warn!(
-                    "'{}': mcp.operations references unknown operation '{}'; valid operations are: {}",
-                    slug,
-                    key,
-                    valid.join(", ")
-                );
-            }
-        }
     }
 
     /// Log warnings for admin config fields that reference nonexistent field names.
@@ -218,8 +198,6 @@ impl Registry {
     /// Register a global definition, keyed by slug. Overwrites any existing definition.
     pub fn register_global(&mut self, def: GlobalDefinition) {
         debug!("Registering global '{}'", def.slug);
-
-        Self::warn_unknown_mcp_operations(&def.slug, &def.mcp, GLOBAL_OPERATIONS);
 
         self.globals.insert(def.slug.clone(), def);
     }

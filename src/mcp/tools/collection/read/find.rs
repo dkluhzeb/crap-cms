@@ -86,7 +86,7 @@ pub(in crate::mcp::tools) fn exec_find(
     let offset = (!pagination.has_cursor()).then_some(pagination.offset);
 
     let fq = FindQuery::builder()
-        .filters(parse_where_filters(args))
+        .filters(parse_where_filters(args)?)
         .order_by(order_by)
         .limit(Some(pagination.limit))
         .offset(offset)

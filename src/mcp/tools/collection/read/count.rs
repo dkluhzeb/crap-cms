@@ -30,7 +30,7 @@ pub(in crate::mcp::tools) fn exec_count(
         .context("Collection not found")?;
     let conn = ctx.pool.get().context("DB connection")?;
 
-    let filters = parse_where_filters(args);
+    let filters = parse_where_filters(args)?;
     let include_drafts = args
         .get("draft")
         .and_then(serde_json::Value::as_bool)

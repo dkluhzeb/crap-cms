@@ -5,7 +5,10 @@ use mlua::{Lua, Table};
 use tracing::warn;
 
 use crate::{
-    core::{FieldDefinition, collection::GlobalDefinition},
+    core::{
+        FieldDefinition,
+        collection::{GLOBAL_OPERATIONS, GlobalDefinition},
+    },
     db::query,
 };
 
@@ -40,7 +43,7 @@ pub fn parse_global_definition(lua: &Lua, slug: &str, config: &Table) -> Result<
     let access = parse_access_config(config);
     let live = parse_live_setting(config);
     let versions = parse_versions_config(config)?;
-    let mcp = parse_mcp_section(config);
+    let mcp = parse_mcp_section(config, GLOBAL_OPERATIONS)?;
 
     warn_deep_nesting("Global", slug, &fields);
     warn_global_index_unique(slug, &fields);

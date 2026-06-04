@@ -69,6 +69,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   as `overrideAcces` previously was silently ignored — defeating the
   exact access bypass it was meant to request — and now fails loudly.
 
+- **MCP `where` clauses reject unknown filter operators.** An unrecognized
+  operator (e.g. a typo'd `gretaer_than`, or a malformed value for a scalar
+  operator) in an MCP `find`/`count`/`update_many`/`delete_many` `where`
+  clause now fails the tool call with a clear error, instead of silently
+  dropping that condition. Previously a dropped filter returned more rows
+  than intended — a correctness/data-exposure risk on an AI-driven surface.
+
+- **`mcp.operations` rejects unknown operation keys at load.** An unknown
+  key in a collection/global `mcp.operations` table (e.g. `delte`) is now a
+  hard load-time error instead of a startup warning, matching the strict
+  validation used for the rest of the schema config.
+
 - **`crap.jobs.queue` rejects unknown option keys.** The third
   options argument now accepts only `priority`, `delay`, and `unique`;
   any other key (e.g. a typo'd `priorty`) is a hard error instead of

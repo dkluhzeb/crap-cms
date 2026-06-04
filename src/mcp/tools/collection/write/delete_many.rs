@@ -38,7 +38,7 @@ pub(in crate::mcp::tools) fn exec_delete_many(
         .context("Collection not found")?
         .clone();
 
-    let filters = parse_where_filters(args);
+    let filters = parse_where_filters(args)?;
 
     let run_hooks = args
         .get("hooks")
