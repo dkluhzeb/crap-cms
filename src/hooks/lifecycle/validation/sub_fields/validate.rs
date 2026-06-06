@@ -24,6 +24,9 @@ struct RowValidationCtx<'a> {
     table: &'a str,
     registry: Option<&'a Registry>,
     is_draft: bool,
+    /// Content locale this write targets — exposed to custom validators as
+    /// `ctx.locale`. `None` when localization is disabled.
+    locale: Option<&'a str>,
 }
 
 /// Per-sub-field call target — the field being validated and its qualified
@@ -42,6 +45,9 @@ pub(in crate::hooks::lifecycle::validation) struct SubFieldParams<'a> {
     pub table: &'a str,
     pub registry: Option<&'a Registry>,
     pub is_draft: bool,
+    /// Content locale this write targets — exposed to custom validators as
+    /// `ctx.locale`. `None` when localization is disabled.
+    pub locale: Option<&'a str>,
 }
 
 /// Validate sub-fields within a single array/blocks row (inner, no mutex).
@@ -65,6 +71,7 @@ pub(in crate::hooks::lifecycle::validation) fn validate_sub_fields_inner(
         table: params.table,
         registry: params.registry,
         is_draft: params.is_draft,
+        locale: params.locale,
     };
 
     validate_children_recursive(&ctx, sub_fields, "", errors);
@@ -99,6 +106,7 @@ fn validate_children_recursive(
                         table: ctx.table,
                         registry: ctx.registry,
                         is_draft: ctx.is_draft,
+                        locale: ctx.locale,
                     };
 
                     validate_sub_fields_inner(&params, &sf.fields, group_obj, errors);
@@ -173,6 +181,7 @@ fn validate_nested_rows(
             table: ctx.table,
             registry: ctx.registry,
             is_draft: ctx.is_draft,
+            locale: ctx.locale,
         };
 
         validate_sub_fields_inner(&params, sub_fields, nested_obj, errors);
@@ -231,6 +240,7 @@ fn validate_leaf_sub_field(
             ctx.row_data,
             ctx.table,
             &sf.name,
+            ctx.locale,
         ) {
             Ok(Some(err_msg)) => {
                 errors.push(FieldError::new(qualified.to_owned(), err_msg));
@@ -276,6 +286,7 @@ fn validate_leaf_sub_field(
         validate_richtext_node_attrs(
             &RichtextValidationCtx::builder(ctx.lua, registry, ctx.table)
                 .draft(ctx.is_draft)
+                .locale(ctx.locale)
                 .build(),
             content,
             qualified,

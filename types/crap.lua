@@ -98,6 +98,7 @@ crap = {}
 --- @field data table<string, any> Full document data.
 --- @field user? table Authenticated user document (nil if unauthenticated or no auth collection).
 --- @field ui_locale? string Admin UI locale code (e.g., `"en"`, `"de"`). Nil if not set.
+--- @field locale? string The content locale this write targets (e.g. `"en"`, `"de"`) — the requested locale, or the default when none was given. Nil when localization is disabled. Lets a custom validator enforce per-locale rules (e.g. only require a value in the default locale).
 
 --- Lua function references for field-level lifecycle hooks.
 --- @class crap.FieldHooks
@@ -174,6 +175,7 @@ crap = {}
 --- @field access? crap.FieldAccess Field-level access control (read/create/update).
 --- @field mcp? crap.McpFieldConfig MCP tool schema options.
 --- @field localized? boolean Per-locale values (default: false).
+--- @field required_locales? "all" | string[] Which locales a `required` localized field must be filled in (the completeness rule). `"all"` = every configured locale; a list names specific locales. Unset → the collection default, else the default locale only. Only meaningful when both `required` and `localized`.
 --- @field hidden? boolean Strip from all read responses (gRPC/Lua/MCP/admin/REST) and skip in the admin form. For admin-form-only hiding (value still returned in API), use `admin.hidden` instead. Default: false.
 
 --- @class crap.TextField : crap.BaseField
@@ -269,6 +271,7 @@ crap = {}
 --- @field blocks? crap.BlockDefinition[] Block type definitions (required).
 --- @field tabs? crap.FieldTab[] Tab definitions (required). Each tab has a label and fields.
 --- @field localized? boolean Per-locale values (default: false).
+--- @field required_locales? "all" | string[] Which locales a `required` localized field must be filled in (the completeness rule). `"all"` = every configured locale; a list names specific locales. Unset → the collection default, else the default locale only. Only meaningful when both `required` and `localized`.
 --- @field picker_appearance? crap.PickerAppearance Input type: "dayOnly" (default), "dayAndTime", "timeOnly", "monthOnly".
 --- @field min_rows? integer Minimum rows. Validated on create/update.
 --- @field max_rows? integer Maximum rows. Admin disables "Add" at max.
@@ -604,6 +607,7 @@ function crap.fields.join(config) end
 --- @field indexes? crap.IndexDefinition[] Compound indexes (multi-column). Created on startup, stale indexes dropped.
 --- @field soft_delete? boolean Enable soft deletes (move to trash instead of permanent deletion). When `true`, `delete` moves documents to trash; the row is purged later according to `soft_delete_retention`.
 --- @field soft_delete_retention? string Retention period for soft-deleted documents before auto-purge. Human-readable duration: `"30d"`, `"7d"`, `"90d"`. `nil` = manual purge only. Only relevant when `soft_delete = true`.
+--- @field required_locales? "all" | string[] Default `required_locales` for this collection's localized required fields — applies to any field that doesn't set its own. `"all"` = every configured locale; a list names specific locales. Unset → only the default locale is required.
 
 --- A compound index definition (multi-column, optionally unique).
 --- @class crap.IndexDefinition
@@ -751,6 +755,7 @@ function crap.fields.join(config) end
 --- @field user? crap.AuthUser Full user document from the auth collection (nil if anonymous). Typed as `crap.AuthUser` (a `crap.Document` variant with an `[string] any` index signature) so access functions can read `context.user.role` / `context.user.email` etc. without per-call casts — the static type can't narrow to a specific auth-collection doc since projects may have multiple auth collections. Users who know their auth collection can still cast: `local u = context.user --[[@as crap.doc.Users]]`.
 --- @field id? string Document ID (for `update` / `delete` / `find_by_id`).
 --- @field data? table<string, any> Incoming data (for `create` / `update`).
+--- @field locale? string The locale this operation targets, when localization is enabled — the requested locale, or the default locale when none was specified. `nil` when localization is disabled. Lets access functions enforce per-locale rules, e.g. restrict a user to certain locales or lock a field to the default locale. Also `nil` when the access function is invoked outside a single-locale operation (e.g. manually via `crap.access.check`, or a nested join read-access check) — gate defensively (`if ctx.locale and ... then`).
 
 -- ── Function-type aliases (one-liner `---@type` for callables) ─────
 
@@ -905,7 +910,6 @@ function crap.collections.update(collection, id, data, opts) end
 
 --- Optional options for `crap.collections.delete`.
 --- @class crap.DeleteOptions
---- @field locale? string Locale code. Currently a no-op for single delete (rows are deleted whole, across all locales); reserved pending a possible per-locale delete feature. Nil = default locale.
 --- @field overrideAccess? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass collection-level access for the current user.
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set `false` to bypass hooks.
 --- @field forceHardDelete? boolean Bypass `soft_delete` and remove the row permanently. Mirrors the same flag on the gRPC/HTTP delete handlers.

@@ -27,4 +27,10 @@ pub struct ValidateContext<'a> {
     /// Admin UI locale code (e.g., `"en"`, `"de"`). Nil if not set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ui_locale: Option<&'a str>,
+    /// The content locale this write targets (e.g. `"en"`, `"de"`) — the
+    /// requested locale, or the default when none was given. Nil when
+    /// localization is disabled. Lets a custom validator enforce per-locale
+    /// rules (e.g. only require a value in the default locale).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locale: Option<&'a str>,
 }

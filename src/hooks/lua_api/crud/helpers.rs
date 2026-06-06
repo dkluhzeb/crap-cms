@@ -143,8 +143,15 @@ pub(crate) fn enforce_access(
     }
 
     let user_doc = hook_user(lua);
-    let result = check_access_with_lua(lua, params.access_fn, user_doc.as_ref(), params.id, None)
-        .map_err(|e| RuntimeError(format!("access check error: {e:#}")))?;
+    let result = check_access_with_lua(
+        lua,
+        params.access_fn,
+        user_doc.as_ref(),
+        params.id,
+        None,
+        None,
+    )
+    .map_err(|e| RuntimeError(format!("access check error: {e:#}")))?;
 
     match result {
         AccessResult::Denied => Err(RuntimeError(params.deny_msg.to_string())),

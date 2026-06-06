@@ -22,6 +22,7 @@ pub(crate) fn check_access_with_lua(
     user: Option<&Document>,
     id: Option<&str>,
     data: Option<&DocumentFields>,
+    locale: Option<&str>,
 ) -> Result<AccessResult> {
     let Some(func_ref) = access_ref else {
         // No access function configured — check if default-deny is enabled
@@ -39,7 +40,12 @@ pub(crate) fn check_access_with_lua(
     // Build the access-context table from a typed Rust struct (see
     // `hooks::lifecycle::AccessContext`) so the Lua shape is the single
     // source of truth.
-    let ctx = crate::hooks::lifecycle::AccessContext { user, id, data };
+    let ctx = crate::hooks::lifecycle::AccessContext {
+        user,
+        id,
+        data,
+        locale,
+    };
     let ctx_table = lua.to_value(&ctx)?;
 
     // A Lua error inside the access function (e.g. typo, runtime
@@ -144,7 +150,7 @@ mod tests {
     fn access_none_ref_returns_allowed() {
         let lua = setup_lua();
         // No DefaultDeny in app_data = defaults to allow
-        let result = check_access_with_lua(&lua, None, None, None, None).unwrap();
+        let result = check_access_with_lua(&lua, None, None, None, None, None).unwrap();
         assert!(matches!(result, AccessResult::Allowed));
     }
 
@@ -152,7 +158,7 @@ mod tests {
     fn access_none_ref_default_deny_false_returns_allowed() {
         let lua = setup_lua();
         lua.set_app_data(DefaultDeny(false));
-        let result = check_access_with_lua(&lua, None, None, None, None).unwrap();
+        let result = check_access_with_lua(&lua, None, None, None, None, None).unwrap();
         assert!(matches!(result, AccessResult::Allowed));
     }
 
@@ -160,7 +166,7 @@ mod tests {
     fn access_none_ref_default_deny_true_returns_denied() {
         let lua = setup_lua();
         lua.set_app_data(DefaultDeny(true));
-        let result = check_access_with_lua(&lua, None, None, None, None).unwrap();
+        let result = check_access_with_lua(&lua, None, None, None, None, None).unwrap();
         assert!(matches!(result, AccessResult::Denied));
     }
 
@@ -170,7 +176,7 @@ mod tests {
         lua.set_app_data(DefaultDeny(true));
         // When an access function IS defined and returns true, default-deny doesn't matter
         let result =
-            check_access_with_lua(&lua, Some("test_access.allow"), None, None, None).unwrap();
+            check_access_with_lua(&lua, Some("test_access.allow"), None, None, None, None).unwrap();
         assert!(matches!(result, AccessResult::Allowed));
     }
 
@@ -178,7 +184,7 @@ mod tests {
     fn access_returns_true_is_allowed() {
         let lua = setup_lua();
         let result =
-            check_access_with_lua(&lua, Some("test_access.allow"), None, None, None).unwrap();
+            check_access_with_lua(&lua, Some("test_access.allow"), None, None, None, None).unwrap();
         assert!(matches!(result, AccessResult::Allowed));
     }
 
@@ -186,7 +192,7 @@ mod tests {
     fn access_returns_false_is_denied() {
         let lua = setup_lua();
         let result =
-            check_access_with_lua(&lua, Some("test_access.deny"), None, None, None).unwrap();
+            check_access_with_lua(&lua, Some("test_access.deny"), None, None, None, None).unwrap();
         assert!(matches!(result, AccessResult::Denied));
     }
 
@@ -194,16 +200,23 @@ mod tests {
     fn access_returns_nil_is_denied() {
         let lua = setup_lua();
         let result =
-            check_access_with_lua(&lua, Some("test_access.return_nil"), None, None, None).unwrap();
+            check_access_with_lua(&lua, Some("test_access.return_nil"), None, None, None, None)
+                .unwrap();
         assert!(matches!(result, AccessResult::Denied));
     }
 
     #[test]
     fn access_returns_unexpected_type_is_denied() {
         let lua = setup_lua();
-        let result =
-            check_access_with_lua(&lua, Some("test_access.return_number"), None, None, None)
-                .unwrap();
+        let result = check_access_with_lua(
+            &lua,
+            Some("test_access.return_number"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         assert!(matches!(result, AccessResult::Denied));
     }
 
@@ -213,6 +226,7 @@ mod tests {
         let result = check_access_with_lua(
             &lua,
             Some("test_access.constrained_string"),
+            None,
             None,
             None,
             None,
@@ -242,6 +256,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap();
         match result {
@@ -268,6 +283,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap();
         match result {
@@ -288,9 +304,15 @@ mod tests {
     #[test]
     fn access_constrained_with_operator_table() {
         let lua = setup_lua();
-        let result =
-            check_access_with_lua(&lua, Some("test_access.constrained_ops"), None, None, None)
-                .unwrap();
+        let result = check_access_with_lua(
+            &lua,
+            Some("test_access.constrained_ops"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         match result {
             AccessResult::Constrained(clauses) => {
                 assert_eq!(clauses.len(), 1);
@@ -312,6 +334,7 @@ mod tests {
         let result = check_access_with_lua(
             &lua,
             Some("test_access.constrained_multi_ops"),
+            None,
             None,
             None,
             None,
@@ -338,6 +361,7 @@ mod tests {
         let result = check_access_with_lua(
             &lua,
             Some("test_access.constrained_ignore_bool"),
+            None,
             None,
             None,
             None,
@@ -369,6 +393,7 @@ mod tests {
             Some(&admin),
             None,
             None,
+            None,
         )
         .unwrap();
         assert!(matches!(result, AccessResult::Allowed));
@@ -380,6 +405,7 @@ mod tests {
             Some(&viewer),
             None,
             None,
+            None,
         )
         .unwrap();
         assert!(matches!(result, AccessResult::Denied));
@@ -389,7 +415,8 @@ mod tests {
     fn access_passes_no_user() {
         let lua = setup_lua();
         let result =
-            check_access_with_lua(&lua, Some("test_access.check_user"), None, None, None).unwrap();
+            check_access_with_lua(&lua, Some("test_access.check_user"), None, None, None, None)
+                .unwrap();
         assert!(matches!(result, AccessResult::Denied));
     }
 
@@ -402,6 +429,7 @@ mod tests {
             None,
             Some("doc-123"),
             None,
+            None,
         )
         .unwrap();
         assert!(matches!(result, AccessResult::Allowed));
@@ -411,6 +439,7 @@ mod tests {
             Some("test_access.check_id"),
             None,
             Some("doc-other"),
+            None,
             None,
         )
         .unwrap();
@@ -428,6 +457,7 @@ mod tests {
             None,
             None,
             Some(&data),
+            None,
         )
         .unwrap();
         assert!(matches!(result, AccessResult::Allowed));
@@ -440,6 +470,7 @@ mod tests {
             None,
             None,
             Some(&bad_data),
+            None,
         )
         .unwrap();
         assert!(matches!(result, AccessResult::Denied));
@@ -452,16 +483,72 @@ mod tests {
         // propagating as anyhow::Error. The wire-level rationale is
         // documented in `grpc_hook_errors::access_fn_error_maps_to_permission_denied`.
         let lua = setup_lua();
-        let result = check_access_with_lua(&lua, Some("test_access.throw_error"), None, None, None)
-            .expect("error is caught + treated as Denied, not propagated");
+        let result = check_access_with_lua(
+            &lua,
+            Some("test_access.throw_error"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("error is caught + treated as Denied, not propagated");
         assert!(matches!(result, AccessResult::Denied));
     }
 
     #[test]
     fn access_invalid_ref_errors() {
         let lua = setup_lua();
-        let result = check_access_with_lua(&lua, Some("nonexistent_module.func"), None, None, None);
+        let result = check_access_with_lua(
+            &lua,
+            Some("nonexistent_module.func"),
+            None,
+            None,
+            None,
+            None,
+        );
         assert!(result.is_err());
+    }
+
+    /// Locale-aware access: the operation locale is exposed as `context.locale`
+    /// so access functions can restrict by locale (e.g. a per-language editor).
+    #[test]
+    fn access_sees_locale_in_context() {
+        let lua = setup_lua();
+
+        // `access.check_locale` allows only when `ctx.locale == "en"`.
+        let allowed = check_access_with_lua(
+            &lua,
+            Some("test_access.check_locale"),
+            None,
+            None,
+            None,
+            Some("en"),
+        )
+        .unwrap();
+        assert!(matches!(allowed, AccessResult::Allowed));
+
+        let denied = check_access_with_lua(
+            &lua,
+            Some("test_access.check_locale"),
+            None,
+            None,
+            None,
+            Some("de"),
+        )
+        .unwrap();
+        assert!(matches!(denied, AccessResult::Denied));
+
+        // No locale (localization disabled) → `ctx.locale` is nil → denied.
+        let nil_locale = check_access_with_lua(
+            &lua,
+            Some("test_access.check_locale"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(matches!(nil_locale, AccessResult::Denied));
     }
 
     // ── check_field_read_access_with_lua ────────────────────────────────

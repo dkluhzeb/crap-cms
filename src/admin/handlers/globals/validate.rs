@@ -85,6 +85,7 @@ pub async fn validate_global(
             soft_delete: false,
             locale_ctx: locale_ctx.as_ref(),
             user_doc: user_doc.as_ref(),
+            required_locales: None,
         })
     })
     .await;

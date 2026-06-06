@@ -1,7 +1,7 @@
 //! Core create operation for collections.
 
 use crate::{
-    db::{AccessResult, query},
+    db::{AccessResult, LocaleContext, query},
     hooks::{HookContext, ValidationCtx},
     service::{
         AfterChangeInput, PersistOptions, ServiceContext, WriteInput, WriteResult, persist_create,
@@ -33,7 +33,13 @@ pub fn create_document_in_conn(
     let def = ctx.collection_def()?;
 
     // Collection-level access check
-    let access = write_hooks.check_access(def.access.create.as_deref(), ctx.user, None, None)?;
+    let access = write_hooks.check_access(
+        def.access.create.as_deref(),
+        ctx.user,
+        None,
+        None,
+        input.locale_ctx.map(LocaleContext::access_locale),
+    )?;
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Create access denied".into()));
     }
@@ -53,7 +59,12 @@ pub fn create_document_in_conn(
     let ui_locale = input.ui_locale.as_deref();
 
     // Strip write-denied fields before hook processing
-    let denied = write_hooks.field_write_denied(&def.fields, ctx.user, "create");
+    let denied = write_hooks.field_write_denied(
+        &def.fields,
+        ctx.user,
+        input.locale_ctx.map(LocaleContext::access_locale),
+        "create",
+    );
     strip_denied_fields(&denied, &mut input.data);
 
     let hook_data = input.data.clone();
@@ -69,6 +80,7 @@ pub fn create_document_in_conn(
         .draft(is_draft)
         .locale_ctx(input.locale_ctx)
         .soft_delete(def.soft_delete)
+        .collection_required_locales(def.required_locales.as_ref())
         .build();
 
     let final_ctx = write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?;
@@ -111,7 +123,11 @@ pub fn create_document_in_conn(
     )?;
 
     // Strip read-denied fields AFTER hydration (hydration can add join data for denied fields)
-    let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user);
+    let mut read_denied = write_hooks.field_read_denied(
+        &def.fields,
+        ctx.user,
+        input.locale_ctx.map(LocaleContext::access_locale),
+    );
     read_denied.extend(collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&read_denied);

@@ -120,6 +120,7 @@ fn collections_validate(
         operation,
         exclude_id: opts.id.as_deref(),
         soft_delete: def.has_soft_delete(),
+        required_locales: def.required_locales.as_ref(),
     };
 
     let input = WriteInput::builder(data)

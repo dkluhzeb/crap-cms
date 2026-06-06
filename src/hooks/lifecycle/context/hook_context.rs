@@ -109,24 +109,7 @@ impl HookContext {
     /// coercion path can preserve precision via `coerce_json_value`.
     #[must_use]
     pub fn to_value_map(&self, fields: &[FieldDefinition]) -> DocumentFields {
-        let mut map = DocumentFields::new();
-
-        for (k, v) in self.data.as_map() {
-            // Check if this key is a group field that needs flattening
-            let is_group = fields
-                .iter()
-                .any(|f| f.name == *k && f.field_type == FieldType::Group);
-
-            if is_group && let Some(obj) = v.as_object() {
-                flatten_group_to_value_map(k, obj, &mut map);
-
-                continue;
-            }
-
-            map.insert(k.clone(), v.clone());
-        }
-
-        map
+        flatten_group_fields(&self.data, fields)
     }
 
     /// Read the `context` table from a returned Lua hook table, replacing `self.context`.
@@ -154,17 +137,49 @@ fn hashmap_to_lua(lua: &Lua, map: &HashMap<String, JsonValue>) -> LuaResult<Tabl
     Ok(tbl)
 }
 
+/// Normalize a document data map so group fields are **flat** (`seo__meta_title`)
+/// rather than nested (`{ seo: { meta_title } }`).
+///
+/// The Lua surface already flattens before reaching the service (so this is a
+/// no-op there); the typed JSON surfaces (gRPC, MCP) and admin forms can arrive
+/// nested. Applying this both before validation and at persist time keeps the
+/// validator and the DB-write seeing the same shape.
+///
+/// A key is flattened only when it names a `Group` field whose value is an
+/// object; otherwise it passes through untouched (so already-flat data is
+/// unchanged, and non-group object values — e.g. a top-level `Json` field — are
+/// preserved).
+#[must_use]
+pub(crate) fn flatten_group_fields(
+    data: &DocumentFields,
+    fields: &[FieldDefinition],
+) -> DocumentFields {
+    let mut map = DocumentFields::new();
+
+    for (k, v) in data.as_map() {
+        let is_group = fields
+            .iter()
+            .any(|f| f.name == *k && f.field_type == FieldType::Group);
+
+        if is_group && let Some(obj) = v.as_object() {
+            flatten_group_obj(k, obj, &mut map);
+
+            continue;
+        }
+
+        map.insert(k.clone(), v.clone());
+    }
+
+    map
+}
+
 /// Recursively flatten a group object into `prefix__key` typed pairs.
-fn flatten_group_to_value_map(
-    prefix: &str,
-    obj: &JsonMap<String, JsonValue>,
-    map: &mut DocumentFields,
-) {
+fn flatten_group_obj(prefix: &str, obj: &JsonMap<String, JsonValue>, map: &mut DocumentFields) {
     for (sub_key, sub_val) in obj {
         let flat_key = format!("{prefix}__{sub_key}");
 
         if let JsonValue::Object(nested) = sub_val {
-            flatten_group_to_value_map(&flat_key, nested, map);
+            flatten_group_obj(&flat_key, nested, map);
         } else {
             map.insert(flat_key, sub_val.clone());
         }
@@ -283,7 +298,12 @@ mod tests {
         let ctx = HookContext::builder("posts", "create").data(data).build();
 
         let fields = vec![
-            FieldDefinition::builder("seo", FieldType::Group).build(),
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("meta_title", FieldType::Text).build(),
+                    FieldDefinition::builder("meta_description", FieldType::Text).build(),
+                ])
+                .build(),
             FieldDefinition::builder("title", FieldType::Text).build(),
         ];
 
@@ -327,7 +347,18 @@ mod tests {
             .data(data)
             .build();
 
-        let fields = vec![FieldDefinition::builder("address", FieldType::Group).build()];
+        let fields = vec![
+            FieldDefinition::builder("address", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("geo", FieldType::Group)
+                        .fields(vec![
+                            FieldDefinition::builder("lat", FieldType::Text).build(),
+                            FieldDefinition::builder("lng", FieldType::Text).build(),
+                        ])
+                        .build(),
+                ])
+                .build(),
+        ];
 
         let map = ctx.to_value_map(&fields);
         assert_eq!(map.get("address__geo__lat"), Some(&json!("40.7128")));
@@ -349,7 +380,14 @@ mod tests {
 
         let ctx = HookContext::builder("posts", "create").data(data).build();
 
-        let fields = vec![FieldDefinition::builder("metrics", FieldType::Group).build()];
+        let fields = vec![
+            FieldDefinition::builder("metrics", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("views", FieldType::Number).build(),
+                    FieldDefinition::builder("likes", FieldType::Number).build(),
+                ])
+                .build(),
+        ];
 
         let map = ctx.to_value_map(&fields);
         assert_eq!(map.get("metrics__views"), Some(&json!(100)));

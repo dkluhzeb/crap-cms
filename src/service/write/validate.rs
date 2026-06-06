@@ -1,8 +1,8 @@
 //! Document validation without persistence.
 
 use crate::{
-    core::{Document, FieldDefinition, collection::Hooks},
-    db::DbConnection,
+    core::{Document, FieldDefinition, RequiredLocales, collection::Hooks},
+    db::{DbConnection, LocaleContext},
     hooks::{HookContext, ValidationCtx},
     service::{WriteInput, hooks::WriteHooks},
 };
@@ -22,6 +22,9 @@ pub struct ValidateContext<'a> {
     /// Exclude this document from unique checks (update path).
     pub exclude_id: Option<&'a str>,
     pub soft_delete: bool,
+    /// Collection-level `required_locales` default, so the dry-run mirrors the
+    /// completeness check that `create`/`update` apply. `None` for globals.
+    pub required_locales: Option<&'a RequiredLocales>,
 }
 
 /// Validate a document without persisting — runs the full before-write pipeline
@@ -46,7 +49,12 @@ pub fn validate_document(
     let is_draft = input.draft;
 
     // Strip write-denied fields
-    let denied = write_hooks.field_write_denied(ctx.fields, user, ctx.operation);
+    let denied = write_hooks.field_write_denied(
+        ctx.fields,
+        user,
+        input.locale_ctx.map(LocaleContext::access_locale),
+        ctx.operation,
+    );
     strip_denied_fields(&denied, &mut input.data);
 
     let hook_data = input.data.clone();
@@ -63,6 +71,7 @@ pub fn validate_document(
         .draft(is_draft)
         .locale_ctx(input.locale_ctx)
         .soft_delete(ctx.soft_delete)
+        .collection_required_locales(ctx.required_locales)
         .build();
 
     write_hooks.run_before_write(ctx.hooks, ctx.fields, hook_ctx, &val_ctx)?;

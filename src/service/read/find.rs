@@ -2,7 +2,7 @@
 
 use crate::{
     core::{CollectionDefinition, Document},
-    db::{AccessResult, Filter, FilterClause, FilterOp, FindQuery, query},
+    db::{AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query},
     service::{FindDocumentsInput, PaginatedResult, ServiceContext, ServiceError, helpers},
 };
 
@@ -39,7 +39,13 @@ pub fn find_documents(
         def.access.read.as_deref()
     };
 
-    let access = hooks.check_access(access_ref, ctx.user, None, None)?;
+    let access = hooks.check_access(
+        access_ref,
+        ctx.user,
+        None,
+        None,
+        input.locale_ctx.map(LocaleContext::access_locale),
+    )?;
 
     if matches!(access, AccessResult::Denied) {
         let msg = if input.trash {

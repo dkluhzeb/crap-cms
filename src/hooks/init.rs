@@ -86,6 +86,12 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
     super::startup_checks::validate_locale_field_collisions(&snapshot, &config.locale.locales)
         .context("Locale/field-name collision detected")?;
 
+    // Reject `required_locales` settings that reference unconfigured locales,
+    // so a typo fails to boot instead of failing every non-draft write at
+    // runtime with a confusing `validation.required_locale` error.
+    super::startup_checks::validate_required_locales(&snapshot, &config.locale.locales)
+        .context("Invalid required_locales configuration")?;
+
     // Reject definitions whose generated table names collide (e.g. a
     // collection slugged `posts_tags` vs the `tags` array field of `posts`).
     super::startup_checks::validate_table_name_collisions(&snapshot)

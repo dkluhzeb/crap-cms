@@ -38,7 +38,14 @@ pub fn queue_job(ctx: &ServiceContext, input: &QueueJobInput) -> Result<JobRun, 
 
     if input.job_def.access.is_some() {
         let result = runner
-            .check_access(input.job_def.access.as_deref(), ctx.user, None, None, conn)
+            .check_access(
+                input.job_def.access.as_deref(),
+                ctx.user,
+                None,
+                None,
+                None,
+                conn,
+            )
             .map_err(ServiceError::Internal)?;
 
         if matches!(result, AccessResult::Denied) {

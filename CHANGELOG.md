@@ -72,6 +72,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   (`overrideAccess`, `draft`, `hooks`, and `locale` for update/delete) are
   unchanged.
 
+- **`crap.collections.delete` no longer accepts `locale`.** Single delete is
+  locale-agnostic (a row is deleted whole, across all locales) and never read
+  the key — it was a silently-ignored no-op. To remove a single locale's
+  content, **update** the document with that locale's fields set to `null` (and
+  localized arrays/relationships to `[]`); there is no per-locale *delete*.
+
 - **Lua operation option tables reject unknown keys.** Every option
   table (`crap.collections.create` / `update` / `delete` /
   `find_by_id` / `validate` / `undelete` / `unpublish`, the version
@@ -130,6 +136,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `max_file_size` still inherits the global default.
 
 ### Fixed
+
+- **`required` on localized fields uses a locale-completeness model.**
+  A `required` localized scalar field must be present in every locale of its
+  effective `required_locales` (see Added) — by default just the default
+  locale, so an untranslated non-default locale is allowed and a translation
+  can be cleared (reads fall back to the default). This is enforced as a
+  document-level completeness check on **non-draft** writes, evaluated against
+  the submitted data overlaid on the existing row, so it naturally becomes a
+  *publish gate*: drafts may be incomplete, publishing (or any live save)
+  requires the configured locales to be filled. Non-localized required fields
+  are unchanged. Previously validation rejected an explicit `null` for a
+  required localized field in any locale even though the DB only makes the
+  default-locale column `NOT NULL`, so a non-default translation could never
+  be cleared.
 
 - **Bulk operations are now atomic.** `create_many`, `update_many`, and
   `delete_many` each run in a single transaction across every surface
@@ -233,6 +253,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   files, so trashed documents remain restorable.)
 
 ### Added
+
+- **`required_locales` — control which locales a required field must be
+  filled in.** A new field option (with a collection-level default) that
+  generalizes `required` for localized content: `"all"` requires every
+  configured locale, a list (`{"en", "de"}`) requires specific ones, and
+  unset keeps today's default (only the default locale). Enforced by the
+  completeness check on non-draft writes (see Fixed), so you can require
+  complete translations before publishing while still drafting incrementally —
+  more granular than the all-or-nothing "strict localization" other CMSes
+  offer. Only applies to localized fields (setting it on a non-localized field
+  is a load-time error). Locale codes are validated against `[locale].locales`
+  at startup — a typo (or `required_locales` with localization disabled) fails
+  to boot instead of silently breaking every non-draft write.
+
+- **`context.locale` in access functions (per-locale access control).**
+  Collection- and field-level access functions now receive `context.locale` —
+  the locale the operation targets (the requested locale, or the default when
+  none was given; `nil` when localization is disabled). This lets you restrict
+  access by locale: limit a user to specific languages (e.g. a German
+  translator may only write German content), or lock a field so it's only
+  editable in the default locale. There's no built-in "allowed locales" field —
+  you express the policy in the access function. Mirrors Payload's `req.locale`.
+  Custom field `validate` functions also receive `context.locale`, so a
+  validator can enforce per-locale rules — including validators on sub-fields
+  inside arrays/blocks and on richtext node attributes.
 
 - **`events` flag on write operations** — every write op can now control
   whether it emits live-update events to event-stream (SSE) subscribers.

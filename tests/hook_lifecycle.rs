@@ -397,7 +397,7 @@ fn check_access_none_ref_is_allowed() {
     let conn = pool.get().expect("DB connection");
 
     let result = runner
-        .check_access(None, None, None, None, &conn)
+        .check_access(None, None, None, None, None, &conn)
         .expect("check_access failed");
     assert!(
         matches!(result, AccessResult::Allowed),
@@ -411,7 +411,14 @@ fn check_access_returns_allowed() {
     let conn = pool.get().expect("DB connection");
 
     let result = runner
-        .check_access(Some("hooks.access.allow_all"), None, None, None, &conn)
+        .check_access(
+            Some("hooks.access.allow_all"),
+            None,
+            None,
+            None,
+            None,
+            &conn,
+        )
         .expect("check_access failed");
     assert!(
         matches!(result, AccessResult::Allowed),
@@ -425,7 +432,7 @@ fn check_access_returns_denied() {
     let conn = pool.get().expect("DB connection");
 
     let result = runner
-        .check_access(Some("hooks.access.deny_all"), None, None, None, &conn)
+        .check_access(Some("hooks.access.deny_all"), None, None, None, None, &conn)
         .expect("check_access failed");
     assert!(
         matches!(result, AccessResult::Denied),
@@ -439,7 +446,14 @@ fn check_access_returns_constrained() {
     let conn = pool.get().expect("DB connection");
 
     let result = runner
-        .check_access(Some("hooks.access.constrained"), None, None, None, &conn)
+        .check_access(
+            Some("hooks.access.constrained"),
+            None,
+            None,
+            None,
+            None,
+            &conn,
+        )
         .expect("check_access failed");
     match result {
         AccessResult::Constrained(clauses) => {
@@ -473,6 +487,7 @@ fn check_access_with_user_context() {
             Some(&admin_user),
             None,
             None,
+            None,
             &conn,
         )
         .expect("check_access failed");
@@ -497,6 +512,7 @@ fn check_access_with_user_context() {
             Some(&regular_user),
             None,
             None,
+            None,
             &conn,
         )
         .expect("check_access failed");
@@ -507,7 +523,14 @@ fn check_access_with_user_context() {
 
     // No user at all should be denied
     let result = runner
-        .check_access(Some("hooks.access.check_role"), None, None, None, &conn)
+        .check_access(
+            Some("hooks.access.check_role"),
+            None,
+            None,
+            None,
+            None,
+            &conn,
+        )
         .expect("check_access failed");
     assert!(
         matches!(result, AccessResult::Denied),
@@ -528,7 +551,7 @@ fn check_field_read_access_no_access_config() {
         make_field("body", FieldType::Textarea),
     ];
 
-    let denied = runner.check_field_read_access(&fields, None, &conn);
+    let denied = runner.check_field_read_access(&fields, None, None, &conn);
     assert!(
         denied.is_empty(),
         "Fields without access config should not be in denied list, got: {denied:?}"
@@ -546,7 +569,7 @@ fn check_field_read_access_denies_field() {
         make_field("body", FieldType::Textarea),
     ];
 
-    let denied = runner.check_field_read_access(&fields, None, &conn);
+    let denied = runner.check_field_read_access(&fields, None, None, &conn);
     assert_eq!(denied.len(), 1, "Should deny exactly one field");
     assert_eq!(denied[0], "secret", "The denied field should be 'secret'");
 }
@@ -561,7 +584,7 @@ fn check_field_read_access_allows_with_allow_all() {
         make_field_with_read_access("hidden", "hooks.access.deny_all"),
     ];
 
-    let denied = runner.check_field_read_access(&fields, None, &conn);
+    let denied = runner.check_field_read_access(&fields, None, None, &conn);
     assert_eq!(denied.len(), 1);
     assert_eq!(denied[0], "hidden");
 }
@@ -576,7 +599,7 @@ fn check_field_write_access_no_access_config() {
         make_field("body", FieldType::Textarea),
     ];
 
-    let denied = runner.check_field_write_access(&fields, None, "create", &conn);
+    let denied = runner.check_field_write_access(&fields, None, None, "create", &conn);
     assert!(
         denied.is_empty(),
         "Fields without write access config should not be denied"
@@ -593,7 +616,7 @@ fn check_field_write_access_denies_field_on_create() {
         make_field_with_write_access("protected", Some("hooks.access.deny_all"), None),
     ];
 
-    let denied = runner.check_field_write_access(&fields, None, "create", &conn);
+    let denied = runner.check_field_write_access(&fields, None, None, "create", &conn);
     assert_eq!(denied.len(), 1);
     assert_eq!(denied[0], "protected");
 }
@@ -609,12 +632,12 @@ fn check_field_write_access_denies_field_on_update() {
     ];
 
     // On update, the "locked" field should be denied
-    let denied = runner.check_field_write_access(&fields, None, "update", &conn);
+    let denied = runner.check_field_write_access(&fields, None, None, "update", &conn);
     assert_eq!(denied.len(), 1);
     assert_eq!(denied[0], "locked");
 
     // On create, no restriction since create access is None
-    let denied = runner.check_field_write_access(&fields, None, "create", &conn);
+    let denied = runner.check_field_write_access(&fields, None, None, "create", &conn);
     assert!(
         denied.is_empty(),
         "No create restriction defined, should be empty"

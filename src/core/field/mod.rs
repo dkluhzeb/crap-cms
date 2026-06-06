@@ -14,7 +14,7 @@ pub use admin::{
 pub use block_definition::{BlockDefinition, FieldTab};
 pub use definition::{
     FieldAccess, FieldDefinition, FieldDefinitionBuilder, FieldHookFn, FieldHooks, McpFieldConfig,
-    PickerAppearance, ValidateFunction, flatten_array_sub_fields, to_title_case,
+    PickerAppearance, RequiredLocales, ValidateFunction, flatten_array_sub_fields, to_title_case,
 };
 pub use field_type::FieldType;
 pub use localized_string::LocalizedString;

@@ -24,9 +24,10 @@ All access functions receive a context table:
 
 ```lua
 function M.check(ctx)
-    -- ctx.user  = full user document (or nil if anonymous)
-    -- ctx.id    = document ID (for update/delete/find_by_id)
-    -- ctx.data  = incoming data (for create/update)
+    -- ctx.user   = full user document (or nil if anonymous)
+    -- ctx.id     = document ID (for update/delete/find_by_id)
+    -- ctx.data   = incoming data (for create/update)
+    -- ctx.locale = locale this operation targets (when localization is on)
     return true  -- or false, or a filter table
 end
 ```
@@ -36,6 +37,35 @@ end
 | `user` | table or nil | Always | Full user document from the auth collection. `nil` if no auth or anonymous. |
 | `id` | string or nil | update, delete, find_by_id | Document ID |
 | `data` | table or nil | create, update | Incoming data |
+| `locale` | string or nil | When localization enabled | The locale this read/write targets — the requested locale, or the default locale when none was given. `nil` when localization is disabled. Available at both collection and field level. |
+
+## Per-Locale Access
+
+Because `ctx.locale` is available at both collection and field level, you can
+restrict access by locale — e.g. limit a translator to their language, or lock
+a field so it's only editable in the default locale.
+
+```lua
+-- Restrict updates to a per-user list of allowed locales (a "German translator"
+-- may only write German content).
+function M.update(ctx)
+    if not ctx.user then return false end
+    local allowed = ctx.user.locales or {}            -- e.g. {"de"}
+    for _, loc in ipairs(allowed) do
+        if loc == ctx.locale then return true end
+    end
+    return false
+end
+
+-- Field-level: a field that may only be edited in the default ("en") locale
+-- (a common "edit base language only" pattern). Returns true = writable.
+function M.title_update(ctx)
+    return ctx.locale == nil or ctx.locale == "en"
+end
+```
+
+There is no built-in "allowed locales" concept — you express the policy in the
+access function, using whatever user fields/roles your project defines.
 
 ## CRUD Access in Access Functions
 

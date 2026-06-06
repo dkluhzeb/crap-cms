@@ -2,19 +2,27 @@ use serde_json::Value;
 
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
 
-/// Check required constraint. Skipped for checkboxes, drafts, and partial updates.
-/// For Array and has-many Relationship, "required" means at least one item.
+/// Check required constraint. For Array and has-many Relationship, "required"
+/// means at least one item.
+///
+/// `skip` collapses the caller's reasons to bypass this per-submit check: the
+/// document is a draft, OR the field is **locale-scoped** while localization is
+/// active. Locale-scoped required fields are instead enforced document-wide by
+/// the completeness check (`check_localized_completeness`) against the field's
+/// effective `required_locales` — so this per-submit check only enforces
+/// `required` for non-localized fields (and for every field when localization
+/// is disabled). Checkboxes and absent fields on update are also skipped.
 pub(crate) fn check_required(
     field: &FieldDefinition,
     data_key: &str,
     value: Option<&Value>,
     is_empty: bool,
-    is_draft: bool,
+    skip: bool,
     is_update: bool,
     errors: &mut Vec<FieldError>,
 ) {
     if !field.required
-        || is_draft
+        || skip
         || field.field_type == FieldType::Checkbox
         || (is_update && value.is_none())
     {

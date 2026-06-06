@@ -11,4 +11,5 @@ mod constraints;
 mod single;
 mod top;
 
+pub(crate) use single::parse_required_locales;
 pub(crate) use top::parse_fields;

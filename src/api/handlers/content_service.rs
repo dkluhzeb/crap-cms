@@ -374,7 +374,7 @@ impl ContentService {
             .inspect_err(|e| error!("Access check tx error: {}", e))
             .map_err(|_| Status::internal("Internal error"))?;
         let result = hook_runner
-            .check_access(access_ref, user_doc, id, data, &tx)
+            .check_access(access_ref, user_doc, id, data, None, &tx)
             .inspect_err(|e| error!("Access check error: {}", e))
             .map_err(|_| Status::internal("Internal error"))?;
 

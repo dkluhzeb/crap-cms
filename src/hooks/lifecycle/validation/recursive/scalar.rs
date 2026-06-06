@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::{
     core::{FieldDefinition, FieldType, validate::FieldError},
-    db::{LocaleMode, query::helpers::prefixed_name, query::sanitize_locale},
+    db::{LocaleContext, LocaleMode, query::helpers::prefixed_name, query::sanitize_locale},
     hooks::lifecycle::validation::{
         checks, is_empty_value,
         richtext_attrs::{RichtextValidationCtx, validate_richtext_node_attrs},
@@ -31,12 +31,20 @@ impl ValidationWalker<'_> {
         let is_empty = is_empty_value(value);
         let is_update = self.ctx.exclude_id.is_some();
 
+        // Localized required is enforced by the document-level completeness
+        // check (against `required_locales`) whenever localization is active,
+        // so skip the per-submit `required` check for locale-scoped fields here.
+        // Non-locale-scoped fields (incl. join fields that aren't themselves
+        // `localized`) keep the normal per-submit `required` check.
+        let localization_active = self.ctx.locale_ctx.is_some_and(|c| c.config.is_enabled());
+        let skip_required = self.ctx.is_draft
+            || (field.is_locale_scoped(inherited_localized) && localization_active);
         checks::check_required(
             field,
             &data_key,
             value,
             is_empty,
-            self.ctx.is_draft,
+            skip_required,
             is_update,
             errors,
         );
@@ -63,8 +71,11 @@ impl ValidationWalker<'_> {
             field,
             &data_key,
             value,
-            self.data,
-            self.ctx.table,
+            &checks::CustomValidateCtx {
+                data: self.data,
+                table: self.ctx.table,
+                locale: self.ctx.locale_ctx.map(LocaleContext::access_locale),
+            },
             errors,
         );
 
@@ -114,6 +125,7 @@ impl ValidationWalker<'_> {
                 table: self.ctx.table,
                 registry: self.ctx.registry,
                 is_draft: self.ctx.is_draft,
+                locale: self.ctx.locale_ctx.map(LocaleContext::access_locale),
             };
             validate_sub_fields_inner(&params, sub_fields, row_obj, errors);
         }
@@ -185,6 +197,7 @@ impl ValidationWalker<'_> {
         validate_richtext_node_attrs(
             &RichtextValidationCtx::builder(self.lua, registry, self.ctx.table)
                 .draft(self.ctx.is_draft)
+                .locale(self.ctx.locale_ctx.map(LocaleContext::access_locale))
                 .build(),
             content,
             data_key,
@@ -536,5 +549,314 @@ mod tests {
             errs[0].message,
         );
         assert_eq!(errs[0].key.as_deref(), Some("validation.invalid_locale"));
+    }
+
+    fn en_de_config() -> LocaleConfig {
+        LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        }
+    }
+
+    fn required_title_localized() -> Vec<FieldDefinition> {
+        vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .required(true)
+                .localized(true)
+                .build(),
+        ]
+    }
+
+    /// Completeness default (`required_locales` unset → default locale only):
+    /// clearing a non-default locale is allowed as long as the default locale
+    /// still has the value. Here `en` exists on the row, so nulling `de` passes.
+    #[test]
+    fn completeness_allows_clearing_nondefault_when_default_present() {
+        let lua = mlua::Lua::new();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, title__en TEXT, title__de TEXT)");
+        conn.setup("INSERT INTO test (id, title__en, title__de) VALUES ('p1', 'hello', 'hallo')");
+
+        let locale_ctx = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: en_de_config(),
+        };
+
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!(null));
+
+        let result = validate_fields_inner(
+            &lua,
+            &required_title_localized(),
+            &data,
+            &ValidationCtx::builder(&conn, "test")
+                .locale_ctx(Some(&locale_ctx))
+                .exclude_id(Some("p1"))
+                .build(),
+        );
+        assert!(
+            result.is_ok(),
+            "clearing a non-default locale must pass when the default locale is present: {:?}",
+            result.err()
+        );
+    }
+
+    /// `required_locales = "all"`: every locale must be filled. With `de` empty
+    /// on the existing row, a (non-draft) write fails completeness even though
+    /// the submitted `en` value is present.
+    #[test]
+    fn completeness_required_locales_all_enforces_each_locale() {
+        let lua = mlua::Lua::new();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, title__en TEXT, title__de TEXT)");
+        conn.setup("INSERT INTO test (id, title__en, title__de) VALUES ('p1', 'hello', NULL)");
+
+        let fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .required(true)
+                .localized(true)
+                .required_locales(crate::core::RequiredLocales::All)
+                .build(),
+        ];
+
+        let locale_ctx = LocaleContext {
+            mode: LocaleMode::Single("en".to_string()),
+            config: en_de_config(),
+        };
+
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("hello"));
+
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test")
+                .locale_ctx(Some(&locale_ctx))
+                .exclude_id(Some("p1"))
+                .build(),
+        );
+        let err = result.expect_err("missing 'de' translation must fail required_locales = all");
+        assert!(
+            err.errors
+                .iter()
+                .any(|e| e.key.as_deref() == Some("validation.required_locale")),
+            "expected a required_locale error, got: {:?}",
+            err.errors
+        );
+    }
+
+    /// Completeness covers join-backed localized fields (arrays/blocks/has-many):
+    /// a required localized array with `required_locales = "all"` fails when a
+    /// locale has no rows in the field's join table, even though the submitted
+    /// (write) locale has items.
+    #[test]
+    fn completeness_join_field_required_locales_all() {
+        let lua = mlua::Lua::new();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY)");
+        conn.setup(
+            "CREATE TABLE test_items (id TEXT, parent_id TEXT, _locale TEXT, _order INTEGER, label TEXT)",
+        );
+        // The `en` locale has one row; `de` has none.
+        conn.setup(
+            "INSERT INTO test_items (id, parent_id, _locale, _order, label) VALUES ('i1','p1','en',0,'x')",
+        );
+
+        let label = FieldDefinition::builder("label", FieldType::Text).build();
+        let items = FieldDefinition::builder("items", FieldType::Array)
+            .required(true)
+            .localized(true)
+            .fields(vec![label])
+            .required_locales(crate::core::RequiredLocales::All)
+            .build();
+
+        let locale_ctx = LocaleContext {
+            mode: LocaleMode::Single("en".to_string()),
+            config: en_de_config(),
+        };
+
+        let mut data = DocumentFields::new();
+        data.insert("items".to_string(), json!([{ "label": "x" }]));
+
+        let result = validate_fields_inner(
+            &lua,
+            &[items],
+            &data,
+            &ValidationCtx::builder(&conn, "test")
+                .locale_ctx(Some(&locale_ctx))
+                .exclude_id(Some("p1"))
+                .build(),
+        );
+        let err = result.expect_err("missing 'de' rows must fail required_locales = all");
+        assert!(
+            err.errors
+                .iter()
+                .any(|e| e.key.as_deref() == Some("validation.required_locale")
+                    && e.message.contains("'de'")),
+            "expected a required_locale error for 'de', got: {:?}",
+            err.errors
+        );
+    }
+
+    /// Drafts are exempt from the completeness check — incomplete translations
+    /// may be saved as drafts and only publishing enforces completeness.
+    #[test]
+    fn completeness_skipped_for_drafts() {
+        let lua = mlua::Lua::new();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, title__en TEXT, title__de TEXT)");
+        conn.setup("INSERT INTO test (id, title__en, title__de) VALUES ('p1', 'hello', NULL)");
+
+        let fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .required(true)
+                .localized(true)
+                .required_locales(crate::core::RequiredLocales::All)
+                .build(),
+        ];
+
+        let locale_ctx = LocaleContext {
+            mode: LocaleMode::Single("en".to_string()),
+            config: en_de_config(),
+        };
+
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("hello"));
+
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test")
+                .locale_ctx(Some(&locale_ctx))
+                .exclude_id(Some("p1"))
+                .draft(true)
+                .build(),
+        );
+        assert!(
+            result.is_ok(),
+            "drafts skip completeness: {:?}",
+            result.err()
+        );
+    }
+
+    /// `required` IS still enforced for a localized field in the DEFAULT locale
+    /// — the default locale's content stays mandatory (and is the fallback
+    /// source), so it cannot be emptied.
+    #[test]
+    fn required_localized_field_enforced_in_default_locale() {
+        let lua = mlua::Lua::new();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, title__en TEXT, title__de TEXT)");
+
+        let locale_ctx = LocaleContext {
+            mode: LocaleMode::Single("en".to_string()),
+            config: en_de_config(),
+        };
+
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!(null));
+
+        let result = validate_fields_inner(
+            &lua,
+            &required_title_localized(),
+            &data,
+            &ValidationCtx::builder(&conn, "test")
+                .locale_ctx(Some(&locale_ctx))
+                .exclude_id(Some("p1"))
+                .build(),
+        );
+        assert!(
+            result.is_err(),
+            "clearing a required localized field in the default locale must fail"
+        );
+    }
+
+    /// A NON-localized required field is shared across locales and stays
+    /// required regardless of the write locale.
+    #[test]
+    fn required_nonlocalized_field_enforced_in_nondefault_locale() {
+        let lua = mlua::Lua::new();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, slug TEXT)");
+
+        let locale_ctx = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: en_de_config(),
+        };
+
+        let fields = vec![
+            FieldDefinition::builder("slug", FieldType::Text)
+                .required(true)
+                .build(),
+        ];
+
+        let mut data = DocumentFields::new();
+        data.insert("slug".to_string(), json!(null));
+
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test")
+                .locale_ctx(Some(&locale_ctx))
+                .exclude_id(Some("p1"))
+                .build(),
+        );
+        assert!(
+            result.is_err(),
+            "non-localized required field must stay required in any locale"
+        );
+    }
+
+    /// A custom `validate` on a sub-field inside an array receives the content
+    /// `ctx.locale` (regression for threading locale into sub-field validation).
+    /// The validator echoes `ctx.locale` back as its error string.
+    #[test]
+    fn sub_field_validator_receives_content_locale() {
+        let lua = mlua::Lua::new();
+        lua.load(
+            r#"
+            package.loaded["validators"] = {
+                echo_locale = function(value, ctx) return ctx.locale end
+            }
+        "#,
+        )
+        .exec()
+        .unwrap();
+
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY)");
+
+        let label = FieldDefinition::builder("label", FieldType::Text)
+            .validate("validators.echo_locale")
+            .build();
+        let items = FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![label])
+            .build();
+
+        let mut data = DocumentFields::new();
+        data.insert("items".to_string(), json!([{ "label": "x" }]));
+
+        let locale_ctx = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: en_de_config(),
+        };
+        let result = validate_fields_inner(
+            &lua,
+            &[items],
+            &data,
+            &ValidationCtx::builder(&conn, "test")
+                .locale_ctx(Some(&locale_ctx))
+                .build(),
+        );
+        let err = result.expect_err("validator echoes locale as an error");
+        assert!(
+            err.errors.iter().any(|e| e.message == "de"),
+            "sub-field validator should see ctx.locale = 'de', got: {:?}",
+            err.errors
+        );
     }
 }

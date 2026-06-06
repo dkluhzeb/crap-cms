@@ -6,7 +6,7 @@ use anyhow::Context as _;
 
 use crate::{
     core::{Document, collection::GlobalDefinition, event::EventOperation},
-    db::{AccessResult, DbConnection, query, query::helpers::global_table},
+    db::{AccessResult, DbConnection, LocaleContext, query, query::helpers::global_table},
     hooks::{HookContext, LuaCrudInfra, ValidationCtx},
     service::{
         AfterChangeInput, RunnerWriteHooks, ServiceContext, ServiceError, WriteHooks, WriteInput,
@@ -103,13 +103,23 @@ pub fn update_global_in_conn(
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.global_def()?;
 
-    check_global_update_access(ctx, write_hooks, def)?;
+    check_global_update_access(
+        ctx,
+        write_hooks,
+        def,
+        input.locale_ctx.map(LocaleContext::access_locale),
+    )?;
 
     let is_draft = input.draft && def.has_drafts();
     let gtable = global_table(ctx.slug);
     let ui_locale = input.ui_locale.as_deref();
 
-    let denied = write_hooks.field_write_denied(&def.fields, ctx.user, "update");
+    let denied = write_hooks.field_write_denied(
+        &def.fields,
+        ctx.user,
+        input.locale_ctx.map(LocaleContext::access_locale),
+        "update",
+    );
     strip_denied_fields(&denied, &mut input.data);
 
     let final_ctx =
@@ -135,7 +145,11 @@ pub fn update_global_in_conn(
     let mut doc = doc;
     query::hydrate_document(conn, &gtable, &def.fields, &mut doc, None, input.locale_ctx)?;
 
-    let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user);
+    let mut read_denied = write_hooks.field_read_denied(
+        &def.fields,
+        ctx.user,
+        input.locale_ctx.map(LocaleContext::access_locale),
+    );
     read_denied.extend(svc_helpers::collect_api_hidden_field_names(&def.fields, ""));
     doc.strip_fields(&read_denied);
 
@@ -149,8 +163,10 @@ fn check_global_update_access(
     ctx: &ServiceContext,
     write_hooks: &dyn WriteHooks,
     def: &GlobalDefinition,
+    locale: Option<&str>,
 ) -> Result<()> {
-    let access = write_hooks.check_access(def.access.update.as_deref(), ctx.user, None, None)?;
+    let access =
+        write_hooks.check_access(def.access.update.as_deref(), ctx.user, None, None, locale)?;
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Update access denied".into()));
     }

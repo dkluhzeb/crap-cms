@@ -22,7 +22,8 @@ fn undelete_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document>
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.collection_def()?;
 
-    let access = write_hooks.check_access(def.access.resolve_trash(), ctx.user, Some(id), None)?;
+    let access =
+        write_hooks.check_access(def.access.resolve_trash(), ctx.user, Some(id), None, None)?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Undelete access denied".into()));
@@ -49,7 +50,7 @@ fn undelete_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document>
     let mut doc = query::find_by_id(conn, ctx.slug, def, id, None)?
         .ok_or_else(|| ServiceError::NotFound("Document not found after undelete".into()))?;
 
-    let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user);
+    let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user, None);
     read_denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&read_denied);

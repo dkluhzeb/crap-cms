@@ -55,6 +55,7 @@ pub(in crate::mcp::tools) fn exec_validate(
         operation,
         exclude_id: exclude_id.as_deref(),
         soft_delete: def.soft_delete,
+        required_locales: def.required_locales.as_ref(),
     };
 
     let input = WriteInput::builder(data)

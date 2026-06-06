@@ -26,8 +26,13 @@ pub fn list_versions(
     let hooks = ctx.read_hooks()?;
     let table = ctx.version_table();
 
-    let access =
-        hooks.check_access(ctx.read_access_ref(), ctx.user, Some(input.parent_id), None)?;
+    let access = hooks.check_access(
+        ctx.read_access_ref(),
+        ctx.user,
+        Some(input.parent_id),
+        None,
+        None,
+    )?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Read access denied".into()));
@@ -108,6 +113,7 @@ mod tests {
             _user: Option<&Document>,
             _id: Option<&str>,
             _data: Option<&DocumentFields>,
+            _locale: Option<&str>,
         ) -> Result<AccessResult> {
             Ok(AccessResult::Allowed)
         }
@@ -116,6 +122,7 @@ mod tests {
             &self,
             _fields: &[FieldDefinition],
             _user: Option<&Document>,
+            _locale: Option<&str>,
         ) -> Vec<String> {
             Vec::new()
         }
@@ -160,6 +167,7 @@ mod tests {
             &self,
             _fields: &[FieldDefinition],
             _user: Option<&Document>,
+            _locale: Option<&str>,
         ) -> Vec<String> {
             Vec::new()
         }
@@ -170,6 +178,7 @@ mod tests {
             _user: Option<&Document>,
             _id: Option<&str>,
             _data: Option<&DocumentFields>,
+            _locale: Option<&str>,
         ) -> Result<AccessResult> {
             Ok(AccessResult::Allowed)
         }
@@ -178,6 +187,7 @@ mod tests {
             &self,
             _fields: &[FieldDefinition],
             _user: Option<&Document>,
+            _locale: Option<&str>,
             _operation: &str,
         ) -> Vec<String> {
             Vec::new()

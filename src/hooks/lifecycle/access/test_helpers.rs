@@ -101,6 +101,13 @@ pub(super) fn setup_lua() -> Lua {
             error("access check failed!")
         end
 
+        function access.check_locale(ctx)
+            if ctx.locale == "en" then
+                return true
+            end
+            return false
+        end
+
         package.loaded["test_access"] = access
     "#,
     )

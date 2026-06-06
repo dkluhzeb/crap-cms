@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::core::{
-    FieldDefinition, Slug,
+    FieldDefinition, RequiredLocales, Slug,
     collection::{
         Access, AdminConfig, Auth, Hooks, IndexDefinition, Labels, LiveMode, LiveSetting,
         McpConfig, VersionsConfig, labels::resolve_label,
@@ -93,6 +93,13 @@ pub struct CollectionDefinition {
     #[serde(default)]
     #[lua(optional)]
     pub soft_delete_retention: Option<String>,
+    /// Default `required_locales` for this collection's localized required
+    /// fields — applies to any field that doesn't set its own. `"all"` =
+    /// every configured locale; a list names specific locales. Unset → only
+    /// the default locale is required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[lua(ty = "\"all\" | string[]", optional)]
+    pub required_locales: Option<RequiredLocales>,
 }
 
 impl Default for CollectionDefinition {
@@ -114,6 +121,7 @@ impl Default for CollectionDefinition {
             indexes: Vec::new(),
             soft_delete: false,
             soft_delete_retention: None,
+            required_locales: None,
         }
     }
 }

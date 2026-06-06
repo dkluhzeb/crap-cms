@@ -7,14 +7,21 @@ use crate::{
     hooks::lifecycle::validation::custom::run_validate_function_inner,
 };
 
+/// Document-level context for a custom validate call: the surrounding field
+/// map, the collection slug, and the content locale being written.
+pub(crate) struct CustomValidateCtx<'a> {
+    pub data: &'a DocumentFields,
+    pub table: &'a str,
+    pub locale: Option<&'a str>,
+}
+
 /// Run custom Lua validate function on a field value.
 pub(crate) fn check_custom_validate(
     lua: &Lua,
     field: &FieldDefinition,
     data_key: &str,
     value: Option<&Value>,
-    data: &DocumentFields,
-    table: &str,
+    ctx: &CustomValidateCtx,
     errors: &mut Vec<FieldError>,
 ) {
     let Some(validate_ref) = field.validate.as_ref() else {
@@ -24,7 +31,15 @@ pub(crate) fn check_custom_validate(
         return;
     };
 
-    match run_validate_function_inner(lua, validate_ref, val, data, table, &field.name) {
+    match run_validate_function_inner(
+        lua,
+        validate_ref,
+        val,
+        ctx.data,
+        ctx.table,
+        &field.name,
+        ctx.locale,
+    ) {
         Ok(Some(err_msg)) => {
             errors.push(FieldError::new(data_key.to_owned(), err_msg));
         }

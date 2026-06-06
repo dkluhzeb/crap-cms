@@ -37,7 +37,7 @@ pub fn unpublish_global_document(ctx: &ServiceContext) -> Result<Document> {
     }
 
     // Access check
-    let access = wh.check_access(def.access.update.as_deref(), ctx.user, None, None)?;
+    let access = wh.check_access(def.access.update.as_deref(), ctx.user, None, None, None)?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Update access denied".into()));
@@ -98,7 +98,7 @@ pub fn unpublish_global_document(ctx: &ServiceContext) -> Result<Document> {
 
     query::hydrate_document(&tx, &gtable, &def.fields, &mut doc, None, None)?;
 
-    let mut read_denied = wh.field_read_denied(&def.fields, ctx.user);
+    let mut read_denied = wh.field_read_denied(&def.fields, ctx.user, None);
     read_denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&read_denied);

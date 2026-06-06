@@ -50,9 +50,45 @@ Localized fields use **suffixed columns** in SQLite:
 
 - A field `title` with locales `["en", "de"]` becomes columns `title__en` and `title__de`
 - Non-localized fields keep their single column
-- `required` is only enforced on the default locale column (`title__en`)
+- Only the default-locale column (`title__en`) is `NOT NULL` for a required field; per-locale completeness is enforced in the validation layer (see [Required across locales](#required-across-locales))
 - `unique` checks the locale-specific column being written to (e.g., writing locale `"de"` checks `title__de`)
 - Junction tables (arrays, blocks, has-many) get a `_locale` column
+
+### Required across locales
+
+By default a `required` localized field must only be filled in the **default
+locale** — untranslated locales fall back, and a translation can be cleared
+(set its fields to `nil` in that locale). To require more, set
+`required_locales` on the field (or `required_locales` as a collection-level
+default):
+
+```lua
+crap.fields.text({
+    name = "title",
+    required = true,
+    localized = true,
+    required_locales = "all",        -- every configured locale
+    -- or a specific set: required_locales = { "en", "de" },
+})
+```
+
+Completeness is checked on **non-draft** writes against the document's actual
+state (submitted data overlaid on the existing row), so it acts as a **publish
+gate**: you can save incomplete translations as **drafts**, and publishing (or
+any live save on a non-versioned collection) requires every locale in
+`required_locales` to be filled. To *remove* a translation, clear that locale's
+fields with an [update](#removing-a-translation) — you can't clear a field
+that's still required in that locale.
+
+`required_locales` only applies to localized fields. It covers both
+column-backed fields (text, number, …) and join-backed fields (arrays, blocks,
+has-many relationships) — for the latter, "present in a locale" means the
+field has at least one row for that locale.
+
+Locale codes in `required_locales` are checked against `[locale].locales` at
+startup: a typo (e.g. `"de-DE"` when only `"de"` is configured), or setting
+`required_locales` while localization is disabled, fails to boot with a clear
+error instead of silently breaking every non-draft write.
 
 ### Unique + Localized
 
@@ -113,6 +149,37 @@ grpcurl -plaintext -d '{
 ```
 
 Non-localized fields are always written to their single column regardless of the locale parameter.
+
+### Removing a translation
+
+There is no per-locale *delete* operation — and there doesn't need to be. A
+document is one row shared across all locales (localized fields are just
+per-locale columns / `_locale`-scoped junction rows), so "removing a
+translation" is an **update** that clears that locale's content:
+
+```lua
+-- Remove the German translation of a document
+crap.collections.pages.update("abc123", {
+    title = nil,        -- clears title__de
+    body = nil,         -- clears body__de
+    gallery = {},       -- clears the de rows of a localized array/relationship
+}, { locale = "de" })
+```
+
+This nulls the `*__de` columns, removes only the `_locale = "de"` junction
+rows, and decrements ref-counts for any localized relationships that were
+removed. The document still exists; reading it in `de` now falls back to the
+default locale (when `fallback = true`). To remove a document entirely (all
+locales), use `delete`.
+
+You **cannot** clear a field that's required in that locale — the
+[completeness check](#required-across-locales) refuses it on a non-draft write
+(the default locale is always required; others depend on `required_locales`).
+
+> **Note:** an update is a full write of the fields you pass, so a *shared*
+> (non-localized) `checkbox` you omit is reset to off. When clearing a locale on
+> a collection that has shared checkboxes, include their current values in the
+> same `update` call.
 
 ## Admin UI
 

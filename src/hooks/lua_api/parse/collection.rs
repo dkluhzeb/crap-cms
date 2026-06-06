@@ -13,6 +13,7 @@ use crate::{
 
 use super::{
     auth::{parse_collection_auth, validate_auth_keys},
+    fields::parse_required_locales,
     helpers::{deny_unknown_keys, get_bool, get_string, get_table},
     shared::{
         parse_access_config, parse_fields_section, parse_hooks_section, parse_indexes,
@@ -103,6 +104,7 @@ const COLLECTION_CONFIG_KEYS: &[&str] = &[
     "mcp",
     "soft_delete",
     "soft_delete_retention",
+    "required_locales",
 ];
 
 /// Parse the `admin` subtable from a Lua config table.
@@ -221,6 +223,7 @@ pub fn parse_collection_definition(
     def.indexes = indexes;
     def.soft_delete = soft_delete;
     def.soft_delete_retention = soft_delete_retention;
+    def.required_locales = parse_required_locales(config)?;
 
     Ok(def)
 }

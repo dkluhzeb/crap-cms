@@ -335,6 +335,7 @@ impl HookRunner {
             locale_ctx: ctx.locale_ctx,
             registry: Some(&self.registry),
             soft_delete: ctx.soft_delete,
+            collection_required_locales: ctx.collection_required_locales,
         };
         validate_fields_inner(&lua, fields, data, &enriched_ctx)
     }

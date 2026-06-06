@@ -130,7 +130,9 @@ fn no_access_ref_allows() {
     let (_tmp, pool, _registry, runner) = setup();
     let conn = pool.get().unwrap();
 
-    let result = runner.check_access(None, None, None, None, &conn).unwrap();
+    let result = runner
+        .check_access(None, None, None, None, None, &conn)
+        .unwrap();
     assert!(matches!(result, query::AccessResult::Allowed));
 }
 
@@ -140,7 +142,7 @@ fn anyone_allows_anonymous() {
     let conn = pool.get().unwrap();
 
     let result = runner
-        .check_access(Some("access.anyone"), None, None, None, &conn)
+        .check_access(Some("access.anyone"), None, None, None, None, &conn)
         .unwrap();
     assert!(matches!(result, query::AccessResult::Allowed));
 }
@@ -151,7 +153,7 @@ fn authenticated_denies_anonymous() {
     let conn = pool.get().unwrap();
 
     let result = runner
-        .check_access(Some("access.authenticated"), None, None, None, &conn)
+        .check_access(Some("access.authenticated"), None, None, None, None, &conn)
         .unwrap();
     assert!(matches!(result, query::AccessResult::Denied));
 }
@@ -168,6 +170,7 @@ fn authenticated_allows_user() {
             Some(&editor),
             None,
             None,
+            None,
             &conn,
         )
         .unwrap();
@@ -181,7 +184,14 @@ fn admin_only_denies_editor() {
     let editor = make_user_doc("editor-1", "editor");
 
     let result = runner
-        .check_access(Some("access.admin_only"), Some(&editor), None, None, &conn)
+        .check_access(
+            Some("access.admin_only"),
+            Some(&editor),
+            None,
+            None,
+            None,
+            &conn,
+        )
         .unwrap();
     assert!(matches!(result, query::AccessResult::Denied));
 }
@@ -193,7 +203,14 @@ fn admin_only_allows_admin() {
     let admin = make_user_doc("admin-1", "admin");
 
     let result = runner
-        .check_access(Some("access.admin_only"), Some(&admin), None, None, &conn)
+        .check_access(
+            Some("access.admin_only"),
+            Some(&admin),
+            None,
+            None,
+            None,
+            &conn,
+        )
         .unwrap();
     assert!(matches!(result, query::AccessResult::Allowed));
 }
@@ -204,7 +221,14 @@ fn published_or_author_constrains_anonymous() {
     let conn = pool.get().unwrap();
 
     let result = runner
-        .check_access(Some("access.published_or_author"), None, None, None, &conn)
+        .check_access(
+            Some("access.published_or_author"),
+            None,
+            None,
+            None,
+            None,
+            &conn,
+        )
         .unwrap();
 
     match result {
@@ -237,6 +261,7 @@ fn published_or_author_allows_admin() {
             Some(&admin),
             None,
             None,
+            None,
             &conn,
         )
         .unwrap();
@@ -253,7 +278,8 @@ fn field_write_no_field_access_allows_all() {
 
     let posts = registry.get_collection("posts").unwrap();
 
-    let denied = runner.check_field_write_access(&posts.fields, Some(&editor), "update", &conn);
+    let denied =
+        runner.check_field_write_access(&posts.fields, Some(&editor), None, "update", &conn);
     // No field-level access controls in posts definition
     assert!(
         denied.is_empty(),
@@ -269,7 +295,7 @@ fn field_read_no_config_allows_all() {
     let posts = registry.get_collection("posts").unwrap();
 
     // No field has read access configured, so nothing should be denied
-    let denied = runner.check_field_read_access(&posts.fields, None, &conn);
+    let denied = runner.check_field_read_access(&posts.fields, None, None, &conn);
     assert!(
         denied.is_empty(),
         "Expected no denied fields for read, got: {denied:?}"
@@ -352,7 +378,7 @@ fn access_check_plus_db_query_end_to_end() {
     // Verify published_or_author for anonymous returns constraint (not fully open)
     let conn = pool.get().unwrap();
     let result = runner
-        .check_access(posts.access.read.as_deref(), None, None, None, &conn)
+        .check_access(posts.access.read.as_deref(), None, None, None, None, &conn)
         .unwrap();
     assert!(matches!(result, query::AccessResult::Constrained(_)));
 
@@ -362,6 +388,7 @@ fn access_check_plus_db_query_end_to_end() {
         .check_access(
             posts.access.read.as_deref(),
             Some(&admin),
+            None,
             None,
             None,
             &conn,
@@ -375,7 +402,14 @@ fn access_check_plus_db_query_end_to_end() {
 
     // Verify author_or_admin denies anonymous delete
     let result = runner
-        .check_access(posts.access.delete.as_deref(), None, None, None, &conn)
+        .check_access(
+            posts.access.delete.as_deref(),
+            None,
+            None,
+            None,
+            None,
+            &conn,
+        )
         .unwrap();
     assert!(matches!(result, query::AccessResult::Denied));
 }
@@ -413,7 +447,7 @@ fn field_read_access_strips_denied_fields() {
     ];
 
     // Anonymous user (no user doc) — admin_only should deny
-    let denied = runner.check_field_read_access(&fields, None, &conn);
+    let denied = runner.check_field_read_access(&fields, None, None, &conn);
     assert_eq!(
         denied.len(),
         1,
@@ -426,7 +460,7 @@ fn field_read_access_strips_denied_fields() {
 
     // Admin user — admin_only should allow
     let admin = make_user_doc("admin-1", "admin");
-    let denied = runner.check_field_read_access(&fields, Some(&admin), &conn);
+    let denied = runner.check_field_read_access(&fields, Some(&admin), None, &conn);
     assert!(
         denied.is_empty(),
         "Admin user should have all fields allowed, but got denied: {denied:?}"
@@ -472,7 +506,7 @@ fn field_write_access_strips_denied_fields() {
     ];
 
     // Anonymous user: on create, auto_slug should be denied (admin_only denies anonymous)
-    let denied_on_create = runner.check_field_write_access(&fields, None, "create", &conn);
+    let denied_on_create = runner.check_field_write_access(&fields, None, None, "create", &conn);
     assert!(
         denied_on_create.contains(&"auto_slug".to_string()),
         "auto_slug should be denied on create for anonymous, got: {denied_on_create:?}"
@@ -483,7 +517,7 @@ fn field_write_access_strips_denied_fields() {
     );
 
     // Anonymous user: on update, immutable_field should be denied (admin_only denies anonymous)
-    let denied_on_update = runner.check_field_write_access(&fields, None, "update", &conn);
+    let denied_on_update = runner.check_field_write_access(&fields, None, None, "update", &conn);
     assert!(
         denied_on_update.contains(&"immutable_field".to_string()),
         "immutable_field should be denied on update for anonymous, got: {denied_on_update:?}"
@@ -503,7 +537,9 @@ fn no_access_config_means_allowed() {
     let conn = pool.get().unwrap();
 
     // Collection-level: None access ref should return Allowed
-    let result = runner.check_access(None, None, None, None, &conn).unwrap();
+    let result = runner
+        .check_access(None, None, None, None, None, &conn)
+        .unwrap();
     assert!(
         matches!(result, query::AccessResult::Allowed),
         "None access ref should return Allowed, got: {result:?}"
@@ -512,7 +548,7 @@ fn no_access_config_means_allowed() {
     // Also test with a user present — should still be Allowed
     let editor = make_user_doc("editor-1", "editor");
     let result = runner
-        .check_access(None, Some(&editor), None, None, &conn)
+        .check_access(None, Some(&editor), None, None, None, &conn)
         .unwrap();
     assert!(
         matches!(result, query::AccessResult::Allowed),
@@ -527,19 +563,19 @@ fn no_access_config_means_allowed() {
         ..Default::default()
     }];
 
-    let denied_read = runner.check_field_read_access(&fields, None, &conn);
+    let denied_read = runner.check_field_read_access(&fields, None, None, &conn);
     assert!(
         denied_read.is_empty(),
         "Fields with no access config should not be denied for read"
     );
 
-    let denied_write_create = runner.check_field_write_access(&fields, None, "create", &conn);
+    let denied_write_create = runner.check_field_write_access(&fields, None, None, "create", &conn);
     assert!(
         denied_write_create.is_empty(),
         "Fields with no access config should not be denied for create"
     );
 
-    let denied_write_update = runner.check_field_write_access(&fields, None, "update", &conn);
+    let denied_write_update = runner.check_field_write_access(&fields, None, None, "update", &conn);
     assert!(
         denied_write_update.is_empty(),
         "Fields with no access config should not be denied for update"
@@ -794,7 +830,9 @@ fn default_deny_true_no_access_ref_returns_denied() {
     let conn = db_pool.get().unwrap();
 
     // No access function configured + default_deny = true → must be Denied
-    let result = runner.check_access(None, None, None, None, &conn).unwrap();
+    let result = runner
+        .check_access(None, None, None, None, None, &conn)
+        .unwrap();
     assert!(
         matches!(result, query::AccessResult::Denied),
         "With default_deny=true and no access ref, expected Denied, got: {result:?}"
@@ -803,7 +841,7 @@ fn default_deny_true_no_access_ref_returns_denied() {
     // Even with a user present, no access function + default_deny → Denied
     let user = make_user_doc("user-1", "editor");
     let result = runner
-        .check_access(None, Some(&user), None, None, &conn)
+        .check_access(None, Some(&user), None, None, None, &conn)
         .unwrap();
     assert!(
         matches!(result, query::AccessResult::Denied),

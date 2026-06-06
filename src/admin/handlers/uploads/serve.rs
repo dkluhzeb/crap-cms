@@ -55,7 +55,7 @@ fn check_upload_access_blocking(
     user_doc: Option<&Document>,
 ) -> Result<AccessResult, anyhow::Error> {
     let conn = pool.get()?;
-    hook_runner.check_access(Some(func_ref), user_doc, None, None, &conn)
+    hook_runner.check_access(Some(func_ref), user_doc, None, None, None, &conn)
 }
 
 /// Check collection read access, returning the cache policy to use.

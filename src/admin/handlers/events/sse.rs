@@ -124,10 +124,14 @@ fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document>) -> SseAc
     };
 
     for (slug, def) in &state.registry.collections {
-        match state
-            .hook_runner
-            .check_access(def.access.read.as_deref(), user_doc, None, None, &tx)
-        {
+        match state.hook_runner.check_access(
+            def.access.read.as_deref(),
+            user_doc,
+            None,
+            None,
+            None,
+            &tx,
+        ) {
             Ok(AccessResult::Allowed) => {
                 access.collections.insert(slug.clone());
             }
@@ -140,7 +144,7 @@ fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document>) -> SseAc
 
         let denied = state
             .hook_runner
-            .check_field_read_access(&def.fields, user_doc, &tx);
+            .check_field_read_access(&def.fields, user_doc, None, &tx);
 
         if !denied.is_empty() {
             access.denied_fields.insert(slug.to_string(), denied);
@@ -150,10 +154,14 @@ fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document>) -> SseAc
     }
 
     for (slug, def) in &state.registry.globals {
-        match state
-            .hook_runner
-            .check_access(def.access.read.as_deref(), user_doc, None, None, &tx)
-        {
+        match state.hook_runner.check_access(
+            def.access.read.as_deref(),
+            user_doc,
+            None,
+            None,
+            None,
+            &tx,
+        ) {
             Ok(AccessResult::Allowed) => {
                 access.globals.insert(slug.clone());
             }
@@ -166,7 +174,7 @@ fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document>) -> SseAc
 
         let denied = state
             .hook_runner
-            .check_field_read_access(&def.fields, user_doc, &tx);
+            .check_field_read_access(&def.fields, user_doc, None, &tx);
 
         if !denied.is_empty() {
             access.denied_fields.insert(slug.to_string(), denied);

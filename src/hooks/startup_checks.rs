@@ -20,7 +20,7 @@ use mlua::Lua;
 use tracing::warn;
 
 use crate::core::{
-    Access, FieldDefinition, FieldType, Hooks, Registry, Slug,
+    Access, FieldDefinition, FieldType, Hooks, Registry, RequiredLocales, Slug,
     collection::{Activation, AuthMethod, Surface},
 };
 use crate::db::query::helpers::{global_table, join_table, prefixed_name};
@@ -329,6 +329,154 @@ fn walk_fields_for_collisions(
         }
         for tab in &f.tabs {
             walk_fields_for_collisions(&tab.fields, locales, source, out);
+        }
+    }
+}
+
+/// Validate every `required_locales` setting against the configured locales, so
+/// a typo (`"de-DE"` when only `"de"` is configured) fails to boot instead of
+/// silently making every non-draft write to that field error at runtime.
+///
+/// Checks the collection-level default and every field-level override (recursing
+/// through groups, blocks, tabs). `All` is always valid (it expands to the
+/// configured set). A `List` code must be a configured locale; setting any
+/// `required_locales` while localization is disabled is also rejected.
+///
+/// Returns `Err` with a single aggregated message listing every offending
+/// setting and its source.
+pub fn validate_required_locales(registry: &Registry, locales: &[String]) -> Result<()> {
+    let mut errors: Vec<String> = Vec::new();
+
+    for (slug, def) in &registry.collections {
+        check_required_locales_value(
+            def.required_locales.as_ref(),
+            locales,
+            &format!("collection '{slug}' (collection-level required_locales)"),
+            &mut errors,
+        );
+        walk_fields_for_required_locales(
+            &def.fields,
+            false,
+            locales,
+            &format!("collection '{slug}'"),
+            &mut errors,
+        );
+    }
+
+    // Globals have no collection-level `required_locales`; only field overrides.
+    for (slug, def) in &registry.globals {
+        walk_fields_for_required_locales(
+            &def.fields,
+            false,
+            locales,
+            &format!("global '{slug}'"),
+            &mut errors,
+        );
+    }
+
+    if errors.is_empty() {
+        return Ok(());
+    }
+
+    let body = errors.join("\n  - ");
+    bail!(
+        "Invalid `required_locales` configuration:\n  - {body}\n\n\
+         `required_locales` may only be set on locale-scoped fields, and every \
+         listed locale must appear in `[locale].locales`."
+    );
+}
+
+/// Validate a single `required_locales` value against the configured locales.
+fn check_required_locales_value(
+    rl: Option<&RequiredLocales>,
+    locales: &[String],
+    source: &str,
+    out: &mut Vec<String>,
+) {
+    let Some(rl) = rl else {
+        return;
+    };
+
+    if locales.is_empty() {
+        out.push(format!(
+            "{source} sets required_locales but localization is not enabled \
+             (no `[locale].locales` configured)"
+        ));
+        return;
+    }
+
+    if let RequiredLocales::List(list) = rl {
+        for code in list {
+            if !locales.iter().any(|l| l == code) {
+                out.push(format!(
+                    "{source}: unknown locale '{code}' (configured: {})",
+                    locales.join(", ")
+                ));
+            }
+        }
+    }
+}
+
+/// Recurse through a field tree validating every `required_locales` override.
+fn walk_fields_for_required_locales(
+    fields: &[FieldDefinition],
+    inherited_localized: bool,
+    locales: &[String],
+    source: &str,
+    out: &mut Vec<String>,
+) {
+    for f in fields {
+        if let Some(rl) = f.required_locales.as_ref() {
+            let ctx = format!("{source} field '{}'", f.name);
+
+            // `required_locales` is only meaningful on a locale-scoped field —
+            // one that is `localized`, or inherits localization from an
+            // enclosing group. This honors inheritance (the per-field parser
+            // can't), matching how the completeness check resolves scope.
+            if !f.is_locale_scoped(inherited_localized) {
+                out.push(format!(
+                    "{ctx}: required_locales only applies to localized fields \
+                     (mark the field — or its enclosing group — localized)"
+                ));
+            }
+
+            check_required_locales_value(Some(rl), locales, &ctx, out);
+        }
+
+        // Recurse exactly as the completeness check does: through groups
+        // (which carry localization down) and the transparent layout wrappers.
+        // Array/Blocks inner fields are intentionally NOT walked — completeness
+        // treats those as opaque leaf join targets, so a `required_locales`
+        // nested inside one is inert and not validated here.
+        match f.field_type {
+            FieldType::Group => walk_fields_for_required_locales(
+                &f.fields,
+                inherited_localized || f.localized,
+                locales,
+                source,
+                out,
+            ),
+            FieldType::Row | FieldType::Collapsible => {
+                walk_fields_for_required_locales(
+                    &f.fields,
+                    inherited_localized,
+                    locales,
+                    source,
+                    out,
+                );
+            }
+            FieldType::Tabs => {
+                for tab in &f.tabs {
+                    walk_fields_for_required_locales(
+                        &tab.fields,
+                        inherited_localized,
+                        locales,
+                        source,
+                        out,
+                    );
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -783,5 +931,188 @@ mod tests {
             .register_collection(auth_def("users", Auth::default_methods()));
         validate_auth_methods(&registry.read().unwrap())
             .expect("default methods should pass validation");
+    }
+
+    // ── required_locales validation ──────────────────────────────────────
+
+    fn en_de() -> Vec<String> {
+        vec!["en".to_string(), "de".to_string()]
+    }
+
+    /// Register a `posts` collection with one field and run the check against
+    /// the given locales, returning the result.
+    fn check_field(field: FieldDefinition, locales: &[String]) -> Result<()> {
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![field];
+        let registry = Registry::shared();
+        registry.write().unwrap().register_collection(def);
+        validate_required_locales(&registry.read().unwrap(), locales)
+    }
+
+    #[test]
+    fn required_locales_unknown_code_is_rejected() {
+        let err = check_field(
+            FieldDefinition::builder("title", FieldType::Text)
+                .required(true)
+                .localized(true)
+                .required_locales(RequiredLocales::List(vec!["de-DE".to_string()]))
+                .build(),
+            &en_de(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("de-DE"),
+            "error should name the bad code: {err}"
+        );
+        assert!(err.contains("title"), "error should name the field: {err}");
+    }
+
+    #[test]
+    fn required_locales_valid_list_passes() {
+        check_field(
+            FieldDefinition::builder("title", FieldType::Text)
+                .required(true)
+                .localized(true)
+                .required_locales(RequiredLocales::List(vec![
+                    "en".to_string(),
+                    "de".to_string(),
+                ]))
+                .build(),
+            &en_de(),
+        )
+        .expect("configured codes must pass");
+    }
+
+    #[test]
+    fn required_locales_all_passes() {
+        check_field(
+            FieldDefinition::builder("title", FieldType::Text)
+                .required(true)
+                .localized(true)
+                .required_locales(RequiredLocales::All)
+                .build(),
+            &en_de(),
+        )
+        .expect("`all` is always valid");
+    }
+
+    #[test]
+    fn required_locales_none_passes() {
+        check_field(
+            FieldDefinition::builder("title", FieldType::Text).build(),
+            &en_de(),
+        )
+        .expect("unset is fine");
+    }
+
+    #[test]
+    fn required_locales_rejected_when_localization_disabled() {
+        let err = check_field(
+            FieldDefinition::builder("title", FieldType::Text)
+                .required(true)
+                .localized(true)
+                .required_locales(RequiredLocales::All)
+                .build(),
+            &[],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("localization is not enabled"),
+            "should reject required_locales with no configured locales: {err}"
+        );
+    }
+
+    #[test]
+    fn required_locales_collection_level_is_validated() {
+        let mut def = CollectionDefinition::new("posts");
+        def.required_locales = Some(RequiredLocales::List(vec!["fr".to_string()]));
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .required(true)
+                .localized(true)
+                .build(),
+        ];
+        let registry = Registry::shared();
+        registry.write().unwrap().register_collection(def);
+
+        let err = validate_required_locales(&registry.read().unwrap(), &en_de())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("fr"),
+            "collection-level bad code must be caught: {err}"
+        );
+        assert!(
+            err.contains("collection-level"),
+            "error should point at the collection-level setting: {err}"
+        );
+    }
+
+    #[test]
+    fn required_locales_validated_inside_groups() {
+        let err = check_field(
+            FieldDefinition::builder("seo", FieldType::Group)
+                .localized(true)
+                .fields(vec![
+                    FieldDefinition::builder("meta_title", FieldType::Text)
+                        .required(true)
+                        .required_locales(RequiredLocales::List(vec!["xx".to_string()]))
+                        .build(),
+                ])
+                .build(),
+            &en_de(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("xx"), "nested bad code must be caught: {err}");
+        assert!(
+            err.contains("meta_title"),
+            "should name the nested field: {err}"
+        );
+    }
+
+    /// A required sub-field that inherits localization from a localized group
+    /// (without its own `localized = true`) is locale-scoped, so valid
+    /// `required_locales` must pass — the per-field parser used to reject this.
+    #[test]
+    fn required_locales_on_group_inherited_subfield_passes() {
+        check_field(
+            FieldDefinition::builder("seo", FieldType::Group)
+                .localized(true)
+                .fields(vec![
+                    FieldDefinition::builder("meta_title", FieldType::Text)
+                        .required(true)
+                        .required_locales(RequiredLocales::List(vec![
+                            "en".to_string(),
+                            "de".to_string(),
+                        ]))
+                        .build(),
+                ])
+                .build(),
+            &en_de(),
+        )
+        .expect("required_locales on a group-inherited sub-field with valid codes must pass");
+    }
+
+    /// `required_locales` on a field that is neither localized nor inside a
+    /// localized group is meaningless and must be rejected (this check moved
+    /// from the per-field parser to startup so it can honor group inheritance).
+    #[test]
+    fn required_locales_on_non_locale_scoped_field_rejected() {
+        let err = check_field(
+            FieldDefinition::builder("title", FieldType::Text)
+                .required(true)
+                .required_locales(RequiredLocales::List(vec!["en".to_string()]))
+                .build(),
+            &en_de(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("only applies to localized"),
+            "non-locale-scoped required_locales must be rejected: {err}"
+        );
     }
 }

@@ -113,6 +113,7 @@ fn globals_validate(
         operation: "update",
         exclude_id: Some("default"),
         soft_delete: false,
+        required_locales: None,
     };
 
     let input = WriteInput::builder(data)

@@ -115,6 +115,7 @@ fn queue_job_inner(
             user_doc.as_ref(),
             None,
             None,
+            None,
         )
         .map_err(|e| RuntimeError(format!("access check error: {e:#}")))?;
 

@@ -989,3 +989,41 @@ async fn grpc_localized_array_crud() {
         "English locale should be unchanged"
     );
 }
+
+/// Regression: a nested required group sub-field *provided* via gRPC must pass
+/// validation (data is normalized to flat keys before validation, matching
+/// persistence). Previously failed with `meta_title is required`.
+#[tokio::test]
+async fn grpc_validation_required_in_group_provided_passes() {
+    let ts = setup_service(vec![make_products_with_required_group_field()], vec![]);
+
+    let mut fields = std::collections::BTreeMap::new();
+    fields.insert("name".to_string(), str_val("HasSEO"));
+    fields.insert(
+        "seo".to_string(),
+        struct_val(&[("meta_title", str_val("Title"))]),
+    );
+
+    let doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "products".to_string(),
+            data: Some(Struct { fields }),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .expect("providing the nested required group sub-field should pass validation")
+        .into_inner()
+        .document
+        .unwrap();
+
+    // And it round-trips: the sub-field persisted under the flat column.
+    let found = find_product_by_id(&ts, &doc.id).await;
+    let seo = found.fields.as_ref().unwrap().fields.get("seo");
+    assert_eq!(
+        get_struct_field_str(seo.unwrap(), "meta_title").as_deref(),
+        Some("Title"),
+    );
+}

@@ -118,7 +118,14 @@ fn resolve_single_slug(
     tx: &dyn DbConnection,
     state: &mut AccessState,
 ) {
-    match hook_runner.check_access(slug_access.access_ref.as_deref(), user_doc, None, None, tx) {
+    match hook_runner.check_access(
+        slug_access.access_ref.as_deref(),
+        user_doc,
+        None,
+        None,
+        None,
+        tx,
+    ) {
         Ok(AccessResult::Allowed) => {
             state.allowed.insert(slug.to_string());
         }
@@ -129,7 +136,7 @@ fn resolve_single_slug(
         _ => return,
     }
 
-    let denied = hook_runner.check_field_read_access(&slug_access.fields, user_doc, tx);
+    let denied = hook_runner.check_field_read_access(&slug_access.fields, user_doc, None, tx);
 
     if !denied.is_empty() {
         state.denied_fields.insert(slug.to_string(), denied);

@@ -2,7 +2,7 @@
 
 use crate::{
     core::Document,
-    db::{AccessResult, query},
+    db::{AccessResult, LocaleContext, query},
     hooks::lifecycle::AfterReadCtx,
     service::{GetGlobalInput, ServiceContext, ServiceError, helpers},
 };
@@ -23,7 +23,13 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
     let hooks = ctx.read_hooks()?;
     let def = ctx.global_def()?;
 
-    let access = hooks.check_access(def.access.read.as_deref(), ctx.user, None, None)?;
+    let access = hooks.check_access(
+        def.access.read.as_deref(),
+        ctx.user,
+        None,
+        None,
+        input.locale_ctx.map(LocaleContext::access_locale),
+    )?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Read access denied".into()));
@@ -40,7 +46,11 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
 
     let mut doc = query::get_global(conn, ctx.slug, def, input.locale_ctx)?;
 
-    let mut denied = hooks.field_read_denied(&def.fields, ctx.user);
+    let mut denied = hooks.field_read_denied(
+        &def.fields,
+        ctx.user,
+        input.locale_ctx.map(LocaleContext::access_locale),
+    );
     denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&denied);

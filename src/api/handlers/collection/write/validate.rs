@@ -62,6 +62,7 @@ fn validate_blocking(input: ValidateBlockingInput) -> Result<content::ValidateRe
         operation: input.operation,
         exclude_id: input.exclude_id.as_deref(),
         soft_delete: input.def.soft_delete,
+        required_locales: input.def.required_locales.as_ref(),
     };
 
     let write_input = WriteInput::builder(input.data)

@@ -60,6 +60,19 @@ impl LocaleContext {
             config: config.clone(),
         }))
     }
+
+    /// The single locale this operation targets, for access / policy
+    /// decisions: the requested locale (`Single`), or the default locale for
+    /// `Default` / `All`. An `Option<&LocaleContext>` is `None` when
+    /// localization is disabled, so `locale_ctx.map(LocaleContext::access_locale)`
+    /// is `None` exactly when there's no meaningful locale.
+    #[must_use]
+    pub fn access_locale(&self) -> &str {
+        match &self.mode {
+            LocaleMode::Single(l) => l.as_str(),
+            LocaleMode::Default | LocaleMode::All => self.config.default_locale.as_str(),
+        }
+    }
 }
 
 /// Get locale-aware SELECT expressions and result column names for a collection.

@@ -12,7 +12,10 @@ use tracing::error;
 
 use crate::{
     admin::{AdminState, Translations, handlers::shared::translate_validation_errors},
-    core::{AuthUser, Document, DocumentFields, FieldDefinition, Hooks, ValidationError},
+    core::{
+        AuthUser, Document, DocumentFields, FieldDefinition, Hooks, RequiredLocales,
+        ValidationError,
+    },
     db::{DbPool, query::LocaleContext},
     hooks::HookRunner,
     service,
@@ -91,6 +94,8 @@ pub struct RunValidationParams<'a> {
     pub soft_delete: bool,
     pub locale_ctx: Option<&'a LocaleContext>,
     pub user_doc: Option<&'a Document>,
+    /// Collection-level `required_locales` default (`None` for globals).
+    pub required_locales: Option<&'a RequiredLocales>,
 }
 
 /// Run the `before_validate` → validate pipeline inside a rolled-back transaction.
@@ -126,6 +131,7 @@ pub fn run_validation(p: &RunValidationParams) -> anyhow::Result<()> {
         operation: p.operation,
         exclude_id: p.exclude_id,
         soft_delete: p.soft_delete,
+        required_locales: p.required_locales,
     };
 
     service::validate_document(&tx, &wh, &validate_ctx, input, p.user_doc)

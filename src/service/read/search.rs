@@ -2,7 +2,7 @@
 
 use crate::{
     core::{Document, upload},
-    db::{AccessResult, query},
+    db::{AccessResult, LocaleContext, query},
     service::{PaginatedResult, SearchDocumentsInput, ServiceContext, ServiceError, helpers},
 };
 
@@ -30,7 +30,13 @@ pub fn search_documents(
     let hooks = ctx.read_hooks()?;
     let def = ctx.collection_def()?;
 
-    let access = hooks.check_access(def.access.read.as_deref(), ctx.user, None, None)?;
+    let access = hooks.check_access(
+        def.access.read.as_deref(),
+        ctx.user,
+        None,
+        None,
+        input.locale_ctx.map(LocaleContext::access_locale),
+    )?;
 
     if matches!(access, AccessResult::Denied) {
         return Ok(PaginatedResult::default());
@@ -103,7 +109,11 @@ pub fn search_documents(
         }
     }
 
-    let mut denied = hooks.field_read_denied(&def.fields, ctx.user);
+    let mut denied = hooks.field_read_denied(
+        &def.fields,
+        ctx.user,
+        input.locale_ctx.map(LocaleContext::access_locale),
+    );
     denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     if !denied.is_empty() {

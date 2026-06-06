@@ -148,7 +148,7 @@ pub fn check_upload_access(
 
     let result = state
         .hook_runner
-        .check_access(access_ref, user_doc, id, None, &tx);
+        .check_access(access_ref, user_doc, id, None, None, &tx);
 
     if let Err(e) = tx.commit() {
         warn!("tx commit failed: {e}");

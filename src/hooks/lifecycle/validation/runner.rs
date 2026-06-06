@@ -4,6 +4,7 @@ use mlua::Lua;
 use serde_json::Value;
 
 use crate::core::{DocumentFields, FieldDefinition, validate::ValidationError};
+use crate::hooks::lifecycle::flatten_group_fields;
 
 use super::ValidationCtx;
 use super::recursive::ValidationWalker;
@@ -16,8 +17,18 @@ pub(crate) fn validate_fields_inner(
     data: &DocumentFields,
     ctx: &ValidationCtx,
 ) -> Result<(), ValidationError> {
+    // Normalize nested group data (`{ seo: { meta_title } }`) to flat keys
+    // (`seo__meta_title`) so validation sees the same shape that persistence
+    // does (`to_value_map`). The Lua surface already flattens upstream (this is
+    // then a no-op); the typed JSON surfaces (gRPC, MCP) arrive nested.
+    let data = flatten_group_fields(data, fields);
+
     let mut errors = Vec::new();
-    ValidationWalker::new(lua, data, ctx).walk(fields, "", false, &mut errors);
+    ValidationWalker::new(lua, &data, ctx).walk(fields, "", false, &mut errors);
+
+    // Document-level: localized required fields must be complete across their
+    // `required_locales` (reads the existing row for non-write locales).
+    super::check_localized_completeness(fields, &data, ctx, &mut errors);
 
     if errors.is_empty() {
         Ok(())

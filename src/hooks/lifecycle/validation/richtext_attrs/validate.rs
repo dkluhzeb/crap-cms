@@ -19,6 +19,9 @@ pub(crate) struct RichtextValidationCtx<'a> {
     pub registry: &'a Registry,
     pub collection: &'a str,
     pub is_draft: bool,
+    /// Content locale this write targets — exposed to custom node-attr
+    /// validators as `ctx.locale`. `None` when localization is disabled.
+    pub locale: Option<&'a str>,
 }
 
 impl<'a> RichtextValidationCtx<'a> {
@@ -33,6 +36,7 @@ impl<'a> RichtextValidationCtx<'a> {
             registry,
             collection,
             is_draft: false,
+            locale: None,
         }
     }
 }
@@ -43,11 +47,17 @@ pub(crate) struct RichtextValidationCtxBuilder<'a> {
     registry: &'a Registry,
     collection: &'a str,
     is_draft: bool,
+    locale: Option<&'a str>,
 }
 
 impl<'a> RichtextValidationCtxBuilder<'a> {
     pub fn draft(mut self, is_draft: bool) -> Self {
         self.is_draft = is_draft;
+        self
+    }
+
+    pub fn locale(mut self, locale: Option<&'a str>) -> Self {
+        self.locale = locale;
         self
     }
 
@@ -57,6 +67,7 @@ impl<'a> RichtextValidationCtxBuilder<'a> {
             registry: self.registry,
             collection: self.collection,
             is_draft: self.is_draft,
+            locale: self.locale,
         }
     }
 }
@@ -158,6 +169,7 @@ fn validate_node_instance(
                 &data,
                 ctx.collection,
                 &attr_def.name,
+                ctx.locale,
             ) {
                 Ok(Some(err_msg)) => {
                     errors.push(FieldError::new(data_key.clone(), err_msg));

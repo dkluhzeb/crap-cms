@@ -637,7 +637,7 @@ async fn five_level_group_crud_roundtrip() {
         &doc,
         "org__dept__team__lead__contact__rank",
         "number",
-        Some("42.0"),
+        Some("42"),
     );
 }
 
@@ -908,7 +908,7 @@ async fn nested_groups_locale_roundtrip() {
         Some("Best in class"),
     );
     html::assert_input(&en_doc, "meta__sku", "text", Some("WDG-001"));
-    html::assert_input(&en_doc, "meta__weight", "number", Some("250.0"));
+    html::assert_input(&en_doc, "meta__weight", "number", Some("250"));
 
     // Verify DE edit form shows DE values for localized fields, EN for non-localized
     let de_body = get_edit_form_with_locale(&app, "products", &doc_record.id, &cookie, "de").await;
@@ -924,7 +924,7 @@ async fn nested_groups_locale_roundtrip() {
     );
     // Non-localized fields show the same value regardless of locale
     html::assert_input(&de_doc, "meta__sku", "text", Some("WDG-001"));
-    html::assert_input(&de_doc, "meta__weight", "number", Some("250.0"));
+    html::assert_input(&de_doc, "meta__weight", "number", Some("250"));
 }
 
 // ── Mixed field type nesting ─────────────────────────────────────────────
@@ -1551,11 +1551,11 @@ async fn group_layout_wrappers_crud_roundtrip() {
     let doc = html::parse(&body);
 
     html::assert_input(&doc, "config__theme", "text", Some("dark"));
-    html::assert_input(&doc, "config__font_size", "number", Some("16.0"));
+    html::assert_input(&doc, "config__font_size", "number", Some("16"));
     html::assert_input(&doc, "config__color", "text", Some("blue"));
-    html::assert_input(&doc, "config__nested__level", "number", Some("3.0"));
-    html::assert_input(&doc, "config__width", "number", Some("800.0"));
-    html::assert_input(&doc, "config__height", "number", Some("600.0"));
+    html::assert_input(&doc, "config__nested__level", "number", Some("3"));
+    html::assert_input(&doc, "config__width", "number", Some("800"));
+    html::assert_input(&doc, "config__height", "number", Some("600"));
 }
 
 // 28. Group > Layout wrappers: validation error on required field inside collapsible

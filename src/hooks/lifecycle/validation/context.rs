@@ -1,7 +1,7 @@
 //! Validation context bundling DB + request parameters consumed by every check.
 
 use crate::{
-    core::registry::Registry,
+    core::{RequiredLocales, registry::Registry},
     db::{DbConnection, LocaleContext},
 };
 
@@ -16,6 +16,9 @@ pub struct ValidationCtx<'a> {
     pub registry: Option<&'a Registry>,
     /// When true, unique constraint checks exclude soft-deleted documents.
     pub soft_delete: bool,
+    /// Collection-level `required_locales` default — the fallback for localized
+    /// required fields that don't set their own (used by the completeness check).
+    pub collection_required_locales: Option<&'a RequiredLocales>,
 }
 
 impl<'a> ValidationCtx<'a> {
@@ -34,6 +37,7 @@ pub struct ValidationCtxBuilder<'a> {
     locale_ctx: Option<&'a LocaleContext>,
     registry: Option<&'a Registry>,
     soft_delete: bool,
+    collection_required_locales: Option<&'a RequiredLocales>,
 }
 
 impl<'a> ValidationCtxBuilder<'a> {
@@ -46,7 +50,14 @@ impl<'a> ValidationCtxBuilder<'a> {
             locale_ctx: None,
             registry: None,
             soft_delete: false,
+            collection_required_locales: None,
         }
+    }
+
+    /// Set the collection-level `required_locales` default.
+    pub fn collection_required_locales(mut self, v: Option<&'a RequiredLocales>) -> Self {
+        self.collection_required_locales = v;
+        self
     }
 
     pub fn exclude_id(mut self, exclude_id: Option<&'a str>) -> Self {
@@ -83,6 +94,7 @@ impl<'a> ValidationCtxBuilder<'a> {
             locale_ctx: self.locale_ctx,
             registry: self.registry,
             soft_delete: self.soft_delete,
+            collection_required_locales: self.collection_required_locales,
         }
     }
 }

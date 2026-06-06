@@ -24,6 +24,7 @@ pub(super) fn run_validate_function_inner(
     data: &HashMap<String, JsonValue>,
     collection: &str,
     field_name: &str,
+    locale: Option<&str>,
 ) -> Result<Option<String>> {
     let func = resolve_hook_function(lua, func_ref)?;
     let lua_value = lua_api::json_to_lua(lua, value)?;
@@ -36,6 +37,7 @@ pub(super) fn run_validate_function_inner(
         data,
         user: user_ctx_ref.as_ref().and_then(|c| c.0.as_ref()),
         ui_locale: locale_ctx_ref.as_ref().and_then(|c| c.0.as_deref()),
+        locale,
     };
     let ctx_table = lua.to_value(&ctx)?;
 
@@ -75,6 +77,7 @@ mod tests {
             &data,
             "test",
             "name",
+            None,
         )
         .unwrap();
         assert!(result.is_none());
@@ -103,11 +106,48 @@ mod tests {
             &data,
             "test",
             "name",
+            None,
         )
         .unwrap();
         assert!(
             result.is_none(),
             "Number return from validator should be treated as valid (None)"
+        );
+    }
+
+    /// A custom validator receives the content `ctx.locale` so it can enforce
+    /// per-locale rules. Here the validator echoes `ctx.locale` back as its
+    /// (string) result, proving the locale reached the Lua context.
+    #[test]
+    fn validate_function_receives_content_locale() {
+        let lua = mlua::Lua::new();
+        lua.load(
+            r#"
+            package.loaded["validators"] = {
+                echo_locale = function(value, ctx)
+                    return ctx.locale
+                end
+            }
+        "#,
+        )
+        .exec()
+        .unwrap();
+        let data = HashMap::new();
+
+        let result = run_validate_function_inner(
+            &lua,
+            "validators.echo_locale",
+            &json!("test"),
+            &data,
+            "posts",
+            "title",
+            Some("de"),
+        )
+        .unwrap();
+        assert_eq!(
+            result.as_deref(),
+            Some("de"),
+            "validator should see ctx.locale"
         );
     }
 }

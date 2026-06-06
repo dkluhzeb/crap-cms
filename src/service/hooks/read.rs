@@ -42,6 +42,9 @@ pub trait ReadHooks {
 
     /// Check collection-level access. Returns the access result (Allowed/Denied/Constrained).
     ///
+    /// `locale` is the locale this read targets (resolved/default, or `None`
+    /// when localization is disabled), exposed as `context.locale`.
+    ///
     /// # Errors
     ///
     /// Returns an error if the access hook itself raises (e.g. a Lua runtime error).
@@ -51,12 +54,17 @@ pub trait ReadHooks {
         user: Option<&Document>,
         id: Option<&str>,
         data: Option<&DocumentFields>,
+        locale: Option<&str>,
     ) -> Result<AccessResult>;
 
     /// Return field names denied by read access control.
     /// Returns empty vec if access control is overridden.
-    fn field_read_denied(&self, fields: &[FieldDefinition], user: Option<&Document>)
-    -> Vec<String>;
+    fn field_read_denied(
+        &self,
+        fields: &[FieldDefinition],
+        user: Option<&Document>,
+        locale: Option<&str>,
+    ) -> Vec<String>;
 }
 
 /// Pool-based hook execution for admin, gRPC, and MCP surfaces.
@@ -92,17 +100,20 @@ impl ReadHooks for RunnerReadHooks<'_> {
         user: Option<&Document>,
         id: Option<&str>,
         data: Option<&DocumentFields>,
+        locale: Option<&str>,
     ) -> Result<AccessResult> {
         self.runner
-            .check_access(access_ref, user, id, data, self.conn)
+            .check_access(access_ref, user, id, data, locale, self.conn)
     }
 
     fn field_read_denied(
         &self,
         fields: &[FieldDefinition],
         user: Option<&Document>,
+        locale: Option<&str>,
     ) -> Vec<String> {
-        self.runner.check_field_read_access(fields, user, self.conn)
+        self.runner
+            .check_field_read_access(fields, user, locale, self.conn)
     }
 }
 
@@ -184,7 +195,7 @@ impl JoinAccessCheck for ReadHooksJoinGuard<'_> {
         access_ref: Option<&str>,
         user: Option<&Document>,
     ) -> anyhow::Result<AccessResult> {
-        self.hooks.check_access(access_ref, user, None, None)
+        self.hooks.check_access(access_ref, user, None, None, None)
     }
 }
 
@@ -195,11 +206,12 @@ impl ReadHooks for LuaReadHooks<'_> {
         user: Option<&Document>,
         id: Option<&str>,
         data: Option<&DocumentFields>,
+        locale: Option<&str>,
     ) -> Result<AccessResult> {
         if self.override_access {
             return Ok(AccessResult::Allowed);
         }
-        check_access_with_lua(self.lua, access_ref, user, id, data)
+        check_access_with_lua(self.lua, access_ref, user, id, data, locale)
     }
 
     fn before_read(&self, hooks: &Hooks, slug: &str, operation: &str) -> Result<()> {
@@ -219,10 +231,11 @@ impl ReadHooks for LuaReadHooks<'_> {
         &self,
         fields: &[FieldDefinition],
         user: Option<&Document>,
+        locale: Option<&str>,
     ) -> Vec<String> {
         if self.override_access {
             return Vec::new();
         }
-        check_field_read_access_with_lua(self.lua, fields, user)
+        check_field_read_access_with_lua(self.lua, fields, user, locale)
     }
 }

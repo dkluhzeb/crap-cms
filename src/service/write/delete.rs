@@ -44,7 +44,8 @@ pub(crate) fn delete_document_in_conn(
         def.access.delete.as_deref()
     };
 
-    let access = write_hooks.check_access(access_ref, ctx.user, Some(id), None)?;
+    // Delete is locale-agnostic — the whole row is removed across all locales.
+    let access = write_hooks.check_access(access_ref, ctx.user, Some(id), None, None)?;
 
     if matches!(access, AccessResult::Denied) {
         let msg = if def.soft_delete {
@@ -222,6 +223,7 @@ mod tests {
             &self,
             _fields: &[FieldDefinition],
             _user: Option<&Document>,
+            _locale: Option<&str>,
         ) -> Vec<String> {
             Vec::new()
         }
@@ -232,6 +234,7 @@ mod tests {
             _user: Option<&Document>,
             _id: Option<&str>,
             _data: Option<&DocumentFields>,
+            _locale: Option<&str>,
         ) -> anyhow::Result<AccessResult> {
             Ok(AccessResult::Allowed)
         }
@@ -240,6 +243,7 @@ mod tests {
             &self,
             _fields: &[FieldDefinition],
             _user: Option<&Document>,
+            _locale: Option<&str>,
             _operation: &str,
         ) -> Vec<String> {
             Vec::new()

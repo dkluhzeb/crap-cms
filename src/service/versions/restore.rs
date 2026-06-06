@@ -220,6 +220,7 @@ pub(crate) fn restore_collection_version_core(
         ctx.user,
         Some(document_id),
         None,
+        None,
     )?;
 
     if matches!(access, AccessResult::Denied) {
@@ -259,7 +260,7 @@ pub(crate) fn restore_collection_version_core(
         locale_config,
     )?;
 
-    let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user);
+    let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user, None);
     read_denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&read_denied);
@@ -325,7 +326,8 @@ pub(crate) fn restore_global_version_core(
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.global_def()?;
 
-    let access = write_hooks.check_access(def.access.update.as_deref(), ctx.user, None, None)?;
+    let access =
+        write_hooks.check_access(def.access.update.as_deref(), ctx.user, None, None, None)?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Update access denied".into()));
@@ -362,7 +364,7 @@ pub(crate) fn restore_global_version_core(
         locale_config,
     )?;
 
-    let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user);
+    let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user, None);
     read_denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&read_denied);

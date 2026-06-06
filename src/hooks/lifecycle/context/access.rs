@@ -29,4 +29,15 @@ pub struct AccessContext<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[lua(ty = "table<string, any>", optional)]
     pub data: Option<&'a DocumentFields>,
+    /// The locale this operation targets, when localization is enabled —
+    /// the requested locale, or the default locale when none was specified.
+    /// `nil` when localization is disabled. Lets access functions enforce
+    /// per-locale rules, e.g. restrict a user to certain locales or lock a
+    /// field to the default locale. Also `nil` when the access function is
+    /// invoked outside a single-locale operation (e.g. manually via
+    /// `crap.access.check`, or a nested join read-access check) — gate
+    /// defensively (`if ctx.locale and ... then`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(optional)]
+    pub locale: Option<&'a str>,
 }

@@ -7,7 +7,8 @@ use mlua::{Lua, Table};
 
 use crate::{
     core::{
-        FieldAccess, FieldAdmin, FieldDefinition, FieldHooks, FieldType, JoinConfig, McpFieldConfig,
+        FieldAccess, FieldAdmin, FieldDefinition, FieldHooks, FieldType, JoinConfig,
+        McpFieldConfig, RequiredLocales,
     },
     db::query,
 };
@@ -41,6 +42,7 @@ const COMMON_FIELD_KEYS: &[&str] = &[
     "unique",
     "index",
     "localized",
+    "required_locales",
     "hidden",
     "validate",
     "default_value",
@@ -283,6 +285,38 @@ fn parse_mcp(field_tbl: &Table) -> Result<McpFieldConfig> {
     })
 }
 
+/// Parse a `required_locales` value from a config table: the string `"all"`
+/// or a non-empty list of locale codes. `None` when the key is absent.
+pub(crate) fn parse_required_locales(tbl: &Table) -> Result<Option<RequiredLocales>> {
+    let val: mlua::Value = tbl.get("required_locales")?;
+    match val {
+        mlua::Value::Nil => Ok(None),
+        mlua::Value::String(s) => {
+            let s = s.to_str()?;
+            if &*s == "all" {
+                Ok(Some(RequiredLocales::All))
+            } else {
+                bail!("required_locales string must be \"all\", got '{}'", &*s)
+            }
+        }
+        mlua::Value::Table(t) => {
+            let locales = t
+                .sequence_values::<String>()
+                .collect::<mlua::Result<Vec<_>>>()?;
+            if locales.is_empty() {
+                bail!(
+                    "required_locales list must not be empty (omit the key for default behavior)"
+                );
+            }
+            Ok(Some(RequiredLocales::List(locales)))
+        }
+        other => bail!(
+            "required_locales must be \"all\" or a list of locale codes, got {}",
+            other.type_name()
+        ),
+    }
+}
+
 /// Phase 2 — fold parsed parts into a [`FieldDefinition`] via the builder.
 fn assemble_field_definition(
     field_tbl: &Table,
@@ -303,6 +337,15 @@ fn assemble_field_definition(
         .has_many(get_bool(field_tbl, "has_many", false)?)
         .hidden(get_bool(field_tbl, "hidden", false)?)
         .options(parts.options);
+
+    if let Some(v) = parse_required_locales(field_tbl)? {
+        // Whether `required_locales` is meaningful (the field is locale-scoped —
+        // possibly by inheriting localization from an enclosing group) is
+        // validated at startup in `startup_checks::validate_required_locales`,
+        // where the full field tree (and thus group inheritance) is known. The
+        // per-field parser only sees this field's own `localized` flag.
+        fd_builder = fd_builder.required_locales(v);
+    }
 
     if let Some(v) = get_string(field_tbl, "validate") {
         fd_builder = fd_builder.validate(v);

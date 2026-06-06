@@ -42,6 +42,7 @@ pub(in crate::mcp::tools) fn exec_validate_global(
         operation: "update",
         exclude_id: Some("default"),
         soft_delete: false,
+        required_locales: None,
     };
 
     let input = WriteInput::builder(data)

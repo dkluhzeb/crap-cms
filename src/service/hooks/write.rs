@@ -72,10 +72,18 @@ pub trait WriteHooks {
     ) -> Result<HookContext>;
 
     /// Field-level read access: returns denied field names to strip from returned documents.
-    fn field_read_denied(&self, fields: &[FieldDefinition], user: Option<&Document>)
-    -> Vec<String>;
+    fn field_read_denied(
+        &self,
+        fields: &[FieldDefinition],
+        user: Option<&Document>,
+        locale: Option<&str>,
+    ) -> Vec<String>;
 
     /// Collection-level access check. Returns the access result (Allowed/Denied/Constrained).
+    ///
+    /// `locale` is the locale this operation targets (the resolved/default
+    /// locale, or `None` when localization is disabled or the op is
+    /// locale-agnostic), exposed to access functions as `context.locale`.
     ///
     /// # Errors
     ///
@@ -86,6 +94,7 @@ pub trait WriteHooks {
         user: Option<&Document>,
         id: Option<&str>,
         data: Option<&DocumentFields>,
+        locale: Option<&str>,
     ) -> Result<AccessResult>;
 
     /// Field-level write access: returns denied field names to strip before persistence.
@@ -93,6 +102,7 @@ pub trait WriteHooks {
         &self,
         fields: &[FieldDefinition],
         user: Option<&Document>,
+        locale: Option<&str>,
         operation: &str,
     ) -> Vec<String>;
 
@@ -230,6 +240,7 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         &self,
         fields: &[FieldDefinition],
         user: Option<&Document>,
+        locale: Option<&str>,
     ) -> Vec<String> {
         if self.override_access {
             return Vec::new();
@@ -237,7 +248,8 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         let Some(conn) = self.conn else {
             return Vec::new();
         };
-        self.runner.check_field_read_access(fields, user, conn)
+        self.runner
+            .check_field_read_access(fields, user, locale, conn)
     }
 
     fn check_access(
@@ -246,6 +258,7 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         user: Option<&Document>,
         id: Option<&str>,
         data: Option<&DocumentFields>,
+        locale: Option<&str>,
     ) -> Result<AccessResult> {
         if self.override_access {
             return Ok(AccessResult::Allowed);
@@ -253,13 +266,15 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         let Some(conn) = self.conn else {
             return Ok(AccessResult::Allowed);
         };
-        self.runner.check_access(access_ref, user, id, data, conn)
+        self.runner
+            .check_access(access_ref, user, id, data, locale, conn)
     }
 
     fn field_write_denied(
         &self,
         fields: &[FieldDefinition],
         user: Option<&Document>,
+        locale: Option<&str>,
         operation: &str,
     ) -> Vec<String> {
         if self.override_access {
@@ -269,7 +284,7 @@ impl WriteHooks for RunnerWriteHooks<'_> {
             return Vec::new();
         };
         self.runner
-            .check_field_write_access(fields, user, operation, conn)
+            .check_field_write_access(fields, user, locale, operation, conn)
     }
 
     fn validate_fields(
@@ -472,34 +487,37 @@ impl WriteHooks for LuaWriteHooks<'_> {
         user: Option<&Document>,
         id: Option<&str>,
         data: Option<&DocumentFields>,
+        locale: Option<&str>,
     ) -> Result<AccessResult> {
         if self.override_access {
             return Ok(AccessResult::Allowed);
         }
-        check_access_with_lua(self.lua, access_ref, user, id, data)
+        check_access_with_lua(self.lua, access_ref, user, id, data, locale)
     }
 
     fn field_read_denied(
         &self,
         fields: &[FieldDefinition],
         user: Option<&Document>,
+        locale: Option<&str>,
     ) -> Vec<String> {
         if self.override_access {
             return Vec::new();
         }
-        check_field_read_access_with_lua(self.lua, fields, user)
+        check_field_read_access_with_lua(self.lua, fields, user, locale)
     }
 
     fn field_write_denied(
         &self,
         fields: &[FieldDefinition],
         user: Option<&Document>,
+        locale: Option<&str>,
         operation: &str,
     ) -> Vec<String> {
         if self.override_access {
             return Vec::new();
         }
-        check_field_write_access_with_lua(self.lua, fields, user, operation)
+        check_field_write_access_with_lua(self.lua, fields, user, locale, operation)
     }
 
     fn validate_fields(

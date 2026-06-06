@@ -224,7 +224,7 @@ fn check_impl(
     let access_ref = resolve_access_ref(registry, collection, operation)?;
     let user = current_user(lua);
 
-    let result = check_access_with_lua(lua, access_ref.as_deref(), user.as_ref(), None, None)
+    let result = check_access_with_lua(lua, access_ref.as_deref(), user.as_ref(), None, None, None)
         .map_err(|e| RuntimeError(format!("access check error: {e:#}")))?;
 
     match result {
@@ -333,6 +333,7 @@ fn field_read_denied_impl(
         lua,
         &fields,
         user.as_ref(),
+        None,
     ))
 }
 
@@ -359,6 +360,7 @@ fn field_write_denied_impl(
         lua,
         &fields,
         user.as_ref(),
+        None,
         operation,
     ))
 }

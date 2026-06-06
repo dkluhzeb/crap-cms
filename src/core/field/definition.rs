@@ -127,6 +127,46 @@ pub struct FieldHooks {
     pub after_read: Vec<String>,
 }
 
+/// Which locales a `required` *localized* field must be filled in for a
+/// document to be considered complete. `All` expands to every configured
+/// locale; `List` names specific locales. Resolved against `LocaleConfig` at
+/// validation time. When unset on a field, the collection-level default
+/// applies; when that's also unset, only the default locale is required.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RequiredLocales {
+    /// Every configured locale.
+    All,
+    /// A specific list of locale codes.
+    List(Vec<String>),
+}
+
+impl Serialize for RequiredLocales {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            RequiredLocales::All => s.serialize_str("all"),
+            RequiredLocales::List(v) => v.serialize(s),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RequiredLocales {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            S(String),
+            L(Vec<String>),
+        }
+        match Raw::deserialize(d)? {
+            Raw::S(s) if s == "all" => Ok(RequiredLocales::All),
+            Raw::S(s) => Err(serde::de::Error::custom(format!(
+                "invalid required_locales '{s}': expected \"all\" or a list of locale codes"
+            ))),
+            Raw::L(v) => Ok(RequiredLocales::List(v)),
+        }
+    }
+}
+
 /// Complete definition of a single field within a collection.
 /// Use the per-type factory classes (`crap.fields.text(...)`,
 /// `crap.fields.select(...)`, etc.) for precise per-type
@@ -205,6 +245,13 @@ pub struct FieldDefinition {
     #[serde(default)]
     #[lua(optional)]
     pub localized: bool,
+    /// Which locales a `required` localized field must be filled in (the
+    /// completeness rule). `"all"` = every configured locale; a list names
+    /// specific locales. Unset → the collection default, else the default
+    /// locale only. Only meaningful when both `required` and `localized`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[lua(ty = "\"all\" | string[]", optional)]
+    pub required_locales: Option<RequiredLocales>,
     /// Input type: "dayOnly" (default), "dayAndTime", "timeOnly", "monthOnly".
     #[serde(default)]
     #[lua(applies_to = "date", ty = "crap.PickerAppearance", optional)]
@@ -304,6 +351,23 @@ impl FieldDefinition {
             _ => true,
         }
     }
+
+    /// Whether this field's stored value is scoped per-locale, given whether it
+    /// inherits localization from an enclosing group.
+    ///
+    /// Column-backed fields inherit localization from a parent group (their
+    /// column becomes `field__locale`), so inheritance counts. Join-backed
+    /// fields (array / blocks / has-many) are locale-scoped **only** by their
+    /// own `localized` flag — `resolve_join_locale` ignores inheritance — so a
+    /// non-localized join field inside a localized group keeps shared rows.
+    #[must_use]
+    pub fn is_locale_scoped(&self, inherited_localized: bool) -> bool {
+        if self.has_parent_column() {
+            inherited_localized || self.localized
+        } else {
+            self.localized
+        }
+    }
 }
 
 /// Convert a `snake_case` identifier to Title Case.
@@ -380,6 +444,13 @@ impl FieldDefinitionBuilder {
     #[must_use]
     pub fn required(mut self, v: bool) -> Self {
         self.inner.required = v;
+        self
+    }
+
+    /// Set which locales a required localized field must be filled in.
+    #[must_use]
+    pub fn required_locales(mut self, v: RequiredLocales) -> Self {
+        self.inner.required_locales = Some(v);
         self
     }
 

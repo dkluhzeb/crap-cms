@@ -68,6 +68,8 @@ fn validate_global_blocking(
         operation: "update",
         exclude_id: Some("default"),
         soft_delete: false,
+        // Globals have no collection-level `required_locales` default.
+        required_locales: None,
     };
 
     let write_input = WriteInput::builder(input.data)

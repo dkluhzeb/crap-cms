@@ -50,7 +50,7 @@ pub fn check_access_or_forbid(
 
     let result = state
         .hook_runner
-        .check_access(access_ref, user_doc, id, data, &tx)
+        .check_access(access_ref, user_doc, id, data, None, &tx)
         .inspect_err(|e| error!("Access check error: {}", e))
         .map_err(|_| Box::new(forbidden(state, "Access check failed").into_response()))?;
 
@@ -86,7 +86,7 @@ pub fn compute_denied_read_fields(
 
     let denied = state
         .hook_runner
-        .check_field_read_access(fields, user_doc, &tx);
+        .check_field_read_access(fields, user_doc, None, &tx);
 
     if let Err(e) = tx.commit() {
         warn!("tx commit failed: {e}");
@@ -191,7 +191,7 @@ pub fn has_access_with_conn(
 
     let result = state
         .hook_runner
-        .check_access(access_ref, user_doc, None, None, conn);
+        .check_access(access_ref, user_doc, None, None, None, conn);
 
     matches!(
         result,

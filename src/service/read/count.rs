@@ -1,7 +1,7 @@
 //! Document counting with access control.
 
 use crate::{
-    db::{AccessResult, Filter, FilterClause, FilterOp, query},
+    db::{AccessResult, Filter, FilterClause, FilterOp, LocaleContext, query},
     service::{CountDocumentsInput, ServiceContext, ServiceError},
 };
 
@@ -26,7 +26,13 @@ pub fn count_documents(ctx: &ServiceContext, input: &CountDocumentsInput) -> Res
     let hooks = ctx.read_hooks()?;
     let def = ctx.collection_def()?;
 
-    let access = hooks.check_access(def.access.read.as_deref(), ctx.user, None, None)?;
+    let access = hooks.check_access(
+        def.access.read.as_deref(),
+        ctx.user,
+        None,
+        None,
+        input.locale_ctx.map(LocaleContext::access_locale),
+    )?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Read access denied".into()));

@@ -1085,3 +1085,227 @@ async fn find_by_id_with_invalid_locale_returns_invalid_argument() {
 }
 
 // ── Group 11: Versions (gRPC) ────────────────────────────────────────────
+
+/// Regression: a partial update that omits a required localized field (leaving
+/// its existing value intact) must NOT fail the localized completeness check.
+#[tokio::test]
+async fn partial_update_omitting_required_localized_field_is_allowed() {
+    let ts = setup_service_with_locale(vec![make_localized_posts_def()], vec![], vec!["en", "de"]);
+
+    // title is localized + required; body is non-localized.
+    let doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "posts".to_string(),
+            data: Some(make_struct(&[("title", "Hello"), ("body", "Body")])),
+            locale: Some("en".to_string()),
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    // Partial update: only body, omit the required `title`. Should succeed —
+    // title keeps its existing value.
+    ts.service
+        .update(Request::new(content::UpdateRequest {
+            events: None,
+            collection: "posts".to_string(),
+            id: doc.id.clone(),
+            data: Some(make_struct(&[("body", "Body 2")])),
+            locale: Some("en".to_string()),
+            draft: None,
+            unpublish: None,
+        }))
+        .await
+        .expect("partial update omitting an untouched required field must be allowed");
+
+    let after = ts
+        .service
+        .find_by_id(Request::new(content::FindByIdRequest {
+            collection: "posts".to_string(),
+            id: doc.id,
+            locale: Some("en".to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+    assert_eq!(get_proto_field(&after, "title").as_deref(), Some("Hello"));
+}
+
+/// Regression: the dry-run `Validate` RPC must honor a *collection-level*
+/// `required_locales` default, mirroring what `Create`/`Update` enforce.
+#[tokio::test]
+async fn validate_honors_collection_level_required_locales() {
+    let mut def = CollectionDefinition::new("posts");
+    def.labels = Labels {
+        singular: Some(LocalizedString::Plain("Post".to_string())),
+        plural: Some(LocalizedString::Plain("Posts".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .localized(true)
+            .build(),
+    ];
+    // Collection-level default (no field-level override).
+    def.required_locales = Some(RequiredLocales::All);
+
+    let ts = setup_service_with_locale(vec![def], vec![], vec!["en", "de"]);
+
+    // Validate a create with only the English title — `de` is required by the
+    // collection-level default, so this must report invalid.
+    let resp = ts
+        .service
+        .validate(Request::new(content::ValidateRequest {
+            collection: "posts".to_string(),
+            data: Some(make_struct(&[("title", "Hello")])),
+            draft: None,
+            locale: Some("en".to_string()),
+            id: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(
+        !resp.valid,
+        "validate must flag the missing required `de` locale"
+    );
+    assert!(
+        resp.errors.contains_key("title"),
+        "expected a completeness error on `title`, got {:?}",
+        resp.errors
+    );
+}
+
+/// Regression: a required *localized* checkbox must not be flagged incomplete
+/// when omitted — checkboxes always have a value (default off), and
+/// `check_required` skips them, so completeness must too.
+#[tokio::test]
+async fn required_localized_checkbox_is_not_flagged_when_omitted() {
+    let mut def = CollectionDefinition::new("posts");
+    def.labels = Labels {
+        singular: Some(LocalizedString::Plain("Post".to_string())),
+        plural: Some(LocalizedString::Plain("Posts".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .localized(true)
+            .build(),
+        FieldDefinition::builder("agree", FieldType::Checkbox)
+            .required(true)
+            .localized(true)
+            .build(),
+    ];
+
+    let ts = setup_service_with_locale(vec![def], vec![], vec!["en", "de"]);
+
+    // Create providing only the title; the required localized checkbox is
+    // omitted (unchecked) and must not block creation.
+    ts.service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "posts".to_string(),
+            data: Some(make_struct(&[("title", "Hello")])),
+            locale: Some("en".to_string()),
+            draft: None,
+        }))
+        .await
+        .expect("an omitted required localized checkbox must not block creation");
+}
+
+/// A localized required sub-field inside a localized group, supplied nested via
+/// gRPC, must validate (Bug-D flattening) and complete correctly (P1), and a
+/// partial update that omits the group must keep it (existing-row fallback).
+#[tokio::test]
+async fn localized_required_group_subfield_nested_roundtrip() {
+    let mut def = CollectionDefinition::new("posts");
+    def.labels = Labels {
+        singular: Some(LocalizedString::Plain("Post".to_string())),
+        plural: Some(LocalizedString::Plain("Posts".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition::builder("slug", FieldType::Text).build(),
+        FieldDefinition::builder("seo", FieldType::Group)
+            .localized(true)
+            .fields(vec![
+                FieldDefinition::builder("meta_title", FieldType::Text)
+                    .required(true)
+                    .build(),
+            ])
+            .build(),
+    ];
+
+    let ts = setup_service_with_locale(vec![def], vec![], vec!["en", "de"]);
+
+    // Create in en with the group supplied NESTED.
+    let mut fields = BTreeMap::new();
+    fields.insert("slug".to_string(), str_val("p1"));
+    fields.insert(
+        "seo".to_string(),
+        struct_val(&[("meta_title", str_val("Hello SEO"))]),
+    );
+    let doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "posts".to_string(),
+            data: Some(Struct { fields }),
+            locale: Some("en".to_string()),
+            draft: None,
+        }))
+        .await
+        .expect("nested localized required group sub-field should validate")
+        .into_inner()
+        .document
+        .unwrap();
+
+    // Partial update that omits the group entirely must NOT fail completeness.
+    ts.service
+        .update(Request::new(content::UpdateRequest {
+            events: None,
+            collection: "posts".to_string(),
+            id: doc.id.clone(),
+            data: Some(make_struct(&[("slug", "p1-edited")])),
+            locale: Some("en".to_string()),
+            draft: None,
+            unpublish: None,
+        }))
+        .await
+        .expect("omitting an untouched required group sub-field must be allowed");
+
+    // The group sub-field is preserved.
+    let found = ts
+        .service
+        .find_by_id(Request::new(content::FindByIdRequest {
+            collection: "posts".to_string(),
+            id: doc.id,
+            locale: Some("en".to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+    let seo = found.fields.as_ref().unwrap().fields.get("seo").unwrap();
+    let meta_title = match &seo.kind {
+        Some(Kind::StructValue(s)) => s.fields.get("meta_title").and_then(|v| match &v.kind {
+            Some(Kind::StringValue(s)) => Some(s.as_str()),
+            _ => None,
+        }),
+        _ => None,
+    };
+    assert_eq!(meta_title, Some("Hello SEO"));
+}

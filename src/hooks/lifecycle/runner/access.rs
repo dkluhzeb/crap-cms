@@ -106,6 +106,7 @@ impl HookRunner {
         user: Option<&Document>,
         id: Option<&str>,
         data: Option<&DocumentFields>,
+        locale: Option<&str>,
         conn: &dyn DbConnection,
     ) -> Result<AccessResult> {
         // No access function configured — the in-Lua path would
@@ -127,7 +128,7 @@ impl HookRunner {
         let lua = self.pool.acquire()?;
         let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
-        check_access_with_lua(&lua, access_ref, user, id, data)
+        check_access_with_lua(&lua, access_ref, user, id, data, locale)
     }
 
     /// Check field-level read access. Returns a list of field names that should be
@@ -139,6 +140,7 @@ impl HookRunner {
         &self,
         fields: &[FieldDefinition],
         user: Option<&Document>,
+        locale: Option<&str>,
         conn: &dyn DbConnection,
     ) -> Vec<String> {
         // Skip VM acquisition if no fields have read access functions (recursive check)
@@ -157,7 +159,7 @@ impl HookRunner {
 
         let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
-        check_field_read_access_with_lua(&lua, fields, user)
+        check_field_read_access_with_lua(&lua, fields, user, locale)
     }
 
     /// Check field-level write access for a given operation ("create" or "update").
@@ -169,6 +171,7 @@ impl HookRunner {
         &self,
         fields: &[FieldDefinition],
         user: Option<&Document>,
+        locale: Option<&str>,
         operation: &str,
         conn: &dyn DbConnection,
     ) -> Vec<String> {
@@ -194,7 +197,7 @@ impl HookRunner {
 
         let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
-        check_field_write_access_with_lua(&lua, fields, user, operation)
+        check_field_write_access_with_lua(&lua, fields, user, locale, operation)
     }
 }
 

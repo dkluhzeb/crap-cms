@@ -29,7 +29,7 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document
     let def = ctx.collection_def()?;
 
     let access =
-        write_hooks.check_access(def.access.update.as_deref(), ctx.user, Some(id), None)?;
+        write_hooks.check_access(def.access.update.as_deref(), ctx.user, Some(id), None, None)?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Update access denied".into()));
@@ -80,7 +80,7 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document
 
     query::hydrate_document(conn, ctx.slug, &def.fields, &mut doc, None, None)?;
 
-    let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user);
+    let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user, None);
     read_denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&read_denied);

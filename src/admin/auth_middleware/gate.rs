@@ -28,7 +28,7 @@ fn check_admin_access_blocking(
     user_doc: &Document,
 ) -> Option<Result<query::AccessResult, anyhow::Error>> {
     let conn = pool.get().ok()?;
-    Some(hook_runner.check_access(Some(access_ref), Some(user_doc), None, None, &conn))
+    Some(hook_runner.check_access(Some(access_ref), Some(user_doc), None, None, None, &conn))
 }
 
 /// Gate 2: Check `admin.access` Lua function. Returns a 403

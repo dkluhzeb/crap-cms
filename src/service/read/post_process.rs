@@ -119,7 +119,11 @@ pub(crate) fn post_process_single(
         query::apply_select_to_document(doc, sel);
     }
 
-    let mut denied = hooks.field_read_denied(&def.fields, user);
+    let mut denied = hooks.field_read_denied(
+        &def.fields,
+        user,
+        opts.locale_ctx().map(LocaleContext::access_locale),
+    );
     denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&denied);
@@ -241,7 +245,11 @@ pub(crate) fn post_process_docs(
         }
     }
 
-    let mut denied = hooks.field_read_denied(&def.fields, user);
+    let mut denied = hooks.field_read_denied(
+        &def.fields,
+        user,
+        opts.locale_ctx().map(LocaleContext::access_locale),
+    );
     denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     if !denied.is_empty() {

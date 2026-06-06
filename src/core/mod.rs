@@ -70,8 +70,8 @@ pub use document_id::DocumentId;
 pub use field::{
     BlockDefinition, FieldAccess, FieldAdmin, FieldAdminBuilder, FieldAdminLabels, FieldDefinition,
     FieldDefinitionBuilder, FieldHookFn, FieldHooks, FieldTab, FieldType, FieldWidth, JoinConfig,
-    LocalizedString, McpFieldConfig, PickerAppearance, RelationshipConfig, SelectOption,
-    ValidateFunction, to_title_case, validate_template_name,
+    LocalizedString, McpFieldConfig, PickerAppearance, RelationshipConfig, RequiredLocales,
+    SelectOption, ValidateFunction, to_title_case, validate_template_name,
 };
 pub use job::{JobDefinition, JobLabels, JobRun, JobStatus};
 pub use lua_lease::{LocalLease, LuaVmLease};
