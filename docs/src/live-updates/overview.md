@@ -26,7 +26,7 @@ channel_capacity = 1024     # default: 1024
 
 Set `enabled = false` to disable live updates entirely. Both SSE and gRPC Subscribe will be unavailable.
 
-Connection limits protect against resource exhaustion. When the limit is reached, new SSE connections receive `503 Service Unavailable` and new gRPC Subscribe calls receive `UNAVAILABLE` status. Existing connections are not affected.
+Connection limits protect against resource exhaustion. When the limit is reached, new SSE connections receive `503 Service Unavailable` and new gRPC Subscribe calls receive `RESOURCE_EXHAUSTED` status. (gRPC `UNAVAILABLE` is reserved for live updates being disabled, a different condition.) Existing connections are not affected.
 
 ### Subscriber lifecycle
 
@@ -78,6 +78,8 @@ crap.collections.define("posts", {
 ```
 
 The filter function receives `{ collection, operation, data }` and returns `true` to broadcast or `false`/`nil` to suppress.
+
+The `live = { ... }` table form is strict: `mode` must be `"full"` or `"metadata"` (the default), `filter` must be a string hook reference, and any unknown key is a hard error at load time — a typo is not silently ignored.
 
 ## Access Control
 

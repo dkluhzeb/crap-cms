@@ -8,6 +8,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Collection, global, and field `access` rules must be strings.** An access
+  rule (`read` / `create` / `update` / `delete` / `trash`) that was present but
+  not a string — e.g. `read = some_function`, `read = true` — was silently
+  dropped via the lenient string getter, falling the rule back to the default
+  policy. Silently discarding an access rule the author wrote is a security
+  footgun, so a present-but-non-string access value is now a hard load error.
+  String references (`read = "hooks.posts.can_read"`) and omitting a rule are
+  unchanged.
+
+- **`live` collection/global setting rejects unknown keys and invalid `mode`.**
+  The `live = { mode, filter }` table was the only nested schema sub-table that
+  silently ignored unknown keys and silently coerced an unrecognized `mode`
+  value to `metadata`. It now rejects unknown keys (e.g. a typo'd `fitler`) and
+  hard-errors when `mode` is anything other than `"full"` / `"metadata"` or when
+  `filter` is a non-string — parity with every other sub-table (`versions`,
+  `access`, `mcp`, …). A config that relied on the silent fallback now fails to
+  load instead of shipping the wrong delivery mode.
+
 - **gRPC: dropped always-true `success` response fields.**
   `DeleteResponse.success`, `ForgotPasswordResponse.success`,
   `ResetPasswordResponse.success`, `VerifyEmailResponse.success`, and

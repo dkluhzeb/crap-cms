@@ -74,17 +74,19 @@ service ContentAPI {
   rpc Create (CreateRequest) returns (CreateResponse);
 
   // CreateMany bulk-creates multiple documents in a single call.
-  // Documents are created in batched transactions (500 per batch).
+  // All documents are created in a single transaction (all-or-nothing) — if
+  // any document fails, the whole batch rolls back and nothing is created.
   // Fires per-document before_validate / after_change hooks by default.
   // Set hooks=false to skip hooks for performance on large batch operations.
   //
   // Auth: optional. Create access is evaluated per document.
   //
   // Errors:
-  //   NOT_FOUND         — collection slug not registered
-  //   PERMISSION_DENIED — create access denied
-  //   INVALID_ARGUMENT  — validation error
-  //   UNAVAILABLE       — transient DB error; retry
+  //   NOT_FOUND           — collection slug not registered
+  //   PERMISSION_DENIED   — create access denied
+  //   INVALID_ARGUMENT    — validation error
+  //   FAILED_PRECONDITION — batch size exceeds [server] bulk_max_documents
+  //   UNAVAILABLE         — transient DB error; retry
   rpc CreateMany (CreateManyRequest) returns (CreateManyResponse);
 
   // Update modifies an existing document by ID and fires the full write hook
@@ -267,10 +269,11 @@ service ContentAPI {
   // Auth: optional. Read and update access functions are evaluated.
   //
   // Errors:
-  //   NOT_FOUND         — collection slug not registered
-  //   PERMISSION_DENIED — read or update access denied for any matching document
-  //   INVALID_ARGUMENT  — malformed where clause
-  //   UNAVAILABLE       — transient DB error; retry
+  //   NOT_FOUND           — collection slug not registered
+  //   PERMISSION_DENIED   — read or update access denied for any matching document
+  //   INVALID_ARGUMENT    — malformed where clause
+  //   FAILED_PRECONDITION — match-set exceeds [server] bulk_max_documents
+  //   UNAVAILABLE         — transient DB error; retry
   rpc UpdateMany (UpdateManyRequest) returns (UpdateManyResponse);
 
   // DeleteMany bulk-deletes all documents matching the where filter.
@@ -282,12 +285,15 @@ service ContentAPI {
   // access per document (all must pass, or the whole operation is denied).
   //
   // Auth: optional. Read and delete access functions are evaluated.
+  // Documents still referenced by others are skipped (counted in the response's
+  // `skipped` field), not failed.
   //
   // Errors:
-  //   NOT_FOUND         — collection slug not registered
-  //   PERMISSION_DENIED — read or delete access denied for any matching document
-  //   INVALID_ARGUMENT  — malformed where clause
-  //   UNAVAILABLE       — transient DB error; retry
+  //   NOT_FOUND           — collection slug not registered
+  //   PERMISSION_DENIED   — read or delete access denied for any matching document
+  //   INVALID_ARGUMENT    — malformed where clause
+  //   FAILED_PRECONDITION — match-set exceeds [server] bulk_max_documents
+  //   UNAVAILABLE         — transient DB error; retry
   rpc DeleteMany (DeleteManyRequest) returns (DeleteManyResponse);
 
   // Subscribe opens a server-streaming connection that receives MutationEvents
@@ -303,9 +309,10 @@ service ContentAPI {
   // Pass a valid JWT in SubscribeRequest.token (not in metadata).
   //
   // Errors:
-  //   UNAUTHENTICATED   — token is present but invalid or expired
-  //   PERMISSION_DENIED — no accessible collections or globals after access checks
-  //   UNAVAILABLE       — live updates disabled (no event bus configured)
+  //   UNAUTHENTICATED    — token is present but invalid or expired
+  //   PERMISSION_DENIED  — no accessible collections or globals after access checks
+  //   RESOURCE_EXHAUSTED — max_subscribe_connections limit reached
+  //   UNAVAILABLE        — live updates disabled (no event bus configured)
   rpc Subscribe (SubscribeRequest) returns (stream MutationEvent);
 
   // ListVersions returns the version history of a document in a collection

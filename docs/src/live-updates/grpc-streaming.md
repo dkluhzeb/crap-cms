@@ -55,8 +55,10 @@ If the stream is interrupted, clients should reconnect. Events missed during dis
 
 ## Connection Limits
 
-The maximum number of concurrent Subscribe streams is controlled by `max_subscribe_connections` in `[live]` (default: 1000). When the limit is reached, new subscriptions receive `UNAVAILABLE` status. Set to `0` for unlimited.
+The maximum number of concurrent Subscribe streams is controlled by `max_subscribe_connections` in `[live]` (default: 1000). When the limit is reached, new subscriptions receive `RESOURCE_EXHAUSTED` status. Set to `0` for unlimited.
+
+(Note: `UNAVAILABLE` is returned for a different condition — live updates being disabled in config — not for hitting the connection limit.)
 
 ## Backpressure
 
-The internal broadcast channel has a configurable capacity (default 1024). If a subscriber falls behind, events are dropped and the stream continues from the latest event (logged as a warning on the server).
+The internal broadcast channel has a configurable capacity (default 1024). If a subscriber falls behind by more than `channel_capacity` events, it is **dropped** on its next read — the stream is closed (logged as a warning on the server) and the client must reconnect. Use the `sequence` field to detect the gap. Earlier builds kept lagging subscribers alive with a warning, which silently dropped events; subscribers are now closed deterministically. Raise `channel_capacity` in `[live]` if legitimate subscribers are being dropped under bursty load.

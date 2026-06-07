@@ -17,7 +17,10 @@ crap.collections.define("posts", {
 })
 ```
 
-Each property is a Lua function ref (string) or `nil` (no restriction).
+Each property is a Lua function ref (string) or `nil` (no restriction). The
+value must be a string — a non-string (e.g. a function value or boolean) is a
+hard error at load time, not a silently dropped rule. The same applies to
+field-level `access` and global `access`.
 
 | Property | Controls | Fallback |
 |----------|----------|----------|

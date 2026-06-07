@@ -80,6 +80,28 @@ pub(super) fn get_string(tbl: &Table, key: &str) -> Option<String> {
     tbl.get::<Option<String>>(key).ok().flatten()
 }
 
+/// Strict optional string: absent / `nil` → `None`, a string → `Some`, any
+/// other present value → a hard error.
+///
+/// Unlike [`get_string`], a present-but-non-string value is NOT silently
+/// dropped. Use this for hook *references* (e.g. access rules), where silently
+/// discarding a value the author wrote — `read = some_function`, `read = true` —
+/// would drop an access rule and is a security footgun, not a harmless typo.
+pub(super) fn get_optional_string_ref(
+    tbl: &Table,
+    key: &str,
+    context: &str,
+) -> Result<Option<String>> {
+    match tbl.get::<Value>(key)? {
+        Value::Nil => Ok(None),
+        Value::String(s) => Ok(Some(s.to_str()?.to_string())),
+        other => bail!(
+            "{context} '{key}' must be a string hook reference, got {}",
+            other.type_name()
+        ),
+    }
+}
+
 /// Parse a Lua value that is either a plain string or a `{locale = string}` table.
 pub(super) fn get_localized_string(tbl: &Table, key: &str) -> Option<LocalizedString> {
     match tbl.get::<Value>(key) {

@@ -181,8 +181,8 @@ pub fn parse_collection_definition(
     let hooks = parse_hooks_section(config)?;
     let auth = parse_collection_auth(config);
     let upload = parse_collection_upload(config)?;
-    let access = parse_access_config(config);
-    let live = parse_live_setting(config);
+    let access = parse_access_config(config)?;
+    let live = parse_live_setting(config)?;
     let versions = parse_versions_config(config)?;
     let indexes = parse_indexes(config)?;
     let mcp = parse_mcp_section(config, COLLECTION_OPERATIONS)?;

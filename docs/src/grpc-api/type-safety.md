@@ -185,7 +185,7 @@ class PostsClient {
     const resp = await this.client.find({ collection: "posts", ...query });
     return {
       documents: resp.documents.map(d => ({ id: d.id, ...d.fields } as Post)),
-      total: resp.total,
+      total: resp.pagination.total_docs,
     };
   }
 

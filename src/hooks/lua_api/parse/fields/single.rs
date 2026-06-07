@@ -16,8 +16,8 @@ use crate::{
 use super::super::admin::parse_field_admin;
 use super::super::blocks::{parse_block_definitions, parse_tab_definitions};
 use super::super::helpers::{
-    deny_unknown_keys, get_bool, get_string, get_string_val, get_table, parse_select_options,
-    parse_string_list,
+    deny_unknown_keys, get_bool, get_optional_string_ref, get_string, get_string_val, get_table,
+    parse_select_options, parse_string_list,
 };
 use super::super::relationship::parse_field_relationship;
 use super::constraints::{parse_constraints, parse_date_config, parse_default_value};
@@ -205,7 +205,7 @@ fn parse_field_parts(lua: &Lua, field_tbl: &Table) -> Result<ParsedFieldParts> {
     let access = match get_table(field_tbl, "access") {
         Ok(tbl) => {
             deny_unknown_keys(&tbl, "field access", &["read", "create", "update"])?;
-            parse_field_access(&tbl)
+            parse_field_access(&tbl)?
         }
         Err(_) => FieldAccess::default(),
     };
@@ -420,12 +420,21 @@ fn apply_date_bounds(
     builder
 }
 
-pub(in crate::hooks::lua_api::parse) fn parse_field_access(access_tbl: &Table) -> FieldAccess {
-    FieldAccess {
-        read: get_string(access_tbl, "read"),
-        create: get_string(access_tbl, "create"),
-        update: get_string(access_tbl, "update"),
-    }
+/// Parse a field's `access` sub-table. Each rule is a string hook reference;
+/// a present-but-non-string value is a hard error rather than being silently
+/// dropped (parity with collection/global `access`).
+///
+/// # Errors
+///
+/// Returns an error if `read`/`create`/`update` is present but not a string.
+pub(in crate::hooks::lua_api::parse) fn parse_field_access(
+    access_tbl: &Table,
+) -> Result<FieldAccess> {
+    Ok(FieldAccess {
+        read: get_optional_string_ref(access_tbl, "read", "field access")?,
+        create: get_optional_string_ref(access_tbl, "create", "field access")?,
+        update: get_optional_string_ref(access_tbl, "update", "field access")?,
+    })
 }
 
 fn parse_field_hooks(hooks_tbl: &Table) -> Result<FieldHooks> {
@@ -460,10 +469,22 @@ mod tests {
         let tbl = lua.create_table().unwrap();
         tbl.set("read", "hooks.access.check_role").unwrap();
         tbl.set("create", "hooks.access.admin_only").unwrap();
-        let access = parse_field_access(&tbl);
+        let access = parse_field_access(&tbl).unwrap();
         assert_eq!(access.read.as_deref(), Some("hooks.access.check_role"));
         assert_eq!(access.create.as_deref(), Some("hooks.access.admin_only"));
         assert!(access.update.is_none());
+    }
+
+    /// Regression: a non-string field access rule is a hard error, not
+    /// silently dropped (parity with collection/global `access`).
+    #[test]
+    fn test_parse_field_access_non_string_errors() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("update", 1i64).unwrap();
+        let err = parse_field_access(&tbl).unwrap_err().to_string();
+        assert!(err.contains("field access"), "got: {err}");
+        assert!(err.contains("update"), "got: {err}");
     }
 
     fn field_with(lua: &Lua, set: impl FnOnce(&Table)) -> Result<()> {

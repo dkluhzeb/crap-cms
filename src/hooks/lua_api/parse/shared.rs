@@ -1,6 +1,6 @@
 //! Shared parsing helpers used by both collection and global definition parsers.
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use mlua::{Lua, Result as LuaResult, Table, Value};
 use tracing::warn;
 
@@ -14,7 +14,8 @@ use crate::core::{
 use super::{
     fields::parse_fields,
     helpers::{
-        deny_unknown_keys, get_bool, get_localized_string, get_string, get_table, parse_hooks,
+        deny_unknown_keys, get_bool, get_localized_string, get_optional_string_ref, get_string,
+        get_table, parse_hooks,
     },
 };
 
@@ -37,7 +38,7 @@ pub(super) const COLLECTION_HOOK_KEYS: &[&str] = &[
 pub(super) const ACCESS_KEYS: &[&str] = &["read", "create", "update", "delete", "trash"];
 
 /// Reject unknown keys in the nested sub-tables shared by collections and
-/// globals (`labels`, `hooks`, `access`, `mcp`, `versions`, `indexes`). Each
+/// globals (`labels`, `hooks`, `access`, `mcp`, `versions`, `live`, `indexes`). Each
 /// `get_table` quietly skips when the key is absent or not a table (e.g.
 /// `versions = true`), so only present sub-tables are validated.
 pub(super) fn validate_shared_nested_keys(config: &Table) -> Result<()> {
@@ -55,6 +56,9 @@ pub(super) fn validate_shared_nested_keys(config: &Table) -> Result<()> {
     }
     if let Ok(t) = get_table(config, "versions") {
         deny_unknown_keys(&t, "versions", &["drafts", "max_versions"])?;
+    }
+    if let Ok(t) = get_table(config, "live") {
+        deny_unknown_keys(&t, "live", &["mode", "filter"])?;
     }
     if let Ok(t) = get_table(config, "indexes") {
         for entry in t.sequence_values::<Table>().flatten() {
@@ -160,18 +164,27 @@ pub(super) struct LiveConfig {
     pub mode: LiveMode,
 }
 
-pub(super) fn parse_live_setting(config: &Table) -> LiveConfig {
+/// Parse the `live` setting. The table form (`{ mode, filter }`) is strict:
+/// an unrecognized `mode` value or a non-string `filter` is a hard error,
+/// rather than being silently coerced to the default. Unknown keys in the
+/// table are rejected separately by [`validate_shared_nested_keys`].
+///
+/// # Errors
+///
+/// Returns an error if `live.mode` is not `"full"`/`"metadata"`, or if
+/// `live.filter` is present but not a string.
+pub(super) fn parse_live_setting(config: &Table) -> Result<LiveConfig> {
     let val: Value = match config.get("live").ok() {
         Some(v) => v,
         None => {
-            return LiveConfig {
+            return Ok(LiveConfig {
                 setting: None,
                 mode: LiveMode::default(),
-            };
+            });
         }
     };
 
-    match val {
+    let cfg = match val {
         Value::Boolean(false) => LiveConfig {
             setting: Some(LiveSetting::Disabled),
             mode: LiveMode::default(),
@@ -189,27 +202,32 @@ pub(super) fn parse_live_setting(config: &Table) -> LiveConfig {
             }
         }
         Value::Table(tbl) => {
-            let mode = tbl
-                .get::<Value>("mode")
-                .ok()
-                .and_then(|v| match v {
-                    Value::String(s) => s.to_str().ok().map(|s| s.to_string()),
-                    _ => None,
-                })
-                .map(|s| match s.as_str() {
+            let mode = match tbl.get::<Value>("mode")? {
+                Value::Nil => LiveMode::default(),
+                Value::String(s) => match &*s.to_str()? {
                     "full" => LiveMode::Full,
-                    _ => LiveMode::Metadata,
-                })
-                .unwrap_or_default();
+                    "metadata" => LiveMode::Metadata,
+                    other => {
+                        bail!("Invalid live.mode value '{other}'. Valid values: full, metadata")
+                    }
+                },
+                other => bail!(
+                    "live.mode must be a string (\"full\" or \"metadata\"), got {}",
+                    other.type_name()
+                ),
+            };
 
-            let filter = tbl
-                .get::<Value>("filter")
-                .ok()
-                .and_then(|v| match v {
-                    Value::String(s) => s.to_str().ok().map(|s| s.to_string()),
-                    _ => None,
-                })
-                .filter(|s| !s.is_empty());
+            let filter = match tbl.get::<Value>("filter")? {
+                Value::Nil => None,
+                Value::String(s) => {
+                    let r = s.to_str()?.to_string();
+                    (!r.is_empty()).then_some(r)
+                }
+                other => bail!(
+                    "live.filter must be a string hook reference, got {}",
+                    other.type_name()
+                ),
+            };
 
             LiveConfig {
                 setting: filter.map(LiveSetting::Function),
@@ -220,7 +238,9 @@ pub(super) fn parse_live_setting(config: &Table) -> LiveConfig {
             setting: None,
             mode: LiveMode::default(),
         },
-    }
+    };
+
+    Ok(cfg)
 }
 
 /// Parse `versions` from a Lua table.
@@ -272,17 +292,26 @@ pub(super) fn parse_indexes(config: &Table) -> LuaResult<Vec<IndexDefinition>> {
     Ok(indexes)
 }
 
-pub(super) fn parse_access_config(config: &Table) -> Access {
+/// Parse the `access` sub-table into [`Access`]. Each rule is a string hook
+/// reference; a present-but-non-string value is a hard error rather than being
+/// silently dropped (dropping an access rule the author wrote is a security
+/// footgun). Unknown keys are rejected by [`validate_shared_nested_keys`].
+///
+/// # Errors
+///
+/// Returns an error if any of `read`/`create`/`update`/`delete`/`trash` is
+/// present but not a string.
+pub(super) fn parse_access_config(config: &Table) -> Result<Access> {
     let Ok(access_tbl) = get_table(config, "access") else {
-        return Access::default();
+        return Ok(Access::default());
     };
-    Access::builder()
-        .read(get_string(&access_tbl, "read"))
-        .create(get_string(&access_tbl, "create"))
-        .update(get_string(&access_tbl, "update"))
-        .delete(get_string(&access_tbl, "delete"))
-        .trash(get_string(&access_tbl, "trash"))
-        .build()
+    Ok(Access::builder()
+        .read(get_optional_string_ref(&access_tbl, "read", "access")?)
+        .create(get_optional_string_ref(&access_tbl, "create", "access")?)
+        .update(get_optional_string_ref(&access_tbl, "update", "access")?)
+        .delete(get_optional_string_ref(&access_tbl, "delete", "access")?)
+        .trash(get_optional_string_ref(&access_tbl, "trash", "access")?)
+        .build())
 }
 
 #[cfg(test)]
@@ -407,7 +436,7 @@ mod tests {
     fn test_parse_live_setting_absent() {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
-        assert!(parse_live_setting(&tbl).setting.is_none());
+        assert!(parse_live_setting(&tbl).unwrap().setting.is_none());
     }
 
     #[test]
@@ -415,7 +444,7 @@ mod tests {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         tbl.set("live", true).unwrap();
-        let r = parse_live_setting(&tbl);
+        let r = parse_live_setting(&tbl).unwrap();
         assert!(r.setting.is_none());
         assert_eq!(r.mode, LiveMode::Metadata);
     }
@@ -426,7 +455,7 @@ mod tests {
         let tbl = lua.create_table().unwrap();
         tbl.set("live", false).unwrap();
         assert!(matches!(
-            parse_live_setting(&tbl).setting,
+            parse_live_setting(&tbl).unwrap().setting,
             Some(LiveSetting::Disabled)
         ));
     }
@@ -436,7 +465,7 @@ mod tests {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         tbl.set("live", "hooks.live.filter_published").unwrap();
-        match parse_live_setting(&tbl).setting {
+        match parse_live_setting(&tbl).unwrap().setting {
             Some(LiveSetting::Function(ref s)) => assert_eq!(s, "hooks.live.filter_published"),
             other => panic!("Expected Function, got {other:?}"),
         }
@@ -447,7 +476,7 @@ mod tests {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         tbl.set("live", "").unwrap();
-        assert!(parse_live_setting(&tbl).setting.is_none());
+        assert!(parse_live_setting(&tbl).unwrap().setting.is_none());
     }
 
     #[test]
@@ -457,9 +486,20 @@ mod tests {
         let live_tbl = lua.create_table().unwrap();
         live_tbl.set("mode", "full").unwrap();
         tbl.set("live", live_tbl).unwrap();
-        let r = parse_live_setting(&tbl);
+        let r = parse_live_setting(&tbl).unwrap();
         assert!(r.setting.is_none());
         assert_eq!(r.mode, LiveMode::Full);
+    }
+
+    #[test]
+    fn test_parse_live_setting_table_metadata_mode() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let live_tbl = lua.create_table().unwrap();
+        live_tbl.set("mode", "metadata").unwrap();
+        tbl.set("live", live_tbl).unwrap();
+        let r = parse_live_setting(&tbl).unwrap();
+        assert_eq!(r.mode, LiveMode::Metadata);
     }
 
     #[test]
@@ -470,7 +510,7 @@ mod tests {
         live_tbl.set("mode", "full").unwrap();
         live_tbl.set("filter", "hooks.live.check").unwrap();
         tbl.set("live", live_tbl).unwrap();
-        let r = parse_live_setting(&tbl);
+        let r = parse_live_setting(&tbl).unwrap();
         assert!(matches!(r.setting, Some(LiveSetting::Function(ref s)) if s == "hooks.live.check"));
         assert_eq!(r.mode, LiveMode::Full);
     }
@@ -480,14 +520,58 @@ mod tests {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         tbl.set("live", 42i64).unwrap();
-        assert!(parse_live_setting(&tbl).setting.is_none());
+        assert!(parse_live_setting(&tbl).unwrap().setting.is_none());
+    }
+
+    /// Regression: an unrecognized `live.mode` value must be a hard error,
+    /// not silently coerced to `metadata` (which would mask a typo and ship
+    /// the wrong delivery mode).
+    #[test]
+    fn test_parse_live_setting_invalid_mode_errors() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let live_tbl = lua.create_table().unwrap();
+        live_tbl.set("mode", "fulll").unwrap();
+        tbl.set("live", live_tbl).unwrap();
+        let err = parse_live_setting(&tbl).unwrap_err().to_string();
+        assert!(err.contains("live.mode"), "got: {err}");
+        assert!(err.contains("fulll"), "got: {err}");
+    }
+
+    /// Regression: a non-string `live.filter` must be a hard error, not
+    /// silently dropped (a dropped filter would broadcast events the filter
+    /// was meant to suppress).
+    #[test]
+    fn test_parse_live_setting_non_string_filter_errors() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let live_tbl = lua.create_table().unwrap();
+        live_tbl.set("filter", 7i64).unwrap();
+        tbl.set("live", live_tbl).unwrap();
+        let err = parse_live_setting(&tbl).unwrap_err().to_string();
+        assert!(err.contains("live.filter"), "got: {err}");
+    }
+
+    /// Regression: an unknown key in the `live` table is rejected by the
+    /// shared nested-key validation, matching every other sub-table.
+    #[test]
+    fn test_validate_live_table_rejects_unknown_key() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let live_tbl = lua.create_table().unwrap();
+        live_tbl.set("mode", "full").unwrap();
+        live_tbl.set("fitler", "hooks.live.check").unwrap();
+        tbl.set("live", live_tbl).unwrap();
+        let err = validate_shared_nested_keys(&tbl).unwrap_err().to_string();
+        assert!(err.contains("live"), "got: {err}");
+        assert!(err.contains("fitler"), "got: {err}");
     }
 
     #[test]
     fn test_parse_access_config_absent() {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
-        let access = parse_access_config(&tbl);
+        let access = parse_access_config(&tbl).unwrap();
         assert!(access.read.is_none());
         assert!(access.create.is_none());
     }
@@ -500,7 +584,7 @@ mod tests {
         access_tbl.set("read", "hooks.access.allow_all").unwrap();
         access_tbl.set("create", "hooks.access.admin_only").unwrap();
         tbl.set("access", access_tbl).unwrap();
-        let access = parse_access_config(&tbl);
+        let access = parse_access_config(&tbl).unwrap();
         assert_eq!(access.read.as_deref(), Some("hooks.access.allow_all"));
         assert_eq!(access.create.as_deref(), Some("hooks.access.admin_only"));
         assert!(access.update.is_none());
@@ -516,12 +600,27 @@ mod tests {
             .set("trash", "hooks.access.editor_or_above")
             .unwrap();
         tbl.set("access", access_tbl).unwrap();
-        let access = parse_access_config(&tbl);
+        let access = parse_access_config(&tbl).unwrap();
         assert_eq!(access.delete.as_deref(), Some("hooks.access.admin_only"));
         assert_eq!(
             access.trash.as_deref(),
             Some("hooks.access.editor_or_above")
         );
+    }
+
+    /// Regression: an access rule that is present but not a string must be a
+    /// hard error, not silently dropped — dropping a rule the author wrote is
+    /// a security footgun (the field would fall back to the default policy).
+    #[test]
+    fn test_parse_access_config_non_string_errors() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let access_tbl = lua.create_table().unwrap();
+        access_tbl.set("read", true).unwrap();
+        tbl.set("access", access_tbl).unwrap();
+        let err = parse_access_config(&tbl).unwrap_err().to_string();
+        assert!(err.contains("access"), "got: {err}");
+        assert!(err.contains("read"), "got: {err}");
     }
 
     #[test]
