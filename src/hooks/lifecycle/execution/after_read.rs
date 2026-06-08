@@ -18,6 +18,8 @@ pub struct AfterReadCtx<'a> {
     pub fields: &'a [FieldDefinition],
     pub collection: &'a str,
     pub operation: &'a str,
+    /// Content locale for this read (nil when not locale-scoped).
+    pub locale: Option<&'a str>,
     pub user: Option<&'a Document>,
     pub ui_locale: Option<&'a str>,
 }
@@ -35,8 +37,9 @@ pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Documen
         return doc;
     }
 
+    let doc_id = doc.id.to_string();
     let mut data = doc.fields.clone();
-    data.insert("id".to_string(), JsonValue::String(doc.id.to_string()));
+    data.insert("id".to_string(), JsonValue::String(doc_id.clone()));
 
     if let Some(ref ts) = doc.created_at {
         data.insert("created_at".to_string(), JsonValue::String(ts.clone()));
@@ -55,6 +58,8 @@ pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Documen
                 event: FieldHookEvent::AfterRead,
                 collection: ctx.collection,
                 operation: ctx.operation,
+                id: Some(&doc_id),
+                locale: ctx.locale,
             },
         )
     {
@@ -68,6 +73,7 @@ pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Documen
 
     let hook_ctx = HookContext::builder(ctx.collection, ctx.operation)
         .data(data)
+        .locale(ctx.locale)
         .user(ctx.user)
         .ui_locale(ctx.ui_locale)
         .build();
@@ -138,6 +144,7 @@ mod tests {
             fields: &fields,
             collection: "posts",
             operation: "find",
+            locale: None,
             user: None,
             ui_locale: None,
         };

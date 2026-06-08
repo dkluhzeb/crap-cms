@@ -11,6 +11,7 @@ use tokio::task;
 use tracing::{debug, error};
 
 use crate::core::collection::Auth;
+use crate::hooks::lifecycle::AuthStrategyInput;
 use crate::{
     admin::{
         AdminState, auth_middleware,
@@ -57,15 +58,14 @@ struct VerifyParams {
 /// match, or `None` if all strategies fail.
 fn try_strategy_auth(
     conn: &BoxedConnection,
-    slug: &str,
     def: &CollectionDefinition,
     hook_runner: &HookRunner,
-    headers: &HashMap<String, String>,
+    strategy_input: &AuthStrategyInput,
 ) -> Option<Document> {
     let auth = def.auth.as_ref()?;
 
     for strategy in auth.strategies() {
-        match hook_runner.run_auth_strategy(strategy.authenticate, slug, headers, conn) {
+        match hook_runner.run_auth_strategy(strategy.authenticate, strategy_input, conn) {
             Ok(Some(doc)) => return Some(doc),
             Ok(None) => {}
             Err(e) => {
@@ -73,7 +73,7 @@ fn try_strategy_auth(
                 // into strategy failures (DB errors, bad config, Lua panics) that
                 // previously silenced themselves as "authentication failed".
                 error!(
-                    collection = slug,
+                    collection = strategy_input.collection,
                     strategy = %strategy.authenticate,
                     error = ?e,
                     "Custom auth strategy returned an error; continuing to next strategy"
@@ -124,9 +124,18 @@ fn verify_credentials_blocking(
         }
     }
 
-    // Fallback: try auth strategies if local auth failed/skipped
+    // Fallback: try auth strategies if local auth failed/skipped. The submitted
+    // credentials are exposed so a strategy can verify them against an external
+    // system; the forwarded client IP rides in `headers` (X-Forwarded-For).
+    let strategy_input = AuthStrategyInput {
+        collection: slug,
+        headers: &params.headers,
+        email: Some(&params.email),
+        password: Some(&params.password),
+        remote_addr: None,
+    };
     if let Some(runner) = &params.hook_runner
-        && let Some(user) = try_strategy_auth(&conn, slug, def, runner, &params.headers)
+        && let Some(user) = try_strategy_auth(&conn, def, runner, &strategy_input)
     {
         let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
 

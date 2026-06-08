@@ -791,6 +791,8 @@ fn lua_hook_error_rolls_back_inner_crud() {
         context: ReqContext::new(),
         user: None,
         ui_locale: None,
+        document_id: None,
+        edited_by: None,
     };
     let result =
         runner.run_after_write(&hooks, &def.fields, HookEvent::AfterChange, ctx, &tx, None);

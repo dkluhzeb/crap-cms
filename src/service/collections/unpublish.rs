@@ -7,8 +7,8 @@ use std::{cell::RefCell, rc::Rc};
 
 use crate::{
     core::{Document, event::EventOperation},
-    db::{AccessResult, query},
-    hooks::{HookContext, HookEvent, LuaCrudInfra},
+    db::{AccessResult, LocaleContext, query},
+    hooks::{AccessCheckInput, HookContext, HookEvent, LuaCrudInfra},
     service::{
         AfterChangeInput, RunnerWriteHooks, ServiceContext, ServiceError, flush_queue, helpers,
         persist_unpublish, run_after_change_hooks,
@@ -20,7 +20,7 @@ type Result<T> = std::result::Result<T, ServiceError>;
 /// Unpublish a versioned document on an existing connection/transaction.
 ///
 /// Runs the full lifecycle: access check -> before-hooks -> set draft status ->
-/// after-hooks -> hydrate -> strip read-denied fields.
+/// hydrate -> after-hooks -> strip read-denied fields.
 /// Does NOT manage transactions — caller must open/commit.
 fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document> {
     let conn = ctx.resolve_conn()?;
@@ -28,8 +28,16 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.collection_def()?;
 
-    let access =
-        write_hooks.check_access(def.access.update.as_deref(), ctx.user, Some(id), None, None)?;
+    let access = write_hooks.check_access(&AccessCheckInput {
+        access_ref: def.access.update.as_deref(),
+        user: ctx.user,
+        id: Some(id),
+        data: None,
+        locale: None,
+        operation: "unpublish",
+        collection: ctx.slug,
+        ui_locale: None,
+    })?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Update access denied".into()));
@@ -52,8 +60,9 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document
 
     let hook_ctx = HookContext::builder(ctx.slug, "update")
         .data(doc.fields.clone())
+        .document_id(id)
         .draft(true)
-        .locale(None::<String>)
+        .locale(locale_ctx.as_ref().map(LocaleContext::access_locale))
         .user(ctx.user)
         .build();
 
@@ -66,19 +75,22 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document
     doc.fields
         .insert("_status".to_string(), Value::String("draft".into()));
 
+    // Hydrate join fields BEFORE after-change hooks so they see nested data.
+    query::hydrate_document(conn, ctx.slug, &def.fields, &mut doc, None, None)?;
+
     run_after_change_hooks(
         write_hooks,
         &def.hooks,
         &def.fields,
         &doc,
         AfterChangeInput::builder(ctx.slug, "update")
+            .draft(true)
+            .locale(locale_ctx.as_ref().map(|lc| lc.access_locale().to_string()))
             .req_context(final_ctx.context)
             .user(ctx.user)
             .build(),
         conn,
     )?;
-
-    query::hydrate_document(conn, ctx.slug, &def.fields, &mut doc, None, None)?;
 
     let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user, None);
     read_denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));

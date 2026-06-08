@@ -24,20 +24,25 @@ All access functions receive a context table:
 
 ```lua
 function M.check(ctx)
-    -- ctx.user   = full user document (or nil if anonymous)
-    -- ctx.id     = document ID (for update/delete/find_by_id)
-    -- ctx.data   = incoming data (for create/update)
-    -- ctx.locale = locale this operation targets (when localization is on)
+    -- ctx.operation  = "create" / "update" / "delete" / "find" / "find_by_id" / …
+    -- ctx.collection = the collection (or global) slug this check is for
+    -- ctx.user       = full user document (or nil if anonymous)
+    -- ctx.id         = document ID (for update/delete/find_by_id)
+    -- ctx.data       = incoming data (for create/update)
+    -- ctx.locale     = locale this operation targets (when localization is on)
     return true  -- or false, or a filter table
 end
 ```
 
 | Field | Type | Present When | Description |
 |-------|------|-------------|-------------|
+| `operation` | string | Always | The operation triggering the check: `"create"`, `"update"`, `"delete"`, `"trash"` (soft delete), `"undelete"`, `"unpublish"`, `"restore"`, `"find"`, `"find_by_id"`, `"count"`, `"search"`, `"get"` (global read), `"read"` (admin read-gating), `"subscribe"`, … Lets one shared function gate several operations. |
+| `collection` | string | Always | The collection (or global) slug this check is for — so a function reused across collections can tell which one it's gating. |
 | `user` | table or nil | Always | Full user document from the auth collection. `nil` if no auth or anonymous. |
 | `id` | string or nil | update, delete, find_by_id | Document ID |
-| `data` | table or nil | create, update | Incoming data |
-| `locale` | string or nil | When localization enabled | The locale this read/write targets — the requested locale, or the default locale when none was given. `nil` when localization is disabled. Available at both collection and field level. |
+| `data` | table or nil | create, update | The **incoming** data being written — *not* the existing stored row. To gate on existing persisted values (e.g. "users may only edit their own rows"), return a **filter table** (e.g. `return { author_id = ctx.user.id }`); the system enforces that the target row matches it. |
+| `locale` | string or nil | When localization enabled | The content locale this read/write targets — the requested locale, or the default locale when none was given. `nil` when localization is disabled. Available at both collection and field level. |
+| `ui_locale` | string or nil | Admin requests | The operator's admin UI language. Set for admin-originating checks (create/update, global read/update); `nil` for gRPC/REST/internal checks. Distinct from `locale` (the content locale). |
 
 ## Per-Locale Access
 

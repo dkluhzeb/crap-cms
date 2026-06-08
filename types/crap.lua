@@ -95,7 +95,10 @@ crap = {}
 --- @class crap.ValidateContext
 --- @field collection string Collection slug.
 --- @field field_name string Name of the field being validated.
---- @field data table<string, any> Full document data.
+--- @field operation string The operation being validated: `"create"` or `"update"`. Lets a custom validator branch (e.g. "immutable after create", or stricter on update).
+--- @field id? string The document id on `update` (the row being edited); `nil` on `create`.
+--- @field data table<string, any> The data in the *nearest scope*: the full document for a top-level field, or the current row for a validator on a field inside an array/blocks row.
+--- @field document table<string, any> The full document being written. Equals `data` for top-level fields; for a sub-field validator inside an array/blocks row it is the *parent* document, so the validator can cross-reference fields outside its row.
 --- @field user? table Authenticated user document (nil if unauthenticated or no auth collection).
 --- @field ui_locale? string Admin UI locale code (e.g., `"en"`, `"de"`). Nil if not set.
 --- @field locale? string The content locale this write targets (e.g. `"en"`, `"de"`) — the requested locale, or the default when none was given. Nil when localization is disabled. Lets a custom validator enforce per-locale rules (e.g. only require a value in the default locale).
@@ -118,9 +121,24 @@ crap = {}
 --- @field field_name string Name of the field being processed.
 --- @field collection string Collection slug.
 --- @field operation string The operation: `"create"`, `"update"`, `"find"`, `"find_by_id"`, …
---- @field data table<string, any> Full document data (read-only snapshot).
+--- @field id? string The id of the document being processed on `update` / read; `nil` on `create` (no row exists yet). Mirrors the `id` on the validator and access contexts.
+--- @field locale? string Content locale for this operation (e.g. `"en"`, `"de"`). Nil when the operation is not locale-scoped. Distinct from `ui_locale` (the admin UI language) — this is the locale of the data being written or read.
+--- @field data table<string, any> The **nearest scope** (read-only snapshot): the full document for a top-level field, or the current row for a hook on a field inside an array/blocks row.
+--- @field document table<string, any> The **full document** being written or read — a read-only snapshot taken before any field hook in this pass ran (so it does not reflect changes made by earlier field hooks in the same pass). Matches `data` at the top level; for a sub-field hook inside an array/blocks row it's the parent document, so the hook can cross-reference fields outside its row.
 --- @field user? table Authenticated user document (nil if unauthenticated or no auth collection).
 --- @field ui_locale? string Admin UI locale code (e.g., `"en"`, `"de"`). Nil if not set.
+
+--- Context passed as the **second** argument to a display-condition function:
+--- `function(form_data, ctx)`. Lets a condition gate on who is editing, which
+--- operation, and the locale — beyond the form values in the first argument.
+--- Existing `function(form_data)` conditions keep working (Lua silently drops
+--- the extra argument).
+--- @class crap.ConditionContext
+--- @field collection string Collection (or global) slug the form belongs to.
+--- @field operation string `"create"` or `"update"` — whether the form is creating a new document or editing an existing one.
+--- @field user? crap.AuthUser Authenticated admin user (nil if not resolvable). Typed as `crap.AuthUser` so a condition can read `ctx.user.role` etc.
+--- @field ui_locale? string Admin UI locale code (e.g. `"en"`, `"de"`). Nil if not set.
+--- @field locale? string The content locale the form is editing (e.g. `"en"`, `"de"`). Nil when localization is disabled.
 
 --- A single tab within a Tabs layout field.
 --- @class crap.FieldTab
@@ -166,6 +184,7 @@ crap = {}
 --- @class crap.BaseField
 --- @field name string Column name (required).
 --- @field required? boolean Validation: must have a value (default: false).
+--- @field required_when? string Conditional requirement: a Lua predicate ref (`"module.fn"`). When set, the field is required whenever the predicate returns truthy for the document being validated — in addition to a static `required = true`. The predicate receives the validate context (`ctx.data` = the full document), so it can require this field based on other fields' values.
 --- @field unique? boolean Unique constraint (default: false).
 --- @field index? boolean Create a B-tree index on this column (default: false). Skipped when unique=true.
 --- @field validate? string Lua function ref called as `crap.ValidateFunction`.
@@ -257,6 +276,7 @@ crap = {}
 --- @class crap.FieldDefinition
 --- @field name string Column name (required).
 --- @field required? boolean Validation: must have a value (default: false).
+--- @field required_when? string Conditional requirement: a Lua predicate ref (`"module.fn"`). When set, the field is required whenever the predicate returns truthy for the document being validated — in addition to a static `required = true`. The predicate receives the validate context (`ctx.data` = the full document), so it can require this field based on other fields' values.
 --- @field unique? boolean Unique constraint (default: false).
 --- @field index? boolean Create a B-tree index on this column (default: false). Skipped when unique=true.
 --- @field validate? string Lua function ref called as `crap.ValidateFunction`.
@@ -455,6 +475,9 @@ function crap.fields.join(config) end
 --- @class crap.AuthStrategyContext
 --- @field headers table<string, string> Request headers (lowercase keys).
 --- @field collection string Auth collection slug.
+--- @field email? string The submitted login identifier (email/username), when the strategy was reached via a password-style login. `nil` for header/token flows (OAuth).
+--- @field password? string The submitted plaintext password, for strategies that verify credentials against an external system (LDAP, a remote API). `nil` for header/token flows. **Sensitive** — only your strategy hook receives it; never log it.
+--- @field remote_addr? string The client's remote IP address, when known.
 
 --- Which host surfaces a method can fire on. Surface filtering is
 --- per-method: a method whose `surfaces` list omits the current
@@ -730,13 +753,15 @@ function crap.fields.join(config) end
 --- top-level API call, `1+` from Lua CRUD invoked inside another hook.
 --- @class crap.HookContext
 --- @field collection string Collection slug.
---- @field operation "create"|"update"|"delete"|"find"|"find_by_id"|"get_global"|"init" The operation being performed.
---- @field data table<string, any> Document data. For read hooks, contains document fields including `id` / timestamps. For delete hooks, contains only `{ id = "..." }`. In `after_change` hooks, `data.id` carries the new document ID.
---- @field locale? string Current locale code (nil if localization disabled or default locale).
+--- @field operation "create"|"update"|"delete"|"find"|"find_by_id"|"get"|"init" The operation being performed.
+--- @field data table<string, any> Document data. For read hooks, contains document fields including `id` / timestamps. For `before_delete` / `after_delete` hooks, contains the deleted document's fields plus `id` (and `soft_delete` for a soft delete) — so a hook can inspect what is being removed; a hard delete leaves no row to re-fetch, so `after_delete` relies on this snapshot. In `after_change` hooks, `data.id` carries the new document ID.
+--- @field locale? string The content locale this operation targets (e.g. `"en"`, `"de"`) — the requested locale, or the default locale when none was given. Nil when localization is disabled (and on the locale-agnostic `before_delete` / `after_delete` hooks, which remove the whole row across all locales). Otherwise the same resolved value every hook surface sees (field hooks, validators, access functions).
 --- @field draft? boolean `true` when this is a draft save (only set for collections with `versions.drafts` enabled).
 --- @field context table<string, any> Request-scoped shared table that persists from `before_validate` through `after_change` within one request. Only JSON-compatible values survive (no functions / userdata).
 --- @field user? table Authenticated user document (nil if unauthenticated or no auth collection).
 --- @field ui_locale? string Admin UI locale code (e.g., `"en"`, `"de"`). Nil if not set or called from gRPC without locale context.
+--- @field document_id? string The id of the document this event targets. Populated across the write lifecycle — `update`/`delete` before- and after-hooks, `after_change` on create (the freshly assigned id; `nil` in create's before-hooks, where no row exists yet), and `"default"` for globals. Also set on live-broadcast hooks (`before_broadcast`). The read lifecycle (`after_read`) leaves this `nil` and carries the id inside `data` instead.
+--- @field edited_by? { id: string, email: string } The user who caused a live-broadcast mutation. Set on `before_broadcast`; `nil` elsewhere or for anonymous changes. (Distinct from `user`, the caller of a request — broadcast fires post-commit with no request user.)
 --- @field hook_depth integer  Current recursion depth. `0` = top-level API/admin call, `1+` = from Lua CRUD inside hooks. Hooks are skipped when this reaches `hooks.max_depth` (default: `3`).
 
 --- The authenticated user attached to `crap.AccessContext.user`.
@@ -754,8 +779,11 @@ function crap.fields.join(config) end
 --- @class crap.AccessContext
 --- @field user? crap.AuthUser Full user document from the auth collection (nil if anonymous). Typed as `crap.AuthUser` (a `crap.Document` variant with an `[string] any` index signature) so access functions can read `context.user.role` / `context.user.email` etc. without per-call casts — the static type can't narrow to a specific auth-collection doc since projects may have multiple auth collections. Users who know their auth collection can still cast: `local u = context.user --[[@as crap.doc.Users]]`.
 --- @field id? string Document ID (for `update` / `delete` / `find_by_id`).
---- @field data? table<string, any> Incoming data (for `create` / `update`).
+--- @field data? table<string, any> The **incoming** data for `create` / `update` (what is being written), `nil` for reads/deletes. This is the submitted change, *not* the existing stored row. To gate on existing persisted values (e.g. "users may only edit their own rows"), return a **filter table** instead of a boolean — e.g. `return { author_id = ctx.user.id }` — and the system enforces that the target row matches it.
 --- @field locale? string The locale this operation targets, when localization is enabled — the requested locale, or the default locale when none was specified. `nil` when localization is disabled. Lets access functions enforce per-locale rules, e.g. restrict a user to certain locales or lock a field to the default locale. Also `nil` when the access function is invoked outside a single-locale operation (e.g. manually via `crap.access.check`, or a nested join read-access check) — gate defensively (`if ctx.locale and ... then`).
+--- @field operation string The operation triggering this check: `"create"`, `"update"`, `"delete"`, `"trash"` (soft delete), `"undelete"`, `"unpublish"`, `"restore"`, `"find"`, `"find_by_id"`, `"count"`, `"search"`, `"get"` (global read), `"read"` (admin read-gating: nav, back-references, condition eval, upload serve), `"subscribe"`, … Lets one shared access function branch on the operation instead of registering a separate function per operation.
+--- @field collection string The collection (or job) slug this check is for — so a function reused across collections can tell which one it is gating.
+--- @field ui_locale? string Admin UI locale code (e.g. `"en"`, `"de"`) when the check originates from an admin request; `nil` otherwise (gRPC/REST/internal checks). Distinct from `locale` (the content locale) — this is the operator's UI language.
 
 -- ── Function-type aliases (one-liner `---@type` for callables) ─────
 
@@ -834,8 +862,8 @@ function crap.any.job_handler(fn) end
 function crap.any.row_label(fn) end
 
 --- Wrap a generic display condition (no per-collection data narrowing).
---- @param fn fun(data: table<string, any>): boolean | table
---- @return fun(data: table<string, any>): boolean | table
+--- @param fn fun(data: table<string, any>, ctx: crap.ConditionContext): boolean | table
+--- @return fun(data: table<string, any>, ctx: crap.ConditionContext): boolean | table
 function crap.any.display_condition(fn) end
 
 -- ── crap.collections ─────────────────────────────────────────
@@ -1821,9 +1849,15 @@ function crap.jobs.define(slug, config) end
 
 --- Job metadata for the current run.
 --- @class crap.JobInfo
+--- @field id string Nanoid id of this job run (e.g. to record it or correlate logs).
 --- @field slug string Job definition slug.
+--- @field queue string Queue this run is executing on.
 --- @field attempt integer Current attempt number (1-based).
 --- @field max_attempts integer Total max attempts.
+--- @field priority integer Scheduling priority this run was queued with (higher = claimed sooner).
+--- @field unique_key? string Dedup key, when the run was queued with `{ unique = "..." }`. `nil` for normal enqueues.
+--- @field scheduled_by? string How this run was triggered: `"cron"`, `"hook"`, `"grpc"`, or `"cli"`. `nil` if unknown.
+--- @field queued_at? string ISO-8601 timestamp when the run was queued. `nil` if unknown.
 
 --- Queue a job for background execution. Returns the job run ID.
 --- Only available inside hooks with transaction context.

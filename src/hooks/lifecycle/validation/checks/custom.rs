@@ -4,7 +4,7 @@ use tracing::warn;
 
 use crate::{
     core::{DocumentFields, FieldDefinition, validate::FieldError},
-    hooks::lifecycle::validation::custom::run_validate_function_inner,
+    hooks::lifecycle::validation::custom::{ValidateCtxSource, run_validate_function_inner},
 };
 
 /// Document-level context for a custom validate call: the surrounding field
@@ -13,6 +13,10 @@ pub(crate) struct CustomValidateCtx<'a> {
     pub data: &'a DocumentFields,
     pub table: &'a str,
     pub locale: Option<&'a str>,
+    /// `"create"` or `"update"`.
+    pub operation: &'a str,
+    /// The document id on `update`; `None` on `create`.
+    pub id: Option<&'a str>,
 }
 
 /// Run custom Lua validate function on a field value.
@@ -35,10 +39,15 @@ pub(crate) fn check_custom_validate(
         lua,
         validate_ref,
         val,
-        ctx.data,
-        ctx.table,
-        &field.name,
-        ctx.locale,
+        &ValidateCtxSource {
+            data: ctx.data,
+            document: ctx.data,
+            collection: ctx.table,
+            field_name: &field.name,
+            locale: ctx.locale,
+            operation: ctx.operation,
+            id: ctx.id,
+        },
     ) {
         Ok(Some(err_msg)) => {
             errors.push(FieldError::new(data_key.to_owned(), err_msg));

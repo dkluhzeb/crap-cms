@@ -31,7 +31,7 @@ use crate::{
         ValidationError,
     },
     db::{DbPool, LocaleContext, LocaleMode},
-    hooks::HookRunner,
+    hooks::{ConditionContext, HookRunner},
     service::{self, ServiceContext, ServiceError},
 };
 
@@ -109,12 +109,20 @@ fn render_validation_error(
     );
 
     let form_data_json = json!(doc_fields);
+    let cond_ctx = ConditionContext {
+        collection: &def.slug,
+        operation: "update",
+        user: get_user_doc(auth_user),
+        ui_locale: auth_user.map(|Extension(au)| au.ui_locale.as_str()),
+        locale: None,
+    };
     apply_display_conditions(
         &mut fields,
         &def.fields,
         &form_data_json,
         &state.hook_runner,
         false,
+        &cond_ctx,
     );
 
     let (main_fields, sidebar_fields) = split_sidebar_fields(fields);

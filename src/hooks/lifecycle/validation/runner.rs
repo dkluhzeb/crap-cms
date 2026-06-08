@@ -28,7 +28,7 @@ pub(crate) fn validate_fields_inner(
 
     // Document-level: localized required fields must be complete across their
     // `required_locales` (reads the existing row for non-write locales).
-    super::check_localized_completeness(fields, &data, ctx, &mut errors);
+    super::check_localized_completeness(lua, fields, &data, ctx, &mut errors);
 
     if errors.is_empty() {
         Ok(())

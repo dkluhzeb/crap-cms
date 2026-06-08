@@ -3,8 +3,10 @@
 
 use serde::Serialize;
 
-use crate::core::{Document, DocumentFields};
-use crate::typegen::lua::LuaAnnotation;
+use crate::{
+    core::{Document, DocumentFields},
+    typegen::lua::LuaAnnotation,
+};
 
 /// Context passed to per-field hook functions.
 #[derive(Serialize, LuaAnnotation)]
@@ -17,9 +19,30 @@ pub struct FieldHookContext<'a> {
     /// The operation: `"create"`, `"update"`, `"find"`, `"find_by_id"`,
     /// …
     pub operation: &'a str,
-    /// Full document data (read-only snapshot).
+    /// The id of the document being processed on `update` / read; `nil` on
+    /// `create` (no row exists yet). Mirrors the `id` on the validator and
+    /// access contexts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(ty = "string", optional)]
+    pub id: Option<&'a str>,
+    /// Content locale for this operation (e.g. `"en"`, `"de"`). Nil when the
+    /// operation is not locale-scoped. Distinct from `ui_locale` (the admin UI
+    /// language) — this is the locale of the data being written or read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(ty = "string", optional)]
+    pub locale: Option<&'a str>,
+    /// The **nearest scope** (read-only snapshot): the full document for a
+    /// top-level field, or the current row for a hook on a field inside an
+    /// array/blocks row.
     #[lua(ty = "table<string, any>")]
     pub data: &'a DocumentFields,
+    /// The **full document** being written or read — a read-only snapshot taken
+    /// before any field hook in this pass ran (so it does not reflect changes
+    /// made by earlier field hooks in the same pass). Matches `data` at the top
+    /// level; for a sub-field hook inside an array/blocks row it's the parent
+    /// document, so the hook can cross-reference fields outside its row.
+    #[lua(ty = "table<string, any>")]
+    pub document: &'a DocumentFields,
     /// Authenticated user document (nil if unauthenticated or no auth
     /// collection).
     #[serde(skip_serializing_if = "Option::is_none")]

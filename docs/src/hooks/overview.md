@@ -102,7 +102,7 @@ end
 return M
 ```
 
-To avoid cross-request state leaks, keep hook functions stateless — use the `ctx` table for input/output, and `crap.collections.*` for persistent storage. If you need request-scoped state, store it in `ctx.context` (the request-scoped shared table — see [Hook Context](hook-context.md#context-request-scoped-shared-table)), not module-level locals.
+To avoid cross-request state leaks, keep hook functions stateless — use the `ctx` table for input/output, and `crap.collections.*` for persistent storage. If you need to carry state between the hooks of one write, store it in `ctx.context` (the per-operation shared table — see [Hook Context](hook-context.md#context-per-operation-shared-table)), not module-level locals.
 
 Module-level constants and utility functions are fine — only mutable state is the concern.
 

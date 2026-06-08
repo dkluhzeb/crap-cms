@@ -58,17 +58,51 @@ impl CollectionPermissions {
             return Self::default();
         };
 
-        let read = has_access_with_conn(state, def.access.read.as_deref(), user_doc, &tx);
-        let create = has_access_with_conn(state, def.access.create.as_deref(), user_doc, &tx);
-        let update = has_access_with_conn(state, def.access.update.as_deref(), user_doc, &tx);
-        let delete = has_access_with_conn(state, def.access.delete.as_deref(), user_doc, &tx);
+        let read = has_access_with_conn(
+            state,
+            def.access.read.as_deref(),
+            user_doc,
+            &tx,
+            "read",
+            &def.slug,
+        );
+        let create = has_access_with_conn(
+            state,
+            def.access.create.as_deref(),
+            user_doc,
+            &tx,
+            "create",
+            &def.slug,
+        );
+        let update = has_access_with_conn(
+            state,
+            def.access.update.as_deref(),
+            user_doc,
+            &tx,
+            "update",
+            &def.slug,
+        );
+        let delete = has_access_with_conn(
+            state,
+            def.access.delete.as_deref(),
+            user_doc,
+            &tx,
+            "delete",
+            &def.slug,
+        );
+        // Mirror the real soft-delete path: gate on `resolve_trash()` (the
+        // `trash` fn, or `update` as the documented fallback) and report the
+        // `"trash"` operation — so the grid's "can trash?" matches what the
+        // server actually enforces on a soft delete.
         let trash = if def.soft_delete {
-            match def.access.trash.as_deref() {
-                Some(_) => has_access_with_conn(state, def.access.trash.as_deref(), user_doc, &tx),
-                // No explicit `access.trash` configured → soft-delete is gated
-                // by the same fn as hard-delete (legacy behaviour).
-                None => delete,
-            }
+            has_access_with_conn(
+                state,
+                def.access.resolve_trash(),
+                user_doc,
+                &tx,
+                "trash",
+                &def.slug,
+            )
         } else {
             false
         };
@@ -110,8 +144,22 @@ impl GlobalPermissions {
             return Self::default();
         };
 
-        let read = has_access_with_conn(state, def.access.read.as_deref(), user_doc, &tx);
-        let update = has_access_with_conn(state, def.access.update.as_deref(), user_doc, &tx);
+        let read = has_access_with_conn(
+            state,
+            def.access.read.as_deref(),
+            user_doc,
+            &tx,
+            "read",
+            &def.slug,
+        );
+        let update = has_access_with_conn(
+            state,
+            def.access.update.as_deref(),
+            user_doc,
+            &tx,
+            "update",
+            &def.slug,
+        );
 
         let _ = tx.commit();
 

@@ -7,6 +7,7 @@ use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
 
+use crate::hooks::AccessCheckInput;
 use crate::{
     api::{content, handlers::ContentService},
     config::LocaleConfig,
@@ -58,11 +59,18 @@ fn delete_many_blocking(input: DeleteManyBlockingInput) -> Result<DeleteManyResu
         &conn,
     )?;
 
+    let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
     let read_access = ContentService::check_access_blocking(
-        input.def.access.read.as_deref(),
-        auth_user.as_ref(),
-        None,
-        None,
+        &AccessCheckInput {
+            access_ref: input.def.access.read.as_deref(),
+            user: user_doc,
+            id: None,
+            data: None,
+            locale: None,
+            operation: "find",
+            collection: &input.def.slug,
+            ui_locale: None,
+        },
         &input.hook_runner,
         &mut conn,
     )?;

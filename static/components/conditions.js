@@ -225,6 +225,7 @@ class CrapConditions extends HTMLElement {
   _setupServer(form, serverFields) {
     const slug = this.getAttribute('collection') || form.dataset.collectionSlug || '';
     const isGlobal = this.getAttribute('type') === 'global';
+    const operation = this.getAttribute('operation') || 'update';
     const url = `${isGlobal ? '/admin/globals/' : '/admin/collections/'}${slug}/evaluate-conditions`;
 
     const run = async () => {
@@ -248,7 +249,7 @@ class CrapConditions extends HTMLElement {
         const res = await fetch(url, {
           method: 'POST',
           headers,
-          body: JSON.stringify({ form_data: collectFormData(form), conditions: refs }),
+          body: JSON.stringify({ form_data: collectFormData(form), conditions: refs, operation }),
           signal: this._serverAbort.signal,
         });
         /** @type {Record<string, boolean>} */

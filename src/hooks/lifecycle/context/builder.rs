@@ -1,7 +1,7 @@
 //! Builder for [`HookContext`].
 
 use crate::{
-    core::{Document, DocumentFields, ReqContext},
+    core::{Document, DocumentFields, ReqContext, event::EventUser},
     hooks::HookContext,
 };
 
@@ -15,6 +15,8 @@ pub struct HookContextBuilder {
     context: ReqContext,
     user: Option<Document>,
     ui_locale: Option<String>,
+    document_id: Option<String>,
+    edited_by: Option<EventUser>,
 }
 
 impl HookContextBuilder {
@@ -28,6 +30,8 @@ impl HookContextBuilder {
             context: ReqContext::new(),
             user: None,
             ui_locale: None,
+            document_id: None,
+            edited_by: None,
         }
     }
 
@@ -68,6 +72,18 @@ impl HookContextBuilder {
     }
 
     #[must_use]
+    pub fn document_id(mut self, document_id: impl Into<String>) -> Self {
+        self.document_id = Some(document_id.into());
+        self
+    }
+
+    #[must_use]
+    pub fn edited_by(mut self, edited_by: Option<EventUser>) -> Self {
+        self.edited_by = edited_by;
+        self
+    }
+
+    #[must_use]
     pub fn build(self) -> HookContext {
         HookContext {
             collection: self.collection,
@@ -78,6 +94,8 @@ impl HookContextBuilder {
             context: self.context,
             user: self.user,
             ui_locale: self.ui_locale,
+            document_id: self.document_id,
+            edited_by: self.edited_by,
         }
     }
 }

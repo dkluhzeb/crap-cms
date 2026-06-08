@@ -29,7 +29,7 @@ use crate::{
         upload::{SharedStorage, StorageNotFound},
     },
     db::{AccessResult, DbPool},
-    hooks::HookRunner,
+    hooks::{AccessCheckInput, HookRunner},
 };
 
 /// Read a key off the async runtime. Local storage never reaches here (it
@@ -53,9 +53,22 @@ fn check_upload_access_blocking(
     hook_runner: &HookRunner,
     func_ref: &str,
     user_doc: Option<&Document>,
+    collection: &str,
 ) -> Result<AccessResult, anyhow::Error> {
     let conn = pool.get()?;
-    hook_runner.check_access(Some(func_ref), user_doc, None, None, None, &conn)
+    hook_runner.check_access(
+        &AccessCheckInput {
+            access_ref: Some(func_ref),
+            user: user_doc,
+            id: None,
+            data: None,
+            locale: None,
+            operation: "read",
+            collection,
+            ui_locale: None,
+        },
+        &conn,
+    )
 }
 
 /// Check collection read access, returning the cache policy to use.
@@ -77,9 +90,16 @@ async fn check_upload_access(
     let user_doc = auth_user.map(|u| u.user_doc);
     let pool = state.pool.clone();
     let hook_runner = state.hook_runner.clone();
+    let collection = collection_slug.to_string();
 
     let access = task::spawn_blocking(move || {
-        check_upload_access_blocking(&pool, &hook_runner, &func_ref, user_doc.as_ref())
+        check_upload_access_blocking(
+            &pool,
+            &hook_runner,
+            &func_ref,
+            user_doc.as_ref(),
+            &collection,
+        )
     })
     .await;
 

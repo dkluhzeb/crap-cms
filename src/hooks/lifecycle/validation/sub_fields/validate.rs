@@ -8,7 +8,7 @@ use crate::{
     core::{FieldDefinition, FieldType, Registry, validate::FieldError},
     hooks::lifecycle::validation::{
         checks::{self, is_valid_date_format},
-        custom::run_validate_function_inner,
+        custom::{ValidateCtxSource, run_required_condition_inner, run_validate_function_inner},
         is_empty_value,
         richtext_attrs::{RichtextValidationCtx, validate_richtext_node_attrs},
     },
@@ -27,6 +27,13 @@ struct RowValidationCtx<'a> {
     /// Content locale this write targets — exposed to custom validators as
     /// `ctx.locale`. `None` when localization is disabled.
     locale: Option<&'a str>,
+    /// `"create"` or `"update"` — exposed to sub-field validators as `ctx.operation`.
+    operation: &'a str,
+    /// The parent document id on `update`; `None` on `create`.
+    id: Option<&'a str>,
+    /// The full parent document (so sub-field validators can cross-reference
+    /// fields outside their row).
+    document: &'a HashMap<String, Value>,
 }
 
 /// Per-sub-field call target — the field being validated and its qualified
@@ -48,6 +55,12 @@ pub(in crate::hooks::lifecycle::validation) struct SubFieldParams<'a> {
     /// Content locale this write targets — exposed to custom validators as
     /// `ctx.locale`. `None` when localization is disabled.
     pub locale: Option<&'a str>,
+    /// `"create"` or `"update"`.
+    pub operation: &'a str,
+    /// The parent document id on `update`; `None` on `create`.
+    pub id: Option<&'a str>,
+    /// The full parent document.
+    pub document: &'a HashMap<String, Value>,
 }
 
 /// Validate sub-fields within a single array/blocks row (inner, no mutex).
@@ -72,6 +85,9 @@ pub(in crate::hooks::lifecycle::validation) fn validate_sub_fields_inner(
         registry: params.registry,
         is_draft: params.is_draft,
         locale: params.locale,
+        operation: params.operation,
+        id: params.id,
+        document: params.document,
     };
 
     validate_children_recursive(&ctx, sub_fields, "", errors);
@@ -107,6 +123,9 @@ fn validate_children_recursive(
                         registry: ctx.registry,
                         is_draft: ctx.is_draft,
                         locale: ctx.locale,
+                        operation: ctx.operation,
+                        id: ctx.id,
+                        document: ctx.document,
                     };
 
                     validate_sub_fields_inner(&params, &sf.fields, group_obj, errors);
@@ -182,9 +201,59 @@ fn validate_nested_rows(
             registry: ctx.registry,
             is_draft: ctx.is_draft,
             locale: ctx.locale,
+            operation: ctx.operation,
+            id: ctx.id,
+            document: ctx.document,
         };
 
         validate_sub_fields_inner(&params, sub_fields, nested_obj, errors);
+    }
+}
+
+/// Whether a sub-field is required for this row. `true` when it's statically
+/// `required`, or when its `required_when` predicate returns truthy for the row
+/// (`ctx.data`) and parent document (`ctx.document`). Returns `false` on drafts
+/// (required is not enforced there, and a predicate error must not block a
+/// draft); a predicate that errors pushes a field error and is treated as not
+/// required.
+fn sub_field_required(
+    ctx: &RowValidationCtx<'_>,
+    sf: &FieldDefinition,
+    qualified: &str,
+    errors: &mut Vec<FieldError>,
+) -> bool {
+    if ctx.is_draft {
+        return false;
+    }
+    if sf.required {
+        return true;
+    }
+
+    let Some(func_ref) = sf.required_when.as_deref() else {
+        return false;
+    };
+
+    match run_required_condition_inner(
+        ctx.lua,
+        func_ref,
+        &ValidateCtxSource {
+            data: ctx.row_data,
+            document: ctx.document,
+            collection: ctx.table,
+            field_name: &sf.name,
+            locale: ctx.locale,
+            operation: ctx.operation,
+            id: ctx.id,
+        },
+    ) {
+        Ok(req) => req,
+        Err(e) => {
+            errors.push(FieldError::new(
+                qualified.to_owned(),
+                format!("required_when predicate '{func_ref}' failed: {e}"),
+            ));
+            false
+        }
     }
 }
 
@@ -201,8 +270,12 @@ fn validate_leaf_sub_field(
 
     let is_empty = is_empty_value(value);
 
-    // 1. Required check (skip for Checkbox — absent/false is valid, skip for drafts)
-    if sf.required && is_empty && !ctx.is_draft && sf.field_type != FieldType::Checkbox {
+    // 1. Required check (skip for Checkbox — absent/false is valid, and skipped
+    //    on drafts via `sub_field_required`).
+    if sub_field_required(ctx, sf, qualified, errors)
+        && is_empty
+        && sf.field_type != FieldType::Checkbox
+    {
         errors.push(
             FieldError::with_key(
                 qualified.to_owned(),
@@ -237,10 +310,15 @@ fn validate_leaf_sub_field(
             ctx.lua,
             validate_ref,
             val,
-            ctx.row_data,
-            ctx.table,
-            &sf.name,
-            ctx.locale,
+            &ValidateCtxSource {
+                data: ctx.row_data,
+                document: ctx.document,
+                collection: ctx.table,
+                field_name: &sf.name,
+                locale: ctx.locale,
+                operation: ctx.operation,
+                id: ctx.id,
+            },
         ) {
             Ok(Some(err_msg)) => {
                 errors.push(FieldError::new(qualified.to_owned(), err_msg));
@@ -287,6 +365,8 @@ fn validate_leaf_sub_field(
             &RichtextValidationCtx::builder(ctx.lua, registry, ctx.table)
                 .draft(ctx.is_draft)
                 .locale(ctx.locale)
+                .operation(ctx.operation)
+                .id(ctx.id)
                 .build(),
             content,
             qualified,

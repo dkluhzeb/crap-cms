@@ -23,11 +23,25 @@ use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::DocumentFields;
+use crap_cms::core::JobRun;
 use crap_cms::core::{ConditionExpr, ConditionOp, ReqContext};
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
+use crap_cms::hooks::ConditionContext;
 use crap_cms::hooks::lifecycle::{HookContext, HookEvent, HookRunner};
 use serde_json::json;
+
+/// A throwaway condition context for `call_display_condition` tests (the
+/// condition functions under test only read the form data, not the context).
+fn cond_ctx() -> ConditionContext<'static> {
+    ConditionContext {
+        collection: "posts",
+        operation: "update",
+        user: None,
+        ui_locale: None,
+        locale: None,
+    }
+}
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
@@ -129,7 +143,8 @@ fn call_display_condition_bool_true() {
     let (_tmp, _pool, _registry, runner) = setup();
 
     let data = json!({"status": "published"});
-    let result = runner.call_display_condition("hooks.field_hooks.show_if_published", &data);
+    let result =
+        runner.call_display_condition("hooks.field_hooks.show_if_published", &data, &cond_ctx());
     assert!(result.is_some());
     match result.unwrap() {
         crap_cms::hooks::lifecycle::DisplayConditionResult::Bool(b) => assert!(b),
@@ -142,7 +157,8 @@ fn call_display_condition_bool_false() {
     let (_tmp, _pool, _registry, runner) = setup();
 
     let data = json!({"status": "draft"});
-    let result = runner.call_display_condition("hooks.field_hooks.show_if_published", &data);
+    let result =
+        runner.call_display_condition("hooks.field_hooks.show_if_published", &data, &cond_ctx());
     assert!(result.is_some());
     match result.unwrap() {
         crap_cms::hooks::lifecycle::DisplayConditionResult::Bool(b) => assert!(!b),
@@ -155,7 +171,8 @@ fn call_display_condition_table() {
     let (_tmp, _pool, _registry, runner) = setup();
 
     let data = json!({"status": "published"});
-    let result = runner.call_display_condition("hooks.field_hooks.condition_table", &data);
+    let result =
+        runner.call_display_condition("hooks.field_hooks.condition_table", &data, &cond_ctx());
     assert!(result.is_some());
     match result.unwrap() {
         crap_cms::hooks::lifecycle::DisplayConditionResult::Table { condition, visible } => {
@@ -176,7 +193,8 @@ fn call_display_condition_table_not_visible() {
     let (_tmp, _pool, _registry, runner) = setup();
 
     let data = json!({"status": "draft"});
-    let result = runner.call_display_condition("hooks.field_hooks.condition_table", &data);
+    let result =
+        runner.call_display_condition("hooks.field_hooks.condition_table", &data, &cond_ctx());
     assert!(result.is_some());
     match result.unwrap() {
         crap_cms::hooks::lifecycle::DisplayConditionResult::Table { visible, .. } => {
@@ -194,7 +212,7 @@ fn call_display_condition_invalid_ref_returns_none() {
     let (_tmp, _pool, _registry, runner) = setup();
 
     let data = json!({"status": "published"});
-    let result = runner.call_display_condition("hooks.nonexistent.function", &data);
+    let result = runner.call_display_condition("hooks.nonexistent.function", &data, &cond_ctx());
     assert!(result.is_none(), "Invalid hook ref should return None");
 }
 
@@ -261,6 +279,8 @@ fn run_hooks_no_conn_fires_collection_and_registered() {
         context: ReqContext::new(),
         user: None,
         ui_locale: None,
+        document_id: None,
+        edited_by: None,
     };
 
     let result = runner
@@ -351,6 +371,15 @@ fn run_migration_invalid_direction_fails() {
 
 // ── 6V. run_job_handler ──────────────────────────────────────────────────────
 
+/// Build a minimal `JobRun` for driving `run_job_handler` directly in tests.
+fn job_run(slug: &str, data: &str, attempt: u32, max_attempts: u32) -> JobRun {
+    JobRun::builder("test-run-id", slug)
+        .data(data)
+        .attempt(attempt)
+        .max_attempts(max_attempts)
+        .build()
+}
+
 #[test]
 fn run_job_handler_with_valid_function() {
     let (_tmp, pool, _registry, runner) = setup();
@@ -364,10 +393,7 @@ fn run_job_handler_with_valid_function() {
     // The system_init function in field_hooks takes a context table and returns it.
     let result = runner.run_job_handler(
         "hooks.field_hooks.system_init",
-        "test-job",
-        r#"{"key": "value"}"#,
-        1,
-        3,
+        &job_run("test-job", r#"{"key": "value"}"#, 1, 3),
         &pool,
     );
     assert!(
@@ -381,7 +407,11 @@ fn run_job_handler_with_valid_function() {
 fn run_job_handler_invalid_ref_fails() {
     let (_tmp, pool, _registry, runner) = setup();
 
-    let result = runner.run_job_handler("hooks.nonexistent.handler", "test-job", "{}", 1, 3, &pool);
+    let result = runner.run_job_handler(
+        "hooks.nonexistent.handler",
+        &job_run("test-job", "{}", 1, 3),
+        &pool,
+    );
     assert!(result.is_err(), "Invalid handler ref should fail");
 }
 
@@ -616,10 +646,7 @@ fn run_job_handler_with_return_value() {
     let result = runner
         .run_job_handler(
             "jobs.test_job.run",
-            "test-job",
-            r#"{"key": "hello"}"#,
-            1,
-            3,
+            &job_run("test-job", r#"{"key": "hello"}"#, 1, 3),
             &pool,
         )
         .expect("run_job_handler failed");
@@ -682,7 +709,7 @@ fn run_job_handler_nil_return() {
         .expect("HookRunner::new");
 
     let result = runner
-        .run_job_handler("jobs.void_job.run", "void-job", "{}", 1, 1, &pool)
+        .run_job_handler("jobs.void_job.run", &job_run("void-job", "{}", 1, 1), &pool)
         .expect("run_job_handler failed");
 
     assert!(result.is_none(), "Job returning nil should give None");
@@ -762,15 +789,22 @@ fn call_display_condition_standalone_bool() {
         .expect("HookRunner::new");
 
     let form_data = json!({ "status": "published" });
-    let result = runner.call_display_condition("hooks.conditions.show_if_published", &form_data);
+    let result = runner.call_display_condition(
+        "hooks.conditions.show_if_published",
+        &form_data,
+        &cond_ctx(),
+    );
     match result {
         Some(crap_cms::hooks::lifecycle::DisplayConditionResult::Bool(b)) => assert!(b),
         other => panic!("Expected Bool(true), got {other:?}"),
     }
 
     let form_data_draft = json!({ "status": "draft" });
-    let result =
-        runner.call_display_condition("hooks.conditions.show_if_published", &form_data_draft);
+    let result = runner.call_display_condition(
+        "hooks.conditions.show_if_published",
+        &form_data_draft,
+        &cond_ctx(),
+    );
     match result {
         Some(crap_cms::hooks::lifecycle::DisplayConditionResult::Bool(b)) => assert!(!b),
         other => panic!("Expected Bool(false), got {other:?}"),
@@ -811,7 +845,8 @@ fn call_display_condition_standalone_table() {
         .expect("HookRunner::new");
 
     let form_data = json!({ "status": "published" });
-    let result = runner.call_display_condition("hooks.conditions.condition_table", &form_data);
+    let result =
+        runner.call_display_condition("hooks.conditions.condition_table", &form_data, &cond_ctx());
     match result {
         Some(crap_cms::hooks::lifecycle::DisplayConditionResult::Table { condition, visible }) => {
             assert!(visible, "status=published should match the condition");

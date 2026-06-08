@@ -153,7 +153,7 @@ fn global_after_read_hook_fires() {
     let def = registry.get_global("site_settings").unwrap().clone();
 
     let conn = pool.get().unwrap();
-    let rh = RunnerReadHooks::new(&runner, &conn);
+    let rh = RunnerReadHooks::new(&runner, &conn, None, None);
     let ctx = ServiceContext::global("site_settings", &def)
         .conn(&conn)
         .read_hooks(&rh)
@@ -187,7 +187,7 @@ fn global_read_access_denied_for_non_admin() {
     };
 
     let conn = pool.get().unwrap();
-    let rh = RunnerReadHooks::new(&runner, &conn);
+    let rh = RunnerReadHooks::new(&runner, &conn, None, None);
     let ctx = ServiceContext::global("restricted", &def)
         .conn(&conn)
         .read_hooks(&rh)

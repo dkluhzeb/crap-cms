@@ -14,7 +14,7 @@ use crate::{
         handlers::{
             collections::shared::{
                 UploadParams, UploadResult, process_collection_upload,
-                render_form_validation_errors,
+                render_form_validation_errors, write_error_toast,
             },
             forms::{FormData, parse_form},
             shared::{
@@ -276,10 +276,7 @@ pub async fn create_action(
                 ve,
                 auth_user.as_ref(),
             ),
-            other => {
-                error!("Create error: {}", other);
-                redirect_response(&paths::collection_create(&slug))
-            }
+            other => toast_only_error(&write_error_toast("Create", other, state.pool.kind())),
         },
         Err(e) => {
             error!("Create task error: {}", e);

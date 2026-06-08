@@ -2,6 +2,7 @@
 
 use crate::{
     db::{AccessResult, Filter, FilterClause, FilterOp, LocaleContext, query},
+    hooks::AccessCheckInput,
     service::{CountDocumentsInput, ServiceContext, ServiceError},
 };
 
@@ -26,13 +27,16 @@ pub fn count_documents(ctx: &ServiceContext, input: &CountDocumentsInput) -> Res
     let hooks = ctx.read_hooks()?;
     let def = ctx.collection_def()?;
 
-    let access = hooks.check_access(
-        def.access.read.as_deref(),
-        ctx.user,
-        None,
-        None,
-        input.locale_ctx.map(LocaleContext::access_locale),
-    )?;
+    let access = hooks.check_access(&AccessCheckInput {
+        access_ref: def.access.read.as_deref(),
+        user: ctx.user,
+        id: None,
+        data: None,
+        locale: input.locale_ctx.map(LocaleContext::access_locale),
+        operation: "count",
+        collection: ctx.slug,
+        ui_locale: None,
+    })?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Read access denied".into()));

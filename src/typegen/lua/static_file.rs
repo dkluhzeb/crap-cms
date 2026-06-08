@@ -29,7 +29,7 @@ use crate::core::{
 };
 use crate::db::query::PaginationResult;
 use crate::hooks::lifecycle::{
-    AccessContext, AuthStrategyContext, FieldHookContext, HookContext, HookEvent,
+    AccessContext, AuthStrategyContext, ConditionContext, FieldHookContext, HookContext, HookEvent,
     JobHandlerContext, JobInfo, ValidateContext,
 };
 use crate::hooks::lua_api::{
@@ -186,6 +186,7 @@ fn render_field_types(out: &mut String) {
     FieldHooks::render_lua_annotation(out);
     FieldHookFn::render_lua_alias(out);
     FieldHookContext::render_lua_annotation(out);
+    ConditionContext::render_lua_annotation(out);
     FieldTab::render_lua_annotation(out);
     BlockDefinition::render_lua_annotation(out);
     PickerAppearance::render_lua_alias(out);
@@ -328,8 +329,8 @@ function crap.any.job_handler(fn) end
 function crap.any.row_label(fn) end
 
 --- Wrap a generic display condition (no per-collection data narrowing).
---- @param fn fun(data: table<string, any>): boolean | table
---- @return fun(data: table<string, any>): boolean | table
+--- @param fn fun(data: table<string, any>, ctx: crap.ConditionContext): boolean | table
+--- @return fun(data: table<string, any>, ctx: crap.ConditionContext): boolean | table
 function crap.any.display_condition(fn) end
 
 ",

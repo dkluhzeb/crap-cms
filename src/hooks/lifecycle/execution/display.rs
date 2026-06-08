@@ -5,27 +5,34 @@
 //! data. The hook returns either a bool, a structured `ConditionExpr` table, or
 //! `nil` (no condition → show normally). All error paths fail closed (hide).
 
-use mlua::{Lua, Value};
+use mlua::{Lua, LuaSerdeExt as _, Value};
 use serde_json::Value as JsonValue;
 use tracing::warn;
 
 use crate::{
     core::ConditionExpr,
-    hooks::{lifecycle::DisplayConditionResult, lua_api},
+    hooks::{
+        lifecycle::{ConditionContext, DisplayConditionResult},
+        lua_api,
+    },
 };
 
 use super::resolve_hook_function;
 
 /// Inner implementation of display condition evaluation — operates on a locked `&Lua`.
+/// The condition function is called as `fn(form_data, ctx)`; existing
+/// `function(form_data)` conditions ignore the extra `ctx` argument.
 pub(crate) fn call_display_condition_with_lua(
     lua: &Lua,
     func_ref: &str,
     form_data: &JsonValue,
+    ctx: &ConditionContext<'_>,
 ) -> Option<DisplayConditionResult> {
     let func = resolve_hook_function(lua, func_ref).ok()?;
     let data_lua = lua_api::json_to_lua(lua, form_data).ok()?;
+    let ctx_lua = lua.to_value(ctx).ok()?;
 
-    match func.call::<Value>(data_lua) {
+    match func.call::<Value>((data_lua, ctx_lua)) {
         Ok(Value::Boolean(b)) => Some(DisplayConditionResult::Bool(b)),
         Ok(val @ Value::Table(_)) => {
             let json = lua_api::lua_to_json(&val).ok()?;
@@ -72,6 +79,16 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn cond_ctx() -> ConditionContext<'static> {
+        ConditionContext {
+            collection: "posts",
+            operation: "update",
+            user: None,
+            ui_locale: None,
+            locale: None,
+        }
+    }
+
     #[test]
     fn display_condition_returns_bool_true() {
         let lua = mlua::Lua::new();
@@ -79,7 +96,7 @@ mod tests {
             .exec()
             .unwrap();
 
-        let result = call_display_condition_with_lua(&lua, "hooks.show", &json!({}));
+        let result = call_display_condition_with_lua(&lua, "hooks.show", &json!({}), &cond_ctx());
         assert!(matches!(result, Some(DisplayConditionResult::Bool(true))));
     }
 
@@ -90,7 +107,7 @@ mod tests {
             .exec()
             .unwrap();
 
-        let result = call_display_condition_with_lua(&lua, "hooks.hide", &json!({}));
+        let result = call_display_condition_with_lua(&lua, "hooks.hide", &json!({}), &cond_ctx());
         assert!(matches!(result, Some(DisplayConditionResult::Bool(false))));
     }
 
@@ -101,7 +118,8 @@ mod tests {
             .exec()
             .unwrap();
 
-        let result = call_display_condition_with_lua(&lua, "hooks.nil_ret", &json!({}));
+        let result =
+            call_display_condition_with_lua(&lua, "hooks.nil_ret", &json!({}), &cond_ctx());
         assert!(result.is_none(), "nil should show field (None)");
     }
 
@@ -115,7 +133,7 @@ mod tests {
             .exec()
             .unwrap();
 
-        let result = call_display_condition_with_lua(&lua, "hooks.boom", &json!({}));
+        let result = call_display_condition_with_lua(&lua, "hooks.boom", &json!({}), &cond_ctx());
         assert!(
             matches!(result, Some(DisplayConditionResult::Bool(false))),
             "error must hide field (fail closed), got {result:?}"
@@ -130,7 +148,7 @@ mod tests {
             .exec()
             .unwrap();
 
-        let result = call_display_condition_with_lua(&lua, "hooks.num", &json!({}));
+        let result = call_display_condition_with_lua(&lua, "hooks.num", &json!({}), &cond_ctx());
         assert!(
             matches!(result, Some(DisplayConditionResult::Bool(false))),
             "unexpected type must hide field (fail closed), got {result:?}"
@@ -140,7 +158,31 @@ mod tests {
     #[test]
     fn display_condition_unresolvable_ref_shows_field() {
         let lua = mlua::Lua::new();
-        let result = call_display_condition_with_lua(&lua, "hooks.nonexistent", &json!({}));
+        let result =
+            call_display_condition_with_lua(&lua, "hooks.nonexistent", &json!({}), &cond_ctx());
         assert!(result.is_none(), "unresolvable reference should show field");
+    }
+
+    /// A condition function receives a second `ctx` argument carrying
+    /// `operation` / `collection` (etc.), in addition to the form data.
+    #[test]
+    fn display_condition_receives_context() {
+        let lua = mlua::Lua::new();
+        lua.load(
+            r#"
+            package.loaded["hooks.ctx"] = function(data, ctx)
+
+                return ctx.operation == "update" and ctx.collection == "posts"
+            end
+        "#,
+        )
+        .exec()
+        .unwrap();
+
+        let result = call_display_condition_with_lua(&lua, "hooks.ctx", &json!({}), &cond_ctx());
+        assert!(
+            matches!(result, Some(DisplayConditionResult::Bool(true))),
+            "condition must receive ctx.operation / ctx.collection, got {result:?}"
+        );
     }
 }

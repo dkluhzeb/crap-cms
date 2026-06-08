@@ -47,6 +47,8 @@ pub async fn restore_confirm(
         auth_user.as_ref(),
         None,
         None,
+        "update",
+        &slug,
     ) {
         Ok(AccessResult::Denied) => {
             return forbidden(&state, "You don't have permission to update this global");
@@ -61,8 +63,8 @@ pub async fn restore_confirm(
 
     // `find_version_by_id` (called by `load_version_with_missing_relations`)
     // runs an access check that requires `ServiceContext.read_hooks`.
-    let read_hooks = RunnerReadHooks::new(&state.hook_runner, &conn);
     let user_doc = auth_user.as_ref().map(|Extension(u)| &u.user_doc);
+    let read_hooks = RunnerReadHooks::new(&state.hook_runner, &conn, user_doc, None);
     let version_ctx = service::ServiceContext::global(&slug, &def)
         .conn(&conn)
         .read_hooks(&read_hooks)

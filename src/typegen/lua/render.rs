@@ -199,7 +199,7 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     // See `docs/src/admin-ui/guides/display-conditions.md`.
     w!(
         out,
-        "---@alias crap.display_condition_fn.{pascal} fun(data: crap.data.{pascal}): boolean | table"
+        "---@alias crap.display_condition_fn.{pascal} fun(data: crap.data.{pascal}, ctx: crap.ConditionContext): boolean | table"
     );
     out.push('\n');
 
@@ -603,7 +603,7 @@ fn render_global(out: &mut String, global: &GlobalDefinition) {
     );
     w!(
         out,
-        "---@alias crap.display_condition_fn.global_{slug} fun(data: crap.global_data.{pascal}): boolean | table",
+        "---@alias crap.display_condition_fn.global_{slug} fun(data: crap.global_data.{pascal}, ctx: crap.ConditionContext): boolean | table",
         slug = global.slug
     );
     out.push('\n');

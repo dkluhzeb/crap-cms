@@ -347,7 +347,11 @@ fn resolve_join_access(
     let Some(check) = opts.join_access else {
         return Ok(Some(Vec::new()));
     };
-    match check.check(target_def.access.read.as_deref(), opts.user)? {
+    match check.check(
+        target_def.access.read.as_deref(),
+        opts.user,
+        &target_def.slug,
+    )? {
         AccessResult::Denied => Ok(None),
         AccessResult::Constrained(extra) => Ok(Some(extra)),
         AccessResult::Allowed => Ok(Some(Vec::new())),
@@ -616,7 +620,12 @@ mod tests {
     fn batch_join_field_denies_for_all_parents_when_target_read_denied() {
         struct DenyAll;
         impl JoinAccessCheck for DenyAll {
-            fn check(&self, _: Option<&str>, _: Option<&Document>) -> AnyResult<AccessResult> {
+            fn check(
+                &self,
+                _: Option<&str>,
+                _: Option<&Document>,
+                _: &str,
+            ) -> AnyResult<AccessResult> {
                 Ok(AccessResult::Denied)
             }
         }

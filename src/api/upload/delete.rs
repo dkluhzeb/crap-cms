@@ -92,7 +92,14 @@ pub(super) async fn delete_upload(
         access_fn,
         user_doc,
         Some(&id),
-        "Delete access denied",
+        // Soft delete → "trash" (trash access fn); hard delete → "delete".
+        if def.soft_delete {
+            "Trash access denied"
+        } else {
+            "Delete access denied"
+        },
+        if def.soft_delete { "trash" } else { "delete" },
+        &def.slug,
     ) {
         return *resp;
     }

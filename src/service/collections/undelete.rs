@@ -7,7 +7,7 @@ use std::{cell::RefCell, rc::Rc};
 use crate::{
     core::{Document, event::EventOperation},
     db::{AccessResult, query},
-    hooks::LuaCrudInfra,
+    hooks::{AccessCheckInput, LuaCrudInfra},
     service::{RunnerWriteHooks, ServiceContext, ServiceError, flush_queue, helpers},
 };
 
@@ -22,8 +22,16 @@ fn undelete_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document>
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.collection_def()?;
 
-    let access =
-        write_hooks.check_access(def.access.resolve_trash(), ctx.user, Some(id), None, None)?;
+    let access = write_hooks.check_access(&AccessCheckInput {
+        access_ref: def.access.resolve_trash(),
+        user: ctx.user,
+        id: Some(id),
+        data: None,
+        locale: None,
+        operation: "undelete",
+        collection: ctx.slug,
+        ui_locale: None,
+    })?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Undelete access denied".into()));

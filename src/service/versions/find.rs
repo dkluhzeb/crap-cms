@@ -5,6 +5,7 @@ use serde_json::Value;
 use crate::{
     core::document::VersionSnapshot,
     db::{AccessResult, query},
+    hooks::AccessCheckInput,
     service::{Def, ServiceContext, ServiceError, helpers},
 };
 
@@ -26,7 +27,16 @@ pub fn find_version_by_id(
     let hooks = ctx.read_hooks()?;
     let table = ctx.version_table();
 
-    let access = hooks.check_access(ctx.read_access_ref(), ctx.user, None, None, None)?;
+    let access = hooks.check_access(&AccessCheckInput {
+        access_ref: ctx.read_access_ref(),
+        user: ctx.user,
+        id: None,
+        data: None,
+        locale: None,
+        operation: "find_by_id",
+        collection: ctx.slug,
+        ui_locale: None,
+    })?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Read access denied".into()));

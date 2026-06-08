@@ -34,7 +34,8 @@ crap.jobs.define("cleanup_expired", {
 local M = {}
 function M.run(ctx)
     -- ctx.data = input data from queue() or {} for cron
-    -- ctx.job = { slug, attempt, max_attempts }
+    -- ctx.job  = { id, slug, queue, attempt, max_attempts, priority,
+    --             unique_key?, scheduled_by?, queued_at? }
     -- Full CRUD access available
     local expired = crap.collections.posts.find({
         where = { expires_at = { less_than = os.date("!%Y-%m-%dT%H:%M:%SZ") } }
@@ -91,9 +92,15 @@ The handler function receives a context table:
 ```lua
 function M.run(ctx)
     ctx.data          -- table: input data from queue() or {} for cron
+    ctx.job.id        -- string: this run's nanoid id
     ctx.job.slug      -- string: job definition slug
+    ctx.job.queue     -- string: queue this run executes on
     ctx.job.attempt   -- integer: current attempt (1-based)
     ctx.job.max_attempts -- integer: total attempts allowed
+    ctx.job.priority  -- integer: scheduling priority (higher = sooner)
+    ctx.job.unique_key   -- string?: dedup key, if queued with { unique = ... }
+    ctx.job.scheduled_by -- string?: "cron" | "hook" | "grpc" | "cli"
+    ctx.job.queued_at -- string?: ISO-8601 time the run was queued
 end
 ```
 

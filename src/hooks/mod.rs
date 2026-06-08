@@ -45,5 +45,6 @@ mod startup_checks;
 pub use init::init_lua;
 pub(crate) use init::{load_lua_dir, sandbox_lua};
 pub use lifecycle::{
-    DisplayConditionResult, HookContext, HookEvent, HookRunner, LuaCrudInfra, ValidationCtx,
+    AccessCheckInput, ConditionContext, DisplayConditionResult, EventAfterReadInput, HookContext,
+    HookEvent, HookRunner, LuaCrudInfra, ValidationCtx,
 };

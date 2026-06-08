@@ -7,11 +7,12 @@ use mlua::{LuaSerdeExt, Value};
 use tracing::error;
 
 use crate::{
-    core::{Document, DocumentFields, FieldDefinition, FieldType, document::DocumentBuilder},
+    core::{Document, FieldDefinition, FieldType, document::DocumentBuilder},
     db::{AccessResult, DbConnection, query::helpers::prefixed_name},
     hooks::{
         HookRunner,
         lifecycle::{
+            AccessCheckInput, AuthStrategyContext, AuthStrategyInput,
             access::{
                 check_access_with_lua, check_field_read_access_with_lua,
                 check_field_write_access_with_lua, has_any_field_access,
@@ -60,8 +61,7 @@ impl HookRunner {
     pub fn run_auth_strategy(
         &self,
         authenticate_ref: &str,
-        collection: &str,
-        headers: &HashMap<String, String>,
+        input: &AuthStrategyInput,
         conn: &dyn DbConnection,
     ) -> Result<Option<Document>> {
         let lua = self.pool.acquire()?;
@@ -74,9 +74,12 @@ impl HookRunner {
         // Build context table from a typed Rust struct so the Lua-side
         // shape is the single source of truth (see
         // `hooks::lifecycle::AuthStrategyContext`).
-        let ctx = crate::hooks::lifecycle::AuthStrategyContext {
-            headers,
-            collection,
+        let ctx = AuthStrategyContext {
+            headers: input.headers,
+            collection: input.collection,
+            email: input.email,
+            password: input.password,
+            remote_addr: input.remote_addr,
         };
         let ctx_value = lua.to_value(&ctx)?;
 
@@ -102,11 +105,7 @@ impl HookRunner {
     /// Returns an error if VM acquisition or the access function call fails.
     pub fn check_access(
         &self,
-        access_ref: Option<&str>,
-        user: Option<&Document>,
-        id: Option<&str>,
-        data: Option<&DocumentFields>,
-        locale: Option<&str>,
+        input: &AccessCheckInput<'_>,
         conn: &dyn DbConnection,
     ) -> Result<AccessResult> {
         // No access function configured — the in-Lua path would
@@ -117,7 +116,7 @@ impl HookRunner {
         // the VM-pool mutex per tick (was 26% of total CPU spent in
         // futex syscalls). The cached `default_deny` flag is set
         // at builder time from `[access] default_deny`.
-        if access_ref.is_none() {
+        if input.access_ref.is_none() {
             return Ok(if self.default_deny {
                 AccessResult::Denied
             } else {
@@ -128,7 +127,7 @@ impl HookRunner {
         let lua = self.pool.acquire()?;
         let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
-        check_access_with_lua(&lua, access_ref, user, id, data, locale)
+        check_access_with_lua(&lua, input)
     }
 
     /// Check field-level read access. Returns a list of field names that should be

@@ -127,4 +127,18 @@ function M.tx_separate_blocks(ctx)
     return { second_ok = ok }
 end
 
+-- Echo the run metadata so a test can assert the handler context's `job`
+-- table carries id / queue / priority / scheduled_by / queued_at / unique_key.
+function M.job_meta(ctx)
+    return {
+        id = ctx.job.id,
+        slug = ctx.job.slug,
+        queue = ctx.job.queue,
+        priority = ctx.job.priority,
+        scheduled_by = ctx.job.scheduled_by,
+        queued_at = ctx.job.queued_at,
+        unique_key = ctx.job.unique_key,
+    }
+end
+
 return M

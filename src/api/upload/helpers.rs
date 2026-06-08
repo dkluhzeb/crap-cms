@@ -17,7 +17,7 @@ use crate::{
         event::{EventOperation, EventTarget, EventUser},
     },
     db::AccessResult,
-    hooks::lifecycle::PublishEventInput,
+    hooks::{AccessCheckInput, lifecycle::PublishEventInput},
     service::ServiceError,
 };
 
@@ -131,6 +131,8 @@ pub fn check_upload_access(
     user_doc: Option<&Document>,
     id: Option<&str>,
     deny_msg: &str,
+    operation: &str,
+    collection: &str,
 ) -> Result<(), Box<Response>> {
     let mut conn = state.pool.get().map_err(|_| {
         Box::new(json_error(
@@ -146,9 +148,19 @@ pub fn check_upload_access(
         ))
     })?;
 
-    let result = state
-        .hook_runner
-        .check_access(access_ref, user_doc, id, None, None, &tx);
+    let result = state.hook_runner.check_access(
+        &AccessCheckInput {
+            access_ref,
+            user: user_doc,
+            id,
+            data: None,
+            locale: None,
+            operation,
+            collection,
+            ui_locale: None,
+        },
+        &tx,
+    );
 
     if let Err(e) = tx.commit() {
         warn!("tx commit failed: {e}");

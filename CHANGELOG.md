@@ -8,6 +8,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Collection-hook `ctx.locale` is now the resolved content locale, not `nil`
+  on default-locale writes.** Previously a collection-level hook
+  (`before_change`, `after_change`, `after_read`, …) saw `ctx.locale = nil` when
+  writing the default locale, while field hooks, validators, and access
+  functions all saw the resolved locale code (e.g. `"en"`). All hook surfaces
+  now agree: `ctx.locale` is the content locale this operation targets, `nil`
+  when localization is disabled (and on the locale-agnostic `before_delete` /
+  `after_delete` hooks, which remove the whole row across all locales). A hook
+  that treated `nil` as "default locale" should compare against the configured
+  default locale instead. (This also lets the internal `content_locale` plumbing
+  be removed — a net simplification.)
+
 - **Collection, global, and field `access` rules must be strings.** An access
   rule (`read` / `create` / `update` / `delete` / `trash`) that was present but
   not a string — e.g. `read = some_function`, `read = true` — was silently
@@ -155,6 +167,124 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Job handlers now see the full run metadata (`id`, `queue`, `priority`,
+  `scheduled_by`, `unique_key`, `queued_at`).** `ctx.job` previously carried only
+  `{ slug, attempt, max_attempts }`, so a handler couldn't tell *who* triggered
+  it (cron vs. a user vs. a hook), reference its own run id, or read its queue /
+  priority. It now exposes all of them — and the `queued_at` field that the docs
+  already advertised but which never actually existed is now real (the run's
+  queue time). `scheduled_by` is one of `"cron"`/`"hook"`/`"grpc"`/`"cli"`.
+
+- **Custom auth strategies now receive the submitted credentials and the real
+  request headers.** A `strategy`-type `authenticate` hook previously got only
+  `{ headers, collection }` — and on the gRPC `Login` path the headers map was
+  passed **empty** — so a strategy that verifies a password against an external
+  system (LDAP, a remote API) was impossible, and gRPC strategies saw nothing at
+  all. The context now also carries `ctx.email`, `ctx.password` (the submitted
+  credentials, on password-style logins), and `ctx.remote_addr`; the gRPC path
+  now passes the real request metadata as `ctx.headers`. (`password` is
+  sensitive — only your strategy hook receives it.)
+
+- **Field `after_read` hooks and custom `validate` functions now receive
+  `ctx.user` / `ctx.ui_locale`.** Both run on their own freshly-acquired pool VM
+  (the after-read pipeline and validation each acquire a VM separate from the
+  write-hook VM), and the user / UI-locale app-data wasn't set there — so the
+  context advertised `ctx.user` but it was always `nil`. A rule like "only an
+  editor may set this field", or a per-user field transform on read, was
+  impossible. Both now expose the current user and admin UI locale (with no CRUD
+  access — they run outside a write transaction).
+
+- **`before_read` hooks now receive `user` and the content `locale` on every
+  surface.** The pool read path (gRPC, admin, MCP) built an empty `before_read`
+  context — no `user`, no `locale`, no `ui_locale` — so a `before_read` hook
+  could not see who was reading or in which locale, and behaved differently than
+  the inline Lua path (which already passed `user`). The pool read-hooks now
+  carry the authenticated user and admin UI locale, and the per-operation
+  content locale is threaded to `before_read` on both paths.
+
+- **`before_broadcast` hooks and `live` filter functions now receive
+  `document_id` and `edited_by`.** They previously got only
+  `{ collection, operation, data }`, so a broadcast filter could not identify
+  which document changed or who changed it — making the canonical "don't echo a
+  user's own edits back to them" filter impossible. Both are now on the context
+  as `ctx.document_id` (string) and `ctx.edited_by` (`{ id, email }`, nil for
+  anonymous changes).
+
+- **Collection write hooks now receive `ctx.document_id`.** `before_change`,
+  `after_change`, `before_delete`, and `after_delete` previously never had the
+  affected document's id set on the context (it was populated only on
+  broadcast/event hooks), and the incoming `data` need not carry `id` — so a
+  `before_change` hook had no reliable way to identify which document it was
+  editing. This made the canonical old-vs-new guard (fetch the persisted
+  document via `crap.collections.find_by_id(ctx.collection, ctx.document_id)` and
+  compare) impossible in before-hooks. `document_id` is now set on every
+  collection write-hook context (the new document's id on `create`'s
+  `after_change`; `nil` on `create`'s before-hooks, where no document exists yet)
+  and on globals (`"default"`).
+
+- **`after_change` hooks now see hydrated array / blocks / has-many data.**
+  Document hydration previously ran *after* the after-change hooks, so a hook
+  reading `ctx.data.<array_field>` / a blocks field / a has-many relationship
+  list got `nil` — only scalar and group columns were visible. Hydration now
+  runs *before* `after_change` on every write path (create, update, bulk update,
+  global update, and both unpublish paths), so after-change hooks (collection and
+  field level) react to the full nested document. Read-denied stripping still
+  happens afterward for the returned response.
+
+- **Live-event `after_read` hooks now report the real operation and a
+  timestamp.** An `after_read` hook fired for a live-update event received a
+  synthetic `ctx.operation = "subscribe"` (a value that exists nowhere else in
+  the read pipeline) and no `created_at` / `updated_at`. It now receives the real
+  triggering operation (`"create"` / `"update"` / `"delete"`) and the event
+  timestamp as `ctx.data.updated_at`, matching the normal read pipeline.
+
+- **Field hooks now receive the content `locale` and the full `document`.**
+  Field-level hooks (`before_validate`, `before_change`, `after_change`,
+  `after_read`) carried only `ui_locale` (the admin UI language), not the
+  per-operation content `locale`, so a localized-field hook couldn't tell which
+  translation it was processing. The resolved content locale — the same value
+  custom validators see (the default locale on a default-locale write, `nil`
+  when localization is disabled) — is now threaded to every field hook as
+  `ctx.locale`. Field hooks also gain `ctx.document`: the full document. For a
+  hook on a field *inside* an array/blocks row, `ctx.data` narrows to the
+  current row while `ctx.document` stays the whole document, so the hook can
+  cross-reference fields outside its row — mirroring the custom-validator
+  context.
+
+- **Field hooks now fire for sub-fields inside Array and Blocks rows.** The
+  field-hook walker only recursed through Group / Row / Collapsible / Tabs
+  containers — Array and Blocks fields were treated as a single leaf value, so a
+  hook (`before_validate` / `before_change` / `after_change` / `after_read`) on a
+  field *inside* an array or blocks row **silently never ran**, and the
+  "does this collection have any field hook?" detector didn't even see them. The
+  walker now recurses into each row, running each sub-field's hooks per row and
+  writing the mutated row back (resolving the per-row block type and preserving
+  `_block_type` for Blocks). In-row Groups are navigated as nested objects (they
+  aren't flattened the way top-level Groups are).
+
+- **Admin form: a hook that aborts a write now gives the user feedback.** When a
+  `before_validate`/`before_change`/`after_change` hook called `error(...)`, the
+  admin create/edit form logged the error and **silently redirected** — the user
+  saw nothing and lost their input. The hook's message now surfaces as an error
+  toast (and the form keeps the submitted values). Genuine internal errors (DB,
+  pool, bugs) show a generic message instead of a silent redirect, without
+  leaking internal error text. (gRPC/MCP already surfaced these as
+  `INVALID_ARGUMENT`; this brings the admin form in line.)
+
+- **`after_change` reports `locale` / `draft` consistently across all write
+  paths.** A single-document update populated `ctx.locale` / `ctx.ui_locale`,
+  but bulk `update_many` and unpublish left them `nil`, and unpublish didn't set
+  `ctx.draft`. The `after_change` context is now consistent regardless of which
+  write path produced it.
+
+- **`create` / `update` access functions now receive the incoming `ctx.data`.**
+  The collection- and global-level `create`/`update` access functions were
+  always passed `data = nil`, even though the docs and the in-code guidance told
+  operators to gate on `ctx.data`. A data-dependent rule (e.g. "only an admin may
+  set `role = admin`") silently couldn't see what was being written. The incoming
+  write data is now exposed to those access functions as documented. Read/delete
+  access is unchanged (no incoming data to expose).
+
 - **`required` on localized fields uses a locale-completeness model.**
   A `required` localized scalar field must be present in every locale of its
   effective `required_locales` (see Added) — by default just the default
@@ -271,6 +401,96 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   files, so trashed documents remain restorable.)
 
 ### Added
+
+- **Display conditions (`admin.condition`) now receive a second `ctx`
+  argument.** A condition function was called as `function(form_data)` with no
+  way to branch on who is editing or which operation. It is now called as
+  `function(form_data, ctx)` where `ctx` carries `collection`, `operation`
+  (`"create"`/`"update"`), `user`, `ui_locale`, and `locale` — so a field can be
+  shown only to certain users, only when editing, etc. Non-breaking: existing
+  `function(form_data)` conditions ignore the extra argument. (The admin form
+  sends the operation to the live re-evaluation endpoint so `ctx.operation`
+  matches the form on both initial render and live updates.)
+
+- **Field hooks now receive `ctx.id`.** Per-field hooks carried the document id
+  only inside `ctx.data` / `ctx.document`; they now also get an explicit
+  `ctx.id` (the document id on `update` / read, `nil` on `create`), matching the
+  validator and access-function contexts.
+
+- **Access functions now receive `ctx.ui_locale`.** The access context gains the
+  admin UI locale (the operator's language) for admin-originating checks
+  (create/update/global read & update), `nil` for non-admin (gRPC/REST/internal)
+  checks — bringing it in line with the other request-time hook contexts.
+  (Existing-row gating remains expressed via the **filter-table** return:
+  `return { author_id = ctx.user.id }` matches the stored row, so `ctx.data` is
+  the *incoming* change, not the existing document — now documented explicitly.)
+
+- **Custom field validators now receive `ctx.operation` and `ctx.id`.** A
+  `validate` function previously couldn't tell whether it was running on a
+  create or an update, nor which document was being edited. It now gets
+  `ctx.operation` (`"create"` / `"update"`) and `ctx.id` (the document id on
+  update; nil on create) — enabling rules like "immutable after creation" or
+  stricter validation on update. Available to both top-level and sub-field
+  (array/blocks-row) validators, and to `required_when` predicates.
+
+- **Validators now receive `ctx.document` (the full parent document).** A custom
+  validator on a field *inside an array/blocks row* previously saw only its own
+  row as `ctx.data`, so it couldn't cross-reference fields outside the row. It
+  now also gets `ctx.document` — the full document being written — so a row-level
+  rule can validate against the parent (e.g. "a line item is only valid once the
+  invoice's `currency` is set"). For top-level fields `ctx.document` equals
+  `ctx.data`. `ctx.data` is unchanged (still the nearest scope), so existing
+  validators are unaffected.
+
+- **Job access functions now receive the queued payload as `ctx.data`.** A job
+  `access` function previously saw only `ctx.user`, so it could gate on *who* was
+  triggering a job but not on *what* was being queued. The queued payload is now
+  exposed as `ctx.data` (on both the gRPC trigger and the Lua
+  `crap.jobs.queue` path), and — via the access-context change below — it also
+  gets `ctx.operation = "trigger"` and `ctx.collection = <job slug>`.
+
+- **Access functions now receive `ctx.operation` and `ctx.collection`.** The
+  access context previously carried only `{ user, id, data, locale }`, so a
+  single access function reused across operations (e.g.
+  `update = "acl.writers", delete = "acl.writers"`) couldn't tell which operation
+  it was gating, and a function shared across collections couldn't tell which
+  collection. Both are now on the context: `ctx.operation` (`"create"`,
+  `"update"`, `"delete"`, `"trash"` (soft delete), `"undelete"`, `"unpublish"`,
+  `"restore"`, `"find"`, `"find_by_id"`, `"count"`, `"search"`, `"get"` (global
+  read), `"subscribe"`, …) and `ctx.collection` (the collection/global slug).
+  Threaded through every access-check call site on all surfaces — including the
+  soft-delete paths, which report `"trash"`. The admin "can trash?" permission
+  grid was also corrected to gate on the same fn the server actually enforces
+  (`access.trash`, falling back to `access.update` — previously it checked
+  `access.delete`), so the grid and enforcement now agree.
+
+- **Conditional `required` via `required_when`.** A field can now be required
+  *conditionally* on other fields by giving it `required_when = "module.fn"` — a
+  Lua predicate that receives the validate context (`ctx.data` = the full
+  document) and returns truthy when the field should be required. This expresses
+  rules like "`shipping_address` is required only when `product_type ==
+  "physical"`", which the static `required` boolean couldn't, and which a custom
+  `validate` fn couldn't either (validators are skipped when the value is absent
+  — correctly, since presence is `required`'s job). The conditional requirement
+  produces the same field-attached `validation.required` error as static
+  `required`, on every surface. It also applies to fields nested inside
+  Array/Blocks rows — there the predicate is evaluated against the row
+  (`ctx.data`) and the parent document (`ctx.document`). The predicate is
+  skipped on draft saves (where required is not enforced), so a predicate error
+  can never block a draft. On a **localized** field the conditional requirement
+  participates in the per-locale completeness gate exactly like a static
+  `required` — when the predicate is truthy, the field must be present in every
+  one of its `required_locales`.
+
+- **`before_delete` / `after_delete` hooks now receive the document's field
+  data.** Previously the delete-hook context carried only `{ id }` (plus
+  `soft_delete`), so a hook had to re-fetch the row to see what it was
+  deleting — and `after_delete` couldn't, because a hard delete leaves no row
+  to fetch. The context's `data` now contains the document's full fields
+  (alongside `id`), captured before the row is removed, so hooks can inspect,
+  log, or cascade on the deleted content. The document is loaded only when a
+  delete hook will actually run (no extra query otherwise). A field literally
+  named `id` or `soft_delete` is shadowed by those context keys.
 
 - **`required_locales` — control which locales a required field must be
   filled in.** A new field option (with a collection-level default) that

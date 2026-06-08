@@ -7,7 +7,9 @@ use crate::{
     core::{FieldDefinition, FieldType, validate::FieldError},
     db::{LocaleContext, LocaleMode, query::helpers::prefixed_name, query::sanitize_locale},
     hooks::lifecycle::validation::{
-        checks, is_empty_value,
+        checks,
+        custom::{ValidateCtxSource, run_required_condition_inner},
+        is_empty_value,
         richtext_attrs::{RichtextValidationCtx, validate_richtext_node_attrs},
         sub_fields::{SubFieldParams, validate_sub_fields_inner},
     },
@@ -39,11 +41,52 @@ impl ValidationWalker<'_> {
         let localization_active = self.ctx.locale_ctx.is_some_and(|c| c.config.is_enabled());
         let skip_required = self.ctx.is_draft
             || (field.is_locale_scoped(inherited_localized) && localization_active);
+
+        // Validators see the operation (`create`/`update`) and the document id
+        // being edited (derived from the validation context's `exclude_id`).
+        let operation = if is_update { "update" } else { "create" };
+
+        // A field is required either statically (`required = true`) or when its
+        // `required_when` predicate returns truthy for this document. Skip the
+        // predicate entirely when the required check itself is skipped (drafts,
+        // locale-scoped fields): there is nothing to enforce, and a predicate
+        // error must not be able to block a draft save.
+        let required = if skip_required {
+            false
+        } else {
+            field.required
+                || match field.required_when.as_deref() {
+                    None => false,
+                    Some(func_ref) => match run_required_condition_inner(
+                        self.lua,
+                        func_ref,
+                        &ValidateCtxSource {
+                            data: self.data,
+                            document: self.data,
+                            collection: self.ctx.table,
+                            field_name: &field.name,
+                            locale: self.ctx.locale_ctx.map(LocaleContext::access_locale),
+                            operation,
+                            id: self.ctx.exclude_id,
+                        },
+                    ) {
+                        Ok(req) => req,
+                        Err(e) => {
+                            errors.push(FieldError::new(
+                                data_key.clone(),
+                                format!("required_when predicate '{func_ref}' failed: {e}"),
+                            ));
+                            false
+                        }
+                    },
+                }
+        };
+
         checks::check_required(
             field,
             &data_key,
             value,
-            is_empty,
+            required,
             skip_required,
             is_update,
             errors,
@@ -75,6 +118,8 @@ impl ValidationWalker<'_> {
                 data: self.data,
                 table: self.ctx.table,
                 locale: self.ctx.locale_ctx.map(LocaleContext::access_locale),
+                operation,
+                id: self.ctx.exclude_id,
             },
             errors,
         );
@@ -126,6 +171,13 @@ impl ValidationWalker<'_> {
                 registry: self.ctx.registry,
                 is_draft: self.ctx.is_draft,
                 locale: self.ctx.locale_ctx.map(LocaleContext::access_locale),
+                operation: if self.ctx.exclude_id.is_some() {
+                    "update"
+                } else {
+                    "create"
+                },
+                id: self.ctx.exclude_id,
+                document: self.data,
             };
             validate_sub_fields_inner(&params, sub_fields, row_obj, errors);
         }
@@ -198,6 +250,12 @@ impl ValidationWalker<'_> {
             &RichtextValidationCtx::builder(self.lua, registry, self.ctx.table)
                 .draft(self.ctx.is_draft)
                 .locale(self.ctx.locale_ctx.map(LocaleContext::access_locale))
+                .operation(if self.ctx.exclude_id.is_some() {
+                    "update"
+                } else {
+                    "create"
+                })
+                .id(self.ctx.exclude_id)
                 .build(),
             content,
             data_key,

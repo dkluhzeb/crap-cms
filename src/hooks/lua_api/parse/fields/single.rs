@@ -39,6 +39,7 @@ const COMMON_FIELD_KEYS: &[&str] = &[
     "name",
     "type",
     "required",
+    "required_when",
     "unique",
     "index",
     "localized",
@@ -349,6 +350,9 @@ fn assemble_field_definition(
 
     if let Some(v) = get_string(field_tbl, "validate") {
         fd_builder = fd_builder.validate(v);
+    }
+    if let Some(v) = get_string(field_tbl, "required_when") {
+        fd_builder = fd_builder.required_when(v);
     }
     if let Some(v) = parts.default_value {
         fd_builder = fd_builder.default_value(v);

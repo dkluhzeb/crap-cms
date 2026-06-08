@@ -7,7 +7,7 @@ use tracing::warn;
 use crate::{
     core::{Document, FieldDefinition, FieldType},
     db::{AccessResult, query::helpers::prefixed_name},
-    hooks::lifecycle::access::collection::check_access_with_lua,
+    hooks::lifecycle::{AccessCheckInput, access::collection::check_access_with_lua},
 };
 
 pub(crate) fn check_field_read_access_with_lua(
@@ -16,7 +16,7 @@ pub(crate) fn check_field_read_access_with_lua(
     user: Option<&Document>,
     locale: Option<&str>,
 ) -> Vec<String> {
-    collect_field_access_denied(lua, fields, user, locale, |f| f.access.read.as_deref(), "")
+    collect_field_access_denied(lua, fields, user, locale, extract_read_access, "", "read")
 }
 
 /// Check field-level write access using an already-held `&Lua` reference.
@@ -35,7 +35,11 @@ pub(crate) fn check_field_write_access_with_lua(
         _ => return Vec::new(),
     };
 
-    collect_field_access_denied(lua, fields, user, locale, extractor, "")
+    collect_field_access_denied(lua, fields, user, locale, extractor, "", "write")
+}
+
+fn extract_read_access(f: &FieldDefinition) -> Option<&str> {
+    f.access.read.as_deref()
 }
 
 fn extract_create_access(f: &FieldDefinition) -> Option<&str> {
@@ -94,6 +98,7 @@ fn collect_field_access_denied(
     locale: Option<&str>,
     extractor: fn(&FieldDefinition) -> Option<&str>,
     prefix: &str,
+    operation: &str,
 ) -> Vec<String> {
     let mut denied = Vec::new();
 
@@ -101,7 +106,22 @@ fn collect_field_access_denied(
         let full_name = prefixed_name(prefix, &field.name);
 
         if let Some(ref_str) = extractor(field) {
-            match check_access_with_lua(lua, Some(ref_str), user, None, None, locale) {
+            let result = check_access_with_lua(
+                lua,
+                &AccessCheckInput {
+                    access_ref: Some(ref_str),
+                    user,
+                    id: None,
+                    data: None,
+                    locale,
+                    operation,
+                    // Field-access functions are registered on a specific field of
+                    // a specific collection, so they don't consult ctx.collection.
+                    collection: "",
+                    ui_locale: None,
+                },
+            );
+            match result {
                 Ok(AccessResult::Allowed | AccessResult::Constrained(_)) => {}
                 Ok(AccessResult::Denied) => {
                     denied.push(full_name.clone());
@@ -131,6 +151,7 @@ fn collect_field_access_denied(
                     locale,
                     extractor,
                     &full_name,
+                    operation,
                 ));
             }
             FieldType::Row | FieldType::Collapsible => {
@@ -141,6 +162,7 @@ fn collect_field_access_denied(
                     locale,
                     extractor,
                     prefix,
+                    operation,
                 ));
             }
             FieldType::Tabs => {
@@ -152,6 +174,7 @@ fn collect_field_access_denied(
                         locale,
                         extractor,
                         prefix,
+                        operation,
                     ));
                 }
             }

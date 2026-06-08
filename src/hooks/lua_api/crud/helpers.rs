@@ -15,8 +15,8 @@ use crate::{
     },
     db::{AccessResult, FilterClause, query::SharedPopulateSingleflight},
     hooks::lifecycle::{
-        HookDepth, HookDepthGuard, LuaCrudInfra, LuaInvalidationTransport, LuaLocaleConfig,
-        LuaPopulateSingleflight, MaxHookDepth, UiLocaleContext, UserContext,
+        AccessCheckInput, HookDepth, HookDepthGuard, LuaCrudInfra, LuaInvalidationTransport,
+        LuaLocaleConfig, LuaPopulateSingleflight, MaxHookDepth, UiLocaleContext, UserContext,
         access::check_access_with_lua,
         converters::{flatten_lua_groups, lua_table_to_hashmap, lua_table_to_json_map},
     },
@@ -122,6 +122,11 @@ pub(crate) struct EnforceAccessParams<'a> {
     pub access_fn: Option<&'a str>,
     pub id: Option<&'a str>,
     pub deny_msg: &'a str,
+    /// The operation reported to the access function as `ctx.operation`
+    /// (e.g. `"update"` for `update_many`, `"delete"` for `delete_many`).
+    /// The access fn passed in is that operation's gate, so the operation
+    /// label must match it — not the `"find"` used to select candidate rows.
+    pub operation: &'a str,
     /// Whether the caller is about to inject a `_status = 'published'` filter.
     /// Controls whether access-hook `_status` constraints are accepted.
     pub injecting_status: bool,
@@ -145,11 +150,16 @@ pub(crate) fn enforce_access(
     let user_doc = hook_user(lua);
     let result = check_access_with_lua(
         lua,
-        params.access_fn,
-        user_doc.as_ref(),
-        params.id,
-        None,
-        None,
+        &AccessCheckInput {
+            access_ref: params.access_fn,
+            user: user_doc.as_ref(),
+            id: params.id,
+            data: None,
+            locale: None,
+            operation: params.operation,
+            collection: params.slug,
+            ui_locale: None,
+        },
     )
     .map_err(|e| RuntimeError(format!("access check error: {e:#}")))?;
 

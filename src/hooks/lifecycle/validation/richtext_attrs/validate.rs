@@ -8,7 +8,11 @@ use serde_json::Value;
 
 use crate::{
     core::{FieldDefinition, registry::Registry, validate::FieldError},
-    hooks::lifecycle::validation::{checks, custom::run_validate_function_inner, is_empty_value},
+    hooks::lifecycle::validation::{
+        checks,
+        custom::{ValidateCtxSource, run_validate_function_inner},
+        is_empty_value,
+    },
 };
 
 use super::extract::{NodeInstance, extract_nodes_from_html, extract_nodes_from_json};
@@ -22,6 +26,10 @@ pub(crate) struct RichtextValidationCtx<'a> {
     /// Content locale this write targets — exposed to custom node-attr
     /// validators as `ctx.locale`. `None` when localization is disabled.
     pub locale: Option<&'a str>,
+    /// `"create"` or `"update"`.
+    pub operation: &'a str,
+    /// The document id on `update`; `None` on `create`.
+    pub id: Option<&'a str>,
 }
 
 impl<'a> RichtextValidationCtx<'a> {
@@ -37,6 +45,8 @@ impl<'a> RichtextValidationCtx<'a> {
             collection,
             is_draft: false,
             locale: None,
+            operation: "create",
+            id: None,
         }
     }
 }
@@ -48,6 +58,8 @@ pub(crate) struct RichtextValidationCtxBuilder<'a> {
     collection: &'a str,
     is_draft: bool,
     locale: Option<&'a str>,
+    operation: &'a str,
+    id: Option<&'a str>,
 }
 
 impl<'a> RichtextValidationCtxBuilder<'a> {
@@ -61,6 +73,16 @@ impl<'a> RichtextValidationCtxBuilder<'a> {
         self
     }
 
+    pub fn operation(mut self, operation: &'a str) -> Self {
+        self.operation = operation;
+        self
+    }
+
+    pub fn id(mut self, id: Option<&'a str>) -> Self {
+        self.id = id;
+        self
+    }
+
     pub fn build(self) -> RichtextValidationCtx<'a> {
         RichtextValidationCtx {
             lua: self.lua,
@@ -68,6 +90,8 @@ impl<'a> RichtextValidationCtxBuilder<'a> {
             collection: self.collection,
             is_draft: self.is_draft,
             locale: self.locale,
+            operation: self.operation,
+            id: self.id,
         }
     }
 }
@@ -166,10 +190,15 @@ fn validate_node_instance(
                 ctx.lua,
                 validate_ref,
                 val,
-                &data,
-                ctx.collection,
-                &attr_def.name,
-                ctx.locale,
+                &ValidateCtxSource {
+                    data: &data,
+                    document: &data,
+                    collection: ctx.collection,
+                    field_name: &attr_def.name,
+                    locale: ctx.locale,
+                    operation: ctx.operation,
+                    id: ctx.id,
+                },
             ) {
                 Ok(Some(err_msg)) => {
                     errors.push(FieldError::new(data_key.clone(), err_msg));

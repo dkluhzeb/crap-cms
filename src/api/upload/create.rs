@@ -96,6 +96,8 @@ pub(super) async fn create_upload(
         user_doc,
         None,
         "Create access denied",
+        "create",
+        &def.slug,
     ) {
         return *resp;
     }

@@ -5,6 +5,8 @@
 //! Tabs containers transparently, accumulating the `__`-separated prefix for
 //! Group fields so hook lookups land at the right `data_key`.
 
+use std::time::Instant;
+
 use anyhow::{Result, anyhow};
 use mlua::{Lua, LuaSerdeExt as _, Value};
 use serde_json::Value as JsonValue;
@@ -14,7 +16,9 @@ use crate::{
     core::{DocumentFields, FieldDefinition, FieldType, field::FieldHooks},
     db::query::helpers::prefixed_name,
     hooks::{
-        lifecycle::{FieldHookEvent, UiLocaleContext, UserContext, runner::FieldHooksCall},
+        lifecycle::{
+            FieldHookContext, FieldHookEvent, UiLocaleContext, UserContext, runner::FieldHooksCall,
+        },
         lua_api,
     },
 };
@@ -37,15 +41,31 @@ pub(crate) fn run_field_hooks_inner(
     data: &mut DocumentFields,
     call: &FieldHooksCall<'_>,
 ) -> Result<()> {
-    FieldHookWalker { lua, call }.walk(data, call.fields, "")
+    // Snapshot the full document up front so every hook — including those on
+    // sub-fields inside array/blocks rows, where `data` narrows to the row —
+    // can reach the whole document via `ctx.document`. We're already gated on
+    // "this collection has field hooks for this event" (see the runner), so
+    // the clone only happens on writes/reads that actually run field hooks.
+    let document = data.clone();
+
+    FieldHookWalker {
+        lua,
+        call,
+        document: &document,
+    }
+    .walk(data, call.fields, "")
 }
 
 /// Iterator state for the recursive field-hook walk. Bundles the per-walk
-/// invariants (Lua VM, call descriptor) so the recursive helpers stay at
-/// ≤ 3 args + receiver instead of 6+ positional args.
+/// invariants (Lua VM, call descriptor, full-document snapshot) so the
+/// recursive helpers stay at ≤ 3 args + receiver instead of 6+ positional
+/// args.
 struct FieldHookWalker<'a> {
     lua: &'a Lua,
     call: &'a FieldHooksCall<'a>,
+    /// Full-document snapshot exposed to every hook as `ctx.document`,
+    /// unchanged as the walk descends into array/blocks rows.
+    document: &'a DocumentFields,
 }
 
 impl FieldHookWalker<'_> {
@@ -74,8 +94,171 @@ impl FieldHookWalker<'_> {
                     }
                 }
 
+                FieldType::Array => {
+                    // A hook on the array field itself fires on the whole value.
+                    self.run_single(data, field, prefix)?;
+                    // Hooks on the array's sub-fields fire per row.
+                    self.walk_array_rows(data, field, prefix)?;
+                }
+
+                FieldType::Blocks => {
+                    self.run_single(data, field, prefix)?;
+                    self.walk_blocks_rows(data, field, prefix)?;
+                }
+
                 _ => {
                     self.run_single(data, field, prefix)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Run sub-field hooks on every row of an `Array` field, writing each
+    /// mutated row back. No-op unless a sub-field actually has a hook for this
+    /// event.
+    fn walk_array_rows(
+        &self,
+        data: &mut DocumentFields,
+        field: &FieldDefinition,
+        prefix: &str,
+    ) -> Result<()> {
+        if !has_any_field_hook(&field.fields, &self.call.event) {
+            return Ok(());
+        }
+
+        let data_key = prefixed_name(prefix, &field.name);
+        let Some(JsonValue::Array(rows)) = data.get(&data_key) else {
+            return Ok(());
+        };
+        let mut rows = rows.clone();
+
+        for row in &mut rows {
+            let Some(obj) = row.as_object() else {
+                continue;
+            };
+            let mut row_data: DocumentFields =
+                obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+
+            self.walk_row(&mut row_data, &field.fields)?;
+
+            *row = JsonValue::Object(
+                row_data
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            );
+        }
+
+        data.insert(data_key, JsonValue::Array(rows));
+        Ok(())
+    }
+
+    /// Run sub-field hooks on every row of a `Blocks` field, resolving each
+    /// row's `_block_type` to the matching block's sub-fields and preserving
+    /// `_block_type` on write-back.
+    fn walk_blocks_rows(
+        &self,
+        data: &mut DocumentFields,
+        field: &FieldDefinition,
+        prefix: &str,
+    ) -> Result<()> {
+        if !field
+            .blocks
+            .iter()
+            .any(|b| has_any_field_hook(&b.fields, &self.call.event))
+        {
+            return Ok(());
+        }
+
+        let data_key = prefixed_name(prefix, &field.name);
+        let Some(JsonValue::Array(rows)) = data.get(&data_key) else {
+            return Ok(());
+        };
+        let mut rows = rows.clone();
+
+        for row in &mut rows {
+            let Some(obj) = row.as_object() else {
+                continue;
+            };
+            let block_type = obj
+                .get("_block_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let Some(block) = field.blocks.iter().find(|b| b.block_type == block_type) else {
+                continue;
+            };
+
+            // Cloning the whole row keeps `_block_type` (and any non-hook keys)
+            // intact on write-back; the walk only touches sub-fields with hooks.
+            let mut row_data: DocumentFields =
+                obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+
+            self.walk_row(&mut row_data, &block.fields)?;
+
+            *row = JsonValue::Object(
+                row_data
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            );
+        }
+
+        data.insert(data_key, JsonValue::Array(rows));
+        Ok(())
+    }
+
+    /// Recurse field hooks within a single array/blocks row. Unlike the
+    /// top-level [`walk`](Self::walk) (where Group data is flattened into
+    /// `group__field` columns), in-row Group data is a **nested object**, so
+    /// here Group navigates into that object. Row/Collapsible/Tabs are
+    /// transparent; nested Array/Blocks recurse again.
+    fn walk_row(&self, row: &mut DocumentFields, fields: &[FieldDefinition]) -> Result<()> {
+        for field in fields {
+            match field.field_type {
+                FieldType::Group => {
+                    let Some(JsonValue::Object(obj)) = row.get(&field.name).cloned() else {
+                        continue;
+                    };
+                    let mut group_data: DocumentFields =
+                        obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+
+                    self.walk_row(&mut group_data, &field.fields)?;
+
+                    row.insert(
+                        field.name.clone(),
+                        JsonValue::Object(
+                            group_data
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect(),
+                        ),
+                    );
+                }
+
+                FieldType::Row | FieldType::Collapsible => {
+                    self.walk_row(row, &field.fields)?;
+                }
+
+                FieldType::Tabs => {
+                    for tab in &field.tabs {
+                        self.walk_row(row, &tab.fields)?;
+                    }
+                }
+
+                FieldType::Array => {
+                    self.run_single(row, field, "")?;
+                    self.walk_array_rows(row, field, "")?;
+                }
+
+                FieldType::Blocks => {
+                    self.run_single(row, field, "")?;
+                    self.walk_blocks_rows(row, field, "")?;
+                }
+
+                _ => {
+                    self.run_single(row, field, "")?;
                 }
             }
         }
@@ -103,10 +286,13 @@ impl FieldHookWalker<'_> {
 
         let mut current = value;
         let timing = tracing::enabled!(tracing::Level::DEBUG);
-        let start = if timing {
-            Some(std::time::Instant::now())
-        } else {
-            None
+        let start = if timing { Some(Instant::now()) } else { None };
+
+        let meta = FieldHookMeta {
+            collection: self.call.collection,
+            operation: self.call.operation,
+            id: self.call.id,
+            locale: self.call.locale,
         };
 
         for hook_ref in hook_refs {
@@ -115,9 +301,9 @@ impl FieldHookWalker<'_> {
                 hook_ref,
                 &current,
                 &data_key,
-                self.call.collection,
-                self.call.operation,
+                &meta,
                 data,
+                self.document,
             )?;
         }
 
@@ -151,13 +337,17 @@ pub(super) fn has_any_field_hook(fields: &[FieldDefinition], event: &FieldHookEv
         }
 
         match f.field_type {
-            FieldType::Group | FieldType::Row | FieldType::Collapsible => {
+            FieldType::Group | FieldType::Row | FieldType::Collapsible | FieldType::Array => {
                 has_any_field_hook(&f.fields, event)
             }
             FieldType::Tabs => f
                 .tabs
                 .iter()
                 .any(|tab| has_any_field_hook(&tab.fields, event)),
+            FieldType::Blocks => f
+                .blocks
+                .iter()
+                .any(|b| has_any_field_hook(&b.fields, event)),
             _ => false,
         }
     })
@@ -176,6 +366,15 @@ pub(crate) fn get_field_hook_refs<'a>(
     }
 }
 
+/// Call-level metadata shared by every field hook in a single walk. Bundled
+/// so [`call_field_hook_ref`] stays within the argument-count budget.
+pub(crate) struct FieldHookMeta<'a> {
+    pub collection: &'a str,
+    pub operation: &'a str,
+    pub id: Option<&'a str>,
+    pub locale: Option<&'a str>,
+}
+
 /// Resolve a hook reference and call it as a field hook.
 /// Field hooks receive `(value, context)` and return the new value.
 pub(crate) fn call_field_hook_ref(
@@ -183,9 +382,9 @@ pub(crate) fn call_field_hook_ref(
     hook_ref: &str,
     value: &JsonValue,
     field_name: &str,
-    collection: &str,
-    operation: &str,
+    meta: &FieldHookMeta<'_>,
     data: &DocumentFields,
+    document: &DocumentFields,
 ) -> Result<JsonValue> {
     let func = resolve_hook_function(lua, hook_ref)?;
 
@@ -197,11 +396,14 @@ pub(crate) fn call_field_hook_ref(
     // `hooks::lifecycle::FieldHookContext`).
     let user_ctx_ref = lua.app_data_ref::<UserContext>();
     let locale_ctx_ref = lua.app_data_ref::<UiLocaleContext>();
-    let ctx = crate::hooks::lifecycle::FieldHookContext {
+    let ctx = FieldHookContext {
         field_name,
-        collection,
-        operation,
+        collection: meta.collection,
+        operation: meta.operation,
+        id: meta.id,
+        locale: meta.locale,
         data,
+        document,
         user: user_ctx_ref.as_ref().and_then(|c| c.0.as_ref()),
         ui_locale: locale_ctx_ref.as_ref().and_then(|c| c.0.as_deref()),
     };
@@ -250,8 +452,13 @@ mod tests {
             "hooks.upper",
             &json!("hello"),
             "title",
-            "posts",
-            "create",
+            &FieldHookMeta {
+                collection: "posts",
+                operation: "create",
+                id: None,
+                locale: None,
+            },
+            &data,
             &data,
         )
         .unwrap();
@@ -285,8 +492,13 @@ mod tests {
             "hooks.trim",
             &JsonValue::Null,
             "title",
-            "posts",
-            "update",
+            &FieldHookMeta {
+                collection: "posts",
+                operation: "update",
+                id: None,
+                locale: None,
+            },
+            &data,
             &data,
         )
         .unwrap();
@@ -328,6 +540,8 @@ mod tests {
                 event: FieldHookEvent::BeforeValidate,
                 collection: "posts",
                 operation: "update",
+                id: None,
+                locale: None,
             },
         )
         .unwrap();
@@ -378,6 +592,8 @@ mod tests {
                 event: FieldHookEvent::BeforeValidate,
                 collection: "posts",
                 operation: "create",
+                id: None,
+                locale: None,
             },
         )
         .unwrap();
@@ -408,13 +624,163 @@ mod tests {
             "hooks.inspect_ctx",
             &json!("hello"),
             "title",
-            "posts",
-            "create",
+            &FieldHookMeta {
+                collection: "posts",
+                operation: "create",
+                id: None,
+                locale: None,
+            },
+            &data,
             &data,
         )
         .unwrap();
 
         assert_eq!(result, json!("posts:title:create"));
+    }
+
+    /// Regression (#14): field hooks receive the content `locale` (distinct from
+    /// `ui_locale`), threaded through `FieldHooksCall` → `FieldHookMeta`.
+    #[test]
+    fn field_hook_context_has_content_locale() {
+        let lua = mlua::Lua::new();
+        lua.load(
+            r#"
+            package.loaded["hooks.locale_probe"] = function(value, context)
+
+                return context.locale or "<nil>"
+            end
+        "#,
+        )
+        .exec()
+        .unwrap();
+
+        let data = DocumentFields::new();
+
+        let result = call_field_hook_ref(
+            &lua,
+            "hooks.locale_probe",
+            &json!("x"),
+            "title",
+            &FieldHookMeta {
+                collection: "posts",
+                operation: "update",
+                id: None,
+                locale: Some("de"),
+            },
+            &data,
+            &data,
+        )
+        .unwrap();
+
+        assert_eq!(
+            result,
+            json!("de"),
+            "field hook must see the content locale as ctx.locale"
+        );
+    }
+
+    /// A field hook receives the document `id` on update (parity with the
+    /// validator / access contexts).
+    #[test]
+    fn field_hook_context_has_id() {
+        let lua = mlua::Lua::new();
+        lua.load(
+            r#"
+            package.loaded["hooks.id_probe"] = function(value, context)
+
+                return context.id or "<nil>"
+            end
+        "#,
+        )
+        .exec()
+        .unwrap();
+
+        let data = DocumentFields::new();
+
+        let result = call_field_hook_ref(
+            &lua,
+            "hooks.id_probe",
+            &json!("x"),
+            "title",
+            &FieldHookMeta {
+                collection: "posts",
+                operation: "update",
+                id: Some("doc-42"),
+                locale: None,
+            },
+            &data,
+            &data,
+        )
+        .unwrap();
+
+        assert_eq!(
+            result,
+            json!("doc-42"),
+            "field hook must see the document id as ctx.id"
+        );
+    }
+
+    /// Regression (#14 parity): a field hook on a sub-field inside an array row
+    /// sees the row as `ctx.data` but the full document as `ctx.document`, so it
+    /// can cross-reference fields outside its row.
+    #[test]
+    fn field_hook_in_row_sees_full_document() {
+        let lua = mlua::Lua::new();
+        lua.load(
+            r#"
+            package.loaded["hooks.tag"] = function(value, ctx)
+
+                -- ctx.data is the row (`label`); ctx.document is the whole doc
+                -- (top-level `prefix`). Combine both to prove each is in scope.
+                return (ctx.document.prefix or "?") .. ":" .. (ctx.data.label or "?")
+            end
+        "#,
+        )
+        .exec()
+        .unwrap();
+
+        let fields = vec![
+            FieldDefinition::builder("prefix", FieldType::Text).build(),
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("label", FieldType::Text).build(),
+                    FieldDefinition::builder("tagged", FieldType::Text)
+                        .hooks(FieldHooks {
+                            before_change: vec!["hooks.tag".to_string()],
+                            ..Default::default()
+                        })
+                        .build(),
+                ])
+                .build(),
+        ];
+
+        let mut data = DocumentFields::new();
+        data.insert("prefix".to_string(), json!("DOC"));
+        data.insert(
+            "items".to_string(),
+            json!([{ "label": "row0", "tagged": "x" }]),
+        );
+
+        run_field_hooks_inner(
+            &lua,
+            &mut data,
+            &FieldHooksCall {
+                fields: &fields,
+                event: FieldHookEvent::BeforeChange,
+                collection: "posts",
+                operation: "create",
+                id: None,
+                locale: None,
+            },
+        )
+        .unwrap();
+
+        let rows = data.get("items").unwrap().as_array().unwrap();
+        assert_eq!(
+            rows[0].get("tagged").unwrap(),
+            &json!("DOC:row0"),
+            "row hook must see the full document (prefix) and the row (label)"
+        );
     }
 
     /// Regression: `has_any_field_hook` must find hooks inside Group/Row/Tabs.

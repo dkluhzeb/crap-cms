@@ -20,13 +20,14 @@ use crate::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
             build_locale_template_data, compute_denied_read_fields, enrich_field_contexts,
             extract_doc_status, extract_editor_locale, fetch_version_sidebar_data,
-            flatten_document_values, is_non_default_locale, not_found, paths, render_page,
-            service_error_to_admin_response, split_sidebar_fields, task_join_error_response,
+            flatten_document_values, get_user_doc, is_non_default_locale, not_found, paths,
+            render_page, service_error_to_admin_response, split_sidebar_fields,
+            task_join_error_response,
         },
     },
     core::{AuthUser, Claims, Document, DocumentFields, collection::GlobalDefinition},
     db::DbPool,
-    hooks::HookRunner,
+    hooks::{ConditionContext, HookRunner},
     service::{GetGlobalInput, RunnerReadHooks, ServiceContext, ServiceError, get_global_document},
 };
 
@@ -45,7 +46,12 @@ struct ReadParams {
 fn read_global_document_blocking(params: &ReadParams) -> Result<Document, ServiceError> {
     let conn = params.pool.get().map_err(ServiceError::Internal)?;
 
-    let hooks = RunnerReadHooks::new(&params.runner, &conn);
+    let hooks = RunnerReadHooks::new(
+        &params.runner,
+        &conn,
+        params.user_doc.as_ref(),
+        params.user_ui_locale.as_deref(),
+    );
     let ctx = ServiceContext::global(&params.slug, &params.def)
         .pool(&params.pool)
         .conn(&conn)
@@ -65,6 +71,7 @@ fn prepare_edit_fields(
     doc_fields: &DocumentFields,
     editor_locale: Option<&str>,
     denied_read_fields: &[String],
+    auth_user: Option<&Extension<AuthUser>>,
 ) -> (Vec<FieldContext>, Vec<FieldContext>) {
     let values = flatten_document_values(doc_fields, &def.fields);
     let non_default_locale = is_non_default_locale(state, editor_locale);
@@ -96,12 +103,20 @@ fn prepare_edit_fields(
     }
 
     let form_data_json = json!(doc_fields);
+    let cond_ctx = ConditionContext {
+        collection: &def.slug,
+        operation: "update",
+        user: get_user_doc(auth_user),
+        ui_locale: auth_user.map(|Extension(au)| au.ui_locale.as_str()),
+        locale: editor_locale,
+    };
     apply_display_conditions(
         &mut fields,
         &def.fields,
         &form_data_json,
         &state.hook_runner,
         false,
+        &cond_ctx,
     );
 
     split_sidebar_fields(fields)
@@ -160,6 +175,7 @@ pub async fn edit_form(
         &document.fields,
         editor_locale.as_deref(),
         &denied,
+        auth_user.as_ref(),
     );
 
     let has_versions = def.has_versions();
@@ -168,7 +184,12 @@ pub async fn edit_form(
 
     let (versions, total_versions) = if has_versions {
         if let Ok(vc) = state.pool.get() {
-            let vh = RunnerReadHooks::new(&state.hook_runner, &vc);
+            let vh = RunnerReadHooks::new(
+                &state.hook_runner,
+                &vc,
+                auth_user.as_ref().map(|Extension(au)| &au.user_doc),
+                None,
+            );
             let version_ctx = ServiceContext::global(&slug, &def)
                 .conn(&vc)
                 .read_hooks(&vh)

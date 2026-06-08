@@ -5,11 +5,11 @@ use anyhow::Result;
 
 use crate::{
     core::{Document, DocumentFields, FieldDefinition, Hooks, Registry, ValidationError},
-    db::{AccessResult, DbConnection},
+    db::{AccessResult, DbConnection, LocaleContext},
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
         lifecycle::{
-            FieldHookEvent, FieldHooksCall, LuaCrudInfra,
+            AccessCheckInput, FieldHookEvent, FieldHooksCall, LuaCrudInfra,
             access::{
                 check_access_with_lua, check_field_read_access_with_lua,
                 check_field_write_access_with_lua,
@@ -71,6 +71,18 @@ pub trait WriteHooks {
         conn: &dyn DbConnection,
     ) -> Result<HookContext>;
 
+    /// Whether a `before_delete` / `after_delete` hook will actually run for a
+    /// collection with these `hooks`. Callers use it to decide whether to
+    /// pre-load the document's field data into the delete-hook context — so the
+    /// load is skipped when no delete hook would see it.
+    ///
+    /// Default: true when the collection declares any delete hook. Surface
+    /// impls refine this with their `hooks_enabled` flag (and, for the pool
+    /// runner, knowledge of globally-registered delete hooks).
+    fn runs_delete_hooks(&self, hooks: &Hooks) -> bool {
+        !hooks.before_delete.is_empty() || !hooks.after_delete.is_empty()
+    }
+
     /// Field-level read access: returns denied field names to strip from returned documents.
     fn field_read_denied(
         &self,
@@ -88,14 +100,7 @@ pub trait WriteHooks {
     /// # Errors
     ///
     /// Returns an error if the access hook itself raises (e.g. a Lua runtime error).
-    fn check_access(
-        &self,
-        access_ref: Option<&str>,
-        user: Option<&Document>,
-        id: Option<&str>,
-        data: Option<&DocumentFields>,
-        locale: Option<&str>,
-    ) -> Result<AccessResult>;
+    fn check_access(&self, input: &AccessCheckInput<'_>) -> Result<AccessResult>;
 
     /// Field-level write access: returns denied field names to strip before persistence.
     fn field_write_denied(
@@ -188,6 +193,14 @@ impl<'a> RunnerWriteHooks<'a> {
 }
 
 impl WriteHooks for RunnerWriteHooks<'_> {
+    fn runs_delete_hooks(&self, hooks: &Hooks) -> bool {
+        self.hooks_enabled
+            && (!hooks.before_delete.is_empty()
+                || !hooks.after_delete.is_empty()
+                || self.runner.has_registered_hooks_for("before_delete")
+                || self.runner.has_registered_hooks_for("after_delete"))
+    }
+
     fn run_before_write(
         &self,
         hooks: &Hooks,
@@ -252,22 +265,14 @@ impl WriteHooks for RunnerWriteHooks<'_> {
             .check_field_read_access(fields, user, locale, conn)
     }
 
-    fn check_access(
-        &self,
-        access_ref: Option<&str>,
-        user: Option<&Document>,
-        id: Option<&str>,
-        data: Option<&DocumentFields>,
-        locale: Option<&str>,
-    ) -> Result<AccessResult> {
+    fn check_access(&self, input: &AccessCheckInput<'_>) -> Result<AccessResult> {
         if self.override_access {
             return Ok(AccessResult::Allowed);
         }
         let Some(conn) = self.conn else {
             return Ok(AccessResult::Allowed);
         };
-        self.runner
-            .check_access(access_ref, user, id, data, locale, conn)
+        self.runner.check_access(input, conn)
     }
 
     fn field_write_denied(
@@ -386,6 +391,14 @@ impl<'a> LuaWriteHooksBuilder<'a> {
 }
 
 impl WriteHooks for LuaWriteHooks<'_> {
+    fn runs_delete_hooks(&self, hooks: &Hooks) -> bool {
+        // Inline nested-Lua delete path: gate on the hooks-enabled flag and the
+        // collection's own delete hooks. Globally-registered delete hooks in
+        // the current VM are not probed here (the common case is collection
+        // refs); a registered-only delete hook still gets the `id`.
+        self.hooks_enabled && (!hooks.before_delete.is_empty() || !hooks.after_delete.is_empty())
+    }
+
     fn run_before_write(
         &self,
         hooks: &Hooks,
@@ -402,6 +415,8 @@ impl WriteHooks for LuaWriteHooks<'_> {
                     event: FieldHookEvent::BeforeValidate,
                     collection: &ctx.collection,
                     operation: &ctx.operation,
+                    id: ctx.document_id.as_deref(),
+                    locale: val_ctx.locale_ctx.map(LocaleContext::access_locale),
                 },
             )?;
 
@@ -431,6 +446,8 @@ impl WriteHooks for LuaWriteHooks<'_> {
                     event: FieldHookEvent::BeforeChange,
                     collection: &ctx.collection,
                     operation: &ctx.operation,
+                    id: ctx.document_id.as_deref(),
+                    locale: val_ctx.locale_ctx.map(LocaleContext::access_locale),
                 },
             )?;
 
@@ -461,6 +478,8 @@ impl WriteHooks for LuaWriteHooks<'_> {
                     event: FieldHookEvent::AfterChange,
                     collection: &ctx.collection,
                     operation: &ctx.operation,
+                    id: ctx.document_id.as_deref(),
+                    locale: ctx.locale.as_deref(),
                 },
             )?;
         }
@@ -481,18 +500,11 @@ impl WriteHooks for LuaWriteHooks<'_> {
         run_hooks_inner(self.lua, hooks, event, ctx)
     }
 
-    fn check_access(
-        &self,
-        access_ref: Option<&str>,
-        user: Option<&Document>,
-        id: Option<&str>,
-        data: Option<&DocumentFields>,
-        locale: Option<&str>,
-    ) -> Result<AccessResult> {
+    fn check_access(&self, input: &AccessCheckInput<'_>) -> Result<AccessResult> {
         if self.override_access {
             return Ok(AccessResult::Allowed);
         }
-        check_access_with_lua(self.lua, access_ref, user, id, data, locale)
+        check_access_with_lua(self.lua, input)
     }
 
     fn field_read_denied(

@@ -78,6 +78,7 @@ pub enum FieldHookEvent {
 /// to keep the struct `'static` — `mlua::set_app_data` requires `T: 'static`,
 /// but the actual connection reference has a shorter lifetime. The caller
 /// guarantees the connection outlives the Lua call.
+#[derive(Clone, Copy)]
 pub(crate) struct TxContext {
     data: usize,
     vtable: usize,
@@ -128,16 +129,19 @@ unsafe impl Sync for TxContext {}
 /// The `crap.transaction(fn)` Lua API temporarily swaps `PoolContext`
 /// for `TxContext` during `fn` so a sequence of CRUD ops shares one
 /// tx for explicit multi-step atomicity.
+#[derive(Clone)]
 pub(crate) struct PoolContext(pub(crate) DbPool);
 
 /// Optional authenticated user context injected alongside `TxContext`.
 /// CRUD closures read this when overrideAccess = false.
+#[derive(Clone)]
 pub(crate) struct UserContext(pub(crate) Option<Document>);
 unsafe impl Send for UserContext {}
 unsafe impl Sync for UserContext {}
 
 /// Admin UI locale injected alongside TxContext/UserContext.
 /// Lua hooks read this to get the current user's preferred UI language.
+#[derive(Clone)]
 pub(crate) struct UiLocaleContext(pub(crate) Option<String>);
 
 /// Maximum Lua instructions per hook invocation. Stored in `app_data`.
@@ -251,17 +255,49 @@ impl Drop for HookDepthGuard<'_> {
     }
 }
 
-/// RAII guard that removes `TxContext`, `UserContext`, and `UiLocaleContext` from Lua `app_data` on drop.
-/// Prevents leaks when hooks return errors via `?`.
+/// RAII guard for the per-VM hook context (`TxContext` / `PoolContext`,
+/// `UserContext`, `UiLocaleContext`, `LuaCrudInfra`).
+///
+/// **Stack discipline (save/restore).** On construction the guard *snapshots*
+/// the current value of every slot it manages; on drop it *restores* those
+/// snapshots rather than blindly removing them. This makes the context
+/// **composable under nesting**: a guard set on a VM that already carries an
+/// outer context (e.g. `set_identity` on a VM mid-hook, or a nested hook) puts
+/// the parent's context back when it drops, instead of tearing it down. This is
+/// the same pattern as [`HookDepthGuard`], generalized to the whole context.
+///
+/// Restoring is sound for the raw-pointer `TxContext` because guards are
+/// lexically nested: the parent's connection always outlives the child guard,
+/// so the restored pointer is still live.
 pub(crate) struct TxContextGuard<'a> {
     lua: &'a Lua,
+    prev_tx: Option<TxContext>,
+    prev_pool: Option<PoolContext>,
+    prev_user: Option<UserContext>,
+    prev_locale: Option<UiLocaleContext>,
+    prev_infra: Option<LuaCrudInfra>,
 }
 
 impl<'a> TxContextGuard<'a> {
+    /// Snapshot the current value of every managed slot (for restore on drop).
+    /// In practice these are all `None` at the real call sites (guards are
+    /// installed at pool entry on a fresh VM), so this is near-free; it only
+    /// allocates when something is genuinely being shadowed by nesting.
+    fn snapshot(lua: &'a Lua) -> Self {
+        Self {
+            lua,
+            prev_tx: lua.app_data_ref::<TxContext>().map(|r| *r),
+            prev_pool: lua.app_data_ref::<PoolContext>().map(|r| (*r).clone()),
+            prev_user: lua.app_data_ref::<UserContext>().map(|r| (*r).clone()),
+            prev_locale: lua.app_data_ref::<UiLocaleContext>().map(|r| (*r).clone()),
+            prev_infra: lua.app_data_ref::<LuaCrudInfra>().map(|r| (*r).clone()),
+        }
+    }
+
     /// Set `TxContext` (conn-mode), `UserContext`, `UiLocaleContext`,
-    /// and optionally `LuaCrudInfra`, returning a guard that cleans up
-    /// on drop. Used by hooks and `crap.transaction(fn)` — all callers
-    /// where a single shared outer transaction is the right model.
+    /// and optionally `LuaCrudInfra`, returning a guard that restores the
+    /// previous context on drop. Used by hooks and `crap.transaction(fn)` —
+    /// all callers where a single shared outer transaction is the right model.
     pub(crate) fn set(
         lua: &'a Lua,
         conn: &dyn DbConnection,
@@ -269,6 +305,8 @@ impl<'a> TxContextGuard<'a> {
         ui_locale: Option<String>,
         infra: Option<LuaCrudInfra>,
     ) -> Self {
+        let guard = Self::snapshot(lua);
+
         lua.set_app_data(TxContext::new(conn));
         lua.set_app_data(UserContext(user));
         lua.set_app_data(UiLocaleContext(ui_locale));
@@ -277,7 +315,7 @@ impl<'a> TxContextGuard<'a> {
             lua.set_app_data(infra);
         }
 
-        Self { lua }
+        guard
     }
 
     /// Set `PoolContext` (pool-mode), `UserContext`, `UiLocaleContext`,
@@ -294,6 +332,8 @@ impl<'a> TxContextGuard<'a> {
         ui_locale: Option<String>,
         infra: Option<LuaCrudInfra>,
     ) -> Self {
+        let guard = Self::snapshot(lua);
+
         lua.set_app_data(PoolContext(pool));
         lua.set_app_data(UserContext(user));
         lua.set_app_data(UiLocaleContext(ui_locale));
@@ -302,17 +342,51 @@ impl<'a> TxContextGuard<'a> {
             lua.set_app_data(infra);
         }
 
-        Self { lua }
+        guard
+    }
+
+    /// Set only `UserContext` and `UiLocaleContext` (no `TxContext`/`PoolContext`,
+    /// so NO CRUD access). Used by the `after_read` and validation paths, where
+    /// field hooks and validators should see the current user + admin UI locale
+    /// but must not be given a transaction/pool to run CRUD against. Thanks to
+    /// the save/restore discipline this is safe to call even on a VM that
+    /// already carries an outer context — it restores it on drop.
+    pub(crate) fn set_identity(
+        lua: &'a Lua,
+        user: Option<Document>,
+        ui_locale: Option<String>,
+    ) -> Self {
+        let guard = Self::snapshot(lua);
+
+        lua.set_app_data(UserContext(user));
+        lua.set_app_data(UiLocaleContext(ui_locale));
+
+        guard
     }
 }
 
 impl Drop for TxContextGuard<'_> {
     fn drop(&mut self) {
-        self.lua.remove_app_data::<TxContext>();
-        self.lua.remove_app_data::<PoolContext>();
-        self.lua.remove_app_data::<UserContext>();
-        self.lua.remove_app_data::<UiLocaleContext>();
-        self.lua.remove_app_data::<LuaCrudInfra>();
+        // Restore the previous values (stack discipline) rather than removing,
+        // so a nested guard cannot tear down its parent's context.
+        restore_slot(self.lua, self.prev_tx.take());
+        restore_slot(self.lua, self.prev_pool.take());
+        restore_slot(self.lua, self.prev_user.take());
+        restore_slot(self.lua, self.prev_locale.take());
+        restore_slot(self.lua, self.prev_infra.take());
+    }
+}
+
+/// Restore one app-data slot to a snapshotted value: re-install it when the
+/// slot was previously set, otherwise remove it (it was absent before).
+fn restore_slot<T: Send + Sync + 'static>(lua: &Lua, prev: Option<T>) {
+    match prev {
+        Some(v) => {
+            lua.set_app_data(v);
+        }
+        None => {
+            lua.remove_app_data::<T>();
+        }
     }
 }
 
@@ -332,6 +406,51 @@ mod tests {
         assert_eq!(HookEvent::AfterDelete.as_str(), "after_delete");
         assert_eq!(HookEvent::BeforeBroadcast.as_str(), "before_broadcast");
         assert_eq!(HookEvent::BeforeRender.as_str(), "before_render");
+    }
+
+    fn current_user_id(lua: &Lua) -> Option<String> {
+        lua.app_data_ref::<UserContext>()
+            .and_then(|r| r.0.as_ref().map(|d| d.id.to_string()))
+    }
+
+    /// Stack discipline: a nested context guard must **restore** the parent's
+    /// context on drop, not remove it. This is the regression test for the
+    /// Example-B clobbering bug — without save/restore, dropping the inner
+    /// guard would wipe `UserContext`, leaving the outer scope with `nil`.
+    #[test]
+    fn context_guard_restores_outer_context_on_nested_drop() {
+        let lua = Lua::new();
+        let alice = Document::new("alice");
+        let bob = Document::new("bob");
+
+        let outer = TxContextGuard::set_identity(&lua, Some(alice), Some("en".to_string()));
+        assert_eq!(current_user_id(&lua).as_deref(), Some("alice"));
+
+        {
+            // Nested scope shadows the user with bob.
+            let _inner = TxContextGuard::set_identity(&lua, Some(bob), None);
+            assert_eq!(current_user_id(&lua).as_deref(), Some("bob"));
+            // `_inner` drops here — must put alice back, not remove the slot.
+        }
+
+        assert_eq!(
+            current_user_id(&lua).as_deref(),
+            Some("alice"),
+            "nested guard must restore the outer user, not tear it down"
+        );
+        assert_eq!(
+            lua.app_data_ref::<UiLocaleContext>()
+                .and_then(|r| r.0.clone())
+                .as_deref(),
+            Some("en"),
+            "outer ui_locale must survive a nested scope"
+        );
+
+        drop(outer);
+        assert!(
+            lua.app_data_ref::<UserContext>().is_none(),
+            "outermost guard removes the slot (nothing was there before)"
+        );
     }
 
     #[test]

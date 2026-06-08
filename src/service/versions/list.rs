@@ -3,6 +3,7 @@
 use crate::{
     core::document::VersionSnapshot,
     db::{AccessResult, query},
+    hooks::AccessCheckInput,
     service::{
         Def, ListVersionsInput, PaginatedResult, ServiceContext, ServiceError,
         helpers::enforce_access_constraints,
@@ -26,13 +27,16 @@ pub fn list_versions(
     let hooks = ctx.read_hooks()?;
     let table = ctx.version_table();
 
-    let access = hooks.check_access(
-        ctx.read_access_ref(),
-        ctx.user,
-        Some(input.parent_id),
-        None,
-        None,
-    )?;
+    let access = hooks.check_access(&AccessCheckInput {
+        access_ref: ctx.read_access_ref(),
+        user: ctx.user,
+        id: Some(input.parent_id),
+        data: None,
+        locale: None,
+        operation: "find",
+        collection: ctx.slug,
+        ui_locale: None,
+    })?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Read access denied".into()));
@@ -99,7 +103,13 @@ mod tests {
     struct NoopReadHooks;
 
     impl ReadHooks for NoopReadHooks {
-        fn before_read(&self, _hooks: &Hooks, _slug: &str, _op: &str) -> Result<()> {
+        fn before_read(
+            &self,
+            _hooks: &Hooks,
+            _slug: &str,
+            _op: &str,
+            _locale: Option<&str>,
+        ) -> Result<()> {
             Ok(())
         }
 
@@ -107,14 +117,7 @@ mod tests {
             doc
         }
 
-        fn check_access(
-            &self,
-            _access_ref: Option<&str>,
-            _user: Option<&Document>,
-            _id: Option<&str>,
-            _data: Option<&DocumentFields>,
-            _locale: Option<&str>,
-        ) -> Result<AccessResult> {
+        fn check_access(&self, _input: &AccessCheckInput<'_>) -> Result<AccessResult> {
             Ok(AccessResult::Allowed)
         }
 
@@ -172,14 +175,7 @@ mod tests {
             Vec::new()
         }
 
-        fn check_access(
-            &self,
-            _access_ref: Option<&str>,
-            _user: Option<&Document>,
-            _id: Option<&str>,
-            _data: Option<&DocumentFields>,
-            _locale: Option<&str>,
-        ) -> Result<AccessResult> {
+        fn check_access(&self, _input: &AccessCheckInput<'_>) -> Result<AccessResult> {
             Ok(AccessResult::Allowed)
         }
 

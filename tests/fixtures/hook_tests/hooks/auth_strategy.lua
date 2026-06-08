@@ -12,4 +12,13 @@ function M.api_key_auth(ctx)
     return nil
 end
 
+--- Credential strategy: verifies the submitted email + password reach the
+--- hook (the gRPC/admin form login passes them via ctx.email / ctx.password).
+function M.credential_auth(ctx)
+    if ctx.email == "admin@x.com" and ctx.password == "secret" then
+        return { id = "cred-user", email = ctx.email }
+    end
+    return nil
+end
+
 return M

@@ -3,6 +3,7 @@
 use crate::{
     core::{CollectionDefinition, Document},
     db::{AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query},
+    hooks::AccessCheckInput,
     service::{FindDocumentsInput, PaginatedResult, ServiceContext, ServiceError, helpers},
 };
 
@@ -39,13 +40,16 @@ pub fn find_documents(
         def.access.read.as_deref()
     };
 
-    let access = hooks.check_access(
+    let access = hooks.check_access(&AccessCheckInput {
         access_ref,
-        ctx.user,
-        None,
-        None,
-        input.locale_ctx.map(LocaleContext::access_locale),
-    )?;
+        user: ctx.user,
+        id: None,
+        data: None,
+        locale: input.locale_ctx.map(LocaleContext::access_locale),
+        operation: "find",
+        collection: ctx.slug,
+        ui_locale: None,
+    })?;
 
     if matches!(access, AccessResult::Denied) {
         let msg = if input.trash {
@@ -78,7 +82,12 @@ pub fn find_documents(
         fq.filters.extend(extra);
     }
 
-    hooks.before_read(&def.hooks, ctx.slug, "find")?;
+    hooks.before_read(
+        &def.hooks,
+        ctx.slug,
+        "find",
+        input.locale_ctx.map(LocaleContext::access_locale),
+    )?;
 
     let had_cursor = fq.after_cursor.is_some() || fq.before_cursor.is_some();
     let overfetch = input.cursor_enabled && had_cursor;

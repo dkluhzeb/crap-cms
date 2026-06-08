@@ -46,7 +46,7 @@ pub(in crate::mcp::tools) fn exec_find_by_id(
         .unwrap_or(ctx.config.depth.default_depth)
         .min(ctx.config.depth.max_depth);
 
-    let hooks = RunnerReadHooks::new(ctx.runner, &conn);
+    let hooks = RunnerReadHooks::new(ctx.runner, &conn, None, None);
     let svc_ctx = ServiceContext::collection(slug, def)
         .pool(ctx.pool)
         .conn(&conn)

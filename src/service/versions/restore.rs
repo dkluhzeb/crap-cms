@@ -10,7 +10,7 @@ use crate::{
     config::LocaleConfig,
     core::{Document, DocumentFields, FieldDefinition, FieldType, event::EventOperation},
     db::{AccessResult, query, query::helpers::global_table},
-    hooks::{LuaCrudInfra, ValidationCtx},
+    hooks::{AccessCheckInput, LuaCrudInfra, ValidationCtx},
     service::{RunnerWriteHooks, ServiceContext, ServiceError, helpers},
 };
 
@@ -215,13 +215,16 @@ pub(crate) fn restore_collection_version_core(
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.collection_def()?;
 
-    let access = write_hooks.check_access(
-        def.access.update.as_deref(),
-        ctx.user,
-        Some(document_id),
-        None,
-        None,
-    )?;
+    let access = write_hooks.check_access(&AccessCheckInput {
+        access_ref: def.access.update.as_deref(),
+        user: ctx.user,
+        id: Some(document_id),
+        data: None,
+        locale: None,
+        operation: "restore",
+        collection: ctx.slug,
+        ui_locale: None,
+    })?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Update access denied".into()));
@@ -245,6 +248,7 @@ pub(crate) fn restore_collection_version_core(
     let val_ctx = ValidationCtx::builder(conn, ctx.slug)
         .exclude_id(Some(document_id))
         .soft_delete(def.soft_delete)
+        .user(ctx.user)
         .build();
     write_hooks
         .validate_fields(&def.fields, &validation_data, &val_ctx)
@@ -326,8 +330,16 @@ pub(crate) fn restore_global_version_core(
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.global_def()?;
 
-    let access =
-        write_hooks.check_access(def.access.update.as_deref(), ctx.user, None, None, None)?;
+    let access = write_hooks.check_access(&AccessCheckInput {
+        access_ref: def.access.update.as_deref(),
+        user: ctx.user,
+        id: None,
+        data: None,
+        locale: None,
+        operation: "restore",
+        collection: ctx.slug,
+        ui_locale: None,
+    })?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Update access denied".into()));
@@ -350,7 +362,7 @@ pub(crate) fn restore_global_version_core(
     // Re-run schema validation against the restored data — see the
     // collection variant above for the full rationale.
     let validation_data = snapshot_to_validation_data(&version.snapshot);
-    let val_ctx = ValidationCtx::builder(conn, &gtable).build();
+    let val_ctx = ValidationCtx::builder(conn, &gtable).user(ctx.user).build();
     write_hooks
         .validate_fields(&def.fields, &validation_data, &val_ctx)
         .map_err(ServiceError::Validation)?;

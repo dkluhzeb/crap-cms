@@ -29,7 +29,7 @@ use crate::{
     },
     core::Document,
     db::DbPool,
-    hooks::HookRunner,
+    hooks::{HookRunner, lifecycle::AuthStrategyInput},
     service::{self, ServiceContext},
 };
 
@@ -43,8 +43,15 @@ fn run_auth_strategy_blocking(
     ctx: &HashMap<String, String>,
 ) -> anyhow::Result<Option<Document>> {
     let conn = pool.get()?;
+    let input = AuthStrategyInput {
+        collection,
+        headers: ctx,
+        email: None,
+        password: None,
+        remote_addr: None,
+    };
     hook_runner
-        .run_auth_strategy(hook_ref, collection, ctx, &conn)
+        .run_auth_strategy(hook_ref, &input, &conn)
         .map_err(|e| anyhow!("Auth callback hook error: {e:#}"))
 }
 

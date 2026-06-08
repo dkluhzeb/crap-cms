@@ -290,7 +290,13 @@ fn build_delete_filters(
             override_access,
             access_fn: access_ref,
             id: None,
-            deny_msg: "Delete access denied",
+            // Soft delete → "trash" (trash access fn); hard delete → "delete".
+            deny_msg: if soft_delete {
+                "Trash access denied"
+            } else {
+                "Delete access denied"
+            },
+            operation: if soft_delete { "trash" } else { "delete" },
             injecting_status: false,
         },
         &mut find_query.filters,

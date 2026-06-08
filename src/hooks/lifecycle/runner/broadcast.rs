@@ -118,6 +118,8 @@ impl HookRunner {
         collection: &str,
         operation: &str,
         data: DocumentFields,
+        document_id: &str,
+        edited_by: Option<&EventUser>,
     ) -> Result<Option<DocumentFields>> {
         let hook_refs = get_hook_refs(hooks, HookEvent::BeforeBroadcast);
 
@@ -128,6 +130,8 @@ impl HookRunner {
 
         let mut ctx = HookContext::builder(collection, operation)
             .data(data)
+            .document_id(document_id)
+            .edited_by(edited_by.cloned())
             .build();
 
         let lua = self.pool.acquire()?;
@@ -165,6 +169,8 @@ impl HookRunner {
         collection: &str,
         operation: &str,
         data: &DocumentFields,
+        document_id: &str,
+        edited_by: Option<&EventUser>,
     ) -> Result<bool> {
         match live {
             None => Ok(true), // absent = broadcast all
@@ -182,6 +188,13 @@ impl HookRunner {
                     data_table.set(k.as_str(), lua_api::json_to_lua(&lua, v)?)?;
                 }
                 ctx_table.set("data", data_table)?;
+                ctx_table.set("document_id", document_id)?;
+                if let Some(u) = edited_by {
+                    let eu = lua.create_table()?;
+                    eu.set("id", u.id.as_str())?;
+                    eu.set("email", u.email.as_str())?;
+                    ctx_table.set("edited_by", eu)?;
+                }
 
                 let result: Value = func.call(ctx_table)?;
                 match result {
@@ -230,7 +243,14 @@ fn publish_event_blocking(
         EventOperation::Delete => "delete",
     };
 
-    match runner.check_live_setting(live, &input.collection, op_str, &input.data) {
+    match runner.check_live_setting(
+        live,
+        &input.collection,
+        op_str,
+        &input.data,
+        input.document_id.as_ref(),
+        input.edited_by.as_ref(),
+    ) {
         Ok(false) => return,
         Err(e) => {
             warn!("live setting check error for {}: {e}", input.collection);
@@ -249,7 +269,14 @@ fn publish_event_blocking(
         edited_by,
     } = input;
 
-    let broadcast_data = match runner.run_before_broadcast(hooks, &collection, op_str, data) {
+    let broadcast_data = match runner.run_before_broadcast(
+        hooks,
+        &collection,
+        op_str,
+        data,
+        document_id.as_ref(),
+        edited_by.as_ref(),
+    ) {
         Ok(Some(d)) => d,
         Ok(None) => return,
         Err(e) => {

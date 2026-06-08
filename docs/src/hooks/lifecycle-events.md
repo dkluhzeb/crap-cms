@@ -22,6 +22,8 @@ Nine lifecycle events fire during CRUD operations and admin page rendering.
 
 In `after_change` and `after_delete` hooks, `context.data.id` contains the document ID. This is useful for queuing jobs or looking up the document after it's been written. In `before_delete` hooks, `context.data.id` is also available.
 
+`before_delete` and `after_delete` additionally receive the deleted document's full field data in `context.data` (captured before the row is removed), so you don't need to re-fetch — and on a hard delete you couldn't, since the row is already gone by `after_delete`.
+
 ## Write Lifecycle (create/update)
 
 ```

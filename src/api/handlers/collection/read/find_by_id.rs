@@ -55,7 +55,7 @@ fn find_by_id_blocking(input: FindByIdBlockingInput) -> Result<Option<content::D
     )?;
 
     let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-    let read_hooks = RunnerReadHooks::new(&input.runner, &conn);
+    let read_hooks = RunnerReadHooks::new(&input.runner, &conn, user_doc, None);
 
     let ctx = ServiceContext::collection(&input.collection, &input.def)
         .pool(&input.pool)

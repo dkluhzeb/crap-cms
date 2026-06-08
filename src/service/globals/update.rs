@@ -5,9 +5,9 @@ use std::{cell::RefCell, rc::Rc};
 use anyhow::Context as _;
 
 use crate::{
-    core::{Document, collection::GlobalDefinition, event::EventOperation},
+    core::{Document, DocumentFields, collection::GlobalDefinition, event::EventOperation},
     db::{AccessResult, DbConnection, LocaleContext, query, query::helpers::global_table},
-    hooks::{HookContext, LuaCrudInfra, ValidationCtx},
+    hooks::{AccessCheckInput, HookContext, LuaCrudInfra, ValidationCtx},
     service::{
         AfterChangeInput, RunnerWriteHooks, ServiceContext, ServiceError, WriteHooks, WriteInput,
         WriteResult, flush_queue, helpers as svc_helpers, run_after_change_hooks,
@@ -107,7 +107,9 @@ pub fn update_global_in_conn(
         ctx,
         write_hooks,
         def,
+        Some(&input.data),
         input.locale_ctx.map(LocaleContext::access_locale),
+        input.ui_locale.as_deref(),
     )?;
 
     let is_draft = input.draft && def.has_drafts();
@@ -125,7 +127,10 @@ pub fn update_global_in_conn(
     let final_ctx =
         run_global_before_write_hooks(write_hooks, ctx, def, &input, &gtable, is_draft, ui_locale)?;
 
-    let doc = persist_global_update(conn, ctx, def, &gtable, &final_ctx, &input, is_draft)?;
+    let mut doc = persist_global_update(conn, ctx, def, &gtable, &final_ctx, &input, is_draft)?;
+
+    // Hydrate join fields BEFORE after-change hooks so they see nested data.
+    query::hydrate_document(conn, &gtable, &def.fields, &mut doc, None, input.locale_ctx)?;
 
     let after_ctx = run_after_change_hooks(
         write_hooks,
@@ -133,7 +138,12 @@ pub fn update_global_in_conn(
         &def.fields,
         &doc,
         AfterChangeInput::builder(ctx.slug, "update")
-            .locale(input.locale)
+            .locale(
+                input
+                    .locale_ctx
+                    .map(LocaleContext::access_locale)
+                    .map(String::from),
+            )
             .draft(is_draft)
             .req_context(final_ctx.context)
             .user(ctx.user)
@@ -141,9 +151,6 @@ pub fn update_global_in_conn(
             .build(),
         conn,
     )?;
-
-    let mut doc = doc;
-    query::hydrate_document(conn, &gtable, &def.fields, &mut doc, None, input.locale_ctx)?;
 
     let mut read_denied = write_hooks.field_read_denied(
         &def.fields,
@@ -163,10 +170,20 @@ fn check_global_update_access(
     ctx: &ServiceContext,
     write_hooks: &dyn WriteHooks,
     def: &GlobalDefinition,
+    data: Option<&DocumentFields>,
     locale: Option<&str>,
+    ui_locale: Option<&str>,
 ) -> Result<()> {
-    let access =
-        write_hooks.check_access(def.access.update.as_deref(), ctx.user, None, None, locale)?;
+    let access = write_hooks.check_access(&AccessCheckInput {
+        access_ref: def.access.update.as_deref(),
+        user: ctx.user,
+        id: None,
+        data,
+        locale,
+        operation: "update",
+        collection: ctx.slug,
+        ui_locale,
+    })?;
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Update access denied".into()));
     }
@@ -194,7 +211,8 @@ fn run_global_before_write_hooks(
     let hook_data = input.data.clone();
     let hook_ctx = HookContext::builder(ctx.slug, "update")
         .data(hook_data)
-        .locale(input.locale.clone())
+        .document_id("default")
+        .locale(input.locale_ctx.map(LocaleContext::access_locale))
         .draft(is_draft)
         .user(ctx.user)
         .ui_locale(ui_locale)
@@ -205,6 +223,8 @@ fn run_global_before_write_hooks(
         .exclude_id(Some("default"))
         .draft(is_draft)
         .locale_ctx(input.locale_ctx)
+        .user(ctx.user)
+        .ui_locale(input.ui_locale.as_deref())
         .build();
 
     Ok(write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?)

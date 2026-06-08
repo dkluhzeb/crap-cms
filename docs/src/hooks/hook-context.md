@@ -7,7 +7,8 @@ Collection-level hooks receive a context table and must return a (potentially mo
 ```lua
 {
     collection = "posts",       -- Collection slug
-    operation = "create",       -- "create", "update", "delete", "find", "find_by_id", or "init"
+    operation = "create",       -- "create", "update", "delete", "find", "find_by_id", "get", or "init"
+    document_id = "abc123",     -- Affected document id; nil only in create's before-hooks (no row yet)
     data = {                    -- Document data (mutable in before-write hooks)
         title = "Hello World",
         slug = "hello-world",
@@ -16,10 +17,10 @@ Collection-level hooks receive a context table and must return a (potentially mo
         created_at = "...",     -- Present on read/update
         updated_at = "...",
     },
-    locale = "en",              -- Locale for this operation (nil if not locale-specific)
+    locale = "en",              -- Content locale this op targets (nil only when localization is disabled)
     draft = true,               -- Whether this is a draft save (versioned collections only)
     hook_depth = 0,             -- Current recursion depth (0 = top-level, 1+ = from Lua CRUD in hooks)
-    context = {                 -- Request-scoped shared table (persists across all hooks in the same request)
+    context = {                 -- Per-operation shared table (one write lifecycle — see "Context" below)
         -- Hooks can read and write arbitrary keys here to share data
     },
     user = {                    -- Authenticated user document (nil if unauthenticated)
@@ -53,17 +54,24 @@ return function(context)
 end
 ```
 
-**Delete hooks** receive only `{ id = "..." }` in `data` (not full document fields),
-so they use the generic `crap.HookContext`:
+**Delete hooks** (`before_delete` / `after_delete`) receive the deleted
+document's full field data in `data`, alongside `id` (and `soft_delete = true`
+for a soft delete). The snapshot is captured before the row is removed, so
+`after_delete` can still see the content even on a hard delete (where the row no
+longer exists to re-fetch). They use the generic `crap.HookContext`:
 
 ```lua
 ---@param context crap.HookContext
 ---@return crap.HookContext
 return function(context)
     local id = context.data.id
+    local title = context.data.title  -- the deleted document's fields
     return context
 end
 ```
+
+> A collection field literally named `id` or `soft_delete` is shadowed by those
+> context keys in delete hooks.
 
 For shared hooks that fire across multiple collections (e.g., via
 `crap.hooks.register()`), use the generic `crap.HookContext`.
@@ -184,31 +192,75 @@ function M.audit_hook(ctx)
 end
 ```
 
-## Context (Request-Scoped Shared Table)
+## Reading the Previous Document
 
-The `context` field is a request-scoped table that persists across all hooks in the same request. It allows hooks to share data with each other without relying on module-level state.
-
-Each hook in the chain receives the same `context` table, and any modifications made by one hook are visible to all subsequent hooks in the same request. The table starts empty at the beginning of each request.
-
-This is useful for:
-- Passing computed values from `before_validate` to `before_change` without recomputing
-- Sharing request metadata between hooks
-- Accumulating data across multiple hooks for use in `after_change`
+In a **before-write hook** (`before_validate`, `before_change`) the document has
+not been written yet, so the *currently persisted* row is still the old state.
+Fetch it on demand with `crap.collections.find_by_id` using `ctx.document_id`
+(the affected document's id — present on update/delete, `nil` on create):
 
 ```lua
--- In before_validate hook: compute and share a value
-function M.before_validate(ctx)
-    ctx.context.original_title = ctx.data.title
-    return ctx
-end
-
--- In after_change hook: use the shared value
-function M.after_change(ctx)
-    if ctx.context.original_title ~= ctx.data.title then
-        crap.log.info("Title changed from: " .. (ctx.context.original_title or "nil"))
+-- Reject any price decrease by comparing against the persisted value.
+function M.price_increase_only(ctx)
+    if ctx.operation ~= "update" then
+        return ctx
+    end
+    local old = crap.collections.find_by_id(ctx.collection, ctx.document_id, { overrideAccess = true })
+    if old and ctx.data.price < old.price then
+        error("price may only increase")
     end
     return ctx
 end
 ```
 
-> **Note:** The `context` table is not the same as module-level variables. Module-level variables persist across requests on the same VM (see [Hooks Overview](overview.md#state--module-caching)), while `context` is scoped to a single request and automatically cleaned up.
+This costs one read **only when a hook asks for it** — hooks that don't need the
+old document pay nothing. In an `after_change` hook the row already holds the
+*new* state, so to compare old-vs-new after the write, capture the old value in
+`before_change` and read it back via `ctx.context` (next section).
+
+## Context (Per-Operation Shared Table)
+
+The `context` field is a table scoped to a **single write operation** — one
+`create` / `update` / `delete` lifecycle and its `before_*` → `after_*` hooks.
+It lets those hooks share data without relying on module-level state. It starts
+empty at the beginning of each operation and is the canonical way to carry a
+value from a before-hook into an after-hook.
+
+> **Scope:** it is *not* request-scoped. A bulk operation that writes 100
+> documents runs 100 separate `before_*`→`after_*` cycles, each with its own
+> fresh `context`; nested CRUD (a hook that calls `crap.collections.*`) gets its
+> own `context` too. Data does not leak between documents or between operations.
+
+Use it to carry the pre-write document into `after_change` — the one thing the
+on-demand pattern above can't do post-write, since the row then holds the new
+state:
+
+```lua
+-- before_change: capture the persisted old value
+function M.capture_status(ctx)
+    local old = crap.collections.find_by_id(ctx.collection, ctx.document_id, { overrideAccess = true })
+    ctx.context.old_status = old and old.status
+    return ctx
+end
+
+-- after_change: react to the committed change using the captured value
+function M.audit_status(ctx)
+    if ctx.context.old_status ~= ctx.data.status then
+        crap.collections.audit_log.create({
+            collection = ctx.collection,
+            from = ctx.context.old_status,
+            to = ctx.data.status,
+        })
+    end
+    return ctx
+end
+```
+
+> **Never use Lua globals (module-level variables) to pass data between hooks.**
+> Hooks run on a **pool of Lua VMs**, and `before_*` and `after_*` may execute on
+> *different* VMs — so a global set in one hook may be invisible in the next.
+> Worse, pooled VMs are reused across requests, so a global written by one
+> request can leak into another user's request on the same VM. `ctx.context` is
+> immune to both: it is threaded between hooks at the Rust level, independent of
+> which VM runs each hook. (See [Hooks Overview](overview.md#state--module-caching)
+> for the VM-pool model.)

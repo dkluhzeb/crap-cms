@@ -55,7 +55,7 @@ fn list_versions_blocking(
     )?;
 
     let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-    let hooks = RunnerReadHooks::new(&input.runner, &conn);
+    let hooks = RunnerReadHooks::new(&input.runner, &conn, user_doc, None);
 
     let ctx = ServiceContext::collection(&input.collection, &input.def)
         .conn(&conn)

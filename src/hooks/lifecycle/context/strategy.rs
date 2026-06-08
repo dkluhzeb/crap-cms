@@ -18,4 +18,30 @@ pub struct AuthStrategyContext<'a> {
     pub headers: &'a HashMap<String, String>,
     /// Auth collection slug.
     pub collection: &'a str,
+    /// The submitted login identifier (email/username), when the strategy was
+    /// reached via a password-style login. `nil` for header/token flows (OAuth).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(optional)]
+    pub email: Option<&'a str>,
+    /// The submitted plaintext password, for strategies that verify credentials
+    /// against an external system (LDAP, a remote API). `nil` for header/token
+    /// flows. **Sensitive** — only your strategy hook receives it; never log it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(optional)]
+    pub password: Option<&'a str>,
+    /// The client's remote IP address, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(optional)]
+    pub remote_addr: Option<&'a str>,
+}
+
+/// Rust-side request bundle for `HookRunner::run_auth_strategy`. Each login
+/// surface (gRPC, admin form, OAuth callback) builds one; the runner converts
+/// it into the Lua-facing [`AuthStrategyContext`].
+pub struct AuthStrategyInput<'a> {
+    pub collection: &'a str,
+    pub headers: &'a HashMap<String, String>,
+    pub email: Option<&'a str>,
+    pub password: Option<&'a str>,
+    pub remote_addr: Option<&'a str>,
 }

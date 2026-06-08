@@ -46,6 +46,8 @@ pub async fn restore_confirm(
         auth_user.as_ref(),
         Some(&id),
         None,
+        "update",
+        &slug,
     ) {
         Ok(AccessResult::Denied) => {
             return forbidden(&state, "You don't have permission to update this item");
@@ -62,8 +64,8 @@ pub async fn restore_confirm(
     // runs an access check against the collection's `read` access ref, so
     // `ServiceContext.read_hooks` must be wired or it errors out with
     // "read_hooks not set" → 500. The version list handler does the same.
-    let read_hooks = RunnerReadHooks::new(&state.hook_runner, &conn);
     let user_doc = auth_user.as_ref().map(|Extension(u)| &u.user_doc);
+    let read_hooks = RunnerReadHooks::new(&state.hook_runner, &conn, user_doc, None);
     let version_ctx = service::ServiceContext::collection(&slug, &def)
         .conn(&conn)
         .read_hooks(&read_hooks)

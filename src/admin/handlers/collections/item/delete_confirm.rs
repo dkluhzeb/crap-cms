@@ -32,7 +32,7 @@ fn fetch_delete_title(
     user_doc: Option<&crate::core::Document>,
 ) -> Result<Option<String>, ()> {
     let conn = state.pool.get().map_err(|_| ())?;
-    let hooks = RunnerReadHooks::new(&state.hook_runner, &conn);
+    let hooks = RunnerReadHooks::new(&state.hook_runner, &conn, user_doc, None);
 
     let ctx = ServiceContext::collection(slug, def)
         .pool(&state.pool)
@@ -79,9 +79,28 @@ pub async fn delete_confirm(
         def.access.delete.as_deref()
     };
 
-    match check_access_or_forbid(&state, access_fn, auth_user.as_ref(), Some(&id), None) {
+    // A soft delete is a "trash" operation (gated by the trash access fn);
+    // a hard delete is "delete". Matches the actual delete action + the grid.
+    let (op, verb) = if def.soft_delete {
+        ("trash", "trash")
+    } else {
+        ("delete", "delete")
+    };
+
+    match check_access_or_forbid(
+        &state,
+        access_fn,
+        auth_user.as_ref(),
+        Some(&id),
+        None,
+        op,
+        &slug,
+    ) {
         Ok(AccessResult::Denied) => {
-            return forbidden(&state, "You don't have permission to delete this item");
+            return forbidden(
+                &state,
+                &format!("You don't have permission to {verb} this item"),
+            );
         }
         Err(resp) => return *resp,
         _ => {}

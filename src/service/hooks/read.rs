@@ -4,12 +4,12 @@
 use anyhow::Result;
 
 use crate::{
-    core::{Document, DocumentFields, FieldDefinition, collection::Hooks},
+    core::{Document, FieldDefinition, collection::Hooks},
     db::{AccessResult, DbConnection, query::JoinAccessCheck},
     hooks::{
         HookRunner,
         lifecycle::{
-            AfterReadCtx, HookContext, HookEvent,
+            AccessCheckInput, AfterReadCtx, HookContext, HookEvent,
             access::{check_access_with_lua, check_field_read_access_with_lua},
             apply_after_read_inner, run_hooks_inner,
         },
@@ -27,7 +27,13 @@ pub trait ReadHooks {
     /// # Errors
     ///
     /// Returns an error if any `before_read` hook fails or aborts the read.
-    fn before_read(&self, hooks: &Hooks, slug: &str, operation: &str) -> Result<()>;
+    fn before_read(
+        &self,
+        hooks: &Hooks,
+        slug: &str,
+        operation: &str,
+        locale: Option<&str>,
+    ) -> Result<()>;
 
     /// Apply `after_read` hooks to a single document.
     fn after_read_one(&self, ctx: &AfterReadCtx, doc: Document) -> Document;
@@ -48,14 +54,7 @@ pub trait ReadHooks {
     /// # Errors
     ///
     /// Returns an error if the access hook itself raises (e.g. a Lua runtime error).
-    fn check_access(
-        &self,
-        access_ref: Option<&str>,
-        user: Option<&Document>,
-        id: Option<&str>,
-        data: Option<&DocumentFields>,
-        locale: Option<&str>,
-    ) -> Result<AccessResult>;
+    fn check_access(&self, input: &AccessCheckInput<'_>) -> Result<AccessResult>;
 
     /// Return field names denied by read access control.
     /// Returns empty vec if access control is overridden.
@@ -72,18 +71,42 @@ pub trait ReadHooks {
 pub struct RunnerReadHooks<'a> {
     pub runner: &'a HookRunner,
     pub conn: &'a dyn DbConnection,
+    /// The authenticated user, exposed to `before_read` hooks as `ctx.user`.
+    pub user: Option<&'a Document>,
+    /// The admin UI locale, exposed to `before_read` hooks as `ctx.ui_locale`.
+    pub ui_locale: Option<&'a str>,
 }
 
 impl<'a> RunnerReadHooks<'a> {
-    pub fn new(runner: &'a HookRunner, conn: &'a dyn DbConnection) -> Self {
-        Self { runner, conn }
+    pub fn new(
+        runner: &'a HookRunner,
+        conn: &'a dyn DbConnection,
+        user: Option<&'a Document>,
+        ui_locale: Option<&'a str>,
+    ) -> Self {
+        Self {
+            runner,
+            conn,
+            user,
+            ui_locale,
+        }
     }
 }
 
 impl ReadHooks for RunnerReadHooks<'_> {
-    fn before_read(&self, hooks: &Hooks, slug: &str, operation: &str) -> Result<()> {
-        self.runner
-            .fire_before_read(hooks, slug, operation, DocumentFields::new())
+    fn before_read(
+        &self,
+        hooks: &Hooks,
+        slug: &str,
+        operation: &str,
+        locale: Option<&str>,
+    ) -> Result<()> {
+        let ctx = HookContext::builder(slug, operation)
+            .user(self.user)
+            .locale(locale)
+            .ui_locale(self.ui_locale)
+            .build();
+        self.runner.fire_before_read(hooks, ctx)
     }
 
     fn after_read_one(&self, ctx: &AfterReadCtx, doc: Document) -> Document {
@@ -94,16 +117,8 @@ impl ReadHooks for RunnerReadHooks<'_> {
         self.runner.apply_after_read_many(ctx, docs)
     }
 
-    fn check_access(
-        &self,
-        access_ref: Option<&str>,
-        user: Option<&Document>,
-        id: Option<&str>,
-        data: Option<&DocumentFields>,
-        locale: Option<&str>,
-    ) -> Result<AccessResult> {
-        self.runner
-            .check_access(access_ref, user, id, data, locale, self.conn)
+    fn check_access(&self, input: &AccessCheckInput<'_>) -> Result<AccessResult> {
+        self.runner.check_access(input, self.conn)
     }
 
     fn field_read_denied(
@@ -194,29 +209,39 @@ impl JoinAccessCheck for ReadHooksJoinGuard<'_> {
         &self,
         access_ref: Option<&str>,
         user: Option<&Document>,
+        collection: &str,
     ) -> anyhow::Result<AccessResult> {
-        self.hooks.check_access(access_ref, user, None, None, None)
+        self.hooks.check_access(&AccessCheckInput {
+            access_ref,
+            user,
+            id: None,
+            data: None,
+            locale: None,
+            operation: "find",
+            collection,
+            ui_locale: None,
+        })
     }
 }
 
 impl ReadHooks for LuaReadHooks<'_> {
-    fn check_access(
-        &self,
-        access_ref: Option<&str>,
-        user: Option<&Document>,
-        id: Option<&str>,
-        data: Option<&DocumentFields>,
-        locale: Option<&str>,
-    ) -> Result<AccessResult> {
+    fn check_access(&self, input: &AccessCheckInput<'_>) -> Result<AccessResult> {
         if self.override_access {
             return Ok(AccessResult::Allowed);
         }
-        check_access_with_lua(self.lua, access_ref, user, id, data, locale)
+        check_access_with_lua(self.lua, input)
     }
 
-    fn before_read(&self, hooks: &Hooks, slug: &str, operation: &str) -> Result<()> {
+    fn before_read(
+        &self,
+        hooks: &Hooks,
+        slug: &str,
+        operation: &str,
+        locale: Option<&str>,
+    ) -> Result<()> {
         let ctx = HookContext::builder(slug, operation)
             .user(self.user)
+            .locale(locale)
             .ui_locale(self.ui_locale)
             .build();
         run_hooks_inner(self.lua, hooks, HookEvent::BeforeRead, ctx)?;

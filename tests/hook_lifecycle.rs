@@ -25,8 +25,10 @@ use crap_cms::core::field::{FieldDefinition, FieldType};
 use crap_cms::db::query::AccessResult;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
+use crap_cms::hooks::AccessCheckInput;
 use crap_cms::hooks::lifecycle::{
-    AfterReadCtx, FieldWriteCtx, HookContext, HookRunner, ValidationCtx,
+    AfterReadCtx, AuthStrategyInput, EventAfterReadInput, FieldWriteCtx, HookContext, HookRunner,
+    ValidationCtx,
 };
 use serde_json::json;
 
@@ -96,6 +98,8 @@ fn before_change_hook_modifies_data() {
         context: ReqContext::new(),
         user: None,
         ui_locale: None,
+        document_id: None,
+        edited_by: None,
     };
 
     let mut conn = pool.get().expect("DB connection");
@@ -138,6 +142,8 @@ fn before_validate_trims_title() {
         context: ReqContext::new(),
         user: None,
         ui_locale: None,
+        document_id: None,
+        edited_by: None,
     };
 
     let mut conn = pool.get().expect("DB connection");
@@ -180,6 +186,8 @@ fn field_before_change_transforms_value() {
                 event: crap_cms::hooks::lifecycle::FieldHookEvent::BeforeChange,
                 collection: "articles",
                 operation: "create",
+                locale: None,
+                id: None,
             },
             FieldWriteCtx::builder(&tx).build(),
         )
@@ -208,6 +216,8 @@ fn registered_hook_fires_for_all_collections() {
         context: ReqContext::new(),
         user: None,
         ui_locale: None,
+        document_id: None,
+        edited_by: None,
     };
 
     let mut conn = pool.get().expect("DB connection");
@@ -270,6 +280,8 @@ fn run_before_write_full_lifecycle() {
         context: ReqContext::new(),
         user: None,
         ui_locale: None,
+        document_id: None,
+        edited_by: None,
     };
 
     let mut conn = pool.get().expect("DB connection");
@@ -323,6 +335,8 @@ fn run_before_write_fails_on_validation_error() {
         context: ReqContext::new(),
         user: None,
         ui_locale: None,
+        document_id: None,
+        edited_by: None,
     };
 
     let mut conn = pool.get().expect("DB connection");
@@ -397,7 +411,19 @@ fn check_access_none_ref_is_allowed() {
     let conn = pool.get().expect("DB connection");
 
     let result = runner
-        .check_access(None, None, None, None, None, &conn)
+        .check_access(
+            &AccessCheckInput {
+                access_ref: None,
+                user: None,
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
+            &conn,
+        )
         .expect("check_access failed");
     assert!(
         matches!(result, AccessResult::Allowed),
@@ -412,11 +438,16 @@ fn check_access_returns_allowed() {
 
     let result = runner
         .check_access(
-            Some("hooks.access.allow_all"),
-            None,
-            None,
-            None,
-            None,
+            &AccessCheckInput {
+                access_ref: Some("hooks.access.allow_all"),
+                user: None,
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
             &conn,
         )
         .expect("check_access failed");
@@ -432,7 +463,19 @@ fn check_access_returns_denied() {
     let conn = pool.get().expect("DB connection");
 
     let result = runner
-        .check_access(Some("hooks.access.deny_all"), None, None, None, None, &conn)
+        .check_access(
+            &AccessCheckInput {
+                access_ref: Some("hooks.access.deny_all"),
+                user: None,
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
+            &conn,
+        )
         .expect("check_access failed");
     assert!(
         matches!(result, AccessResult::Denied),
@@ -447,11 +490,16 @@ fn check_access_returns_constrained() {
 
     let result = runner
         .check_access(
-            Some("hooks.access.constrained"),
-            None,
-            None,
-            None,
-            None,
+            &AccessCheckInput {
+                access_ref: Some("hooks.access.constrained"),
+                user: None,
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
             &conn,
         )
         .expect("check_access failed");
@@ -483,11 +531,16 @@ fn check_access_with_user_context() {
 
     let result = runner
         .check_access(
-            Some("hooks.access.check_role"),
-            Some(&admin_user),
-            None,
-            None,
-            None,
+            &AccessCheckInput {
+                access_ref: Some("hooks.access.check_role"),
+                user: Some(&admin_user),
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
             &conn,
         )
         .expect("check_access failed");
@@ -508,11 +561,16 @@ fn check_access_with_user_context() {
 
     let result = runner
         .check_access(
-            Some("hooks.access.check_role"),
-            Some(&regular_user),
-            None,
-            None,
-            None,
+            &AccessCheckInput {
+                access_ref: Some("hooks.access.check_role"),
+                user: Some(&regular_user),
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
             &conn,
         )
         .expect("check_access failed");
@@ -524,11 +582,16 @@ fn check_access_with_user_context() {
     // No user at all should be denied
     let result = runner
         .check_access(
-            Some("hooks.access.check_role"),
-            None,
-            None,
-            None,
-            None,
+            &AccessCheckInput {
+                access_ref: Some("hooks.access.check_role"),
+                user: None,
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
             &conn,
         )
         .expect("check_access failed");
@@ -664,6 +727,7 @@ fn apply_after_read_transforms_doc() {
         fields: &def.fields,
         collection: "articles",
         operation: "find",
+        locale: None,
         user: None,
         ui_locale: None,
     };
@@ -704,6 +768,7 @@ fn apply_after_read_many_transforms_all() {
         fields: &def.fields,
         collection: "articles",
         operation: "find",
+        locale: None,
         user: None,
         ui_locale: None,
     };
@@ -740,6 +805,7 @@ fn apply_after_read_no_hooks_returns_same() {
         fields: &empty_fields,
         collection: "articles",
         operation: "find",
+        locale: None,
         user: None,
         ui_locale: None,
     };
@@ -767,8 +833,8 @@ fn fire_before_read_executes() {
 
     // fire_before_read should succeed without error for articles
     // (articles collection does not have before_read hooks, but it should not error)
-    let data = DocumentFields::new();
-    let result = runner.fire_before_read(&def.hooks, "articles", "find", data);
+    let ctx = HookContext::builder("articles", "find").build();
+    let result = runner.fire_before_read(&def.hooks, ctx);
     assert!(
         result.is_ok(),
         "fire_before_read should not error even with no before_read hooks defined"
@@ -776,6 +842,16 @@ fn fire_before_read_executes() {
 }
 
 // ── 4A. Auth Strategies ──────────────────────────────────────────────────────
+
+fn api_key_strategy_input(headers: &HashMap<String, String>) -> AuthStrategyInput<'_> {
+    AuthStrategyInput {
+        collection: "articles",
+        headers,
+        email: None,
+        password: None,
+        remote_addr: None,
+    }
+}
 
 #[test]
 fn auth_strategy_returns_user_on_valid_key() {
@@ -792,8 +868,7 @@ fn auth_strategy_returns_user_on_valid_key() {
     let conn = pool.get().expect("DB connection");
     let result = runner.run_auth_strategy(
         "hooks.auth_strategy.api_key_auth",
-        "articles",
-        &headers,
+        &api_key_strategy_input(&headers),
         &conn,
     );
     assert!(result.is_ok(), "run_auth_strategy should not error");
@@ -812,8 +887,7 @@ fn auth_strategy_returns_none_on_invalid_key() {
     let result = runner
         .run_auth_strategy(
             "hooks.auth_strategy.api_key_auth",
-            "articles",
-            &headers,
+            &api_key_strategy_input(&headers),
             &conn,
         )
         .expect("should not error");
@@ -830,12 +904,52 @@ fn auth_strategy_returns_none_on_missing_header() {
     let result = runner
         .run_auth_strategy(
             "hooks.auth_strategy.api_key_auth",
-            "articles",
-            &headers,
+            &api_key_strategy_input(&headers),
             &conn,
         )
         .expect("should not error");
     assert!(result.is_none(), "Missing header should return None");
+}
+
+/// Regression: a custom auth strategy must receive the submitted credentials
+/// (`ctx.email` / `ctx.password`). The gRPC login passed an empty context and
+/// no credentials, so a "verify against LDAP / external API" strategy was
+/// impossible there.
+#[test]
+fn auth_strategy_receives_credentials() {
+    let (_tmp, pool, _registry, runner) = setup();
+    let headers = HashMap::new();
+    let conn = pool.get().expect("DB connection");
+
+    let good = AuthStrategyInput {
+        collection: "articles",
+        headers: &headers,
+        email: Some("admin@x.com"),
+        password: Some("secret"),
+        remote_addr: Some("1.2.3.4"),
+    };
+    let ok = runner
+        .run_auth_strategy("hooks.auth_strategy.credential_auth", &good, &conn)
+        .expect("should not error");
+    assert!(
+        ok.is_some(),
+        "strategy must authenticate when ctx.email + ctx.password match"
+    );
+
+    let bad = AuthStrategyInput {
+        collection: "articles",
+        headers: &headers,
+        email: Some("admin@x.com"),
+        password: Some("wrong"),
+        remote_addr: None,
+    };
+    let denied = runner
+        .run_auth_strategy("hooks.auth_strategy.credential_auth", &bad, &conn)
+        .expect("should not error");
+    assert!(
+        denied.is_none(),
+        "strategy must reject a wrong password (proves ctx.password reaches it)"
+    );
 }
 
 #[test]
@@ -857,8 +971,7 @@ fn auth_strategy_has_crud_access() {
     let result = runner
         .run_auth_strategy(
             "hooks.auth_strategy.api_key_auth",
-            "articles",
-            &headers,
+            &api_key_strategy_input(&headers),
             &conn,
         )
         .expect("should not error");
@@ -873,7 +986,96 @@ fn auth_strategy_has_crud_access() {
 #[test]
 fn check_live_setting_none_allows() {
     let (_tmp, _pool, _registry, runner) = setup();
-    let result = runner.check_live_setting(None, "articles", "create", &DocumentFields::new());
+    let result = runner.check_live_setting(
+        None,
+        "articles",
+        "create",
+        &DocumentFields::new(),
+        "doc-1",
+        None,
+    );
     assert!(result.is_ok());
     assert!(result.unwrap(), "None live setting should allow broadcast");
+}
+
+/// Regression (#13): an `after_read` hook fired for a live-update event must
+/// report the REAL triggering operation (create/update/delete) and the event
+/// timestamp — not the synthetic `"subscribe"` op with no timestamp it used to.
+#[test]
+fn event_after_read_reports_real_operation_and_timestamp() {
+    let tmp = tempfile::tempdir().unwrap();
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("posts.lua"),
+        r#"
+crap.collections.define("posts", {
+    fields = {
+        { name = "title", type = "text" },
+    },
+    hooks = {
+        after_read = { "hooks.ev.record" },
+    },
+})
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("ev.lua"),
+        r"
+local M = {}
+
+-- Surface what the event after_read hook actually sees.
+function M.record(ctx)
+    ctx.data.seen_op = ctx.operation
+    ctx.data.seen_updated = ctx.data.updated_at
+    return ctx
+end
+
+return M
+",
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+
+    let def = registry.get_collection("posts").unwrap().clone();
+
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Hello"));
+
+    let processed = runner.apply_after_read_for_event(&EventAfterReadInput {
+        collection: "posts",
+        hooks: &def.hooks,
+        fields: &def.fields,
+        document_id: "doc-1",
+        data: &data,
+        user: None,
+        operation: "update",
+        timestamp: "2026-06-07T12:00:00Z",
+    });
+
+    assert_eq!(
+        processed.get_str("seen_op"),
+        Some("update"),
+        "event after_read must report the real operation, not 'subscribe'"
+    );
+    assert_eq!(
+        processed.get_str("seen_updated"),
+        Some("2026-06-07T12:00:00Z"),
+        "event after_read must expose the event timestamp as updated_at"
+    );
 }

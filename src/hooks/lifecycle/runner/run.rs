@@ -90,6 +90,10 @@ pub struct FieldHooksCall<'a> {
     pub event: FieldHookEvent,
     pub collection: &'a str,
     pub operation: &'a str,
+    /// The document id being processed (nil on create — no row yet).
+    pub id: Option<&'a str>,
+    /// Content locale for this operation (nil when not locale-scoped).
+    pub locale: Option<&'a str>,
 }
 
 impl HookRunner {

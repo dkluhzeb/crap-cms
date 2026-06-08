@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::job::JobStatus;
+use crap_cms::core::job::{JobRun, JobStatus};
 use crap_cms::db::query::jobs as job_query;
 use crap_cms::db::{DbConnection, DbValue, migrate, pool, query};
 use crap_cms::hooks;
@@ -271,16 +271,22 @@ fn purge_old_jobs() {
 
 // ── Job Execution (HookRunner) ──────────────────────────────────────────
 
+/// Build a minimal `JobRun` for driving `run_job_handler` directly in tests.
+fn job_run(slug: &str, data: &str, attempt: u32, max_attempts: u32) -> JobRun {
+    JobRun::builder("test-run-id", slug)
+        .data(data)
+        .attempt(attempt)
+        .max_attempts(max_attempts)
+        .build()
+}
+
 #[test]
 fn execute_echo_job_via_hook_runner() {
     let (_tmp, pool, _registry, runner) = setup();
     let result = runner
         .run_job_handler(
             "jobs.test_job.echo",
-            "test_echo_job",
-            "{\"hello\":\"world\"}",
-            1,
-            1,
+            &job_run("test_echo_job", "{\"hello\":\"world\"}", 1, 1),
             &pool,
         )
         .expect("run_job_handler");
@@ -297,10 +303,7 @@ fn execute_job_that_creates_document() {
     runner
         .run_job_handler(
             "jobs.test_job.create_post",
-            "test_create_post",
-            "{\"title\":\"From Job\"}",
-            1,
-            1,
+            &job_run("test_create_post", "{\"title\":\"From Job\"}", 1, 1),
             &pool,
         )
         .expect("run_job_handler");
@@ -319,11 +322,51 @@ fn execute_job_that_creates_document() {
     );
 }
 
+/// Regression: the job handler context's `job` must expose the run id, queue,
+/// priority, trigger source (`scheduled_by`), and `queued_at` — not just slug /
+/// attempt / `max_attempts`.
+#[test]
+fn job_handler_receives_run_metadata() {
+    let (_tmp, pool, _registry, runner) = setup();
+    let jr = JobRun::builder("run-42", "meta-job")
+        .queue("emails")
+        .priority(7)
+        .data("{}")
+        .attempt(1)
+        .max_attempts(3)
+        .scheduled_by("cron")
+        .unique_key("dedup-key-1")
+        .created_at("2026-01-01T00:00:00Z")
+        .build();
+
+    let result = runner
+        .run_job_handler("jobs.test_job.job_meta", &jr, &pool)
+        .expect("run_job_handler")
+        .expect("handler returned a value");
+    let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+
+    assert_eq!(json["id"], "run-42");
+    assert_eq!(json["queue"], "emails");
+    assert_eq!(json["priority"], 7);
+    assert_eq!(
+        json["scheduled_by"], "cron",
+        "handler must see who triggered it"
+    );
+    assert_eq!(json["queued_at"], "2026-01-01T00:00:00Z");
+    assert_eq!(
+        json["unique_key"], "dedup-key-1",
+        "handler must see the dedup unique_key"
+    );
+}
+
 #[test]
 fn execute_failing_job_returns_error() {
     let (_tmp, pool, _registry, runner) = setup();
-    let result =
-        runner.run_job_handler("jobs.test_job.fail", "test_failing_job", "{}", 1, 3, &pool);
+    let result = runner.run_job_handler(
+        "jobs.test_job.fail",
+        &job_run("test_failing_job", "{}", 1, 3),
+        &pool,
+    );
 
     assert!(result.is_err(), "Failing job should return an error");
     let err_msg = result.unwrap_err().to_string();

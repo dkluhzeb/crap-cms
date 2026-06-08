@@ -11,6 +11,7 @@ use crate::{
     hooks::{
         HookRunner,
         lifecycle::{
+            ConditionContext,
             execution::{
                 call_display_condition_with_lua, has_registered_hooks, resolve_hook_function,
             },
@@ -46,9 +47,10 @@ impl HookRunner {
         &self,
         func_ref: &str,
         form_data: &JsonValue,
+        ctx: &ConditionContext<'_>,
     ) -> Option<DisplayConditionResult> {
         let lua = self.pool.acquire().ok()?;
-        call_display_condition_with_lua(&lua, func_ref, form_data)
+        call_display_condition_with_lua(&lua, func_ref, form_data, ctx)
     }
 
     /// Evaluate display conditions for multiple fields using a single VM acquisition.
@@ -57,6 +59,7 @@ impl HookRunner {
     pub fn call_display_conditions_batch(
         &self,
         conditions: &[(&str, &JsonValue)],
+        ctx: &ConditionContext<'_>,
     ) -> HashMap<String, DisplayConditionResult> {
         if conditions.is_empty() {
             return HashMap::new();
@@ -67,7 +70,7 @@ impl HookRunner {
         let mut results = HashMap::new();
 
         for &(func_ref, form_data) in conditions {
-            if let Some(result) = call_display_condition_with_lua(&lua, func_ref, form_data) {
+            if let Some(result) = call_display_condition_with_lua(&lua, func_ref, form_data, ctx) {
                 results.insert(func_ref.to_string(), result);
             }
         }

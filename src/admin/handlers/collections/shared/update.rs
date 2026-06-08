@@ -34,8 +34,8 @@ use crate::{
     },
 };
 
-use super::render_form_validation_errors;
 use super::upload::{UploadParams, UploadResult, process_collection_upload};
+use super::{render_form_validation_errors, write_error_toast};
 
 /// Handle post-update success: commit upload, clean old files, enqueue conversions.
 fn handle_update_success(state: &AdminState, slug: &str, id: &str, upload: Option<UploadResult>) {
@@ -289,10 +289,14 @@ pub(in crate::admin::handlers::collections) async fn do_update(
                 render_form_validation_errors(state, &def, Some(id), &form_for_error, ve, auth_user)
                     .into_response()
             }
-            other => {
-                error!("Update error: {}", other);
-                redirect_response(&paths::collection_item(slug, id))
+            // The target document is gone (e.g. deleted in another tab) — a
+            // navigation case, not a save error. Redirect back rather than
+            // toast a generic "save failed".
+            ServiceError::NotFound(_) => {
+                redirect_response(&paths::collection_item(slug, id)).into_response()
             }
+            other => toast_only_error(&write_error_toast("Update", other, state.pool.kind()))
+                .into_response(),
         },
         Err(e) => {
             error!("Update task error: {}", e);

@@ -32,7 +32,7 @@ use crate::{
         event::{EventOperation, EventTarget, InvalidationReceiver, RecvError},
     },
     db::{AccessResult, FilterClause, query::filter::memory},
-    hooks::HookRunner,
+    hooks::{AccessCheckInput, EventAfterReadInput, HookRunner},
 };
 
 /// Outbound channel capacity per subscriber. Kept small — the pumping task uses
@@ -125,11 +125,16 @@ fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document>) -> SseAc
 
     for (slug, def) in &state.registry.collections {
         match state.hook_runner.check_access(
-            def.access.read.as_deref(),
-            user_doc,
-            None,
-            None,
-            None,
+            &AccessCheckInput {
+                access_ref: def.access.read.as_deref(),
+                user: user_doc,
+                id: None,
+                data: None,
+                locale: None,
+                operation: "subscribe",
+                collection: slug,
+                ui_locale: None,
+            },
             &tx,
         ) {
             Ok(AccessResult::Allowed) => {
@@ -155,11 +160,16 @@ fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document>) -> SseAc
 
     for (slug, def) in &state.registry.globals {
         match state.hook_runner.check_access(
-            def.access.read.as_deref(),
-            user_doc,
-            None,
-            None,
-            None,
+            &AccessCheckInput {
+                access_ref: def.access.read.as_deref(),
+                user: user_doc,
+                id: None,
+                data: None,
+                locale: None,
+                operation: "subscribe",
+                collection: slug,
+                ui_locale: None,
+            },
             &tx,
         ) {
             Ok(AccessResult::Allowed) => {
@@ -245,14 +255,16 @@ fn build_event_payload(
         }
         .unwrap_or_default();
 
-        let processed_data = hook_runner.apply_after_read_for_event(
-            slug_str,
-            &hooks,
-            &field_defs,
-            event.document_id.as_ref(),
-            &event.data,
-            user_doc,
-        );
+        let processed_data = hook_runner.apply_after_read_for_event(&EventAfterReadInput {
+            collection: slug_str,
+            hooks: &hooks,
+            fields: &field_defs,
+            document_id: event.document_id.as_ref(),
+            data: &event.data,
+            user: user_doc,
+            operation: op_str,
+            timestamp: event.timestamp.as_str(),
+        });
 
         let denied = access.denied_fields.get(slug_str);
 

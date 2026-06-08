@@ -6,8 +6,8 @@ use serde_json::Value;
 
 use crate::{
     core::Document,
-    db::{AccessResult, query, query::helpers::global_table},
-    hooks::{HookContext, HookEvent},
+    db::{AccessResult, LocaleContext, query, query::helpers::global_table},
+    hooks::{AccessCheckInput, HookContext, HookEvent},
     service::{
         AfterChangeInput, RunnerWriteHooks, ServiceContext, ServiceError, helpers,
         hooks::WriteHooks, run_after_change_hooks, unpublish_with_snapshot,
@@ -37,7 +37,16 @@ pub fn unpublish_global_document(ctx: &ServiceContext) -> Result<Document> {
     }
 
     // Access check
-    let access = wh.check_access(def.access.update.as_deref(), ctx.user, None, None, None)?;
+    let access = wh.check_access(&AccessCheckInput {
+        access_ref: def.access.update.as_deref(),
+        user: ctx.user,
+        id: None,
+        data: None,
+        locale: None,
+        operation: "unpublish",
+        collection: ctx.slug,
+        ui_locale: None,
+    })?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Update access denied".into()));
@@ -63,8 +72,9 @@ pub fn unpublish_global_document(ctx: &ServiceContext) -> Result<Document> {
 
     let hook_ctx = HookContext::builder(ctx.slug, "update")
         .data(doc.fields.clone())
+        .document_id("default")
         .draft(true)
-        .locale(None::<String>)
+        .locale(locale_ctx.as_ref().map(LocaleContext::access_locale))
         .user(ctx.user)
         .build();
 
@@ -84,19 +94,22 @@ pub fn unpublish_global_document(ctx: &ServiceContext) -> Result<Document> {
     doc.fields
         .insert("_status".to_string(), Value::String("draft".into()));
 
+    // Hydrate join fields BEFORE after-change hooks so they see nested data.
+    query::hydrate_document(&tx, &gtable, &def.fields, &mut doc, None, None)?;
+
     run_after_change_hooks(
         &wh,
         &def.hooks,
         &def.fields,
         &doc,
         AfterChangeInput::builder(ctx.slug, "update")
+            .draft(true)
+            .locale(locale_ctx.as_ref().map(|lc| lc.access_locale().to_string()))
             .req_context(final_ctx.context)
             .user(ctx.user)
             .build(),
         &tx,
     )?;
-
-    query::hydrate_document(&tx, &gtable, &def.fields, &mut doc, None, None)?;
 
     let mut read_denied = wh.field_read_denied(&def.fields, ctx.user, None);
     read_denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));

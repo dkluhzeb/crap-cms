@@ -16,9 +16,22 @@ pub struct ValidateContext<'a> {
     pub collection: &'a str,
     /// Name of the field being validated.
     pub field_name: &'a str,
-    /// Full document data.
+    /// The operation being validated: `"create"` or `"update"`. Lets a custom
+    /// validator branch (e.g. "immutable after create", or stricter on update).
+    pub operation: &'a str,
+    /// The document id on `update` (the row being edited); `nil` on `create`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(ty = "string", optional)]
+    pub id: Option<&'a str>,
+    /// The data in the *nearest scope*: the full document for a top-level field,
+    /// or the current row for a validator on a field inside an array/blocks row.
     #[lua(ty = "table<string, any>")]
     pub data: &'a HashMap<String, JsonValue>,
+    /// The full document being written. Equals `data` for top-level fields; for
+    /// a sub-field validator inside an array/blocks row it is the *parent*
+    /// document, so the validator can cross-reference fields outside its row.
+    #[lua(ty = "table<string, any>")]
+    pub document: &'a HashMap<String, JsonValue>,
     /// Authenticated user document (nil if unauthenticated or no auth
     /// collection).
     #[serde(skip_serializing_if = "Option::is_none")]

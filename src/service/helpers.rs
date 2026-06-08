@@ -25,6 +25,7 @@ pub(crate) fn run_after_change_hooks(
     after_data.insert("id".to_string(), Value::String(doc.id.to_string()));
     let after_ctx = HookContext::builder(input.slug, input.operation)
         .data(after_data)
+        .document_id(doc.id.to_string())
         .draft(input.is_draft)
         .locale(input.locale)
         .context(input.req_context)

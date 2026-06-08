@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
+use crate::hooks::lifecycle::validation::runner::is_empty_value;
 
 /// Check required constraint. For Array and has-many Relationship, "required"
 /// means at least one item.
@@ -16,12 +17,12 @@ pub(crate) fn check_required(
     field: &FieldDefinition,
     data_key: &str,
     value: Option<&Value>,
-    is_empty: bool,
+    required: bool,
     skip: bool,
     is_update: bool,
     errors: &mut Vec<FieldError>,
 ) {
-    if !field.required
+    if !required
         || skip
         || field.field_type == FieldType::Checkbox
         || (is_update && value.is_none())
@@ -29,7 +30,7 @@ pub(crate) fn check_required(
         return;
     }
 
-    if is_value_present(field, value, is_empty) {
+    if is_value_present(field, value, is_empty_value(value)) {
         return;
     }
 

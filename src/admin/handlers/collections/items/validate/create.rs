@@ -40,6 +40,8 @@ pub async fn validate_create(
         auth_user.as_ref(),
         None,
         None,
+        "create",
+        &slug,
     ) {
         Ok(AccessResult::Denied) => return validation_error_response_simple("Access denied"),
         Err(_) => return validation_error_response_simple("Access check failed"),

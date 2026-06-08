@@ -26,7 +26,12 @@ pub trait JoinAccessCheck {
     /// # Errors
     ///
     /// Returns an error if the implementing access hook raises (e.g. a Lua runtime error).
-    fn check(&self, access_ref: Option<&str>, user: Option<&Document>) -> Result<AccessResult>;
+    fn check(
+        &self,
+        access_ref: Option<&str>,
+        user: Option<&Document>,
+        collection: &str,
+    ) -> Result<AccessResult>;
 }
 
 /// Build a cache key for a populated document.

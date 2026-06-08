@@ -87,6 +87,8 @@ fn check_live_setting_disabled_blocks() {
         "articles",
         "create",
         &DocumentFields::new(),
+        "doc-1",
+        None,
     );
     assert!(result.is_ok());
     assert!(
@@ -104,19 +106,81 @@ fn check_live_setting_function() {
     let live = LiveSetting::Function("hooks.live.filter_published".to_string());
 
     let result = runner
-        .check_live_setting(Some(&live), "articles", "create", &DocumentFields::new())
+        .check_live_setting(
+            Some(&live),
+            "articles",
+            "create",
+            &DocumentFields::new(),
+            "doc-1",
+            None,
+        )
         .expect("should not error");
     assert!(result, "create should be allowed");
 
     let result = runner
-        .check_live_setting(Some(&live), "articles", "update", &DocumentFields::new())
+        .check_live_setting(
+            Some(&live),
+            "articles",
+            "update",
+            &DocumentFields::new(),
+            "doc-1",
+            None,
+        )
         .expect("should not error");
     assert!(result, "update should be allowed");
 
     let result = runner
-        .check_live_setting(Some(&live), "articles", "delete", &DocumentFields::new())
+        .check_live_setting(
+            Some(&live),
+            "articles",
+            "delete",
+            &DocumentFields::new(),
+            "doc-1",
+            None,
+        )
         .expect("should not error");
     assert!(!result, "delete should be suppressed");
+}
+
+/// Regression: the `live` filter function must receive `ctx.document_id` and
+/// `ctx.edited_by` — both were dropped before the filter, so it could not
+/// identify the document or who made the change ("don't echo my own edits").
+#[test]
+fn check_live_setting_receives_document_id_and_editor() {
+    use crap_cms::core::collection::LiveSetting;
+    use crap_cms::core::event::EventUser;
+    let (_tmp, _pool, _registry, runner) = setup();
+    let live = LiveSetting::Function("hooks.live.gate_on_id_and_editor".to_string());
+    let editor = EventUser::new("u1", "editor@x.com");
+
+    let call = |id: &str, editor: Option<&EventUser>| {
+        runner
+            .check_live_setting(
+                Some(&live),
+                "articles",
+                "update",
+                &DocumentFields::new(),
+                id,
+                editor,
+            )
+            .expect("no error")
+    };
+
+    // Matching id + matching editor → broadcast.
+    assert!(
+        call("broadcast-me", Some(&editor)),
+        "filter should see document_id + edited_by and allow"
+    );
+    // Different id → suppressed (proves document_id reached the filter).
+    assert!(
+        !call("other", Some(&editor)),
+        "filter should suppress when document_id differs"
+    );
+    // No editor → suppressed (proves edited_by reached the filter).
+    assert!(
+        !call("broadcast-me", None),
+        "filter should suppress when edited_by is nil"
+    );
 }
 
 // ── 4C. Field After Hooks ────────────────────────────────────────────────────
@@ -140,6 +204,7 @@ fn field_after_read_hook_transforms_value() {
         fields: &def.fields,
         collection: "articles",
         operation: "find",
+        locale: None,
         user: None,
         ui_locale: None,
     };
@@ -169,6 +234,8 @@ fn run_after_write_runs_hooks_with_crud_access() {
         context: ReqContext::new(),
         user: None,
         ui_locale: None,
+        document_id: None,
+        edited_by: None,
     };
     let result = runner.run_after_write(
         &def.hooks,
@@ -193,7 +260,7 @@ fn before_broadcast_no_hooks_passes_through() {
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Broadcast Test"));
 
-    let result = runner.run_before_broadcast(&def.hooks, "articles", "create", data);
+    let result = runner.run_before_broadcast(&def.hooks, "articles", "create", data, "doc-1", None);
     assert!(result.is_ok());
     let data = result.unwrap();
     assert!(
@@ -220,7 +287,7 @@ fn before_broadcast_transforms_data() {
     data.insert("title".to_string(), json!("Original"));
 
     let result = runner
-        .run_before_broadcast(&hooks, "articles", "create", data)
+        .run_before_broadcast(&hooks, "articles", "create", data, "doc-1", None)
         .expect("should not error");
     assert!(result.is_some(), "Should not suppress");
     let data = result.unwrap();
@@ -243,7 +310,7 @@ fn before_broadcast_suppresses_event() {
     let data = DocumentFields::new();
 
     let result = runner
-        .run_before_broadcast(&hooks, "articles", "create", data)
+        .run_before_broadcast(&hooks, "articles", "create", data, "doc-1", None)
         .expect("should not error");
     assert!(
         result.is_none(),
@@ -273,6 +340,8 @@ fn validate_required_field_errors() {
         context: ReqContext::new(),
         user: None,
         ui_locale: None,
+        document_id: None,
+        edited_by: None,
     };
 
     let mut conn = pool.get().expect("DB connection");
@@ -319,6 +388,7 @@ fn after_read_hooks_fire() {
         fields: &def.fields,
         collection: "articles",
         operation: "find",
+        locale: None,
         user: None,
         ui_locale: None,
     };
@@ -404,6 +474,7 @@ fn field_after_read_hooks_transform_values() {
         fields: &def.fields,
         collection: "articles",
         operation: "find",
+        locale: None,
         user: None,
         ui_locale: None,
     };
@@ -442,6 +513,7 @@ fn field_after_read_hooks_with_apply_after_read_many() {
         fields: &def.fields,
         collection: "articles",
         operation: "find",
+        locale: None,
         user: None,
         ui_locale: None,
     };
@@ -477,6 +549,8 @@ fn run_after_write_runs_field_after_change_hooks() {
         context: ReqContext::new(),
         user: None,
         ui_locale: None,
+        document_id: None,
+        edited_by: None,
     };
 
     let mut conn = pool.get().unwrap();
@@ -519,6 +593,8 @@ fn run_after_write_with_non_after_change_event() {
         context: ReqContext::new(),
         user: None,
         ui_locale: None,
+        document_id: None,
+        edited_by: None,
     };
 
     let mut conn = pool.get().unwrap();
@@ -555,6 +631,8 @@ fn run_field_hooks_without_conn() {
             event: FieldHookEvent::AfterRead,
             collection: "articles",
             operation: "find",
+            locale: None,
+            id: None,
         },
     );
     assert!(result.is_ok());
@@ -585,6 +663,8 @@ fn hook_context_passes_locale_and_draft() {
         context: ReqContext::new(),
         user: None,
         ui_locale: None,
+        document_id: None,
+        edited_by: None,
     };
 
     let mut conn = pool.get().unwrap();
@@ -621,6 +701,8 @@ fn hook_context_table_flows_through() {
         context,
         user: None,
         ui_locale: None,
+        document_id: None,
+        edited_by: None,
     };
 
     let mut conn = pool.get().unwrap();
@@ -657,6 +739,8 @@ fn field_before_validate_hook_trims_title() {
                 event: FieldHookEvent::BeforeValidate,
                 collection: "articles",
                 operation: "create",
+                locale: None,
+                id: None,
             },
             FieldWriteCtx::builder(&tx).build(),
         )
@@ -680,7 +764,14 @@ fn check_live_setting_function_returns_nil_means_false() {
     // suppress_broadcast returns nil, which should be treated as false
     let live = LiveSetting::Function("hooks.live.suppress_broadcast".to_string());
     let result = runner
-        .check_live_setting(Some(&live), "articles", "create", &DocumentFields::new())
+        .check_live_setting(
+            Some(&live),
+            "articles",
+            "create",
+            &DocumentFields::new(),
+            "doc-1",
+            None,
+        )
         .expect("should not error");
     assert!(!result, "nil return should mean suppress (false)");
 }
@@ -712,6 +803,8 @@ fn multiple_field_hooks_run_in_sequence() {
                 event: FieldHookEvent::BeforeValidate,
                 collection: "articles",
                 operation: "create",
+                locale: None,
+                id: None,
             },
             FieldWriteCtx::builder(&tx).build(),
         )
@@ -728,6 +821,8 @@ fn multiple_field_hooks_run_in_sequence() {
                 event: FieldHookEvent::AfterRead,
                 collection: "articles",
                 operation: "find",
+                locale: None,
+                id: None,
             },
         )
         .expect("after_read field hook");
@@ -764,6 +859,8 @@ fn run_before_write_with_user_context() {
         context: ReqContext::new(),
         user: Some(user),
         ui_locale: None,
+        document_id: None,
+        edited_by: None,
     };
 
     let mut conn = pool.get().unwrap();
@@ -800,6 +897,7 @@ fn apply_after_read_many_empty_hooks_passthrough() {
         fields: &fields,
         collection: "articles",
         operation: "find",
+        locale: None,
         user: None,
         ui_locale: None,
     };
@@ -842,7 +940,7 @@ fn registered_before_broadcast_suppresses_event() {
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Test"));
     let result = runner
-        .run_before_broadcast(&hooks, "articles", "create", data)
+        .run_before_broadcast(&hooks, "articles", "create", data, "doc-1", None)
         .expect("run_before_broadcast");
     assert!(
         result.is_none(),
@@ -883,7 +981,7 @@ fn registered_before_broadcast_transforms_data() {
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Test"));
     let result = runner
-        .run_before_broadcast(&hooks, "articles", "create", data)
+        .run_before_broadcast(&hooks, "articles", "create", data, "doc-1", None)
         .expect("run_before_broadcast");
     assert!(result.is_some());
     let result_data = result.unwrap();
@@ -984,6 +1082,8 @@ fn nested_group_field_hooks_execute() {
                 event: FieldHookEvent::BeforeChange,
                 collection: "nested_hooks",
                 operation: "create",
+                locale: None,
+                id: None,
             },
             FieldWriteCtx::builder(&tx).build(),
         )
@@ -1018,6 +1118,8 @@ fn nested_row_field_hooks_execute() {
                 event: FieldHookEvent::BeforeChange,
                 collection: "nested_hooks",
                 operation: "create",
+                locale: None,
+                id: None,
             },
             FieldWriteCtx::builder(&tx).build(),
         )
@@ -1047,6 +1149,8 @@ fn nested_group_after_read_hooks_execute() {
                 event: FieldHookEvent::AfterRead,
                 collection: "nested_hooks",
                 operation: "find",
+                locale: None,
+                id: None,
             },
         )
         .expect("field hooks failed");
@@ -1085,7 +1189,7 @@ fn before_broadcast_mutation_does_not_affect_stored_doc() {
     data.insert("title".to_string(), json!("original"));
 
     let broadcast = runner
-        .run_before_broadcast(&hooks, "articles", "create", data)
+        .run_before_broadcast(&hooks, "articles", "create", data, "doc-1", None)
         .expect("run_before_broadcast failed");
     let broadcast = broadcast.expect("broadcast should not be suppressed");
 

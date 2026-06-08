@@ -40,7 +40,7 @@ pub(in crate::mcp::tools) fn exec_count(
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
 
-    let hooks = RunnerReadHooks::new(ctx.runner, &conn);
+    let hooks = RunnerReadHooks::new(ctx.runner, &conn, None, None);
     let svc_ctx = ServiceContext::collection(slug, def)
         .pool(ctx.pool)
         .conn(&conn)

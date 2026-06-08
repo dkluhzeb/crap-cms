@@ -15,7 +15,11 @@ crap.fields.text({
 }),
 ```
 
-The condition references a Lua function using the standard hook ref format (`hooks.<collection>.<name>`). The function receives the current form data and returns **either** a condition table (client-side) or a boolean (server-side).
+The condition references a Lua function using the standard hook ref format (`hooks.<collection>.<name>`). The function is called as `function(form_data, ctx)` and returns **either** a condition table (client-side) or a boolean (server-side).
+
+The second `ctx` argument carries `collection`, `operation` (`"create"` or `"update"`), `user` (the admin), `ui_locale`, and `locale` — so a field can be shown only to certain users, only when editing, etc. It's optional: a `function(form_data)` that ignores it keeps working. A condition that uses `ctx` must return a **boolean** (server-evaluated); the client-side condition-table form can't see `ctx`.
+
+`ctx.operation` is correct on both the initial form render and live re-evaluation (the form sends it). `ctx.locale` is the editor's content locale on the initial render but is `nil` during live re-evaluation as you type (the live endpoint is locale-agnostic) — gate defensively if you branch on it.
 
 The `data` parameter is typed per-collection (`crap.data.Posts`, `crap.global_data.SiteSettings`) for IDE autocomplete. The type generator emits these types automatically.
 

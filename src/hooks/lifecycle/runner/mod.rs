@@ -14,4 +14,5 @@ mod vm_pool;
 pub use broadcast::PublishEventInput;
 pub use builder::HookRunnerBuilder;
 pub use hook_runner::HookRunner;
+pub use read_write::EventAfterReadInput;
 pub use run::{FieldHooksCall, FieldWriteCtx};

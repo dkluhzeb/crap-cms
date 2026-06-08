@@ -6,6 +6,9 @@ use crate::core::{Document, ReqContext};
 pub(crate) struct AfterChangeInput<'a> {
     pub slug: &'a str,
     pub operation: &'a str,
+    /// The resolved content locale (`access_locale`) for this write — surfaced
+    /// to after-change hooks as `ctx.locale`. Nil only when localization is
+    /// disabled.
     pub locale: Option<String>,
     pub is_draft: bool,
     pub req_context: ReqContext,

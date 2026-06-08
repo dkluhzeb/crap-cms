@@ -52,7 +52,7 @@ fn get_global_blocking(input: GetGlobalBlockingInput) -> Result<content::Documen
 
     // Access check is handled by service::get_global_document
     let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-    let read_hooks = RunnerReadHooks::new(&input.runner, &conn);
+    let read_hooks = RunnerReadHooks::new(&input.runner, &conn, user_doc, None);
 
     let ctx = ServiceContext::global(&input.slug, &input.def)
         .pool(&input.pool)

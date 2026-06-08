@@ -59,12 +59,17 @@ pub fn validate_document(
 
     let hook_data = input.data.clone();
 
-    let hook_ctx = HookContext::builder(ctx.slug, ctx.operation)
+    let mut hook_ctx_builder = HookContext::builder(ctx.slug, ctx.operation)
         .data(hook_data)
-        .locale(input.locale.clone())
+        .locale(input.locale_ctx.map(LocaleContext::access_locale))
         .draft(is_draft)
-        .user(user)
-        .build();
+        .user(user);
+    // On an update dry-run, expose the target id (matches the real write path,
+    // so a field hook's `ctx.id` agrees between validate and persist).
+    if let Some(id) = ctx.exclude_id {
+        hook_ctx_builder = hook_ctx_builder.document_id(id);
+    }
+    let hook_ctx = hook_ctx_builder.build();
 
     let val_ctx = ValidationCtx::builder(conn, ctx.table_name)
         .exclude_id(ctx.exclude_id)
@@ -72,6 +77,8 @@ pub fn validate_document(
         .locale_ctx(input.locale_ctx)
         .soft_delete(ctx.soft_delete)
         .collection_required_locales(ctx.required_locales)
+        .user(user)
+        .ui_locale(input.ui_locale.as_deref())
         .build();
 
     write_hooks.run_before_write(ctx.hooks, ctx.fields, hook_ctx, &val_ctx)?;

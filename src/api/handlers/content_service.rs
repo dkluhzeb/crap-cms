@@ -17,7 +17,7 @@ use crate::{
     },
     config::{EmailConfig, LocaleConfig, PasswordPolicy, ServerConfig},
     core::{
-        AuthUser, CollectionDefinition, DocumentFields, GlobalDefinition, Registry, SharedCache,
+        AuthUser, CollectionDefinition, GlobalDefinition, Registry, SharedCache,
         SharedEventTransport, SharedInvalidationTransport, SharedPasswordProvider, SharedStorage,
         SharedTokenProvider, auth::TokenProvider, collection::Surface, email::EmailRenderer,
         event::InProcessInvalidationBus, rate_limit::LoginRateLimiter,
@@ -26,7 +26,7 @@ use crate::{
         AccessResult, BoxedConnection, DbConnection, DbPool, SharedPopulateSingleflight,
         Singleflight, query,
     },
-    hooks::HookRunner,
+    hooks::{AccessCheckInput, HookRunner},
     service::{
         self, EmailContext,
         auth::{AuthFailure, AuthRequest, EvaluateDeps, Resolution},
@@ -361,20 +361,16 @@ impl ContentService {
     ///
     /// Free-standing helper — safe to call inside `spawn_blocking`.
     pub(in crate::api::handlers) fn check_access_blocking(
-        access_ref: Option<&str>,
-        auth_user: Option<&AuthUser>,
-        id: Option<&str>,
-        data: Option<&DocumentFields>,
+        input: &AccessCheckInput<'_>,
         hook_runner: &HookRunner,
         conn: &mut BoxedConnection,
     ) -> Result<AccessResult, Status> {
-        let user_doc = auth_user.map(|au| &au.user_doc);
         let tx = conn
             .transaction()
             .inspect_err(|e| error!("Access check tx error: {}", e))
             .map_err(|_| Status::internal("Internal error"))?;
         let result = hook_runner
-            .check_access(access_ref, user_doc, id, data, None, &tx)
+            .check_access(input, &tx)
             .inspect_err(|e| error!("Access check error: {}", e))
             .map_err(|_| Status::internal("Internal error"))?;
 

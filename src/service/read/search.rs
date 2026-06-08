@@ -3,6 +3,7 @@
 use crate::{
     core::{Document, upload},
     db::{AccessResult, LocaleContext, query},
+    hooks::AccessCheckInput,
     service::{PaginatedResult, SearchDocumentsInput, ServiceContext, ServiceError, helpers},
 };
 
@@ -30,13 +31,16 @@ pub fn search_documents(
     let hooks = ctx.read_hooks()?;
     let def = ctx.collection_def()?;
 
-    let access = hooks.check_access(
-        def.access.read.as_deref(),
-        ctx.user,
-        None,
-        None,
-        input.locale_ctx.map(LocaleContext::access_locale),
-    )?;
+    let access = hooks.check_access(&AccessCheckInput {
+        access_ref: def.access.read.as_deref(),
+        user: ctx.user,
+        id: None,
+        data: None,
+        locale: input.locale_ctx.map(LocaleContext::access_locale),
+        operation: "search",
+        collection: ctx.slug,
+        ui_locale: None,
+    })?;
 
     if matches!(access, AccessResult::Denied) {
         return Ok(PaginatedResult::default());

@@ -91,7 +91,7 @@ pub async fn search_collection(
     let locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale).unwrap_or(None);
     let user_doc = get_user_doc(auth_user.as_ref());
 
-    let read_hooks = service::RunnerReadHooks::new(&state.hook_runner, &conn);
+    let read_hooks = service::RunnerReadHooks::new(&state.hook_runner, &conn, user_doc, None);
 
     let search = if search_term.is_empty() {
         None

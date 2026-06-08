@@ -2,7 +2,7 @@
 
 use crate::{
     db::{AccessResult, LocaleContext, query},
-    hooks::{HookContext, ValidationCtx},
+    hooks::{AccessCheckInput, HookContext, ValidationCtx},
     service::{
         AfterChangeInput, PersistOptions, ServiceContext, WriteInput, WriteResult, persist_create,
         run_after_change_hooks,
@@ -32,14 +32,18 @@ pub fn create_document_in_conn(
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.collection_def()?;
 
-    // Collection-level access check
-    let access = write_hooks.check_access(
-        def.access.create.as_deref(),
-        ctx.user,
-        None,
-        None,
-        input.locale_ctx.map(LocaleContext::access_locale),
-    )?;
+    // Collection-level access check. The incoming data is exposed to the
+    // access function as `ctx.data` so it can gate on what is being written.
+    let access = write_hooks.check_access(&AccessCheckInput {
+        access_ref: def.access.create.as_deref(),
+        user: ctx.user,
+        id: None,
+        data: Some(&input.data),
+        locale: input.locale_ctx.map(LocaleContext::access_locale),
+        operation: "create",
+        collection: ctx.slug,
+        ui_locale: input.ui_locale.as_deref(),
+    })?;
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Create access denied".into()));
     }
@@ -70,7 +74,7 @@ pub fn create_document_in_conn(
     let hook_data = input.data.clone();
     let hook_ctx = HookContext::builder(ctx.slug, "create")
         .data(hook_data)
-        .locale(input.locale.clone())
+        .locale(input.locale_ctx.map(LocaleContext::access_locale))
         .draft(is_draft)
         .user(ctx.user)
         .ui_locale(ui_locale)
@@ -81,6 +85,8 @@ pub fn create_document_in_conn(
         .locale_ctx(input.locale_ctx)
         .soft_delete(def.soft_delete)
         .collection_required_locales(def.required_locales.as_ref())
+        .user(ctx.user)
+        .ui_locale(input.ui_locale.as_deref())
         .build();
 
     let final_ctx = write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?;
@@ -93,26 +99,10 @@ pub fn create_document_in_conn(
         .draft(is_draft)
         .build();
 
-    let doc = persist_create(ctx, &final_data, &opts)?;
+    let mut doc = persist_create(ctx, &final_data, &opts)?;
 
-    let after_ctx = run_after_change_hooks(
-        write_hooks,
-        &def.hooks,
-        &def.fields,
-        &doc,
-        AfterChangeInput::builder(ctx.slug, "create")
-            .locale(input.locale)
-            .draft(is_draft)
-            .req_context(final_ctx.context)
-            .user(ctx.user)
-            .ui_locale(ui_locale)
-            .build(),
-        conn,
-    )?;
-
-    // Hydrate join fields (arrays, blocks, has-many) so the returned document is complete
-    let mut doc = doc;
-
+    // Hydrate join fields (arrays, blocks, has-many) BEFORE after-change hooks so
+    // they can react to nested array/blocks/has-many data, not just scalar columns.
     query::hydrate_document(
         conn,
         ctx.slug,
@@ -122,7 +112,28 @@ pub fn create_document_in_conn(
         input.locale_ctx,
     )?;
 
-    // Strip read-denied fields AFTER hydration (hydration can add join data for denied fields)
+    let after_ctx = run_after_change_hooks(
+        write_hooks,
+        &def.hooks,
+        &def.fields,
+        &doc,
+        AfterChangeInput::builder(ctx.slug, "create")
+            .locale(
+                input
+                    .locale_ctx
+                    .map(LocaleContext::access_locale)
+                    .map(String::from),
+            )
+            .draft(is_draft)
+            .req_context(final_ctx.context)
+            .user(ctx.user)
+            .ui_locale(ui_locale)
+            .build(),
+        conn,
+    )?;
+
+    // Strip read-denied fields from the returned document, after the hooks have
+    // seen the full doc (hydration can add join data for denied fields).
     let mut read_denied = write_hooks.field_read_denied(
         &def.fields,
         ctx.user,

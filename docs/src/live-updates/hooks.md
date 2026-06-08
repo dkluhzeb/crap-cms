@@ -8,7 +8,7 @@ For every mutation event, the live-update pipeline runs in this strict order —
 2. **`before_broadcast` hooks** — collection-level first, then global registered hooks. Any hook returning `false`/`nil` suppresses the event and stops the chain.
 3. **EventBus dispatch** — the event is delivered to each matching subscriber, with per-subscriber access checks, `after_read` hooks (full mode only), and field stripping (full mode only).
 
-The `live` filter function and `before_broadcast` hooks both receive a context table with `{ collection, operation, data }` and have similar shapes, but they sit at different stages: `live` is the cheap gate, `before_broadcast` is the transformation/suppression stage.
+The `live` filter function and `before_broadcast` hooks both receive a context table with `{ collection, operation, data, document_id, edited_by }` and have similar shapes, but they sit at different stages: `live` is the cheap gate, `before_broadcast` is the transformation/suppression stage. `document_id` is the affected document's id, and `edited_by` is `{ id, email }` of the user who made the change (`nil` for anonymous changes) — useful for, e.g., suppressing an event for the user who triggered it.
 
 ## `before_broadcast`
 

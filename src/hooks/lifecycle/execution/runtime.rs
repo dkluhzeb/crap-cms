@@ -2,7 +2,7 @@
 //! hooks, dispatch collection-level + globally-registered handlers, and the
 //! shared helpers consumed by sibling execution modules.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Instant};
 
 use anyhow::{Context as _, Result, bail};
 use mlua::{Function as LuaFunction, Lua, Table, Value};
@@ -26,11 +26,7 @@ pub(crate) fn run_hooks_inner(
 ) -> Result<HookContext> {
     let hook_refs = get_hook_refs(hooks, event);
     let timing = !hook_refs.is_empty() && tracing::enabled!(tracing::Level::DEBUG);
-    let start = if timing {
-        Some(std::time::Instant::now())
-    } else {
-        None
-    };
+    let start = if timing { Some(Instant::now()) } else { None };
 
     for hook_ref in hook_refs {
         context = call_hook_ref(lua, hook_ref, context)?;

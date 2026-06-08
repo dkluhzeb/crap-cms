@@ -25,9 +25,12 @@ end
 | `field_name` | string | Name of the field being processed |
 | `collection` | string | Collection slug |
 | `operation` | string | `"create"`, `"update"`, `"find"`, `"find_by_id"` |
-| `data` | table | Full document data (read-only snapshot) |
+| `id` | string/nil | Document id on `update` / read; nil on `create` |
+| `data` | table | The **nearest scope** (read-only snapshot): the full document for a top-level field, or the current row for a hook on a field inside an array/blocks row |
+| `document` | table | The **full document** being written or read — a read-only snapshot taken before any field hook in this pass ran (it does not reflect earlier field hooks' changes). Matches `data` at the top level; for a sub-field hook inside an array/blocks row it's the parent document, so the hook can cross-reference fields outside its row |
 | `user` | table/nil | Authenticated user document (nil if unauthenticated) |
 | `ui_locale` | string/nil | Admin UI locale code (e.g., `"en"`, `"de"`) |
+| `locale` | string/nil | Content locale this operation targets (nil when localization is disabled). Distinct from `ui_locale` — this is the locale of the data being written or read |
 
 ### Typed Contexts
 

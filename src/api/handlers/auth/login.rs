@@ -15,7 +15,7 @@ use crate::{
     },
     core::{CollectionDefinition, Document, SharedPasswordProvider, Slug, auth::ClaimsBuilder},
     db::DbPool,
-    hooks::HookRunner,
+    hooks::{HookRunner, lifecycle::AuthStrategyInput},
     service::{self, ServiceContext, ServiceError, auth::authenticate_local},
 };
 
@@ -30,6 +30,8 @@ struct LoginBlockingInput {
     allows_password: bool,
     password_provider: SharedPasswordProvider,
     hook_runner: HookRunner,
+    headers: HashMap<String, String>,
+    remote_addr: String,
 }
 
 /// Try local email+password auth first, then any configured custom strategies.
@@ -68,13 +70,20 @@ fn login_blocking(input: &LoginBlockingInput) -> Result<Option<(Document, u64)>,
 
     // Fallback: try custom auth strategies
     if let Some(auth) = &input.def.auth {
+        let strategy_input = AuthStrategyInput {
+            collection: &input.slug,
+            headers: &input.headers,
+            email: Some(&input.email),
+            password: Some(&input.password),
+            remote_addr: Some(&input.remote_addr),
+        };
+
         for strategy in auth.strategies() {
-            if let Ok(Some(doc)) = input.hook_runner.run_auth_strategy(
-                strategy.authenticate,
-                &input.slug,
-                &HashMap::new(),
-                &conn,
-            ) {
+            if let Ok(Some(doc)) =
+                input
+                    .hook_runner
+                    .run_auth_strategy(strategy.authenticate, &strategy_input, &conn)
+            {
                 let ctx = ServiceContext::slug_only(&input.slug).conn(&conn).build();
 
                 // Strategy-authenticated users still need locked/verified checks
@@ -113,6 +122,7 @@ impl ContentService {
         let ip = request
             .remote_addr()
             .map_or_else(|| "unknown".to_string(), |a| a.ip().to_string());
+        let headers = self.metadata_headers(request.metadata());
         let req = request.into_inner();
 
         if self.login_limiter.is_blocked(&req.email) || self.ip_login_limiter.is_blocked(&ip) {
@@ -149,6 +159,8 @@ impl ContentService {
             allows_password,
             password_provider: self.password_provider.clone(),
             hook_runner: self.hook_runner.clone(),
+            headers,
+            remote_addr: ip.clone(),
         };
 
         let login_result = task::spawn_blocking(move || login_blocking(&input))

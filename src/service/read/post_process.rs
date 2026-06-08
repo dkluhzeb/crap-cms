@@ -133,6 +133,7 @@ pub(crate) fn post_process_single(
         fields: &def.fields,
         collection: slug,
         operation,
+        locale: opts.locale_ctx().map(LocaleContext::access_locale),
         user,
         ui_locale: opts.ui_locale(),
     };
@@ -263,6 +264,7 @@ pub(crate) fn post_process_docs(
         fields: &def.fields,
         collection: slug,
         operation: "find",
+        locale: opts.locale_ctx().map(LocaleContext::access_locale),
         user,
         ui_locale: opts.ui_locale(),
     };

@@ -3,6 +3,7 @@
 use crate::{
     core::Document,
     db::{AccessResult, LocaleContext, ops},
+    hooks::AccessCheckInput,
     service::{FindByIdInput, ServiceContext, ServiceError},
 };
 
@@ -34,13 +35,16 @@ pub fn find_document_by_id(
         def.access.read.as_deref()
     };
 
-    let access = hooks.check_access(
+    let access = hooks.check_access(&AccessCheckInput {
         access_ref,
-        ctx.user,
-        Some(input.id),
-        None,
-        input.locale_ctx.map(LocaleContext::access_locale),
-    )?;
+        user: ctx.user,
+        id: Some(input.id),
+        data: None,
+        locale: input.locale_ctx.map(LocaleContext::access_locale),
+        operation: "find_by_id",
+        collection: ctx.slug,
+        ui_locale: None,
+    })?;
 
     if matches!(access, AccessResult::Denied) {
         let msg = if input.include_deleted {
@@ -70,7 +74,12 @@ pub fn find_document_by_id(
         _ => None,
     };
 
-    hooks.before_read(&def.hooks, ctx.slug, "find_by_id")?;
+    hooks.before_read(
+        &def.hooks,
+        ctx.slug,
+        "find_by_id",
+        input.locale_ctx.map(LocaleContext::access_locale),
+    )?;
 
     let Some(mut doc) = ops::find_by_id_full(ops::FindByIdFullParams {
         conn,

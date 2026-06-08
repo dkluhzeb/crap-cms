@@ -13,7 +13,7 @@ use tracing::error;
 use crate::admin::{AdminState, auth_middleware::pages::admin_denied_response};
 use crate::core::{AuthUser, Document};
 use crate::db::{DbPool, query};
-use crate::hooks::HookRunner;
+use crate::hooks::{AccessCheckInput, HookRunner};
 
 /// Blocking body for the admin-access gate's `spawn_blocking`
 /// call. Pulls a connection from the pool and runs the configured
@@ -28,7 +28,19 @@ fn check_admin_access_blocking(
     user_doc: &Document,
 ) -> Option<Result<query::AccessResult, anyhow::Error>> {
     let conn = pool.get().ok()?;
-    Some(hook_runner.check_access(Some(access_ref), Some(user_doc), None, None, None, &conn))
+    Some(hook_runner.check_access(
+        &AccessCheckInput {
+            access_ref: Some(access_ref),
+            user: Some(user_doc),
+            id: None,
+            data: None,
+            locale: None,
+            operation: "admin",
+            collection: "admin",
+            ui_locale: None,
+        },
+        &conn,
+    ))
 }
 
 /// Gate 2: Check `admin.access` Lua function. Returns a 403

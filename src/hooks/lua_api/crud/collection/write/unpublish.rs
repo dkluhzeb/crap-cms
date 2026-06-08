@@ -167,6 +167,7 @@ pub(super) fn handle_unpublish(
     if hooks_enabled {
         let before_ctx = HookContext::builder(ctx.collection, "update")
             .data(existing_doc.fields.clone())
+            .document_id(ctx.id)
             .draft(true)
             .locale(ctx.locale_str)
             .user(ctx.hook_user)
@@ -216,6 +217,7 @@ pub(super) fn handle_unpublish(
 
         let after_ctx = HookContext::builder(ctx.collection, "update")
             .data(after_data)
+            .document_id(ctx.id)
             .draft(true)
             .locale(ctx.locale_str)
             .user(ctx.hook_user)

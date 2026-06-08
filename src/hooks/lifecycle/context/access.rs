@@ -25,7 +25,12 @@ pub struct AccessContext<'a> {
     /// Document ID (for `update` / `delete` / `find_by_id`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<&'a str>,
-    /// Incoming data (for `create` / `update`).
+    /// The **incoming** data for `create` / `update` (what is being written),
+    /// `nil` for reads/deletes. This is the submitted change, *not* the existing
+    /// stored row. To gate on existing persisted values (e.g. "users may only
+    /// edit their own rows"), return a **filter table** instead of a boolean —
+    /// e.g. `return { author_id = ctx.user.id }` — and the system enforces that
+    /// the target row matches it.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[lua(ty = "table<string, any>", optional)]
     pub data: Option<&'a DocumentFields>,
@@ -40,4 +45,37 @@ pub struct AccessContext<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[lua(optional)]
     pub locale: Option<&'a str>,
+    /// The operation triggering this check: `"create"`, `"update"`, `"delete"`,
+    /// `"trash"` (soft delete), `"undelete"`, `"unpublish"`, `"restore"`,
+    /// `"find"`, `"find_by_id"`, `"count"`, `"search"`, `"get"` (global read),
+    /// `"read"` (admin read-gating: nav, back-references, condition eval, upload
+    /// serve), `"subscribe"`, … Lets one shared access function branch on the
+    /// operation instead of registering a separate function per operation.
+    pub operation: &'a str,
+    /// The collection (or job) slug this check is for — so a function reused
+    /// across collections can tell which one it is gating.
+    pub collection: &'a str,
+    /// Admin UI locale code (e.g. `"en"`, `"de"`) when the check originates from
+    /// an admin request; `nil` otherwise (gRPC/REST/internal checks). Distinct
+    /// from `locale` (the content locale) — this is the operator's UI language.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(optional)]
+    pub ui_locale: Option<&'a str>,
+}
+
+/// Bundled inputs for an access check (`HookRunner::check_access`,
+/// `check_access_with_lua`, and the `ReadHooks`/`WriteHooks::check_access`
+/// trait methods). Grouped into a struct so the access-check signature stays
+/// within the argument-count budget as `operation`/`collection` were added.
+pub struct AccessCheckInput<'a> {
+    /// The access function ref (`"module.fn"`), or `None` when no access
+    /// function is configured (default-allow / default-deny applies).
+    pub access_ref: Option<&'a str>,
+    pub user: Option<&'a Document>,
+    pub id: Option<&'a str>,
+    pub data: Option<&'a DocumentFields>,
+    pub locale: Option<&'a str>,
+    pub operation: &'a str,
+    pub collection: &'a str,
+    pub ui_locale: Option<&'a str>,
 }

@@ -87,8 +87,11 @@ return M
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `headers` | table | HTTP request headers (lowercase keys, string values) |
+| `headers` | table | HTTP request headers (lowercase keys, string values). On the gRPC login path these are the request metadata entries. |
 | `collection` | string | Auth collection slug |
+| `email` | string? | The submitted login identifier, when the strategy was reached via a password-style login (gRPC `Login` / the admin form). `nil` for header/token flows (OAuth callback, per-request resolution). |
+| `password` | string? | The submitted plaintext password — for strategies that verify credentials against an external system (LDAP, a remote API). `nil` for header/token flows. **Sensitive:** only your strategy receives it; never log it. |
+| `remote_addr` | string? | The client's IP address, when known (set on the gRPC login path). |
 
 ## CRUD Access
 

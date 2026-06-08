@@ -185,6 +185,14 @@ pub struct FieldDefinition {
     #[serde(default)]
     #[lua(optional)]
     pub required: bool,
+    /// Conditional requirement: a Lua predicate ref (`"module.fn"`). When set,
+    /// the field is required whenever the predicate returns truthy for the
+    /// document being validated — in addition to a static `required = true`.
+    /// The predicate receives the validate context (`ctx.data` = the full
+    /// document), so it can require this field based on other fields' values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[lua(optional)]
+    pub required_when: Option<String>,
     /// Unique constraint (default: false).
     #[serde(default)]
     #[lua(optional)]
@@ -444,6 +452,13 @@ impl FieldDefinitionBuilder {
     #[must_use]
     pub fn required(mut self, v: bool) -> Self {
         self.inner.required = v;
+        self
+    }
+
+    /// Set a Lua predicate ref that makes the field conditionally required.
+    #[must_use]
+    pub fn required_when(mut self, v: impl Into<String>) -> Self {
+        self.inner.required_when = Some(v.into());
         self
     }
 

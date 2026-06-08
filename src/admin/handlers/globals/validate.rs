@@ -45,6 +45,8 @@ pub async fn validate_global(
         auth_user.as_ref(),
         None,
         None,
+        "update",
+        &slug,
     ) {
         Ok(AccessResult::Denied) => return validation_error_response_simple("Access denied"),
         Err(_) => return validation_error_response_simple("Access check failed"),

@@ -15,7 +15,10 @@
   <crap-validate-form validate-url="/admin/collections/{{collection.slug}}{{#if editing}}/{{document.id}}{{/if}}/validate">
     <crap-dirty-form>
       <crap-scroll-restore>
-        <crap-conditions collection="{{collection.slug}}">
+        <crap-conditions
+          collection="{{collection.slug}}"
+          operation="{{#if editing}}update{{else}}create{{/if}}"
+        >
           <form
             id="edit-form"
             {{#if editing}}

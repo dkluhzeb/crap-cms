@@ -34,7 +34,7 @@ use crate::core::{
     collection::{Auth, Surface},
 };
 use crate::db::{DbConnection, query};
-use crate::hooks::HookRunner;
+use crate::hooks::{HookRunner, lifecycle::AuthStrategyInput};
 use crate::service::{self, ServiceContext};
 
 /// Per-request inputs for [`evaluate`].
@@ -348,12 +348,19 @@ fn try_strategy(
 ) -> Option<Resolution> {
     let def = deps.registry.get_collection(&entry.slug)?;
     let auth = def.auth.as_ref()?;
-    match deps.hook_runner.run_auth_strategy(
-        &entry.authenticate,
-        &entry.slug,
-        request.headers,
-        deps.conn,
-    ) {
+    // Request-resolution path: identity comes from headers (SSO header, bearer,
+    // etc.), so there are no submitted login credentials to expose.
+    let strategy_input = AuthStrategyInput {
+        collection: &entry.slug,
+        headers: request.headers,
+        email: None,
+        password: None,
+        remote_addr: None,
+    };
+    match deps
+        .hook_runner
+        .run_auth_strategy(&entry.authenticate, &strategy_input, deps.conn)
+    {
         Ok(Some(doc)) => {
             if is_locked(&doc) {
                 debug!(

@@ -27,7 +27,7 @@ pub struct JobRun {
     /// `(slug, unique_key)` prevents a second active row with the
     /// same pair from being inserted.
     pub unique_key: Option<String>,
-    /// How this job was triggered: "cron", "manual", "hook", "grpc", "cli".
+    /// How this job was triggered: "cron", "hook", "grpc", "cli".
     pub scheduled_by: Option<String>,
     pub created_at: Option<String>,
     pub started_at: Option<String>,

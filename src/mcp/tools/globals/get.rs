@@ -17,7 +17,7 @@ pub(in crate::mcp::tools) fn exec_read_global(
 ) -> Result<String> {
     let def = ctx.registry.globals.get(slug).context("Global not found")?;
     let conn = ctx.pool.get().context("DB connection")?;
-    let hooks = RunnerReadHooks::new(ctx.runner, &conn);
+    let hooks = RunnerReadHooks::new(ctx.runner, &conn, None, None);
 
     let locale = args.get("locale").and_then(|v| v.as_str());
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;

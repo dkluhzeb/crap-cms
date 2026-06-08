@@ -61,7 +61,7 @@ pub async fn list_versions_page(
 
     let user_doc = get_user_doc(auth_user.as_ref());
     let pg = params.resolve(&state.config.pagination);
-    let hooks = RunnerReadHooks::new(&state.hook_runner, &conn);
+    let hooks = RunnerReadHooks::new(&state.hook_runner, &conn, user_doc, None);
 
     let ctx = ServiceContext::global(&slug, &def)
         .conn(&conn)

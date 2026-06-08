@@ -13,8 +13,8 @@ use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::collection::{CollectionDefinition, Labels};
 use crap_cms::core::field::{FieldDefinition, FieldType, LocalizedString};
 use crap_cms::core::{DocumentFields, Registry};
-use crap_cms::db::{DbPool, migrate, pool, query};
-use crap_cms::hooks::lifecycle::HookRunner;
+use crap_cms::db::{DbPool, LocaleContext, LocaleMode, migrate, pool, query};
+use crap_cms::hooks::{self, lifecycle::HookRunner};
 use crap_cms::service::{
     CreateManyItem, CreateManyOptions, DeleteManyOptions, ServiceContext, ServiceError,
     UpdateManyOptions, create_many, delete_many, update_many,
@@ -276,5 +276,223 @@ fn update_many_is_atomic_on_mid_operation_failure() {
         dupes.len(),
         0,
         "no row should have been committed with the duplicate title (operation rolled back)"
+    );
+}
+
+/// A `posts` collection (defined in Lua) whose `before_delete` hook
+/// unconditionally raises, so a per-document delete fails inside the bulk
+/// transaction. Seeded with `n` docs. Used to exercise the delete-side atomic
+/// rollback (the `create`/`update` cases use a unique-constraint violation; a
+/// hard delete has no unique constraint to trip, so we fail it via a hook).
+fn setup_with_delete_guard(n: usize) -> Setup {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("posts.lua"),
+        r#"
+crap.collections.define("posts", {
+    fields = {
+        { name = "title", type = "text", required = true },
+        { name = "status", type = "text" },
+    },
+    hooks = {
+        before_delete = { "hooks.guard.block_delete" },
+    },
+})
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("guard.lua"),
+        r#"
+local M = {}
+
+function M.block_delete(_ctx)
+    error("guard: deletion is blocked")
+end
+
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let def = registry.get_collection("posts").expect("posts def").clone();
+
+    let pool = pool::create_pool(tmp.path(), &config).expect("pool");
+    migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
+
+    for i in 0..n {
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!(format!("Title {i}")));
+        data.insert("status".to_string(), json!("draft"));
+        let mut conn = pool.get().expect("conn");
+        let tx = conn.transaction().expect("tx");
+        query::create(&tx, "posts", &def, &data, None).expect("create");
+        tx.commit().expect("commit");
+    }
+
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .expect("hook runner");
+
+    Setup {
+        _tmp: tmp,
+        pool,
+        runner,
+        def,
+    }
+}
+
+#[test]
+fn delete_many_is_atomic_on_mid_operation_failure() {
+    let s = setup_with_delete_guard(3);
+
+    // The `before_delete` hook raises, so the per-document delete errors inside
+    // the bulk transaction. That error aborts the whole operation (the tx is
+    // dropped without commit), so nothing is deleted — and it is a real
+    // failure, not a cap rejection.
+    let opts = DeleteManyOptions {
+        run_hooks: true,
+        max_documents: 0,
+        ..Default::default()
+    };
+
+    let err = delete_many(&ctx(&s), &[], &LocaleConfig::default(), &opts)
+        .expect_err("before_delete hook error should abort the operation");
+    assert!(
+        !matches!(err, ServiceError::LimitExceeded(_)),
+        "expected a real failure, not a cap error, got: {err:?}"
+    );
+
+    assert_eq!(
+        count_all(&s),
+        3,
+        "no document should be deleted after the batch rolled back"
+    );
+}
+
+/// Regression: a bulk `update_many` fires per-document `before_change` collection
+/// hooks via `update_many_single`. Those hooks must see the resolved content
+/// `ctx.locale` (the default "en" when localization is enabled), not nil — the
+/// `update_many_single` before-hook builder was missing `.locale(...)`.
+#[test]
+fn update_many_before_change_hook_sees_resolved_locale() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("posts.lua"),
+        r#"
+crap.collections.define("posts", {
+    fields = {
+        { name = "title", type = "text", required = true },
+        { name = "status", type = "text" },
+    },
+    hooks = {
+        before_change = { "hooks.lh.assert_locale" },
+    },
+})
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("lh.lua"),
+        r#"
+local M = {}
+
+-- On a bulk update, the before_change hook must see the resolved content
+-- locale ("en") and the admin ui_locale ("fr"), not nil.
+function M.assert_locale(ctx)
+    if ctx.operation == "update" then
+        if ctx.locale ~= "en" then
+            error("WRONG_LOCALE:" .. tostring(ctx.locale))
+        end
+        if ctx.ui_locale ~= "fr" then
+            error("WRONG_UI_LOCALE:" .. tostring(ctx.ui_locale))
+        end
+    end
+    return ctx
+end
+
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.locale.locales = vec!["en".to_string(), "de".to_string()];
+    config.locale.default_locale = "en".to_string();
+
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let def = registry.get_collection("posts").expect("posts def").clone();
+
+    let pool = pool::create_pool(tmp.path(), &config).expect("pool");
+    migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
+
+    for i in 0..2 {
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!(format!("Title {i}")));
+        data.insert("status".to_string(), json!("draft"));
+        let mut conn = pool.get().expect("conn");
+        let tx = conn.transaction().expect("tx");
+        query::create(&tx, "posts", &def, &data, None).expect("create");
+        tx.commit().expect("commit");
+    }
+
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .expect("hook runner");
+
+    let s = Setup {
+        _tmp: tmp,
+        pool,
+        runner,
+        def,
+    };
+
+    let lctx = LocaleContext {
+        mode: LocaleMode::Default,
+        config: config.locale.clone(),
+    };
+    let opts = UpdateManyOptions {
+        locale_ctx: Some(&lctx),
+        run_hooks: true,
+        draft: false,
+        ui_locale: Some("fr".to_string()),
+        max_documents: 100,
+    };
+    let mut data = DocumentFields::new();
+    data.insert("status".to_string(), json!("published"));
+
+    // If the before_change hook saw `ctx.locale == nil` on update, it errors and
+    // the bulk update fails.
+    let result = update_many(&ctx(&s), &[], &data, &config.locale, &opts);
+    assert!(
+        result.is_ok(),
+        "update_many before_change hook must see resolved locale 'en', got: {result:?}"
     );
 }

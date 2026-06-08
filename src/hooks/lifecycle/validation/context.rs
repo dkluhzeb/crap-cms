@@ -1,7 +1,7 @@
 //! Validation context bundling DB + request parameters consumed by every check.
 
 use crate::{
-    core::{RequiredLocales, registry::Registry},
+    core::{Document, RequiredLocales, registry::Registry},
     db::{DbConnection, LocaleContext},
 };
 
@@ -19,6 +19,12 @@ pub struct ValidationCtx<'a> {
     /// Collection-level `required_locales` default — the fallback for localized
     /// required fields that don't set their own (used by the completeness check).
     pub collection_required_locales: Option<&'a RequiredLocales>,
+    /// The authenticated user, exposed to custom `validate` functions as
+    /// `ctx.user` (via VM app-data). `None` when unauthenticated.
+    pub user: Option<&'a Document>,
+    /// The admin UI locale, exposed to custom `validate` functions as
+    /// `ctx.ui_locale`.
+    pub ui_locale: Option<&'a str>,
 }
 
 impl<'a> ValidationCtx<'a> {
@@ -38,6 +44,8 @@ pub struct ValidationCtxBuilder<'a> {
     registry: Option<&'a Registry>,
     soft_delete: bool,
     collection_required_locales: Option<&'a RequiredLocales>,
+    user: Option<&'a Document>,
+    ui_locale: Option<&'a str>,
 }
 
 impl<'a> ValidationCtxBuilder<'a> {
@@ -51,7 +59,19 @@ impl<'a> ValidationCtxBuilder<'a> {
             registry: None,
             soft_delete: false,
             collection_required_locales: None,
+            user: None,
+            ui_locale: None,
         }
+    }
+
+    pub fn user(mut self, user: Option<&'a Document>) -> Self {
+        self.user = user;
+        self
+    }
+
+    pub fn ui_locale(mut self, ui_locale: Option<&'a str>) -> Self {
+        self.ui_locale = ui_locale;
+        self
     }
 
     /// Set the collection-level `required_locales` default.
@@ -95,6 +115,8 @@ impl<'a> ValidationCtxBuilder<'a> {
             registry: self.registry,
             soft_delete: self.soft_delete,
             collection_required_locales: self.collection_required_locales,
+            user: self.user,
+            ui_locale: self.ui_locale,
         }
     }
 }

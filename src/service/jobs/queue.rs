@@ -1,8 +1,12 @@
 //! Queue a job run with optional access control.
 
 use crate::{
-    core::job::{JobDefinition, JobRun},
+    core::{
+        DocumentFields,
+        job::{JobDefinition, JobRun},
+    },
     db::{AccessResult, query},
+    hooks::AccessCheckInput,
     service::{ServiceContext, ServiceError},
 };
 
@@ -37,13 +41,24 @@ pub fn queue_job(ctx: &ServiceContext, input: &QueueJobInput) -> Result<JobRun, 
     let runner = ctx.runner()?;
 
     if input.job_def.access.is_some() {
+        // Expose the queued payload to the access fn as `ctx.data`, so it can
+        // gate on *what* is being queued, not only *who* is queuing.
+        let payload = input
+            .data
+            .and_then(|s| serde_json::from_str::<DocumentFields>(s).ok());
+
         let result = runner
             .check_access(
-                input.job_def.access.as_deref(),
-                ctx.user,
-                None,
-                None,
-                None,
+                &AccessCheckInput {
+                    access_ref: input.job_def.access.as_deref(),
+                    user: ctx.user,
+                    id: None,
+                    data: payload.as_ref(),
+                    locale: None,
+                    operation: "trigger",
+                    collection: ctx.slug,
+                    ui_locale: None,
+                },
                 conn,
             )
             .map_err(ServiceError::Internal)?;

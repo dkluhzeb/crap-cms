@@ -5,7 +5,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::HashMap;
 
 use crate::{
-    core::{Document, DocumentFields, FieldDefinition, FieldType, ReqContext},
+    core::{Document, DocumentFields, FieldDefinition, FieldType, ReqContext, event::EventUser},
     hooks::{
         lifecycle::{HookDepth, converters::document_to_lua_table},
         lua_api,
@@ -35,16 +35,23 @@ pub struct HookContext {
     /// Collection slug.
     pub collection: String,
     /// The operation being performed.
-    #[lua(ty = "\"create\"|\"update\"|\"delete\"|\"find\"|\"find_by_id\"|\"get_global\"|\"init\"")]
+    #[lua(ty = "\"create\"|\"update\"|\"delete\"|\"find\"|\"find_by_id\"|\"get\"|\"init\"")]
     pub operation: String,
     /// Document data. For read hooks, contains document fields including
-    /// `id` / timestamps. For delete hooks, contains only
-    /// `{ id = "..." }`. In `after_change` hooks, `data.id` carries the
-    /// new document ID.
+    /// `id` / timestamps. For `before_delete` / `after_delete` hooks,
+    /// contains the deleted document's fields plus `id` (and `soft_delete`
+    /// for a soft delete) — so a hook can inspect what is being removed; a
+    /// hard delete leaves no row to re-fetch, so `after_delete` relies on
+    /// this snapshot. In `after_change` hooks, `data.id` carries the new
+    /// document ID.
     #[lua(ty = "table<string, any>")]
     pub data: DocumentFields,
-    /// Current locale code (nil if localization disabled or default
-    /// locale).
+    /// The content locale this operation targets (e.g. `"en"`, `"de"`) — the
+    /// requested locale, or the default locale when none was given. Nil when
+    /// localization is disabled (and on the locale-agnostic `before_delete` /
+    /// `after_delete` hooks, which remove the whole row across all locales).
+    /// Otherwise the same resolved value every hook surface sees (field hooks,
+    /// validators, access functions).
     pub locale: Option<String>,
     /// `true` when this is a draft save (only set for collections with
     /// `versions.drafts` enabled).
@@ -61,6 +68,19 @@ pub struct HookContext {
     /// Admin UI locale code (e.g., `"en"`, `"de"`). Nil if not set or
     /// called from gRPC without locale context.
     pub ui_locale: Option<String>,
+    /// The id of the document this event targets. Populated across the write
+    /// lifecycle — `update`/`delete` before- and after-hooks, `after_change` on
+    /// create (the freshly assigned id; `nil` in create's before-hooks, where no
+    /// row exists yet), and `"default"` for globals. Also set on live-broadcast
+    /// hooks (`before_broadcast`). The read lifecycle (`after_read`) leaves this
+    /// `nil` and carries the id inside `data` instead.
+    #[lua(optional)]
+    pub document_id: Option<String>,
+    /// The user who caused a live-broadcast mutation. Set on `before_broadcast`;
+    /// `nil` elsewhere or for anonymous changes. (Distinct from `user`, the
+    /// caller of a request — broadcast fires post-commit with no request user.)
+    #[lua(ty = "{ id: string, email: string }", optional)]
+    pub edited_by: Option<EventUser>,
 }
 
 impl HookContext {
@@ -95,6 +115,15 @@ impl HookContext {
         }
         if let Some(ref doc) = self.user {
             tbl.set("user", document_to_lua_table(lua, doc)?)?;
+        }
+        if let Some(ref id) = self.document_id {
+            tbl.set("document_id", id.as_str())?;
+        }
+        if let Some(ref u) = self.edited_by {
+            let eu = lua.create_table()?;
+            eu.set("id", u.id.as_str())?;
+            eu.set("email", u.email.as_str())?;
+            tbl.set("edited_by", eu)?;
         }
 
         Ok(tbl)

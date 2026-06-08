@@ -48,7 +48,7 @@ pub async fn render_custom_page(
     let registered = state.custom_pages.get(&slug);
     if let Some(access_ref) = registered.and_then(|p| p.access.as_deref()) {
         let user_doc = get_user_doc(auth_user.as_ref());
-        if !has_read_access(&state, Some(access_ref), user_doc) {
+        if !has_read_access(&state, Some(access_ref), user_doc, "") {
             return forbidden(&state, "You don't have permission to view this page");
         }
     }

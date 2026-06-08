@@ -58,7 +58,7 @@ fn fetch_version_data(
         return Err(Box::new(server_error(state, "Database error")));
     };
 
-    let hooks = RunnerReadHooks::new(&state.hook_runner, &conn);
+    let hooks = RunnerReadHooks::new(&state.hook_runner, &conn, user, None);
     let ctx = ServiceContext::collection(slug, def)
         .conn(&conn)
         .read_hooks(&hooks)

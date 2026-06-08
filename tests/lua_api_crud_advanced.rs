@@ -759,6 +759,8 @@ crap.collections.define("items", {
         context: ReqContext::new(),
         user: None,
         ui_locale: None,
+        document_id: None,
+        edited_by: None,
     };
 
     let mut conn = pool.get().expect("conn");
@@ -810,6 +812,8 @@ fn context_starts_empty() {
         context: ReqContext::new(),
         user: None,
         ui_locale: None,
+        document_id: None,
+        edited_by: None,
     };
 
     assert!(ctx.context.is_empty(), "Context should start empty");
@@ -852,6 +856,8 @@ fn after_hook_has_crud_access() {
         context: ReqContext::new(),
         user: None,
         ui_locale: None,
+        document_id: None,
+        edited_by: None,
     };
     let result =
         runner.run_after_write(&hooks, &def.fields, HookEvent::AfterChange, ctx, &tx, None);
@@ -920,6 +926,8 @@ fn after_hook_error_rolls_back() {
         context: ReqContext::new(),
         user: None,
         ui_locale: None,
+        document_id: None,
+        edited_by: None,
     };
     let result =
         runner.run_after_write(&hooks, &def.fields, HookEvent::AfterChange, ctx, &tx, None);
@@ -966,6 +974,8 @@ fn context_flows_to_after_hooks() {
         context: req_context,
         user: None,
         ui_locale: None,
+        document_id: None,
+        edited_by: None,
     };
 
     let result = runner.run_after_write(&hooks, &[], HookEvent::AfterChange, ctx, &tx, None);

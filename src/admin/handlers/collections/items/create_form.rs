@@ -20,12 +20,13 @@ use crate::{
         handlers::shared::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
             build_locale_template_data, check_access_or_forbid, enrich_field_contexts,
-            extract_editor_locale, forbidden, is_non_default_locale, not_found, paths, render_page,
-            split_sidebar_fields,
+            extract_editor_locale, forbidden, get_user_doc, is_non_default_locale, not_found,
+            paths, render_page, split_sidebar_fields,
         },
     },
     core::{AuthUser, Claims, CollectionDefinition, DocumentFields},
     db::AccessResult,
+    hooks::ConditionContext,
 };
 
 /// Build, enrich, and split the field contexts for the create form.
@@ -33,6 +34,7 @@ fn prepare_create_fields(
     state: &AdminState,
     def: &CollectionDefinition,
     editor_locale: Option<&str>,
+    auth_user: Option<&Extension<AuthUser>>,
 ) -> (Vec<FieldContext>, Vec<FieldContext>) {
     let non_default_locale = is_non_default_locale(state, editor_locale);
     let empty: HashMap<String, String> = HashMap::new();
@@ -50,12 +52,21 @@ fn prepare_create_fields(
             .build(),
     );
 
+    let cond_ctx = ConditionContext {
+        collection: &def.slug,
+        operation: "create",
+        user: get_user_doc(auth_user),
+        ui_locale: auth_user.map(|Extension(au)| au.ui_locale.as_str()),
+        locale: editor_locale,
+    };
+
     apply_display_conditions(
         &mut fields,
         &def.fields,
         &json!({}),
         &state.hook_runner,
         true,
+        &cond_ctx,
     );
 
     if def.is_auth_collection() {
@@ -116,6 +127,8 @@ pub async fn create_form(
         auth_user.as_ref(),
         None,
         None,
+        "create",
+        &slug,
     ) {
         Ok(AccessResult::Denied) => {
             return forbidden(
@@ -129,7 +142,7 @@ pub async fn create_form(
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let (main_fields, sidebar_fields) =
-        prepare_create_fields(&state, &def, editor_locale.as_deref());
+        prepare_create_fields(&state, &def, editor_locale.as_deref(), auth_user.as_ref());
     let (_locale_ctx, locale_data) = build_locale_template_data(&state, editor_locale.as_deref());
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);

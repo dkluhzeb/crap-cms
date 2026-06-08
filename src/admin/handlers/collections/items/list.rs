@@ -65,7 +65,7 @@ fn fetch_list_documents(
         .as_ref()
         .map(|Extension(au)| au.user_doc.clone());
 
-    let hooks = RunnerReadHooks::new(&args.state.hook_runner, &conn);
+    let hooks = RunnerReadHooks::new(&args.state.hook_runner, &conn, user_doc.as_ref(), None);
     let ctx = ServiceContext::collection(args.slug, args.def)
         .pool(&args.state.pool)
         .conn(&conn)

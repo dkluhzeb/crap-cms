@@ -104,6 +104,8 @@ pub(super) async fn update_upload(
         user_doc,
         Some(&id),
         "Update access denied",
+        "update",
+        &def.slug,
     ) {
         return *resp;
     }

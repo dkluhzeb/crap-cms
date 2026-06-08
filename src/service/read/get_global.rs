@@ -3,7 +3,7 @@
 use crate::{
     core::Document,
     db::{AccessResult, LocaleContext, query},
-    hooks::lifecycle::AfterReadCtx,
+    hooks::{AccessCheckInput, lifecycle::AfterReadCtx},
     service::{GetGlobalInput, ServiceContext, ServiceError, helpers},
 };
 
@@ -23,13 +23,18 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
     let hooks = ctx.read_hooks()?;
     let def = ctx.global_def()?;
 
-    let access = hooks.check_access(
-        def.access.read.as_deref(),
-        ctx.user,
-        None,
-        None,
-        input.locale_ctx.map(LocaleContext::access_locale),
-    )?;
+    let access = hooks.check_access(&AccessCheckInput {
+        access_ref: def.access.read.as_deref(),
+        user: ctx.user,
+        id: None,
+        data: None,
+        locale: input.locale_ctx.map(LocaleContext::access_locale),
+        // Match this global-read's own `before_read` / `after_read` hooks, which
+        // report `"get"` — a global has no collection-style `find`.
+        operation: "get",
+        collection: ctx.slug,
+        ui_locale: input.ui_locale,
+    })?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Read access denied".into()));
@@ -42,7 +47,12 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
         )));
     }
 
-    hooks.before_read(&def.hooks, ctx.slug, "get")?;
+    hooks.before_read(
+        &def.hooks,
+        ctx.slug,
+        "get",
+        input.locale_ctx.map(LocaleContext::access_locale),
+    )?;
 
     let mut doc = query::get_global(conn, ctx.slug, def, input.locale_ctx)?;
 
@@ -60,6 +70,7 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
         fields: &def.fields,
         collection: ctx.slug,
         operation: "get",
+        locale: input.locale_ctx.map(LocaleContext::access_locale),
         user: ctx.user,
         ui_locale: input.ui_locale,
     };

@@ -975,7 +975,7 @@ fn global_read_admin_via_service_layer_allowed() {
     };
 
     let conn = db_pool.get().unwrap();
-    let rh = RunnerReadHooks::new(&runner, &conn);
+    let rh = RunnerReadHooks::new(&runner, &conn, None, None);
     let ctx = ServiceContext::global("restricted_settings", &def)
         .conn(&conn)
         .read_hooks(&rh)

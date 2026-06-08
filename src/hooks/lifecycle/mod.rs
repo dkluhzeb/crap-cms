@@ -11,10 +11,13 @@ mod validation;
 // Re-exports (preserves all existing external import paths)
 pub(crate) use context::flatten_group_fields;
 pub use context::{
-    AccessContext, AuthStrategyContext, FieldHookContext, HookContext, HookContextBuilder,
-    JobHandlerContext, JobInfo, ValidateContext,
+    AccessCheckInput, AccessContext, AuthStrategyContext, AuthStrategyInput, ConditionContext,
+    FieldHookContext, HookContext, HookContextBuilder, JobHandlerContext, JobInfo, ValidateContext,
 };
-pub use runner::{FieldHooksCall, FieldWriteCtx, HookRunner, HookRunnerBuilder, PublishEventInput};
+pub use runner::{
+    EventAfterReadInput, FieldHooksCall, FieldWriteCtx, HookRunner, HookRunnerBuilder,
+    PublishEventInput,
+};
 pub use types::{DisplayConditionResult, FieldHookEvent, HookEvent, InitPhase, LuaCrudInfra};
 // Internal types needed by sibling submodules (access.rs, context.rs)
 // and by `lua_api/crud/` (the runtime CRUD layer was relocated there

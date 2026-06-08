@@ -10,10 +10,12 @@ use crate::{
         AdminState,
         handlers::shared::{
             EvaluateConditionsRequest, check_access_or_forbid, evaluate_condition_results,
+            get_user_doc,
         },
     },
     core::auth::AuthUser,
     db::AccessResult,
+    hooks::ConditionContext,
 };
 
 /// POST /admin/globals/{slug}/evaluate-conditions
@@ -35,12 +37,24 @@ pub(crate) async fn evaluate_conditions(
         auth_user.as_ref(),
         None,
         None,
+        "read",
+        &slug,
     ) {
         Ok(AccessResult::Denied) | Err(_) => return Json(json!({})).into_response(),
         _ => {}
     }
 
-    let results = evaluate_condition_results(&state.hook_runner, &def.fields, &req);
+    let cond_ctx = ConditionContext {
+        collection: &slug,
+        operation: &req.operation,
+        user: get_user_doc(auth_user.as_ref()),
+        ui_locale: auth_user
+            .as_ref()
+            .map(|Extension(au)| au.ui_locale.as_str()),
+        locale: None,
+    };
+
+    let results = evaluate_condition_results(&state.hook_runner, &def.fields, &req, &cond_ctx);
 
     Json(Value::Object(results)).into_response()
 }

@@ -2,6 +2,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::hooks::{AccessCheckInput, ConditionContext};
+
 use axum::{Extension, response::IntoResponse};
 use serde_json::{Map, Value, json};
 use tracing::{error, warn};
@@ -28,6 +30,8 @@ pub fn check_access_or_forbid(
     auth_user: Option<&Extension<AuthUser>>,
     id: Option<&str>,
     data: Option<&DocumentFields>,
+    operation: &str,
+    collection: &str,
 ) -> Result<AccessResult, Box<axum::response::Response>> {
     if access_ref.is_none() {
         return if state.config.access.default_deny {
@@ -50,7 +54,19 @@ pub fn check_access_or_forbid(
 
     let result = state
         .hook_runner
-        .check_access(access_ref, user_doc, id, data, None, &tx)
+        .check_access(
+            &AccessCheckInput {
+                access_ref,
+                user: user_doc,
+                id,
+                data,
+                locale: None,
+                operation,
+                collection,
+                ui_locale: None,
+            },
+            &tx,
+        )
         .inspect_err(|e| error!("Access check error: {}", e))
         .map_err(|_| Box::new(forbidden(state, "Access check failed").into_response()))?;
 
@@ -128,6 +144,15 @@ pub struct EvaluateConditionsRequest {
     pub form_data: DocumentFields,
     /// Map of field names to their condition function references.
     pub conditions: HashMap<String, String>,
+    /// Whether the form is creating or editing — sent by the client so the
+    /// condition's `ctx.operation` matches the live form. Defaults to
+    /// `"update"` for older clients that don't send it.
+    #[serde(default = "default_condition_operation")]
+    pub operation: String,
+}
+
+fn default_condition_operation() -> String {
+    "update".to_string()
 }
 
 /// Evaluate display conditions and return a `field_name` → visible map.
@@ -138,6 +163,7 @@ pub fn evaluate_condition_results(
     hook_runner: &HookRunner,
     fields: &[FieldDefinition],
     req: &EvaluateConditionsRequest,
+    cond_ctx: &ConditionContext<'_>,
 ) -> Map<String, Value> {
     use crate::hooks::DisplayConditionResult;
 
@@ -155,7 +181,7 @@ pub fn evaluate_condition_results(
             continue;
         }
 
-        let visible = match hook_runner.call_display_condition(func_ref, &form_data) {
+        let visible = match hook_runner.call_display_condition(func_ref, &form_data, cond_ctx) {
             Some(DisplayConditionResult::Bool(b)) => b,
             Some(DisplayConditionResult::Table { visible, .. }) => visible,
             None => true,
@@ -184,14 +210,26 @@ pub fn has_access_with_conn(
     access_ref: Option<&str>,
     user_doc: Option<&Document>,
     conn: &dyn crate::db::DbConnection,
+    operation: &str,
+    collection: &str,
 ) -> bool {
     if access_ref.is_none() {
         return !state.config.access.default_deny;
     }
 
-    let result = state
-        .hook_runner
-        .check_access(access_ref, user_doc, None, None, None, conn);
+    let result = state.hook_runner.check_access(
+        &AccessCheckInput {
+            access_ref,
+            user: user_doc,
+            id: None,
+            data: None,
+            locale: None,
+            operation,
+            collection,
+            ui_locale: None,
+        },
+        conn,
+    );
 
     matches!(
         result,
@@ -202,10 +240,14 @@ pub fn has_access_with_conn(
 /// Quick read-access check for dashboard/list visibility. Convenience
 /// wrapper around [`has_access_with_conn`] that opens its own transaction.
 /// Use the with-conn variant when checking multiple permissions in a row.
+///
+/// `collection` is the slug exposed to the access function as `ctx.collection`
+/// (empty for slug-less custom pages, whose access rule has no collection).
 pub fn has_read_access(
     state: &AdminState,
     access_ref: Option<&str>,
     user_doc: Option<&Document>,
+    collection: &str,
 ) -> bool {
     if access_ref.is_none() {
         return !state.config.access.default_deny;
@@ -219,7 +261,7 @@ pub fn has_read_access(
         return false;
     };
 
-    let allowed = has_access_with_conn(state, access_ref, user_doc, &tx);
+    let allowed = has_access_with_conn(state, access_ref, user_doc, &tx, "read", collection);
 
     if let Err(e) = tx.commit() {
         warn!("tx commit failed: {e}");

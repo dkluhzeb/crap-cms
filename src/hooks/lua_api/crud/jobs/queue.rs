@@ -7,10 +7,10 @@ use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
 use crate::config::parse_duration_string;
-use crate::core::Registry;
+use crate::core::{DocumentFields, Registry};
 use crate::db::query::jobs::InsertJobOpts;
 use crate::db::{AccessResult, query};
-use crate::hooks::lifecycle::access::check_access_with_lua;
+use crate::hooks::lifecycle::{AccessCheckInput, access::check_access_with_lua};
 use crate::hooks::lua_api;
 use crate::hooks::lua_api::crud::{get_tx_conn, helpers::hook_user};
 use crate::hooks::lua_api::parse::deny_unknown_keys;
@@ -109,13 +109,24 @@ fn queue_job_inner(
 
     if job_def.access.is_some() {
         let user_doc = hook_user(lua);
+        // Expose the queued payload to the access fn as `ctx.data`.
+        let payload: Option<DocumentFields> = data
+            .as_ref()
+            .and_then(|t| lua_api::lua_to_json(&Value::Table(t.clone())).ok())
+            .and_then(|j| serde_json::from_value(j).ok());
+
         let result = check_access_with_lua(
             lua,
-            job_def.access.as_deref(),
-            user_doc.as_ref(),
-            None,
-            None,
-            None,
+            &AccessCheckInput {
+                access_ref: job_def.access.as_deref(),
+                user: user_doc.as_ref(),
+                id: None,
+                data: payload.as_ref(),
+                locale: None,
+                operation: "trigger",
+                collection: slug,
+                ui_locale: None,
+            },
         )
         .map_err(|e| RuntimeError(format!("access check error: {e:#}")))?;
 

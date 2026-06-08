@@ -8,7 +8,7 @@ use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 use crate::core::{Document, FieldDefinition, Registry, RegistryRead, SharedRegistry};
 use crate::db::{AccessResult, FilterClause, FilterOp};
 use crate::hooks::lifecycle::{
-    UserContext,
+    AccessCheckInput, UserContext,
     access::{
         check_access_with_lua, check_field_read_access_with_lua, check_field_write_access_with_lua,
     },
@@ -224,8 +224,20 @@ fn check_impl(
     let access_ref = resolve_access_ref(registry, collection, operation)?;
     let user = current_user(lua);
 
-    let result = check_access_with_lua(lua, access_ref.as_deref(), user.as_ref(), None, None, None)
-        .map_err(|e| RuntimeError(format!("access check error: {e:#}")))?;
+    let result = check_access_with_lua(
+        lua,
+        &AccessCheckInput {
+            access_ref: access_ref.as_deref(),
+            user: user.as_ref(),
+            id: None,
+            data: None,
+            locale: None,
+            operation,
+            collection,
+            ui_locale: None,
+        },
+    )
+    .map_err(|e| RuntimeError(format!("access check error: {e:#}")))?;
 
     match result {
         AccessResult::Allowed => Ok(Value::String(lua.create_string("allowed")?)),

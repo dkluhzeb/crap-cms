@@ -28,6 +28,8 @@ pub async fn back_references(
         auth_user.as_ref(),
         Some(&id),
         None,
+        "read",
+        &slug,
     ) {
         Ok(AccessResult::Denied) => {
             return Json(json!({ "error": "Access denied" })).into_response();

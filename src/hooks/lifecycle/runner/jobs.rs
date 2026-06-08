@@ -5,11 +5,14 @@ use mlua::{LuaSerdeExt as _, Value};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::{
-    core::Document,
+    core::{Document, job::JobRun},
     db::{DbConnection, DbPool},
     hooks::{
         HookRunner,
-        lifecycle::{InitPhase, execution::resolve_hook_function, types::TxContextGuard},
+        lifecycle::{
+            InitPhase, JobHandlerContext, JobInfo, execution::resolve_hook_function,
+            types::TxContextGuard,
+        },
         lua_api,
     },
 };
@@ -20,10 +23,10 @@ impl HookRunner {
     /// opens its own short-lived IMMEDIATE transaction via
     /// `with_lua_db` (wired by the `#[lua_fn(auto_tx)]` attribute).
     ///
-    /// The handler receives a context table
-    /// `{ data, job = { slug, attempt, max_attempts, queued_at } }`.
-    /// Returns the handler's return value as a JSON string (or `None`
-    /// for nil).
+    /// The handler receives a context table `{ data, job }`, where `job` is
+    /// `{ id, slug, queue, attempt, max_attempts, priority, unique_key,
+    /// scheduled_by, queued_at }`. Returns the handler's return value as a JSON
+    /// string (or `None` for nil).
     ///
     /// For multi-step atomicity, user code wraps a block in
     /// `crap.transaction(function() ... end)` which temporarily swaps
@@ -36,10 +39,7 @@ impl HookRunner {
     pub fn run_job_handler(
         &self,
         handler_ref: &str,
-        slug: &str,
-        data_json: &str,
-        attempt: u32,
-        max_attempts: u32,
+        job_run: &JobRun,
         pool: &DbPool,
     ) -> Result<Option<String>> {
         let lua = self.pool.acquire()?;
@@ -49,13 +49,19 @@ impl HookRunner {
         // the single source of truth (see
         // `hooks::lifecycle::JobHandlerContext`).
         let data_value: JsonValue =
-            serde_json::from_str(data_json).unwrap_or(JsonValue::Object(JsonMap::new()));
-        let ctx = crate::hooks::lifecycle::JobHandlerContext {
+            serde_json::from_str(&job_run.data).unwrap_or(JsonValue::Object(JsonMap::new()));
+        let ctx = JobHandlerContext {
             data: &data_value,
-            job: crate::hooks::lifecycle::JobInfo {
-                slug,
-                attempt,
-                max_attempts,
+            job: JobInfo {
+                id: &job_run.id,
+                slug: &job_run.slug,
+                queue: &job_run.queue,
+                attempt: job_run.attempt,
+                max_attempts: job_run.max_attempts,
+                priority: job_run.priority,
+                unique_key: job_run.unique_key.as_deref(),
+                scheduled_by: job_run.scheduled_by.as_deref(),
+                queued_at: job_run.created_at.as_deref(),
             },
         };
         let ctx_value = lua.to_value(&ctx)?;

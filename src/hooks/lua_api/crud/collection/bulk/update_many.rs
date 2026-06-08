@@ -252,6 +252,7 @@ fn build_update_filters(
             access_fn: def.access.update.as_deref(),
             id: None,
             deny_msg: "Update access denied",
+            operation: "update",
             injecting_status: false,
         },
         &mut find_query.filters,

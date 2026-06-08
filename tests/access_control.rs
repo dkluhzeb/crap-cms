@@ -21,12 +21,14 @@ use crap_cms::core::DocumentFields;
 use crap_cms::db::{DbConnection, FindQuery};
 use crap_cms::db::{DbValue, migrate, ops, pool, query};
 use crap_cms::hooks;
+use crap_cms::hooks::AccessCheckInput;
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::service::{
     GetGlobalInput, ListVersionsInput, RunnerReadHooks, RunnerWriteHooks, SearchDocumentsInput,
-    ServiceContext, WriteInput, get_global_document,
+    ServiceContext, WriteInput, create_document_in_conn, get_global_document,
     jobs::{QueueJobInput, queue_job},
-    list_versions, restore_collection_version, search_documents, update_global_in_conn,
+    list_versions, restore_collection_version, search_documents, update_document,
+    update_global_in_conn,
 };
 use serde_json::{Value, json};
 
@@ -131,7 +133,19 @@ fn no_access_ref_allows() {
     let conn = pool.get().unwrap();
 
     let result = runner
-        .check_access(None, None, None, None, None, &conn)
+        .check_access(
+            &AccessCheckInput {
+                access_ref: None,
+                user: None,
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
+            &conn,
+        )
         .unwrap();
     assert!(matches!(result, query::AccessResult::Allowed));
 }
@@ -142,7 +156,19 @@ fn anyone_allows_anonymous() {
     let conn = pool.get().unwrap();
 
     let result = runner
-        .check_access(Some("access.anyone"), None, None, None, None, &conn)
+        .check_access(
+            &AccessCheckInput {
+                access_ref: Some("access.anyone"),
+                user: None,
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
+            &conn,
+        )
         .unwrap();
     assert!(matches!(result, query::AccessResult::Allowed));
 }
@@ -153,7 +179,19 @@ fn authenticated_denies_anonymous() {
     let conn = pool.get().unwrap();
 
     let result = runner
-        .check_access(Some("access.authenticated"), None, None, None, None, &conn)
+        .check_access(
+            &AccessCheckInput {
+                access_ref: Some("access.authenticated"),
+                user: None,
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
+            &conn,
+        )
         .unwrap();
     assert!(matches!(result, query::AccessResult::Denied));
 }
@@ -166,11 +204,16 @@ fn authenticated_allows_user() {
 
     let result = runner
         .check_access(
-            Some("access.authenticated"),
-            Some(&editor),
-            None,
-            None,
-            None,
+            &AccessCheckInput {
+                access_ref: Some("access.authenticated"),
+                user: Some(&editor),
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
             &conn,
         )
         .unwrap();
@@ -185,11 +228,16 @@ fn admin_only_denies_editor() {
 
     let result = runner
         .check_access(
-            Some("access.admin_only"),
-            Some(&editor),
-            None,
-            None,
-            None,
+            &AccessCheckInput {
+                access_ref: Some("access.admin_only"),
+                user: Some(&editor),
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
             &conn,
         )
         .unwrap();
@@ -204,11 +252,16 @@ fn admin_only_allows_admin() {
 
     let result = runner
         .check_access(
-            Some("access.admin_only"),
-            Some(&admin),
-            None,
-            None,
-            None,
+            &AccessCheckInput {
+                access_ref: Some("access.admin_only"),
+                user: Some(&admin),
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
             &conn,
         )
         .unwrap();
@@ -222,11 +275,16 @@ fn published_or_author_constrains_anonymous() {
 
     let result = runner
         .check_access(
-            Some("access.published_or_author"),
-            None,
-            None,
-            None,
-            None,
+            &AccessCheckInput {
+                access_ref: Some("access.published_or_author"),
+                user: None,
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
             &conn,
         )
         .unwrap();
@@ -257,11 +315,16 @@ fn published_or_author_allows_admin() {
 
     let result = runner
         .check_access(
-            Some("access.published_or_author"),
-            Some(&admin),
-            None,
-            None,
-            None,
+            &AccessCheckInput {
+                access_ref: Some("access.published_or_author"),
+                user: Some(&admin),
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
             &conn,
         )
         .unwrap();
@@ -378,7 +441,19 @@ fn access_check_plus_db_query_end_to_end() {
     // Verify published_or_author for anonymous returns constraint (not fully open)
     let conn = pool.get().unwrap();
     let result = runner
-        .check_access(posts.access.read.as_deref(), None, None, None, None, &conn)
+        .check_access(
+            &AccessCheckInput {
+                access_ref: posts.access.read.as_deref(),
+                user: None,
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
+            &conn,
+        )
         .unwrap();
     assert!(matches!(result, query::AccessResult::Constrained(_)));
 
@@ -386,11 +461,16 @@ fn access_check_plus_db_query_end_to_end() {
     let admin = make_user_doc("admin-1", "admin");
     let result = runner
         .check_access(
-            posts.access.read.as_deref(),
-            Some(&admin),
-            None,
-            None,
-            None,
+            &AccessCheckInput {
+                access_ref: posts.access.read.as_deref(),
+                user: Some(&admin),
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
             &conn,
         )
         .unwrap();
@@ -403,11 +483,16 @@ fn access_check_plus_db_query_end_to_end() {
     // Verify author_or_admin denies anonymous delete
     let result = runner
         .check_access(
-            posts.access.delete.as_deref(),
-            None,
-            None,
-            None,
-            None,
+            &AccessCheckInput {
+                access_ref: posts.access.delete.as_deref(),
+                user: None,
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
             &conn,
         )
         .unwrap();
@@ -538,7 +623,19 @@ fn no_access_config_means_allowed() {
 
     // Collection-level: None access ref should return Allowed
     let result = runner
-        .check_access(None, None, None, None, None, &conn)
+        .check_access(
+            &AccessCheckInput {
+                access_ref: None,
+                user: None,
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
+            &conn,
+        )
         .unwrap();
     assert!(
         matches!(result, query::AccessResult::Allowed),
@@ -548,7 +645,19 @@ fn no_access_config_means_allowed() {
     // Also test with a user present — should still be Allowed
     let editor = make_user_doc("editor-1", "editor");
     let result = runner
-        .check_access(None, Some(&editor), None, None, None, &conn)
+        .check_access(
+            &AccessCheckInput {
+                access_ref: None,
+                user: Some(&editor),
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
+            &conn,
+        )
         .unwrap();
     assert!(
         matches!(result, query::AccessResult::Allowed),
@@ -831,7 +940,19 @@ fn default_deny_true_no_access_ref_returns_denied() {
 
     // No access function configured + default_deny = true → must be Denied
     let result = runner
-        .check_access(None, None, None, None, None, &conn)
+        .check_access(
+            &AccessCheckInput {
+                access_ref: None,
+                user: None,
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
+            &conn,
+        )
         .unwrap();
     assert!(
         matches!(result, query::AccessResult::Denied),
@@ -841,7 +962,19 @@ fn default_deny_true_no_access_ref_returns_denied() {
     // Even with a user present, no access function + default_deny → Denied
     let user = make_user_doc("user-1", "editor");
     let result = runner
-        .check_access(None, Some(&user), None, None, None, &conn)
+        .check_access(
+            &AccessCheckInput {
+                access_ref: None,
+                user: Some(&user),
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
+            &conn,
+        )
         .unwrap();
     assert!(
         matches!(result, query::AccessResult::Denied),
@@ -866,7 +999,7 @@ fn access_hook_filter_table_on_global_read_is_rejected() {
     let def = registry.get_global("site_settings").unwrap().clone();
 
     let conn = pool.get().unwrap();
-    let hooks = RunnerReadHooks::new(&runner, &conn);
+    let hooks = RunnerReadHooks::new(&runner, &conn, None, None);
     let ctx = ServiceContext::global("site_settings", &def)
         .conn(&conn)
         .read_hooks(&hooks)
@@ -907,6 +1040,1136 @@ fn access_hook_filter_table_on_global_update_is_rejected() {
     let msg = err.to_string();
     assert!(msg.contains("site_settings"), "got: {msg}");
     assert!(msg.contains("filter table"), "got: {msg}");
+}
+
+/// Regression: the collection `create` / `update` access function must receive
+/// the incoming write data as `ctx.data`. It was passed `None`, so a data-gating
+/// access rule silently couldn't see what was being written — despite the docs
+/// and the in-code comment telling operators to gate on `ctx.data`.
+#[test]
+fn create_access_receives_incoming_data() {
+    let tmp = tempfile::tempdir().unwrap();
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("posts.lua"),
+        r#"
+crap.collections.define("posts", {
+    fields = {
+        { name = "title", type = "text" },
+        { name = "flag", type = "text" },
+    },
+    access = { create = "hooks.gate.requires_flag" },
+})
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("gate.lua"),
+        r#"
+local M = {}
+
+-- Allow the write only when the incoming data carries flag == "ok".
+function M.requires_flag(ctx)
+    return ctx.data ~= nil and ctx.data.flag == "ok"
+end
+
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+
+    let def = registry.get_collection("posts").unwrap().clone();
+
+    let create = |flag: &str| {
+        let mut conn = db_pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let wh = RunnerWriteHooks::new(&runner).with_conn(&tx);
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&tx)
+            .write_hooks(&wh)
+            .build();
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Hello"));
+        data.insert("flag".to_string(), json!(flag));
+        let res = create_document_in_conn(&ctx, WriteInput::builder(data).build());
+        if res.is_ok() {
+            tx.commit().unwrap();
+        }
+        res
+    };
+
+    // flag == "ok" → the access fn reads ctx.data.flag and allows.
+    assert!(
+        create("ok").is_ok(),
+        "create with flag=ok must be allowed (access fn could read ctx.data)"
+    );
+
+    // flag != "ok" → denied, which is only possible if the access fn saw ctx.data.
+    let err = create("no").expect_err("create with flag=no must be denied via ctx.data");
+    assert!(
+        matches!(err, crap_cms::service::ServiceError::AccessDenied(_)),
+        "expected AccessDenied, got: {err:?}"
+    );
+}
+
+/// Regression: `before_change` on an update must expose `ctx.document_id` so a
+/// hook can fetch the *pre-write* document on demand via
+/// `crap.collections.find_by_id(ctx.collection, ctx.document_id)`. The update
+/// write path previously never set `document_id` (and the incoming `data` need
+/// not carry `id`), so the canonical "price may only increase" guard — which
+/// must compare against the persisted old value — was impossible in a
+/// before-hook. This locks the on-demand-original contract for the freeze.
+#[test]
+fn before_change_update_exposes_document_id_for_on_demand_original() {
+    let tmp = tempfile::tempdir().unwrap();
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("products.lua"),
+        r#"
+crap.collections.define("products", {
+    fields = {
+        { name = "price", type = "number" },
+    },
+    hooks = {
+        before_change = { "hooks.guard.price_increase_only" },
+    },
+})
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("guard.lua"),
+        r#"
+local M = {}
+
+-- Fetch the pre-write document on demand and reject a price decrease.
+-- Only meaningful on update; create has no prior document.
+function M.price_increase_only(ctx)
+    if ctx.operation ~= "update" then
+        return ctx
+    end
+    if ctx.document_id == nil then
+        error("document_id missing in before_change update")
+    end
+    local old = crap.collections.find_by_id(ctx.collection, ctx.document_id, { overrideAccess = true })
+    if old ~= nil and ctx.data.price ~= nil and ctx.data.price < old.price then
+        error("price may only increase")
+    end
+    return ctx
+end
+
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+
+    let def = registry.get_collection("products").unwrap().clone();
+
+    // Seed a product at price 10.
+    let id = {
+        let mut conn = db_pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let wh = RunnerWriteHooks::new(&runner).with_conn(&tx);
+        let ctx = ServiceContext::collection("products", &def)
+            .conn(&tx)
+            .write_hooks(&wh)
+            .build();
+        let mut data = DocumentFields::new();
+        data.insert("price".to_string(), json!(10));
+        let (doc, _) = create_document_in_conn(&ctx, WriteInput::builder(data).build()).unwrap();
+        tx.commit().unwrap();
+        doc.id.to_string()
+    };
+
+    let update = |price: i64| {
+        let mut conn = db_pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let wh = RunnerWriteHooks::new(&runner).with_conn(&tx);
+        let ctx = ServiceContext::collection("products", &def)
+            .conn(&tx)
+            .write_hooks(&wh)
+            .build();
+        let mut data = DocumentFields::new();
+        data.insert("price".to_string(), json!(price));
+        let res = update_document(&ctx, &id, WriteInput::builder(data).build());
+        if res.is_ok() {
+            tx.commit().unwrap();
+        }
+        res
+    };
+
+    // Increase → allowed (the hook fetched old=10 via document_id and saw 20 >= 10).
+    assert!(
+        update(20).is_ok(),
+        "price increase must be allowed (on-demand original resolved)"
+    );
+
+    // Decrease → rejected. Only possible if the hook resolved the persisted old
+    // value through ctx.document_id; a missing document_id would have errored or
+    // returned nil and let the decrease through.
+    let err = update(5).expect_err("price decrease must be rejected via on-demand original");
+    assert!(
+        err.to_string().contains("price may only increase"),
+        "expected the guard's rejection (proving the old value was resolved), got: {err:?}"
+    );
+}
+
+/// Regression: `ctx.context` is scoped to a single *write operation* (one
+/// create/update/delete lifecycle), NOT the whole request. Two updates in the
+/// same transaction/request must each start with a fresh, empty `context` —
+/// the docs previously called it "request-scoped", which would imply a leak
+/// between operations (and across documents in a bulk op). Within one operation,
+/// before→after sharing is covered by `context_flows_through_hooks`.
+#[test]
+fn hook_context_is_per_operation_not_per_request() {
+    let tmp = tempfile::tempdir().unwrap();
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("notes.lua"),
+        r#"
+crap.collections.define("notes", {
+    fields = {
+        { name = "body", type = "text" },
+    },
+    hooks = {
+        before_change = { "hooks.scope.fresh_context" },
+    },
+})
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("scope.lua"),
+        r#"
+local M = {}
+
+-- Each write operation must begin with an empty context. If a previous
+-- operation's marker is visible here, context is leaking across operations.
+function M.fresh_context(ctx)
+    if ctx.context.touched ~= nil then
+        error("context bled across operations")
+    end
+    ctx.context.touched = true
+    return ctx
+end
+
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+
+    let def = registry.get_collection("notes").unwrap().clone();
+
+    let make = |body: &str| -> String {
+        let mut conn = db_pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let wh = RunnerWriteHooks::new(&runner).with_conn(&tx);
+        let ctx = ServiceContext::collection("notes", &def)
+            .conn(&tx)
+            .write_hooks(&wh)
+            .build();
+        let mut data = DocumentFields::new();
+        data.insert("body".to_string(), json!(body));
+        let (doc, _) = create_document_in_conn(&ctx, WriteInput::builder(data).build()).unwrap();
+        tx.commit().unwrap();
+        doc.id.to_string()
+    };
+
+    let id_a = make("a");
+    let id_b = make("b");
+
+    // Two updates in ONE transaction/request. If context were request-scoped,
+    // the second update's before_change would see the first's `touched` marker
+    // and error.
+    let mut conn = db_pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let wh = RunnerWriteHooks::new(&runner).with_conn(&tx);
+
+    let ctx_a = ServiceContext::collection("notes", &def)
+        .conn(&tx)
+        .write_hooks(&wh)
+        .build();
+    let mut d1 = DocumentFields::new();
+    d1.insert("body".to_string(), json!("a2"));
+    update_document(&ctx_a, &id_a, WriteInput::builder(d1).build()).expect("update A");
+
+    let ctx_b = ServiceContext::collection("notes", &def)
+        .conn(&tx)
+        .write_hooks(&wh)
+        .build();
+    let mut d2 = DocumentFields::new();
+    d2.insert("body".to_string(), json!("b2"));
+    update_document(&ctx_b, &id_b, WriteInput::builder(d2).build())
+        .expect("second update in same request must start with a fresh, empty context");
+
+    tx.commit().unwrap();
+}
+
+/// Regression (#11): `after_change` hooks must see hydrated array/blocks/has-many
+/// data, not just scalar columns. Hydration previously ran AFTER the after-change
+/// hooks, so a hook reading `ctx.data.<array_field>` got `nil`. Hydration now runs
+/// before `after_change` on every write path.
+#[test]
+fn after_change_sees_hydrated_array_data() {
+    let tmp = tempfile::tempdir().unwrap();
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("carts.lua"),
+        r#"
+crap.collections.define("carts", {
+    fields = {
+        { name = "items", type = "array", fields = {
+            { name = "sku", type = "text" },
+        } },
+    },
+    hooks = {
+        after_change = { "hooks.cart.require_items" },
+    },
+})
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("cart.lua"),
+        r#"
+local M = {}
+
+-- after_change must see the array rows (hydrated), not nil.
+function M.require_items(ctx)
+    if type(ctx.data.items) ~= "table" then
+        error("after_change did not see array 'items' (got " .. type(ctx.data.items) .. ")")
+    end
+    if #ctx.data.items ~= 2 then
+        error("after_change saw " .. tostring(#ctx.data.items) .. " items, expected 2")
+    end
+    return ctx
+end
+
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+
+    let def = registry.get_collection("carts").unwrap().clone();
+
+    let mut conn = db_pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let wh = RunnerWriteHooks::new(&runner).with_conn(&tx);
+    let ctx = ServiceContext::collection("carts", &def)
+        .conn(&tx)
+        .write_hooks(&wh)
+        .build();
+    let mut data = DocumentFields::new();
+    data.insert("items".to_string(), json!([{ "sku": "a" }, { "sku": "b" }]));
+
+    // If after_change couldn't see the hydrated array, the hook errors → create fails.
+    create_document_in_conn(&ctx, WriteInput::builder(data).build())
+        .expect("create must succeed — after_change must see the hydrated array rows");
+    tx.commit().unwrap();
+
+    // The UPDATE path must also hydrate join data before after_change (same
+    // reorder as create). Driven via Lua since `update_document_in_conn` is
+    // crate-private; it routes through the same service update path.
+    let conn2 = db_pool.get().unwrap();
+    let updated = runner
+        .eval_lua_with_conn(
+            r#"
+        local found = crap.collections.find("carts", {})
+        local id = found.documents[1].id
+        crap.collections.update("carts", id, { items = { { sku = "c" }, { sku = "d" } } })
+        return "ok"
+        "#,
+            &conn2,
+            None,
+        )
+        .expect("update must succeed — after_change must see the hydrated array rows on update");
+    assert_eq!(updated, "ok");
+}
+
+/// Regression (#8): access functions receive `ctx.operation`, so a single shared
+/// access function can branch on the operation (create/update/delete) instead of
+/// needing a separate function per operation.
+#[test]
+fn access_fn_receives_operation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("memos.lua"),
+        r#"
+crap.collections.define("memos", {
+    fields = {
+        { name = "body", type = "text" },
+    },
+    -- One shared fn gating two operations; it must distinguish them via ctx.operation.
+    access = {
+        create = "hooks.op.create_only",
+        update = "hooks.op.create_only",
+    },
+})
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("op.lua"),
+        r#"
+local M = {}
+
+-- Allow only on create; deny update — provable only if ctx.operation is set.
+function M.create_only(ctx)
+    return ctx.operation == "create"
+end
+
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+
+    let def = registry.get_collection("memos").unwrap().clone();
+
+    // create → operation == "create" → allowed
+    let id = {
+        let mut conn = db_pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let wh = RunnerWriteHooks::new(&runner).with_conn(&tx);
+        let ctx = ServiceContext::collection("memos", &def)
+            .conn(&tx)
+            .write_hooks(&wh)
+            .build();
+        let mut data = DocumentFields::new();
+        data.insert("body".to_string(), json!("hi"));
+        let (doc, _) = create_document_in_conn(&ctx, WriteInput::builder(data).build())
+            .expect("create must be allowed (ctx.operation == \"create\")");
+        tx.commit().unwrap();
+        doc.id.to_string()
+    };
+
+    // update → operation == "update" → the same fn now denies
+    let mut conn = db_pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let wh = RunnerWriteHooks::new(&runner).with_conn(&tx);
+    let ctx = ServiceContext::collection("memos", &def)
+        .conn(&tx)
+        .write_hooks(&wh)
+        .build();
+    let mut data = DocumentFields::new();
+    data.insert("body".to_string(), json!("bye"));
+    let err = update_document(&ctx, &id, WriteInput::builder(data).build())
+        .expect_err("update must be denied — the shared fn saw ctx.operation == \"update\"");
+    assert!(
+        matches!(err, crap_cms::service::ServiceError::AccessDenied(_)),
+        "expected AccessDenied, got: {err:?}"
+    );
+}
+
+/// Conditional required (#12): a field with `required_when` is required only when
+/// its predicate returns truthy for the document being validated — expressing
+/// "field B is required when field A has a certain value" without the static
+/// `required` boolean and without touching the (correct) skip-on-nil validator
+/// behavior.
+#[test]
+fn required_when_enforces_conditional_requirement() {
+    let tmp = tempfile::tempdir().unwrap();
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("orders.lua"),
+        r#"
+crap.collections.define("orders", {
+    fields = {
+        { name = "product_type", type = "text" },
+        { name = "shipping_address", type = "text", required_when = "hooks.cond.is_physical" },
+    },
+})
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("cond.lua"),
+        r#"
+local M = {}
+
+-- shipping_address is required only for physical products.
+function M.is_physical(ctx)
+    return ctx.data.product_type == "physical"
+end
+
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+
+    let def = registry.get_collection("orders").unwrap().clone();
+
+    let create = |product_type: &str, shipping: Option<&str>| {
+        let mut conn = db_pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let wh = RunnerWriteHooks::new(&runner).with_conn(&tx);
+        let ctx = ServiceContext::collection("orders", &def)
+            .conn(&tx)
+            .write_hooks(&wh)
+            .build();
+        let mut data = DocumentFields::new();
+        data.insert("product_type".to_string(), json!(product_type));
+        if let Some(s) = shipping {
+            data.insert("shipping_address".to_string(), json!(s));
+        }
+        let res = create_document_in_conn(&ctx, WriteInput::builder(data).build());
+        if res.is_ok() {
+            tx.commit().unwrap();
+        }
+        res
+    };
+
+    // Digital product: predicate false → shipping_address not required.
+    assert!(
+        create("digital", None).is_ok(),
+        "digital product must not require shipping_address"
+    );
+
+    // Physical product, no shipping → predicate true + absent → validation error.
+    let err = create("physical", None)
+        .expect_err("physical product without shipping_address must fail validation");
+    assert!(
+        matches!(err, crap_cms::service::ServiceError::Validation(_)),
+        "expected a Validation error, got: {err:?}"
+    );
+
+    // Physical product with shipping → satisfied.
+    assert!(
+        create("physical", Some("123 Main St")).is_ok(),
+        "physical product with shipping_address must pass"
+    );
+}
+
+/// Conditional required inside Array/Blocks rows (#12.3 parity): a `required_when`
+/// predicate on a sub-field is evaluated per row, seeing the row as `ctx.data`
+/// and the full document as `ctx.document`. Previously sub-field `required_when`
+/// was silently ignored (only static `required` was checked in rows).
+#[test]
+fn required_when_enforces_conditional_requirement_in_array_rows() {
+    let tmp = tempfile::tempdir().unwrap();
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("orders2.lua"),
+        r#"
+crap.collections.define("orders2", {
+    versions = { drafts = true },
+    fields = {
+        { name = "mode", type = "text" },
+        { name = "items", type = "array", fields = {
+            { name = "kind", type = "text" },
+            { name = "serial", type = "text", required_when = "hooks.cond2.needs_serial" },
+        }},
+    },
+})
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("cond2.lua"),
+        r#"
+local M = {}
+
+-- A serial is required for device rows (row-level `ctx.data`), OR whenever the
+-- whole order is in strict mode (top-level `ctx.document`, outside the row).
+function M.needs_serial(ctx)
+    return ctx.data.kind == "device" or ctx.document.mode == "strict"
+end
+
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+
+    let def = registry.get_collection("orders2").unwrap().clone();
+
+    let create = |mode: &str, row: serde_json::Value, draft: bool| {
+        let mut conn = db_pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let wh = RunnerWriteHooks::new(&runner).with_conn(&tx);
+        let ctx = ServiceContext::collection("orders2", &def)
+            .conn(&tx)
+            .write_hooks(&wh)
+            .build();
+        let mut data = DocumentFields::new();
+        data.insert("mode".to_string(), json!(mode));
+        data.insert("items".to_string(), json!([row]));
+        let res = create_document_in_conn(&ctx, WriteInput::builder(data).draft(draft).build());
+        if res.is_ok() {
+            tx.commit().unwrap();
+        }
+        res
+    };
+
+    // Non-device row, non-strict order → serial not required.
+    assert!(
+        create("normal", json!({ "kind": "other" }), false).is_ok(),
+        "non-device row in a non-strict order must not require serial"
+    );
+
+    // Device row, no serial → row-level predicate (ctx.data) fires → error.
+    let err = create("normal", json!({ "kind": "device" }), false)
+        .expect_err("device row without serial must fail validation");
+    assert!(
+        matches!(err, crap_cms::service::ServiceError::Validation(_)),
+        "expected a Validation error, got: {err:?}"
+    );
+
+    // Strict order, non-device row, no serial → document-level predicate
+    // (ctx.document.mode) fires from inside the row → error. This proves the
+    // sub-field predicate sees the full document, not just the row.
+    let err = create("strict", json!({ "kind": "other" }), false)
+        .expect_err("strict order without serial must fail validation");
+    assert!(
+        matches!(err, crap_cms::service::ServiceError::Validation(_)),
+        "expected a Validation error from the document-level condition, got: {err:?}"
+    );
+
+    // Same strict order saved as a DRAFT → required (incl. required_when) is
+    // skipped, so it must succeed.
+    assert!(
+        create("strict", json!({ "kind": "other" }), true).is_ok(),
+        "draft save must skip the conditional requirement"
+    );
+
+    // Device row with serial → satisfied.
+    assert!(
+        create(
+            "normal",
+            json!({ "kind": "device", "serial": "SN-1" }),
+            false
+        )
+        .is_ok(),
+        "device row with serial must pass"
+    );
+}
+
+/// Regression: the Lua bulk path (`crap.collections.update_many` /
+/// `delete_many`) must report the real write `operation` to the collection's
+/// access function — not the `"find"` used internally to select candidate rows.
+/// The shared `enforce_access` helper previously hardcoded `"find"`, so a
+/// shared access fn that branches on `ctx.operation` mis-gated bulk writes.
+#[test]
+fn bulk_update_many_reports_update_operation_to_access_fn() {
+    let tmp = tempfile::tempdir().unwrap();
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("widgets.lua"),
+        r#"
+crap.collections.define("widgets", {
+    access = { update = "hooks.gate.assert_update_op" },
+    fields = {
+        { name = "name", type = "text" },
+        { name = "status", type = "text" },
+    },
+})
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("gate.lua"),
+        r#"
+local M = {}
+
+-- The update access fn must see operation "update" and the right collection,
+-- even when invoked from the bulk path that selects rows with a find filter.
+function M.assert_update_op(ctx)
+    if ctx.operation ~= "update" then
+        error("WRONG_OP:" .. tostring(ctx.operation))
+    end
+    if ctx.collection ~= "widgets" then
+        error("WRONG_COLLECTION:" .. tostring(ctx.collection))
+    end
+    return true
+end
+
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+
+    let conn = db_pool.get().unwrap();
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
+        crap.collections.create("widgets", { name = "a", status = "draft" })
+        crap.collections.create("widgets", { name = "b", status = "draft" })
+
+        local r = crap.collections.update_many("widgets",
+            { where = { status = "draft" } },
+            { status = "live" }
+        )
+        if r.modified ~= 2 then return "WRONG_MODIFIED:" .. tostring(r.modified) end
+        return "ok"
+        "#,
+            &conn,
+            None,
+        )
+        .expect("bulk update_many should succeed — access fn must see operation \"update\"");
+
+    assert_eq!(
+        result, "ok",
+        "update_many must report operation \"update\" to the access fn"
+    );
+}
+
+/// Regression: a soft delete is a "trash" operation. The configured
+/// `access.trash` function must see `ctx.operation == "trash"` (matching the
+/// admin permission grid), not `"delete"` — so a function that branches on the
+/// operation gates trash vs hard-delete correctly.
+#[test]
+fn soft_delete_reports_trash_operation_to_access_fn() {
+    let tmp = tempfile::tempdir().unwrap();
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("trashables.lua"),
+        r#"
+crap.collections.define("trashables", {
+    soft_delete = true,
+    access = { trash = "hooks.tgate.assert_trash" },
+    fields = {
+        { name = "name", type = "text" },
+    },
+})
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("tgate.lua"),
+        r#"
+local M = {}
+
+function M.assert_trash(ctx)
+    if ctx.operation ~= "trash" then
+        error("WRONG_OP:" .. tostring(ctx.operation))
+    end
+    return true
+end
+
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+
+    let conn = db_pool.get().unwrap();
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
+        -- Single-doc soft delete (service delete path).
+        local doc = crap.collections.create("trashables", { name = "x" })
+        crap.collections.delete("trashables", doc.id)
+
+        -- Bulk soft delete (delete_many path) must also report "trash".
+        crap.collections.create("trashables", { name = "y" })
+        crap.collections.create("trashables", { name = "z" })
+        local d = crap.collections.delete_many("trashables", {})
+        if d.deleted ~= 2 then return "WRONG_DELETED:" .. tostring(d.deleted) end
+        return "ok"
+        "#,
+            &conn,
+            None,
+        )
+        .expect("soft delete should succeed — trash access fn must see operation \"trash\"");
+
+    assert_eq!(
+        result, "ok",
+        "single + bulk soft delete must report operation \"trash\" to access.trash"
+    );
+}
+
+/// Regression: a global read invokes its `access.read` function with
+/// `operation == "get"` (matching the global's own `before_read`/`after_read`
+/// hooks) — not `"find"`, which is collection-specific.
+#[test]
+fn global_read_reports_get_operation_to_access_fn() {
+    let tmp = tempfile::tempdir().unwrap();
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("settings.lua"),
+        r#"
+crap.globals.define("settings", {
+    access = { read = "hooks.ggate.assert_get" },
+    fields = {
+        { name = "title", type = "text" },
+    },
+})
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("ggate.lua"),
+        r#"
+local M = {}
+
+function M.assert_get(ctx)
+    if ctx.operation ~= "get" then
+        error("WRONG_OP:" .. tostring(ctx.operation))
+    end
+    return true
+end
+
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+
+    let conn = db_pool.get().unwrap();
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
+        crap.globals.get("settings")
+        return "ok"
+        "#,
+            &conn,
+            None,
+        )
+        .expect("global read should succeed — access fn must see operation \"get\"");
+
+    assert_eq!(
+        result, "ok",
+        "global read must report operation \"get\" to access.read"
+    );
+}
+
+/// Regression: the pool read path (`RunnerReadHooks`) must pass `user` and the
+/// content `locale` to `before_read` hooks. They were previously dropped (the
+/// pool path built an empty context), so a `before_read` hook couldn't see who
+/// was reading or in which locale — asymmetric with the inline Lua path.
+#[test]
+fn before_read_pool_path_receives_user_and_locale() {
+    use crap_cms::service::ReadHooks;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+    std::fs::write(
+        collections_dir.join("posts.lua"),
+        r#"
+crap.collections.define("posts", {
+    fields = { { name = "title", type = "text" } },
+    hooks = { before_read = { "hooks.guard.require_user_and_locale" } },
+})
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        hooks_dir.join("guard.lua"),
+        r#"
+local M = {}
+
+function M.require_user_and_locale(ctx)
+    if ctx.user == nil then error("before_read: missing user") end
+    if ctx.locale == nil then error("before_read: missing locale") end
+    return ctx
+end
+
+return M
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+    let def = registry.get_collection("posts").unwrap().clone();
+    let conn = db_pool.get().unwrap();
+    let user = make_user_doc("admin-1", "admin");
+
+    // With user + locale, the hook's guards both pass.
+    let rh = RunnerReadHooks::new(&runner, &conn, Some(&user), None);
+    assert!(
+        rh.before_read(&def.hooks, "posts", "find", Some("en"))
+            .is_ok(),
+        "before_read must see ctx.user and ctx.locale on the pool path"
+    );
+
+    // No user → the hook errors (proves user reaches the pool-path context).
+    let rh_nouser = RunnerReadHooks::new(&runner, &conn, None, None);
+    assert!(
+        rh_nouser
+            .before_read(&def.hooks, "posts", "find", Some("en"))
+            .is_err(),
+        "before_read must error when ctx.user is missing"
+    );
+
+    // No locale → the hook errors (proves locale reaches the context).
+    assert!(
+        rh.before_read(&def.hooks, "posts", "find", None).is_err(),
+        "before_read must error when ctx.locale is missing"
+    );
+}
+
+/// Regression: a custom field `validate` function must see `ctx.user`.
+/// Validation runs on its own freshly-acquired pool VM (separate from the
+/// write-hook VM), so the user previously arrived as `nil` — making a rule like
+/// "only an editor may set this field" impossible.
+#[test]
+fn validator_receives_user() {
+    let tmp = tempfile::tempdir().unwrap();
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+    std::fs::write(
+        collections_dir.join("posts.lua"),
+        r#"
+crap.collections.define("posts", {
+    fields = {
+        { name = "title", type = "text", validate = "hooks.v.require_user" },
+    },
+})
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        hooks_dir.join("v.lua"),
+        r#"
+local M = {}
+
+-- Reject the write unless a user is present in the validation context.
+function M.require_user(_value, ctx)
+    if ctx.user == nil then return "must be authenticated" end
+    return true
+end
+
+return M
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+    let def = registry.get_collection("posts").unwrap().clone();
+    let user = make_user_doc("u1", "admin");
+
+    let create = |user_arg: Option<&Document>| {
+        let mut conn = db_pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let wh = RunnerWriteHooks::new(&runner).with_conn(&tx);
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&tx)
+            .write_hooks(&wh)
+            .user(user_arg)
+            .build();
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Hello"));
+        let res = create_document_in_conn(&ctx, WriteInput::builder(data).build());
+        if res.is_ok() {
+            tx.commit().unwrap();
+        }
+        res
+    };
+
+    // With a user, the validator sees ctx.user and allows.
+    assert!(
+        create(Some(&user)).is_ok(),
+        "validator must see ctx.user and allow the write"
+    );
+
+    // Without a user, the validator rejects (proves ctx.user reaches it).
+    let err = create(None).expect_err("validator must reject when ctx.user is nil");
+    assert!(
+        matches!(err, crap_cms::service::ServiceError::Validation(_)),
+        "expected a Validation error, got: {err:?}"
+    );
 }
 
 /// Helper: seed a versioned article directly so we can drive list/restore.
@@ -962,7 +2225,7 @@ fn access_hook_filter_table_on_list_versions_enforces_parent_match() {
     // { author_id = user_a } against the parent row, which doesn't match.
     let user_a = make_user_doc("user_a", "editor");
     let conn = pool.get().unwrap();
-    let hooks = RunnerReadHooks::new(&runner, &conn);
+    let hooks = RunnerReadHooks::new(&runner, &conn, None, None);
     let ctx = ServiceContext::collection("versioned_articles", &def)
         .conn(&conn)
         .read_hooks(&hooks)
@@ -980,7 +2243,7 @@ fn access_hook_filter_table_on_list_versions_enforces_parent_match() {
 
     // user_b (matching author) should succeed.
     let user_b = make_user_doc("user_b", "editor");
-    let hooks_b = RunnerReadHooks::new(&runner, &conn);
+    let hooks_b = RunnerReadHooks::new(&runner, &conn, None, None);
     let ctx_b = ServiceContext::collection("versioned_articles", &def)
         .conn(&conn)
         .read_hooks(&hooks_b)
@@ -1184,7 +2447,7 @@ fn search_documents_excludes_drafts_by_default() {
 
     let user_a = make_user_doc("user_a", "editor");
     let conn = pool.get().unwrap();
-    let hooks = RunnerReadHooks::new(&runner, &conn);
+    let hooks = RunnerReadHooks::new(&runner, &conn, None, None);
     let ctx = ServiceContext::collection("versioned_articles", &def)
         .conn(&conn)
         .read_hooks(&hooks)
@@ -1229,7 +2492,7 @@ fn search_documents_includes_drafts_when_opted_in() {
 
     let user_a = make_user_doc("user_a", "editor");
     let conn = pool.get().unwrap();
-    let hooks = RunnerReadHooks::new(&runner, &conn);
+    let hooks = RunnerReadHooks::new(&runner, &conn, None, None);
     let ctx = ServiceContext::collection("versioned_articles", &def)
         .conn(&conn)
         .read_hooks(&hooks)
@@ -1466,4 +2729,386 @@ fn lua_restore_version_override_access_bypasses() {
         .eval_lua_with_conn(&code, &conn, Some(&user_a))
         .expect("overrideAccess = true must bypass the access check");
     assert_eq!(result, id, "restored doc id must match parent doc id");
+}
+
+/// Regression (#15): a job access function receives the queued payload as
+/// `ctx.data`, so it can gate on *what* is being queued, not only who is queuing.
+/// (#8 already gave it `ctx.operation = "trigger"` and `ctx.collection = <slug>`.)
+#[test]
+fn job_access_fn_receives_payload() {
+    let tmp = tempfile::tempdir().unwrap();
+    let jobs_dir = tmp.path().join("jobs");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&jobs_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        jobs_dir.join("email.lua"),
+        r#"
+local M = {}
+
+function M.send(ctx) end
+
+crap.jobs.define("send_email", {
+    handler = "jobs.email.send",
+    access = "hooks.jobgate.allowed_only",
+})
+
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("jobgate.lua"),
+        r"
+local M = {}
+
+-- Gate on the queued payload, not just the user.
+function M.allowed_only(ctx)
+    return ctx.data ~= nil and ctx.data.allowed == true
+end
+
+return M
+",
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+
+    let job_def = registry.get_job("send_email").unwrap().clone();
+
+    let queue = |payload: &str| {
+        let conn = db_pool.get().unwrap();
+        let ctx = ServiceContext::slug_only("send_email")
+            .conn(&conn)
+            .runner(&runner)
+            .build();
+        let input = QueueJobInput {
+            job_def: &job_def,
+            data: Some(payload),
+            scheduled_by: "test",
+            priority: 0,
+            queue_retries: None,
+        };
+        queue_job(&ctx, &input)
+    };
+
+    // The access fn only allows when the payload carries allowed == true.
+    assert!(
+        queue(r#"{"allowed":true}"#).is_ok(),
+        "allowed payload must queue (access fn saw ctx.data)"
+    );
+    let err = queue(r#"{"allowed":false}"#)
+        .expect_err("disallowed payload must be rejected via ctx.data");
+    assert!(
+        matches!(err, crap_cms::service::ServiceError::AccessDenied(_)),
+        "expected AccessDenied, got: {err:?}"
+    );
+}
+
+/// Regression (#12.1): custom field validators receive `ctx.operation` (and
+/// `ctx.id` on update), so a validator can branch on create-vs-update — e.g. an
+/// "immutable after create" field.
+#[test]
+fn validator_receives_operation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("things.lua"),
+        r#"
+crap.collections.define("things", {
+    fields = {
+        { name = "sku", type = "text", validate = "hooks.imm.immutable_sku" },
+    },
+})
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("imm.lua"),
+        r#"
+local M = {}
+
+-- sku may be set on create but never changed on update.
+function M.immutable_sku(value, ctx)
+    if ctx.operation == "update" then
+        return "sku is immutable after creation"
+    end
+    return true
+end
+
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+
+    let def = registry.get_collection("things").unwrap().clone();
+
+    // create with sku → operation == "create" → allowed
+    let id = {
+        let mut conn = db_pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let wh = RunnerWriteHooks::new(&runner).with_conn(&tx);
+        let ctx = ServiceContext::collection("things", &def)
+            .conn(&tx)
+            .write_hooks(&wh)
+            .build();
+        let mut data = DocumentFields::new();
+        data.insert("sku".to_string(), json!("ABC-1"));
+        let (doc, _) = create_document_in_conn(&ctx, WriteInput::builder(data).build())
+            .expect("create with sku must pass (operation == \"create\")");
+        tx.commit().unwrap();
+        doc.id.to_string()
+    };
+
+    // update sku → operation == "update" → validator rejects
+    let mut conn = db_pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let wh = RunnerWriteHooks::new(&runner).with_conn(&tx);
+    let ctx = ServiceContext::collection("things", &def)
+        .conn(&tx)
+        .write_hooks(&wh)
+        .build();
+    let mut data = DocumentFields::new();
+    data.insert("sku".to_string(), json!("ABC-2"));
+    let err = update_document(&ctx, &id, WriteInput::builder(data).build())
+        .expect_err("changing sku on update must be rejected via ctx.operation");
+    assert!(
+        err.to_string().contains("immutable"),
+        "expected the immutable-sku validation message, got: {err:?}"
+    );
+}
+
+/// Regression (#14): field hooks fire for sub-fields *inside array and blocks
+/// rows* (and `has_any_field_hook` detects them). Previously the field-hook
+/// walker never recursed into rows, so these hooks silently never ran.
+#[test]
+fn field_hooks_fire_inside_array_and_blocks_rows() {
+    let tmp = tempfile::tempdir().unwrap();
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("carts2.lua"),
+        r#"
+crap.collections.define("carts2", {
+    fields = {
+        { name = "items", type = "array", fields = {
+            { name = "name", type = "text", hooks = { before_change = { "hooks.up.upper" } } },
+        } },
+        { name = "sections", type = "blocks", blocks = {
+            { type = "text", fields = {
+                { name = "heading", type = "text", hooks = { before_change = { "hooks.up.upper" } } },
+            } },
+        } },
+    },
+})
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("up.lua"),
+        r#"
+local M = {}
+
+function M.upper(value, ctx)
+    if type(value) == "string" then
+        return value:upper()
+    end
+    return value
+end
+
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+
+    let def = registry.get_collection("carts2").unwrap().clone();
+
+    let mut conn = db_pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let wh = RunnerWriteHooks::new(&runner).with_conn(&tx);
+    let ctx = ServiceContext::collection("carts2", &def)
+        .conn(&tx)
+        .write_hooks(&wh)
+        .build();
+    let mut data = DocumentFields::new();
+    data.insert(
+        "items".to_string(),
+        json!([{ "name": "foo" }, { "name": "bar" }]),
+    );
+    data.insert(
+        "sections".to_string(),
+        json!([{ "_block_type": "text", "heading": "hi" }]),
+    );
+
+    let (doc, _) = create_document_in_conn(&ctx, WriteInput::builder(data).build())
+        .expect("create must succeed");
+    tx.commit().unwrap();
+
+    // Array sub-field hook fired per row.
+    let items = doc
+        .fields
+        .get("items")
+        .and_then(|v| v.as_array())
+        .expect("items array");
+    assert_eq!(items[0].get("name").and_then(|v| v.as_str()), Some("FOO"));
+    assert_eq!(items[1].get("name").and_then(|v| v.as_str()), Some("BAR"));
+
+    // Blocks sub-field hook fired per row, with `_block_type` preserved.
+    let sections = doc
+        .fields
+        .get("sections")
+        .and_then(|v| v.as_array())
+        .expect("sections array");
+    assert_eq!(
+        sections[0].get("heading").and_then(|v| v.as_str()),
+        Some("HI")
+    );
+    assert_eq!(
+        sections[0].get("_block_type").and_then(|v| v.as_str()),
+        Some("text"),
+        "_block_type must be preserved on write-back"
+    );
+}
+
+/// Regression (#12.2): a validator on a field *inside an array/blocks row* can
+/// reach the full parent document via `ctx.document` (its own row stays as
+/// `ctx.data`), enabling cross-row / parent cross-field rules.
+#[test]
+fn sub_field_validator_sees_parent_document() {
+    let tmp = tempfile::tempdir().unwrap();
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("invoices.lua"),
+        r#"
+crap.collections.define("invoices", {
+    fields = {
+        { name = "currency", type = "text" },
+        { name = "lines", type = "array", fields = {
+            { name = "amount", type = "text", validate = "hooks.inv.line_ok" },
+        } },
+    },
+})
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("inv.lua"),
+        r#"
+local M = {}
+
+-- A line is only valid when the parent invoice has a currency set. The line
+-- itself (ctx.data) has no currency — only the parent document does.
+function M.line_ok(value, ctx)
+    if ctx.document.currency == nil or ctx.document.currency == "" then
+        return "currency must be set on the invoice before adding lines"
+    end
+    return true
+end
+
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+
+    let def = registry.get_collection("invoices").unwrap().clone();
+
+    let create = |currency: Option<&str>| {
+        let mut conn = db_pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let wh = RunnerWriteHooks::new(&runner).with_conn(&tx);
+        let ctx = ServiceContext::collection("invoices", &def)
+            .conn(&tx)
+            .write_hooks(&wh)
+            .build();
+        let mut data = DocumentFields::new();
+        if let Some(c) = currency {
+            data.insert("currency".to_string(), json!(c));
+        }
+        data.insert("lines".to_string(), json!([{ "amount": "10" }]));
+        let res = create_document_in_conn(&ctx, WriteInput::builder(data).build());
+        if res.is_ok() {
+            tx.commit().unwrap();
+        }
+        res
+    };
+
+    // currency set on the parent → the sub-field validator (reading ctx.document) passes.
+    assert!(
+        create(Some("USD")).is_ok(),
+        "line valid when parent invoice has a currency"
+    );
+
+    // currency missing → the sub-field validator rejects via ctx.document.
+    let err = create(None)
+        .expect_err("line must be rejected — sub-field validator reads parent ctx.document");
+    assert!(
+        matches!(err, crap_cms::service::ServiceError::Validation(_)),
+        "expected a Validation error, got: {err:?}"
+    );
 }

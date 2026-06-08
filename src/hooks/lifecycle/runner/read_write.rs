@@ -8,19 +8,38 @@ use crate::{
     core::{
         Document, DocumentFields, FieldDefinition, FieldError, FieldType, Hooks, ValidationError,
     },
-    db::{DbConnection, query::helpers::prefixed_name},
+    db::{DbConnection, LocaleContext, query::helpers::prefixed_name},
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
         lifecycle::{
             LuaCrudInfra,
             execution::{AfterReadCtx, apply_after_read_inner, has_field_hooks_for_event},
-            types::FieldHookEvent,
+            types::{FieldHookEvent, TxContextGuard},
             validation::{
                 richtext_attrs::run_before_validate_on_node_attrs, validate_fields_inner,
             },
         },
     },
 };
+
+/// Bundled inputs for [`HookRunner::apply_after_read_for_event`] — the event
+/// surface's equivalent of [`AfterReadCtx`]. Carries the real triggering
+/// `operation` (create/update/delete) and the event `timestamp` so an
+/// `after_read` hook on a live event sees the same `ctx.operation` and
+/// `ctx.data.updated_at` it would on a normal read, instead of a synthetic
+/// `"subscribe"` op with no timestamp.
+pub struct EventAfterReadInput<'a> {
+    pub collection: &'a str,
+    pub hooks: &'a Hooks,
+    pub fields: &'a [FieldDefinition],
+    pub document_id: &'a str,
+    pub data: &'a DocumentFields,
+    pub user: Option<&'a Document>,
+    /// The real operation that produced the event: `"create"`, `"update"`, or `"delete"`.
+    pub operation: &'a str,
+    /// ISO-8601 timestamp of the event (surfaced to the hook as `updated_at`).
+    pub timestamp: &'a str,
+}
 
 impl HookRunner {
     /// Fire `before_read` hooks. Returns error to abort the read.
@@ -30,17 +49,7 @@ impl HookRunner {
     /// # Errors
     ///
     /// Returns an error if any `before_read` hook fails or aborts the read.
-    pub fn fire_before_read(
-        &self,
-        hooks: &Hooks,
-        collection: &str,
-        operation: &str,
-        data: DocumentFields,
-    ) -> Result<()> {
-        let ctx = HookContext::builder(collection, operation)
-            .data(data)
-            .build();
-
+    pub fn fire_before_read(&self, hooks: &Hooks, ctx: HookContext) -> Result<()> {
         self.run_hooks(hooks, HookEvent::BeforeRead, ctx)?;
 
         Ok(())
@@ -59,6 +68,15 @@ impl HookRunner {
             }
         };
 
+        // Expose the reader + UI locale to field `after_read` hooks (which read
+        // them from VM app_data). The freshly-acquired pool VM has none set, so
+        // unlike the inline path it would otherwise see `nil`.
+        let _identity = TxContextGuard::set_identity(
+            &lua,
+            ctx.user.cloned(),
+            ctx.ui_locale.map(std::string::ToString::to_string),
+        );
+
         apply_after_read_inner(&lua, ctx, doc)
     }
 
@@ -66,36 +84,29 @@ impl HookRunner {
     /// Used by SSE and gRPC Subscribe to ensure event data consistency.
     /// Returns the original data unchanged if no hooks are configured.
     #[must_use]
-    pub fn apply_after_read_for_event(
-        &self,
-        collection: &str,
-        hooks: &Hooks,
-        fields: &[FieldDefinition],
-        document_id: &str,
-        data: &DocumentFields,
-        user: Option<&Document>,
-    ) -> DocumentFields {
-        let has_field_hooks = has_field_hooks_for_event(fields, &FieldHookEvent::AfterRead);
-        let has_collection_hooks = !hooks.after_read.is_empty();
+    pub fn apply_after_read_for_event(&self, input: &EventAfterReadInput<'_>) -> DocumentFields {
+        let has_field_hooks = has_field_hooks_for_event(input.fields, &FieldHookEvent::AfterRead);
+        let has_collection_hooks = !input.hooks.after_read.is_empty();
         let has_registered = self.has_registered_hooks_for("after_read");
 
         if !has_field_hooks && !has_collection_hooks && !has_registered {
-            return data.clone();
+            return input.data.clone();
         }
 
         let doc = Document {
-            id: document_id.to_string().into(),
-            fields: data.clone(),
+            id: input.document_id.to_string().into(),
+            fields: input.data.clone(),
             created_at: None,
-            updated_at: None,
+            updated_at: Some(input.timestamp.to_string()),
         };
 
         let ctx = AfterReadCtx {
-            hooks,
-            fields,
-            collection,
-            operation: "subscribe",
-            user,
+            hooks: input.hooks,
+            fields: input.fields,
+            collection: input.collection,
+            operation: input.operation,
+            locale: None,
+            user: input.user,
             ui_locale: None,
         };
 
@@ -122,6 +133,14 @@ impl HookRunner {
                 return docs;
             }
         };
+
+        // Same as `apply_after_read`: expose user + UI locale to field
+        // `after_read` hooks on the freshly-acquired pool VM.
+        let _identity = TxContextGuard::set_identity(
+            &lua,
+            ctx.user.cloned(),
+            ctx.ui_locale.map(std::string::ToString::to_string),
+        );
 
         docs.into_iter()
             .map(|doc| apply_after_read_inner(&lua, ctx, doc))
@@ -162,6 +181,8 @@ impl HookRunner {
                 event: FieldHookEvent::BeforeValidate,
                 collection: &ctx.collection,
                 operation: &ctx.operation,
+                id: ctx.document_id.as_deref(),
+                locale: val_ctx.locale_ctx.map(LocaleContext::access_locale),
             },
             wctx,
         )?;
@@ -196,6 +217,8 @@ impl HookRunner {
                 event: FieldHookEvent::BeforeChange,
                 collection: &ctx.collection,
                 operation: &ctx.operation,
+                id: ctx.document_id.as_deref(),
+                locale: val_ctx.locale_ctx.map(LocaleContext::access_locale),
             },
             wctx,
         )?;
@@ -240,6 +263,8 @@ impl HookRunner {
                         event: FieldHookEvent::AfterChange,
                         collection: &ctx.collection,
                         operation: &ctx.operation,
+                        id: ctx.document_id.as_deref(),
+                        locale: ctx.locale.as_deref(),
                     },
                     wctx,
                 )?;
@@ -323,6 +348,15 @@ impl HookRunner {
             .acquire()
             .map_err(|_| ValidationError::new(vec![FieldError::new("_system", "VM pool error")]))?;
 
+        // Validation runs on its own freshly-acquired pool VM (separate from the
+        // write-hook VM), so custom `validate` functions would otherwise see
+        // `ctx.user`/`ctx.ui_locale` as nil. Expose them via app-data (no CRUD).
+        let _identity = TxContextGuard::set_identity(
+            &lua,
+            ctx.user.cloned(),
+            ctx.ui_locale.map(std::string::ToString::to_string),
+        );
+
         // Inject registry for richtext node attr validation if not already set
         if ctx.registry.is_some() {
             return validate_fields_inner(&lua, fields, data, ctx);
@@ -336,6 +370,8 @@ impl HookRunner {
             registry: Some(&self.registry),
             soft_delete: ctx.soft_delete,
             collection_required_locales: ctx.collection_required_locales,
+            user: ctx.user,
+            ui_locale: ctx.ui_locale,
         };
         validate_fields_inner(&lua, fields, data, &enriched_ctx)
     }

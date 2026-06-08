@@ -4,10 +4,10 @@ use serde_json::Value;
 
 use crate::{
     config::LocaleConfig,
-    core::{DocumentFields, ReqContext},
-    db::{AccessResult, LocaleContext, query},
-    hooks::{HookContext, HookEvent},
-    service::{ServiceContext, helpers::enforce_access_constraints},
+    core::{CollectionDefinition, DocumentFields, ReqContext},
+    db::{AccessResult, DbConnection, LocaleContext, query},
+    hooks::{AccessCheckInput, HookContext, HookEvent},
+    service::{ServiceContext, helpers::enforce_access_constraints, hooks::WriteHooks},
 };
 
 use super::ServiceError;
@@ -20,6 +20,59 @@ pub(crate) struct DeleteResult {
     pub context: ReqContext,
     /// Upload file fields from the deleted document (for post-commit cleanup).
     pub upload_doc_fields: Option<DocumentFields>,
+}
+
+/// Load the document's fields once (before deletion removes the row) and build
+/// the delete-hook `data`. Returns `(upload_doc_fields, hook_data)`:
+///
+/// - `upload_doc_fields` — fields for post-commit upload-file cleanup (only for
+///   upload collections; `None` otherwise).
+/// - `hook_data` — the `data` passed to `before_delete` / `after_delete`: the
+///   document's full fields (when a delete hook will run) plus `id`, and
+///   `soft_delete` for a soft delete; otherwise just `{ id }` (+ `soft_delete`).
+///
+/// The document is loaded only when an upload collection or a delete hook needs
+/// it, so a plain delete with no hooks does no extra query.
+fn prepare_delete_hook_data(
+    ctx: &ServiceContext,
+    write_hooks: &dyn WriteHooks,
+    def: &CollectionDefinition,
+    conn: &dyn DbConnection,
+    id: &str,
+    locale_config: Option<&LocaleConfig>,
+) -> Result<(Option<DocumentFields>, DocumentFields)> {
+    let wants_hook_data = write_hooks.runs_delete_hooks(&def.hooks);
+
+    let doc_fields = if def.is_upload_collection() || wants_hook_data {
+        let lc = locale_config.cloned().unwrap_or_default();
+        let locale_ctx = LocaleContext::from_locale_string(None, &lc)?;
+
+        query::find_by_id(conn, ctx.slug, def, id, locale_ctx.as_ref())
+            .ok()
+            .flatten()
+            .map(|d| d.fields)
+    } else {
+        None
+    };
+
+    let upload_doc_fields = if def.is_upload_collection() {
+        doc_fields.clone()
+    } else {
+        None
+    };
+
+    let mut hook_data = if wants_hook_data {
+        doc_fields.unwrap_or_default()
+    } else {
+        DocumentFields::new()
+    };
+    hook_data.insert("id".to_string(), Value::String(id.to_string()));
+
+    if def.soft_delete {
+        hook_data.insert("soft_delete".to_string(), Value::Bool(true));
+    }
+
+    Ok((upload_doc_fields, hook_data))
 }
 
 /// Delete a document on an existing connection/transaction.
@@ -45,7 +98,19 @@ pub(crate) fn delete_document_in_conn(
     };
 
     // Delete is locale-agnostic — the whole row is removed across all locales.
-    let access = write_hooks.check_access(access_ref, ctx.user, Some(id), None, None)?;
+    let access = write_hooks.check_access(&AccessCheckInput {
+        access_ref,
+        user: ctx.user,
+        id: Some(id),
+        data: None,
+        locale: None,
+        // A soft delete is a "trash" operation (gated by the trash access fn);
+        // a hard delete is "delete". Keeps the operation label consistent with
+        // the access fn being invoked (and with the admin permission grid).
+        operation: if def.soft_delete { "trash" } else { "delete" },
+        collection: ctx.slug,
+        ui_locale: None,
+    })?;
 
     if matches!(access, AccessResult::Denied) {
         let msg = if def.soft_delete {
@@ -63,18 +128,12 @@ pub(crate) fn delete_document_in_conn(
     let op_label = if def.soft_delete { "Trash" } else { "Delete" };
     enforce_access_constraints(ctx, id, &access, op_label, false)?;
 
-    // Pre-load upload doc for file cleanup (before deletion removes it)
-    let upload_doc_fields = if def.is_upload_collection() {
-        let lc = locale_config.cloned().unwrap_or_default();
-        let locale_ctx = LocaleContext::from_locale_string(None, &lc)?;
-
-        query::find_by_id(conn, ctx.slug, def, id, locale_ctx.as_ref())
-            .ok()
-            .flatten()
-            .map(|d| d.fields.clone())
-    } else {
-        None
-    };
+    // Load the document fields once (before deletion removes the row) for upload
+    // cleanup and the delete-hook context, and build the hook `data`. For a hard
+    // delete the row is gone afterwards, so this snapshot is `after_delete`'s
+    // only view of what was removed.
+    let (upload_doc_fields, hook_data) =
+        prepare_delete_hook_data(ctx, write_hooks, def, conn, id, locale_config)?;
 
     // Ref count protection (hard delete only).
     if !def.soft_delete {
@@ -88,16 +147,9 @@ pub(crate) fn delete_document_in_conn(
         }
     }
 
-    // Before-delete hooks
-    let mut hook_data = DocumentFields::new();
-    hook_data.insert("id".to_string(), Value::String(id.to_string()));
-
-    if def.soft_delete {
-        hook_data.insert("soft_delete".to_string(), Value::Bool(true));
-    }
-
     let hook_ctx = HookContext::builder(ctx.slug, "delete")
         .data(hook_data.clone())
+        .document_id(id)
         .user(ctx.user)
         .build();
 
@@ -145,6 +197,7 @@ pub(crate) fn delete_document_in_conn(
     // After-delete hooks
     let after_ctx = HookContext::builder(ctx.slug, "delete")
         .data(hook_data)
+        .document_id(id)
         .context(final_ctx.context)
         .user(ctx.user)
         .build();
@@ -167,9 +220,10 @@ pub(crate) fn delete_document_in_conn(
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use rusqlite::Connection;
+    use serde_json::json;
 
     use crate::{
         core::{
@@ -228,14 +282,7 @@ mod tests {
             Vec::new()
         }
 
-        fn check_access(
-            &self,
-            _access_ref: Option<&str>,
-            _user: Option<&Document>,
-            _id: Option<&str>,
-            _data: Option<&DocumentFields>,
-            _locale: Option<&str>,
-        ) -> anyhow::Result<AccessResult> {
+        fn check_access(&self, _input: &AccessCheckInput<'_>) -> anyhow::Result<AccessResult> {
             Ok(AccessResult::Allowed)
         }
 
@@ -381,6 +428,144 @@ mod tests {
         assert!(
             recv_result.is_err(),
             "non-auth hard-delete must not publish an invalidation signal"
+        );
+    }
+
+    /// Allow-all hooks that record the `data` passed to `before_delete` /
+    /// `after_delete`, so a test can assert the document's field data reaches
+    /// the delete-hook context. `runs_delete_hooks` returns `true` so the
+    /// document is pre-loaded.
+    #[derive(Default)]
+    struct RecordingWriteHooks {
+        before: Mutex<Vec<DocumentFields>>,
+        after: Mutex<Vec<DocumentFields>>,
+    }
+
+    impl WriteHooks for RecordingWriteHooks {
+        fn runs_delete_hooks(&self, _hooks: &Hooks) -> bool {
+            true
+        }
+
+        fn run_before_write(
+            &self,
+            _hooks: &Hooks,
+            _fields: &[FieldDefinition],
+            ctx: HookContext,
+            _val_ctx: &ValidationCtx,
+        ) -> anyhow::Result<HookContext> {
+            Ok(ctx)
+        }
+
+        fn run_after_write(
+            &self,
+            _hooks: &Hooks,
+            _fields: &[FieldDefinition],
+            _event: HookEvent,
+            ctx: HookContext,
+            _conn: &dyn DbConnection,
+        ) -> anyhow::Result<HookContext> {
+            Ok(ctx)
+        }
+
+        fn run_hooks_with_conn(
+            &self,
+            _hooks: &Hooks,
+            event: HookEvent,
+            ctx: HookContext,
+            _conn: &dyn DbConnection,
+        ) -> anyhow::Result<HookContext> {
+            match event {
+                HookEvent::BeforeDelete => self.before.lock().unwrap().push(ctx.data.clone()),
+                HookEvent::AfterDelete => self.after.lock().unwrap().push(ctx.data.clone()),
+                _ => {}
+            }
+            Ok(ctx)
+        }
+
+        fn field_read_denied(
+            &self,
+            _fields: &[FieldDefinition],
+            _user: Option<&Document>,
+            _locale: Option<&str>,
+        ) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn check_access(&self, _input: &AccessCheckInput<'_>) -> anyhow::Result<AccessResult> {
+            Ok(AccessResult::Allowed)
+        }
+
+        fn field_write_denied(
+            &self,
+            _fields: &[FieldDefinition],
+            _user: Option<&Document>,
+            _locale: Option<&str>,
+            _operation: &str,
+        ) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn validate_fields(
+            &self,
+            _fields: &[FieldDefinition],
+            _data: &DocumentFields,
+            _ctx: &ValidationCtx,
+        ) -> std::result::Result<(), ValidationError> {
+            Ok(())
+        }
+    }
+
+    /// Regression: `before_delete` and `after_delete` must receive the deleted
+    /// document's field data (plus `id`), not just `{ id }`. For a hard delete
+    /// the row is gone by `after_delete`, so the snapshot is the only way the
+    /// hook can see what was removed.
+    #[test]
+    fn delete_hooks_receive_document_field_data() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                _ref_count INTEGER DEFAULT 0,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO posts (id, title) VALUES ('p1', 'Hello');",
+        )
+        .unwrap();
+
+        let mut def = CollectionDefinition::new("posts");
+        def.timestamps = true;
+        def.fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
+
+        let hooks = RecordingWriteHooks::default();
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .write_hooks(&hooks)
+            .override_access(true)
+            .build();
+
+        delete_document_in_conn(&ctx, "p1", None).expect("delete");
+
+        let before = hooks.before.lock().unwrap();
+        let after = hooks.after.lock().unwrap();
+        assert_eq!(before.len(), 1, "before_delete should fire once");
+        assert_eq!(after.len(), 1, "after_delete should fire once");
+
+        assert_eq!(
+            before[0].get("title"),
+            Some(&json!("Hello")),
+            "before_delete must see the document's field data"
+        );
+        assert_eq!(
+            before[0].get("id"),
+            Some(&json!("p1")),
+            "before_delete must still carry the id"
+        );
+        assert_eq!(
+            after[0].get("title"),
+            Some(&json!("Hello")),
+            "after_delete must see the field data (the row is already gone)"
         );
     }
 }

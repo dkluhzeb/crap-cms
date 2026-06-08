@@ -32,8 +32,9 @@ pub(in crate::api::handlers) fn job_run_status(status: &JobStatus) -> content::J
     }
 }
 
-/// Map the stored `scheduled_by` string (`"grpc"`/`"cron"`/`"hook"`, or absent)
-/// to its proto enum. Anything else — including `None` — is `Unspecified`.
+/// Map the stored `scheduled_by` string (`"grpc"`/`"cron"`/`"hook"`) to its
+/// proto enum. Anything else — `"cli"` (no proto variant), unknown values, or
+/// `None` — is `Unspecified`.
 pub(in crate::api::handlers) fn job_scheduled_by(value: Option<&str>) -> content::JobScheduledBy {
     match value {
         Some("grpc") => content::JobScheduledBy::Grpc,

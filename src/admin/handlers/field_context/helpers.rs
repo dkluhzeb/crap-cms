@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 use crate::{
     admin::context::field::FieldContext,
     core::{FieldDefinition, FieldType},
-    hooks::{HookRunner, lifecycle::DisplayConditionResult},
+    hooks::{ConditionContext, HookRunner, lifecycle::DisplayConditionResult},
 };
 
 /// Max nesting depth for recursive field context building (guard against infinite nesting).
@@ -167,6 +167,7 @@ pub fn apply_display_conditions(
     form_data: &Value,
     hook_runner: &HookRunner,
     filter_hidden: bool,
+    cond_ctx: &ConditionContext<'_>,
 ) {
     let defs: Vec<&FieldDefinition> = if filter_hidden {
         field_defs.iter().filter(|f| !f.admin.hidden).collect()
@@ -183,7 +184,7 @@ pub fn apply_display_conditions(
         return;
     }
 
-    let results = hook_runner.call_display_conditions_batch(&conditions);
+    let results = hook_runner.call_display_conditions_batch(&conditions, cond_ctx);
 
     for (fc, field_def) in fields.iter_mut().zip(defs.iter()) {
         apply_single_condition(fc, field_def, &results);

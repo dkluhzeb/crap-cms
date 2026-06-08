@@ -9,15 +9,28 @@
 
 use std::collections::HashMap;
 
+use mlua::Lua;
+
 use crate::{
     core::{DocumentFields, FieldDefinition, FieldType, RequiredLocales, validate::FieldError},
     db::{
         DbValue, LocaleContext,
         query::helpers::{join_table, locale_column, prefixed_name},
     },
+    hooks::lifecycle::validation::custom::{ValidateCtxSource, run_required_condition_inner},
 };
 
 use super::{ValidationCtx, is_empty_value};
+
+/// Stable inputs shared across the recursive `collect_required_localized` walk:
+/// the Lua VM (for `required_when` predicates), the submitted document, and the
+/// validation + locale context.
+struct CompletenessCtx<'a> {
+    lua: &'a Lua,
+    data: &'a DocumentFields,
+    ctx: &'a ValidationCtx<'a>,
+    lctx: &'a LocaleContext,
+}
 
 /// How a localized field stores its value, which determines the presence check.
 #[derive(Clone, Copy, PartialEq)]
@@ -38,6 +51,7 @@ struct Target {
 /// Run the localized completeness check, pushing a `validation.required_locale`
 /// error for each (field, locale) that is required but empty.
 pub(in crate::hooks::lifecycle::validation) fn check_localized_completeness(
+    lua: &Lua,
     fields: &[FieldDefinition],
     data: &DocumentFields,
     ctx: &ValidationCtx,
@@ -51,8 +65,14 @@ pub(in crate::hooks::lifecycle::validation) fn check_localized_completeness(
     };
     let write_locale = lctx.access_locale();
 
+    let cctx = CompletenessCtx {
+        lua,
+        data,
+        ctx,
+        lctx,
+    };
     let mut targets: Vec<Target> = Vec::new();
-    collect_required_localized(fields, "", false, ctx, lctx, &mut targets);
+    collect_required_localized(&cctx, fields, "", false, &mut targets, errors);
     if targets.is_empty() {
         return;
     }
@@ -150,12 +170,12 @@ fn join_row_exists(ctx: &ValidationCtx, data_key: &str, loc: &str) -> bool {
 /// traversal). Group sub-fields can't be localized arrays/blocks themselves, so
 /// those join tables keep the group prefix in `data_key`.
 fn collect_required_localized(
+    cctx: &CompletenessCtx<'_>,
     fields: &[FieldDefinition],
     prefix: &str,
     inherited_localized: bool,
-    ctx: &ValidationCtx,
-    lctx: &LocaleContext,
     out: &mut Vec<Target>,
+    errors: &mut Vec<FieldError>,
 ) {
     for field in fields {
         let data_key = prefixed_name(prefix, &field.name);
@@ -163,14 +183,14 @@ fn collect_required_localized(
 
         match field.field_type {
             FieldType::Group => {
-                collect_required_localized(&field.fields, &data_key, localized, ctx, lctx, out);
+                collect_required_localized(cctx, &field.fields, &data_key, localized, out, errors);
             }
             FieldType::Row | FieldType::Collapsible => {
-                collect_required_localized(&field.fields, prefix, localized, ctx, lctx, out);
+                collect_required_localized(cctx, &field.fields, prefix, localized, out, errors);
             }
             FieldType::Tabs => {
                 for tab in &field.tabs {
-                    collect_required_localized(&tab.fields, prefix, localized, ctx, lctx, out);
+                    collect_required_localized(cctx, &tab.fields, prefix, localized, out, errors);
                 }
             }
             // Checkboxes always have a value (default off), so `required` is a
@@ -178,7 +198,14 @@ fn collect_required_localized(
             // must agree, or an unchecked localized checkbox would block writes.
             FieldType::Checkbox => {}
             _ => {
-                if field.required && field.is_locale_scoped(inherited_localized) {
+                // A localized field is required either statically (`required`) or
+                // when its `required_when` predicate is truthy. The submit-time
+                // walker skips the predicate for locale-scoped fields (required
+                // is delegated here), so this is the only place it runs for them.
+                let required = field.is_locale_scoped(inherited_localized)
+                    && (field.required || required_when_truthy(cctx, field, &data_key, errors));
+
+                if required {
                     let kind = if field.has_parent_column() {
                         FieldKind::Scalar
                     } else {
@@ -186,11 +213,54 @@ fn collect_required_localized(
                     };
                     out.push(Target {
                         data_key,
-                        locales: effective_locales(field, ctx, lctx),
+                        locales: effective_locales(field, cctx.ctx, cctx.lctx),
                         kind,
                     });
                 }
             }
+        }
+    }
+}
+
+/// Evaluate a localized field's `required_when` predicate against the submitted
+/// document. `false` (no eval) when the field has no predicate. A predicate
+/// error pushes a field error and returns `false` (fail-loud, not required).
+fn required_when_truthy(
+    cctx: &CompletenessCtx<'_>,
+    field: &FieldDefinition,
+    data_key: &str,
+    errors: &mut Vec<FieldError>,
+) -> bool {
+    let Some(func_ref) = field.required_when.as_deref() else {
+        return false;
+    };
+
+    let operation = if cctx.ctx.exclude_id.is_some() {
+        "update"
+    } else {
+        "create"
+    };
+
+    match run_required_condition_inner(
+        cctx.lua,
+        func_ref,
+        &ValidateCtxSource {
+            data: cctx.data,
+            document: cctx.data,
+            collection: cctx.ctx.table,
+            field_name: &field.name,
+            locale: Some(cctx.lctx.access_locale()),
+            operation,
+            id: cctx.ctx.exclude_id,
+        },
+    ) {
+        Ok(req) => req,
+        Err(e) => {
+            errors.push(FieldError::new(
+                data_key.to_owned(),
+                format!("required_when predicate '{func_ref}' failed: {e}"),
+            ));
+            false
         }
     }
 }
@@ -271,5 +341,88 @@ fn db_present(v: Option<&DbValue>) -> bool {
         None | Some(DbValue::Null) => false,
         Some(DbValue::Text(s)) => !s.is_empty(),
         Some(_) => true,
+    }
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod tests {
+    use mlua::Lua;
+    use serde_json::json;
+
+    use crate::config::LocaleConfig;
+    use crate::core::{DocumentFields, FieldDefinition, FieldType};
+    use crate::db::{LocaleContext, LocaleMode};
+
+    use super::{ValidationCtx, check_localized_completeness};
+
+    fn lua_with_predicate() -> Lua {
+        let lua = Lua::new();
+        lua.load(
+            r#"
+            package.loaded["validators"] = {
+                needs = function(ctx)
+                    return ctx.data.kind == "official"
+                end,
+            }
+        "#,
+        )
+        .exec()
+        .unwrap();
+        lua
+    }
+
+    fn en_de_ctx() -> LocaleContext {
+        LocaleContext {
+            mode: LocaleMode::Default,
+            config: LocaleConfig {
+                default_locale: "en".to_string(),
+                locales: vec!["en".to_string(), "de".to_string()],
+                fallback: false,
+            },
+        }
+    }
+
+    /// Regression: a localized field's `required_when` predicate is enforced via
+    /// the per-locale completeness gate (the submit-time check skips locale-scoped
+    /// fields, delegating to completeness). Previously completeness honored only
+    /// the static `required` flag, so a truthy predicate on a localized field was
+    /// silently dropped — required nowhere.
+    #[test]
+    fn localized_required_when_enforced_via_completeness() {
+        let lua = lua_with_predicate();
+        let fields = vec![
+            FieldDefinition::builder("kind", FieldType::Text).build(),
+            FieldDefinition::builder("notes", FieldType::Text)
+                .localized(true)
+                .required_when("validators.needs")
+                .build(),
+        ];
+        let lctx = en_de_ctx();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let ctx = ValidationCtx::builder(&conn, "docs")
+            .locale_ctx(Some(&lctx))
+            .build();
+
+        // Predicate truthy + `notes` absent → required in the default locale.
+        let mut data = DocumentFields::new();
+        data.insert("kind".to_string(), json!("official"));
+        let mut errors = Vec::new();
+        check_localized_completeness(&lua, &fields, &data, &ctx, &mut errors);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.key.as_deref() == Some("validation.required_locale")),
+            "truthy required_when on a localized field must produce a required_locale error, got: {errors:?}"
+        );
+
+        // Predicate falsy → `notes` not required, no error.
+        let mut data2 = DocumentFields::new();
+        data2.insert("kind".to_string(), json!("casual"));
+        let mut errors2 = Vec::new();
+        check_localized_completeness(&lua, &fields, &data2, &ctx, &mut errors2);
+        assert!(
+            errors2.is_empty(),
+            "falsy required_when must not require the localized field, got: {errors2:?}"
+        );
     }
 }

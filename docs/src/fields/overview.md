@@ -44,6 +44,7 @@ Every field type accepts these properties:
 |----------|------|---------|-------------|
 | `name` | string | **required** | Column name. Must be a valid SQL identifier (alphanumeric + underscore). See the reserved-name rules below. |
 | `required` | boolean | `false` | Validation: must have a non-empty value on create/update. |
+| `required_when` | string | — | Lua predicate ref (`"module.fn"`) for a **conditional** requirement. The predicate receives the [validate context](#custom-validation) and returns truthy when the field must be present — e.g. require `shipping_address` only when `ctx.data.product_type == "physical"`. For a field inside an array/blocks row, `ctx.data` is the row and `ctx.document` the full document. Applies in addition to a static `required = true`, produces the same `validation.required` error, and is skipped on draft saves. |
 | `unique` | boolean | `false` | Unique constraint. Checked in the current transaction. For [localized](../locale/overview.md#unique--localized) fields, enforced per locale. |
 | `index` | boolean | `false` | Create a B-tree index on this column. Skipped when `unique = true` (already indexed by SQLite). |
 | `localized` | boolean | `false` | Enable per-locale values. Requires [localization](../locale/overview.md) to be configured. |
@@ -200,6 +201,10 @@ The context table contains:
 |-------|------|-------------|
 | `collection` | string | Collection slug |
 | `field_name` | string | Name of the field being validated |
-| `data` | table | Full document data |
+| `operation` | string | `"create"` or `"update"` — lets a validator branch (e.g. "immutable after create") |
+| `id` | string/nil | The document id on `update`; nil on `create` |
+| `data` | table | The **nearest scope**: the full document for a top-level field, or the current row for a validator on a field inside an array/blocks row |
+| `document` | table | The **full document** being written. Equals `data` for top-level fields; for a sub-field validator it's the parent document, so it can cross-reference fields outside its row |
 | `user` | table/nil | Authenticated user document (nil if unauthenticated) |
 | `ui_locale` | string/nil | Admin UI locale code (e.g., `"en"`, `"de"`) |
+| `locale` | string/nil | Content locale this write targets (nil when localization is disabled) |

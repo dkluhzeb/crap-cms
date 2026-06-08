@@ -9,6 +9,7 @@ use tracing::error;
 
 use super::helpers::build_bulk_filters;
 
+use crate::hooks::AccessCheckInput;
 use crate::{
     api::{
         content,
@@ -62,11 +63,18 @@ fn update_many_blocking(input: UpdateManyBlockingInput) -> Result<i64, Status> {
         &conn,
     )?;
 
+    let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
     let read_access = ContentService::check_access_blocking(
-        input.def.access.read.as_deref(),
-        auth_user.as_ref(),
-        None,
-        None,
+        &AccessCheckInput {
+            access_ref: input.def.access.read.as_deref(),
+            user: user_doc,
+            id: None,
+            data: None,
+            locale: None,
+            operation: "find",
+            collection: &input.def.slug,
+            ui_locale: None,
+        },
         &input.hook_runner,
         &mut conn,
     )?;
