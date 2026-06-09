@@ -46,6 +46,7 @@ pub mod document_id;
 pub mod email;
 pub mod event;
 pub mod field;
+pub mod field_denial;
 pub mod hook_ref;
 pub mod job;
 pub mod lua_lease;
@@ -74,6 +75,7 @@ pub use field::{
     LocalizedString, McpFieldConfig, PickerAppearance, RelationshipConfig, RequiredLocales,
     SelectOption, ValidateFunction, to_title_case, validate_template_name,
 };
+pub use field_denial::{DenialSeg, FieldDenial};
 pub use hook_ref::HookRef;
 pub use job::{JobDefinition, JobLabels, JobRun, JobStatus};
 pub use lua_lease::{LocalLease, LuaVmLease};

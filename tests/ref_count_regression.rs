@@ -212,6 +212,11 @@ fn make_nesting_matrix_defs() -> Vec<CollectionDefinition> {
         FieldDefinition::builder("slides", FieldType::Array)
             .fields(vec![rel("slide_tag", false)])
             .build(),
+        // Array > has-many (id list stored as JSON in the column — the DB-read
+        // path must parse it back to an array, not comma-split a raw string)
+        FieldDefinition::builder("gallery", FieldType::Array)
+            .fields(vec![rel("gallery_tags", true)])
+            .build(),
         // Array > Group > has-one
         FieldDefinition::builder("variants", FieldType::Array)
             .fields(vec![
@@ -266,6 +271,7 @@ async fn create_matrix_article(setup: &TestSetup) -> (String, Vec<(&'static str,
         ("top-level", create_tag(setup, "top").await),
         ("group", create_tag(setup, "group").await),
         ("array", create_tag(setup, "array").await),
+        ("array>has-many", create_tag(setup, "array_hm").await),
         ("array>group", create_tag(setup, "array_group").await),
         ("blocks", create_tag(setup, "block").await),
         ("blocks>group", create_tag(setup, "block_group").await),
@@ -284,6 +290,13 @@ async fn create_matrix_article(setup: &TestSetup) -> (String, Vec<(&'static str,
             (
                 "slides".to_string(),
                 list_val(vec![struct_val(&[("slide_tag", str_val(&id_of("array")))])]),
+            ),
+            (
+                "gallery".to_string(),
+                list_val(vec![struct_val(&[(
+                    "gallery_tags",
+                    list_val(vec![str_val(&id_of("array>has-many"))]),
+                )])]),
             ),
             (
                 "variants".to_string(),

@@ -83,6 +83,10 @@ fallback = true
 # [depth]
 # default_depth = 1              # default relationship population depth for FindByID
 # max_depth = 10                 # hard cap on population depth
+# max_nesting_depth = 64         # max nesting depth for JSON data structures (e.g. a Lua
+#                                # table a hook builds). Distinct from max_depth (population).
+#                                # Must be >= max_depth; values > 128 won't round-trip through
+#                                # the JSON parser.
 
 # [cache]
 # backend = "memory"             # cache backend: "memory" (default), "redis", "none"

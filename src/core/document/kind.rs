@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::core::{DocumentFields, DocumentId};
+use crate::core::{DocumentFields, DocumentId, FieldDenial};
 use crate::typegen::lua::LuaAnnotation;
 
 /// A single content document with an ID, user-defined fields, and optional timestamps.
@@ -65,52 +65,13 @@ impl Document {
         self.fields.get_str(key)
     }
 
-    /// Strip denied fields by name, handling both flat keys and `__`-separated
-    /// group subfields. After hydration, `address__city` becomes nested
-    /// `{"address": {"city": ...}}` — this method strips from both forms.
-    pub fn strip_fields(&mut self, names: &[String]) {
-        for name in names {
-            // Flat removal (pre-hydration top-level keys like "secret" or "address__city")
-            self.fields.remove(name);
-
-            // Nested removal (post-hydration group subfields)
-            let segments: Vec<&str> = name.split("__").collect();
-            if segments.len() >= 2 {
-                strip_nested(&mut self.fields, &segments);
-            }
+    /// Strip denied fields, handling flat keys, `__`-separated group subfields
+    /// (both pre- and post-hydration), and fields nested inside array/blocks
+    /// rows at any depth. See [`FieldDenial`].
+    pub fn strip_fields(&mut self, denials: &[FieldDenial]) {
+        for denial in denials {
+            denial.strip_from(&mut self.fields);
         }
-    }
-}
-
-/// Walk into nested objects following `__`-separated segments and remove the leaf.
-fn strip_nested(fields: &mut DocumentFields, segments: &[&str]) {
-    let Some((&first, rest)) = segments.split_first() else {
-        return;
-    };
-
-    let Some(Value::Object(map)) = fields.get_mut(first) else {
-        return;
-    };
-
-    if rest.len() == 1 {
-        map.remove(rest[0]);
-    } else {
-        strip_nested_value(map, rest);
-    }
-}
-
-/// Recurse into a `serde_json::Map` to remove a deeply nested field.
-fn strip_nested_value(map: &mut serde_json::Map<String, Value>, segments: &[&str]) {
-    let Some((&first, rest)) = segments.split_first() else {
-        return;
-    };
-
-    if rest.len() == 1 {
-        if let Some(Value::Object(inner)) = map.get_mut(first) {
-            inner.remove(rest[0]);
-        }
-    } else if let Some(Value::Object(inner)) = map.get_mut(first) {
-        strip_nested_value(inner, rest);
     }
 }
 

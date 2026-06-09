@@ -87,8 +87,8 @@ mod tests {
     use crate::{
         config::LocaleConfig,
         core::{
-            CollectionDefinition, Document, DocumentFields, FieldDefinition, FieldType, Hooks,
-            ValidationError, VersionsConfig,
+            CollectionDefinition, Document, DocumentFields, FieldDefinition, FieldDenial,
+            FieldType, Hooks, ValidationError, VersionsConfig,
         },
         db::{AccessResult, DbConnection},
         hooks::{HookContext, HookEvent, ValidationCtx, lifecycle::AfterReadCtx},
@@ -126,7 +126,7 @@ mod tests {
             _fields: &[FieldDefinition],
             _user: Option<&Document>,
             _locale: Option<&str>,
-        ) -> Vec<String> {
+        ) -> Vec<FieldDenial> {
             Vec::new()
         }
     }
@@ -171,7 +171,7 @@ mod tests {
             _fields: &[FieldDefinition],
             _user: Option<&Document>,
             _locale: Option<&str>,
-        ) -> Vec<String> {
+        ) -> Vec<FieldDenial> {
             Vec::new()
         }
 
@@ -185,7 +185,7 @@ mod tests {
             _user: Option<&Document>,
             _locale: Option<&str>,
             _operation: &str,
-        ) -> Vec<String> {
+        ) -> Vec<FieldDenial> {
             Vec::new()
         }
 

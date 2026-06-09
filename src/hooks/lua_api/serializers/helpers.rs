@@ -1,5 +1,7 @@
 //! Shared helpers for Lua table serializers.
 
+use std::sync::OnceLock;
+
 use mlua::{Lua, Table, Value};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
@@ -48,7 +50,28 @@ pub(super) fn localized_string_to_lua(lua: &Lua, ls: &LocalizedString) -> mlua::
     }
 }
 
-const MAX_NESTING_DEPTH: usize = 64;
+/// Fallback nesting limit used before config is applied (and in unit tests /
+/// CLI paths that never call [`set_max_nesting_depth`]). Matches the
+/// `depth.max_nesting_depth` config default.
+const DEFAULT_MAX_NESTING_DEPTH: usize = 64;
+
+/// Process-wide JSON data-nesting limit, set once from `depth.max_nesting_depth`
+/// at server startup (after config validation). Distinct from relationship
+/// population depth.
+static MAX_NESTING_DEPTH: OnceLock<usize> = OnceLock::new();
+
+/// Apply the configured data-nesting limit (called once at startup). Subsequent
+/// calls are ignored — the limit is fixed for the process lifetime.
+pub fn set_max_nesting_depth(limit: usize) {
+    let _ = MAX_NESTING_DEPTH.set(limit);
+}
+
+fn max_nesting_depth() -> usize {
+    MAX_NESTING_DEPTH
+        .get()
+        .copied()
+        .unwrap_or(DEFAULT_MAX_NESTING_DEPTH)
+}
 
 /// Convert a Lua value to a JSON value.
 pub fn lua_to_json(value: &Value) -> mlua::Result<JsonValue> {
@@ -56,9 +79,10 @@ pub fn lua_to_json(value: &Value) -> mlua::Result<JsonValue> {
 }
 
 fn lua_to_json_inner(value: &Value, depth: usize) -> mlua::Result<JsonValue> {
-    if depth > MAX_NESTING_DEPTH {
+    let max = max_nesting_depth();
+    if depth > max {
         return Err(mlua::Error::RuntimeError(format!(
-            "Table nesting exceeds maximum depth of {MAX_NESTING_DEPTH}"
+            "Table nesting exceeds maximum depth of {max}"
         )));
     }
 
@@ -124,9 +148,10 @@ pub fn json_to_lua(lua: &Lua, value: &JsonValue) -> mlua::Result<Value> {
 }
 
 fn json_to_lua_inner(lua: &Lua, value: &JsonValue, depth: usize) -> mlua::Result<Value> {
-    if depth > MAX_NESTING_DEPTH {
+    let max = max_nesting_depth();
+    if depth > max {
         return Err(mlua::Error::RuntimeError(format!(
-            "JSON nesting exceeds maximum depth of {MAX_NESTING_DEPTH}"
+            "JSON nesting exceeds maximum depth of {max}"
         )));
     }
 

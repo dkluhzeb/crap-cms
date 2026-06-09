@@ -3,11 +3,11 @@
 use serde_json::Value;
 
 use crate::{
-    core::{Document, FieldDefinition, FieldType, ReqContext, collection::Hooks},
+    core::{Document, FieldDefinition, FieldDenial, ReqContext, collection::Hooks},
     db::{
         AccessResult, DbConnection, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query,
     },
-    hooks::{HookContext, HookEvent},
+    hooks::{HookContext, HookEvent, lifecycle::access::collect_denials_flat},
     service::{AfterChangeInput, ServiceContext, ServiceError, hooks::WriteHooks},
 };
 
@@ -37,10 +37,11 @@ pub(crate) fn run_after_change_hooks(
     Ok(after_result.context)
 }
 
-/// Collect field names that are marked top-level `hidden = true` for stripping
-/// from API read responses (gRPC, Lua, MCP, admin JSON, REST). Includes group
-/// subfields with `__` prefix. Mirrors the traversal pattern of
-/// `collect_field_access_denied`.
+/// Collect denials for fields marked top-level `hidden = true`, for stripping
+/// from API read responses (gRPC, Lua, MCP, admin JSON, REST). Covers flat
+/// columns, group subfields (`__` prefix), and fields nested inside array/blocks
+/// rows at any depth — sharing the [`collect_denials_flat`] walker with
+/// field-access so the two never diverge.
 ///
 /// `admin.hidden` is *not* read here — that flag controls admin-form rendering
 /// only and never affects API output (so the admin upload widget, gRPC, Lua,
@@ -48,36 +49,11 @@ pub(crate) fn run_after_change_hooks(
 pub(crate) fn collect_api_hidden_field_names(
     fields: &[FieldDefinition],
     prefix: &str,
-) -> Vec<String> {
+) -> Vec<FieldDenial> {
+    let is_hidden = |field: &FieldDefinition| field.hidden;
+
     let mut hidden = Vec::new();
-
-    for field in fields {
-        let full_name = if prefix.is_empty() {
-            field.name.clone()
-        } else {
-            format!("{}__{}", prefix, field.name)
-        };
-
-        if field.hidden {
-            hidden.push(full_name.clone());
-            continue; // parent hidden → skip sub-fields
-        }
-
-        match field.field_type {
-            FieldType::Group => {
-                hidden.extend(collect_api_hidden_field_names(&field.fields, &full_name));
-            }
-            FieldType::Row | FieldType::Collapsible => {
-                hidden.extend(collect_api_hidden_field_names(&field.fields, prefix));
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    hidden.extend(collect_api_hidden_field_names(&tab.fields, prefix));
-                }
-            }
-            _ => {}
-        }
-    }
+    collect_denials_flat(fields, &is_hidden, prefix, &mut hidden);
 
     hidden
 }
@@ -203,7 +179,7 @@ mod tests {
 
         let names = collect_api_hidden_field_names(&fields, "");
 
-        assert_eq!(names, vec!["secret".to_string()]);
+        assert_eq!(names, vec![FieldDenial::Flat("secret".into())]);
     }
 
     /// `admin.hidden = true` (only) → NOT collected. This is the upload-bug
@@ -227,7 +203,7 @@ mod tests {
 
         let names = collect_api_hidden_field_names(&fields, "");
 
-        assert_eq!(names, vec!["internal".to_string()]);
+        assert_eq!(names, vec![FieldDenial::Flat("internal".into())]);
     }
 
     /// Default field (neither flag) → not collected.
@@ -251,7 +227,7 @@ mod tests {
 
         let names = collect_api_hidden_field_names(&[group], "");
 
-        assert_eq!(names, vec!["meta".to_string()]);
+        assert_eq!(names, vec![FieldDenial::Flat("meta".into())]);
     }
 
     /// Group with visible parent but hidden subfield → subfield collected with
@@ -267,6 +243,6 @@ mod tests {
 
         let names = collect_api_hidden_field_names(&[group], "");
 
-        assert_eq!(names, vec!["seo__internal_score".to_string()]);
+        assert_eq!(names, vec![FieldDenial::Flat("seo__internal_score".into())]);
     }
 }

@@ -4,7 +4,9 @@
 use anyhow::Result;
 
 use crate::{
-    core::{Document, DocumentFields, FieldDefinition, Hooks, Registry, ValidationError},
+    core::{
+        Document, DocumentFields, FieldDefinition, FieldDenial, Hooks, Registry, ValidationError,
+    },
     db::{AccessResult, DbConnection, LocaleContext},
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
@@ -89,7 +91,7 @@ pub trait WriteHooks {
         fields: &[FieldDefinition],
         user: Option<&Document>,
         locale: Option<&str>,
-    ) -> Vec<String>;
+    ) -> Vec<FieldDenial>;
 
     /// Collection-level access check. Returns the access result (Allowed/Denied/Constrained).
     ///
@@ -109,7 +111,7 @@ pub trait WriteHooks {
         user: Option<&Document>,
         locale: Option<&str>,
         operation: &str,
-    ) -> Vec<String>;
+    ) -> Vec<FieldDenial>;
 
     /// Run schema-level field validation (required, unique, regex, type checks,
     /// richtext node attrs, …) without firing any user-defined hooks. Used by
@@ -254,7 +256,7 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         fields: &[FieldDefinition],
         user: Option<&Document>,
         locale: Option<&str>,
-    ) -> Vec<String> {
+    ) -> Vec<FieldDenial> {
         if self.override_access {
             return Vec::new();
         }
@@ -281,7 +283,7 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         user: Option<&Document>,
         locale: Option<&str>,
         operation: &str,
-    ) -> Vec<String> {
+    ) -> Vec<FieldDenial> {
         if self.override_access {
             return Vec::new();
         }
@@ -512,7 +514,7 @@ impl WriteHooks for LuaWriteHooks<'_> {
         fields: &[FieldDefinition],
         user: Option<&Document>,
         locale: Option<&str>,
-    ) -> Vec<String> {
+    ) -> Vec<FieldDenial> {
         if self.override_access {
             return Vec::new();
         }
@@ -525,7 +527,7 @@ impl WriteHooks for LuaWriteHooks<'_> {
         user: Option<&Document>,
         locale: Option<&str>,
         operation: &str,
-    ) -> Vec<String> {
+    ) -> Vec<FieldDenial> {
         if self.override_access {
             return Vec::new();
         }

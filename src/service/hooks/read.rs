@@ -4,7 +4,7 @@
 use anyhow::Result;
 
 use crate::{
-    core::{Document, FieldDefinition, HookRef, collection::Hooks},
+    core::{Document, FieldDefinition, FieldDenial, HookRef, collection::Hooks},
     db::{AccessResult, DbConnection, query::JoinAccessCheck},
     hooks::{
         HookRunner,
@@ -63,7 +63,7 @@ pub trait ReadHooks {
         fields: &[FieldDefinition],
         user: Option<&Document>,
         locale: Option<&str>,
-    ) -> Vec<String>;
+    ) -> Vec<FieldDenial>;
 }
 
 /// Pool-based hook execution for admin, gRPC, and MCP surfaces.
@@ -126,7 +126,7 @@ impl ReadHooks for RunnerReadHooks<'_> {
         fields: &[FieldDefinition],
         user: Option<&Document>,
         locale: Option<&str>,
-    ) -> Vec<String> {
+    ) -> Vec<FieldDenial> {
         self.runner
             .check_field_read_access(fields, user, locale, self.conn)
     }
@@ -257,7 +257,7 @@ impl ReadHooks for LuaReadHooks<'_> {
         fields: &[FieldDefinition],
         user: Option<&Document>,
         locale: Option<&str>,
-    ) -> Vec<String> {
+    ) -> Vec<FieldDenial> {
         if self.override_access {
             return Vec::new();
         }

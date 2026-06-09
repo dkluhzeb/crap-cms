@@ -22,8 +22,8 @@ use crate::{
         handlers::{ContentService, enum_mapping, proto::json_to_prost_value},
     },
     core::{
-        Document, EventReceiver, FieldDefinition, HookRef, LiveMode, MutationEvent, Registry,
-        SharedTokenProvider,
+        Document, EventReceiver, FieldDefinition, FieldDenial, HookRef, LiveMode, MutationEvent,
+        Registry, SharedTokenProvider,
         event::{EventOperation, EventTarget, InvalidationReceiver, RecvError},
     },
     db::{
@@ -93,7 +93,7 @@ struct SlugAccess {
 /// Accumulated access state built during slug resolution.
 struct AccessState {
     allowed: HashSet<String>,
-    denied_fields: HashMap<String, Vec<String>>,
+    denied_fields: HashMap<String, Vec<FieldDenial>>,
     constraints: HashMap<String, Vec<FilterClause>>,
     modes: HashMap<String, LiveMode>,
 }
@@ -217,11 +217,19 @@ fn process_event(event: &MutationEvent, ctx: &SubscriberCtx) -> Option<content::
                 timestamp: event.timestamp.as_str(),
             });
 
-        let denied = ctx.access.denied_fields.get(slug_str);
-
-        processed
+        let mut visible: serde_json::Map<String, serde_json::Value> = processed
             .iter()
-            .filter(|(k, _)| denied.is_none_or(|d| !d.iter().any(|name| name == *k)))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        if let Some(denied) = ctx.access.denied_fields.get(slug_str) {
+            for denial in denied {
+                denial.strip_from(&mut visible);
+            }
+        }
+
+        visible
+            .iter()
             .map(|(k, v)| (k.clone(), json_to_prost_value(v)))
             .collect()
     } else {
@@ -243,7 +251,7 @@ fn process_event(event: &MutationEvent, ctx: &SubscriberCtx) -> Option<content::
 struct SubscribeAccess {
     allowed_collections: HashSet<String>,
     allowed_globals: HashSet<String>,
-    denied_fields: HashMap<String, Vec<String>>,
+    denied_fields: HashMap<String, Vec<FieldDenial>>,
     /// Row-level access constraints per collection (from `Constrained` access results).
     constraints: HashMap<String, Vec<FilterClause>>,
     /// Per-collection event delivery mode.

@@ -300,6 +300,12 @@ pub fn enrich_nested_fields(
             FieldContext::Blocks(bf) => {
                 enrich_nested_blocks(bf, field_def, conn, reg, rel_locale_ctx);
             }
+            FieldContext::Richtext(rf) => {
+                // A richtext field inside a Group must get its custom-node
+                // enrichment too, exactly as one inside a Row/Tabs does —
+                // otherwise the group's editor is missing node definitions.
+                super::types::enrich_richtext(rf, reg);
+            }
             _ => {}
         }
     }

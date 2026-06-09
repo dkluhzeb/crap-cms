@@ -28,7 +28,7 @@ use tracing::warn;
 use crate::{
     admin::AdminState,
     core::{
-        AuthUser, Document, EventReceiver, LiveMode, MutationEvent, Registry, Slug,
+        AuthUser, Document, EventReceiver, FieldDenial, LiveMode, MutationEvent, Registry, Slug,
         event::{EventOperation, EventTarget, InvalidationReceiver, RecvError},
     },
     db::{AccessResult, FilterClause, query::filter::memory},
@@ -99,7 +99,7 @@ fn try_acquire_sse_slot(counter: &AtomicUsize, max: usize) -> bool {
 struct SseAccess {
     collections: HashSet<Slug>,
     globals: HashSet<Slug>,
-    denied_fields: HashMap<String, Vec<String>>,
+    denied_fields: HashMap<String, Vec<FieldDenial>>,
     constraints: HashMap<String, Vec<FilterClause>>,
     modes: HashMap<String, LiveMode>,
 }
@@ -266,13 +266,18 @@ fn build_event_payload(
             timestamp: event.timestamp.as_str(),
         });
 
-        let denied = access.denied_fields.get(slug_str);
-
-        processed_data
+        let mut visible: Map<String, Value> = processed_data
             .iter()
-            .filter(|(k, _)| denied.is_none_or(|d| !d.iter().any(|name| name == *k)))
             .map(|(k, v)| (k.clone(), v.clone()))
-            .collect()
+            .collect();
+
+        if let Some(denied) = access.denied_fields.get(slug_str) {
+            for denial in denied {
+                denial.strip_from(&mut visible);
+            }
+        }
+
+        visible
     } else {
         Map::new() // metadata mode: no data
     };
@@ -606,8 +611,11 @@ mod tests {
 
         // Build SseAccess that mirrors what `build_allowed_slugs` would compute
         // for an anonymous user against this posts collection.
-        let mut denied_fields: HashMap<String, Vec<String>> = HashMap::new();
-        denied_fields.insert("posts".to_string(), vec!["secret".to_string()]);
+        let mut denied_fields: HashMap<String, Vec<FieldDenial>> = HashMap::new();
+        denied_fields.insert(
+            "posts".to_string(),
+            vec![FieldDenial::Flat("secret".into())],
+        );
 
         let mut modes: HashMap<String, LiveMode> = HashMap::new();
         modes.insert("posts".to_string(), LiveMode::Full);

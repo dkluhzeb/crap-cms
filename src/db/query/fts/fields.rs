@@ -116,10 +116,11 @@ pub fn get_fts_columns(
 
     let mut columns = Vec::new();
     for field_name in &logical_fields {
-        let is_localized = def
-            .fields
-            .iter()
-            .any(|f| f.name == *field_name && f.localized);
+        // `logical_fields` can include fields promoted through transparent
+        // layout wrappers (Row/Collapsible/Tabs), so the localized lookup must
+        // descend the same way — otherwise a localized field inside a wrapper is
+        // mis-resolved to a bare column instead of `field__locale`.
+        let is_localized = field_localized(field_name, &def.fields).unwrap_or(false);
 
         if is_localized {
             for locale in &locale_config.locales {
@@ -131,6 +132,27 @@ pub fn get_fts_columns(
     }
 
     Ok(columns)
+}
+
+/// Find a field by name and return its `localized` flag, descending transparent
+/// layout wrappers (Row/Collapsible/Tabs) so a wrapper-promoted field resolves.
+/// `None` if no such field exists at the parent level.
+fn field_localized(name: &str, fields: &[FieldDefinition]) -> Option<bool> {
+    for f in fields {
+        if f.name == name {
+            return Some(f.localized);
+        }
+
+        if matches!(
+            f.field_type,
+            FieldType::Row | FieldType::Collapsible | FieldType::Tabs
+        ) && let Some(localized) = field_localized(name, &f.fields)
+        {
+            return Some(localized);
+        }
+    }
+
+    None
 }
 
 /// Build a set of column names that are JSON-format richtext fields.
@@ -353,5 +375,20 @@ mod tests {
         let fields = get_fts_fields(&def);
         assert!(fields.contains(&"top_level".to_string()));
         assert!(fields.contains(&"nested_in_row".to_string()));
+    }
+
+    #[test]
+    fn get_fts_columns_localized_field_inside_wrapper_expands() {
+        // Regression: a localized text field promoted through a Row must expand
+        // to `field__locale` columns, not be mis-resolved to a bare column.
+        let def = simple_def(vec![FieldDefinition {
+            name: "row".to_string(),
+            field_type: FieldType::Row,
+            fields: vec![localized_field("title")],
+            ..Default::default()
+        }]);
+
+        let cols = get_fts_columns(&def, &locale_en_de()).unwrap();
+        assert_eq!(cols, vec!["title__en", "title__de"]);
     }
 }

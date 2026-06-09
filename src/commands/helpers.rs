@@ -71,6 +71,9 @@ pub fn load_and_validate_config(config_dir: &Path) -> Result<CrapConfig> {
     let cfg = CrapConfig::load(config_dir)?;
     cfg.validate()?;
 
+    // Apply the configured JSON data-nesting limit process-wide (Lua↔JSON).
+    hooks::lua_api::set_max_nesting_depth(cfg.depth.max_nesting_depth);
+
     if let Some(warning) = cfg.check_version() {
         warn!("{}", warning);
     }

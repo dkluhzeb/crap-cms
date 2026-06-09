@@ -187,11 +187,9 @@ pub(crate) fn flatten_group_fields(
     let mut map = DocumentFields::new();
 
     for (k, v) in data.as_map() {
-        let is_group = fields
-            .iter()
-            .any(|f| f.name == *k && f.field_type == FieldType::Group);
-
-        if is_group && let Some(obj) = v.as_object() {
+        if names_a_group(fields, k)
+            && let Some(obj) = v.as_object()
+        {
             flatten_group_obj(k, obj, &mut map);
 
             continue;
@@ -201,6 +199,21 @@ pub(crate) fn flatten_group_fields(
     }
 
     map
+}
+
+/// Whether `key` names a `Group` field at the flattened top level — i.e. a
+/// direct top-level group, or one reached through only transparent layout
+/// wrappers (Row/Collapsible/Tabs), which don't contribute a data key of their
+/// own. Without seeing through the wrappers, a group nested under a top-level
+/// Row would arrive nested but never get flattened, so the validator would look
+/// it up by flat `group__child` key and miss it.
+fn names_a_group(fields: &[FieldDefinition], key: &str) -> bool {
+    fields.iter().any(|f| match f.field_type {
+        FieldType::Group => f.name == key,
+        FieldType::Row | FieldType::Collapsible => names_a_group(&f.fields, key),
+        FieldType::Tabs => f.tabs.iter().any(|t| names_a_group(&t.fields, key)),
+        _ => false,
+    })
 }
 
 /// Recursively flatten a group object into `prefix__key` typed pairs.
@@ -344,6 +357,33 @@ mod tests {
             Some(&json!("My Description"))
         );
         assert_eq!(map.get("title"), Some(&json!("Hello")));
+        assert!(!map.contains_key("seo"));
+    }
+
+    #[test]
+    fn string_map_flattens_group_under_top_level_row() {
+        // Regression: a Group nested under a transparent top-level Row arrives
+        // nested (gRPC/MCP/admin input) and must still be flattened — otherwise
+        // the validator looks it up by flat `seo__meta_title` and misses it.
+        let mut data = HashMap::new();
+        data.insert("seo".to_string(), json!({ "meta_title": "T" }));
+
+        let ctx = HookContext::builder("posts", "create").data(data).build();
+
+        let fields = vec![
+            FieldDefinition::builder("layout", FieldType::Row)
+                .fields(vec![
+                    FieldDefinition::builder("seo", FieldType::Group)
+                        .fields(vec![
+                            FieldDefinition::builder("meta_title", FieldType::Text).build(),
+                        ])
+                        .build(),
+                ])
+                .build(),
+        ];
+
+        let map = ctx.to_value_map(&fields);
+        assert_eq!(map.get("seo__meta_title"), Some(&json!("T")));
         assert!(!map.contains_key("seo"));
     }
 

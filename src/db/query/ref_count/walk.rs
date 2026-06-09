@@ -1,5 +1,5 @@
-//! Recursive walker that collects outgoing refs from a nested-composite
-//! JSON object — an array row or a block's reconstructed `data`.
+//! Recursive walker that visits outgoing refs from a nested-composite JSON
+//! object — an array row or a block's reconstructed `data`.
 //!
 //! Inside array rows and block data, fields are keyed by their bare name
 //! (`field.name`) and composites nest as JSON objects/arrays. This differs
@@ -9,22 +9,48 @@
 //! deeper container — Group, Array, Blocks, Row/Collapsible/Tabs — nests as
 //! JSON, so a single recursive walker covers every combination at any depth,
 //! counting both has-one and has-many relationships.
+//!
+//! [`walk_nested_with`] is the single source of truth for this traversal.
+//! Ref-counting wraps it to collect [`OutgoingRef`]s (ignoring the path);
+//! the back-reference scanner wraps it to record the field-name path to each
+//! matched reference (for precise `field_name`/label reporting). No other
+//! code should re-encode the container-recursion rules.
 
 use std::collections::HashSet;
 
 use serde_json::{Map, Value};
 
-use crate::core::{BlockDefinition, FieldDefinition, FieldType};
+use crate::core::{BlockDefinition, FieldDefinition, FieldType, RelationshipConfig};
 use crate::db::query::join::{parse_id_list, parse_polymorphic_values};
 
 use super::outgoing_ref::{OutgoingRef, push_ref};
 
-/// Walk one nested object against its field definitions, collecting refs.
-pub(super) fn walk_nested_refs(
+/// One segment of the path from a nested walk's root to a matched reference.
+///
+/// Transparent layout wrappers (Row/Collapsible/Tabs) contribute no segment;
+/// Group/Array push their own [`FieldDefinition`]; Blocks push their field
+/// then the matched [`BlockDefinition`]. The leaf relationship field is passed
+/// to the visitor separately, so it is not on the stack.
+pub(crate) enum RefPathSeg<'a> {
+    Field(&'a FieldDefinition),
+    Block(&'a BlockDefinition),
+}
+
+/// Generic nested-composite walker — the single traversal primitive.
+///
+/// Calls `visit(leaf_field, ancestor_path, target_collection, target_id,
+/// is_polymorphic)` once per resolved relationship/upload reference, at any
+/// nesting depth. Has-many values are deduplicated within a single field value
+/// (mirroring the junction `SELECT DISTINCT`); malformed/empty refs are
+/// dropped.
+pub(crate) fn walk_nested_with<'a, V>(
     obj: &Map<String, Value>,
-    fields: &[FieldDefinition],
-    refs: &mut Vec<OutgoingRef>,
-) {
+    fields: &'a [FieldDefinition],
+    stack: &mut Vec<RefPathSeg<'a>>,
+    visit: &mut V,
+) where
+    V: FnMut(&'a FieldDefinition, &[RefPathSeg<'a>], &str, &str, bool),
+{
     for field in fields {
         match field.field_type {
             FieldType::Relationship | FieldType::Upload => {
@@ -35,42 +61,44 @@ pub(super) fn walk_nested_refs(
                     continue;
                 };
 
-                if rc.has_many {
-                    push_has_many(value, rc.is_polymorphic(), &rc.collection, refs);
-                } else if let Some(s) = value.as_str() {
-                    push_ref(refs, s, rc.is_polymorphic(), &rc.collection);
-                }
+                emit_rel(field, rc, value, stack, visit);
             }
 
             FieldType::Group => {
                 if let Some(Value::Object(inner)) = obj.get(&field.name) {
-                    walk_nested_refs(inner, &field.fields, refs);
+                    stack.push(RefPathSeg::Field(field));
+                    walk_nested_with(inner, &field.fields, stack, visit);
+                    stack.pop();
                 }
             }
 
             FieldType::Array => {
                 if let Some(Value::Array(rows)) = obj.get(&field.name) {
+                    stack.push(RefPathSeg::Field(field));
                     for row in rows {
                         if let Value::Object(row_obj) = row {
-                            walk_nested_refs(row_obj, &field.fields, refs);
+                            walk_nested_with(row_obj, &field.fields, stack, visit);
                         }
                     }
+                    stack.pop();
                 }
             }
 
             FieldType::Blocks => {
                 if let Some(Value::Array(blocks)) = obj.get(&field.name) {
-                    walk_block_values(blocks, &field.blocks, refs);
+                    stack.push(RefPathSeg::Field(field));
+                    walk_blocks_with(blocks, &field.blocks, stack, visit);
+                    stack.pop();
                 }
             }
 
             FieldType::Row | FieldType::Collapsible => {
-                walk_nested_refs(obj, &field.fields, refs);
+                walk_nested_with(obj, &field.fields, stack, visit);
             }
 
             FieldType::Tabs => {
                 for tab in &field.tabs {
-                    walk_nested_refs(obj, &tab.fields, refs);
+                    walk_nested_with(obj, &tab.fields, stack, visit);
                 }
             }
 
@@ -80,12 +108,17 @@ pub(super) fn walk_nested_refs(
 }
 
 /// Walk a list of block instances (`_block_type` + nested data fields),
-/// matching each to its definition and recursing into its fields.
-pub(super) fn walk_block_values(
+/// matching each to its definition and recursing into its fields. Pushes a
+/// [`RefPathSeg::Block`] for the matched definition so the visitor sees the
+/// block type in the path.
+pub(crate) fn walk_blocks_with<'a, V>(
     blocks: &[Value],
-    defs: &[BlockDefinition],
-    refs: &mut Vec<OutgoingRef>,
-) {
+    defs: &'a [BlockDefinition],
+    stack: &mut Vec<RefPathSeg<'a>>,
+    visit: &mut V,
+) where
+    V: FnMut(&'a FieldDefinition, &[RefPathSeg<'a>], &str, &str, bool),
+{
     for block in blocks {
         let Value::Object(obj) = block else {
             continue;
@@ -97,35 +130,107 @@ pub(super) fn walk_block_values(
             continue;
         };
 
-        walk_nested_refs(obj, &def.fields, refs);
+        stack.push(RefPathSeg::Block(def));
+        walk_nested_with(obj, &def.fields, stack, visit);
+        stack.pop();
     }
 }
 
-/// Push refs for a has-many relationship value — an array of ids, or
-/// polymorphic `collection/id` entries. Deduplicated within the value to
-/// mirror the `SELECT DISTINCT` the top-level junction path uses.
-fn push_has_many(
+/// Resolve a relationship/upload field's value into `(collection, id)` pairs
+/// and emit each via the visitor. Deduplicates has-many values within the
+/// field, drops empty/malformed entries.
+fn emit_rel<'a, V>(
+    field: &'a FieldDefinition,
+    rc: &RelationshipConfig,
     value: &Value,
-    is_polymorphic: bool,
-    default_collection: &str,
+    stack: &mut [RefPathSeg<'a>],
+    visit: &mut V,
+) where
+    V: FnMut(&'a FieldDefinition, &[RefPathSeg<'a>], &str, &str, bool),
+{
+    let collection: &str = &rc.collection;
+
+    if rc.has_many {
+        if rc.is_polymorphic() {
+            let mut seen = HashSet::new();
+
+            for (coll, id) in parse_polymorphic_values(value) {
+                if !coll.is_empty() && !id.is_empty() && seen.insert((coll.clone(), id.clone())) {
+                    visit(field, stack, &coll, &id, true);
+                }
+            }
+        } else {
+            let mut seen = HashSet::new();
+
+            for id in parse_id_list(value) {
+                if !id.is_empty() && seen.insert(id.clone()) {
+                    visit(field, stack, collection, &id, false);
+                }
+            }
+        }
+
+        return;
+    }
+
+    let Some(s) = value.as_str() else {
+        return;
+    };
+
+    if rc.is_polymorphic() {
+        if let Some((coll, id)) = s.split_once('/')
+            && !coll.is_empty()
+            && !id.is_empty()
+        {
+            visit(field, stack, coll, id, true);
+        }
+    } else if !s.is_empty() {
+        visit(field, stack, collection, s, false);
+    }
+}
+
+/// Walk one nested object against its field definitions, collecting refs.
+/// Thin ref-counting wrapper over [`walk_nested_with`] — ignores the path.
+pub(super) fn walk_nested_refs(
+    obj: &Map<String, Value>,
+    fields: &[FieldDefinition],
     refs: &mut Vec<OutgoingRef>,
 ) {
+    let mut stack = Vec::new();
+    walk_nested_with(
+        obj,
+        fields,
+        &mut stack,
+        &mut |_field, _path, coll, id, poly| {
+            push_resolved(refs, coll, id, poly);
+        },
+    );
+}
+
+/// Walk a list of block instances, collecting refs. Thin ref-counting wrapper
+/// over [`walk_blocks_with`].
+pub(super) fn walk_block_values(
+    blocks: &[Value],
+    defs: &[BlockDefinition],
+    refs: &mut Vec<OutgoingRef>,
+) {
+    let mut stack = Vec::new();
+    walk_blocks_with(
+        blocks,
+        defs,
+        &mut stack,
+        &mut |_field, _path, coll, id, poly| {
+            push_resolved(refs, coll, id, poly);
+        },
+    );
+}
+
+/// Push an already-resolved `(collection, id)` ref through [`push_ref`] so the
+/// `OutgoingRef` construction stays in one place.
+fn push_resolved(refs: &mut Vec<OutgoingRef>, collection: &str, id: &str, is_polymorphic: bool) {
     if is_polymorphic {
-        let mut seen = HashSet::new();
-
-        for (coll, id) in parse_polymorphic_values(value) {
-            if seen.insert((coll.clone(), id.clone())) {
-                push_ref(refs, &format!("{coll}/{id}"), true, "");
-            }
-        }
+        push_ref(refs, &format!("{collection}/{id}"), true, "");
     } else {
-        let mut seen = HashSet::new();
-
-        for id in parse_id_list(value) {
-            if seen.insert(id.clone()) {
-                push_ref(refs, &id, false, default_collection);
-            }
-        }
+        push_ref(refs, id, false, collection);
     }
 }
 
@@ -267,6 +372,71 @@ mod tests {
         assert_eq!(
             collect(&data, &fields),
             vec![("tags".into(), "a".into()), ("tags".into(), "b".into())]
+        );
+    }
+
+    #[test]
+    fn array_in_array_relationship_is_collected() {
+        // array → array → rel: the inner array is a JSON array nested in the
+        // outer row object. The single walker descends it at any depth.
+        let fields = vec![
+            FieldDefinition::builder("outer", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("inner", FieldType::Array)
+                        .fields(vec![rel("tag", false)])
+                        .build(),
+                ])
+                .build(),
+        ];
+        let data = json!({
+            "outer": [
+                { "inner": [{ "tag": "t1" }, { "tag": "t2" }] },
+                { "inner": [{ "tag": "t3" }] }
+            ]
+        });
+        assert_eq!(
+            collect(&data, &fields),
+            vec![
+                ("tags".into(), "t1".into()),
+                ("tags".into(), "t2".into()),
+                ("tags".into(), "t3".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn path_records_group_and_leaf_for_back_references() {
+        // The path-aware visitor sees the ancestor chain (Group) plus the leaf
+        // field — this is what the back-reference scanner uses for labels.
+        let fields = vec![
+            FieldDefinition::builder("g", FieldType::Group)
+                .fields(vec![rel("tag", false)])
+                .build(),
+        ];
+        let obj = json!({ "g": { "tag": "t1" } });
+
+        let mut seen: Vec<(Vec<String>, String)> = Vec::new();
+        let mut stack = Vec::new();
+        walk_nested_with(
+            obj.as_object().unwrap(),
+            &fields,
+            &mut stack,
+            &mut |leaf, path, _coll, id, _poly| {
+                let names: Vec<String> = path
+                    .iter()
+                    .map(|seg| match seg {
+                        RefPathSeg::Field(f) => f.name.clone(),
+                        RefPathSeg::Block(b) => b.block_type.clone(),
+                    })
+                    .chain(std::iter::once(leaf.name.clone()))
+                    .collect();
+                seen.push((names, id.to_string()));
+            },
+        );
+
+        assert_eq!(
+            seen,
+            vec![(vec!["g".to_string(), "tag".to_string()], "t1".to_string())]
         );
     }
 }

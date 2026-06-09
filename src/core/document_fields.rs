@@ -17,6 +17,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::core::field_denial::JsonRoot;
+
 /// A document's user-defined field values. See module docs.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
@@ -60,6 +62,18 @@ impl DocumentFields {
     /// Read a key as an f64 if the value is a JSON number.
     pub fn get_f64(&self, key: &str) -> Option<f64> {
         self.0.get(key).and_then(Value::as_f64)
+    }
+}
+
+impl JsonRoot for DocumentFields {
+    fn root_get(&self, key: &str) -> Option<&Value> {
+        self.0.get(key)
+    }
+    fn root_get_mut(&mut self, key: &str) -> Option<&mut Value> {
+        self.0.get_mut(key)
+    }
+    fn root_remove(&mut self, key: &str) {
+        self.0.remove(key);
     }
 }
 

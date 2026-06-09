@@ -130,6 +130,10 @@ impl CrapConfig {
 
     /// Validate depth/population limits.
     pub(super) fn validate_depth(&self) -> Result<()> {
+        // `serde_json`'s default deserialization recursion limit — the round-trip
+        // ceiling for stored JSON (see the `max_nesting_depth` check below).
+        const SERDE_RECURSION_LIMIT: usize = 128;
+
         if self.depth.default_depth < 0 {
             bail!("depth.default_depth must be >= 0");
         }
@@ -146,6 +150,34 @@ impl CrapConfig {
             warn!(
                 "depth.default_depth ({}) exceeds depth.max_depth ({}) -- requests will be capped",
                 self.depth.default_depth, self.depth.max_depth
+            );
+        }
+
+        if self.depth.max_nesting_depth == 0 {
+            bail!("depth.max_nesting_depth must be >= 1 (0 rejects all nested data)");
+        }
+
+        // The data-nesting ceiling must accommodate the data that population
+        // produces: a document populated to `max_depth` nests at least that
+        // deep, so a smaller ceiling would reject your own legitimately-deep
+        // data at Lua↔JSON conversion time.
+        if let Ok(max_depth) = usize::try_from(self.depth.max_depth)
+            && self.depth.max_nesting_depth < max_depth
+        {
+            warn!(
+                "depth.max_nesting_depth ({}) is below depth.max_depth ({}) -- data populated to max_depth may exceed the nesting limit and fail to convert",
+                self.depth.max_nesting_depth, self.depth.max_depth
+            );
+        }
+
+        // Data nested deeper than serde's parse limit can be built in memory and
+        // serialized, but cannot be parsed back from stored JSON — effectively
+        // write-only. Going beyond it would require a custom `Deserializer`
+        // recursion limit at every user-JSON parse site.
+        if self.depth.max_nesting_depth > SERDE_RECURSION_LIMIT {
+            warn!(
+                "depth.max_nesting_depth ({}) exceeds the JSON parser recursion limit ({SERDE_RECURSION_LIMIT}) -- data nested deeper than {SERDE_RECURSION_LIMIT} can be built but will not parse back from stored JSON",
+                self.depth.max_nesting_depth
             );
         }
 
@@ -359,6 +391,25 @@ mod tests {
     fn validate_max_depth_zero_warns_but_passes() {
         let mut config = CrapConfig::default();
         config.depth.max_depth = 0;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_max_nesting_depth_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.depth.max_nesting_depth = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("max_nesting_depth"));
+    }
+
+    #[test]
+    fn validate_max_nesting_depth_below_max_depth_warns_but_passes() {
+        // A nesting ceiling under the population depth is a misconfiguration
+        // (populated data could exceed it) but is surfaced as a warning, not a
+        // hard failure.
+        let mut config = CrapConfig::default();
+        config.depth.max_depth = 20;
+        config.depth.max_nesting_depth = 5;
         assert!(config.validate().is_ok());
     }
 

@@ -120,8 +120,15 @@ pub(super) fn field_to_lua_type(field: &FieldDefinition, parent_pascal: &str) ->
             _ => "string".to_string(),
         },
         FieldType::Array => {
-            let sub = format!("{}{}", parent_pascal, to_pascal_case(&field.name));
-            format!("crap.array_row.{sub}[]")
+            // An empty-`fields` array declares no `crap.array_row.*` class (the
+            // sub-type collector skips it), so referencing one would dangle —
+            // fall back to `table[]`, mirroring the Group case.
+            if field.fields.is_empty() {
+                "table[]".to_string()
+            } else {
+                let sub = format!("{}{}", parent_pascal, to_pascal_case(&field.name));
+                format!("crap.array_row.{sub}[]")
+            }
         }
         FieldType::Group => {
             if field.fields.is_empty() {
@@ -234,6 +241,14 @@ mod tests {
             .fields(vec![text_field("label", true)])
             .build();
         assert_eq!(field_to_lua_type(&f, "Test"), "crap.array_row.TestItems[]");
+    }
+
+    #[test]
+    fn lua_array_type_empty_falls_back_to_table() {
+        // No sub-fields → no `crap.array_row.*` class is declared, so the type
+        // must not reference one (which would be undefined in LuaLS).
+        let f = FieldDefinition::builder("items", FieldType::Array).build();
+        assert_eq!(field_to_lua_type(&f, "Test"), "table[]");
     }
 
     #[test]

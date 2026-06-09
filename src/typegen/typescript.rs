@@ -34,10 +34,10 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
 
     // Sub-types (Array rows and Group shapes)
     for stf in collect_sub_type_fields(&col.fields, &pascal) {
-        let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
+        let sub_pascal = format!("{}{}", stf.parent_pascal, to_pascal_case(&stf.field.name));
         w!(out, "export interface {} {{", sub_pascal);
         for sf in &stf.field.fields {
-            write_field(out, sf, &pascal);
+            write_field(out, sf, &sub_pascal);
         }
         w!(out, "}}\n");
     }
@@ -73,10 +73,10 @@ fn render_global(out: &mut String, global: &GlobalDefinition) {
 
     // Sub-types (Array rows and Group shapes)
     for stf in collect_sub_type_fields(&global.fields, &pascal) {
-        let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
+        let sub_pascal = format!("{}{}", stf.parent_pascal, to_pascal_case(&stf.field.name));
         w!(out, "export interface {} {{", sub_pascal);
         for sf in &stf.field.fields {
-            write_field(out, sf, &pascal);
+            write_field(out, sf, &sub_pascal);
         }
         w!(out, "}}\n");
     }
@@ -445,6 +445,40 @@ mod tests {
         assert!(out.contains("  label: string;"));
         assert!(out.contains("  value?: string;"));
         assert!(out.contains("PostsItems[]"));
+    }
+
+    #[test]
+    fn typescript_nested_group_in_array_uses_compound_pascal() {
+        // Regression: a Group nested inside an array row must be declared and
+        // referenced with the *compound* parent path (PostsItemsMeta), not the
+        // collection pascal (PostsMeta) — otherwise the reference dangles.
+        let col = make_col(
+            "posts",
+            vec![
+                FieldDefinition::builder("items", FieldType::Array)
+                    .fields(vec![
+                        FieldDefinition::builder("meta", FieldType::Group)
+                            .fields(vec![text_field("title", true)])
+                            .build(),
+                    ])
+                    .build(),
+            ],
+        );
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+
+        assert!(
+            out.contains("export interface PostsItemsMeta {"),
+            "nested group sub-type must use compound pascal: {out}"
+        );
+        assert!(
+            out.contains("PostsItemsMeta;"),
+            "the PostsItems body must reference PostsItemsMeta: {out}"
+        );
+        assert!(
+            !out.contains("PostsMeta"),
+            "must not emit the wrong collection-pascal name: {out}"
+        );
     }
 
     #[test]

@@ -7,15 +7,15 @@ use mlua::{LuaSerdeExt, Value};
 use tracing::error;
 
 use crate::{
-    core::{Document, FieldDefinition, FieldType, HookRef, document::DocumentBuilder},
-    db::{AccessResult, DbConnection, query::helpers::prefixed_name},
+    core::{Document, FieldDefinition, FieldDenial, HookRef, document::DocumentBuilder},
+    db::{AccessResult, DbConnection},
     hooks::{
         HookRunner,
         lifecycle::{
             AccessCheckInput, AuthStrategyContext, AuthStrategyInput,
             access::{
                 check_access_with_lua, check_field_read_access_with_lua,
-                check_field_write_access_with_lua, has_any_field_access,
+                check_field_write_access_with_lua, collect_denials_flat, has_any_field_access,
             },
             execution::resolve_hook_function,
             types::TxContextGuard,
@@ -142,7 +142,7 @@ impl HookRunner {
         user: Option<&Document>,
         locale: Option<&str>,
         conn: &dyn DbConnection,
-    ) -> Vec<String> {
+    ) -> Vec<FieldDenial> {
         // Skip VM acquisition if no fields have read access functions (recursive check)
         if !has_any_field_access(fields, |f| f.access.read.as_ref()) {
             return Vec::new();
@@ -174,7 +174,7 @@ impl HookRunner {
         locale: Option<&str>,
         operation: &str,
         conn: &dyn DbConnection,
-    ) -> Vec<String> {
+    ) -> Vec<FieldDenial> {
         // Skip VM acquisition if no fields have write access functions (recursive check)
         let extractor: fn(&FieldDefinition) -> Option<&HookRef> = match operation {
             "create" => |f| f.access.create.as_ref(),
@@ -201,45 +201,18 @@ impl HookRunner {
     }
 }
 
-/// Collect names of all fields that have an access control function configured.
-/// Used as fail-closed fallback when the Lua VM pool is unavailable.
-/// Recurses into Group (with `__` prefix), Row/Collapsible/Tabs (transparent).
+/// Fail-closed denial set when the Lua VM pool is unavailable: deny EVERY
+/// access-controlled field, at any depth (including inside array/blocks rows).
+/// Uses the shared [`collect_denials_flat`] walker so the fail-closed path can
+/// never diverge from the normal Lua-evaluated path's container recursion.
 fn deny_all_access_controlled(
     fields: &[FieldDefinition],
     extractor: impl Fn(&FieldDefinition) -> Option<&HookRef> + Copy,
-) -> Vec<String> {
-    deny_all_recursive(fields, &extractor, "")
-}
+) -> Vec<FieldDenial> {
+    let is_denied = |field: &FieldDefinition| extractor(field).is_some();
 
-fn deny_all_recursive(
-    fields: &[FieldDefinition],
-    extractor: &(impl Fn(&FieldDefinition) -> Option<&HookRef> + Copy),
-    prefix: &str,
-) -> Vec<String> {
     let mut denied = Vec::new();
-
-    for field in fields {
-        let full_name = prefixed_name(prefix, &field.name);
-
-        if extractor(field).is_some() {
-            denied.push(full_name.clone());
-        }
-
-        match field.field_type {
-            FieldType::Group => {
-                denied.extend(deny_all_recursive(&field.fields, extractor, &full_name));
-            }
-            FieldType::Row | FieldType::Collapsible => {
-                denied.extend(deny_all_recursive(&field.fields, extractor, prefix));
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    denied.extend(deny_all_recursive(&tab.fields, extractor, prefix));
-                }
-            }
-            _ => {}
-        }
-    }
+    collect_denials_flat(fields, &is_denied, "", &mut denied);
 
     denied
 }
@@ -247,7 +220,7 @@ fn deny_all_recursive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{FieldAccess, FieldTab};
+    use crate::core::{FieldAccess, FieldTab, FieldType};
     fn make_field(name: &str, access: FieldAccess) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Text)
             .access(access)
@@ -264,7 +237,7 @@ mod tests {
             },
         )];
         let denied = deny_all_access_controlled(&fields, |f| f.access.read.as_ref());
-        assert_eq!(denied, vec!["secret"]);
+        assert_eq!(denied, vec![FieldDenial::Flat("secret".into())]);
     }
 
     #[test]
@@ -281,7 +254,7 @@ mod tests {
                 .build(),
         ];
         let denied = deny_all_access_controlled(&fields, |f| f.access.read.as_ref());
-        assert_eq!(denied, vec!["seo__title"]);
+        assert_eq!(denied, vec![FieldDenial::Flat("seo__title".into())]);
     }
 
     #[test]
@@ -301,7 +274,7 @@ mod tests {
                 .build(),
         ];
         let denied = deny_all_access_controlled(&fields, |f| f.access.read.as_ref());
-        assert_eq!(denied, vec!["hidden"]);
+        assert_eq!(denied, vec![FieldDenial::Flat("hidden".into())]);
     }
 
     #[test]

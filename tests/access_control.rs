@@ -543,7 +543,8 @@ fn field_read_access_strips_denied_fields() {
         "Should deny exactly one field for anonymous user"
     );
     assert_eq!(
-        denied[0], "secret_notes",
+        denied[0].display_path(),
+        "secret_notes",
         "The denied field should be 'secret_notes'"
     );
 
@@ -597,22 +598,30 @@ fn field_write_access_strips_denied_fields() {
     // Anonymous user: on create, auto_slug should be denied (admin_only denies anonymous)
     let denied_on_create = runner.check_field_write_access(&fields, None, None, "create", &conn);
     assert!(
-        denied_on_create.contains(&"auto_slug".to_string()),
+        denied_on_create
+            .iter()
+            .any(|d| d.display_path() == "auto_slug"),
         "auto_slug should be denied on create for anonymous, got: {denied_on_create:?}"
     );
     assert!(
-        !denied_on_create.contains(&"immutable_field".to_string()),
+        !denied_on_create
+            .iter()
+            .any(|d| d.display_path() == "immutable_field"),
         "immutable_field should be allowed on create (no create access config), got: {denied_on_create:?}"
     );
 
     // Anonymous user: on update, immutable_field should be denied (admin_only denies anonymous)
     let denied_on_update = runner.check_field_write_access(&fields, None, None, "update", &conn);
     assert!(
-        denied_on_update.contains(&"immutable_field".to_string()),
+        denied_on_update
+            .iter()
+            .any(|d| d.display_path() == "immutable_field"),
         "immutable_field should be denied on update for anonymous, got: {denied_on_update:?}"
     );
     assert!(
-        !denied_on_update.contains(&"auto_slug".to_string()),
+        !denied_on_update
+            .iter()
+            .any(|d| d.display_path() == "auto_slug"),
         "auto_slug should be allowed on update (no update access config), got: {denied_on_update:?}"
     );
 }

@@ -39,39 +39,6 @@ pub(super) fn query_ids(
     }
 }
 
-/// Simple query for array/blocks `parent_id` lookups.
-pub(super) fn query_ids_simple(conn: &dyn DbConnection, sql: &str, value: &str) -> Vec<String> {
-    let params = vec![DbValue::Text(value.to_string())];
-    match conn.query_all(sql, &params) {
-        Ok(rows) => rows
-            .into_iter()
-            .filter_map(|row| row.opt_text_at(0))
-            .collect(),
-        Err(e) => {
-            tracing::debug!("Back-ref scan query failed: {}", e);
-            Vec::new()
-        }
-    }
-}
-
-/// Query with arbitrary params, returning collected IDs.
-pub(super) fn query_ids_simple_params(
-    conn: &dyn DbConnection,
-    sql: &str,
-    params: &[DbValue],
-) -> Vec<String> {
-    match conn.query_all(sql, params) {
-        Ok(rows) => rows
-            .into_iter()
-            .filter_map(|row| row.opt_text_at(0))
-            .collect(),
-        Err(e) => {
-            tracing::debug!("Back-ref scan query failed: {}", e);
-            Vec::new()
-        }
-    }
-}
-
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
@@ -166,12 +133,5 @@ mod tests {
             true,
         );
         assert_eq!(ids, vec!["a", "b", "t1"]);
-    }
-
-    #[test]
-    fn query_ids_simple_collects_the_id_column() {
-        let conn = refs_conn();
-        let ids = query_ids_simple(&conn, "SELECT id FROM refs WHERE id != ?1 ORDER BY id", "a");
-        assert_eq!(ids, vec!["b", "t1"]);
     }
 }

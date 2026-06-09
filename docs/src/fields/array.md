@@ -33,7 +33,9 @@ crap.fields.array({
 
 ## Sub-Fields
 
-Sub-fields support the same properties as regular fields (name, type, required, default_value, admin, etc.). Has-one relationships are supported (stored as a TEXT column in the join table). Nested arrays (array inside array) are **not** supported.
+Sub-fields support the same properties as regular fields (name, type, required, default_value, admin, etc.), and may themselves be composites — **groups, arrays, blocks, and relationships nest to any depth**.
+
+Scalar sub-fields (and has-one relationships) are stored as columns in the array's join table. Composites nested *inside* an array row — a group, a nested array, a nested blocks field — are stored as JSON within the row (not as their own relational tables), and are still queryable via dot-notation filters (`items.dimensions.width` → `json_extract` / `json_each`; see [Query & Filters](../query-and-filters/overview.md)). Reference-counting, back-references, validation, and field-level access all descend into this nested JSON at any depth.
 
 ### Layout Wrappers in Sub-Fields
 

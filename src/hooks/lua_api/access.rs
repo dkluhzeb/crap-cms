@@ -5,7 +5,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
-use crate::core::{Document, FieldDefinition, HookRef, Registry, RegistryRead, SharedRegistry};
+use crate::core::{
+    Document, FieldDefinition, FieldDenial, HookRef, Registry, RegistryRead, SharedRegistry,
+};
 use crate::db::{AccessResult, FilterClause, FilterOp};
 use crate::hooks::lifecycle::{
     AccessCheckInput, UserContext,
@@ -341,12 +343,12 @@ fn field_read_denied_impl(
     let fields = resolve_fields(registry, collection)?;
     let user = current_user(lua);
 
-    Ok(check_field_read_access_with_lua(
-        lua,
-        &fields,
-        user.as_ref(),
-        None,
-    ))
+    Ok(
+        check_field_read_access_with_lua(lua, &fields, user.as_ref(), None)
+            .iter()
+            .map(FieldDenial::display_path)
+            .collect(),
+    )
 }
 
 /// `crap.access.field_write_denied(collection, operation)` -> `{string}`
@@ -368,13 +370,12 @@ fn field_write_denied_impl(
     let fields = resolve_fields(registry, collection)?;
     let user = current_user(lua);
 
-    Ok(check_field_write_access_with_lua(
-        lua,
-        &fields,
-        user.as_ref(),
-        None,
-        operation,
-    ))
+    Ok(
+        check_field_write_access_with_lua(lua, &fields, user.as_ref(), None, operation)
+            .iter()
+            .map(FieldDenial::display_path)
+            .collect(),
+    )
 }
 
 /// Look up the field definitions for a collection or global.

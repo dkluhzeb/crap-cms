@@ -31,7 +31,7 @@ use crate::{
             task_join_error_response,
         },
     },
-    core::{AuthUser, Claims, CollectionDefinition, Document, upload},
+    core::{AuthUser, Claims, CollectionDefinition, Document, FieldDenial, upload},
     db::{DbPool, query::LocaleContext},
     hooks::{ConditionContext, HookRunner},
     service::{
@@ -124,10 +124,17 @@ fn prepare_edit_fields(
     document: &Document,
     id: &str,
     editor_locale: Option<&str>,
-    denied_read_fields: &[String],
+    denied_read_fields: &[FieldDenial],
     auth_user: Option<&Extension<AuthUser>>,
 ) -> (Vec<FieldContext>, Vec<FieldContext>) {
-    let values = flatten_document_values(&document.fields, &def.fields);
+    // Read-denied fields must not reach the form — strip them (including values
+    // nested inside array/blocks rows) before building any view of the data.
+    let mut visible_fields = document.fields.clone();
+    for denial in denied_read_fields {
+        denial.strip_from(&mut visible_fields);
+    }
+
+    let values = flatten_document_values(&visible_fields, &def.fields);
     let non_default_locale = is_non_default_locale(state, editor_locale);
 
     let mut fields = build_field_contexts(
@@ -141,7 +148,7 @@ fn prepare_edit_fields(
     enrich_field_contexts(
         &mut fields,
         &def.fields,
-        &document.fields,
+        &visible_fields,
         state,
         &EnrichOptions::builder(&HashMap::new())
             .filter_hidden(true)
@@ -150,15 +157,15 @@ fn prepare_edit_fields(
             .build(),
     );
 
-    // Remove read-denied fields entirely — they shouldn't render in the form
+    // Drop top-level denied field contexts so no empty input renders for them.
     if !denied_read_fields.is_empty() {
         fields.retain(|fc| {
             let name = fc.base().name.as_str();
-            !denied_read_fields.iter().any(|d| d == name)
+            !denied_read_fields.iter().any(|d| d.display_path() == name)
         });
     }
 
-    let form_data_json = json!(document.fields);
+    let form_data_json = json!(visible_fields);
     let cond_ctx = ConditionContext {
         collection: &def.slug,
         operation: "update",

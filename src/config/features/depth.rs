@@ -11,6 +11,13 @@ pub struct DepthConfig {
     pub default_depth: i32,
     /// Maximum allowed depth application-wide. Prevents abuse.
     pub max_depth: i32,
+    /// Maximum nesting depth for in-memory JSON *data structures* (the Lua↔JSON
+    /// converter). Distinct from `max_depth`, which limits relationship
+    /// *population*: this bounds how deeply a single value (e.g. a Lua table a
+    /// hook builds) may nest, guarding against stack overflow. Must be large
+    /// enough to hold the data that `max_depth` population produces — validated
+    /// in [`crate::config::CrapConfig::validate`]. Generous by default.
+    pub max_nesting_depth: usize,
 }
 
 impl Default for DepthConfig {
@@ -18,6 +25,7 @@ impl Default for DepthConfig {
         Self {
             default_depth: 1,
             max_depth: 10,
+            max_nesting_depth: 64,
         }
     }
 }
@@ -31,5 +39,6 @@ mod tests {
         let depth = DepthConfig::default();
         assert_eq!(depth.default_depth, 1);
         assert_eq!(depth.max_depth, 10);
+        assert_eq!(depth.max_nesting_depth, 64);
     }
 }

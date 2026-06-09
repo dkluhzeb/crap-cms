@@ -10,7 +10,7 @@ use tracing::{error, warn};
 
 use crate::{
     admin::AdminState,
-    core::{AuthUser, Document, DocumentFields, FieldDefinition, FieldType, HookRef},
+    core::{AuthUser, Document, DocumentFields, FieldDefinition, FieldDenial, FieldType, HookRef},
     db::AccessResult,
     hooks::{HookRunner, lifecycle::access::has_any_field_access},
 };
@@ -82,7 +82,7 @@ pub fn compute_denied_read_fields(
     state: &AdminState,
     auth_user: Option<&Extension<AuthUser>>,
     fields: &[FieldDefinition],
-) -> Result<Vec<String>, Box<axum::response::Response>> {
+) -> Result<Vec<FieldDenial>, Box<axum::response::Response>> {
     if !has_any_field_access(fields, |f| f.access.read.as_ref()) {
         return Ok(Vec::new());
     }

@@ -227,7 +227,7 @@ mod tests {
 
     use crate::{
         core::{
-            CollectionDefinition, Document, FieldDefinition, FieldType, Hooks,
+            CollectionDefinition, Document, FieldDefinition, FieldDenial, FieldType, Hooks,
             SharedInvalidationTransport, ValidationError, collection::Auth,
             event::InProcessInvalidationBus,
         },
@@ -278,7 +278,7 @@ mod tests {
             _fields: &[FieldDefinition],
             _user: Option<&Document>,
             _locale: Option<&str>,
-        ) -> Vec<String> {
+        ) -> Vec<FieldDenial> {
             Vec::new()
         }
 
@@ -292,7 +292,7 @@ mod tests {
             _user: Option<&Document>,
             _locale: Option<&str>,
             _operation: &str,
-        ) -> Vec<String> {
+        ) -> Vec<FieldDenial> {
             Vec::new()
         }
 
@@ -487,7 +487,7 @@ mod tests {
             _fields: &[FieldDefinition],
             _user: Option<&Document>,
             _locale: Option<&str>,
-        ) -> Vec<String> {
+        ) -> Vec<FieldDenial> {
             Vec::new()
         }
 
@@ -501,7 +501,7 @@ mod tests {
             _user: Option<&Document>,
             _locale: Option<&str>,
             _operation: &str,
-        ) -> Vec<String> {
+        ) -> Vec<FieldDenial> {
             Vec::new()
         }
 

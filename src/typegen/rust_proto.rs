@@ -338,6 +338,44 @@ fn scalar(base: &str, doc_var: &str, name: &str, optional: bool) -> String {
 }
 
 /// Generate the extraction expression for a single field.
+/// Build the `from_document` extraction expression for a sub-typed field,
+/// calling the generated `from_struct`. `is_list` selects Array (a list of
+/// structs) vs Group (a single struct).
+fn sub_type_extraction(
+    sub: &str,
+    name: &str,
+    doc_var: &str,
+    optional: bool,
+    is_list: bool,
+) -> String {
+    let arm = if is_list {
+        format!(
+            "Some(Kind::ListValue(list)) => Some(\
+                list.values.iter()\
+                    .filter_map(|v| match &v.kind {{\
+                        Some(Kind::StructValue(s)) => Some({sub}::from_struct(s)),\
+                        _ => None,\
+                    }})\
+                    .collect::<Vec<_>>()\
+            ),"
+        )
+    } else {
+        format!("Some(Kind::StructValue(s)) => Some({sub}::from_struct(s)),")
+    };
+
+    let expr = format!(
+        "{doc_var}.fields.as_ref()\
+        .and_then(|f| f.fields.get(\"{name}\"))\
+        .and_then(|v| match &v.kind {{ {arm} _ => None, }})"
+    );
+
+    if optional {
+        expr
+    } else {
+        format!("{expr}.unwrap_or_default()")
+    }
+}
+
 fn field_extraction(field: &FieldDefinition, parent_pascal: &str, doc_var: &str) -> String {
     let name = &field.name;
     let optional = is_optional(field);
@@ -400,30 +438,18 @@ fn field_extraction(field: &FieldDefinition, parent_pascal: &str, doc_var: &str)
             }
         }
 
-        // Typed arrays
+        // Typed arrays — a list of structs.
         FieldType::Array if !field.fields.is_empty() => {
             let sub = format!("{}{}", parent_pascal, to_pascal_case(name));
-            let expr = format!(
-                "{doc_var}.fields.as_ref()\
-                .and_then(|f| f.fields.get(\"{name}\"))\
-                .and_then(|v| match &v.kind {{\
-                    Some(Kind::ListValue(list)) => Some(\
-                        list.values.iter()\
-                            .filter_map(|v| match &v.kind {{\
-                                Some(Kind::StructValue(s)) => Some({sub}::from_struct(s)),\
-                                _ => None,\
-                            }})\
-                            .collect::<Vec<_>>()\
-                    ),\
-                    _ => None,\
-                }})"
-            );
+            sub_type_extraction(&sub, name, doc_var, optional, true)
+        }
 
-            if optional {
-                expr
-            } else {
-                format!("{expr}.unwrap_or_default()")
-            }
+        // Typed group — a single nested struct (vs Array's list). Its
+        // `from_struct` impl is generated alongside array sub-types; without
+        // calling it the group would silently extract as default/empty.
+        FieldType::Group if !field.fields.is_empty() => {
+            let sub = format!("{}{}", parent_pascal, to_pascal_case(name));
+            sub_type_extraction(&sub, name, doc_var, optional, false)
         }
 
         // Fallbacks
@@ -629,6 +655,32 @@ mod tests {
         assert!(
             out.contains("PostsItems::from_struct(s)"),
             "should call from_struct in array extraction: {out}"
+        );
+    }
+
+    #[test]
+    fn proto_group_calls_from_struct_not_default() {
+        // Regression: a top-level Group used to fall through to
+        // `Default::default()` (silent data loss) even though its `from_struct`
+        // impl is generated. It must extract the nested struct.
+        let col = make_col(
+            "posts",
+            vec![
+                FieldDefinition::builder("seo", FieldType::Group)
+                    .fields(vec![text_field("title", true)])
+                    .build(),
+            ],
+        );
+        let mut out = String::new();
+        render_collection_impl(&mut out, &col);
+
+        assert!(
+            out.contains("impl PostsSeo {"),
+            "should generate group sub-type impl: {out}"
+        );
+        assert!(
+            out.contains("PostsSeo::from_struct(s)"),
+            "group must extract via from_struct, not default: {out}"
         );
     }
 

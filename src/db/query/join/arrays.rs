@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use crate::core::{FieldDefinition, FieldType, field::flatten_array_sub_fields};
 use crate::db::{
-    DbConnection, DbValue,
+    DbConnection, DbRow, DbValue,
     query::{
         coerce_json_value,
         helpers::{coerce_date_value_json, join_table, tz_column},
@@ -183,53 +183,128 @@ pub fn find_array_rows(
     let mut result = Vec::with_capacity(db_rows.len());
 
     for db_row in &db_rows {
-        let mut map = Map::new();
-        let id = db_row.get_value(0).cloned().unwrap_or(DbValue::Null);
-        if let DbValue::Text(s) = id {
-            map.insert("id".to_string(), Value::String(s));
-        }
+        let mut map = reconstruct_array_row(db_row, &flat_subs, 1);
 
-        let mut col_idx = 1; // starts after "id"
-        for sf in &flat_subs {
-            let val = db_row.get_value(col_idx).cloned().unwrap_or(DbValue::Null);
-            col_idx += 1;
-
-            let json_val = match val {
-                DbValue::Integer(n) => json!(n),
-                DbValue::Real(f) => json!(f),
-                DbValue::Text(s) => {
-                    // Composite sub-fields store JSON in TEXT columns —
-                    // attempt to parse so nested data comes back structured.
-                    match sf.field_type {
-                        FieldType::Array
-                        | FieldType::Blocks
-                        | FieldType::Group
-                        | FieldType::Row
-                        | FieldType::Collapsible
-                        | FieldType::Tabs
-                        | FieldType::Json => serde_json::from_str(&s).unwrap_or(Value::String(s)),
-                        _ => Value::String(s),
-                    }
-                }
-                DbValue::Null | DbValue::Blob(_) => Value::Null,
-            };
-            map.insert(sf.name.clone(), json_val);
-
-            // Read timezone companion column
-            if sf.field_type == FieldType::Date && sf.timezone {
-                let tz_val = db_row.get_value(col_idx).cloned().unwrap_or(DbValue::Null);
-                col_idx += 1;
-
-                let tz_json = match tz_val {
-                    DbValue::Text(s) => Value::String(s),
-                    _ => Value::Null,
-                };
-                map.insert(tz_column(&sf.name), tz_json);
-            }
+        if let Some(DbValue::Text(s)) = db_row.get_value(0) {
+            map.insert("id".to_string(), Value::String(s.clone()));
         }
 
         result.push(Value::Object(map));
     }
+    Ok(result)
+}
+
+/// Whether a sub-field column holds JSON that must be parsed on read: any
+/// composite (Group/Array/Blocks/layout wrapper/Json) or a has-many
+/// relationship/upload (stored as a JSON id array in the column).
+fn sub_field_stores_json(sf: &FieldDefinition) -> bool {
+    matches!(
+        sf.field_type,
+        FieldType::Array
+            | FieldType::Blocks
+            | FieldType::Group
+            | FieldType::Row
+            | FieldType::Collapsible
+            | FieldType::Tabs
+            | FieldType::Json
+    ) || (matches!(sf.field_type, FieldType::Relationship | FieldType::Upload)
+        && sf.relationship.as_ref().is_some_and(|rc| rc.has_many))
+}
+
+/// Reconstruct an array-row object from a DB row's sub-field columns, starting
+/// at column index `start`. Composite sub-fields (Group/Array/Blocks/layout
+/// wrappers/Json) are stored as JSON in TEXT columns and parsed back to
+/// structured values, so nested composites at any depth come back ready for a
+/// JSON walk. Date+timezone fields read their `_tz` companion column.
+///
+/// Shared by [`find_array_rows`] (per-parent read) and
+/// [`find_all_array_rows_with_parent`] (back-reference scan) so the
+/// column→JSON mapping lives in exactly one place.
+pub(crate) fn reconstruct_array_row(
+    db_row: &DbRow,
+    flat_subs: &[&FieldDefinition],
+    start: usize,
+) -> Map<String, Value> {
+    let mut map = Map::new();
+    let mut col_idx = start;
+
+    for sf in flat_subs {
+        let val = db_row.get_value(col_idx).cloned().unwrap_or(DbValue::Null);
+        col_idx += 1;
+
+        let json_val = match val {
+            DbValue::Integer(n) => json!(n),
+            DbValue::Real(f) => json!(f),
+            DbValue::Text(s) if sub_field_stores_json(sf) => {
+                // Composite sub-fields (and has-many relationship/upload, which
+                // store a JSON id array) keep JSON in a TEXT column — parse it
+                // so nested data comes back structured.
+                serde_json::from_str(&s).unwrap_or(Value::String(s))
+            }
+            DbValue::Text(s) => Value::String(s),
+            DbValue::Null | DbValue::Blob(_) => Value::Null,
+        };
+        map.insert(sf.name.clone(), json_val);
+
+        if sf.field_type == FieldType::Date && sf.timezone {
+            let tz_val = db_row.get_value(col_idx).cloned().unwrap_or(DbValue::Null);
+            col_idx += 1;
+
+            let tz_json = match tz_val {
+                DbValue::Text(s) => Value::String(s),
+                _ => Value::Null,
+            };
+            map.insert(tz_column(&sf.name), tz_json);
+        }
+    }
+
+    map
+}
+
+/// Load every row of an array join table as `(parent_id, row_object)`, with
+/// composite sub-fields JSON-parsed (see [`reconstruct_array_row`]). Used by
+/// the back-reference scanner to walk array rows for nested relationships at
+/// any depth (group-in-array, array-in-array, has-many in array) rather than
+/// querying a single column. Not locale-scoped: a reference exists regardless
+/// of which locale's row holds it.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails.
+pub(crate) fn find_all_array_rows_with_parent(
+    conn: &dyn DbConnection,
+    array_table: &str,
+    sub_fields: &[FieldDefinition],
+) -> Result<Vec<(String, Map<String, Value>)>> {
+    let flat_subs = flatten_array_sub_fields(sub_fields);
+
+    let mut select_col_names: Vec<String> = Vec::new();
+    for sf in &flat_subs {
+        select_col_names.push(sf.name.clone());
+        if sf.field_type == FieldType::Date && sf.timezone {
+            select_col_names.push(tz_column(&sf.name));
+        }
+    }
+
+    let select_cols = if select_col_names.is_empty() {
+        "parent_id".to_string()
+    } else {
+        format!("parent_id, {}", select_col_names.join(", "))
+    };
+    let sql = format!("SELECT {select_cols} FROM \"{array_table}\"");
+
+    let db_rows = conn.query_all(&sql, &[])?;
+    let mut result = Vec::with_capacity(db_rows.len());
+
+    for db_row in &db_rows {
+        let Some(DbValue::Text(parent_id)) = db_row.get_value(0) else {
+            continue;
+        };
+        let row = reconstruct_array_row(db_row, &flat_subs, 1);
+
+        result.push((parent_id.clone(), row));
+    }
+
     Ok(result)
 }
 
@@ -511,5 +586,68 @@ mod tests {
             found[0]["event_date_tz"].is_null(),
             "tz should be null when not provided"
         );
+    }
+
+    // ── Deep nesting round-trips (write → DB → read) ─────────────────
+
+    #[test]
+    fn array_in_array_round_trips_as_structured_json() {
+        // An array nested inside an array row is stored as JSON in the outer
+        // row's column and must come back as a structured array, not a string.
+        let (_dir, conn) = setup_conn(
+            "CREATE TABLE posts (id TEXT PRIMARY KEY);
+             CREATE TABLE posts_outer (
+                 id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, inner TEXT
+             );
+             INSERT INTO posts (id) VALUES ('p1');",
+        );
+
+        let sub_fields = vec![
+            FieldDefinition::builder("inner", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("label", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+        let rows = vec![HashMap::from([(
+            "inner".to_string(),
+            json!([{ "label": "a" }, { "label": "b" }]),
+        )])];
+
+        set_array_rows(&conn, "posts", "outer", "p1", &rows, &sub_fields, None).unwrap();
+        let found = find_array_rows(&conn, "posts", "outer", "p1", &sub_fields, None).unwrap();
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            found[0]["inner"],
+            json!([{ "label": "a" }, { "label": "b" }])
+        );
+    }
+
+    #[test]
+    fn has_many_relationship_in_array_round_trips_as_array() {
+        // A has-many relationship inside an array row stores its id list as JSON
+        // in the column and must read back as an array (not a raw string).
+        let (_dir, conn) = setup_conn(
+            "CREATE TABLE posts (id TEXT PRIMARY KEY);
+             CREATE TABLE posts_rows (
+                 id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, tags TEXT
+             );
+             INSERT INTO posts (id) VALUES ('p1');",
+        );
+
+        let sub_fields = vec![
+            FieldDefinition::builder("tags", FieldType::Relationship)
+                .relationship(crate::core::RelationshipConfig::new("tags", true))
+                .has_many(true)
+                .build(),
+        ];
+        let rows = vec![HashMap::from([("tags".to_string(), json!(["t1", "t2"]))])];
+
+        set_array_rows(&conn, "posts", "rows", "p1", &rows, &sub_fields, None).unwrap();
+        let found = find_array_rows(&conn, "posts", "rows", "p1", &sub_fields, None).unwrap();
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0]["tags"], json!(["t1", "t2"]));
     }
 }

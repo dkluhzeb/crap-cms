@@ -3,7 +3,7 @@
 use serde_json::Value;
 
 use crate::{
-    core::document::VersionSnapshot,
+    core::{FieldDenial, document::VersionSnapshot},
     db::{AccessResult, query},
     hooks::AccessCheckInput,
     service::{Def, ServiceContext, ServiceError, helpers},
@@ -71,36 +71,13 @@ pub fn find_version_by_id(
 }
 
 /// Strip `__`-separated field names from a snapshot `Value::Object`.
-fn strip_snapshot_fields(snapshot: &mut Value, denied: &[String]) {
+fn strip_snapshot_fields(snapshot: &mut Value, denied: &[FieldDenial]) {
     let Some(map) = snapshot.as_object_mut() else {
         return;
     };
 
-    for name in denied {
-        map.remove(name);
-
-        // Handle nested group subfields (snapshot stores groups as nested objects)
-        let segments: Vec<&str> = name.split("__").collect();
-
-        if segments.len() >= 2 {
-            strip_nested_snapshot(map, &segments);
-        }
-    }
-}
-
-fn strip_nested_snapshot(map: &mut serde_json::Map<String, Value>, segments: &[&str]) {
-    let Some((&first, rest)) = segments.split_first() else {
-        return;
-    };
-
-    let Some(Value::Object(inner)) = map.get_mut(first) else {
-        return;
-    };
-
-    if rest.len() == 1 {
-        inner.remove(rest[0]);
-    } else {
-        strip_nested_snapshot(inner, rest);
+    for denial in denied {
+        denial.strip_from(map);
     }
 }
 
@@ -113,7 +90,7 @@ mod tests {
     #[test]
     fn strips_top_level_denied_fields() {
         let mut snap = json!({ "title": "Hi", "secret": "x", "body": "text" });
-        strip_snapshot_fields(&mut snap, &["secret".to_string()]);
+        strip_snapshot_fields(&mut snap, &[FieldDenial::Flat("secret".into())]);
         assert_eq!(snap, json!({ "title": "Hi", "body": "text" }));
     }
 
@@ -125,26 +102,32 @@ mod tests {
             "meta": { "token": "secret", "author": "ada" },
             "title": "Hi"
         });
-        strip_snapshot_fields(&mut snap, &["meta__token".to_string()]);
+        strip_snapshot_fields(&mut snap, &[FieldDenial::Flat("meta__token".into())]);
         assert_eq!(snap, json!({ "meta": { "author": "ada" }, "title": "Hi" }));
     }
 
     #[test]
     fn strips_deeply_nested_subfield() {
         let mut snap = json!({ "a": { "b": { "c": 1, "d": 2 } } });
-        strip_snapshot_fields(&mut snap, &["a__b__c".to_string()]);
+        strip_snapshot_fields(&mut snap, &[FieldDenial::Flat("a__b__c".into())]);
         assert_eq!(snap, json!({ "a": { "b": { "d": 2 } } }));
     }
 
     #[test]
     fn missing_paths_and_non_objects_are_no_ops() {
         let mut snap = json!({ "title": "Hi" });
-        strip_snapshot_fields(&mut snap, &["nope".to_string(), "a__b".to_string()]);
+        strip_snapshot_fields(
+            &mut snap,
+            &[
+                FieldDenial::Flat("nope".into()),
+                FieldDenial::Flat("a__b".into()),
+            ],
+        );
         assert_eq!(snap, json!({ "title": "Hi" }));
 
         // A non-object snapshot is left untouched.
         let mut arr = json!([1, 2, 3]);
-        strip_snapshot_fields(&mut arr, &["x".to_string()]);
+        strip_snapshot_fields(&mut arr, &[FieldDenial::Flat("x".into())]);
         assert_eq!(arr, json!([1, 2, 3]));
     }
 }

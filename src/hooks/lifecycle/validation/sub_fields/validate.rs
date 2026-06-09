@@ -176,6 +176,19 @@ fn validate_nested_rows(
 ) {
     for (nested_idx, nested_row) in nested_rows.iter().enumerate() {
         let Some(nested_obj) = nested_row.as_object() else {
+            // Mirror the top-level array/blocks walker: a non-object row is a
+            // malformed payload and must surface an error, not be silently
+            // skipped (which would let a bad row escape validation entirely).
+            errors.push(
+                FieldError::with_key(
+                    format!("{}[{nested_idx}]", call.qualified),
+                    format!("{} row {nested_idx} must be an object", call.sf.name),
+                    "validation.invalid_row_type",
+                )
+                .with_param("field", call.sf.name.clone())
+                .with_param("index", nested_idx.to_string()),
+            );
+
             continue;
         };
 
@@ -359,6 +372,13 @@ fn validate_leaf_sub_field(
 
     // 8. Has-many element validation (per-element length/numeric bounds, row counts)
     checks::check_has_many_elements(sf, qualified, value, is_empty, errors);
+
+    // 8b. Polymorphic relationship allowlist — a forged target collection on a
+    //     relationship/upload nested inside an array/blocks row must be rejected
+    //     here too, exactly as at the top level. The save path descends into
+    //     nested composites, so skipping this would let an attacker reference a
+    //     collection the field author never allowed.
+    checks::check_polymorphic_allowlist(sf, qualified, value, errors);
 
     // 9. Richtext node attr validation
     if sf.field_type == FieldType::Richtext

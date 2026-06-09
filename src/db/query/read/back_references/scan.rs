@@ -96,11 +96,11 @@ fn scan_fields(
             }
             FieldType::Array => {
                 let table = join_table(parent_table, &prefixed(prefix, &field.name));
-                scan_array_sub_fields(scan, &field.fields, &table, &field.name, results);
+                scan_array_sub_fields(scan, field, &table, results);
             }
             FieldType::Blocks => {
                 let table = join_table(parent_table, &prefixed(prefix, &field.name));
-                scan_blocks(scan, &field.blocks, &table, &field.name, results);
+                scan_blocks(scan, field, &table, results);
             }
             _ => {}
         }

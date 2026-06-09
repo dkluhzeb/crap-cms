@@ -6,6 +6,7 @@ mod helpers;
 pub(crate) mod hydrate;
 mod relationships;
 
+pub(crate) use arrays::find_all_array_rows_with_parent;
 pub use arrays::{find_array_rows, set_array_rows};
 pub use blocks::{find_block_rows, set_block_rows};
 pub use hydrate::{hydrate_document, hydrate_documents, save_join_table_data};

@@ -6,8 +6,9 @@ use crate::{
     admin::{
         AdminState,
         context::field::{FieldContext, RelationshipSelectedItem, TabsField},
-        handlers::field_context::enrich::{
-            EnrichCtx, EnrichOptions, nested::enrich_nested_fields, types,
+        handlers::field_context::{
+            builder::visible_field_defs,
+            enrich::{EnrichCtx, EnrichOptions, nested::enrich_nested_fields, types},
         },
     },
     core::{DocumentFields, FieldDefinition, Registry, RelationshipConfig},
@@ -103,7 +104,6 @@ fn enrich_single_field(
     fc: &mut FieldContext,
     field_def: &FieldDefinition,
     doc_fields: &DocumentFields,
-    state: &AdminState,
     opts: &EnrichOptions,
     enrich_ctx: &EnrichCtx,
 ) {
@@ -125,21 +125,21 @@ fn enrich_single_field(
             types::enrich_blocks(bf, field_def, doc_fields, enrich_ctx);
         }
         FieldContext::Row(rf) => {
-            enrich_field_contexts(
+            enrich_nested_aligned(
                 &mut rf.sub_fields,
                 &field_def.fields,
                 doc_fields,
-                state,
                 opts,
+                enrich_ctx,
             );
         }
         FieldContext::Collapsible(cf) => {
-            enrich_field_contexts(
+            enrich_nested_aligned(
                 &mut cf.sub_fields,
                 &field_def.fields,
                 doc_fields,
-                state,
                 opts,
+                enrich_ctx,
             );
         }
         FieldContext::Group(gf) => {
@@ -152,7 +152,7 @@ fn enrich_single_field(
             );
         }
         FieldContext::Tabs(tf) => {
-            enrich_tabs(tf, field_def, doc_fields, state, opts);
+            enrich_tabs(tf, field_def, doc_fields, opts, enrich_ctx);
         }
         FieldContext::Join(jf) => {
             types::enrich_join(jf, field_def, conn, reg, rel_locale_ctx, opts.doc_id);
@@ -169,17 +169,38 @@ fn enrich_tabs(
     tf: &mut TabsField,
     field_def: &FieldDefinition,
     doc_fields: &DocumentFields,
-    state: &AdminState,
     opts: &EnrichOptions,
+    enrich_ctx: &EnrichCtx,
 ) {
     for (tab_panel, tab_def) in tf.tabs.iter_mut().zip(field_def.tabs.iter()) {
-        enrich_field_contexts(
+        enrich_nested_aligned(
             &mut tab_panel.sub_fields,
             &tab_def.fields,
             doc_fields,
-            state,
             opts,
+            enrich_ctx,
         );
+    }
+}
+
+/// Enrich a 1:1-aligned list of nested sub-field contexts against their defs.
+///
+/// Used by layout wrappers (Row/Collapsible/Tabs) whose sub-field *contexts* are
+/// built UNFILTERED by `build_layout_sub_fields` — exactly one context per def,
+/// in def order. So the defs are deliberately NOT run through `visible_field_defs`
+/// here: filtering them would drop entries the context list still has, desyncing
+/// the `zip`. Hidden-field filtering happens once, at the top level (see
+/// [`enrich_field_contexts`]), consistently with `build_field_contexts`. Reuses
+/// the parent [`EnrichCtx`] so the whole tree shares one pooled connection.
+fn enrich_nested_aligned(
+    fields: &mut [FieldContext],
+    field_defs: &[FieldDefinition],
+    doc_fields: &DocumentFields,
+    opts: &EnrichOptions,
+    enrich_ctx: &EnrichCtx,
+) {
+    for (fc, field_def) in fields.iter_mut().zip(field_defs.iter()) {
+        enrich_single_field(fc, field_def, doc_fields, opts, enrich_ctx);
     }
 }
 
@@ -214,22 +235,15 @@ pub fn enrich_field_contexts(
         rel_locale_ctx: rel_locale_ctx.as_ref(),
     };
 
-    // NOTE: this filters only `admin.hidden` (when `filter_hidden`), NOT the
-    // top-level `field.hidden` — so it does NOT use `visible_field_defs`. That
-    // is deliberate: `enrich_field_contexts` recurses into Row/Collapsible/Tabs
-    // sub-fields, and nested sub-field *contexts* are built UNFILTERED by
-    // `build_layout_sub_fields`; filtering the recursive defs here would desync
-    // that nested zip. The top-level `field.hidden` desync (vs `build_field_contexts`)
-    // is a known pre-existing inconsistency rooted in nested context-building not
-    // filtering — a separate fix from this hooks work. See `visible_field_defs`.
-    let defs_iter: Box<dyn Iterator<Item = &FieldDefinition>> = if opts.filter_hidden {
-        Box::new(field_defs.iter().filter(|f| !f.admin.hidden))
-    } else {
-        Box::new(field_defs.iter())
-    };
-
-    for (fc, field_def) in fields.iter_mut().zip(defs_iter) {
-        enrich_single_field(fc, field_def, doc_fields, state, opts, &enrich_ctx);
+    // Filter the top-level defs through the SAME single source of truth as
+    // `build_field_contexts` so this `zip` pairs each enriched context with the
+    // def it was built from. Nested layout sub-fields are handled separately by
+    // `enrich_nested_aligned` (unfiltered, 1:1) — see its doc comment.
+    for (fc, field_def) in fields
+        .iter_mut()
+        .zip(visible_field_defs(field_defs, opts.filter_hidden))
+    {
+        enrich_single_field(fc, field_def, doc_fields, opts, &enrich_ctx);
     }
 }
 
@@ -336,6 +350,62 @@ mod tests {
             .as_array()
             .expect("array inside Row must have rows populated from doc_fields");
         assert_eq!(rows.len(), 2, "should have 2 array rows");
+    }
+
+    /// Regression: a top-level `field.hidden` field placed BEFORE other fields
+    /// used to desync enrichment. `build_field_contexts` always drops
+    /// `field.hidden` (so it produces N-1 contexts), but `enrich_field_contexts`
+    /// iterated the raw, unfiltered def list (N defs) — so the `zip` paired the
+    /// surviving contexts with the WRONG defs from the hidden field onward, and
+    /// the array's rows were looked up under the hidden field's name (→ empty).
+    /// Both passes now filter through `visible_field_defs`, so the zip stays
+    /// aligned and the array enriches correctly.
+    #[test]
+    fn enrich_field_contexts_hidden_field_before_array_stays_aligned() {
+        let secret = FieldDefinition::builder("secret", FieldType::Text)
+            .hidden(true)
+            .build();
+        let array_field = FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![make_field("label", FieldType::Text)])
+            .build();
+        let field_defs = vec![secret, array_field];
+
+        let values = HashMap::new();
+        let errors = HashMap::new();
+        let mut contexts = build_value_contexts(&field_defs, &values, &errors, false, false);
+
+        // `build_field_contexts` always strips `field.hidden`, so only the array
+        // context survives.
+        assert_eq!(contexts.len(), 1, "hidden field must not produce a context");
+        assert_eq!(contexts[0]["field_type"], "array");
+
+        let mut doc_fields = DocumentFields::new();
+        doc_fields.insert(
+            "items".to_string(),
+            json!([
+                {"label": "First"},
+                {"label": "Second"},
+            ]),
+        );
+
+        let state = make_test_state();
+
+        enrich_field_contexts_values(
+            &mut contexts,
+            &field_defs,
+            &doc_fields,
+            &state,
+            &EnrichOptions::builder(&errors).build(),
+        );
+
+        let rows = contexts[0]["rows"]
+            .as_array()
+            .expect("array must enrich despite the preceding hidden field");
+        assert_eq!(
+            rows.len(),
+            2,
+            "array rows must populate (enrich stayed aligned)"
+        );
     }
 
     // ── Layout wrappers inside Array: transparent names + data flow ─
