@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::config::parsing::serde_duration;
+use crate::core::HookRef;
 
 use super::csp::CspConfig;
 
@@ -22,7 +23,9 @@ pub struct AdminConfig {
     pub site_name: String,
     /// Optional Lua function ref that gates admin panel access.
     /// Checked after successful authentication. None = any authenticated user.
-    pub access: Option<String>,
+    /// Accepts a bare ref string or a `{ ref, options }` table (TOML inline
+    /// table) carrying per-config options exposed to the hook as `ctx.options`.
+    pub access: Option<HookRef>,
     /// Content-Security-Policy header configuration.
     pub csp: CspConfig,
     /// Default IANA timezone for date fields with `timezone = true` that don't
@@ -88,7 +91,29 @@ mod tests {
         let config = CrapConfig::load(tmp.path()).unwrap();
         assert!(config.admin.dev_mode);
         assert!(!config.admin.require_auth);
-        assert_eq!(config.admin.access, Some("access.admin_panel".to_string()));
+        assert_eq!(
+            config.admin.access.as_ref().map(HookRef::reference),
+            Some("access.admin_panel")
+        );
+    }
+
+    /// The panel-access gate accepts the `{ ref, options }` form as a TOML
+    /// inline table, exposing per-config options to the gate as `ctx.options`.
+    #[test]
+    fn admin_access_accepts_ref_options_table() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            tmp.path().join("crap.toml"),
+            "[admin]\naccess = { ref = \"access.panel\", options = { role = \"admin\" } }\n",
+        )
+        .unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
+        let access = config.admin.access.expect("access set");
+        assert_eq!(access.reference(), "access.panel");
+        assert_eq!(
+            access.options().and_then(|o| o.get("role")),
+            Some(&serde_json::json!("admin"))
+        );
     }
 
     #[test]

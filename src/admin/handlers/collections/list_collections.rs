@@ -25,7 +25,7 @@ pub async fn list_collections(
         .registry
         .collections
         .iter()
-        .filter(|(_, def)| has_read_access(&state, def.access.read.as_deref(), user_doc, &def.slug))
+        .filter(|(_, def)| has_read_access(&state, def.access.read.as_ref(), user_doc, &def.slug))
         .map(|(slug, def)| CollectionEntry {
             slug: slug.to_string(),
             display_name: def.display_name().to_string(),

@@ -35,7 +35,7 @@ pub fn create_document_in_conn(
     // Collection-level access check. The incoming data is exposed to the
     // access function as `ctx.data` so it can gate on what is being written.
     let access = write_hooks.check_access(&AccessCheckInput {
-        access_ref: def.access.create.as_deref(),
+        access: def.access.create.as_ref(),
         user: ctx.user,
         id: None,
         data: Some(&input.data),

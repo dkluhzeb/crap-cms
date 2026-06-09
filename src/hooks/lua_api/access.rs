@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
-use crate::core::{Document, FieldDefinition, Registry, RegistryRead, SharedRegistry};
+use crate::core::{Document, FieldDefinition, HookRef, Registry, RegistryRead, SharedRegistry};
 use crate::db::{AccessResult, FilterClause, FilterOp};
 use crate::hooks::lifecycle::{
     AccessCheckInput, UserContext,
@@ -172,7 +172,7 @@ fn resolve_access_ref(
     registry: &Registry,
     collection: &str,
     operation: &str,
-) -> LuaResult<Option<String>> {
+) -> LuaResult<Option<HookRef>> {
     // Try as collection first, then as global.
     if let Some(def) = registry.get_collection(collection) {
         let access_ref = match operation {
@@ -221,13 +221,13 @@ fn check_impl(
     collection: &str,
     operation: &str,
 ) -> LuaResult<Value> {
-    let access_ref = resolve_access_ref(registry, collection, operation)?;
+    let access = resolve_access_ref(registry, collection, operation)?;
     let user = current_user(lua);
 
     let result = check_access_with_lua(
         lua,
         &AccessCheckInput {
-            access_ref: access_ref.as_deref(),
+            access: access.as_ref(),
             user: user.as_ref(),
             id: None,
             data: None,

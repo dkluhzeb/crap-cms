@@ -23,7 +23,7 @@ fn undelete_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document>
     let def = ctx.collection_def()?;
 
     let access = write_hooks.check_access(&AccessCheckInput {
-        access_ref: def.access.resolve_trash(),
+        access: def.access.resolve_trash(),
         user: ctx.user,
         id: Some(id),
         data: None,

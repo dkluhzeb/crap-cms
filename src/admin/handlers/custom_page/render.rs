@@ -46,9 +46,9 @@ pub async fn render_custom_page(
     // collections. When the page declares `access = "fn_name"` and the
     // function returns false (or denies), respond 403.
     let registered = state.custom_pages.get(&slug);
-    if let Some(access_ref) = registered.and_then(|p| p.access.as_deref()) {
+    if let Some(access) = registered.and_then(|p| p.access.as_ref()) {
         let user_doc = get_user_doc(auth_user.as_ref());
-        if !has_read_access(&state, Some(access_ref), user_doc, "") {
+        if !has_read_access(&state, Some(access), user_doc, "") {
             return forbidden(&state, "You don't have permission to view this page");
         }
     }

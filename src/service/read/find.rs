@@ -37,11 +37,11 @@ pub fn find_documents(
     let access_ref = if input.trash {
         def.access.resolve_trash()
     } else {
-        def.access.read.as_deref()
+        def.access.read.as_ref()
     };
 
     let access = hooks.check_access(&AccessCheckInput {
-        access_ref,
+        access: access_ref,
         user: ctx.user,
         id: None,
         data: None,

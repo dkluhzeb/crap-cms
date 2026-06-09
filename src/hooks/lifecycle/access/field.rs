@@ -5,7 +5,7 @@ use mlua::Lua;
 use tracing::warn;
 
 use crate::{
-    core::{Document, FieldDefinition, FieldType},
+    core::{Document, FieldDefinition, FieldType, HookRef},
     db::{AccessResult, query::helpers::prefixed_name},
     hooks::lifecycle::{AccessCheckInput, access::collection::check_access_with_lua},
 };
@@ -29,7 +29,7 @@ pub(crate) fn check_field_write_access_with_lua(
     locale: Option<&str>,
     operation: &str,
 ) -> Vec<String> {
-    let extractor: fn(&FieldDefinition) -> Option<&str> = match operation {
+    let extractor: fn(&FieldDefinition) -> Option<&HookRef> = match operation {
         "create" => extract_create_access,
         "update" => extract_update_access,
         _ => return Vec::new(),
@@ -38,16 +38,16 @@ pub(crate) fn check_field_write_access_with_lua(
     collect_field_access_denied(lua, fields, user, locale, extractor, "", "write")
 }
 
-fn extract_read_access(f: &FieldDefinition) -> Option<&str> {
-    f.access.read.as_deref()
+fn extract_read_access(f: &FieldDefinition) -> Option<&HookRef> {
+    f.access.read.as_ref()
 }
 
-fn extract_create_access(f: &FieldDefinition) -> Option<&str> {
-    f.access.create.as_deref()
+fn extract_create_access(f: &FieldDefinition) -> Option<&HookRef> {
+    f.access.create.as_ref()
 }
 
-fn extract_update_access(f: &FieldDefinition) -> Option<&str> {
-    f.access.update.as_deref()
+fn extract_update_access(f: &FieldDefinition) -> Option<&HookRef> {
+    f.access.update.as_ref()
 }
 
 /// Check whether any field (including nested sub-fields of Groups and transparent
@@ -59,7 +59,7 @@ fn extract_update_access(f: &FieldDefinition) -> Option<&str> {
 /// - Array/Blocks: skip (separate join tables, no column-level stripping).
 pub(crate) fn has_any_field_access(
     fields: &[FieldDefinition],
-    extractor: fn(&FieldDefinition) -> Option<&str>,
+    extractor: fn(&FieldDefinition) -> Option<&HookRef>,
 ) -> bool {
     for field in fields {
         if extractor(field).is_some() {
@@ -96,7 +96,7 @@ fn collect_field_access_denied(
     fields: &[FieldDefinition],
     user: Option<&Document>,
     locale: Option<&str>,
-    extractor: fn(&FieldDefinition) -> Option<&str>,
+    extractor: fn(&FieldDefinition) -> Option<&HookRef>,
     prefix: &str,
     operation: &str,
 ) -> Vec<String> {
@@ -105,11 +105,11 @@ fn collect_field_access_denied(
     for field in fields {
         let full_name = prefixed_name(prefix, &field.name);
 
-        if let Some(ref_str) = extractor(field) {
+        if let Some(hook) = extractor(field) {
             let result = check_access_with_lua(
                 lua,
                 &AccessCheckInput {
-                    access_ref: Some(ref_str),
+                    access: Some(hook),
                     user,
                     id: None,
                     data: None,
@@ -131,7 +131,8 @@ fn collect_field_access_denied(
                 Err(e) => {
                     warn!(
                         "Field access function '{}' error (treating as denied): {}",
-                        ref_str, e
+                        hook.reference(),
+                        e
                     );
 
                     denied.push(full_name.clone());
@@ -207,7 +208,7 @@ mod tests {
         let fields = vec![make_field(
             "title",
             FieldAccess {
-                read: Some("test_access.allow".to_string()),
+                read: Some("test_access.allow".into()),
                 ..Default::default()
             },
         )];
@@ -222,7 +223,7 @@ mod tests {
             make_field(
                 "secret",
                 FieldAccess {
-                    read: Some("test_access.deny".to_string()),
+                    read: Some("test_access.deny".into()),
                     ..Default::default()
                 },
             ),
@@ -238,7 +239,7 @@ mod tests {
         let fields = vec![make_field(
             "status",
             FieldAccess {
-                read: Some("test_access.constrained_string".to_string()),
+                read: Some("test_access.constrained_string".into()),
                 ..Default::default()
             },
         )];
@@ -252,7 +253,7 @@ mod tests {
         let fields = vec![make_field(
             "broken",
             FieldAccess {
-                read: Some("test_access.throw_error".to_string()),
+                read: Some("test_access.throw_error".into()),
                 ..Default::default()
             },
         )];
@@ -267,14 +268,14 @@ mod tests {
             make_field(
                 "public",
                 FieldAccess {
-                    read: Some("test_access.allow".to_string()),
+                    read: Some("test_access.allow".into()),
                     ..Default::default()
                 },
             ),
             make_field(
                 "secret",
                 FieldAccess {
-                    read: Some("test_access.deny".to_string()),
+                    read: Some("test_access.deny".into()),
                     ..Default::default()
                 },
             ),
@@ -290,7 +291,7 @@ mod tests {
         let fields = vec![make_field(
             "admin_only",
             FieldAccess {
-                read: Some("test_access.check_user".to_string()),
+                read: Some("test_access.check_user".into()),
                 ..Default::default()
             },
         )];
@@ -322,7 +323,7 @@ mod tests {
         let fields = vec![make_field(
             "locked",
             FieldAccess {
-                create: Some("test_access.deny".to_string()),
+                create: Some("test_access.deny".into()),
                 ..Default::default()
             },
         )];
@@ -336,7 +337,7 @@ mod tests {
         let fields = vec![make_field(
             "immutable",
             FieldAccess {
-                update: Some("test_access.deny".to_string()),
+                update: Some("test_access.deny".into()),
                 ..Default::default()
             },
         )];
@@ -350,7 +351,7 @@ mod tests {
         let fields = vec![make_field(
             "title",
             FieldAccess {
-                create: Some("test_access.allow".to_string()),
+                create: Some("test_access.allow".into()),
                 ..Default::default()
             },
         )];
@@ -364,8 +365,8 @@ mod tests {
         let fields = vec![make_field(
             "title",
             FieldAccess {
-                create: Some("test_access.deny".to_string()),
-                update: Some("test_access.deny".to_string()),
+                create: Some("test_access.deny".into()),
+                update: Some("test_access.deny".into()),
                 ..Default::default()
             },
         )];
@@ -380,7 +381,7 @@ mod tests {
         let fields = vec![make_field(
             "broken",
             FieldAccess {
-                create: Some("test_access.throw_error".to_string()),
+                create: Some("test_access.throw_error".into()),
                 ..Default::default()
             },
         )];
@@ -394,8 +395,8 @@ mod tests {
         let fields = vec![make_field(
             "role",
             FieldAccess {
-                create: Some("test_access.allow".to_string()),
-                update: Some("test_access.deny".to_string()),
+                create: Some("test_access.allow".into()),
+                update: Some("test_access.deny".into()),
                 ..Default::default()
             },
         )];
@@ -412,7 +413,7 @@ mod tests {
         let fields = vec![make_field(
             "status",
             FieldAccess {
-                create: Some("test_access.constrained_string".to_string()),
+                create: Some("test_access.constrained_string".into()),
                 ..Default::default()
             },
         )];
@@ -426,7 +427,7 @@ mod tests {
         let fields = vec![make_field(
             "admin_only",
             FieldAccess {
-                update: Some("test_access.check_user".to_string()),
+                update: Some("test_access.check_user".into()),
                 ..Default::default()
             },
         )];
@@ -450,7 +451,7 @@ mod tests {
                 .fields(vec![make_field(
                     "title",
                     FieldAccess {
-                        read: Some("test_access.deny".to_string()),
+                        read: Some("test_access.deny".into()),
                         ..Default::default()
                     },
                 )])
@@ -468,7 +469,7 @@ mod tests {
                 .fields(vec![make_field(
                     "secret",
                     FieldAccess {
-                        read: Some("test_access.deny".to_string()),
+                        read: Some("test_access.deny".into()),
                         ..Default::default()
                     },
                 )])
@@ -486,7 +487,7 @@ mod tests {
                 .fields(vec![make_field(
                     "debug",
                     FieldAccess {
-                        create: Some("test_access.deny".to_string()),
+                        create: Some("test_access.deny".into()),
                         ..Default::default()
                     },
                 )])
@@ -504,7 +505,7 @@ mod tests {
                 .fields(vec![make_field(
                     "name",
                     FieldAccess {
-                        read: Some("test_access.deny".to_string()),
+                        read: Some("test_access.deny".into()),
                         ..Default::default()
                     },
                 )])
@@ -523,7 +524,7 @@ mod tests {
             make_field("title", FieldAccess::default()),
             make_field("body", FieldAccess::default()),
         ];
-        assert!(!has_any_field_access(&fields, |f| f.access.read.as_deref()));
+        assert!(!has_any_field_access(&fields, |f| f.access.read.as_ref()));
     }
 
     #[test]
@@ -531,11 +532,11 @@ mod tests {
         let fields = vec![make_field(
             "secret",
             FieldAccess {
-                read: Some("test_access.deny".to_string()),
+                read: Some("test_access.deny".into()),
                 ..Default::default()
             },
         )];
-        assert!(has_any_field_access(&fields, |f| f.access.read.as_deref()));
+        assert!(has_any_field_access(&fields, |f| f.access.read.as_ref()));
     }
 
     #[test]
@@ -546,13 +547,13 @@ mod tests {
                 .fields(vec![make_field(
                     "canonical_url",
                     FieldAccess {
-                        read: Some("test_access.deny".to_string()),
+                        read: Some("test_access.deny".into()),
                         ..Default::default()
                     },
                 )])
                 .build(),
         ];
-        assert!(has_any_field_access(&fields, |f| f.access.read.as_deref()));
+        assert!(has_any_field_access(&fields, |f| f.access.read.as_ref()));
     }
 
     #[test]
@@ -562,16 +563,13 @@ mod tests {
                 .fields(vec![make_field(
                     "secret",
                     FieldAccess {
-                        create: Some("test_access.deny".to_string()),
+                        create: Some("test_access.deny".into()),
                         ..Default::default()
                     },
                 )])
                 .build(),
         ];
-        assert!(has_any_field_access(&fields, |f| f
-            .access
-            .create
-            .as_deref()));
+        assert!(has_any_field_access(&fields, |f| f.access.create.as_ref()));
     }
 
     #[test]
@@ -581,14 +579,14 @@ mod tests {
                 .fields(vec![make_field(
                     "name",
                     FieldAccess {
-                        read: Some("test_access.deny".to_string()),
+                        read: Some("test_access.deny".into()),
                         ..Default::default()
                     },
                 )])
                 .build(),
         ];
         // Array sub-fields have separate join tables — not included
-        assert!(!has_any_field_access(&fields, |f| f.access.read.as_deref()));
+        assert!(!has_any_field_access(&fields, |f| f.access.read.as_ref()));
     }
 
     #[test]
@@ -601,7 +599,7 @@ mod tests {
                         .fields(vec![make_field(
                             "deep",
                             FieldAccess {
-                                update: Some("test_access.deny".to_string()),
+                                update: Some("test_access.deny".into()),
                                 ..Default::default()
                             },
                         )])
@@ -609,10 +607,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        assert!(has_any_field_access(&fields, |f| f
-            .access
-            .update
-            .as_deref()));
+        assert!(has_any_field_access(&fields, |f| f.access.update.as_ref()));
     }
 
     #[test]
@@ -626,7 +621,7 @@ mod tests {
                     fields: vec![make_field(
                         "secret",
                         FieldAccess {
-                            read: Some("test_access.deny".to_string()),
+                            read: Some("test_access.deny".into()),
                             ..Default::default()
                         },
                     )],
@@ -648,7 +643,7 @@ mod tests {
                     fields: vec![make_field(
                         "locked",
                         FieldAccess {
-                            create: Some("test_access.deny".to_string()),
+                            create: Some("test_access.deny".into()),
                             ..Default::default()
                         },
                     )],
@@ -669,14 +664,14 @@ mod tests {
                     fields: vec![make_field(
                         "meta_title",
                         FieldAccess {
-                            read: Some("test_access.deny".to_string()),
+                            read: Some("test_access.deny".into()),
                             ..Default::default()
                         },
                     )],
                 }])
                 .build(),
         ];
-        assert!(has_any_field_access(&fields, |f| f.access.read.as_deref()));
+        assert!(has_any_field_access(&fields, |f| f.access.read.as_ref()));
     }
 
     #[test]
@@ -684,18 +679,12 @@ mod tests {
         let fields = vec![make_field(
             "title",
             FieldAccess {
-                create: Some("test_access.deny".to_string()),
+                create: Some("test_access.deny".into()),
                 ..Default::default()
             },
         )];
         // Has create access, but checking update should return false
-        assert!(!has_any_field_access(&fields, |f| f
-            .access
-            .update
-            .as_deref()));
-        assert!(has_any_field_access(&fields, |f| f
-            .access
-            .create
-            .as_deref()));
+        assert!(!has_any_field_access(&fields, |f| f.access.update.as_ref()));
+        assert!(has_any_field_access(&fields, |f| f.access.create.as_ref()));
     }
 }

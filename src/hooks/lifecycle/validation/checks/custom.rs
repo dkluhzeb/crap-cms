@@ -28,12 +28,14 @@ pub(crate) fn check_custom_validate(
     ctx: &CustomValidateCtx,
     errors: &mut Vec<FieldError>,
 ) {
-    let Some(validate_ref) = field.validate.as_ref() else {
+    let Some(validate) = field.validate.as_ref() else {
         return;
     };
     let Some(val) = value else {
         return;
     };
+
+    let validate_ref = validate.reference();
 
     match run_validate_function_inner(
         lua,
@@ -47,6 +49,7 @@ pub(crate) fn check_custom_validate(
             locale: ctx.locale,
             operation: ctx.operation,
             id: ctx.id,
+            options: validate.options(),
         },
     ) {
         Ok(Some(err_msg)) => {

@@ -347,11 +347,7 @@ fn resolve_join_access(
     let Some(check) = opts.join_access else {
         return Ok(Some(Vec::new()));
     };
-    match check.check(
-        target_def.access.read.as_deref(),
-        opts.user,
-        &target_def.slug,
-    )? {
+    match check.check(target_def.access.read.as_ref(), opts.user, &target_def.slug)? {
         AccessResult::Denied => Ok(None),
         AccessResult::Constrained(extra) => Ok(Some(extra)),
         AccessResult::Allowed => Ok(Some(Vec::new())),
@@ -479,6 +475,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::core::HookRef;
     use crate::core::Registry;
     use crate::core::cache::NoneCache;
     use crate::db::AccessResult;
@@ -622,7 +619,7 @@ mod tests {
         impl JoinAccessCheck for DenyAll {
             fn check(
                 &self,
-                _: Option<&str>,
+                _: Option<&HookRef>,
                 _: Option<&Document>,
                 _: &str,
             ) -> AnyResult<AccessResult> {

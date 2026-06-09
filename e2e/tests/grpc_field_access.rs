@@ -22,6 +22,7 @@
     clippy::unreadable_literal
 )]
 
+use crap_cms::core::HookRef;
 use std::collections::BTreeMap;
 
 use prost_types::{Struct, Value, value::Kind};
@@ -80,11 +81,11 @@ fn make_posts_def() -> CollectionDefinition {
         .build();
 
     let mut secret = FieldDefinition::builder("secret", FieldType::Text).build();
-    secret.access.read = Some("access.admin_only".to_string());
+    secret.access.read = Some(HookRef::new("access.admin_only"));
 
     let mut flag = FieldDefinition::builder("flag", FieldType::Text).build();
-    flag.access.create = Some("access.admin_only".to_string());
-    flag.access.update = Some("access.admin_only".to_string());
+    flag.access.create = Some(HookRef::new("access.admin_only"));
+    flag.access.update = Some(HookRef::new("access.admin_only"));
 
     def.fields = vec![title, secret, flag];
     def

@@ -3,7 +3,7 @@
 use anyhow::Result;
 
 use crate::{
-    core::{Document, DocumentFields, FieldDefinition, collection::Hooks},
+    core::{Document, DocumentFields, FieldDefinition, HookRef, collection::Hooks},
     db::DbConnection,
     hooks::{
         HookContext, HookEvent, HookRunner,
@@ -120,7 +120,11 @@ impl HookRunner {
         let lua = self.pool.acquire()?;
 
         for hook_ref in hook_refs {
-            tracing::debug!("Running hook: {} for {}", hook_ref, context.collection);
+            tracing::debug!(
+                "Running hook: {} for {}",
+                hook_ref.reference(),
+                context.collection
+            );
             context = call_hook_ref(&lua, hook_ref, context)?;
         }
 
@@ -169,7 +173,11 @@ impl HookRunner {
         );
 
         for hook_ref in hook_refs {
-            tracing::debug!("Running hook (tx): {} for {}", hook_ref, context.collection);
+            tracing::debug!(
+                "Running hook (tx): {} for {}",
+                hook_ref.reference(),
+                context.collection
+            );
             context = call_hook_ref(&lua, hook_ref, context)?;
         }
 
@@ -202,7 +210,8 @@ impl HookRunner {
         for hook_ref in refs {
             tracing::debug!("Running system hook: {}", hook_ref);
             let ctx = HookContext::builder("", "init").build();
-            call_hook_ref(&lua, hook_ref, ctx)?;
+            // System/init hooks are plain module refs with no per-config options.
+            call_hook_ref(&lua, &HookRef::new(hook_ref.as_str()), ctx)?;
         }
 
         Ok(())

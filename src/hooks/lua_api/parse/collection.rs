@@ -231,6 +231,7 @@ pub fn parse_collection_definition(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::HookRef;
     use mlua::Lua;
 
     #[test]
@@ -322,7 +323,10 @@ mod tests {
         hooks_tbl.set("before_broadcast", bb).unwrap();
         config.set("hooks", hooks_tbl).unwrap();
         let def = parse_collection_definition(&lua, "posts", &config).unwrap();
-        assert_eq!(def.hooks.before_broadcast, vec!["hooks.filter_broadcast"]);
+        assert_eq!(
+            def.hooks.before_broadcast,
+            vec![HookRef::new("hooks.filter_broadcast")]
+        );
     }
 
     #[test]

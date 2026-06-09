@@ -3,6 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::HookRef;
+
 /// Controls live event broadcasting for a collection or global.
 /// `None` = enabled (broadcast all events).
 /// `Some(LiveSetting::Disabled)` = never broadcast.
@@ -11,8 +13,10 @@ use serde::{Deserialize, Serialize};
 pub enum LiveSetting {
     /// Disable all live event broadcasting for this collection/global.
     Disabled,
-    /// Use a Lua function to determine if an event should be broadcast.
-    Function(String),
+    /// Use a Lua function to determine if an event should be broadcast. The ref
+    /// may carry per-config `options` (a `{ ref, options }` table) exposed to
+    /// the filter as `ctx.options`.
+    Function(HookRef),
 }
 
 /// Controls what data events carry for a collection or global.

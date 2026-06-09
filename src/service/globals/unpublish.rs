@@ -38,7 +38,7 @@ pub fn unpublish_global_document(ctx: &ServiceContext) -> Result<Document> {
 
     // Access check
     let access = wh.check_access(&AccessCheckInput {
-        access_ref: def.access.update.as_deref(),
+        access: def.access.update.as_ref(),
         user: ctx.user,
         id: None,
         data: None,

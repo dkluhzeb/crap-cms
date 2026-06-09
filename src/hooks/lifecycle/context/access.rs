@@ -1,8 +1,9 @@
 //! Context passed to collection-level and field-level access hooks.
 
 use serde::Serialize;
+use serde_json::Value;
 
-use crate::core::{Document, DocumentFields};
+use crate::core::{Document, DocumentFields, HookRef};
 use crate::typegen::lua::LuaAnnotation;
 
 /// Context passed to collection- and field-level access functions.
@@ -61,6 +62,11 @@ pub struct AccessContext<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[lua(optional)]
     pub ui_locale: Option<&'a str>,
+    /// Per-config options from the hook ref's `{ ref, options }` table; `nil`
+    /// when the access rule was configured as a bare ref string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(ty = "table", optional)]
+    pub options: Option<&'a Value>,
 }
 
 /// Bundled inputs for an access check (`HookRunner::check_access`,
@@ -68,9 +74,11 @@ pub struct AccessContext<'a> {
 /// trait methods). Grouped into a struct so the access-check signature stays
 /// within the argument-count budget as `operation`/`collection` were added.
 pub struct AccessCheckInput<'a> {
-    /// The access function ref (`"module.fn"`), or `None` when no access
-    /// function is configured (default-allow / default-deny applies).
-    pub access_ref: Option<&'a str>,
+    /// The access hook ref (a bare ref or a `{ ref, options }` table), or `None`
+    /// when no access function is configured (default-allow / default-deny
+    /// applies). The ref's `options`, if any, reach the function as
+    /// `ctx.options`.
+    pub access: Option<&'a HookRef>,
     pub user: Option<&'a Document>,
     pub id: Option<&'a str>,
     pub data: Option<&'a DocumentFields>,

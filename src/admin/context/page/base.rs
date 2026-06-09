@@ -223,7 +223,7 @@ fn filter_nav_in_place(
             .registry
             .collections
             .get(c.slug.as_str())
-            .and_then(|d| d.access.read.as_deref());
+            .and_then(|d| d.access.read.as_ref());
         has_read_access(state, access_ref, user_doc, &c.slug)
     });
 
@@ -232,12 +232,12 @@ fn filter_nav_in_place(
             .registry
             .globals
             .get(g.slug.as_str())
-            .and_then(|d| d.access.read.as_deref());
+            .and_then(|d| d.access.read.as_ref());
         has_read_access(state, access_ref, user_doc, &g.slug)
     });
 
     nav.custom_pages
-        .retain(|p| has_read_access(state, p.access.as_deref(), user_doc, ""));
+        .retain(|p| has_read_access(state, p.access.as_ref(), user_doc, ""));
 }
 
 // Tests for the typed bases live alongside per-page-context tests once the

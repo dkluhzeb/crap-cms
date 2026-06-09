@@ -212,7 +212,7 @@ impl CollectionDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{LocalizedString, upload::CollectionUpload};
+    use crate::core::{HookRef, LocalizedString, upload::CollectionUpload};
     use std::collections::HashMap;
 
     fn make_collection(
@@ -428,9 +428,9 @@ mod tests {
     #[test]
     fn live_setting_function() {
         let mut col = make_collection("posts", None, None, None);
-        col.live = Some(LiveSetting::Function("hooks.live_filter".to_string()));
+        col.live = Some(LiveSetting::Function(HookRef::new("hooks.live_filter")));
         match &col.live {
-            Some(LiveSetting::Function(s)) => assert_eq!(s, "hooks.live_filter"),
+            Some(LiveSetting::Function(s)) => assert_eq!(s.reference(), "hooks.live_filter"),
             _ => panic!("expected LiveSetting::Function"),
         }
     }

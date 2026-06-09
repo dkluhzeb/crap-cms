@@ -1150,7 +1150,7 @@ crap.jobs.define("cleanup", {
     let config = CrapConfig::test_default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let job = registry.get_job("cleanup").expect("cleanup job");
-    assert_eq!(job.handler, "hooks.jobs.cleanup");
+    assert_eq!(job.handler.reference(), "hooks.jobs.cleanup");
     assert_eq!(job.schedule, Some("0 0 * * *".to_string()));
     assert_eq!(job.queue, "maintenance");
     assert_eq!(job.retries, Some(3));

@@ -30,8 +30,54 @@ Collection-level hooks receive a context table and must return a (potentially mo
         -- ... all fields from the auth collection
     },
     ui_locale = "en",           -- Admin UI locale (nil if not set)
+    options = {                 -- Per-config options (nil for a bare ref — see below)
+        from = "title",
+        to = "slug",
+    },
 }
 ```
+
+## Per-Config Options (`ctx.options`)
+
+A hook ref is normally a bare string. To reuse **one** hook function across
+collections (or fields) with different configuration, declare the ref as a
+`{ ref, options }` table — the `options` table is handed to the hook as
+`ctx.options` (it is `nil` for a bare-string ref):
+
+```lua
+crap.collections.define("posts", {
+    fields = { ... },
+    hooks = {
+        before_change = {
+            "hooks.posts.touch",                       -- bare ref: ctx.options is nil
+            {
+                ref = "hooks.shared.slugify",
+                options = { from = "title", to = "slug" },
+            },
+        },
+    },
+})
+```
+
+```lua
+-- hooks/shared/slugify.lua — one reusable hook, parameterized per collection.
+return function(ctx)
+    local o = ctx.options
+    if o and (not ctx.data[o.to] or ctx.data[o.to] == "") then
+        ctx.data[o.to] = crap.util.slugify(ctx.data[o.from] or "")
+    end
+    return ctx
+end
+```
+
+`ctx.options` is the same per-config table at **every** site a ref can be
+declared: collection/global lifecycle hooks, field hooks, `access` rules, field
+`validate` / `required_when`, `admin.condition`, `auth` `strategy`
+`authenticate`, `crap.jobs.define` `handler` / `access`, `crap.pages.register`
+`access`, the collection `live.filter` broadcast gate, and the `[admin] access`
+panel gate in `crap.toml` (a TOML inline table: `access = { ref = "...",
+options = { ... } }`). The bare-string form stays valid everywhere, so this is
+purely additive.
 
 ## Typed Contexts
 

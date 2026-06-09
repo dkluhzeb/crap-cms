@@ -7,6 +7,8 @@ use crate::core::{
     collection::{Activation, AuthMethod, MfaMode, Surface, SurfaceSet},
 };
 
+use super::helpers::hook_ref_to_lua;
+
 /// Serialize the auth section of a `CollectionDefinition` into the Lua table.
 pub(super) fn collection_auth_to_lua(
     lua: &Lua,
@@ -77,7 +79,7 @@ fn method_to_lua(lua: &Lua, m: &AuthMethod) -> mlua::Result<Table> {
         } => {
             t.set("type", "strategy")?;
             t.set("name", name.as_str())?;
-            t.set("authenticate", authenticate.as_str())?;
+            t.set("authenticate", hook_ref_to_lua(lua, authenticate)?)?;
             t.set("activates_on", activation_to_lua(lua, activates_on)?)?;
             if surfaces != &SurfaceSet::admin_only() {
                 t.set("surfaces", surfaces_to_lua(lua, surfaces)?)?;

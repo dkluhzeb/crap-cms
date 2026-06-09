@@ -7,7 +7,7 @@ use mlua::{LuaSerdeExt, Value};
 use tracing::error;
 
 use crate::{
-    core::{Document, FieldDefinition, FieldType, document::DocumentBuilder},
+    core::{Document, FieldDefinition, FieldType, HookRef, document::DocumentBuilder},
     db::{AccessResult, DbConnection, query::helpers::prefixed_name},
     hooks::{
         HookRunner,
@@ -60,7 +60,7 @@ impl HookRunner {
     /// strategy call itself fails.
     pub fn run_auth_strategy(
         &self,
-        authenticate_ref: &str,
+        authenticate: &HookRef,
         input: &AuthStrategyInput,
         conn: &dyn DbConnection,
     ) -> Result<Option<Document>> {
@@ -69,7 +69,7 @@ impl HookRunner {
         // Inject connection for CRUD access — guard ensures cleanup on all exit paths
         let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
-        let func = resolve_hook_function(&lua, authenticate_ref)?;
+        let func = resolve_hook_function(&lua, authenticate.reference())?;
 
         // Build context table from a typed Rust struct so the Lua-side
         // shape is the single source of truth (see
@@ -80,6 +80,7 @@ impl HookRunner {
             email: input.email,
             password: input.password,
             remote_addr: input.remote_addr,
+            options: authenticate.options(),
         };
         let ctx_value = lua.to_value(&ctx)?;
 
@@ -116,7 +117,7 @@ impl HookRunner {
         // the VM-pool mutex per tick (was 26% of total CPU spent in
         // futex syscalls). The cached `default_deny` flag is set
         // at builder time from `[access] default_deny`.
-        if input.access_ref.is_none() {
+        if input.access.is_none() {
             return Ok(if self.default_deny {
                 AccessResult::Denied
             } else {
@@ -143,7 +144,7 @@ impl HookRunner {
         conn: &dyn DbConnection,
     ) -> Vec<String> {
         // Skip VM acquisition if no fields have read access functions (recursive check)
-        if !has_any_field_access(fields, |f| f.access.read.as_deref()) {
+        if !has_any_field_access(fields, |f| f.access.read.as_ref()) {
             return Vec::new();
         }
 
@@ -152,7 +153,7 @@ impl HookRunner {
             Err(e) => {
                 error!("Lua VM pool exhausted during field read access check: {e}");
 
-                return deny_all_access_controlled(fields, |f| f.access.read.as_deref());
+                return deny_all_access_controlled(fields, |f| f.access.read.as_ref());
             }
         };
 
@@ -175,9 +176,9 @@ impl HookRunner {
         conn: &dyn DbConnection,
     ) -> Vec<String> {
         // Skip VM acquisition if no fields have write access functions (recursive check)
-        let extractor: fn(&FieldDefinition) -> Option<&str> = match operation {
-            "create" => |f| f.access.create.as_deref(),
-            "update" => |f| f.access.update.as_deref(),
+        let extractor: fn(&FieldDefinition) -> Option<&HookRef> = match operation {
+            "create" => |f| f.access.create.as_ref(),
+            "update" => |f| f.access.update.as_ref(),
             _ => return Vec::new(),
         };
 
@@ -205,14 +206,14 @@ impl HookRunner {
 /// Recurses into Group (with `__` prefix), Row/Collapsible/Tabs (transparent).
 fn deny_all_access_controlled(
     fields: &[FieldDefinition],
-    extractor: impl Fn(&FieldDefinition) -> Option<&str> + Copy,
+    extractor: impl Fn(&FieldDefinition) -> Option<&HookRef> + Copy,
 ) -> Vec<String> {
     deny_all_recursive(fields, &extractor, "")
 }
 
 fn deny_all_recursive(
     fields: &[FieldDefinition],
-    extractor: &(impl Fn(&FieldDefinition) -> Option<&str> + Copy),
+    extractor: &(impl Fn(&FieldDefinition) -> Option<&HookRef> + Copy),
     prefix: &str,
 ) -> Vec<String> {
     let mut denied = Vec::new();
@@ -258,11 +259,11 @@ mod tests {
         let fields = vec![make_field(
             "secret",
             FieldAccess {
-                read: Some("hooks.deny".to_string()),
+                read: Some(HookRef::new("hooks.deny")),
                 ..Default::default()
             },
         )];
-        let denied = deny_all_access_controlled(&fields, |f| f.access.read.as_deref());
+        let denied = deny_all_access_controlled(&fields, |f| f.access.read.as_ref());
         assert_eq!(denied, vec!["secret"]);
     }
 
@@ -273,13 +274,13 @@ mod tests {
                 .fields(vec![make_field(
                     "title",
                     FieldAccess {
-                        read: Some("hooks.deny".to_string()),
+                        read: Some(HookRef::new("hooks.deny")),
                         ..Default::default()
                     },
                 )])
                 .build(),
         ];
-        let denied = deny_all_access_controlled(&fields, |f| f.access.read.as_deref());
+        let denied = deny_all_access_controlled(&fields, |f| f.access.read.as_ref());
         assert_eq!(denied, vec!["seo__title"]);
     }
 
@@ -292,14 +293,14 @@ mod tests {
                     vec![make_field(
                         "hidden",
                         FieldAccess {
-                            read: Some("hooks.deny".to_string()),
+                            read: Some(HookRef::new("hooks.deny")),
                             ..Default::default()
                         },
                     )],
                 )])
                 .build(),
         ];
-        let denied = deny_all_access_controlled(&fields, |f| f.access.read.as_deref());
+        let denied = deny_all_access_controlled(&fields, |f| f.access.read.as_ref());
         assert_eq!(denied, vec!["hidden"]);
     }
 
@@ -309,7 +310,7 @@ mod tests {
             make_field("title", FieldAccess::default()),
             make_field("body", FieldAccess::default()),
         ];
-        let denied = deny_all_access_controlled(&fields, |f| f.access.read.as_deref());
+        let denied = deny_all_access_controlled(&fields, |f| f.access.read.as_ref());
         assert!(denied.is_empty());
     }
 }

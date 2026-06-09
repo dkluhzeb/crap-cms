@@ -10,7 +10,7 @@ use tracing::warn;
 use crate::{
     config::LocaleConfig,
     core::{
-        CollectionDefinition, Document, DocumentFields, GlobalDefinition, Registry,
+        CollectionDefinition, Document, DocumentFields, GlobalDefinition, HookRef, Registry,
         SharedInvalidationTransport,
     },
     db::{AccessResult, FilterClause, query::SharedPopulateSingleflight},
@@ -119,7 +119,7 @@ pub(crate) fn check_hook_depth<'a>(
 pub(crate) struct EnforceAccessParams<'a> {
     pub slug: &'a str,
     pub override_access: bool,
-    pub access_fn: Option<&'a str>,
+    pub access_fn: Option<&'a HookRef>,
     pub id: Option<&'a str>,
     pub deny_msg: &'a str,
     /// The operation reported to the access function as `ctx.operation`
@@ -151,7 +151,7 @@ pub(crate) fn enforce_access(
     let result = check_access_with_lua(
         lua,
         &AccessCheckInput {
-            access_ref: params.access_fn,
+            access: params.access_fn,
             user: user_doc.as_ref(),
             id: params.id,
             data: None,

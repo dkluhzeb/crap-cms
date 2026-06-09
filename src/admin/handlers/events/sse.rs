@@ -126,7 +126,7 @@ fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document>) -> SseAc
     for (slug, def) in &state.registry.collections {
         match state.hook_runner.check_access(
             &AccessCheckInput {
-                access_ref: def.access.read.as_deref(),
+                access: def.access.read.as_ref(),
                 user: user_doc,
                 id: None,
                 data: None,
@@ -161,7 +161,7 @@ fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document>) -> SseAc
     for (slug, def) in &state.registry.globals {
         match state.hook_runner.check_access(
             &AccessCheckInput {
-                access_ref: def.access.read.as_deref(),
+                access: def.access.read.as_ref(),
                 user: user_doc,
                 id: None,
                 data: None,
@@ -504,6 +504,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::core::HookRef;
 
     #[test]
     fn sse_slot_acquire_within_limit() {
@@ -549,7 +550,7 @@ mod tests {
                 name: "secret".to_string(),
                 field_type: FieldType::Text,
                 access: FieldAccess {
-                    read: Some("hooks.access.field_read_deny".to_string()),
+                    read: Some(HookRef::new("hooks.access.field_read_deny")),
                     ..Default::default()
                 },
                 ..Default::default()

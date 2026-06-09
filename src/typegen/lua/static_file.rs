@@ -17,7 +17,7 @@ use super::{LuaAlias, LuaAnnotation, LuaFieldTypeViews};
 
 use crate::core::{
     BlockDefinition, Document, FieldAccess, FieldAdmin, FieldAdminLabels, FieldDefinition,
-    FieldHooks, FieldTab, FieldType, Hooks, IndexDefinition, Labels, LocalizedString,
+    FieldHooks, FieldTab, FieldType, HookRef, Hooks, IndexDefinition, Labels, LocalizedString,
     McpFieldConfig, RelationshipConfig, SelectOption, VersionsConfig,
     collection::{
         Access, Activation, AdminConfig, Auth, AuthMethod, CollectionDefinition, GlobalDefinition,
@@ -30,7 +30,7 @@ use crate::core::{
 use crate::db::query::PaginationResult;
 use crate::hooks::lifecycle::{
     AccessContext, AuthStrategyContext, ConditionContext, FieldHookContext, HookContext, HookEvent,
-    JobHandlerContext, JobInfo, ValidateContext,
+    JobHandlerContext, JobInfo, LiveFilterContext, ValidateContext,
 };
 use crate::hooks::lua_api::{
     access::render_crap_access_init_lua,
@@ -204,9 +204,11 @@ fn render_field_factories(out: &mut String) {
 fn render_collection_types(out: &mut String) {
     Labels::render_lua_annotation(out);
     AdminConfig::render_lua_annotation(out);
+    HookRef::render_lua_annotation(out);
     Hooks::render_lua_annotation(out);
     Access::render_lua_annotation(out);
     AuthStrategyContext::render_lua_annotation(out);
+    LiveFilterContext::render_lua_annotation(out);
     Surface::render_lua_alias(out);
     Activation::render_lua_alias(out);
     AuthMethod::render_lua_alias(out);

@@ -5,4 +5,5 @@ mod single;
 
 pub use context::build_field_contexts;
 pub(super) use context::build_select_options;
+pub(in crate::admin::handlers::field_context) use context::visible_field_defs;
 pub use single::build_single_field_context;

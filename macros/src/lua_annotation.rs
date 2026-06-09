@@ -30,13 +30,14 @@ struct LuaContainer {
     /// always wins.
     #[darling(default)]
     rename_all: Option<String>,
-    /// Optional `extra_field = "[K] V"` literal that gets appended to
-    /// the class as a final `--- @field [K] V` line. Used for
-    /// `lua-language-server` index signatures (e.g. `crap.Document`'s
-    /// `[string] any` — "dynamic fields from the collection schema").
-    /// The string is emitted verbatim after the regular fields.
-    #[darling(default)]
-    extra_field: Option<String>,
+    /// Optional `extra_field = "[K] V"` literal(s) appended to the class as
+    /// final `--- @field [K] V` line(s). Used for `lua-language-server` index
+    /// signatures (e.g. `crap.Document`'s `[string] any`) and for context-table
+    /// keys injected at marshal time rather than present on the Rust struct
+    /// (e.g. `hook_depth`, `options` on `crap.HookContext`). May be repeated;
+    /// each is emitted verbatim, in order, after the regular fields.
+    #[darling(multiple)]
+    extra_field: Vec<String>,
     /// Accepted (but unused here) so a struct may stack `LuaAnnotation`
     /// alongside `LuaFieldTypeViews` and share the `#[lua(...)]`
     /// attribute container.
@@ -61,7 +62,7 @@ pub(crate) fn derive(input: TokenStream) -> TokenStream {
     let class = &container.class;
     let extends = container.extends.as_deref();
     let rename_all = container.rename_all.as_deref();
-    let extra_field = container.extra_field.as_deref();
+    let extra_fields = &container.extra_field;
     let struct_docs = extract_docs(&container.attrs);
 
     let Some(struct_fields) = container.data.take_struct() else {
@@ -91,12 +92,15 @@ pub(crate) fn derive(input: TokenStream) -> TokenStream {
         }
     }
 
-    let extra_field_emit = match extra_field {
-        Some(decl) => {
-            let line = format!("--- @field {decl}\n");
-            quote! { out.push_str(#line); }
-        }
-        None => quote! {},
+    let extra_field_emit = {
+        let lines: Vec<_> = extra_fields
+            .iter()
+            .map(|decl| {
+                let line = format!("--- @field {decl}\n");
+                quote! { out.push_str(#line); }
+            })
+            .collect();
+        quote! { #(#lines)* }
     };
 
     let expanded = quote! {

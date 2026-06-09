@@ -19,6 +19,7 @@ use std::sync::Arc;
 use crap_cms::config::CrapConfig;
 use crap_cms::core::Document;
 use crap_cms::core::DocumentFields;
+use crap_cms::core::HookRef;
 use crap_cms::core::ReqContext;
 use crap_cms::core::collection::Hooks;
 use crap_cms::core::field::{FieldDefinition, FieldType};
@@ -388,7 +389,7 @@ fn make_field(name: &str, field_type: FieldType) -> FieldDefinition {
 
 fn make_field_with_read_access(name: &str, read_ref: &str) -> FieldDefinition {
     let mut f = make_field(name, FieldType::Text);
-    f.access.read = Some(read_ref.to_string());
+    f.access.read = Some(HookRef::new(read_ref));
     f
 }
 
@@ -398,8 +399,8 @@ fn make_field_with_write_access(
     update_ref: Option<&str>,
 ) -> FieldDefinition {
     let mut f = make_field(name, FieldType::Text);
-    f.access.create = create_ref.map(std::string::ToString::to_string);
-    f.access.update = update_ref.map(std::string::ToString::to_string);
+    f.access.create = create_ref.map(HookRef::new);
+    f.access.update = update_ref.map(HookRef::new);
     f
 }
 
@@ -413,7 +414,7 @@ fn check_access_none_ref_is_allowed() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: None,
+                access: None,
                 user: None,
                 id: None,
                 data: None,
@@ -439,7 +440,7 @@ fn check_access_returns_allowed() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: Some("hooks.access.allow_all"),
+                access: Some(&HookRef::new("hooks.access.allow_all")),
                 user: None,
                 id: None,
                 data: None,
@@ -465,7 +466,7 @@ fn check_access_returns_denied() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: Some("hooks.access.deny_all"),
+                access: Some(&HookRef::new("hooks.access.deny_all")),
                 user: None,
                 id: None,
                 data: None,
@@ -491,7 +492,7 @@ fn check_access_returns_constrained() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: Some("hooks.access.constrained"),
+                access: Some(&HookRef::new("hooks.access.constrained")),
                 user: None,
                 id: None,
                 data: None,
@@ -532,7 +533,7 @@ fn check_access_with_user_context() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: Some("hooks.access.check_role"),
+                access: Some(&HookRef::new("hooks.access.check_role")),
                 user: Some(&admin_user),
                 id: None,
                 data: None,
@@ -562,7 +563,7 @@ fn check_access_with_user_context() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: Some("hooks.access.check_role"),
+                access: Some(&HookRef::new("hooks.access.check_role")),
                 user: Some(&regular_user),
                 id: None,
                 data: None,
@@ -583,7 +584,7 @@ fn check_access_with_user_context() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: Some("hooks.access.check_role"),
+                access: Some(&HookRef::new("hooks.access.check_role")),
                 user: None,
                 id: None,
                 data: None,
@@ -867,7 +868,7 @@ fn auth_strategy_returns_user_on_valid_key() {
 
     let conn = pool.get().expect("DB connection");
     let result = runner.run_auth_strategy(
-        "hooks.auth_strategy.api_key_auth",
+        &HookRef::new("hooks.auth_strategy.api_key_auth"),
         &api_key_strategy_input(&headers),
         &conn,
     );
@@ -886,7 +887,7 @@ fn auth_strategy_returns_none_on_invalid_key() {
     let conn = pool.get().expect("DB connection");
     let result = runner
         .run_auth_strategy(
-            "hooks.auth_strategy.api_key_auth",
+            &HookRef::new("hooks.auth_strategy.api_key_auth"),
             &api_key_strategy_input(&headers),
             &conn,
         )
@@ -903,7 +904,7 @@ fn auth_strategy_returns_none_on_missing_header() {
     let conn = pool.get().expect("DB connection");
     let result = runner
         .run_auth_strategy(
-            "hooks.auth_strategy.api_key_auth",
+            &HookRef::new("hooks.auth_strategy.api_key_auth"),
             &api_key_strategy_input(&headers),
             &conn,
         )
@@ -929,7 +930,11 @@ fn auth_strategy_receives_credentials() {
         remote_addr: Some("1.2.3.4"),
     };
     let ok = runner
-        .run_auth_strategy("hooks.auth_strategy.credential_auth", &good, &conn)
+        .run_auth_strategy(
+            &HookRef::new("hooks.auth_strategy.credential_auth"),
+            &good,
+            &conn,
+        )
         .expect("should not error");
     assert!(
         ok.is_some(),
@@ -944,7 +949,11 @@ fn auth_strategy_receives_credentials() {
         remote_addr: None,
     };
     let denied = runner
-        .run_auth_strategy("hooks.auth_strategy.credential_auth", &bad, &conn)
+        .run_auth_strategy(
+            &HookRef::new("hooks.auth_strategy.credential_auth"),
+            &bad,
+            &conn,
+        )
         .expect("should not error");
     assert!(
         denied.is_none(),
@@ -970,7 +979,7 @@ fn auth_strategy_has_crud_access() {
     let conn = pool.get().expect("DB connection");
     let result = runner
         .run_auth_strategy(
-            "hooks.auth_strategy.api_key_auth",
+            &HookRef::new("hooks.auth_strategy.api_key_auth"),
             &api_key_strategy_input(&headers),
             &conn,
         )

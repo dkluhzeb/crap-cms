@@ -118,6 +118,7 @@ pub(in crate::admin::handlers::collections) fn render_form_with_error(
         user: get_user_doc(p.auth_user),
         ui_locale: p.auth_user.map(|Extension(au)| au.ui_locale.as_str()),
         locale: None,
+        options: None,
     };
 
     apply_display_conditions(

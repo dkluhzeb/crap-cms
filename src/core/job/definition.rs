@@ -1,4 +1,4 @@
-use crate::core::{Slug, job::JobLabels};
+use crate::core::{HookRef, Slug, job::JobLabels};
 
 /// A job definition registered via `crap.jobs.define()` in Lua.
 #[derive(Debug, Clone)]
@@ -6,7 +6,8 @@ pub struct JobDefinition {
     /// Unique identifier for this job type.
     pub slug: Slug,
     /// Lua function reference for the job handler (e.g., "jobs.cleanup.run").
-    pub handler: String,
+    /// May carry per-definition options exposed to the handler as `ctx.options`.
+    pub handler: HookRef,
     /// Optional cron schedule expression (e.g., "0 3 * * *").
     pub schedule: Option<String>,
     /// Queue name for grouping jobs. Default: "default".
@@ -33,11 +34,11 @@ pub struct JobDefinition {
     /// Display labels for admin UI.
     pub labels: JobLabels,
     /// Optional Lua function ref for access control on trigger.
-    pub access: Option<String>,
+    pub access: Option<HookRef>,
 }
 
 impl JobDefinition {
-    pub fn builder(slug: impl Into<Slug>, handler: impl Into<String>) -> JobDefinitionBuilder {
+    pub fn builder(slug: impl Into<Slug>, handler: impl Into<HookRef>) -> JobDefinitionBuilder {
         JobDefinitionBuilder::new(slug, handler)
     }
 
@@ -63,7 +64,7 @@ impl Default for JobDefinition {
     fn default() -> Self {
         Self {
             slug: Slug::new(""),
-            handler: String::new(),
+            handler: HookRef::new(""),
             schedule: None,
             queue: "default".to_string(),
             retries: None,
@@ -87,7 +88,7 @@ pub struct JobDefinitionBuilder {
 
 impl JobDefinitionBuilder {
     /// Create a new builder with the required `slug` and `handler` fields.
-    pub fn new(slug: impl Into<Slug>, handler: impl Into<String>) -> Self {
+    pub fn new(slug: impl Into<Slug>, handler: impl Into<HookRef>) -> Self {
         Self {
             inner: JobDefinition {
                 slug: slug.into(),
@@ -158,7 +159,7 @@ impl JobDefinitionBuilder {
     }
 
     #[must_use]
-    pub fn access(mut self, a: impl Into<String>) -> Self {
+    pub fn access(mut self, a: impl Into<HookRef>) -> Self {
         self.inner.access = Some(a.into());
 
         self
@@ -192,7 +193,7 @@ mod tests {
     fn builds_job_definition_with_defaults() {
         let def = JobDefinitionBuilder::new("cleanup", "jobs.cleanup.run").build();
         assert_eq!(def.slug, "cleanup");
-        assert_eq!(def.handler, "jobs.cleanup.run");
+        assert_eq!(def.handler.reference(), "jobs.cleanup.run");
         assert_eq!(def.queue, "default");
         assert_eq!(def.retries, None);
         assert_eq!(def.effective_max_attempts(None), 1);
@@ -220,7 +221,10 @@ mod tests {
         assert_eq!(def.timeout, 120);
         assert_eq!(def.concurrency, 2);
         assert!(!def.skip_if_running);
-        assert_eq!(def.access.as_deref(), Some("access.admin_only"));
+        assert_eq!(
+            def.access.as_ref().map(HookRef::reference),
+            Some("access.admin_only")
+        );
     }
 
     #[test]

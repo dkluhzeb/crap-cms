@@ -7,7 +7,7 @@ use dialoguer::MultiSelect;
 
 use crate::{
     cli::{self, Table, crap_theme},
-    core::{Registry, collection::Hooks},
+    core::{HookRef, Registry, collection::Hooks},
     db::DbConnection,
     hooks::HookRunner,
 };
@@ -60,7 +60,7 @@ fn collect_hooks(reg: &Registry, filter_collection: Option<&str>) -> Vec<HookEnt
 }
 
 fn append_event_hooks(entries: &mut Vec<HookEntry>, slug: &str, hooks: &Hooks) {
-    let events: &[(&str, &[String])] = &[
+    let events: &[(&str, &[HookRef])] = &[
         ("before_validate", &hooks.before_validate),
         ("before_change", &hooks.before_change),
         ("after_change", &hooks.after_change),
@@ -72,11 +72,11 @@ fn append_event_hooks(entries: &mut Vec<HookEntry>, slug: &str, hooks: &Hooks) {
     ];
 
     for (event, refs) in events {
-        for hook_ref in *refs {
+        for hook in *refs {
             entries.push(HookEntry {
                 slug: slug.to_string(),
                 event,
-                hook_ref: hook_ref.clone(),
+                hook_ref: hook.reference().to_string(),
             });
         }
     }
@@ -252,7 +252,7 @@ pub fn run(params: &HookBenchParams) -> Result<()> {
 
 /// Build a `Hooks` struct with only one event populated with a single ref.
 fn build_single_hook(event: &str, hook_ref: &str) -> Hooks {
-    let refs = vec![hook_ref.to_string()];
+    let refs = vec![HookRef::new(hook_ref)];
     let mut hooks = Hooks::new();
 
     match event {

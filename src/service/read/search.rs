@@ -32,7 +32,7 @@ pub fn search_documents(
     let def = ctx.collection_def()?;
 
     let access = hooks.check_access(&AccessCheckInput {
-        access_ref: def.access.read.as_deref(),
+        access: def.access.read.as_ref(),
         user: ctx.user,
         id: None,
         data: None,

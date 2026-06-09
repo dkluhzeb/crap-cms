@@ -100,7 +100,7 @@ pub(super) async fn update_upload(
     // Defense-in-depth: pre-check access before parsing the multipart body.
     if let Err(resp) = check_upload_access(
         &state,
-        def.access.update.as_deref(),
+        def.access.update.as_ref(),
         user_doc,
         Some(&id),
         "Update access denied",

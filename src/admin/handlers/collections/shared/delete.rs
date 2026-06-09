@@ -167,23 +167,30 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::HookRef;
     use crate::core::collection::Access;
 
     #[test]
     fn trash_access_falls_back_to_update() {
         let access = Access {
-            trash: Some("access.trash_fn".to_string()),
-            update: Some("access.update_fn".to_string()),
+            trash: Some(HookRef::new("access.trash_fn")),
+            update: Some(HookRef::new("access.update_fn")),
             ..Default::default()
         };
-        assert_eq!(access.resolve_trash(), Some("access.trash_fn"));
+        assert_eq!(
+            access.resolve_trash(),
+            Some(&HookRef::new("access.trash_fn"))
+        );
 
         let access = Access {
             trash: None,
-            update: Some("access.update_fn".to_string()),
+            update: Some(HookRef::new("access.update_fn")),
             ..Default::default()
         };
-        assert_eq!(access.resolve_trash(), Some("access.update_fn"));
+        assert_eq!(
+            access.resolve_trash(),
+            Some(&HookRef::new("access.update_fn"))
+        );
 
         let access = Access::default();
         assert!(access.resolve_trash().is_none());

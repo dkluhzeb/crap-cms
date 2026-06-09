@@ -561,6 +561,7 @@ fn count_hooks(hooks: &Hooks) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::HookRef;
     use crate::core::{
         CollectionDefinition,
         collection::{Activation, Auth, AuthMethod, SurfaceSet},
@@ -631,13 +632,13 @@ mod tests {
     fn check_auth_methods_multiple_always_strategies_on_same_surface_warns() {
         let mtls_strategy = AuthMethod::Strategy {
             name: "mtls".to_string(),
-            authenticate: "hooks.auth.mtls".to_string(),
+            authenticate: HookRef::new("hooks.auth.mtls"),
             activates_on: Activation::always(),
             surfaces: SurfaceSet::admin_only(),
         };
         let proxy_strategy = AuthMethod::Strategy {
             name: "proxy".to_string(),
-            authenticate: "hooks.auth.proxy".to_string(),
+            authenticate: HookRef::new("hooks.auth.proxy"),
             activates_on: Activation::always(),
             surfaces: SurfaceSet::admin_only(),
         };

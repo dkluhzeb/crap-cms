@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, Registry, upload},
+    core::{CollectionDefinition, HookRef, Registry, upload},
     db::{FilterClause, FindQuery, LocaleContext, query::filter::normalize_filter_fields},
     hooks::{
         lifecycle::LuaStorage,
@@ -260,11 +260,11 @@ pub(crate) fn register_delete_many(
 }
 
 /// Resolve the access function for delete operations.
-fn resolve_delete_access(def: &CollectionDefinition, soft_delete: bool) -> Option<&str> {
+fn resolve_delete_access(def: &CollectionDefinition, soft_delete: bool) -> Option<&HookRef> {
     if soft_delete {
         def.access.resolve_trash()
     } else {
-        def.access.delete.as_deref()
+        def.access.delete.as_ref()
     }
 }
 
@@ -315,8 +315,14 @@ mod tests {
         def.access.delete = Some("can_delete".into());
         def.access.trash = Some("can_trash".into());
 
-        assert_eq!(resolve_delete_access(&def, false), Some("can_delete"));
-        assert_eq!(resolve_delete_access(&def, true), Some("can_trash"));
+        assert_eq!(
+            resolve_delete_access(&def, false),
+            Some(&HookRef::new("can_delete"))
+        );
+        assert_eq!(
+            resolve_delete_access(&def, true),
+            Some(&HookRef::new("can_trash"))
+        );
     }
 
     #[test]

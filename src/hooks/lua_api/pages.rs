@@ -30,6 +30,7 @@ use anyhow::Result;
 use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::Deserialize;
 
+use crate::core::HookRef;
 use crate::hooks::lifecycle::InitPhase;
 use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
@@ -45,8 +46,10 @@ pub(crate) struct PageOptions {
     /// Material Symbols icon name.
     pub(crate) icon: Option<String>,
     /// Lua function ref for access control (resolved against the same
-    /// registry as collection-level `access.*`).
-    pub(crate) access: Option<String>,
+    /// registry as collection-level `access.*`). A bare ref string or a
+    /// `{ ref, options }` table whose options reach the gate as `ctx.options`.
+    #[lua(ty = "string | crap.HookRef")]
+    pub(crate) access: Option<HookRef>,
 }
 
 impl FromLua for PageOptions {
@@ -103,7 +106,17 @@ fn page_register(
         entry.set("icon", i.as_str())?;
     }
     if let Some(a) = &opts.access {
-        entry.set("access", a.as_str())?;
+        // Store as a bare string or a `{ ref, options }` table so the
+        // page-registry round-trip preserves any per-config options.
+        match a.options() {
+            None => entry.set("access", a.reference())?,
+            Some(options) => {
+                let t = lua.create_table()?;
+                t.set("ref", a.reference())?;
+                t.set("options", super::json_to_lua(lua, options)?)?;
+                entry.set("access", t)?;
+            }
+        }
     }
     pages.set(slug, entry)?;
     Ok(())

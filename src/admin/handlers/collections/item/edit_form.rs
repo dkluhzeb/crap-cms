@@ -165,6 +165,7 @@ fn prepare_edit_fields(
         user: get_user_doc(auth_user),
         ui_locale: auth_user.map(|Extension(au)| au.ui_locale.as_str()),
         locale: editor_locale,
+        options: None,
     };
     apply_display_conditions(
         &mut fields,

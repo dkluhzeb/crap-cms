@@ -17,6 +17,11 @@ pub struct JobHandlerContext<'a> {
     pub data: &'a JsonValue,
     /// Job metadata for the current run.
     pub job: JobInfo<'a>,
+    /// Per-definition options from the handler's `{ ref, options }` table;
+    /// `nil` when the handler was configured as a bare ref string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(ty = "table", optional)]
+    pub options: Option<&'a JsonValue>,
 }
 
 /// Job metadata for the current run.

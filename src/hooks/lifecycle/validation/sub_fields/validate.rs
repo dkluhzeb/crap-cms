@@ -229,9 +229,11 @@ fn sub_field_required(
         return true;
     }
 
-    let Some(func_ref) = sf.required_when.as_deref() else {
+    let Some(required_when) = sf.required_when.as_ref() else {
         return false;
     };
+
+    let func_ref = required_when.reference();
 
     match run_required_condition_inner(
         ctx.lua,
@@ -244,6 +246,7 @@ fn sub_field_required(
             locale: ctx.locale,
             operation: ctx.operation,
             id: ctx.id,
+            options: required_when.options(),
         },
     ) {
         Ok(req) => req,
@@ -303,9 +306,11 @@ fn validate_leaf_sub_field(
     }
 
     // 3. Custom Lua validate function
-    if let Some(ref validate_ref) = sf.validate
+    if let Some(ref validate) = sf.validate
         && let Some(val) = value
     {
+        let validate_ref = validate.reference();
+
         match run_validate_function_inner(
             ctx.lua,
             validate_ref,
@@ -318,6 +323,7 @@ fn validate_leaf_sub_field(
                 locale: ctx.locale,
                 operation: ctx.operation,
                 id: ctx.id,
+                options: validate.options(),
             },
         ) {
             Ok(Some(err_msg)) => {

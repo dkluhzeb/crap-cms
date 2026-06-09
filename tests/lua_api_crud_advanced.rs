@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
+use crap_cms::core::HookRef;
 use crap_cms::core::{DocumentFields, Registry, ReqContext};
 use crap_cms::db::DbPool;
 use crap_cms::hooks;
@@ -831,7 +832,7 @@ fn after_hook_has_crud_access() {
 
     // Build hooks with an after_change hook that creates a side-effect document
     let hooks = Hooks {
-        after_change: vec!["hooks.after_crud.create_side_effect".to_string()],
+        after_change: vec![HookRef::new("hooks.after_crud.create_side_effect")],
         ..Default::default()
     };
 
@@ -900,7 +901,7 @@ fn after_hook_error_rolls_back() {
 
     // Build hooks with an after_change hook that errors
     let hooks = Hooks {
-        after_change: vec!["hooks.after_crud.error_hook".to_string()],
+        after_change: vec![HookRef::new("hooks.after_crud.error_hook")],
         ..Default::default()
     };
 
@@ -954,7 +955,7 @@ fn context_flows_to_after_hooks() {
 
     // Build hooks with an after_change hook that reads ctx.context
     let hooks = Hooks {
-        after_change: vec!["hooks.after_crud.check_context".to_string()],
+        after_change: vec![HookRef::new("hooks.after_crud.check_context")],
         ..Default::default()
     };
 

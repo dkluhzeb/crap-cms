@@ -86,6 +86,7 @@ mod tests {
             user: None,
             ui_locale: None,
             locale: None,
+            options: None,
         }
     }
 
@@ -161,6 +162,41 @@ mod tests {
         let result =
             call_display_condition_with_lua(&lua, "hooks.nonexistent", &json!({}), &cond_ctx());
         assert!(result.is_none(), "unresolvable reference should show field");
+    }
+
+    /// Per-config `options` reach the condition as `ctx.options`. The SAME ref
+    /// with DIFFERENT options must yield DIFFERENT results — the property that
+    /// lets one condition function be reused across fields, and that the batch
+    /// evaluator must key per-field (not per-ref) to preserve.
+    #[test]
+    fn display_condition_receives_options() {
+        let lua = mlua::Lua::new();
+        lua.load(
+            r#"package.loaded["hooks.want"] = function(_, ctx)
+                return ctx.options ~= nil and ctx.options.want == "link"
+            end"#,
+        )
+        .exec()
+        .unwrap();
+
+        let want_link = json!({ "want": "link" });
+        let ctx_link = ConditionContext {
+            options: Some(&want_link),
+            ..cond_ctx()
+        };
+        let r1 = call_display_condition_with_lua(&lua, "hooks.want", &json!({}), &ctx_link);
+        assert!(matches!(r1, Some(DisplayConditionResult::Bool(true))));
+
+        let want_video = json!({ "want": "video" });
+        let ctx_video = ConditionContext {
+            options: Some(&want_video),
+            ..cond_ctx()
+        };
+        let r2 = call_display_condition_with_lua(&lua, "hooks.want", &json!({}), &ctx_video);
+        assert!(
+            matches!(r2, Some(DisplayConditionResult::Bool(false))),
+            "same ref, different options must give a different result, got {r2:?}"
+        );
     }
 
     /// A condition function receives a second `ctx` argument carrying

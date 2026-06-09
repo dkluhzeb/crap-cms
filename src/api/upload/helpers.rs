@@ -13,7 +13,7 @@ use tracing::{error, warn};
 use crate::{
     admin::{AdminState, server::load_auth_user},
     core::{
-        AuthUser, CollectionDefinition, Document, DocumentFields,
+        AuthUser, CollectionDefinition, Document, DocumentFields, HookRef,
         event::{EventOperation, EventTarget, EventUser},
     },
     db::AccessResult,
@@ -127,7 +127,7 @@ pub fn json_ok<T: Serialize>(status: StatusCode, body: &T) -> Response {
 #[cfg(not(tarpaulin_include))]
 pub fn check_upload_access(
     state: &AdminState,
-    access_ref: Option<&str>,
+    access: Option<&HookRef>,
     user_doc: Option<&Document>,
     id: Option<&str>,
     deny_msg: &str,
@@ -150,7 +150,7 @@ pub fn check_upload_access(
 
     let result = state.hook_runner.check_access(
         &AccessCheckInput {
-            access_ref,
+            access,
             user: user_doc,
             id,
             data: None,

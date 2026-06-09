@@ -249,7 +249,7 @@ fn build_update_filters(
         &EnforceAccessParams {
             slug: collection,
             override_access,
-            access_fn: def.access.update.as_deref(),
+            access_fn: def.access.update.as_ref(),
             id: None,
             deny_msg: "Update access denied",
             operation: "update",

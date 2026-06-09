@@ -216,7 +216,7 @@ pub(crate) fn restore_collection_version_core(
     let def = ctx.collection_def()?;
 
     let access = write_hooks.check_access(&AccessCheckInput {
-        access_ref: def.access.update.as_deref(),
+        access: def.access.update.as_ref(),
         user: ctx.user,
         id: Some(document_id),
         data: None,
@@ -331,7 +331,7 @@ pub(crate) fn restore_global_version_core(
     let def = ctx.global_def()?;
 
     let access = write_hooks.check_access(&AccessCheckInput {
-        access_ref: def.access.update.as_deref(),
+        access: def.access.update.as_ref(),
         user: ctx.user,
         id: None,
         data: None,

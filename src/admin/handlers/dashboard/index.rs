@@ -35,7 +35,7 @@ fn build_collection_cards(
         .registry
         .collections
         .iter()
-        .filter(|(_, def)| has_read_access(state, def.access.read.as_deref(), user_doc, &def.slug))
+        .filter(|(_, def)| has_read_access(state, def.access.read.as_ref(), user_doc, &def.slug))
         .map(|(slug, def)| {
             let count = count_documents(&state.pool, slug, def, &[], None).unwrap_or(0);
 
@@ -67,7 +67,7 @@ fn build_global_cards(
         .registry
         .globals
         .iter()
-        .filter(|(_, def)| has_read_access(state, def.access.read.as_deref(), user_doc, &def.slug))
+        .filter(|(_, def)| has_read_access(state, def.access.read.as_ref(), user_doc, &def.slug))
         .map(|(slug, def)| {
             let table = global_table(slug);
 

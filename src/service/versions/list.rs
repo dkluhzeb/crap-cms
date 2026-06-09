@@ -28,7 +28,7 @@ pub fn list_versions(
     let table = ctx.version_table();
 
     let access = hooks.check_access(&AccessCheckInput {
-        access_ref: ctx.read_access_ref(),
+        access: ctx.read_access_ref(),
         user: ctx.user,
         id: Some(input.parent_id),
         data: None,

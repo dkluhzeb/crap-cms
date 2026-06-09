@@ -22,7 +22,7 @@ use crate::{
         handlers::{ContentService, enum_mapping, proto::json_to_prost_value},
     },
     core::{
-        Document, EventReceiver, FieldDefinition, LiveMode, MutationEvent, Registry,
+        Document, EventReceiver, FieldDefinition, HookRef, LiveMode, MutationEvent, Registry,
         SharedTokenProvider,
         event::{EventOperation, EventTarget, InvalidationReceiver, RecvError},
     },
@@ -85,7 +85,7 @@ impl<S: Stream + Unpin> Stream for GuardedStream<S> {
 
 /// Per-slug access resolution result.
 struct SlugAccess {
-    access_ref: Option<String>,
+    access_ref: Option<HookRef>,
     fields: Vec<FieldDefinition>,
     live_mode: LiveMode,
 }
@@ -120,7 +120,7 @@ fn resolve_single_slug(
 ) {
     match hook_runner.check_access(
         &AccessCheckInput {
-            access_ref: slug_access.access_ref.as_deref(),
+            access: slug_access.access_ref.as_ref(),
             user: user_doc,
             id: None,
             data: None,

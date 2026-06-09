@@ -46,4 +46,9 @@ pub struct ValidateContext<'a> {
     /// rules (e.g. only require a value in the default locale).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locale: Option<&'a str>,
+    /// Per-config options from the `validate` / `required_when` hook ref's
+    /// `{ ref, options }` table; `nil` when configured as a bare ref string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(ty = "table", optional)]
+    pub options: Option<&'a JsonValue>,
 }

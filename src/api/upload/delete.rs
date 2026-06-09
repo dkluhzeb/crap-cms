@@ -84,7 +84,7 @@ pub(super) async fn delete_upload(
     let access_fn = if def.soft_delete {
         def.access.resolve_trash()
     } else {
-        def.access.delete.as_deref()
+        def.access.delete.as_ref()
     };
 
     if let Err(resp) = check_upload_access(

@@ -5,7 +5,7 @@ use mlua::{LuaSerdeExt as _, Value};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::{
-    core::{Document, job::JobRun},
+    core::{Document, HookRef, job::JobRun},
     db::{DbConnection, DbPool},
     hooks::{
         HookRunner,
@@ -38,7 +38,7 @@ impl HookRunner {
     /// call itself, or return-value serialization fails.
     pub fn run_job_handler(
         &self,
-        handler_ref: &str,
+        handler: &HookRef,
         job_run: &JobRun,
         pool: &DbPool,
     ) -> Result<Option<String>> {
@@ -63,11 +63,12 @@ impl HookRunner {
                 scheduled_by: job_run.scheduled_by.as_deref(),
                 queued_at: job_run.created_at.as_deref(),
             },
+            options: handler.options(),
         };
         let ctx_value = lua.to_value(&ctx)?;
 
         // Resolve the handler function (e.g., "jobs.cleanup.run")
-        let func = resolve_hook_function(&lua, handler_ref)?;
+        let func = resolve_hook_function(&lua, handler.reference())?;
 
         // Call handler(ctx)
         let return_val: Value = func.call(ctx_value)?;

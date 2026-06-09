@@ -19,6 +19,7 @@ use std::sync::Arc;
 use crap_cms::config::CrapConfig;
 use crap_cms::core::Document;
 use crap_cms::core::DocumentFields;
+use crap_cms::core::HookRef;
 use crap_cms::core::ReqContext;
 use crap_cms::core::collection::Hooks;
 use crap_cms::core::field::FieldDefinition;
@@ -103,7 +104,7 @@ fn check_live_setting_function() {
     let (_tmp, _pool, _registry, runner) = setup();
 
     // The filter_published function allows create/update but blocks delete
-    let live = LiveSetting::Function("hooks.live.filter_published".to_string());
+    let live = LiveSetting::Function(HookRef::new("hooks.live.filter_published"));
 
     let result = runner
         .check_live_setting(
@@ -150,7 +151,7 @@ fn check_live_setting_receives_document_id_and_editor() {
     use crap_cms::core::collection::LiveSetting;
     use crap_cms::core::event::EventUser;
     let (_tmp, _pool, _registry, runner) = setup();
-    let live = LiveSetting::Function("hooks.live.gate_on_id_and_editor".to_string());
+    let live = LiveSetting::Function(HookRef::new("hooks.live.gate_on_id_and_editor"));
     let editor = EventUser::new("u1", "editor@x.com");
 
     let call = |id: &str, editor: Option<&EventUser>| {
@@ -279,7 +280,7 @@ fn before_broadcast_transforms_data() {
 
     // Build hooks with a before_broadcast hook
     let hooks = Hooks {
-        before_broadcast: vec!["hooks.live.transform_broadcast".to_string()],
+        before_broadcast: vec![HookRef::new("hooks.live.transform_broadcast")],
         ..Default::default()
     };
 
@@ -303,7 +304,7 @@ fn before_broadcast_suppresses_event() {
     let (_tmp, _pool, _registry, runner) = setup();
 
     let hooks = Hooks {
-        before_broadcast: vec!["hooks.live.suppress_broadcast".to_string()],
+        before_broadcast: vec![HookRef::new("hooks.live.suppress_broadcast")],
         ..Default::default()
     };
 
@@ -762,7 +763,7 @@ fn check_live_setting_function_returns_nil_means_false() {
     let (_tmp, _pool, _registry, runner) = setup();
 
     // suppress_broadcast returns nil, which should be treated as false
-    let live = LiveSetting::Function("hooks.live.suppress_broadcast".to_string());
+    let live = LiveSetting::Function(HookRef::new("hooks.live.suppress_broadcast"));
     let result = runner
         .check_live_setting(
             Some(&live),
@@ -1180,7 +1181,7 @@ fn before_broadcast_mutation_does_not_affect_stored_doc() {
     let doc = create_article(&pool, &registry, &article_data);
 
     let hooks = Hooks {
-        before_broadcast: vec!["hooks.live.mutate_title_for_broadcast".to_string()],
+        before_broadcast: vec![HookRef::new("hooks.live.mutate_title_for_broadcast")],
         ..Default::default()
     };
 

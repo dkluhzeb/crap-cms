@@ -32,7 +32,7 @@ pub(crate) fn update_many_single_in_conn(
     let def = ctx.collection_def()?;
 
     let access = write_hooks.check_access(&AccessCheckInput {
-        access_ref: def.access.update.as_deref(),
+        access: def.access.update.as_ref(),
         user: ctx.user,
         id: Some(id),
         data: Some(&input.data),

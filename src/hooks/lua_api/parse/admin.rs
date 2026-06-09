@@ -8,7 +8,9 @@ use crate::{
     hooks::lua_api::lua_to_json,
 };
 
-use super::helpers::{deny_unknown_keys, get_bool, get_localized_string, get_string, get_table};
+use super::helpers::{
+    deny_unknown_keys, get_bool, get_localized_string, get_optional_hook_ref, get_string, get_table,
+};
 
 /// Every key accepted in a field's `admin = {...}` sub-table. Mirrors the
 /// `FieldAdmin` struct (Lua key names). Plugin/custom-template config goes
@@ -52,7 +54,7 @@ pub(super) fn parse_field_admin(admin_tbl: &Table) -> LuaResult<FieldAdmin> {
 
     let mut builder = parse_admin_booleans(admin_tbl)?;
     builder = apply_localized_strings(builder, admin_tbl);
-    builder = apply_identifier_strings(builder, admin_tbl);
+    builder = apply_identifier_strings(builder, admin_tbl)?;
     builder = apply_label_overrides(builder, admin_tbl);
     builder = apply_rows(builder, admin_tbl);
     builder = apply_sequence_lists(builder, admin_tbl);
@@ -93,7 +95,7 @@ fn apply_localized_strings(mut builder: FieldAdminBuilder, admin_tbl: &Table) ->
 fn apply_identifier_strings(
     mut builder: FieldAdminBuilder,
     admin_tbl: &Table,
-) -> FieldAdminBuilder {
+) -> LuaResult<FieldAdminBuilder> {
     if let Some(v) = get_string(admin_tbl, "width") {
         builder = builder.width(v);
     }
@@ -106,7 +108,9 @@ fn apply_identifier_strings(
     if let Some(v) = get_string(admin_tbl, "position") {
         builder = builder.position(v);
     }
-    if let Some(v) = get_string(admin_tbl, "condition") {
+    if let Some(v) = get_optional_hook_ref(admin_tbl, "condition", "admin condition")
+        .map_err(|e| RuntimeError(e.to_string()))?
+    {
         builder = builder.condition(v);
     }
     if let Some(v) = get_string(admin_tbl, "step") {
@@ -121,7 +125,7 @@ fn apply_identifier_strings(
     if let Some(v) = get_string(admin_tbl, "format") {
         builder = builder.richtext_format(v);
     }
-    builder
+    Ok(builder)
 }
 
 /// Apply the singular/plural label overrides from the `labels` sub-table.

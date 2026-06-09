@@ -6,19 +6,28 @@ use anyhow::{Context as _, Result};
 use mlua::{Function as LuaFunction, Lua, Table, Value};
 use tracing::warn;
 
-use crate::hooks::lifecycle::context::HookContext;
+use crate::{
+    core::HookRef,
+    hooks::{lifecycle::context::HookContext, lua_api},
+};
 
 use super::runtime::{read_hook_result, resolve_hook_function};
 
 /// Call a `before_broadcast` hook ref. Returns Some(context) to continue, None to suppress.
 pub(crate) fn call_before_broadcast_hook(
     lua: &Lua,
-    hook_ref: &str,
+    hook: &HookRef,
     context: HookContext,
 ) -> Result<Option<HookContext>> {
+    let hook_ref = hook.reference();
     let func = resolve_hook_function(lua, hook_ref)?;
 
     let ctx_table = context.to_lua_table(lua)?;
+
+    if let Some(options) = hook.options() {
+        ctx_table.set("options", lua_api::json_to_lua(lua, options)?)?;
+    }
+
     let result: Value = func.call(ctx_table)?;
 
     match result {

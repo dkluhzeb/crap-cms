@@ -21,7 +21,7 @@ pub(crate) fn check_access_with_lua(
     lua: &Lua,
     input: &AccessCheckInput<'_>,
 ) -> Result<AccessResult> {
-    let Some(func_ref) = input.access_ref else {
+    let Some(hook) = input.access else {
         // No access function configured — check if default-deny is enabled
         let deny = lua.app_data_ref::<DefaultDeny>().is_some_and(|d| d.0);
 
@@ -32,6 +32,7 @@ pub(crate) fn check_access_with_lua(
         });
     };
 
+    let func_ref = hook.reference();
     let func = resolve_hook_function(lua, func_ref)?;
 
     // Build the access-context table from a typed Rust struct (see
@@ -45,6 +46,7 @@ pub(crate) fn check_access_with_lua(
         operation: input.operation,
         collection: input.collection,
         ui_locale: input.ui_locale,
+        options: hook.options(),
     };
     let ctx_table = lua.to_value(&ctx)?;
 
@@ -142,17 +144,17 @@ fn parse_access_constraints(lua: &Lua, tbl: &mlua::Table) -> Result<AccessResult
 mod tests {
     use super::super::test_helpers::*;
     use super::*;
-    use crate::core::DocumentFields;
+    use crate::core::{DocumentFields, HookRef};
     use serde_json::json;
 
     /// Build an `AccessCheckInput` for tests (operation/collection are
     /// informational here).
     fn acc<'a>(
-        access_ref: Option<&'a str>,
+        access: Option<&'a HookRef>,
         data: Option<&'a DocumentFields>,
     ) -> AccessCheckInput<'a> {
         AccessCheckInput {
-            access_ref,
+            access,
             user: None,
             id: None,
             data,
@@ -194,46 +196,60 @@ mod tests {
         let lua = setup_lua();
         lua.set_app_data(DefaultDeny(true));
         // When an access function IS defined and returns true, default-deny doesn't matter
-        let result = check_access_with_lua(&lua, &acc(Some("test_access.allow"), None)).unwrap();
+        let result =
+            check_access_with_lua(&lua, &acc(Some(&HookRef::new("test_access.allow")), None))
+                .unwrap();
         assert!(matches!(result, AccessResult::Allowed));
     }
 
     #[test]
     fn access_returns_true_is_allowed() {
         let lua = setup_lua();
-        let result = check_access_with_lua(&lua, &acc(Some("test_access.allow"), None)).unwrap();
+        let result =
+            check_access_with_lua(&lua, &acc(Some(&HookRef::new("test_access.allow")), None))
+                .unwrap();
         assert!(matches!(result, AccessResult::Allowed));
     }
 
     #[test]
     fn access_returns_false_is_denied() {
         let lua = setup_lua();
-        let result = check_access_with_lua(&lua, &acc(Some("test_access.deny"), None)).unwrap();
+        let result =
+            check_access_with_lua(&lua, &acc(Some(&HookRef::new("test_access.deny")), None))
+                .unwrap();
         assert!(matches!(result, AccessResult::Denied));
     }
 
     #[test]
     fn access_returns_nil_is_denied() {
         let lua = setup_lua();
-        let result =
-            check_access_with_lua(&lua, &acc(Some("test_access.return_nil"), None)).unwrap();
+        let result = check_access_with_lua(
+            &lua,
+            &acc(Some(&HookRef::new("test_access.return_nil")), None),
+        )
+        .unwrap();
         assert!(matches!(result, AccessResult::Denied));
     }
 
     #[test]
     fn access_returns_unexpected_type_is_denied() {
         let lua = setup_lua();
-        let result =
-            check_access_with_lua(&lua, &acc(Some("test_access.return_number"), None)).unwrap();
+        let result = check_access_with_lua(
+            &lua,
+            &acc(Some(&HookRef::new("test_access.return_number")), None),
+        )
+        .unwrap();
         assert!(matches!(result, AccessResult::Denied));
     }
 
     #[test]
     fn access_constrained_string_value() {
         let lua = setup_lua();
-        let result =
-            check_access_with_lua(&lua, &acc(Some("test_access.constrained_string"), None))
-                .unwrap();
+        let result = check_access_with_lua(
+            &lua,
+            &acc(Some(&HookRef::new("test_access.constrained_string")), None),
+        )
+        .unwrap();
         match result {
             AccessResult::Constrained(clauses) => {
                 assert_eq!(clauses.len(), 1);
@@ -252,9 +268,11 @@ mod tests {
     #[test]
     fn access_constrained_integer_value() {
         let lua = setup_lua();
-        let result =
-            check_access_with_lua(&lua, &acc(Some("test_access.constrained_integer"), None))
-                .unwrap();
+        let result = check_access_with_lua(
+            &lua,
+            &acc(Some(&HookRef::new("test_access.constrained_integer")), None),
+        )
+        .unwrap();
         match result {
             AccessResult::Constrained(clauses) => {
                 assert_eq!(clauses.len(), 1);
@@ -273,9 +291,11 @@ mod tests {
     #[test]
     fn access_constrained_number_value() {
         let lua = setup_lua();
-        let result =
-            check_access_with_lua(&lua, &acc(Some("test_access.constrained_number"), None))
-                .unwrap();
+        let result = check_access_with_lua(
+            &lua,
+            &acc(Some(&HookRef::new("test_access.constrained_number")), None),
+        )
+        .unwrap();
         match result {
             AccessResult::Constrained(clauses) => {
                 assert_eq!(clauses.len(), 1);
@@ -294,8 +314,11 @@ mod tests {
     #[test]
     fn access_constrained_with_operator_table() {
         let lua = setup_lua();
-        let result =
-            check_access_with_lua(&lua, &acc(Some("test_access.constrained_ops"), None)).unwrap();
+        let result = check_access_with_lua(
+            &lua,
+            &acc(Some(&HookRef::new("test_access.constrained_ops")), None),
+        )
+        .unwrap();
         match result {
             AccessResult::Constrained(clauses) => {
                 assert_eq!(clauses.len(), 1);
@@ -314,9 +337,14 @@ mod tests {
     #[test]
     fn access_constrained_multi_ops() {
         let lua = setup_lua();
-        let result =
-            check_access_with_lua(&lua, &acc(Some("test_access.constrained_multi_ops"), None))
-                .unwrap();
+        let result = check_access_with_lua(
+            &lua,
+            &acc(
+                Some(&HookRef::new("test_access.constrained_multi_ops")),
+                None,
+            ),
+        )
+        .unwrap();
         match result {
             AccessResult::Constrained(clauses) => {
                 assert_eq!(clauses.len(), 2);
@@ -337,7 +365,10 @@ mod tests {
         let lua = setup_lua();
         let result = check_access_with_lua(
             &lua,
-            &acc(Some("test_access.constrained_ignore_bool"), None),
+            &acc(
+                Some(&HookRef::new("test_access.constrained_ignore_bool")),
+                None,
+            ),
         )
         .unwrap();
         // Boolean values are converted to "1"/"0" filter constraints
@@ -363,7 +394,7 @@ mod tests {
         let result = check_access_with_lua(
             &lua,
             &AccessCheckInput {
-                access_ref: Some("test_access.check_user"),
+                access: Some(&HookRef::new("test_access.check_user")),
                 user: Some(&admin),
                 id: None,
                 data: None,
@@ -380,7 +411,7 @@ mod tests {
         let result = check_access_with_lua(
             &lua,
             &AccessCheckInput {
-                access_ref: Some("test_access.check_user"),
+                access: Some(&HookRef::new("test_access.check_user")),
                 user: Some(&viewer),
                 id: None,
                 data: None,
@@ -397,8 +428,11 @@ mod tests {
     #[test]
     fn access_passes_no_user() {
         let lua = setup_lua();
-        let result =
-            check_access_with_lua(&lua, &acc(Some("test_access.check_user"), None)).unwrap();
+        let result = check_access_with_lua(
+            &lua,
+            &acc(Some(&HookRef::new("test_access.check_user")), None),
+        )
+        .unwrap();
         assert!(matches!(result, AccessResult::Denied));
     }
 
@@ -408,7 +442,7 @@ mod tests {
         let result = check_access_with_lua(
             &lua,
             &AccessCheckInput {
-                access_ref: Some("test_access.check_id"),
+                access: Some(&HookRef::new("test_access.check_id")),
                 user: None,
                 id: Some("doc-123"),
                 data: None,
@@ -424,7 +458,7 @@ mod tests {
         let result = check_access_with_lua(
             &lua,
             &AccessCheckInput {
-                access_ref: Some("test_access.check_id"),
+                access: Some(&HookRef::new("test_access.check_id")),
                 user: None,
                 id: Some("doc-other"),
                 data: None,
@@ -443,15 +477,23 @@ mod tests {
         let lua = setup_lua();
         let mut data = DocumentFields::new();
         data.insert("title".to_string(), json!("test"));
-        let result =
-            check_access_with_lua(&lua, &acc(Some("test_access.check_data"), Some(&data))).unwrap();
+        let result = check_access_with_lua(
+            &lua,
+            &acc(Some(&HookRef::new("test_access.check_data")), Some(&data)),
+        )
+        .unwrap();
         assert!(matches!(result, AccessResult::Allowed));
 
         let mut bad_data = DocumentFields::new();
         bad_data.insert("title".to_string(), json!("other"));
-        let result =
-            check_access_with_lua(&lua, &acc(Some("test_access.check_data"), Some(&bad_data)))
-                .unwrap();
+        let result = check_access_with_lua(
+            &lua,
+            &acc(
+                Some(&HookRef::new("test_access.check_data")),
+                Some(&bad_data),
+            ),
+        )
+        .unwrap();
         assert!(matches!(result, AccessResult::Denied));
     }
 
@@ -462,15 +504,21 @@ mod tests {
         // propagating as anyhow::Error. The wire-level rationale is
         // documented in `grpc_hook_errors::access_fn_error_maps_to_permission_denied`.
         let lua = setup_lua();
-        let result = check_access_with_lua(&lua, &acc(Some("test_access.throw_error"), None))
-            .expect("error is caught + treated as Denied, not propagated");
+        let result = check_access_with_lua(
+            &lua,
+            &acc(Some(&HookRef::new("test_access.throw_error")), None),
+        )
+        .expect("error is caught + treated as Denied, not propagated");
         assert!(matches!(result, AccessResult::Denied));
     }
 
     #[test]
     fn access_invalid_ref_errors() {
         let lua = setup_lua();
-        let result = check_access_with_lua(&lua, &acc(Some("nonexistent_module.func"), None));
+        let result = check_access_with_lua(
+            &lua,
+            &acc(Some(&HookRef::new("nonexistent_module.func")), None),
+        );
         assert!(result.is_err());
     }
 
@@ -484,7 +532,7 @@ mod tests {
         let allowed = check_access_with_lua(
             &lua,
             &AccessCheckInput {
-                access_ref: Some("test_access.check_locale"),
+                access: Some(&HookRef::new("test_access.check_locale")),
                 user: None,
                 id: None,
                 data: None,
@@ -500,7 +548,7 @@ mod tests {
         let denied = check_access_with_lua(
             &lua,
             &AccessCheckInput {
-                access_ref: Some("test_access.check_locale"),
+                access: Some(&HookRef::new("test_access.check_locale")),
                 user: None,
                 id: None,
                 data: None,
@@ -514,8 +562,11 @@ mod tests {
         assert!(matches!(denied, AccessResult::Denied));
 
         // No locale (localization disabled) → `ctx.locale` is nil → denied.
-        let nil_locale =
-            check_access_with_lua(&lua, &acc(Some("test_access.check_locale"), None)).unwrap();
+        let nil_locale = check_access_with_lua(
+            &lua,
+            &acc(Some(&HookRef::new("test_access.check_locale")), None),
+        )
+        .unwrap();
         assert!(matches!(nil_locale, AccessResult::Denied));
     }
 

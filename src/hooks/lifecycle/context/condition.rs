@@ -2,6 +2,7 @@
 //! (`field.admin.condition`).
 
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::{core::Document, typegen::lua::LuaAnnotation};
 
@@ -10,7 +11,7 @@ use crate::{core::Document, typegen::lua::LuaAnnotation};
 /// operation, and the locale — beyond the form values in the first argument.
 /// Existing `function(form_data)` conditions keep working (Lua silently drops
 /// the extra argument).
-#[derive(Serialize, LuaAnnotation)]
+#[derive(Serialize, LuaAnnotation, Clone, Copy)]
 #[lua(class = "crap.ConditionContext")]
 pub struct ConditionContext<'a> {
     /// Collection (or global) slug the form belongs to.
@@ -32,4 +33,9 @@ pub struct ConditionContext<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[lua(optional)]
     pub locale: Option<&'a str>,
+    /// Per-config options from the condition's `{ ref, options }` table; `nil`
+    /// when the condition was configured as a bare ref string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(ty = "table", optional)]
+    pub options: Option<&'a Value>,
 }

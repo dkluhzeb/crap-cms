@@ -2,6 +2,7 @@
 //! (`before_validate`, `before_change`, `after_change`, `after_read`).
 
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::{
     core::{Document, DocumentFields},
@@ -51,4 +52,9 @@ pub struct FieldHookContext<'a> {
     /// Admin UI locale code (e.g., `"en"`, `"de"`). Nil if not set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ui_locale: Option<&'a str>,
+    /// Per-config options from this field hook's `{ ref, options }` table; `nil`
+    /// when the hook was configured as a bare ref string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(ty = "table", optional)]
+    pub options: Option<&'a Value>,
 }

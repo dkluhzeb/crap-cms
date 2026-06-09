@@ -24,7 +24,7 @@ pub async fn back_references(
 
     match check_access_or_forbid(
         &state,
-        def.access.read.as_deref(),
+        def.access.read.as_ref(),
         auth_user.as_ref(),
         Some(&id),
         None,

@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
+use crap_cms::core::HookRef;
 use crap_cms::core::job::{JobRun, JobStatus};
 use crap_cms::db::query::jobs as job_query;
 use crap_cms::db::{DbConnection, DbValue, migrate, pool, query};
@@ -72,7 +73,7 @@ fn job_definitions_loaded_from_lua() {
     );
 
     let def = registry.get_job("test_create_post").unwrap();
-    assert_eq!(def.handler, "jobs.test_job.create_post");
+    assert_eq!(def.handler.reference(), "jobs.test_job.create_post");
     assert_eq!(def.retries, Some(1));
     assert_eq!(def.timeout, 30);
 
@@ -285,7 +286,7 @@ fn execute_echo_job_via_hook_runner() {
     let (_tmp, pool, _registry, runner) = setup();
     let result = runner
         .run_job_handler(
-            "jobs.test_job.echo",
+            &HookRef::new("jobs.test_job.echo"),
             &job_run("test_echo_job", "{\"hello\":\"world\"}", 1, 1),
             &pool,
         )
@@ -302,7 +303,7 @@ fn execute_job_that_creates_document() {
 
     runner
         .run_job_handler(
-            "jobs.test_job.create_post",
+            &HookRef::new("jobs.test_job.create_post"),
             &job_run("test_create_post", "{\"title\":\"From Job\"}", 1, 1),
             &pool,
         )
@@ -340,7 +341,7 @@ fn job_handler_receives_run_metadata() {
         .build();
 
     let result = runner
-        .run_job_handler("jobs.test_job.job_meta", &jr, &pool)
+        .run_job_handler(&HookRef::new("jobs.test_job.job_meta"), &jr, &pool)
         .expect("run_job_handler")
         .expect("handler returned a value");
     let json: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -363,7 +364,7 @@ fn job_handler_receives_run_metadata() {
 fn execute_failing_job_returns_error() {
     let (_tmp, pool, _registry, runner) = setup();
     let result = runner.run_job_handler(
-        "jobs.test_job.fail",
+        &HookRef::new("jobs.test_job.fail"),
         &job_run("test_failing_job", "{}", 1, 3),
         &pool,
     );

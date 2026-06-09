@@ -77,9 +77,15 @@ crap.collections.define("posts", {
 })
 ```
 
-The filter function receives `{ collection, operation, data }` and returns `true` to broadcast or `false`/`nil` to suppress.
+The filter function receives a typed `crap.LiveFilterContext` (`{ collection, operation, data, document_id, edited_by, options }`) and returns `true` to broadcast or `false`/`nil` to suppress.
 
-The `live = { ... }` table form is strict: `mode` must be `"full"` or `"metadata"` (the default), `filter` must be a string hook reference, and any unknown key is a hard error at load time — a typo is not silently ignored.
+`filter` may be a bare ref string **or** a `{ ref, options }` table — the options reach the filter as `ctx.options`, so one gate function can be reused across collections with different config:
+
+```lua
+live = { mode = "full", filter = { ref = "hooks.live.status_gate", options = { allow = { "published" } } } }
+```
+
+The `live = { ... }` table form is strict: `mode` must be `"full"` or `"metadata"` (the default), `filter` must be a valid hook ref (string or `{ ref, options }`), and any unknown key is a hard error at load time — a typo is not silently ignored.
 
 ## Access Control
 

@@ -30,6 +30,8 @@ pub(super) struct ValidateCtxSource<'a> {
     pub locale: Option<&'a str>,
     pub operation: &'a str,
     pub id: Option<&'a str>,
+    /// Per-config options from the `validate` / `required_when` hook ref.
+    pub options: Option<&'a JsonValue>,
 }
 
 pub(super) fn run_validate_function_inner(
@@ -53,6 +55,7 @@ pub(super) fn run_validate_function_inner(
         user: user_ctx_ref.as_ref().and_then(|c| c.0.as_ref()),
         ui_locale: locale_ctx_ref.as_ref().and_then(|c| c.0.as_deref()),
         locale: src.locale,
+        options: src.options,
     };
     let ctx_table = lua.to_value(&ctx)?;
 
@@ -87,6 +90,7 @@ pub(super) fn run_required_condition_inner(
         user: user_ctx_ref.as_ref().and_then(|c| c.0.as_ref()),
         ui_locale: locale_ctx_ref.as_ref().and_then(|c| c.0.as_deref()),
         locale: src.locale,
+        options: src.options,
     };
     let ctx_table = lua.to_value(&ctx)?;
 
@@ -128,6 +132,7 @@ mod tests {
                 locale: None,
                 operation: "create",
                 id: None,
+                options: None,
             },
         )
         .unwrap();
@@ -162,6 +167,7 @@ mod tests {
                 locale: None,
                 operation: "create",
                 id: None,
+                options: None,
             },
         )
         .unwrap();
@@ -202,6 +208,7 @@ mod tests {
                 locale: Some("de"),
                 operation: "create",
                 id: None,
+                options: None,
             },
         )
         .unwrap();

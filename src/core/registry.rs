@@ -7,7 +7,7 @@ use std::{
 use tracing::{debug, warn};
 
 use crate::core::{
-    CollectionDefinition, FieldDefinition, FieldType, Slug,
+    CollectionDefinition, FieldDefinition, FieldType, HookRef, Slug,
     collection::{Activation, AuthMethod, GlobalDefinition, Surface},
     job::JobDefinition,
     richtext::RichtextNodeDef,
@@ -25,8 +25,9 @@ pub struct StrategyEntry {
     pub slug: Slug,
     /// Identifier used in logs and `ResolvedMethod::Strategy.name`.
     pub name: String,
-    /// Lua function reference (`module.function`) for the strategy.
-    pub authenticate: String,
+    /// Lua function reference (`module.function`) for the strategy, plus any
+    /// per-config options exposed to the hook as `ctx.options`.
+    pub authenticate: HookRef,
 }
 
 /// Holds all collection, global, and job definitions loaded at startup.

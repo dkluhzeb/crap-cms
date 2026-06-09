@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::{
     core::{
-        FieldDefinition, Registry,
+        FieldDefinition, HookRef, Registry,
         richtext::renderer::{extract_attr_value, html_escape_attr},
     },
     hooks::{lifecycle::execution::resolve_hook_function, lua_api},
@@ -206,13 +206,14 @@ fn run_before_validate_html(
 /// Run a chain of `before_validate` hook functions on a single attr value.
 fn run_attr_before_validate_hooks(
     lua: &Lua,
-    hook_refs: &[String],
+    hook_refs: &[HookRef],
     value: &Value,
     collection: &str,
     field_name: &str,
 ) -> Value {
     let mut current = value.clone();
-    for hook_ref in hook_refs {
+    for hook in hook_refs {
+        let hook_ref = hook.reference();
         let func = match resolve_hook_function(lua, hook_ref) {
             Ok(f) => f,
             Err(e) => {
@@ -233,6 +234,12 @@ fn run_attr_before_validate_hooks(
         };
         let _ = ctx_table.set("collection", collection);
         let _ = ctx_table.set("field_name", field_name);
+
+        if let Some(opts) = hook.options()
+            && let Ok(opts_val) = lua_api::json_to_lua(lua, opts)
+        {
+            let _ = ctx_table.set("options", opts_val);
+        }
 
         match func.call::<mlua::Value>((lua_val, ctx_table)) {
             Ok(result) => {

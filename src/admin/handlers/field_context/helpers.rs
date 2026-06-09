@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     admin::context::field::FieldContext,
-    core::{FieldDefinition, FieldType},
+    core::{FieldDefinition, FieldType, HookRef},
     hooks::{ConditionContext, HookRunner, lifecycle::DisplayConditionResult},
 };
 
@@ -169,25 +169,39 @@ pub fn apply_display_conditions(
     filter_hidden: bool,
     cond_ctx: &ConditionContext<'_>,
 ) {
-    let defs: Vec<&FieldDefinition> = if filter_hidden {
-        field_defs.iter().filter(|f| !f.admin.hidden).collect()
-    } else {
-        field_defs.iter().collect()
-    };
+    // Same visibility filter `build_field_contexts` used to produce `fields`,
+    // so the per-field `zip` below stays aligned (see `visible_field_defs`).
+    let defs: Vec<&FieldDefinition> =
+        super::builder::visible_field_defs(field_defs, filter_hidden).collect();
 
-    let conditions: Vec<(&str, &Value)> = defs
+    // Pair each conditioned field with its position in `defs` so results map
+    // back per-field — NOT by ref string, which is no longer unique once two
+    // fields can share a ref with different `options`.
+    let conditioned: Vec<(usize, &HookRef)> = defs
         .iter()
-        .filter_map(|fd| fd.admin.condition.as_deref().map(|c| (c, form_data)))
+        .enumerate()
+        .filter_map(|(i, fd)| fd.admin.condition.as_ref().map(|c| (i, c)))
         .collect();
 
-    if conditions.is_empty() {
+    if conditioned.is_empty() {
         return;
     }
 
+    let conditions: Vec<(&HookRef, &Value)> =
+        conditioned.iter().map(|&(_, c)| (c, form_data)).collect();
+
     let results = hook_runner.call_display_conditions_batch(&conditions, cond_ctx);
 
-    for (fc, field_def) in fields.iter_mut().zip(defs.iter()) {
-        apply_single_condition(fc, field_def, &results);
+    // Scatter positional results back to their def slots.
+    let mut by_def: Vec<Option<DisplayConditionResult>> = (0..defs.len()).map(|_| None).collect();
+    for (&(def_idx, _), result) in conditioned.iter().zip(results) {
+        by_def[def_idx] = result;
+    }
+
+    for ((fc, field_def), result) in fields.iter_mut().zip(defs.iter()).zip(by_def) {
+        if let Some(result) = result {
+            apply_single_condition(fc, field_def, &result);
+        }
     }
 }
 
@@ -195,13 +209,9 @@ pub fn apply_display_conditions(
 fn apply_single_condition(
     fc: &mut FieldContext,
     field_def: &FieldDefinition,
-    results: &HashMap<String, DisplayConditionResult>,
+    result: &DisplayConditionResult,
 ) {
     let Some(ref cond_ref) = field_def.admin.condition else {
-        return;
-    };
-
-    let Some(result) = results.get(cond_ref.as_str()) else {
         return;
     };
 
@@ -210,7 +220,7 @@ fn apply_single_condition(
     match result {
         DisplayConditionResult::Bool(visible) => {
             condition.visible = Some(*visible);
-            condition.func_ref = Some(cond_ref.clone());
+            condition.func_ref = Some(cond_ref.reference().to_string());
         }
         DisplayConditionResult::Table {
             condition: cond,

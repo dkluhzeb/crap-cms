@@ -41,7 +41,7 @@ pub async fn validate_global(
 
     match check_access_or_forbid(
         &state,
-        def.access.update.as_deref(),
+        def.access.update.as_ref(),
         auth_user.as_ref(),
         None,
         None,

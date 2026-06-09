@@ -33,7 +33,7 @@ pub(crate) async fn evaluate_conditions(
 
     match check_access_or_forbid(
         &state,
-        def.access.read.as_deref(),
+        def.access.read.as_ref(),
         auth_user.as_ref(),
         None,
         None,
@@ -52,6 +52,7 @@ pub(crate) async fn evaluate_conditions(
             .as_ref()
             .map(|Extension(au)| au.ui_locale.as_str()),
         locale: None,
+        options: None,
     };
 
     let results = evaluate_condition_results(&state.hook_runner, &def.fields, &req, &cond_ctx);

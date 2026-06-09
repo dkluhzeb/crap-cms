@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::Serialize;
 
+use crate::core::HookRef;
 use crate::typegen::LuaAnnotation;
 
 /// Sidebar metadata declared from Lua via `crap.pages.register`.
@@ -47,9 +48,12 @@ pub struct CustomPage {
     /// is hidden from the sidebar nav for users who can't read it.
     /// Mirrors `access.read` on collections / globals — register the
     /// function once via `crap.access.register("name", fn)`, then refer
-    /// to it by name here.
+    /// to it by name here. A bare ref string or a `{ ref, options }` table
+    /// whose options reach the gate as `ctx.options`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub access: Option<String>,
+    #[schemars(with = "Option<String>")]
+    #[lua(ty = "string | crap.HookRef")]
+    pub access: Option<HookRef>,
 }
 
 /// Registered custom pages, keyed by slug. Populated once during

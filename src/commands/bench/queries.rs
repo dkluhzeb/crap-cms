@@ -155,15 +155,15 @@ fn collect_read_hooks(def: &CollectionDefinition) -> Vec<String> {
     let mut hooks = Vec::new();
 
     if let Some(ref f) = def.access.read {
-        hooks.push(format!("access.read: {f}"));
+        hooks.push(format!("access.read: {}", f.reference()));
     }
 
     for f in &def.hooks.before_read {
-        hooks.push(format!("before_read: {f}"));
+        hooks.push(format!("before_read: {}", f.reference()));
     }
 
     for f in &def.hooks.after_read {
-        hooks.push(format!("after_read: {f}"));
+        hooks.push(format!("after_read: {}", f.reference()));
     }
 
     hooks

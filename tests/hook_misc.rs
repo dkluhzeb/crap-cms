@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::DocumentFields;
+use crap_cms::core::HookRef;
 use crap_cms::core::JobRun;
 use crap_cms::core::{ConditionExpr, ConditionOp, ReqContext};
 use crap_cms::db::{migrate, pool, query};
@@ -40,6 +41,7 @@ fn cond_ctx() -> ConditionContext<'static> {
         user: None,
         ui_locale: None,
         locale: None,
+        options: None,
     }
 }
 
@@ -143,8 +145,11 @@ fn call_display_condition_bool_true() {
     let (_tmp, _pool, _registry, runner) = setup();
 
     let data = json!({"status": "published"});
-    let result =
-        runner.call_display_condition("hooks.field_hooks.show_if_published", &data, &cond_ctx());
+    let result = runner.call_display_condition(
+        &HookRef::new("hooks.field_hooks.show_if_published"),
+        &data,
+        &cond_ctx(),
+    );
     assert!(result.is_some());
     match result.unwrap() {
         crap_cms::hooks::lifecycle::DisplayConditionResult::Bool(b) => assert!(b),
@@ -157,8 +162,11 @@ fn call_display_condition_bool_false() {
     let (_tmp, _pool, _registry, runner) = setup();
 
     let data = json!({"status": "draft"});
-    let result =
-        runner.call_display_condition("hooks.field_hooks.show_if_published", &data, &cond_ctx());
+    let result = runner.call_display_condition(
+        &HookRef::new("hooks.field_hooks.show_if_published"),
+        &data,
+        &cond_ctx(),
+    );
     assert!(result.is_some());
     match result.unwrap() {
         crap_cms::hooks::lifecycle::DisplayConditionResult::Bool(b) => assert!(!b),
@@ -171,8 +179,11 @@ fn call_display_condition_table() {
     let (_tmp, _pool, _registry, runner) = setup();
 
     let data = json!({"status": "published"});
-    let result =
-        runner.call_display_condition("hooks.field_hooks.condition_table", &data, &cond_ctx());
+    let result = runner.call_display_condition(
+        &HookRef::new("hooks.field_hooks.condition_table"),
+        &data,
+        &cond_ctx(),
+    );
     assert!(result.is_some());
     match result.unwrap() {
         crap_cms::hooks::lifecycle::DisplayConditionResult::Table { condition, visible } => {
@@ -193,8 +204,11 @@ fn call_display_condition_table_not_visible() {
     let (_tmp, _pool, _registry, runner) = setup();
 
     let data = json!({"status": "draft"});
-    let result =
-        runner.call_display_condition("hooks.field_hooks.condition_table", &data, &cond_ctx());
+    let result = runner.call_display_condition(
+        &HookRef::new("hooks.field_hooks.condition_table"),
+        &data,
+        &cond_ctx(),
+    );
     assert!(result.is_some());
     match result.unwrap() {
         crap_cms::hooks::lifecycle::DisplayConditionResult::Table { visible, .. } => {
@@ -212,7 +226,11 @@ fn call_display_condition_invalid_ref_returns_none() {
     let (_tmp, _pool, _registry, runner) = setup();
 
     let data = json!({"status": "published"});
-    let result = runner.call_display_condition("hooks.nonexistent.function", &data, &cond_ctx());
+    let result = runner.call_display_condition(
+        &HookRef::new("hooks.nonexistent.function"),
+        &data,
+        &cond_ctx(),
+    );
     assert!(result.is_none(), "Invalid hook ref should return None");
 }
 
@@ -392,7 +410,7 @@ fn run_job_handler_with_valid_function() {
     // Actually, let's just test that run_job_handler works with a function that's already loaded.
     // The system_init function in field_hooks takes a context table and returns it.
     let result = runner.run_job_handler(
-        "hooks.field_hooks.system_init",
+        &HookRef::new("hooks.field_hooks.system_init"),
         &job_run("test-job", r#"{"key": "value"}"#, 1, 3),
         &pool,
     );
@@ -408,7 +426,7 @@ fn run_job_handler_invalid_ref_fails() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let result = runner.run_job_handler(
-        "hooks.nonexistent.handler",
+        &HookRef::new("hooks.nonexistent.handler"),
         &job_run("test-job", "{}", 1, 3),
         &pool,
     );
@@ -645,7 +663,7 @@ fn run_job_handler_with_return_value() {
 
     let result = runner
         .run_job_handler(
-            "jobs.test_job.run",
+            &HookRef::new("jobs.test_job.run"),
             &job_run("test-job", r#"{"key": "hello"}"#, 1, 3),
             &pool,
         )
@@ -709,7 +727,11 @@ fn run_job_handler_nil_return() {
         .expect("HookRunner::new");
 
     let result = runner
-        .run_job_handler("jobs.void_job.run", &job_run("void-job", "{}", 1, 1), &pool)
+        .run_job_handler(
+            &HookRef::new("jobs.void_job.run"),
+            &job_run("void-job", "{}", 1, 1),
+            &pool,
+        )
         .expect("run_job_handler failed");
 
     assert!(result.is_none(), "Job returning nil should give None");
@@ -790,7 +812,7 @@ fn call_display_condition_standalone_bool() {
 
     let form_data = json!({ "status": "published" });
     let result = runner.call_display_condition(
-        "hooks.conditions.show_if_published",
+        &HookRef::new("hooks.conditions.show_if_published"),
         &form_data,
         &cond_ctx(),
     );
@@ -801,7 +823,7 @@ fn call_display_condition_standalone_bool() {
 
     let form_data_draft = json!({ "status": "draft" });
     let result = runner.call_display_condition(
-        "hooks.conditions.show_if_published",
+        &HookRef::new("hooks.conditions.show_if_published"),
         &form_data_draft,
         &cond_ctx(),
     );
@@ -845,8 +867,11 @@ fn call_display_condition_standalone_table() {
         .expect("HookRunner::new");
 
     let form_data = json!({ "status": "published" });
-    let result =
-        runner.call_display_condition("hooks.conditions.condition_table", &form_data, &cond_ctx());
+    let result = runner.call_display_condition(
+        &HookRef::new("hooks.conditions.condition_table"),
+        &form_data,
+        &cond_ctx(),
+    );
     match result {
         Some(crap_cms::hooks::lifecycle::DisplayConditionResult::Table { condition, visible }) => {
             assert!(visible, "status=published should match the condition");

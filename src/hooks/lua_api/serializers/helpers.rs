@@ -1,9 +1,36 @@
 //! Shared helpers for Lua table serializers.
 
-use mlua::{Lua, Value};
+use mlua::{Lua, Table, Value};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
-use crate::core::LocalizedString;
+use crate::core::{HookRef, LocalizedString};
+
+/// Serialize a [`HookRef`] back to Lua — a bare string when it carries no
+/// options, or a `{ ref, options }` table otherwise. Inverse of the parse-side
+/// `parse_hook_ref`, so a config round-trips through serialize→parse unchanged.
+pub(super) fn hook_ref_to_lua(lua: &Lua, hook: &HookRef) -> mlua::Result<Value> {
+    let Some(options) = hook.options() else {
+        return Ok(Value::String(lua.create_string(hook.reference())?));
+    };
+
+    let tbl = lua.create_table()?;
+    tbl.set("ref", hook.reference())?;
+    tbl.set("options", json_to_lua(lua, options)?)?;
+
+    Ok(Value::Table(tbl))
+}
+
+/// Serialize a list of [`HookRef`]s to a Lua array (each entry a string or
+/// `{ ref, options }` table).
+pub(super) fn hook_ref_list_to_lua(lua: &Lua, hooks: &[HookRef]) -> mlua::Result<Table> {
+    let tbl = lua.create_table()?;
+
+    for (i, hook) in hooks.iter().enumerate() {
+        tbl.set(i + 1, hook_ref_to_lua(lua, hook)?)?;
+    }
+
+    Ok(tbl)
+}
 
 /// Convert a `LocalizedString` to a Lua value (string or locale table).
 pub(super) fn localized_string_to_lua(lua: &Lua, ls: &LocalizedString) -> mlua::Result<Value> {
@@ -146,6 +173,28 @@ mod tests {
     use mlua::Lua;
     use serde_json::json;
     use std::collections::HashMap;
+
+    /// `hook_ref_to_lua` emits a bare string for a ref with no options, and a
+    /// `{ ref, options }` table otherwise — the inverse of the parse-side
+    /// `parse_hook_ref`, so a config round-trips serialize→parse unchanged.
+    #[test]
+    fn hook_ref_to_lua_bare_and_with_options() {
+        let lua = Lua::new();
+
+        match hook_ref_to_lua(&lua, &HookRef::new("hooks.x")).unwrap() {
+            Value::String(s) => assert_eq!(s.to_str().unwrap(), "hooks.x"),
+            other => panic!("bare ref should serialize to a string, got {other:?}"),
+        }
+
+        match hook_ref_to_lua(&lua, &HookRef::with_options("hooks.y", json!({ "k": 1 }))).unwrap() {
+            Value::Table(tbl) => {
+                assert_eq!(tbl.get::<String>("ref").unwrap(), "hooks.y");
+                let opts = tbl.get::<Table>("options").unwrap();
+                assert_eq!(opts.get::<i64>("k").unwrap(), 1);
+            }
+            other => panic!("ref with options should serialize to a table, got {other:?}"),
+        }
+    }
 
     #[test]
     fn test_localized_string_plain() {

@@ -72,7 +72,7 @@ crap = {}
 --- @field row_label? string Lua function ref for computed row labels (arrays/blocks). Receives the row data table, returns a display string or nil. Takes priority over `label_field`. Signature: `fun(row: table): string?`.
 --- @field labels? crap.FieldAdminLabels Custom singular/plural labels for row items (e.g., `{ singular = "Slide", plural = "Slides" }` → "Add Slide" button).
 --- @field position? string "main" or "sidebar".
---- @field condition? string Lua function ref (string) for conditional show/hide — e.g. `"hooks.conditions.show_external_url"`. Inline condition tables are not accepted here; this field is the name of the function, not the condition itself. The referenced function receives form data and returns either: - a boolean (server-evaluated on each change via HTMX), or - a condition table (serialized to JSON, client-evaluated instantly). See `docs/src/admin-ui/guides/display-conditions.md`.
+--- @field condition? string | crap.HookRef Lua function ref (string) for conditional show/hide — e.g. `"hooks.conditions.show_external_url"`. Inline condition tables are not accepted here; this field is the name of the function, not the condition itself. The referenced function receives form data and returns either: - a boolean (server-evaluated on each change via HTMX), or - a condition table (serialized to JSON, client-evaluated instantly). See `docs/src/admin-ui/guides/display-conditions.md`.
 --- @field step? string Step value for number inputs (default: "any"). Use "1" for integers, "0.01" for cents, etc.
 --- @field rows? integer Number of rows for textarea fields (default: 8).
 --- @field language? string Default language mode for code fields (default: "json"). Options: "json", "javascript", "html", "css", "python", "plain". When `languages` is non-empty, this is the initial value; the editor can switch to any other language in the allow-list at edit time.
@@ -102,13 +102,14 @@ crap = {}
 --- @field user? table Authenticated user document (nil if unauthenticated or no auth collection).
 --- @field ui_locale? string Admin UI locale code (e.g., `"en"`, `"de"`). Nil if not set.
 --- @field locale? string The content locale this write targets (e.g. `"en"`, `"de"`) — the requested locale, or the default when none was given. Nil when localization is disabled. Lets a custom validator enforce per-locale rules (e.g. only require a value in the default locale).
+--- @field options? table Per-config options from the `validate` / `required_when` hook ref's `{ ref, options }` table; `nil` when configured as a bare ref string.
 
 --- Lua function references for field-level lifecycle hooks.
 --- @class crap.FieldHooks
---- @field before_validate? string[] Hook refs to run before field validation (value normalizers).
---- @field before_change? string[] Hook refs to run after validation, before write.
---- @field after_change? string[] Hook refs to run after create/update write.
---- @field after_read? string[] Hook refs to run after read, before response.
+--- @field before_validate? (string | crap.HookRef)[] Hook refs to run before field validation (value normalizers).
+--- @field before_change? (string | crap.HookRef)[] Hook refs to run after validation, before write.
+--- @field after_change? (string | crap.HookRef)[] Hook refs to run after create/update write.
+--- @field after_read? (string | crap.HookRef)[] Hook refs to run after read, before response.
 
 --- Field hook function type.
 --- Receives the field value and a context table; returns the (possibly
@@ -127,6 +128,7 @@ crap = {}
 --- @field document table<string, any> The **full document** being written or read — a read-only snapshot taken before any field hook in this pass ran (so it does not reflect changes made by earlier field hooks in the same pass). Matches `data` at the top level; for a sub-field hook inside an array/blocks row it's the parent document, so the hook can cross-reference fields outside its row.
 --- @field user? table Authenticated user document (nil if unauthenticated or no auth collection).
 --- @field ui_locale? string Admin UI locale code (e.g., `"en"`, `"de"`). Nil if not set.
+--- @field options? table Per-config options from this field hook's `{ ref, options }` table; `nil` when the hook was configured as a bare ref string.
 
 --- Context passed as the **second** argument to a display-condition function:
 --- `function(form_data, ctx)`. Lets a condition gate on who is editing, which
@@ -139,6 +141,7 @@ crap = {}
 --- @field user? crap.AuthUser Authenticated admin user (nil if not resolvable). Typed as `crap.AuthUser` so a condition can read `ctx.user.role` etc.
 --- @field ui_locale? string Admin UI locale code (e.g. `"en"`, `"de"`). Nil if not set.
 --- @field locale? string The content locale the form is editing (e.g. `"en"`, `"de"`). Nil when localization is disabled.
+--- @field options? table Per-config options from the condition's `{ ref, options }` table; `nil` when the condition was configured as a bare ref string.
 
 --- A single tab within a Tabs layout field.
 --- @class crap.FieldTab
@@ -184,10 +187,10 @@ crap = {}
 --- @class crap.BaseField
 --- @field name string Column name (required).
 --- @field required? boolean Validation: must have a value (default: false).
---- @field required_when? string Conditional requirement: a Lua predicate ref (`"module.fn"`). When set, the field is required whenever the predicate returns truthy for the document being validated — in addition to a static `required = true`. The predicate receives the validate context (`ctx.data` = the full document), so it can require this field based on other fields' values.
+--- @field required_when? string | crap.HookRef Conditional requirement: a Lua predicate ref (`"module.fn"`). When set, the field is required whenever the predicate returns truthy for the document being validated — in addition to a static `required = true`. The predicate receives the validate context (`ctx.data` = the full document), so it can require this field based on other fields' values.
 --- @field unique? boolean Unique constraint (default: false).
 --- @field index? boolean Create a B-tree index on this column (default: false). Skipped when unique=true.
---- @field validate? string Lua function ref called as `crap.ValidateFunction`.
+--- @field validate? string | crap.HookRef Lua function ref called as `crap.ValidateFunction`.
 --- @field default_value? any Default value on create.
 --- @field admin? crap.FieldAdmin Admin UI display options.
 --- @field hooks? crap.FieldHooks Per-field lifecycle hooks.
@@ -276,10 +279,10 @@ crap = {}
 --- @class crap.FieldDefinition
 --- @field name string Column name (required).
 --- @field required? boolean Validation: must have a value (default: false).
---- @field required_when? string Conditional requirement: a Lua predicate ref (`"module.fn"`). When set, the field is required whenever the predicate returns truthy for the document being validated — in addition to a static `required = true`. The predicate receives the validate context (`ctx.data` = the full document), so it can require this field based on other fields' values.
+--- @field required_when? string | crap.HookRef Conditional requirement: a Lua predicate ref (`"module.fn"`). When set, the field is required whenever the predicate returns truthy for the document being validated — in addition to a static `required = true`. The predicate receives the validate context (`ctx.data` = the full document), so it can require this field based on other fields' values.
 --- @field unique? boolean Unique constraint (default: false).
 --- @field index? boolean Create a B-tree index on this column (default: false). Skipped when unique=true.
---- @field validate? string Lua function ref called as `crap.ValidateFunction`.
+--- @field validate? string | crap.HookRef Lua function ref called as `crap.ValidateFunction`.
 --- @field default_value? any Default value on create.
 --- @field options? crap.SelectOption[] Option list (required).
 --- @field admin? crap.FieldAdmin Admin UI display options.
@@ -452,24 +455,48 @@ function crap.fields.join(config) end
 --- @field list_searchable_fields? string[] Fields searchable in the list view.
 --- @field list_columns? string[] Default columns shown in the list view, in order. Empty = the built-in default (`_status` if the collection has drafts, plus `created_at`). A per-user column selection overrides this. Entries may be field names or the meta columns `created_at` / `updated_at` / `_status`.
 
+--- A reference to a Lua hook function, optionally carrying per-configuration
+--- `options`.
+---
+--- One hook function can be reused across collections/fields with different
+--- `options`; the resolved options table is exposed to the hook as
+--- `ctx.options` (nil for a bare-string ref).
+---
+--- Both Lua config and serde accept two interchangeable shapes:
+--- - a bare string `"hooks.posts.slugify"` (no options), and
+--- - a table/map `{ ref = "hooks.posts.slugify", options = { ... } }`.
+---
+--- Serialization mirrors that: a ref without options serializes as a bare
+--- string, so existing registry snapshots (which stored bare strings) round-trip
+--- unchanged.
+--- @class crap.HookRef
+--- @field ref string Dotted Lua function reference, e.g. `"hooks.posts.slugify"`.
+--- @field options? table Per-config options passed to the hook as `ctx.options` (nil when absent).
+
 --- Lua function references for lifecycle hooks.
+---
+--- Each entry is a [`HookRef`]: a bare ref string or a `{ ref, options }` table
+--- carrying per-config options exposed to the hook as `ctx.options`.
 --- @class crap.Hooks
---- @field before_validate? string[] Hook refs to run before field validation.
---- @field before_change? string[] Hook refs to run before create/update write.
---- @field after_change? string[] Hook refs to run after create/update write.
---- @field before_read? string[] Hook refs to run before returning read results.
---- @field after_read? string[] Hook refs to run after read, before response.
---- @field before_delete? string[] Hook refs to run before delete.
---- @field after_delete? string[] Hook refs to run after delete.
---- @field before_broadcast? string[] Hook refs to run before broadcasting live update events. Can suppress or transform event data. No CRUD access.
+--- @field before_validate? (string | crap.HookRef)[] Hook refs to run before field validation.
+--- @field before_change? (string | crap.HookRef)[] Hook refs to run before create/update write.
+--- @field after_change? (string | crap.HookRef)[] Hook refs to run after create/update write.
+--- @field before_read? (string | crap.HookRef)[] Hook refs to run before returning read results.
+--- @field after_read? (string | crap.HookRef)[] Hook refs to run after read, before response.
+--- @field before_delete? (string | crap.HookRef)[] Hook refs to run before delete.
+--- @field after_delete? (string | crap.HookRef)[] Hook refs to run after delete.
+--- @field before_broadcast? (string | crap.HookRef)[] Hook refs to run before broadcasting live update events. Can suppress or transform event data. No CRUD access.
 
 --- Lua function references for access control (read/create/update/delete).
+---
+--- Each rule is a [`HookRef`]: a bare ref string or a `{ ref, options }` table
+--- whose options reach the access function as `ctx.options`.
 --- @class crap.Access
---- @field read? string Hook ref for read access control.
---- @field create? string Hook ref for create access control.
---- @field update? string Hook ref for update access control.
---- @field delete? string Hook ref for delete access control.
---- @field trash? string Hook ref for soft-delete (trash) access control. Falls back to `update` when unset, so most collections don't set this explicitly. Set to lock trashing behind a different policy than update — e.g. only editors can trash, but authors can still update their own drafts.
+--- @field read? string | crap.HookRef Hook ref for read access control.
+--- @field create? string | crap.HookRef Hook ref for create access control.
+--- @field update? string | crap.HookRef Hook ref for update access control.
+--- @field delete? string | crap.HookRef Hook ref for delete access control.
+--- @field trash? string | crap.HookRef Hook ref for soft-delete (trash) access control. Falls back to `update` when unset, so most collections don't set this explicitly. Set to lock trashing behind a different policy than update — e.g. only editors can trash, but authors can still update their own drafts.
 
 --- Context passed to `strategy`-type auth `authenticate` hooks.
 --- @class crap.AuthStrategyContext
@@ -478,6 +505,20 @@ function crap.fields.join(config) end
 --- @field email? string The submitted login identifier (email/username), when the strategy was reached via a password-style login. `nil` for header/token flows (OAuth).
 --- @field password? string The submitted plaintext password, for strategies that verify credentials against an external system (LDAP, a remote API). `nil` for header/token flows. **Sensitive** — only your strategy hook receives it; never log it.
 --- @field remote_addr? string The client's remote IP address, when known.
+--- @field options? table Per-config options from the strategy's `authenticate` `{ ref, options }` table; `nil` when configured as a bare ref string.
+
+--- Context passed to the `live.filter` function — the per-collection gate that
+--- decides whether a committed mutation is broadcast to live subscribers.
+---
+--- Runs **after** the write commits, with no CRUD/transaction access. The
+--- function returns `true` to broadcast, `false`/`nil` to suppress.
+--- @class crap.LiveFilterContext
+--- @field collection string Collection (or global) slug the mutation targets.
+--- @field operation string The mutation operation: `"create"`, `"update"`, or `"delete"`.
+--- @field data table<string, any> The document's field data for this event.
+--- @field document_id string The affected document's id.
+--- @field edited_by? { id: string, email: string } The user who caused the mutation (`nil` for anonymous/system changes).
+--- @field options? table Per-config options from the filter's `{ ref, options }` table; `nil` when configured as a bare ref string.
 
 --- Which host surfaces a method can fire on. Surface filtering is
 --- per-method: a method whose `surfaces` list omits the current
@@ -540,7 +581,7 @@ function crap.fields.join(config) end
 --- @class crap.AuthMethodStrategy
 --- @field type "strategy"
 --- @field name string Identifier used in logging + error messages. Doesn't have to be unique across collections, but should be.
---- @field authenticate string Lua function ref, e.g. `"hooks.auth.api_key"`. Receives `crap.AuthStrategyContext`; returns user doc or nil.
+--- @field authenticate string | crap.HookRef Lua function ref, e.g. `"hooks.auth.api_key"`. Receives `crap.AuthStrategyContext`; returns user doc or nil. May carry per-config options exposed to the hook as `ctx.options`.
 --- @field activates_on crap.Activation Discriminator for when the strategy fires. See [`Activation`].
 --- @field surfaces? crap.Surface[] Surfaces this method fires on (default: `{"admin"}`).
 
@@ -741,9 +782,9 @@ function crap.fields.join(config) end
 
 --- Lua function references for field-level access control (read/create/update).
 --- @class crap.FieldAccess
---- @field read? string Hook ref for field read access control.
---- @field create? string Hook ref for field create access control.
---- @field update? string Hook ref for field update access control.
+--- @field read? string | crap.HookRef Hook ref for field read access control.
+--- @field create? string | crap.HookRef Hook ref for field create access control.
+--- @field update? string | crap.HookRef Hook ref for field update access control.
 
 --- Context passed to hook functions.
 ---
@@ -763,6 +804,7 @@ function crap.fields.join(config) end
 --- @field document_id? string The id of the document this event targets. Populated across the write lifecycle — `update`/`delete` before- and after-hooks, `after_change` on create (the freshly assigned id; `nil` in create's before-hooks, where no row exists yet), and `"default"` for globals. Also set on live-broadcast hooks (`before_broadcast`). The read lifecycle (`after_read`) leaves this `nil` and carries the id inside `data` instead.
 --- @field edited_by? { id: string, email: string } The user who caused a live-broadcast mutation. Set on `before_broadcast`; `nil` elsewhere or for anonymous changes. (Distinct from `user`, the caller of a request — broadcast fires post-commit with no request user.)
 --- @field hook_depth integer  Current recursion depth. `0` = top-level API/admin call, `1+` = from Lua CRUD inside hooks. Hooks are skipped when this reaches `hooks.max_depth` (default: `3`).
+--- @field options? table  Per-config options from this hook ref's `{ ref, options }` table; `nil` when the hook was configured as a bare ref string.
 
 --- The authenticated user attached to `crap.AccessContext.user`.
 --- Carries the base `crap.Document` shape (id + timestamps) plus an
@@ -784,6 +826,7 @@ function crap.fields.join(config) end
 --- @field operation string The operation triggering this check: `"create"`, `"update"`, `"delete"`, `"trash"` (soft delete), `"undelete"`, `"unpublish"`, `"restore"`, `"find"`, `"find_by_id"`, `"count"`, `"search"`, `"get"` (global read), `"read"` (admin read-gating: nav, back-references, condition eval, upload serve), `"subscribe"`, … Lets one shared access function branch on the operation instead of registering a separate function per operation.
 --- @field collection string The collection (or job) slug this check is for — so a function reused across collections can tell which one it is gating.
 --- @field ui_locale? string Admin UI locale code (e.g. `"en"`, `"de"`) when the check originates from an admin request; `nil` otherwise (gRPC/REST/internal checks). Distinct from `locale` (the content locale) — this is the operator's UI language.
+--- @field options? table Per-config options from the hook ref's `{ ref, options }` table; `nil` when the access rule was configured as a bare ref string.
 
 -- ── Function-type aliases (one-liner `---@type` for callables) ─────
 
@@ -1830,7 +1873,7 @@ function crap.jobs.define(slug, config) end
 
 --- Typed `config` table passed to `crap.jobs.define(slug, config)`.
 --- @class crap.JobDefinitionConfig
---- @field handler? string Lua function ref for the job handler (required, e.g., `"jobs.cleanup.run"`).
+--- @field handler? string | crap.HookRef Lua function ref for the job handler (required, e.g., `"jobs.cleanup.run"`). May carry per-definition options exposed to the handler as `ctx.options`.
 --- @field schedule? string Cron expression (e.g., `"0 3 * * *"`). When set, the job runs on this schedule. Accepts both 5-field and 6/7-field forms.
 --- @field queue? string Queue name (default: `"default"`).
 --- @field retries? integer Max retry attempts on failure (default: `0`).
@@ -1839,13 +1882,14 @@ function crap.jobs.define(slug, config) end
 --- @field priority? integer Default scheduling priority for this job. Used when a queue site doesn't pass an explicit `{ priority = N }`. Higher = claimed sooner; negative = run only when otherwise idle. Default: `0`.
 --- @field skip_if_running? boolean Skip scheduled run if a previous run is still active (default: `true`).
 --- @field labels? crap.JobLabels Display labels for the admin UI.
---- @field access? string Lua function ref for access control on gRPC/CLI trigger.
+--- @field access? string | crap.HookRef Lua function ref for access control on gRPC/CLI trigger.
 
 --- Job handler context. Passed to the handler function configured on a
 --- `crap.jobs.define` definition.
 --- @class crap.JobHandlerContext
 --- @field data table<string, any> Input data from `crap.jobs.queue(...)` (or `{}` for cron-only runs).
 --- @field job crap.JobInfo Job metadata for the current run.
+--- @field options? table Per-definition options from the handler's `{ ref, options }` table; `nil` when the handler was configured as a bare ref string.
 
 --- Job metadata for the current run.
 --- @class crap.JobInfo
@@ -1894,7 +1938,7 @@ function crap.pages.list() end
 --- @field section? string Sidebar section heading (e.g., `"Tools"`).
 --- @field label? string Sidebar label (defaults to title-cased slug when omitted).
 --- @field icon? string Material Symbols icon name.
---- @field access? string Lua function ref for access control (resolved against the same registry as collection-level `access.*`).
+--- @field access? string | crap.HookRef Lua function ref for access control (resolved against the same registry as collection-level `access.*`). A bare ref string or a `{ ref, options }` table whose options reach the gate as `ctx.options`.
 
 
 -- ── crap.template_data ───────────────────────────────────────

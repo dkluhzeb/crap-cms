@@ -25,7 +25,7 @@ use crate::{
         server::{extract_cookie, load_auth_user},
     },
     core::{
-        AuthUser, Document,
+        AuthUser, Document, HookRef,
         upload::{SharedStorage, StorageNotFound},
     },
     db::{AccessResult, DbPool},
@@ -51,14 +51,14 @@ fn has_path_traversal(segment: &str) -> bool {
 fn check_upload_access_blocking(
     pool: &DbPool,
     hook_runner: &HookRunner,
-    func_ref: &str,
+    access: &HookRef,
     user_doc: Option<&Document>,
     collection: &str,
 ) -> Result<AccessResult, anyhow::Error> {
     let conn = pool.get()?;
     hook_runner.check_access(
         &AccessCheckInput {
-            access_ref: Some(func_ref),
+            access: Some(access),
             user: user_doc,
             id: None,
             data: None,

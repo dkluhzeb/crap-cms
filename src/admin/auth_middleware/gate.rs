@@ -11,26 +11,26 @@ use tokio::task::spawn_blocking;
 use tracing::error;
 
 use crate::admin::{AdminState, auth_middleware::pages::admin_denied_response};
-use crate::core::{AuthUser, Document};
+use crate::core::{AuthUser, Document, HookRef};
 use crate::db::{DbPool, query};
 use crate::hooks::{AccessCheckInput, HookRunner};
 
 /// Blocking body for the admin-access gate's `spawn_blocking`
 /// call. Pulls a connection from the pool and runs the configured
-/// `admin.access` Lua hook. Returns `None` only when the pool is
-/// exhausted; pool failure is treated as a transient deny-by-
-/// default upstream.
+/// `admin.access` Lua hook. Returns `None` when the pool is
+/// exhausted — the caller treats that (and a join failure) as a
+/// denial, so the gate fails **closed**.
 #[cfg(not(tarpaulin_include))]
 fn check_admin_access_blocking(
     pool: &DbPool,
     hook_runner: &HookRunner,
-    access_ref: &str,
+    access: &HookRef,
     user_doc: &Document,
 ) -> Option<Result<query::AccessResult, anyhow::Error>> {
     let conn = pool.get().ok()?;
     Some(hook_runner.check_access(
         &AccessCheckInput {
-            access_ref: Some(access_ref),
+            access: Some(access),
             user: Some(user_doc),
             id: None,
             data: None,
@@ -59,23 +59,30 @@ pub(crate) async fn check_admin_gate_for_doc(
     state: &AdminState,
     user_doc: &Document,
 ) -> Option<Response> {
-    let access_ref = state.config.admin.access.as_deref()?;
+    let access = state.config.admin.access.clone()?;
     let pool = state.pool.clone();
     let hook_runner = state.hook_runner.clone();
     let user_doc = user_doc.clone();
-    let access_ref = access_ref.to_string();
 
     let result = spawn_blocking(move || {
-        check_admin_access_blocking(&pool, &hook_runner, &access_ref, &user_doc)
+        check_admin_access_blocking(&pool, &hook_runner, &access, &user_doc)
     })
     .await;
 
     match result {
+        // Allowed (or constrained — the admin gate has no row scope to filter)
+        // is the ONLY outcome that lets the request through.
+        Ok(Some(Ok(query::AccessResult::Allowed | query::AccessResult::Constrained(_)))) => None,
         Ok(Some(Ok(query::AccessResult::Denied))) => Some(admin_denied_response(state)),
         Ok(Some(Err(e))) => {
             error!("admin.access check failed: {}", e);
             Some(admin_denied_response(state))
         }
-        _ => None,
+        // Pool exhaustion (`Ok(None)`) or a spawn-join failure (`Err`) must
+        // fail CLOSED — never silently admit when the gate could not run.
+        Ok(None) | Err(_) => {
+            error!("admin.access gate could not run (pool exhausted or task join failed); denying");
+            Some(admin_denied_response(state))
+        }
     }
 }

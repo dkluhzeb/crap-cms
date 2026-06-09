@@ -36,7 +36,7 @@ pub async fn validate_create(
 
     match check_access_or_forbid(
         &state,
-        def.access.create.as_deref(),
+        def.access.create.as_ref(),
         auth_user.as_ref(),
         None,
         None,

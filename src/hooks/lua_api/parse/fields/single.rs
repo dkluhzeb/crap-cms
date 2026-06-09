@@ -16,8 +16,8 @@ use crate::{
 use super::super::admin::parse_field_admin;
 use super::super::blocks::{parse_block_definitions, parse_tab_definitions};
 use super::super::helpers::{
-    deny_unknown_keys, get_bool, get_optional_string_ref, get_string, get_string_val, get_table,
-    parse_select_options, parse_string_list,
+    deny_unknown_keys, get_bool, get_optional_hook_ref, get_string, get_string_val, get_table,
+    parse_hook_ref_list, parse_select_options,
 };
 use super::super::relationship::parse_field_relationship;
 use super::constraints::{parse_constraints, parse_date_config, parse_default_value};
@@ -348,10 +348,10 @@ fn assemble_field_definition(
         fd_builder = fd_builder.required_locales(v);
     }
 
-    if let Some(v) = get_string(field_tbl, "validate") {
+    if let Some(v) = get_optional_hook_ref(field_tbl, "validate", "field validate")? {
         fd_builder = fd_builder.validate(v);
     }
-    if let Some(v) = get_string(field_tbl, "required_when") {
+    if let Some(v) = get_optional_hook_ref(field_tbl, "required_when", "required_when")? {
         fd_builder = fd_builder.required_when(v);
     }
     if let Some(v) = parts.default_value {
@@ -435,9 +435,9 @@ pub(in crate::hooks::lua_api::parse) fn parse_field_access(
     access_tbl: &Table,
 ) -> Result<FieldAccess> {
     Ok(FieldAccess {
-        read: get_optional_string_ref(access_tbl, "read", "field access")?,
-        create: get_optional_string_ref(access_tbl, "create", "field access")?,
-        update: get_optional_string_ref(access_tbl, "update", "field access")?,
+        read: get_optional_hook_ref(access_tbl, "read", "field access")?,
+        create: get_optional_hook_ref(access_tbl, "create", "field access")?,
+        update: get_optional_hook_ref(access_tbl, "update", "field access")?,
     })
 }
 
@@ -454,16 +454,17 @@ fn parse_field_hooks(hooks_tbl: &Table) -> Result<FieldHooks> {
     )?;
 
     Ok(FieldHooks {
-        before_validate: parse_string_list(hooks_tbl, "before_validate")?,
-        before_change: parse_string_list(hooks_tbl, "before_change")?,
-        after_change: parse_string_list(hooks_tbl, "after_change")?,
-        after_read: parse_string_list(hooks_tbl, "after_read")?,
+        before_validate: parse_hook_ref_list(hooks_tbl, "before_validate")?,
+        before_change: parse_hook_ref_list(hooks_tbl, "before_change")?,
+        after_change: parse_hook_ref_list(hooks_tbl, "after_change")?,
+        after_read: parse_hook_ref_list(hooks_tbl, "after_read")?,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::HookRef;
     use mlua::Lua;
     use serde_json::Value as JsonValue;
 
@@ -474,8 +475,14 @@ mod tests {
         tbl.set("read", "hooks.access.check_role").unwrap();
         tbl.set("create", "hooks.access.admin_only").unwrap();
         let access = parse_field_access(&tbl).unwrap();
-        assert_eq!(access.read.as_deref(), Some("hooks.access.check_role"));
-        assert_eq!(access.create.as_deref(), Some("hooks.access.admin_only"));
+        assert_eq!(
+            access.read.as_ref().map(HookRef::reference),
+            Some("hooks.access.check_role")
+        );
+        assert_eq!(
+            access.create.as_ref().map(HookRef::reference),
+            Some("hooks.access.admin_only")
+        );
         assert!(access.update.is_none());
     }
 
@@ -1015,10 +1022,19 @@ mod tests {
         fields_tbl.set(1, field).unwrap();
         let fields = parse_fields(&lua, &fields_tbl).unwrap();
         let hooks = &fields[0].hooks;
-        assert_eq!(hooks.before_validate, vec!["hooks.validate_title"]);
-        assert_eq!(hooks.before_change, vec!["hooks.transform_title"]);
-        assert_eq!(hooks.after_change, vec!["hooks.after_title_change"]);
-        assert_eq!(hooks.after_read, vec!["hooks.format_title"]);
+        assert_eq!(
+            hooks.before_validate,
+            vec![HookRef::new("hooks.validate_title")]
+        );
+        assert_eq!(
+            hooks.before_change,
+            vec![HookRef::new("hooks.transform_title")]
+        );
+        assert_eq!(
+            hooks.after_change,
+            vec![HookRef::new("hooks.after_title_change")]
+        );
+        assert_eq!(hooks.after_read, vec![HookRef::new("hooks.format_title")]);
     }
 
     #[test]

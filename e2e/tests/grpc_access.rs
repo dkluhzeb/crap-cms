@@ -26,6 +26,7 @@
     clippy::unreadable_literal
 )]
 
+use crap_cms::core::HookRef;
 use std::collections::BTreeMap;
 
 use prost_types::{Struct, Value, value::Kind};
@@ -108,10 +109,10 @@ fn make_restricted_posts_def() -> CollectionDefinition {
             .build(),
     ];
     def.access = Access {
-        read: Some("access.authenticated".to_string()),
-        create: Some("access.admin_only".to_string()),
-        update: Some("access.admin_only".to_string()),
-        delete: Some("access.admin_only".to_string()),
+        read: Some(HookRef::new("access.authenticated")),
+        create: Some(HookRef::new("access.admin_only")),
+        update: Some(HookRef::new("access.admin_only")),
+        delete: Some(HookRef::new("access.admin_only")),
         ..Default::default()
     };
     def
@@ -131,7 +132,7 @@ fn make_owned_posts_def() -> CollectionDefinition {
         FieldDefinition::builder("author_id", FieldType::Text).build(),
     ];
     def.access = Access {
-        read: Some("access.own_rows".to_string()),
+        read: Some(HookRef::new("access.own_rows")),
         ..Default::default()
     };
     def
@@ -373,7 +374,7 @@ async fn update_and_delete_access_deny_non_admin() {
 #[tokio::test(flavor = "multi_thread")]
 async fn never_access_blocks_all_reads() {
     let mut posts_def = make_restricted_posts_def();
-    posts_def.access.read = Some("access.never".to_string());
+    posts_def.access.read = Some(HookRef::new("access.never"));
 
     let ctx = spawn_grpc_server_with_lua(
         vec![make_users_def(), posts_def],

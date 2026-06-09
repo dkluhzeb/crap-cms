@@ -3,12 +3,14 @@
 use mlua::{Lua, Result as LuaResult, Table};
 
 use crate::core::{
-    CollectionDefinition, FieldDefinition,
-    collection::{Access, Hooks, Labels, LiveSetting, McpConfig},
+    CollectionDefinition, FieldDefinition, HookRef,
+    collection::{Access, Hooks, Labels, LiveMode, LiveSetting, McpConfig},
 };
 
 use super::{
-    auth::collection_auth_to_lua, fields::field_config_to_lua, helpers::localized_string_to_lua,
+    auth::collection_auth_to_lua,
+    fields::field_config_to_lua,
+    helpers::{hook_ref_list_to_lua, hook_ref_to_lua, localized_string_to_lua},
     upload::collection_upload_to_lua,
 };
 
@@ -32,35 +34,67 @@ pub(super) fn access_to_lua(lua: &Lua, tbl: &Table, access: &Access) -> LuaResul
     let access_tbl = lua.create_table()?;
 
     if let Some(ref s) = access.read {
-        access_tbl.set("read", s.as_str())?;
+        access_tbl.set("read", hook_ref_to_lua(lua, s)?)?;
     }
 
     if let Some(ref s) = access.create {
-        access_tbl.set("create", s.as_str())?;
+        access_tbl.set("create", hook_ref_to_lua(lua, s)?)?;
     }
 
     if let Some(ref s) = access.update {
-        access_tbl.set("update", s.as_str())?;
+        access_tbl.set("update", hook_ref_to_lua(lua, s)?)?;
     }
 
     if let Some(ref s) = access.delete {
-        access_tbl.set("delete", s.as_str())?;
+        access_tbl.set("delete", hook_ref_to_lua(lua, s)?)?;
     }
 
     if let Some(ref s) = access.trash {
-        access_tbl.set("trash", s.as_str())?;
+        access_tbl.set("trash", hook_ref_to_lua(lua, s)?)?;
     }
 
     tbl.set("access", access_tbl)
 }
 
-/// Serialize live setting to a Lua table.
-pub(super) fn live_to_lua(tbl: &Table, live: Option<&LiveSetting>) -> LuaResult<()> {
-    match live {
-        None => tbl.set("live", true),
-        Some(LiveSetting::Disabled) => tbl.set("live", false),
-        Some(LiveSetting::Function(s)) => tbl.set("live", s.as_str()),
+/// Serialize the live setting + mode back to a Lua value, round-tripping with
+/// [`parse_live_setting`]. Emits the terse shorthand (`live = true` / `false` /
+/// `"ref"`) only when `mode` is the default (`Metadata`) and the filter has no
+/// options; otherwise the `live = { mode?, filter? }` table form — so neither
+/// `mode` nor filter `options` is lost.
+pub(super) fn live_to_lua(
+    lua: &Lua,
+    tbl: &Table,
+    live: Option<&LiveSetting>,
+    mode: LiveMode,
+) -> LuaResult<()> {
+    // Disabled is terminal — `mode` is irrelevant when nothing is broadcast.
+    if matches!(live, Some(LiveSetting::Disabled)) {
+        return tbl.set("live", false);
     }
+
+    // `None` setting = enabled; `Function` = filtered.
+    let filter = match live {
+        Some(LiveSetting::Function(hook)) => Some(hook),
+        _ => None,
+    };
+
+    let needs_table = mode != LiveMode::Metadata || filter.is_some_and(|h| h.options().is_some());
+
+    if !needs_table {
+        return match filter {
+            Some(hook) => tbl.set("live", hook.reference()),
+            None => tbl.set("live", true),
+        };
+    }
+
+    let live_tbl = lua.create_table()?;
+    if mode == LiveMode::Full {
+        live_tbl.set("mode", "full")?;
+    }
+    if let Some(hook) = filter {
+        live_tbl.set("filter", hook_ref_to_lua(lua, hook)?)?;
+    }
+    tbl.set("live", live_tbl)
 }
 
 /// Serialize MCP config to a Lua table.
@@ -152,7 +186,7 @@ pub(crate) fn collection_config_to_lua(lua: &Lua, def: &CollectionDefinition) ->
     mcp_to_lua(lua, &tbl, &def.mcp)?;
     collection_auth_to_lua(lua, &tbl, def)?;
     collection_upload_to_lua(lua, &tbl, def)?;
-    live_to_lua(&tbl, def.live.as_ref())?;
+    live_to_lua(lua, &tbl, def.live.as_ref(), def.live_mode)?;
 
     // soft_delete
     if def.soft_delete {
@@ -186,7 +220,7 @@ pub(crate) fn collection_config_to_lua(lua: &Lua, def: &CollectionDefinition) ->
 /// Convert collection-level hooks to a Lua table.
 pub(super) fn collection_hooks_to_lua(lua: &Lua, hooks: &Hooks) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
-    let pairs: &[(&str, &[String])] = &[
+    let pairs: &[(&str, &[HookRef])] = &[
         ("before_validate", &hooks.before_validate),
         ("before_change", &hooks.before_change),
         ("after_change", &hooks.after_change),
@@ -199,11 +233,7 @@ pub(super) fn collection_hooks_to_lua(lua: &Lua, hooks: &Hooks) -> LuaResult<Tab
 
     for (key, list) in pairs {
         if !list.is_empty() {
-            let arr = lua.create_table()?;
-            for (i, s) in list.iter().enumerate() {
-                arr.set(i + 1, s.as_str())?;
-            }
-            tbl.set(*key, arr)?;
+            tbl.set(*key, hook_ref_list_to_lua(lua, list)?)?;
         }
     }
 
@@ -213,9 +243,12 @@ pub(super) fn collection_hooks_to_lua(lua: &Lua, hooks: &Hooks) -> LuaResult<Tab
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::HookRef;
     use crate::core::{
         CollectionDefinition, FieldDefinition, FieldType, LocalizedString,
-        collection::{Access, AdminConfig, Hooks, Labels, LiveSetting, McpConfig, VersionsConfig},
+        collection::{
+            Access, AdminConfig, Hooks, Labels, LiveMode, LiveSetting, McpConfig, VersionsConfig,
+        },
     };
     use mlua::{self, Lua, Value};
 
@@ -262,9 +295,53 @@ mod tests {
 
         // live = Function -> string
         let mut def_func = CollectionDefinition::new("t");
-        def_func.live = Some(LiveSetting::Function("hooks.live.filter".to_string()));
+        def_func.live = Some(LiveSetting::Function(HookRef::new("hooks.live.filter")));
         let tbl = collection_config_to_lua(&lua, &def_func).unwrap();
         assert_eq!(tbl.get::<String>("live").unwrap(), "hooks.live.filter");
+    }
+
+    /// Regression: `live_to_lua` must preserve BOTH `mode` and filter `options`
+    /// (a bare-ref + default-mode collection uses the terse string shorthand; any
+    /// non-default mode or options forces the `{ mode?, filter }` table form).
+    #[test]
+    fn test_collection_config_to_lua_live_mode_and_options() {
+        let lua = Lua::new();
+
+        // Full mode + bare filter -> live = { mode = "full", filter = "ref" }
+        let mut def = CollectionDefinition::new("t");
+        def.live = Some(LiveSetting::Function(HookRef::new("hooks.live.f")));
+        def.live_mode = LiveMode::Full;
+        let live: mlua::Table = collection_config_to_lua(&lua, &def)
+            .unwrap()
+            .get("live")
+            .unwrap();
+        assert_eq!(live.get::<String>("mode").unwrap(), "full");
+        assert_eq!(live.get::<String>("filter").unwrap(), "hooks.live.f");
+
+        // Metadata mode + filter with options -> live = { filter = { ref, options } }
+        let mut def2 = CollectionDefinition::new("t");
+        def2.live = Some(LiveSetting::Function(HookRef::with_options(
+            "hooks.live.g",
+            serde_json::json!({ "allow": "published" }),
+        )));
+        let live2: mlua::Table = collection_config_to_lua(&lua, &def2)
+            .unwrap()
+            .get("live")
+            .unwrap();
+        let filter: mlua::Table = live2.get("filter").unwrap();
+        assert_eq!(filter.get::<String>("ref").unwrap(), "hooks.live.g");
+        let opts: mlua::Table = filter.get("options").unwrap();
+        assert_eq!(opts.get::<String>("allow").unwrap(), "published");
+
+        // Full mode, no filter (just enabled, full data) -> live = { mode = "full" }
+        let mut def3 = CollectionDefinition::new("t");
+        def3.live_mode = LiveMode::Full;
+        let live3: mlua::Table = collection_config_to_lua(&lua, &def3)
+            .unwrap()
+            .get("live")
+            .unwrap();
+        assert_eq!(live3.get::<String>("mode").unwrap(), "full");
+        assert!(live3.get::<Value>("filter").unwrap().is_nil());
     }
 
     #[test]
@@ -290,14 +367,14 @@ mod tests {
     fn test_collection_hooks_to_lua() {
         let lua = Lua::new();
         let hooks = Hooks {
-            before_validate: vec!["hooks.v".to_string()],
-            before_change: vec!["hooks.c1".to_string(), "hooks.c2".to_string()],
+            before_validate: vec![HookRef::new("hooks.v")],
+            before_change: vec![HookRef::new("hooks.c1"), HookRef::new("hooks.c2")],
             after_change: Vec::new(),
             before_read: Vec::new(),
             after_read: Vec::new(),
             before_delete: Vec::new(),
             after_delete: Vec::new(),
-            before_broadcast: vec!["hooks.b".to_string()],
+            before_broadcast: vec![HookRef::new("hooks.b")],
         };
         let tbl = collection_hooks_to_lua(&lua, &hooks).unwrap();
         let bv: mlua::Table = tbl.get("before_validate").unwrap();
@@ -391,8 +468,8 @@ mod tests {
         let lua = Lua::new();
         let mut def = CollectionDefinition::new("posts");
         def.access = Access {
-            delete: Some("access.admin_only".to_string()),
-            trash: Some("access.editor".to_string()),
+            delete: Some(HookRef::new("access.admin_only")),
+            trash: Some(HookRef::new("access.editor")),
             ..Default::default()
         };
         let tbl = collection_config_to_lua(&lua, &def).unwrap();

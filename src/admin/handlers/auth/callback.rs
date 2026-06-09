@@ -27,7 +27,7 @@ use crate::{
             shared::paths,
         },
     },
-    core::Document,
+    core::{Document, HookRef},
     db::DbPool,
     hooks::{HookRunner, lifecycle::AuthStrategyInput},
     service::{self, ServiceContext},
@@ -50,8 +50,11 @@ fn run_auth_strategy_blocking(
         password: None,
         remote_addr: None,
     };
+    // OAuth-callback hook refs are synthesized (`auth_callback.<name>`), not
+    // config-declared, so they carry no per-config options.
+    let strategy = HookRef::new(hook_ref);
     hook_runner
-        .run_auth_strategy(hook_ref, &input, &conn)
+        .run_auth_strategy(&strategy, &input, &conn)
         .map_err(|e| anyhow!("Auth callback hook error: {e:#}"))
 }
 

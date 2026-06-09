@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::typegen::lua::LuaAnnotation;
 
@@ -33,6 +34,11 @@ pub struct AuthStrategyContext<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[lua(optional)]
     pub remote_addr: Option<&'a str>,
+    /// Per-config options from the strategy's `authenticate` `{ ref, options }`
+    /// table; `nil` when configured as a bare ref string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(ty = "table", optional)]
+    pub options: Option<&'a Value>,
 }
 
 /// Rust-side request bundle for `HookRunner::run_auth_strategy`. Each login

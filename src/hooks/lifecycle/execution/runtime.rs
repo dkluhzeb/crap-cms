@@ -9,7 +9,7 @@ use mlua::{Function as LuaFunction, Lua, Table, Value};
 use tracing::{debug, warn};
 
 use crate::{
-    core::{DocumentFields, collection::Hooks},
+    core::{DocumentFields, HookRef, collection::Hooks},
     hooks::{
         lifecycle::{HookEvent, context::HookContext},
         lua_api,
@@ -50,7 +50,7 @@ pub(crate) fn run_hooks_inner(
 }
 
 /// Get the list of hook references for a given event.
-pub(crate) fn get_hook_refs(hooks: &Hooks, event: HookEvent) -> &[String] {
+pub(crate) fn get_hook_refs(hooks: &Hooks, event: HookEvent) -> &[HookRef] {
     match event {
         HookEvent::BeforeValidate => &hooks.before_validate,
         HookEvent::BeforeChange => &hooks.before_change,
@@ -204,13 +204,19 @@ pub(crate) fn resolve_hook_function(lua: &Lua, hook_ref: &str) -> Result<LuaFunc
 /// and call it with the context.
 pub(crate) fn call_hook_ref(
     lua: &Lua,
-    hook_ref: &str,
+    hook: &HookRef,
     context: HookContext,
 ) -> Result<HookContext> {
+    let hook_ref = hook.reference();
     let func = resolve_hook_function(lua, hook_ref)?;
 
-    // Convert context to Lua table
+    // Convert context to Lua table, injecting this ref's per-config `options`
+    // (nil for a bare-string ref).
     let ctx_table = context.to_lua_table(lua)?;
+
+    if let Some(options) = hook.options() {
+        ctx_table.set("options", lua_api::json_to_lua(lua, options)?)?;
+    }
 
     // Call the hook with optional timing (zero-cost when debug is disabled)
     let timing = tracing::enabled!(tracing::Level::DEBUG);
@@ -254,7 +260,37 @@ pub(crate) fn call_hook_ref(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
+
+    /// A `{ ref, options }` hook config surfaces its `options` to the hook as
+    /// `ctx.options`. Regression for the config-customizable-hooks feature: a
+    /// bare-string ref leaves `ctx.options` nil, the table form injects it.
+    #[test]
+    fn call_hook_ref_injects_options() {
+        let lua = mlua::Lua::new();
+        lua.load(
+            r#"package.loaded["h"] = function(ctx)
+                ctx.data.echoed = ctx.options and ctx.options.tag or "none"
+                return ctx
+            end"#,
+        )
+        .exec()
+        .unwrap();
+
+        // Bare ref → no options → hook sees nil.
+        let bare = HookRef::new("h");
+        let ctx = HookContext::builder("posts", "create").build();
+        let out = call_hook_ref(&lua, &bare, ctx).unwrap();
+        assert_eq!(out.data.get("echoed"), Some(&json!("none")));
+
+        // `{ ref, options }` → hook sees ctx.options.tag.
+        let parameterized = HookRef::with_options("h", json!({ "tag": "hello" }));
+        let ctx = HookContext::builder("posts", "create").build();
+        let out = call_hook_ref(&lua, &parameterized, ctx).unwrap();
+        assert_eq!(out.data.get("echoed"), Some(&json!("hello")));
+    }
 
     #[test]
     fn has_registered_hooks_empty() {
@@ -287,35 +323,38 @@ mod tests {
     #[test]
     fn get_hook_refs_maps_events() {
         let hooks = Hooks {
-            before_validate: vec!["hooks.validate".to_string()],
-            before_change: vec!["hooks.change".to_string()],
-            after_change: vec!["hooks.after".to_string()],
+            before_validate: vec![HookRef::new("hooks.validate")],
+            before_change: vec![HookRef::new("hooks.change")],
+            after_change: vec![HookRef::new("hooks.after")],
             before_read: vec![],
-            after_read: vec!["hooks.read".to_string()],
+            after_read: vec![HookRef::new("hooks.read")],
             before_delete: vec![],
             after_delete: vec![],
-            before_broadcast: vec!["hooks.broadcast".to_string()],
+            before_broadcast: vec![HookRef::new("hooks.broadcast")],
         };
 
         assert_eq!(
             get_hook_refs(&hooks, HookEvent::BeforeValidate),
-            &["hooks.validate"]
+            &[HookRef::new("hooks.validate")]
         );
         assert_eq!(
             get_hook_refs(&hooks, HookEvent::BeforeChange),
-            &["hooks.change"]
+            &[HookRef::new("hooks.change")]
         );
         assert_eq!(
             get_hook_refs(&hooks, HookEvent::AfterChange),
-            &["hooks.after"]
+            &[HookRef::new("hooks.after")]
         );
         assert!(get_hook_refs(&hooks, HookEvent::BeforeRead).is_empty());
-        assert_eq!(get_hook_refs(&hooks, HookEvent::AfterRead), &["hooks.read"]);
+        assert_eq!(
+            get_hook_refs(&hooks, HookEvent::AfterRead),
+            &[HookRef::new("hooks.read")]
+        );
         assert!(get_hook_refs(&hooks, HookEvent::BeforeDelete).is_empty());
         assert!(get_hook_refs(&hooks, HookEvent::AfterDelete).is_empty());
         assert_eq!(
             get_hook_refs(&hooks, HookEvent::BeforeBroadcast),
-            &["hooks.broadcast"]
+            &[HookRef::new("hooks.broadcast")]
         );
         assert!(get_hook_refs(&hooks, HookEvent::BeforeRender).is_empty());
     }

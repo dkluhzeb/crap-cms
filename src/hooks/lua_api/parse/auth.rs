@@ -23,7 +23,7 @@ use mlua::{Table, Value};
 
 use crate::core::collection::{Activation, Auth, AuthMethod, MfaMode, Surface, SurfaceSet};
 
-use super::helpers::{deny_unknown_keys, get_table};
+use super::helpers::{deny_unknown_keys, get_optional_hook_ref, get_table};
 
 /// Keys accepted on the top-level `auth = { ... }` table.
 const AUTH_KEYS: &[&str] = &["enabled", "token_expiry", "methods"];
@@ -141,10 +141,10 @@ fn parse_method(tbl: &Table) -> Option<AuthMethod> {
         }),
         "strategy" => {
             let name = tbl.get::<String>("name").unwrap_or_default();
-            let authenticate = tbl.get::<String>("authenticate").unwrap_or_default();
-            if authenticate.is_empty() {
-                return None;
-            }
+            let authenticate = match get_optional_hook_ref(tbl, "authenticate", "auth strategy") {
+                Ok(Some(h)) if !h.reference().is_empty() => h,
+                _ => return None,
+            };
             let activates_on = parse_activation(tbl).unwrap_or(Activation::always());
             Some(AuthMethod::Strategy {
                 name,
@@ -263,11 +263,45 @@ mod tests {
                 surfaces,
             } => {
                 assert_eq!(name, "api-key");
-                assert_eq!(authenticate, "hooks.auth.api_key");
+                assert_eq!(authenticate.reference(), "hooks.auth.api_key");
                 assert!(
                     matches!(activates_on, Activation::Header { header } if header == "x-api-key")
                 );
                 assert_eq!(surfaces, &SurfaceSet::grpc_only());
+            }
+            other => panic!("expected Strategy, got {other:?}"),
+        }
+    }
+
+    /// A strategy `authenticate` declared as `{ ref, options }` parses to a
+    /// `HookRef` carrying the options (exposed to the strategy as `ctx.options`).
+    #[test]
+    fn parse_strategy_authenticate_with_options() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let auth_tbl = lua.create_table().unwrap();
+        let methods = lua.create_table().unwrap();
+        let m = lua.create_table().unwrap();
+        m.set("type", "strategy").unwrap();
+        m.set("name", "api-key").unwrap();
+        let auth_ref = lua.create_table().unwrap();
+        auth_ref.set("ref", "hooks.auth.api_key").unwrap();
+        let opts = lua.create_table().unwrap();
+        opts.set("header", "x-api-key").unwrap();
+        auth_ref.set("options", opts).unwrap();
+        m.set("authenticate", auth_ref).unwrap();
+        methods.set(1, m).unwrap();
+        auth_tbl.set("methods", methods).unwrap();
+        tbl.set("auth", auth_tbl).unwrap();
+
+        let auth = parse_collection_auth(&tbl).unwrap();
+        match &auth.methods[0] {
+            AuthMethod::Strategy { authenticate, .. } => {
+                assert_eq!(authenticate.reference(), "hooks.auth.api_key");
+                assert_eq!(
+                    authenticate.options().and_then(|o| o.get("header")),
+                    Some(&serde_json::json!("x-api-key"))
+                );
             }
             other => panic!("expected Strategy, got {other:?}"),
         }

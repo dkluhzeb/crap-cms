@@ -4,7 +4,7 @@
 use anyhow::Result;
 
 use crate::{
-    core::{Document, FieldDefinition, collection::Hooks},
+    core::{Document, FieldDefinition, HookRef, collection::Hooks},
     db::{AccessResult, DbConnection, query::JoinAccessCheck},
     hooks::{
         HookRunner,
@@ -207,12 +207,12 @@ impl<'a> ReadHooksJoinGuard<'a> {
 impl JoinAccessCheck for ReadHooksJoinGuard<'_> {
     fn check(
         &self,
-        access_ref: Option<&str>,
+        access: Option<&HookRef>,
         user: Option<&Document>,
         collection: &str,
     ) -> anyhow::Result<AccessResult> {
         self.hooks.check_access(&AccessCheckInput {
-            access_ref,
+            access,
             user,
             id: None,
             data: None,

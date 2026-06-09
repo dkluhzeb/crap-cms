@@ -94,12 +94,12 @@ pub(crate) fn delete_document_in_conn(
     let access_ref = if def.soft_delete {
         def.access.resolve_trash()
     } else {
-        def.access.delete.as_deref()
+        def.access.delete.as_ref()
     };
 
     // Delete is locale-agnostic — the whole row is removed across all locales.
     let access = write_hooks.check_access(&AccessCheckInput {
-        access_ref,
+        access: access_ref,
         user: ctx.user,
         id: Some(id),
         data: None,

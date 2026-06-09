@@ -5,7 +5,7 @@ use std::{fs, path::Path};
 use crate::{
     cli::{self, Table},
     config::CrapConfig,
-    core::{LiveMode, LiveSetting, Registry},
+    core::{Access, HookRef, Hooks, LiveMode, LiveSetting, Registry},
     db::{DbConnection, DbPool, migrate, query},
 };
 
@@ -334,8 +334,8 @@ pub(super) fn print_access(cfg: &CrapConfig, reg: &Registry) {
     cli::dim(&format!("  Unset rules default to: {default}"));
 }
 
-fn access_row(target: &str, a: &crate::core::Access) -> Vec<String> {
-    let fmt = |opt: &Option<String>| opt.as_deref().unwrap_or("-").to_string();
+fn access_row(target: &str, a: &Access) -> Vec<String> {
+    let fmt = |opt: &Option<HookRef>| opt.as_ref().map_or("-", HookRef::reference).to_string();
 
     vec![
         target.to_string(),
@@ -396,7 +396,7 @@ pub(super) fn print_live(cfg: &CrapConfig, reg: &Registry) {
 fn live_status(live: Option<&LiveSetting>, mode: LiveMode) -> String {
     match live {
         Some(LiveSetting::Disabled) => "disabled".to_string(),
-        Some(LiveSetting::Function(f)) => format!("filter: {f}"),
+        Some(LiveSetting::Function(f)) => format!("filter: {}", f.reference()),
         None => match mode {
             LiveMode::Full => "full".to_string(),
             LiveMode::Metadata => "metadata".to_string(),
@@ -494,7 +494,12 @@ pub(super) fn print_hooks(reg: &Registry) {
     for (target, hooks) in &rows {
         for (i, (event, fns)) in hooks.iter().enumerate() {
             let target_col = if i == 0 { target.as_str() } else { "" };
-            table.row(vec![target_col, event, &fns.join(", ")]);
+            let joined = fns
+                .iter()
+                .map(HookRef::reference)
+                .collect::<Vec<_>>()
+                .join(", ");
+            table.row(vec![target_col, event, &joined]);
         }
     }
 
@@ -502,8 +507,8 @@ pub(super) fn print_hooks(reg: &Registry) {
 }
 
 /// Collect non-empty hook events with their function names.
-fn collect_hook_names(h: &crate::core::Hooks) -> Vec<(&'static str, &Vec<String>)> {
-    let events: &[(&str, &Vec<String>)] = &[
+fn collect_hook_names(h: &Hooks) -> Vec<(&'static str, &Vec<HookRef>)> {
+    let events: &[(&str, &Vec<HookRef>)] = &[
         ("before_validate", &h.before_validate),
         ("before_change", &h.before_change),
         ("after_change", &h.after_change),

@@ -22,6 +22,7 @@
     clippy::unreadable_literal
 )]
 
+use crap_cms::core::HookRef;
 use std::collections::BTreeMap;
 
 use prost_types::{Struct, Value, value::Kind};
@@ -162,7 +163,7 @@ async fn field_level_before_change_derives_slug_from_name() {
 
     let mut slug_f = FieldDefinition::builder("slug", FieldType::Text).build();
     slug_f.hooks = FieldHooks {
-        before_change: vec!["hooks.slug_gen.auto_slug".to_string()],
+        before_change: vec![HookRef::new("hooks.slug_gen.auto_slug")],
         ..Default::default()
     };
 
@@ -213,7 +214,7 @@ async fn field_level_before_change_derives_slug_from_name() {
 async fn collection_before_change_mutation_persists() {
     let def = posts_def_with(
         Hooks {
-            before_change: vec!["hooks.stamp.stamp_input".to_string()],
+            before_change: vec![HookRef::new("hooks.stamp.stamp_input")],
             ..Default::default()
         },
         vec![FieldDefinition::builder("stamp", FieldType::Text).build()],
@@ -267,7 +268,7 @@ async fn collection_before_change_mutation_persists() {
 async fn before_validate_error_maps_to_invalid_argument() {
     let def = posts_def_with(
         Hooks {
-            before_validate: vec!["hooks.moderator.reject_forbidden".to_string()],
+            before_validate: vec![HookRef::new("hooks.moderator.reject_forbidden")],
             ..Default::default()
         },
         vec![],
@@ -318,7 +319,7 @@ async fn after_read_adds_computed_field_visible_on_wire() {
     // hook's added value survives DocumentFields filtering.
     let def = posts_def_with(
         Hooks {
-            after_read: vec!["hooks.computed.add_computed".to_string()],
+            after_read: vec![HookRef::new("hooks.computed.add_computed")],
             ..Default::default()
         },
         vec![FieldDefinition::builder("computed", FieldType::Text).build()],
@@ -377,7 +378,7 @@ async fn after_read_adds_computed_field_visible_on_wire() {
 async fn before_read_hook_runs_without_breaking_find() {
     let def = posts_def_with(
         Hooks {
-            before_read: vec!["hooks.noop_read.touch".to_string()],
+            before_read: vec![HookRef::new("hooks.noop_read.touch")],
             ..Default::default()
         },
         vec![],

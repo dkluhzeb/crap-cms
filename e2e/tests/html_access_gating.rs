@@ -33,6 +33,7 @@ use crap_cms::{
     db::query,
 };
 
+use crap_cms::core::HookRef;
 use crap_cms_e2e::{helpers::*, html};
 
 // ── Lua access fns used in these tests ───────────────────────────────────
@@ -77,10 +78,10 @@ fn make_restricted_posts_def() -> CollectionDefinition {
             .build(),
     ];
     def.access = Access {
-        read: Some("access.authenticated".to_string()),
-        create: Some("access.editor_or_above".to_string()),
-        update: Some("access.editor_or_above".to_string()),
-        delete: Some("access.admin_only".to_string()),
+        read: Some(HookRef::new("access.authenticated")),
+        create: Some(HookRef::new("access.editor_or_above")),
+        update: Some(HookRef::new("access.editor_or_above")),
+        delete: Some(HookRef::new("access.admin_only")),
         ..Default::default()
     };
     def
@@ -96,8 +97,8 @@ fn make_restricted_settings_def() -> GlobalDefinition {
     };
     def.fields = vec![FieldDefinition::builder("site_name", FieldType::Text).build()];
     def.access = Access {
-        read: Some("access.authenticated".to_string()),
-        update: Some("access.admin_only".to_string()),
+        read: Some(HookRef::new("access.authenticated")),
+        update: Some(HookRef::new("access.admin_only")),
         ..Default::default()
     };
     def

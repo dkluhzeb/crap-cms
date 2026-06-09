@@ -18,6 +18,7 @@ use std::sync::Arc;
 use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::Document;
 use crap_cms::core::DocumentFields;
+use crap_cms::core::HookRef;
 use crap_cms::db::{DbConnection, FindQuery};
 use crap_cms::db::{DbValue, migrate, ops, pool, query};
 use crap_cms::hooks;
@@ -78,20 +79,23 @@ fn access_config_parsed_from_lua() {
         .expect("posts collection not found");
 
     assert_eq!(
-        posts.access.read.as_deref(),
+        posts.access.read.as_ref().map(HookRef::reference),
         Some("access.published_or_author")
     );
-    assert_eq!(posts.access.create.as_deref(), Some("access.authenticated"));
     assert_eq!(
-        posts.access.update.as_deref(),
+        posts.access.create.as_ref().map(HookRef::reference),
+        Some("access.authenticated")
+    );
+    assert_eq!(
+        posts.access.update.as_ref().map(HookRef::reference),
         Some("access.author_or_editor")
     );
     assert_eq!(
-        posts.access.trash.as_deref(),
+        posts.access.trash.as_ref().map(HookRef::reference),
         Some("access.editor_or_above")
     );
     assert_eq!(
-        posts.access.delete.as_deref(),
+        posts.access.delete.as_ref().map(HookRef::reference),
         Some("access.admin_or_director")
     );
 }
@@ -135,7 +139,7 @@ fn no_access_ref_allows() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: None,
+                access: None,
                 user: None,
                 id: None,
                 data: None,
@@ -158,7 +162,7 @@ fn anyone_allows_anonymous() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: Some("access.anyone"),
+                access: Some(&HookRef::new("access.anyone")),
                 user: None,
                 id: None,
                 data: None,
@@ -181,7 +185,7 @@ fn authenticated_denies_anonymous() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: Some("access.authenticated"),
+                access: Some(&HookRef::new("access.authenticated")),
                 user: None,
                 id: None,
                 data: None,
@@ -205,7 +209,7 @@ fn authenticated_allows_user() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: Some("access.authenticated"),
+                access: Some(&HookRef::new("access.authenticated")),
                 user: Some(&editor),
                 id: None,
                 data: None,
@@ -229,7 +233,7 @@ fn admin_only_denies_editor() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: Some("access.admin_only"),
+                access: Some(&HookRef::new("access.admin_only")),
                 user: Some(&editor),
                 id: None,
                 data: None,
@@ -253,7 +257,7 @@ fn admin_only_allows_admin() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: Some("access.admin_only"),
+                access: Some(&HookRef::new("access.admin_only")),
                 user: Some(&admin),
                 id: None,
                 data: None,
@@ -276,7 +280,7 @@ fn published_or_author_constrains_anonymous() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: Some("access.published_or_author"),
+                access: Some(&HookRef::new("access.published_or_author")),
                 user: None,
                 id: None,
                 data: None,
@@ -316,7 +320,7 @@ fn published_or_author_allows_admin() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: Some("access.published_or_author"),
+                access: Some(&HookRef::new("access.published_or_author")),
                 user: Some(&admin),
                 id: None,
                 data: None,
@@ -443,7 +447,7 @@ fn access_check_plus_db_query_end_to_end() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: posts.access.read.as_deref(),
+                access: posts.access.read.as_ref(),
                 user: None,
                 id: None,
                 data: None,
@@ -462,7 +466,7 @@ fn access_check_plus_db_query_end_to_end() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: posts.access.read.as_deref(),
+                access: posts.access.read.as_ref(),
                 user: Some(&admin),
                 id: None,
                 data: None,
@@ -484,7 +488,7 @@ fn access_check_plus_db_query_end_to_end() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: posts.access.delete.as_deref(),
+                access: posts.access.delete.as_ref(),
                 user: None,
                 id: None,
                 data: None,
@@ -519,7 +523,7 @@ fn field_read_access_strips_denied_fields() {
             name: "secret_notes".to_string(),
             field_type: crap_cms::core::field::FieldType::Textarea,
             access: crap_cms::core::field::FieldAccess {
-                read: Some("access.admin_only".to_string()),
+                read: Some(HookRef::new("access.admin_only")),
                 ..Default::default()
             },
             ..Default::default()
@@ -571,7 +575,7 @@ fn field_write_access_strips_denied_fields() {
             name: "auto_slug".to_string(),
             field_type: crap_cms::core::field::FieldType::Text,
             access: crap_cms::core::field::FieldAccess {
-                create: Some("access.admin_only".to_string()),
+                create: Some(HookRef::new("access.admin_only")),
                 update: None,
                 ..Default::default()
             },
@@ -583,7 +587,7 @@ fn field_write_access_strips_denied_fields() {
             field_type: crap_cms::core::field::FieldType::Text,
             access: crap_cms::core::field::FieldAccess {
                 create: None,
-                update: Some("access.admin_only".to_string()),
+                update: Some(HookRef::new("access.admin_only")),
                 ..Default::default()
             },
             ..Default::default()
@@ -625,7 +629,7 @@ fn no_access_config_means_allowed() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: None,
+                access: None,
                 user: None,
                 id: None,
                 data: None,
@@ -647,7 +651,7 @@ fn no_access_config_means_allowed() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: None,
+                access: None,
                 user: Some(&editor),
                 id: None,
                 data: None,
@@ -942,7 +946,7 @@ fn default_deny_true_no_access_ref_returns_denied() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: None,
+                access: None,
                 user: None,
                 id: None,
                 data: None,
@@ -964,7 +968,7 @@ fn default_deny_true_no_access_ref_returns_denied() {
     let result = runner
         .check_access(
             &AccessCheckInput {
-                access_ref: None,
+                access: None,
                 user: Some(&user),
                 id: None,
                 data: None,

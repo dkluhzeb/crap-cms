@@ -3,7 +3,7 @@
 use anyhow::Result;
 
 use crate::core::cache::CacheBackend;
-use crate::core::{CollectionDefinition, Document, Registry};
+use crate::core::{CollectionDefinition, Document, HookRef, Registry};
 use crate::db::query::AccessResult;
 use crate::db::query::populate::Singleflight;
 use crate::db::{DbConnection, LocaleContext, LocaleMode};
@@ -20,15 +20,16 @@ use crate::db::{DbConnection, LocaleContext, LocaleMode};
 pub trait JoinAccessCheck {
     /// Check read access for the target collection.
     ///
-    /// `access_ref` is the target collection's `access.read` string reference.
-    /// Implementations return `Allowed`, `Denied`, or `Constrained(filters)`.
+    /// `access` is the target collection's `access.read` hook ref (carrying any
+    /// per-config `options`). Implementations return `Allowed`, `Denied`, or
+    /// `Constrained(filters)`.
     ///
     /// # Errors
     ///
     /// Returns an error if the implementing access hook raises (e.g. a Lua runtime error).
     fn check(
         &self,
-        access_ref: Option<&str>,
+        access: Option<&HookRef>,
         user: Option<&Document>,
         collection: &str,
     ) -> Result<AccessResult>;

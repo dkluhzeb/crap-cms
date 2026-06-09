@@ -20,7 +20,7 @@ use mlua::Lua;
 use tracing::warn;
 
 use crate::core::{
-    Access, FieldDefinition, FieldType, Hooks, Registry, RequiredLocales, Slug,
+    Access, FieldDefinition, FieldType, HookRef, Hooks, Registry, RequiredLocales, Slug,
     collection::{Activation, AuthMethod, Surface},
 };
 use crate::db::query::helpers::{global_table, join_table, prefixed_name};
@@ -77,7 +77,7 @@ pub fn validate_hook_references(lua: &Lua, registry: &Registry) -> Result<()> {
 
 /// Collect any unresolved refs in a `Hooks` struct.
 fn check_hooks(lua: &Lua, hooks: &Hooks, source: &str, out: &mut Vec<String>) {
-    let pairs: [(&str, &[String]); 8] = [
+    let pairs: [(&str, &[HookRef]); 8] = [
         ("before_validate", &hooks.before_validate),
         ("before_change", &hooks.before_change),
         ("after_change", &hooks.after_change),
@@ -90,8 +90,8 @@ fn check_hooks(lua: &Lua, hooks: &Hooks, source: &str, out: &mut Vec<String>) {
 
     for (kind, refs) in pairs {
         for r in refs {
-            if resolve_hook_function(lua, r).is_err() {
-                out.push(format!("{source}: {kind}: '{r}'"));
+            if resolve_hook_function(lua, r.reference()).is_err() {
+                out.push(format!("{source}: {kind}: '{}'", r.reference()));
             }
         }
     }
@@ -176,7 +176,7 @@ fn check_one_collection_methods(
             } => check_strategy_shape(
                 slug,
                 name,
-                authenticate,
+                authenticate.reference(),
                 activates_on,
                 surfaces,
                 errors,
@@ -596,11 +596,23 @@ fn collect_field_tables(
 /// Collect any unresolved refs in an `Access` struct.
 fn check_access(lua: &Lua, access: &Access, source: &str, out: &mut Vec<String>) {
     let pairs: [(&str, Option<&str>); 5] = [
-        ("access.read", access.read.as_deref()),
-        ("access.create", access.create.as_deref()),
-        ("access.update", access.update.as_deref()),
-        ("access.delete", access.delete.as_deref()),
-        ("access.trash", access.trash.as_deref()),
+        ("access.read", access.read.as_ref().map(HookRef::reference)),
+        (
+            "access.create",
+            access.create.as_ref().map(HookRef::reference),
+        ),
+        (
+            "access.update",
+            access.update.as_ref().map(HookRef::reference),
+        ),
+        (
+            "access.delete",
+            access.delete.as_ref().map(HookRef::reference),
+        ),
+        (
+            "access.trash",
+            access.trash.as_ref().map(HookRef::reference),
+        ),
     ];
 
     for (kind, maybe_ref) in pairs {
@@ -618,7 +630,7 @@ fn check_field_list(lua: &Lua, fields: &[FieldDefinition], source: &str, out: &m
         let field_src = format!("{source} field '{}'", f.name);
 
         // field-level hooks
-        let hook_pairs: [(&str, &[String]); 4] = [
+        let hook_pairs: [(&str, &[HookRef]); 4] = [
             ("before_validate", &f.hooks.before_validate),
             ("before_change", &f.hooks.before_change),
             ("after_change", &f.hooks.after_change),
@@ -626,17 +638,26 @@ fn check_field_list(lua: &Lua, fields: &[FieldDefinition], source: &str, out: &m
         ];
         for (kind, refs) in hook_pairs {
             for r in refs {
-                if resolve_hook_function(lua, r).is_err() {
-                    out.push(format!("{field_src}: {kind}: '{r}'"));
+                if resolve_hook_function(lua, r.reference()).is_err() {
+                    out.push(format!("{field_src}: {kind}: '{}'", r.reference()));
                 }
             }
         }
 
         // field-level access
         let access_pairs: [(&str, Option<&str>); 3] = [
-            ("access.read", f.access.read.as_deref()),
-            ("access.create", f.access.create.as_deref()),
-            ("access.update", f.access.update.as_deref()),
+            (
+                "access.read",
+                f.access.read.as_ref().map(HookRef::reference),
+            ),
+            (
+                "access.create",
+                f.access.create.as_ref().map(HookRef::reference),
+            ),
+            (
+                "access.update",
+                f.access.update.as_ref().map(HookRef::reference),
+            ),
         ];
         for (kind, maybe_ref) in access_pairs {
             let Some(r) = maybe_ref else { continue };
@@ -680,7 +701,7 @@ mod tests {
         let lua = sandboxed_lua();
         let mut def = CollectionDefinition::new("posts");
         def.hooks = Hooks::builder()
-            .before_change(vec!["hooks.missing.module".to_string()])
+            .before_change(vec![HookRef::new("hooks.missing.module")])
             .build();
 
         let registry = Registry::shared();
@@ -702,7 +723,7 @@ mod tests {
         let lua = sandboxed_lua();
         let mut def = CollectionDefinition::new("posts");
         let mut field = FieldDefinition::builder("title", FieldType::Text).build();
-        field.access.read = Some("hooks.never.exists".to_string());
+        field.access.read = Some(HookRef::new("hooks.never.exists"));
         def.fields = vec![field];
 
         let registry = Registry::shared();
@@ -827,7 +848,7 @@ mod tests {
         let lua = sandboxed_lua();
         let mut def = CollectionDefinition::new("posts");
         def.access = Access::builder()
-            .read(Some("hooks.gone".to_string()))
+            .read(Some(HookRef::new("hooks.gone")))
             .build();
         let registry = Registry::shared();
         registry.write().unwrap().register_collection(def);
@@ -882,7 +903,7 @@ mod tests {
                 AuthMethod::bearer(),
                 AuthMethod::Strategy {
                     name: "bogus".to_string(),
-                    authenticate: "hooks.auth.bogus".to_string(),
+                    authenticate: HookRef::new("hooks.auth.bogus"),
                     activates_on: Activation::Header {
                         header: "  ".to_string(),
                     },
@@ -908,7 +929,7 @@ mod tests {
                 AuthMethod::bearer(),
                 AuthMethod::Strategy {
                     name: "incomplete".to_string(),
-                    authenticate: String::new(),
+                    authenticate: HookRef::new(""),
                     activates_on: Activation::always(),
                     surfaces: SurfaceSet::admin_only(),
                 },

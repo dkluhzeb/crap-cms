@@ -58,6 +58,7 @@ fn prepare_create_fields(
         user: get_user_doc(auth_user),
         ui_locale: auth_user.map(|Extension(au)| au.ui_locale.as_str()),
         locale: editor_locale,
+        options: None,
     };
 
     apply_display_conditions(
@@ -123,7 +124,7 @@ pub async fn create_form(
 
     match check_access_or_forbid(
         &state,
-        def.access.create.as_deref(),
+        def.access.create.as_ref(),
         auth_user.as_ref(),
         None,
         None,

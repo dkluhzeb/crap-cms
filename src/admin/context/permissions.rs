@@ -60,7 +60,7 @@ impl CollectionPermissions {
 
         let read = has_access_with_conn(
             state,
-            def.access.read.as_deref(),
+            def.access.read.as_ref(),
             user_doc,
             &tx,
             "read",
@@ -68,7 +68,7 @@ impl CollectionPermissions {
         );
         let create = has_access_with_conn(
             state,
-            def.access.create.as_deref(),
+            def.access.create.as_ref(),
             user_doc,
             &tx,
             "create",
@@ -76,7 +76,7 @@ impl CollectionPermissions {
         );
         let update = has_access_with_conn(
             state,
-            def.access.update.as_deref(),
+            def.access.update.as_ref(),
             user_doc,
             &tx,
             "update",
@@ -84,7 +84,7 @@ impl CollectionPermissions {
         );
         let delete = has_access_with_conn(
             state,
-            def.access.delete.as_deref(),
+            def.access.delete.as_ref(),
             user_doc,
             &tx,
             "delete",
@@ -146,7 +146,7 @@ impl GlobalPermissions {
 
         let read = has_access_with_conn(
             state,
-            def.access.read.as_deref(),
+            def.access.read.as_ref(),
             user_doc,
             &tx,
             "read",
@@ -154,7 +154,7 @@ impl GlobalPermissions {
         );
         let update = has_access_with_conn(
             state,
-            def.access.update.as_deref(),
+            def.access.update.as_ref(),
             user_doc,
             &tx,
             "update",

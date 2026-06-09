@@ -231,9 +231,11 @@ fn required_when_truthy(
     data_key: &str,
     errors: &mut Vec<FieldError>,
 ) -> bool {
-    let Some(func_ref) = field.required_when.as_deref() else {
+    let Some(required_when) = field.required_when.as_ref() else {
         return false;
     };
+
+    let func_ref = required_when.reference();
 
     let operation = if cctx.ctx.exclude_id.is_some() {
         "update"
@@ -252,6 +254,7 @@ fn required_when_truthy(
             locale: Some(cctx.lctx.access_locale()),
             operation,
             id: cctx.ctx.exclude_id,
+            options: required_when.options(),
         },
     ) {
         Ok(req) => req,

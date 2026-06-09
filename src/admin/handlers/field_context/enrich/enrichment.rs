@@ -214,6 +214,14 @@ pub fn enrich_field_contexts(
         rel_locale_ctx: rel_locale_ctx.as_ref(),
     };
 
+    // NOTE: this filters only `admin.hidden` (when `filter_hidden`), NOT the
+    // top-level `field.hidden` — so it does NOT use `visible_field_defs`. That
+    // is deliberate: `enrich_field_contexts` recurses into Row/Collapsible/Tabs
+    // sub-fields, and nested sub-field *contexts* are built UNFILTERED by
+    // `build_layout_sub_fields`; filtering the recursive defs here would desync
+    // that nested zip. The top-level `field.hidden` desync (vs `build_field_contexts`)
+    // is a known pre-existing inconsistency rooted in nested context-building not
+    // filtering — a separate fix from this hooks work. See `visible_field_defs`.
     let defs_iter: Box<dyn Iterator<Item = &FieldDefinition>> = if opts.filter_hidden {
         Box::new(field_defs.iter().filter(|f| !f.admin.hidden))
     } else {

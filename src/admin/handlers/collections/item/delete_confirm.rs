@@ -76,7 +76,7 @@ pub async fn delete_confirm(
     let access_fn = if def.soft_delete {
         def.access.resolve_trash()
     } else {
-        def.access.delete.as_deref()
+        def.access.delete.as_ref()
     };
 
     // A soft delete is a "trash" operation (gated by the trash access fn);

@@ -29,7 +29,8 @@ use super::HookContextBuilder;
 #[derive(Debug, Clone, LuaAnnotation)]
 #[lua(
     class = "crap.HookContext",
-    extra_field = "hook_depth integer  Current recursion depth. `0` = top-level API/admin call, `1+` = from Lua CRUD inside hooks. Hooks are skipped when this reaches `hooks.max_depth` (default: `3`)."
+    extra_field = "hook_depth integer  Current recursion depth. `0` = top-level API/admin call, `1+` = from Lua CRUD inside hooks. Hooks are skipped when this reaches `hooks.max_depth` (default: `3`).",
+    extra_field = "options? table  Per-config options from this hook ref's `{ ref, options }` table; `nil` when the hook was configured as a bare ref string."
 )]
 pub struct HookContext {
     /// Collection slug.

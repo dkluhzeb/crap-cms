@@ -356,7 +356,7 @@ crap.collections.define("users", {
     assert_eq!(auth.strategies().count(), 2);
     assert_eq!(auth.strategies().next().unwrap().name, "api_key");
     assert_eq!(
-        auth.strategies().next().unwrap().authenticate,
+        auth.strategies().next().unwrap().authenticate.reference(),
         "hooks.auth.api_key"
     );
     assert_eq!(auth.strategies().nth(1).unwrap().name, "oauth");
@@ -389,7 +389,7 @@ crap.collections.define("events", {
         .expect("events should be registered");
     match &def.live {
         Some(crap_cms::core::collection::LiveSetting::Function(f)) => {
-            assert_eq!(f, "hooks.live.filter");
+            assert_eq!(f.reference(), "hooks.live.filter");
         }
         other => panic!("Expected LiveSetting::Function, got {other:?}"),
     }

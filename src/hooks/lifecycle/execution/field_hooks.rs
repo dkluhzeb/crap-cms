@@ -13,7 +13,7 @@ use serde_json::Value as JsonValue;
 use tracing::debug;
 
 use crate::{
-    core::{DocumentFields, FieldDefinition, FieldType, field::FieldHooks},
+    core::{DocumentFields, FieldDefinition, FieldType, HookRef, field::FieldHooks},
     db::query::helpers::prefixed_name,
     hooks::{
         lifecycle::{
@@ -357,7 +357,7 @@ pub(super) fn has_any_field_hook(fields: &[FieldDefinition], event: &FieldHookEv
 pub(crate) fn get_field_hook_refs<'a>(
     hooks: &'a FieldHooks,
     event: &FieldHookEvent,
-) -> &'a [String] {
+) -> &'a [HookRef] {
     match event {
         FieldHookEvent::BeforeValidate => &hooks.before_validate,
         FieldHookEvent::BeforeChange => &hooks.before_change,
@@ -379,13 +379,14 @@ pub(crate) struct FieldHookMeta<'a> {
 /// Field hooks receive `(value, context)` and return the new value.
 pub(crate) fn call_field_hook_ref(
     lua: &Lua,
-    hook_ref: &str,
+    hook: &HookRef,
     value: &JsonValue,
     field_name: &str,
     meta: &FieldHookMeta<'_>,
     data: &DocumentFields,
     document: &DocumentFields,
 ) -> Result<JsonValue> {
+    let hook_ref = hook.reference();
     let func = resolve_hook_function(lua, hook_ref)?;
 
     // Convert the field value to Lua
@@ -406,6 +407,7 @@ pub(crate) fn call_field_hook_ref(
         document,
         user: user_ctx_ref.as_ref().and_then(|c| c.0.as_ref()),
         ui_locale: locale_ctx_ref.as_ref().and_then(|c| c.0.as_deref()),
+        options: hook.options(),
     };
     let ctx_table = lua.to_value(&ctx)?;
 
@@ -449,7 +451,7 @@ mod tests {
 
         let result = call_field_hook_ref(
             &lua,
-            "hooks.upper",
+            &HookRef::new("hooks.upper"),
             &json!("hello"),
             "title",
             &FieldHookMeta {
@@ -489,7 +491,7 @@ mod tests {
 
         let result = call_field_hook_ref(
             &lua,
-            "hooks.trim",
+            &HookRef::new("hooks.trim"),
             &JsonValue::Null,
             "title",
             &FieldHookMeta {
@@ -523,7 +525,7 @@ mod tests {
         let fields = vec![
             FieldDefinition::builder("title", FieldType::Text)
                 .hooks(FieldHooks {
-                    before_validate: vec!["hooks.noop".to_string()],
+                    before_validate: vec![HookRef::new("hooks.noop")],
                     ..Default::default()
                 })
                 .build(),
@@ -575,7 +577,7 @@ mod tests {
         let fields = vec![
             FieldDefinition::builder("slug", FieldType::Text)
                 .hooks(FieldHooks {
-                    before_validate: vec!["hooks.default_val".to_string()],
+                    before_validate: vec![HookRef::new("hooks.default_val")],
                     ..Default::default()
                 })
                 .build(),
@@ -621,7 +623,7 @@ mod tests {
 
         let result = call_field_hook_ref(
             &lua,
-            "hooks.inspect_ctx",
+            &HookRef::new("hooks.inspect_ctx"),
             &json!("hello"),
             "title",
             &FieldHookMeta {
@@ -658,7 +660,7 @@ mod tests {
 
         let result = call_field_hook_ref(
             &lua,
-            "hooks.locale_probe",
+            &HookRef::new("hooks.locale_probe"),
             &json!("x"),
             "title",
             &FieldHookMeta {
@@ -699,7 +701,7 @@ mod tests {
 
         let result = call_field_hook_ref(
             &lua,
-            "hooks.id_probe",
+            &HookRef::new("hooks.id_probe"),
             &json!("x"),
             "title",
             &FieldHookMeta {
@@ -746,7 +748,7 @@ mod tests {
                     FieldDefinition::builder("label", FieldType::Text).build(),
                     FieldDefinition::builder("tagged", FieldType::Text)
                         .hooks(FieldHooks {
-                            before_change: vec!["hooks.tag".to_string()],
+                            before_change: vec![HookRef::new("hooks.tag")],
                             ..Default::default()
                         })
                         .build(),
@@ -787,7 +789,7 @@ mod tests {
     #[test]
     fn has_any_field_hook_finds_nested_hooks() {
         let mut inner = FieldDefinition::builder("inner", FieldType::Text).build();
-        inner.hooks.before_change = vec!["hooks.my_hook".to_string()];
+        inner.hooks.before_change = vec![HookRef::new("hooks.my_hook")];
 
         // Hook on a sub-field inside a Group
         let group = FieldDefinition::builder("group", FieldType::Group)

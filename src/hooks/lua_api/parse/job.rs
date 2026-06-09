@@ -8,7 +8,7 @@ use mlua::{FromLua, Lua, LuaSerdeExt, Result as LuaResult, Value};
 use serde::Deserialize;
 
 use crate::core::job::JobDefinitionBuilder;
-use crate::core::{JobDefinition, JobLabels};
+use crate::core::{HookRef, JobDefinition, JobLabels};
 use crate::typegen::lua::LuaAnnotation;
 
 /// Typed `config` table passed to `crap.jobs.define(slug, config)`.
@@ -17,8 +17,10 @@ use crate::typegen::lua::LuaAnnotation;
 #[lua(class = "crap.JobDefinitionConfig")]
 pub struct JobDefinitionConfig {
     /// Lua function ref for the job handler (required, e.g.,
-    /// `"jobs.cleanup.run"`).
-    pub handler: Option<String>,
+    /// `"jobs.cleanup.run"`). May carry per-definition options exposed to the
+    /// handler as `ctx.options`.
+    #[lua(ty = "string | crap.HookRef", optional)]
+    pub handler: Option<HookRef>,
     /// Cron expression (e.g., `"0 3 * * *"`). When set, the job runs on
     /// this schedule. Accepts both 5-field and 6/7-field forms.
     pub schedule: Option<String>,
@@ -42,7 +44,8 @@ pub struct JobDefinitionConfig {
     #[lua(ty = "crap.JobLabels", optional)]
     pub labels: Option<JobLabels>,
     /// Lua function ref for access control on gRPC/CLI trigger.
-    pub access: Option<String>,
+    #[lua(ty = "string | crap.HookRef", optional)]
+    pub access: Option<HookRef>,
 }
 
 impl FromLua for JobDefinitionConfig {
@@ -121,7 +124,7 @@ mod tests {
 
         let job = parse_job_definition("my-job", cfg).unwrap();
         assert_eq!(job.slug, "my-job");
-        assert_eq!(job.handler, "jobs.my_job.run");
+        assert_eq!(job.handler.reference(), "jobs.my_job.run");
         assert!(job.schedule.is_none());
         assert_eq!(job.queue, "default");
         assert_eq!(
@@ -154,14 +157,17 @@ mod tests {
 
         let job = parse_job_definition("sync", cfg).unwrap();
         assert_eq!(job.slug, "sync");
-        assert_eq!(job.handler, "jobs.sync.run");
+        assert_eq!(job.handler.reference(), "jobs.sync.run");
         assert_eq!(job.schedule.as_deref(), Some("*/5 * * * *"));
         assert_eq!(job.queue, "sync");
         assert_eq!(job.retries, Some(3));
         assert_eq!(job.timeout, 300);
         assert_eq!(job.concurrency, 2);
         assert!(!job.skip_if_running);
-        assert_eq!(job.access.as_deref(), Some("access.admin_only"));
+        assert_eq!(
+            job.access.as_ref().map(HookRef::reference),
+            Some("access.admin_only")
+        );
         assert_eq!(job.labels.singular.as_deref(), Some("Sync Job"));
     }
 

@@ -27,6 +27,7 @@ use serde_json::json;
 use tower::ServiceExt;
 
 use crap_cms::core::DocumentFields;
+use crap_cms::core::HookRef;
 use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
 use crap_cms::db::{DbConnection, DbValue, query};
@@ -82,10 +83,10 @@ fn make_restricted_posts_def() -> CollectionDefinition {
             .build(),
     ];
     def.access = Access {
-        read: Some("access.authenticated".to_string()),
-        create: Some("access.editor_or_above".to_string()),
-        update: Some("access.editor_or_above".to_string()),
-        delete: Some("access.admin_only".to_string()),
+        read: Some(HookRef::new("access.authenticated")),
+        create: Some(HookRef::new("access.editor_or_above")),
+        update: Some(HookRef::new("access.editor_or_above")),
+        delete: Some(HookRef::new("access.admin_only")),
         ..Default::default()
     };
     def
@@ -93,7 +94,7 @@ fn make_restricted_posts_def() -> CollectionDefinition {
 
 fn make_no_read_posts_def() -> CollectionDefinition {
     let mut def = make_restricted_posts_def();
-    def.access.read = Some("access.never".to_string());
+    def.access.read = Some(HookRef::new("access.never"));
     def
 }
 

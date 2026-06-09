@@ -28,6 +28,7 @@
     clippy::unreadable_literal
 )]
 
+use crap_cms::core::HookRef;
 use std::collections::BTreeMap;
 
 use prost_types::{Struct, Value, value::Kind};
@@ -111,7 +112,7 @@ fn posts_def_with_hooks(hooks: Hooks) -> CollectionDefinition {
 #[tokio::test(flavor = "multi_thread")]
 async fn lifecycle_hook_error_maps_to_invalid_argument() {
     let def = posts_def_with_hooks(Hooks {
-        before_change: vec!["hooks.boom.boom".to_string()],
+        before_change: vec![HookRef::new("hooks.boom.boom")],
         ..Default::default()
     });
 
@@ -153,7 +154,7 @@ async fn lifecycle_hook_error_maps_to_invalid_argument() {
 async fn access_fn_error_maps_to_permission_denied() {
     let mut def = posts_def_with_hooks(Hooks::default());
     def.access = Access {
-        read: Some("access.exploding".to_string()),
+        read: Some(HookRef::new("access.exploding")),
         ..Default::default()
     };
 
@@ -195,7 +196,7 @@ async fn access_fn_error_maps_to_permission_denied() {
 #[tokio::test(flavor = "multi_thread")]
 async fn structured_validation_error_includes_field_name() {
     let def = posts_def_with_hooks(Hooks {
-        before_validate: vec!["hooks.field_validator.required_title".to_string()],
+        before_validate: vec![HookRef::new("hooks.field_validator.required_title")],
         ..Default::default()
     });
 

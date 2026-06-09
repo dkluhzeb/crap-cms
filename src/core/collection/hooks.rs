@@ -2,44 +2,47 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::typegen::lua::LuaAnnotation;
+use crate::{core::HookRef, typegen::lua::LuaAnnotation};
 
 /// Lua function references for lifecycle hooks.
+///
+/// Each entry is a [`HookRef`]: a bare ref string or a `{ ref, options }` table
+/// carrying per-config options exposed to the hook as `ctx.options`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, LuaAnnotation)]
 #[lua(class = "crap.Hooks")]
 pub struct Hooks {
     /// Hook refs to run before field validation.
     #[serde(default)]
-    #[lua(optional)]
-    pub before_validate: Vec<String>,
+    #[lua(ty = "(string | crap.HookRef)[]", optional)]
+    pub before_validate: Vec<HookRef>,
     /// Hook refs to run before create/update write.
     #[serde(default)]
-    #[lua(optional)]
-    pub before_change: Vec<String>,
+    #[lua(ty = "(string | crap.HookRef)[]", optional)]
+    pub before_change: Vec<HookRef>,
     /// Hook refs to run after create/update write.
     #[serde(default)]
-    #[lua(optional)]
-    pub after_change: Vec<String>,
+    #[lua(ty = "(string | crap.HookRef)[]", optional)]
+    pub after_change: Vec<HookRef>,
     /// Hook refs to run before returning read results.
     #[serde(default)]
-    #[lua(optional)]
-    pub before_read: Vec<String>,
+    #[lua(ty = "(string | crap.HookRef)[]", optional)]
+    pub before_read: Vec<HookRef>,
     /// Hook refs to run after read, before response.
     #[serde(default)]
-    #[lua(optional)]
-    pub after_read: Vec<String>,
+    #[lua(ty = "(string | crap.HookRef)[]", optional)]
+    pub after_read: Vec<HookRef>,
     /// Hook refs to run before delete.
     #[serde(default)]
-    #[lua(optional)]
-    pub before_delete: Vec<String>,
+    #[lua(ty = "(string | crap.HookRef)[]", optional)]
+    pub before_delete: Vec<HookRef>,
     /// Hook refs to run after delete.
     #[serde(default)]
-    #[lua(optional)]
-    pub after_delete: Vec<String>,
+    #[lua(ty = "(string | crap.HookRef)[]", optional)]
+    pub after_delete: Vec<HookRef>,
     /// Hook refs to run before broadcasting live update events. Can suppress or transform event data. No CRUD access.
     #[serde(default)]
-    #[lua(optional)]
-    pub before_broadcast: Vec<String>,
+    #[lua(ty = "(string | crap.HookRef)[]", optional)]
+    pub before_broadcast: Vec<HookRef>,
 }
 
 impl Hooks {
@@ -59,14 +62,14 @@ impl Hooks {
 /// Builder for [`Hooks`]. Created via [`Hooks::builder`].
 #[derive(Default)]
 pub struct HooksBuilder {
-    before_validate: Vec<String>,
-    before_change: Vec<String>,
-    after_change: Vec<String>,
-    before_read: Vec<String>,
-    after_read: Vec<String>,
-    before_delete: Vec<String>,
-    after_delete: Vec<String>,
-    before_broadcast: Vec<String>,
+    before_validate: Vec<HookRef>,
+    before_change: Vec<HookRef>,
+    after_change: Vec<HookRef>,
+    before_read: Vec<HookRef>,
+    after_read: Vec<HookRef>,
+    before_delete: Vec<HookRef>,
+    after_delete: Vec<HookRef>,
+    before_broadcast: Vec<HookRef>,
 }
 
 impl HooksBuilder {
@@ -75,56 +78,56 @@ impl HooksBuilder {
     }
 
     #[must_use]
-    pub fn before_validate(mut self, v: Vec<String>) -> Self {
+    pub fn before_validate(mut self, v: Vec<HookRef>) -> Self {
         self.before_validate = v;
 
         self
     }
 
     #[must_use]
-    pub fn before_change(mut self, v: Vec<String>) -> Self {
+    pub fn before_change(mut self, v: Vec<HookRef>) -> Self {
         self.before_change = v;
 
         self
     }
 
     #[must_use]
-    pub fn after_change(mut self, v: Vec<String>) -> Self {
+    pub fn after_change(mut self, v: Vec<HookRef>) -> Self {
         self.after_change = v;
 
         self
     }
 
     #[must_use]
-    pub fn before_read(mut self, v: Vec<String>) -> Self {
+    pub fn before_read(mut self, v: Vec<HookRef>) -> Self {
         self.before_read = v;
 
         self
     }
 
     #[must_use]
-    pub fn after_read(mut self, v: Vec<String>) -> Self {
+    pub fn after_read(mut self, v: Vec<HookRef>) -> Self {
         self.after_read = v;
 
         self
     }
 
     #[must_use]
-    pub fn before_delete(mut self, v: Vec<String>) -> Self {
+    pub fn before_delete(mut self, v: Vec<HookRef>) -> Self {
         self.before_delete = v;
 
         self
     }
 
     #[must_use]
-    pub fn after_delete(mut self, v: Vec<String>) -> Self {
+    pub fn after_delete(mut self, v: Vec<HookRef>) -> Self {
         self.after_delete = v;
 
         self
     }
 
     #[must_use]
-    pub fn before_broadcast(mut self, v: Vec<String>) -> Self {
+    pub fn before_broadcast(mut self, v: Vec<HookRef>) -> Self {
         self.before_broadcast = v;
 
         self
@@ -177,13 +180,13 @@ mod tests {
             .before_broadcast(vec!["bb".into()])
             .build();
 
-        assert_eq!(h.before_validate, vec!["bv"]);
-        assert_eq!(h.before_change, vec!["bc"]);
-        assert_eq!(h.after_change, vec!["ac"]);
-        assert_eq!(h.before_read, vec!["br"]);
-        assert_eq!(h.after_read, vec!["ar"]);
-        assert_eq!(h.before_delete, vec!["bd"]);
-        assert_eq!(h.after_delete, vec!["ad"]);
-        assert_eq!(h.before_broadcast, vec!["bb"]);
+        assert_eq!(h.before_validate, vec![HookRef::new("bv")]);
+        assert_eq!(h.before_change, vec![HookRef::new("bc")]);
+        assert_eq!(h.after_change, vec![HookRef::new("ac")]);
+        assert_eq!(h.before_read, vec![HookRef::new("br")]);
+        assert_eq!(h.after_read, vec![HookRef::new("ar")]);
+        assert_eq!(h.before_delete, vec![HookRef::new("bd")]);
+        assert_eq!(h.after_delete, vec![HookRef::new("ad")]);
+        assert_eq!(h.before_broadcast, vec![HookRef::new("bb")]);
     }
 }

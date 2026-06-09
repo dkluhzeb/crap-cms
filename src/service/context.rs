@@ -9,7 +9,7 @@ use crate::core::collection::Auth;
 use crate::{
     config::LocaleConfig,
     core::{
-        CollectionDefinition, Document, DocumentFields, FieldDefinition, GlobalDefinition,
+        CollectionDefinition, Document, DocumentFields, FieldDefinition, GlobalDefinition, HookRef,
         LiveMode, SharedCache, SharedEventTransport, SharedInvalidationTransport,
         event::{EventOperation, EventTarget, EventUser},
     },
@@ -234,12 +234,12 @@ impl<'a> ServiceContext<'a> {
         }
     }
 
-    /// Get the read access reference from the definition.
+    /// Get the read access hook ref from the definition.
     #[must_use]
-    pub fn read_access_ref(&self) -> Option<&str> {
+    pub fn read_access_ref(&self) -> Option<&HookRef> {
         match &self.def {
-            Def::Collection(d) => d.access.read.as_deref(),
-            Def::Global(d) => d.access.read.as_deref(),
+            Def::Collection(d) => d.access.read.as_ref(),
+            Def::Global(d) => d.access.read.as_ref(),
             Def::None => None,
         }
     }

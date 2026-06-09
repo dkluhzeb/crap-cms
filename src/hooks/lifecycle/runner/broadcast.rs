@@ -1,7 +1,7 @@
 //! `HookRunner` methods for event broadcasting.
 
 use anyhow::Result;
-use mlua::Value;
+use mlua::{LuaSerdeExt as _, Value};
 use tracing::{debug, warn};
 
 use crate::{
@@ -12,11 +12,13 @@ use crate::{
     },
     hooks::{
         HookContext, HookEvent, HookRunner,
-        lifecycle::execution::{
-            call_before_broadcast_hook, call_registered_before_broadcast, get_hook_refs,
-            resolve_hook_function,
+        lifecycle::{
+            LiveFilterContext,
+            execution::{
+                call_before_broadcast_hook, call_registered_before_broadcast, get_hook_refs,
+                resolve_hook_function,
+            },
         },
-        lua_api,
     },
 };
 
@@ -140,7 +142,8 @@ impl HookRunner {
         for hook_ref in hook_refs {
             debug!(
                 "Running before_broadcast hook: {} for {}",
-                hook_ref, ctx.collection
+                hook_ref.reference(),
+                ctx.collection
             );
 
             match call_before_broadcast_hook(&lua, hook_ref, ctx.clone())? {
@@ -175,28 +178,24 @@ impl HookRunner {
         match live {
             None => Ok(true), // absent = broadcast all
             Some(LiveSetting::Disabled) => Ok(false),
-            Some(LiveSetting::Function(func_ref)) => {
+            Some(LiveSetting::Function(hook)) => {
                 let lua = self.pool.acquire()?;
 
-                let func = resolve_hook_function(&lua, func_ref)?;
+                let func = resolve_hook_function(&lua, hook.reference())?;
 
-                let ctx_table = lua.create_table()?;
-                ctx_table.set("collection", collection)?;
-                ctx_table.set("operation", operation)?;
-                let data_table = lua.create_table()?;
-                for (k, v) in data {
-                    data_table.set(k.as_str(), lua_api::json_to_lua(&lua, v)?)?;
-                }
-                ctx_table.set("data", data_table)?;
-                ctx_table.set("document_id", document_id)?;
-                if let Some(u) = edited_by {
-                    let eu = lua.create_table()?;
-                    eu.set("id", u.id.as_str())?;
-                    eu.set("email", u.email.as_str())?;
-                    ctx_table.set("edited_by", eu)?;
-                }
+                // Typed `crap.LiveFilterContext` — single source of truth for
+                // the Lua-facing shape (incl. per-config `ctx.options`).
+                let ctx = LiveFilterContext {
+                    collection,
+                    operation,
+                    data,
+                    document_id,
+                    edited_by,
+                    options: hook.options(),
+                };
+                let ctx_value = lua.to_value(&ctx)?;
 
-                let result: Value = func.call(ctx_table)?;
+                let result: Value = func.call(ctx_value)?;
                 match result {
                     Value::Boolean(b) => Ok(b),
                     Value::Nil => Ok(false),

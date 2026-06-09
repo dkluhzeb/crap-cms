@@ -5,7 +5,7 @@ use mlua::{Lua, Result as LuaResult, Table, Value};
 use tracing::warn;
 
 use crate::core::{
-    FieldDefinition,
+    FieldDefinition, HookRef,
     collection::{
         Access, Hooks, IndexDefinition, Labels, LiveMode, LiveSetting, McpConfig, VersionsConfig,
     },
@@ -14,7 +14,7 @@ use crate::core::{
 use super::{
     fields::parse_fields,
     helpers::{
-        deny_unknown_keys, get_bool, get_localized_string, get_optional_string_ref, get_string,
+        deny_unknown_keys, get_bool, get_localized_string, get_optional_hook_ref, get_string,
         get_table, parse_hooks,
     },
 };
@@ -165,14 +165,16 @@ pub(super) struct LiveConfig {
 }
 
 /// Parse the `live` setting. The table form (`{ mode, filter }`) is strict:
-/// an unrecognized `mode` value or a non-string `filter` is a hard error,
-/// rather than being silently coerced to the default. Unknown keys in the
-/// table are rejected separately by [`validate_shared_nested_keys`].
+/// an unrecognized `mode` value or an invalid `filter` is a hard error, rather
+/// than being silently coerced to the default. `filter` is a hook ref — a bare
+/// string or a `{ ref, options }` table (options reach the filter as
+/// `ctx.options`). Unknown keys in the table are rejected separately by
+/// [`validate_shared_nested_keys`].
 ///
 /// # Errors
 ///
 /// Returns an error if `live.mode` is not `"full"`/`"metadata"`, or if
-/// `live.filter` is present but not a string.
+/// `live.filter` is present but not a valid hook ref.
 pub(super) fn parse_live_setting(config: &Table) -> Result<LiveConfig> {
     let val: Value = match config.get("live").ok() {
         Some(v) => v,
@@ -196,7 +198,7 @@ pub(super) fn parse_live_setting(config: &Table) -> Result<LiveConfig> {
                 setting: if func_ref.is_empty() {
                     None
                 } else {
-                    Some(LiveSetting::Function(func_ref))
+                    Some(LiveSetting::Function(HookRef::new(func_ref)))
                 },
                 mode: LiveMode::default(),
             }
@@ -217,17 +219,10 @@ pub(super) fn parse_live_setting(config: &Table) -> Result<LiveConfig> {
                 ),
             };
 
-            let filter = match tbl.get::<Value>("filter")? {
-                Value::Nil => None,
-                Value::String(s) => {
-                    let r = s.to_str()?.to_string();
-                    (!r.is_empty()).then_some(r)
-                }
-                other => bail!(
-                    "live.filter must be a string hook reference, got {}",
-                    other.type_name()
-                ),
-            };
+            // A bare ref string or a `{ ref, options }` table (options reach
+            // the filter as `ctx.options`); an empty ref means "no filter".
+            let filter = get_optional_hook_ref(&tbl, "filter", "live.filter")?
+                .filter(|h| !h.reference().is_empty());
 
             LiveConfig {
                 setting: filter.map(LiveSetting::Function),
@@ -292,31 +287,33 @@ pub(super) fn parse_indexes(config: &Table) -> LuaResult<Vec<IndexDefinition>> {
     Ok(indexes)
 }
 
-/// Parse the `access` sub-table into [`Access`]. Each rule is a string hook
-/// reference; a present-but-non-string value is a hard error rather than being
-/// silently dropped (dropping an access rule the author wrote is a security
-/// footgun). Unknown keys are rejected by [`validate_shared_nested_keys`].
+/// Parse the `access` sub-table into [`Access`]. Each rule is a hook reference
+/// (a bare string or a `{ ref, options }` table); a present-but-invalid value
+/// is a hard error rather than being silently dropped (dropping an access rule
+/// the author wrote is a security footgun). Unknown keys are rejected by
+/// [`validate_shared_nested_keys`].
 ///
 /// # Errors
 ///
 /// Returns an error if any of `read`/`create`/`update`/`delete`/`trash` is
-/// present but not a string.
+/// present but not a valid hook ref.
 pub(super) fn parse_access_config(config: &Table) -> Result<Access> {
     let Ok(access_tbl) = get_table(config, "access") else {
         return Ok(Access::default());
     };
     Ok(Access::builder()
-        .read(get_optional_string_ref(&access_tbl, "read", "access")?)
-        .create(get_optional_string_ref(&access_tbl, "create", "access")?)
-        .update(get_optional_string_ref(&access_tbl, "update", "access")?)
-        .delete(get_optional_string_ref(&access_tbl, "delete", "access")?)
-        .trash(get_optional_string_ref(&access_tbl, "trash", "access")?)
+        .read(get_optional_hook_ref(&access_tbl, "read", "access")?)
+        .create(get_optional_hook_ref(&access_tbl, "create", "access")?)
+        .update(get_optional_hook_ref(&access_tbl, "update", "access")?)
+        .delete(get_optional_hook_ref(&access_tbl, "delete", "access")?)
+        .trash(get_optional_hook_ref(&access_tbl, "trash", "access")?)
         .build())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::HookRef;
     use crate::core::{
         BlockDefinition, FieldDefinition, FieldTab, FieldType, LocalizedString,
         collection::{COLLECTION_OPERATIONS, LiveSetting},
@@ -466,7 +463,9 @@ mod tests {
         let tbl = lua.create_table().unwrap();
         tbl.set("live", "hooks.live.filter_published").unwrap();
         match parse_live_setting(&tbl).unwrap().setting {
-            Some(LiveSetting::Function(ref s)) => assert_eq!(s, "hooks.live.filter_published"),
+            Some(LiveSetting::Function(ref s)) => {
+                assert_eq!(s.reference(), "hooks.live.filter_published");
+            }
             other => panic!("Expected Function, got {other:?}"),
         }
     }
@@ -511,8 +510,38 @@ mod tests {
         live_tbl.set("filter", "hooks.live.check").unwrap();
         tbl.set("live", live_tbl).unwrap();
         let r = parse_live_setting(&tbl).unwrap();
-        assert!(matches!(r.setting, Some(LiveSetting::Function(ref s)) if s == "hooks.live.check"));
+        assert!(
+            matches!(r.setting, Some(LiveSetting::Function(ref s)) if s.reference() == "hooks.live.check")
+        );
         assert_eq!(r.mode, LiveMode::Full);
+    }
+
+    /// `live.filter` accepts the `{ ref, options }` form — options reach the
+    /// filter as `ctx.options`, letting one gate function be reused per
+    /// collection with different config.
+    #[test]
+    fn test_parse_live_setting_filter_with_options() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let live_tbl = lua.create_table().unwrap();
+        let filter = lua.create_table().unwrap();
+        filter.set("ref", "hooks.live.status_gate").unwrap();
+        let opts = lua.create_table().unwrap();
+        opts.set("allow", "published").unwrap();
+        filter.set("options", opts).unwrap();
+        live_tbl.set("filter", filter).unwrap();
+        tbl.set("live", live_tbl).unwrap();
+
+        match parse_live_setting(&tbl).unwrap().setting {
+            Some(LiveSetting::Function(hook)) => {
+                assert_eq!(hook.reference(), "hooks.live.status_gate");
+                assert_eq!(
+                    hook.options().and_then(|o| o.get("allow")),
+                    Some(&serde_json::json!("published"))
+                );
+            }
+            other => panic!("expected Function with options, got {other:?}"),
+        }
     }
 
     #[test]
@@ -585,8 +614,14 @@ mod tests {
         access_tbl.set("create", "hooks.access.admin_only").unwrap();
         tbl.set("access", access_tbl).unwrap();
         let access = parse_access_config(&tbl).unwrap();
-        assert_eq!(access.read.as_deref(), Some("hooks.access.allow_all"));
-        assert_eq!(access.create.as_deref(), Some("hooks.access.admin_only"));
+        assert_eq!(
+            access.read.as_ref().map(HookRef::reference),
+            Some("hooks.access.allow_all")
+        );
+        assert_eq!(
+            access.create.as_ref().map(HookRef::reference),
+            Some("hooks.access.admin_only")
+        );
         assert!(access.update.is_none());
     }
 
@@ -601,9 +636,12 @@ mod tests {
             .unwrap();
         tbl.set("access", access_tbl).unwrap();
         let access = parse_access_config(&tbl).unwrap();
-        assert_eq!(access.delete.as_deref(), Some("hooks.access.admin_only"));
         assert_eq!(
-            access.trash.as_deref(),
+            access.delete.as_ref().map(HookRef::reference),
+            Some("hooks.access.admin_only")
+        );
+        assert_eq!(
+            access.trash.as_ref().map(HookRef::reference),
             Some("hooks.access.editor_or_above")
         );
     }

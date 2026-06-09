@@ -72,12 +72,26 @@ pub fn build_field_contexts(
     filter_hidden: bool,
     non_default_locale: bool,
 ) -> Vec<FieldContext> {
-    fields
-        .iter()
-        .filter(|field| !field.hidden)
-        .filter(|field| !filter_hidden || !field.admin.hidden)
+    visible_field_defs(fields, filter_hidden)
         .map(|field| build_single_field_context(field, values, errors, "", non_default_locale, 0))
         .collect()
+}
+
+/// The top-level field defs that become form fields, in order — the **single
+/// source of truth** for "which fields are visible." Shared by
+/// [`build_field_contexts`], `apply_display_conditions`, and
+/// `enrich_field_contexts` so their per-field `zip`s stay aligned: `field.hidden`
+/// is always dropped, `admin.hidden` only when `filter_hidden`. Duplicating this
+/// filter (as these three sites used to) silently desyncs the zips when a
+/// top-level hidden field shifts the pairing.
+pub(in crate::admin::handlers::field_context) fn visible_field_defs(
+    field_defs: &[FieldDefinition],
+    filter_hidden: bool,
+) -> impl Iterator<Item = &FieldDefinition> {
+    field_defs
+        .iter()
+        .filter(|f| !f.hidden)
+        .filter(move |f| !filter_hidden || !f.admin.hidden)
 }
 
 #[cfg(test)]
@@ -447,6 +461,42 @@ mod tests {
         let result = build_value_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0]["name"], "title");
+    }
+
+    /// Regression (zip-alignment): `visible_field_defs` must yield the SAME
+    /// field sequence `build_field_contexts` builds — `apply_display_conditions`
+    /// and `enrich_field_contexts` zip their per-field results against it, so a
+    /// divergence silently applies the wrong field's condition/enrichment. A
+    /// top-level `hidden` field before later fields used to desync them (defs
+    /// kept the hidden field; the built contexts dropped it).
+    #[test]
+    fn visible_field_defs_matches_built_contexts_with_hidden_fields() {
+        let mut internal = make_field("internal", FieldType::Text);
+        internal.hidden = true; // always dropped
+        let mut admin_only = make_field("admin_only", FieldType::Text);
+        admin_only.admin.hidden = true; // dropped only when filter_hidden
+        let fields = vec![
+            internal,
+            make_field("title", FieldType::Text),
+            admin_only,
+            make_field("body", FieldType::Text),
+        ];
+
+        for filter_hidden in [true, false] {
+            let built = build_value_contexts(
+                &fields,
+                &HashMap::new(),
+                &HashMap::new(),
+                filter_hidden,
+                false,
+            );
+            let built_names: Vec<&str> =
+                built.iter().map(|c| c["name"].as_str().unwrap()).collect();
+            let def_names: Vec<&str> = visible_field_defs(&fields, filter_hidden)
+                .map(|f| f.name.as_str())
+                .collect();
+            assert_eq!(built_names, def_names, "filter_hidden={filter_hidden}");
+        }
     }
 
     /// `admin.hidden = true` (only) is the upload-meta case: the data must NOT

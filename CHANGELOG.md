@@ -167,6 +167,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **The `[admin] access` panel gate now fails closed.** If the database pool was
+  exhausted (or the access task failed to join) while running the configured
+  `admin.access` hook, the gate previously returned "allowed" — admitting the
+  request without ever running the check. It now denies in those cases, matching
+  every other access gate (collection/field/upload), which already fail closed.
+
 - **Job handlers now see the full run metadata (`id`, `queue`, `priority`,
   `scheduled_by`, `unique_key`, `queued_at`).** `ctx.job` previously carried only
   `{ slug, attempt, max_attempts }`, so a handler couldn't tell *who* triggered
@@ -401,6 +407,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   files, so trashed documents remain restorable.)
 
 ### Added
+
+- **Config-customizable hooks: a hook ref can carry per-config `options`,
+  surfaced to the hook as `ctx.options`.** Any hook reference may now be written
+  either as a bare string (`"hooks.shared.slugify"`) or as a
+  `{ ref = "hooks.shared.slugify", options = { from = "title", to = "slug" } }`
+  table; the `options` table is handed to the hook as `ctx.options` (`nil` for a
+  bare-string ref). This lets one hook function be reused across collections and
+  fields with different configuration instead of writing a near-duplicate hook
+  per use. Supported at **every** ref site: collection/global lifecycle hooks,
+  field hooks, `access` rules, field `validate` / `required_when`,
+  `admin.condition`, `auth` `strategy` `authenticate`, `crap.jobs.define`
+  `handler` / `access`, `crap.pages.register` `access`, the collection
+  `live.filter` broadcast gate, and the `[admin] access` panel gate in
+  `crap.toml`. Purely additive — the bare-string form is unchanged, and
+  existing configs (and registry snapshots) round-trip identically. The Lua type
+  generator emits a `crap.HookRef` class and `options? table` on every hook
+  context. Display-condition evaluation now keys per field rather than per ref
+  string, so two fields can reuse the same condition function with different
+  `options`. See [Per-Config Options](hooks/hook-context.md#per-config-options-ctxoptions).
 
 - **Display conditions (`admin.condition`) now receive a second `ctx`
   argument.** A condition function was called as `function(form_data)` with no

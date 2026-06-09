@@ -5,7 +5,10 @@ use std::collections::HashMap;
 use anyhow::{Result, bail};
 use mlua::{Table, Value};
 
-use crate::core::{LocalizedString, SelectOption, collection::Hooks};
+use crate::{
+    core::{HookRef, LocalizedString, SelectOption, collection::Hooks},
+    hooks::lua_api::lua_to_json,
+};
 
 /// Reject any named key in `table` that is not present in `allowed`.
 ///
@@ -171,30 +174,84 @@ pub(super) fn get_string_val(tbl: &Table, key: &str) -> mlua::Result<String> {
     tbl.get(key)
 }
 
-pub(super) fn parse_string_list(tbl: &Table, key: &str) -> Result<Vec<String>> {
-    if let Ok(list_tbl) = get_table(tbl, key) {
-        let mut items = Vec::new();
+/// Parse a single hook reference: a bare string `"hooks.posts.slugify"` or a
+/// `{ ref = "hooks.posts.slugify", options = { ... } }` table.
+///
+/// The table form carries per-config `options` exposed to the hook as
+/// `ctx.options`. Unknown keys are rejected (parity with the rest of the strict
+/// config surface); `ref` is required and must be a string; `options`, when
+/// present, must be a table.
+pub(super) fn parse_hook_ref(value: Value, context: &str) -> Result<HookRef> {
+    match value {
+        Value::String(s) => Ok(HookRef::new(s.to_str()?.to_string())),
+        Value::Table(t) => {
+            deny_unknown_keys(&t, context, &["ref", "options"])?;
 
-        for pair in list_tbl.sequence_values::<String>() {
-            items.push(pair?);
+            let reference = get_optional_string_ref(&t, "ref", context)?
+                .ok_or_else(|| anyhow::anyhow!("{context} table requires a string 'ref' key"))?;
+
+            let options = match t.get::<Value>("options")? {
+                Value::Nil => None,
+                v @ Value::Table(_) => Some(lua_to_json(&v)?),
+                other => bail!(
+                    "{context} 'options' must be a table, got {}",
+                    other.type_name()
+                ),
+            };
+
+            Ok(HookRef { reference, options })
         }
+        other => bail!(
+            "{context} must be a string hook ref or a {{ ref, options }} table, got {}",
+            other.type_name()
+        ),
+    }
+}
 
-        Ok(items)
-    } else {
-        Ok(Vec::new())
+/// Parse an array of hook references (each a string or `{ ref, options }` table).
+/// Missing / non-table value at `key` yields an empty list.
+pub(super) fn parse_hook_ref_list(tbl: &Table, key: &str) -> Result<Vec<HookRef>> {
+    let Ok(list_tbl) = get_table(tbl, key) else {
+        return Ok(Vec::new());
+    };
+
+    let mut items = Vec::new();
+
+    for pair in list_tbl.sequence_values::<Value>() {
+        items.push(parse_hook_ref(pair?, key)?);
+    }
+
+    Ok(items)
+}
+
+/// Strict optional single hook ref: absent / `nil` → `None`, a string or
+/// `{ ref, options }` table → `Some`, any other present value → a hard error.
+///
+/// The single-ref analogue of [`get_optional_string_ref`], for sites like
+/// access rules and field conditions that take one ref rather than a list.
+pub(super) fn get_optional_hook_ref(
+    tbl: &Table,
+    key: &str,
+    context: &str,
+) -> Result<Option<HookRef>> {
+    match tbl.get::<Value>(key)? {
+        Value::Nil => Ok(None),
+        // Fold the key into the context so a bad value names the offending rule
+        // (e.g. `access 'read'`), not just the surface.
+        other => Ok(Some(parse_hook_ref(other, &format!("{context} '{key}'"))?)),
     }
 }
 
 pub(super) fn parse_hooks(hooks_tbl: &Table) -> Result<Hooks> {
     Ok(Hooks::builder()
-        .before_validate(parse_string_list(hooks_tbl, "before_validate")?)
-        .before_change(parse_string_list(hooks_tbl, "before_change")?)
-        .after_change(parse_string_list(hooks_tbl, "after_change")?)
-        .before_read(parse_string_list(hooks_tbl, "before_read")?)
-        .after_read(parse_string_list(hooks_tbl, "after_read")?)
-        .before_delete(parse_string_list(hooks_tbl, "before_delete")?)
-        .after_delete(parse_string_list(hooks_tbl, "after_delete")?)
-        .before_broadcast(parse_string_list(hooks_tbl, "before_broadcast")?)
+        .before_validate(parse_hook_ref_list(hooks_tbl, "before_validate")?)
+        .before_change(parse_hook_ref_list(hooks_tbl, "before_change")?)
+        .after_change(parse_hook_ref_list(hooks_tbl, "after_change")?)
+        .before_read(parse_hook_ref_list(hooks_tbl, "before_read")?)
+        .after_read(parse_hook_ref_list(hooks_tbl, "after_read")?)
+        .before_delete(parse_hook_ref_list(hooks_tbl, "before_delete")?)
+        .after_delete(parse_hook_ref_list(hooks_tbl, "after_delete")?)
+        .before_broadcast(parse_hook_ref_list(hooks_tbl, "before_broadcast")?)
         .build())
 }
 
@@ -407,6 +464,96 @@ mod tests {
         let (col, poly) = parse_relationship_collection(&rel_tbl);
         assert_eq!(col, "posts");
         assert_eq!(poly, vec!["posts", "pages"]);
+    }
+
+    #[test]
+    fn parse_hook_ref_bare_string() {
+        let r = parse_hook_ref(
+            Value::String(Lua::new().create_string("hooks.x").unwrap()),
+            "bc",
+        )
+        .unwrap();
+        assert_eq!(r, HookRef::new("hooks.x"));
+    }
+
+    #[test]
+    fn parse_hook_ref_table_with_options() {
+        let lua = Lua::new();
+        let t = lua.create_table().unwrap();
+        t.set("ref", "hooks.slugify").unwrap();
+        let opts = lua.create_table().unwrap();
+        opts.set("from", "title").unwrap();
+        t.set("options", opts).unwrap();
+
+        let r = parse_hook_ref(Value::Table(t), "before_change").unwrap();
+        assert_eq!(r.reference, "hooks.slugify");
+        assert_eq!(r.options.unwrap()["from"], serde_json::json!("title"));
+    }
+
+    #[test]
+    fn parse_hook_ref_table_missing_ref_errors() {
+        let lua = Lua::new();
+        let t = lua.create_table().unwrap();
+        let opts = lua.create_table().unwrap();
+        t.set("options", opts).unwrap();
+
+        let err = parse_hook_ref(Value::Table(t), "before_change").unwrap_err();
+        assert!(err.to_string().contains("ref"), "{err}");
+    }
+
+    #[test]
+    fn parse_hook_ref_table_unknown_key_rejected() {
+        let lua = Lua::new();
+        let t = lua.create_table().unwrap();
+        t.set("ref", "hooks.x").unwrap();
+        t.set("optionz", lua.create_table().unwrap()).unwrap();
+
+        let err = parse_hook_ref(Value::Table(t), "before_change").unwrap_err();
+        assert!(err.to_string().contains("optionz"), "{err}");
+    }
+
+    #[test]
+    fn parse_hook_ref_options_must_be_table() {
+        let lua = Lua::new();
+        let t = lua.create_table().unwrap();
+        t.set("ref", "hooks.x").unwrap();
+        t.set("options", "nope").unwrap();
+
+        let err = parse_hook_ref(Value::Table(t), "before_change").unwrap_err();
+        assert!(err.to_string().contains("options"), "{err}");
+    }
+
+    #[test]
+    fn parse_hook_ref_list_mixes_string_and_table() {
+        let lua = Lua::new();
+        let list = lua.create_table().unwrap();
+        list.set(1, "hooks.bare").unwrap();
+        let entry = lua.create_table().unwrap();
+        entry.set("ref", "hooks.param").unwrap();
+        let opts = lua.create_table().unwrap();
+        opts.set("n", 3).unwrap();
+        entry.set("options", opts).unwrap();
+        list.set(2, entry).unwrap();
+
+        let outer = lua.create_table().unwrap();
+        outer.set("before_change", list).unwrap();
+
+        let refs = parse_hook_ref_list(&outer, "before_change").unwrap();
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0], HookRef::new("hooks.bare"));
+        assert_eq!(refs[1].reference, "hooks.param");
+        assert!(refs[1].options.is_some());
+    }
+
+    #[test]
+    fn get_optional_hook_ref_nil_is_none() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        assert!(
+            get_optional_hook_ref(&tbl, "read", "access")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

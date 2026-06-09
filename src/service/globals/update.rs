@@ -175,7 +175,7 @@ fn check_global_update_access(
     ui_locale: Option<&str>,
 ) -> Result<()> {
     let access = write_hooks.check_access(&AccessCheckInput {
-        access_ref: def.access.update.as_deref(),
+        access: def.access.update.as_ref(),
         user: ctx.user,
         id: None,
         data,

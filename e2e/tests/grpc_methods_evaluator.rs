@@ -56,6 +56,7 @@ use std::collections::BTreeMap;
 use prost_types::{Struct, Value, value::Kind};
 use tonic::{Code, Request, metadata::MetadataValue};
 
+use crap_cms::core::HookRef;
 use crap_cms::{
     api::content::{
         CreateRequest, FindRequest, LoginRequest, content_api_client::ContentApiClient,
@@ -165,7 +166,7 @@ fn posts_def_anonymous_read_denied() -> CollectionDefinition {
             .build(),
     ];
     def.access = Access {
-        read: Some("hooks.deny_anonymous.read".to_string()),
+        read: Some(HookRef::new("hooks.deny_anonymous.read")),
         ..Default::default()
     };
     def
@@ -215,7 +216,7 @@ fn users_def_with_admin_only_strategy() -> CollectionDefinition {
     let mut auth = Auth::enabled();
     auth.methods.push(AuthMethod::Strategy {
         name: "admin-only".to_string(),
-        authenticate: "hooks.api_key.authenticate".to_string(),
+        authenticate: HookRef::new("hooks.api_key.authenticate"),
         activates_on: Activation::Header {
             header: "x-api-key".to_string(),
         },

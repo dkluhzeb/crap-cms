@@ -19,7 +19,7 @@ pub(crate) fn global_config_to_lua(lua: &Lua, def: &GlobalDefinition) -> LuaResu
 
     access_to_lua(lua, &tbl, &def.access)?;
     mcp_to_lua(lua, &tbl, &def.mcp)?;
-    live_to_lua(&tbl, def.live.as_ref())?;
+    live_to_lua(lua, &tbl, def.live.as_ref(), def.live_mode)?;
 
     Ok(tbl)
 }
@@ -27,6 +27,7 @@ pub(crate) fn global_config_to_lua(lua: &Lua, def: &GlobalDefinition) -> LuaResu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::HookRef;
     use crate::core::{
         FieldDefinition, FieldType, LocalizedString,
         collection::{Access, GlobalDefinition, LiveSetting, McpConfig},
@@ -58,7 +59,7 @@ mod tests {
         let lua = Lua::new();
         let mut def = GlobalDefinition::new("settings");
         def.access = Access {
-            read: Some("hooks.access.allow".to_string()),
+            read: Some(HookRef::new("hooks.access.allow")),
             ..Default::default()
         };
         def.live = Some(LiveSetting::Disabled);
@@ -86,7 +87,7 @@ mod tests {
         let lua = Lua::new();
         let mut def = GlobalDefinition::new("settings");
         def.access = Access {
-            trash: Some("access.editor".to_string()),
+            trash: Some(HookRef::new("access.editor")),
             ..Default::default()
         };
         let tbl = global_config_to_lua(&lua, &def).unwrap();
@@ -98,7 +99,7 @@ mod tests {
     fn test_global_config_to_lua_live_function() {
         let lua = Lua::new();
         let mut def = GlobalDefinition::new("settings");
-        def.live = Some(LiveSetting::Function("hooks.live.settings".to_string()));
+        def.live = Some(LiveSetting::Function(HookRef::new("hooks.live.settings")));
         let tbl = global_config_to_lua(&lua, &def).unwrap();
         assert_eq!(tbl.get::<String>("live").unwrap(), "hooks.live.settings");
     }

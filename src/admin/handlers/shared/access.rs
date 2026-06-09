@@ -1,6 +1,6 @@
 //! Access control helpers — collection/global/field-level access checks.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::hooks::{AccessCheckInput, ConditionContext};
 
@@ -10,7 +10,7 @@ use tracing::{error, warn};
 
 use crate::{
     admin::AdminState,
-    core::{AuthUser, Document, DocumentFields, FieldDefinition, FieldType},
+    core::{AuthUser, Document, DocumentFields, FieldDefinition, FieldType, HookRef},
     db::AccessResult,
     hooks::{HookRunner, lifecycle::access::has_any_field_access},
 };
@@ -26,14 +26,14 @@ pub fn get_user_doc(auth_user: Option<&Extension<AuthUser>>) -> Option<&Document
 /// Helper to check collection/global-level access. Returns `AccessResult` or renders a 403 page.
 pub fn check_access_or_forbid(
     state: &AdminState,
-    access_ref: Option<&str>,
+    access: Option<&HookRef>,
     auth_user: Option<&Extension<AuthUser>>,
     id: Option<&str>,
     data: Option<&DocumentFields>,
     operation: &str,
     collection: &str,
 ) -> Result<AccessResult, Box<axum::response::Response>> {
-    if access_ref.is_none() {
+    if access.is_none() {
         return if state.config.access.default_deny {
             Ok(AccessResult::Denied)
         } else {
@@ -56,7 +56,7 @@ pub fn check_access_or_forbid(
         .hook_runner
         .check_access(
             &AccessCheckInput {
-                access_ref,
+                access,
                 user: user_doc,
                 id,
                 data,
@@ -83,7 +83,7 @@ pub fn compute_denied_read_fields(
     auth_user: Option<&Extension<AuthUser>>,
     fields: &[FieldDefinition],
 ) -> Result<Vec<String>, Box<axum::response::Response>> {
-    if !has_any_field_access(fields, |f| f.access.read.as_deref()) {
+    if !has_any_field_access(fields, |f| f.access.read.as_ref()) {
         return Ok(Vec::new());
     }
 
@@ -111,13 +111,19 @@ pub fn compute_denied_read_fields(
     Ok(denied)
 }
 
-/// Recursively collect all `admin.condition` function refs from field definitions.
-pub fn collect_condition_refs(fields: &[FieldDefinition]) -> HashSet<&str> {
-    let mut refs = HashSet::new();
+/// Recursively collect all `admin.condition` hook refs from field definitions,
+/// keyed by **field name** (matching the form's `data-field-name`) so the
+/// evaluate-conditions endpoint resolves a client-sent field to *that field's*
+/// configured [`HookRef`] — and thus its own `options`. Keying by field name
+/// (not the ref string) is what lets two fields share a condition function with
+/// different options; it also hardens the endpoint, since the server uses the
+/// field's configured ref rather than trusting the client-sent ref string.
+pub fn collect_condition_refs(fields: &[FieldDefinition]) -> HashMap<&str, &HookRef> {
+    let mut refs = HashMap::new();
 
     for field in fields {
         if let Some(ref cond) = field.admin.condition {
-            refs.insert(cond.as_str());
+            refs.insert(field.name.as_str(), cond);
         }
 
         match field.field_type {
@@ -167,21 +173,21 @@ pub fn evaluate_condition_results(
 ) -> Map<String, Value> {
     use crate::hooks::DisplayConditionResult;
 
-    let valid_refs = collect_condition_refs(fields);
+    let by_field = collect_condition_refs(fields);
     let form_data = json!(req.form_data);
     let mut results = Map::new();
 
-    for (field_name, func_ref) in &req.conditions {
-        if !valid_refs.contains(func_ref.as_str()) {
-            warn!(
-                "evaluate_conditions: rejecting unknown func_ref '{}' for field '{}'",
-                func_ref, field_name,
-            );
+    // Iterate the client-sent field names; the field's OWN configured ref is
+    // resolved server-side (carrying its `options`) — the client-sent ref
+    // string (the map value) is not trusted, so only the keys matter.
+    for field_name in req.conditions.keys() {
+        let Some(hook) = by_field.get(field_name.as_str()) else {
+            warn!("evaluate_conditions: rejecting unknown condition field '{field_name}'");
             results.insert(field_name.clone(), json!(true));
             continue;
-        }
+        };
 
-        let visible = match hook_runner.call_display_condition(func_ref, &form_data, cond_ctx) {
+        let visible = match hook_runner.call_display_condition(hook, &form_data, cond_ctx) {
             Some(DisplayConditionResult::Bool(b)) => b,
             Some(DisplayConditionResult::Table { visible, .. }) => visible,
             None => true,
@@ -207,19 +213,19 @@ pub fn evaluate_condition_results(
 /// with full context when the user actually tries the action.
 pub fn has_access_with_conn(
     state: &AdminState,
-    access_ref: Option<&str>,
+    access: Option<&HookRef>,
     user_doc: Option<&Document>,
     conn: &dyn crate::db::DbConnection,
     operation: &str,
     collection: &str,
 ) -> bool {
-    if access_ref.is_none() {
+    if access.is_none() {
         return !state.config.access.default_deny;
     }
 
     let result = state.hook_runner.check_access(
         &AccessCheckInput {
-            access_ref,
+            access,
             user: user_doc,
             id: None,
             data: None,
@@ -245,11 +251,11 @@ pub fn has_access_with_conn(
 /// (empty for slug-less custom pages, whose access rule has no collection).
 pub fn has_read_access(
     state: &AdminState,
-    access_ref: Option<&str>,
+    access: Option<&HookRef>,
     user_doc: Option<&Document>,
     collection: &str,
 ) -> bool {
-    if access_ref.is_none() {
+    if access.is_none() {
         return !state.config.access.default_deny;
     }
 
@@ -261,7 +267,7 @@ pub fn has_read_access(
         return false;
     };
 
-    let allowed = has_access_with_conn(state, access_ref, user_doc, &tx, "read", collection);
+    let allowed = has_access_with_conn(state, access, user_doc, &tx, "read", collection);
 
     if let Err(e) = tx.commit() {
         warn!("tx commit failed: {e}");
@@ -283,21 +289,26 @@ mod tests {
     }
 
     #[test]
-    fn collects_condition_refs_recursively_and_dedups() {
+    fn collects_condition_refs_recursively_keyed_by_field() {
         let fields = vec![
             with_condition("a", "cond.show_a"),
             FieldDefinition::builder("plain", FieldType::Text).build(), // no condition
             FieldDefinition::builder("grp", FieldType::Group)
                 .fields(vec![
                     with_condition("b", "cond.show_b"),
-                    with_condition("c", "cond.show_a"), // duplicate ref
+                    with_condition("c", "cond.show_a"), // same ref, distinct field
                 ])
                 .build(),
         ];
 
-        let mut refs: Vec<&str> = collect_condition_refs(&fields).into_iter().collect();
-        refs.sort_unstable();
-        assert_eq!(refs, vec!["cond.show_a", "cond.show_b"]);
+        let map = collect_condition_refs(&fields);
+        // Two fields (`a`, `c`) share a ref but are kept as distinct keys; the
+        // no-condition `plain` field is absent.
+        assert_eq!(map.get("a").unwrap().reference(), "cond.show_a");
+        assert_eq!(map.get("c").unwrap().reference(), "cond.show_a");
+        let mut names: Vec<&str> = map.into_keys().collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["a", "b", "c"]);
     }
 
     #[test]
@@ -310,6 +321,6 @@ mod tests {
                 )])
                 .build(),
         ];
-        assert!(collect_condition_refs(&fields).contains("cond.x"));
+        assert!(collect_condition_refs(&fields).contains_key("x"));
     }
 }

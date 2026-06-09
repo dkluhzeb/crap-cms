@@ -22,6 +22,7 @@ use std::sync::Arc;
 use serde_json::json;
 
 use crap_cms::config::CrapConfig;
+use crap_cms::core::HookRef;
 use crap_cms::core::{DocumentFields, Registry, ReqContext};
 use crap_cms::db::DbPool;
 use crap_cms::hooks;
@@ -767,7 +768,7 @@ fn lua_hook_error_rolls_back_inner_crud() {
     let def = reg.get_collection("orders").unwrap().clone();
 
     let hooks = Hooks {
-        after_change: vec!["hooks.order_hooks.create_and_error".to_string()],
+        after_change: vec![HookRef::new("hooks.order_hooks.create_and_error")],
         ..Default::default()
     };
 

@@ -74,7 +74,7 @@ fn try_strategy_auth(
                 // previously silenced themselves as "authentication failed".
                 error!(
                     collection = strategy_input.collection,
-                    strategy = %strategy.authenticate,
+                    strategy = strategy.authenticate.reference(),
                     error = ?e,
                     "Custom auth strategy returned an error; continuing to next strategy"
                 );

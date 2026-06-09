@@ -55,11 +55,11 @@ impl ValidationWalker<'_> {
             false
         } else {
             field.required
-                || match field.required_when.as_deref() {
+                || match field.required_when.as_ref() {
                     None => false,
-                    Some(func_ref) => match run_required_condition_inner(
+                    Some(required_when) => match run_required_condition_inner(
                         self.lua,
-                        func_ref,
+                        required_when.reference(),
                         &ValidateCtxSource {
                             data: self.data,
                             document: self.data,
@@ -68,13 +68,17 @@ impl ValidationWalker<'_> {
                             locale: self.ctx.locale_ctx.map(LocaleContext::access_locale),
                             operation,
                             id: self.ctx.exclude_id,
+                            options: required_when.options(),
                         },
                     ) {
                         Ok(req) => req,
                         Err(e) => {
                             errors.push(FieldError::new(
                                 data_key.clone(),
-                                format!("required_when predicate '{func_ref}' failed: {e}"),
+                                format!(
+                                    "required_when predicate '{}' failed: {e}",
+                                    required_when.reference()
+                                ),
                             ));
                             false
                         }

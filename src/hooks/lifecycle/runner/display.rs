@@ -1,13 +1,12 @@
 //! `HookRunner` methods for display conditions and rendering.
 
-use std::collections::HashMap;
-
-use mlua::{Function, Lua, Result as LuaResult, Table, Value};
+use mlua::{Function, Lua, LuaSerdeExt as _, Result as LuaResult, Table, Value};
 use serde_json::Value as JsonValue;
 use tracing::warn;
 
 use crate::{
     admin::custom_pages::CustomPage,
+    core::HookRef,
     hooks::{
         HookRunner,
         lifecycle::{
@@ -45,37 +44,47 @@ impl HookRunner {
     #[must_use]
     pub fn call_display_condition(
         &self,
-        func_ref: &str,
+        hook: &HookRef,
         form_data: &JsonValue,
         ctx: &ConditionContext<'_>,
     ) -> Option<DisplayConditionResult> {
         let lua = self.pool.acquire().ok()?;
-        call_display_condition_with_lua(&lua, func_ref, form_data, ctx)
+        let cond_ctx = ConditionContext {
+            options: hook.options(),
+            ..*ctx
+        };
+        call_display_condition_with_lua(&lua, hook.reference(), form_data, &cond_ctx)
     }
 
     /// Evaluate display conditions for multiple fields using a single VM acquisition.
-    /// Returns a map from `func_ref` to the evaluation result.
+    /// Returns results **positionally aligned** with `conditions` — `result[i]`
+    /// is for `conditions[i]`. Keyed by position rather than by ref string so two
+    /// fields sharing a ref but differing in `options` get their own result (a
+    /// ref string is no longer a unique key once `options` exist).
     #[must_use]
     pub fn call_display_conditions_batch(
         &self,
-        conditions: &[(&str, &JsonValue)],
+        conditions: &[(&HookRef, &JsonValue)],
         ctx: &ConditionContext<'_>,
-    ) -> HashMap<String, DisplayConditionResult> {
+    ) -> Vec<Option<DisplayConditionResult>> {
         if conditions.is_empty() {
-            return HashMap::new();
+            return Vec::new();
         }
         let Ok(lua) = self.pool.acquire() else {
-            return HashMap::new();
+            return vec![None; conditions.len()];
         };
-        let mut results = HashMap::new();
 
-        for &(func_ref, form_data) in conditions {
-            if let Some(result) = call_display_condition_with_lua(&lua, func_ref, form_data, ctx) {
-                results.insert(func_ref.to_string(), result);
-            }
-        }
+        conditions
+            .iter()
+            .map(|&(hook, form_data)| {
+                let cond_ctx = ConditionContext {
+                    options: hook.options(),
+                    ..*ctx
+                };
 
-        results
+                call_display_condition_with_lua(&lua, hook.reference(), form_data, &cond_ctx)
+            })
+            .collect()
     }
 
     /// Invoke a template-data function registered via
@@ -146,12 +155,19 @@ impl HookRunner {
         for pair in pages_table.pairs::<String, Table>() {
             let Ok((slug, opts)) = pair else { continue };
 
+            // `access` is a bare string or a `{ ref, options }` table — let
+            // HookRef's serde shape decode either via `lua.from_value`.
+            let access = match opts.get::<Value>("access") {
+                Ok(Value::Nil) | Err(_) => None,
+                Ok(v) => lua.from_value::<HookRef>(v).ok(),
+            };
+
             out.push(CustomPage {
                 slug,
                 section: opts.get::<String>("section").ok(),
                 label: opts.get::<String>("label").ok(),
                 icon: opts.get::<String>("icon").ok(),
-                access: opts.get::<String>("access").ok(),
+                access,
             });
         }
 

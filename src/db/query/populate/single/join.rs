@@ -71,11 +71,7 @@ fn populate_join_docs(
     // service layer, honor the target's `access.read`. Denied => empty array.
     // Constrained => merge into filters. Allowed => proceed as-is.
     if let Some(check) = opts.join_access {
-        match check.check(
-            target_def.access.read.as_deref(),
-            opts.user,
-            &target_def.slug,
-        )? {
+        match check.check(target_def.access.read.as_ref(), opts.user, &target_def.slug)? {
             AccessResult::Denied => return Ok(Vec::new()),
             AccessResult::Constrained(extra) => filters.extend(extra),
             AccessResult::Allowed => {}
@@ -142,7 +138,7 @@ mod tests {
 
     use super::populate_relationships_cached;
     use crate::core::cache::NoneCache;
-    use crate::core::{Document, Registry};
+    use crate::core::{Document, HookRef, Registry};
     use crate::db::query::populate::test_helpers::*;
     use crate::db::query::populate::{JoinAccessCheck, PopulateContext, PopulateOpts};
     use crate::db::{AccessResult, Filter, FilterClause, FilterOp};
@@ -151,7 +147,12 @@ mod tests {
     /// Fixture check: Denied for every call.
     struct DenyAll;
     impl JoinAccessCheck for DenyAll {
-        fn check(&self, _: Option<&str>, _: Option<&Document>, _: &str) -> AnyResult<AccessResult> {
+        fn check(
+            &self,
+            _: Option<&HookRef>,
+            _: Option<&Document>,
+            _: &str,
+        ) -> AnyResult<AccessResult> {
             Ok(AccessResult::Denied)
         }
     }
@@ -159,7 +160,12 @@ mod tests {
     /// Fixture check: Allowed for every call.
     struct AllowAll;
     impl JoinAccessCheck for AllowAll {
-        fn check(&self, _: Option<&str>, _: Option<&Document>, _: &str) -> AnyResult<AccessResult> {
+        fn check(
+            &self,
+            _: Option<&HookRef>,
+            _: Option<&Document>,
+            _: &str,
+        ) -> AnyResult<AccessResult> {
             Ok(AccessResult::Allowed)
         }
     }
@@ -168,7 +174,12 @@ mod tests {
     /// (forces empty result after the filter merge, without needing _status).
     struct ConstrainToTitle(&'static str);
     impl JoinAccessCheck for ConstrainToTitle {
-        fn check(&self, _: Option<&str>, _: Option<&Document>, _: &str) -> AnyResult<AccessResult> {
+        fn check(
+            &self,
+            _: Option<&HookRef>,
+            _: Option<&Document>,
+            _: &str,
+        ) -> AnyResult<AccessResult> {
             Ok(AccessResult::Constrained(vec![FilterClause::Single(
                 Filter {
                     field: "title".to_string(),

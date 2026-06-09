@@ -24,7 +24,7 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
     let def = ctx.global_def()?;
 
     let access = hooks.check_access(&AccessCheckInput {
-        access_ref: def.access.read.as_deref(),
+        access: def.access.read.as_ref(),
         user: ctx.user,
         id: None,
         data: None,

@@ -50,7 +50,10 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::typegen::lua::{LuaAlias, LuaAnnotation, LuaTaggedClass};
+use crate::{
+    core::HookRef,
+    typegen::lua::{LuaAlias, LuaAnnotation, LuaTaggedClass},
+};
 
 /// MFA (Multi-Factor Authentication) mode. Lives inside the
 /// `password_login` method since it only applies to the
@@ -272,8 +275,10 @@ pub enum AuthMethod {
         /// have to be unique across collections, but should be.
         name: String,
         /// Lua function ref, e.g. `"hooks.auth.api_key"`. Receives
-        /// `crap.AuthStrategyContext`; returns user doc or nil.
-        authenticate: String,
+        /// `crap.AuthStrategyContext`; returns user doc or nil. May carry
+        /// per-config options exposed to the hook as `ctx.options`.
+        #[lua(ty = "string | crap.HookRef")]
+        authenticate: HookRef,
         /// Discriminator for when the strategy fires. See
         /// [`Activation`].
         #[lua(ty = "crap.Activation")]
@@ -351,7 +356,7 @@ impl AuthMethod {
     /// (matches the legacy `auth.strategies = […]` behavior for
     /// pre-`methods` configs).
     #[must_use]
-    pub fn strategy_always(name: impl Into<String>, authenticate: impl Into<String>) -> Self {
+    pub fn strategy_always(name: impl Into<String>, authenticate: impl Into<HookRef>) -> Self {
         Self::Strategy {
             name: name.into(),
             authenticate: authenticate.into(),
@@ -364,7 +369,7 @@ impl AuthMethod {
     #[must_use]
     pub fn strategy_on_header(
         name: impl Into<String>,
-        authenticate: impl Into<String>,
+        authenticate: impl Into<HookRef>,
         header: impl Into<String>,
         surfaces: SurfaceSet,
     ) -> Self {
@@ -614,7 +619,7 @@ impl Auth {
     pub fn with_strategy(
         mut self,
         name: impl Into<String>,
-        authenticate: impl Into<String>,
+        authenticate: impl Into<HookRef>,
     ) -> Self {
         self.methods
             .push(AuthMethod::strategy_always(name, authenticate));
@@ -670,7 +675,7 @@ pub struct PasswordLoginCfg {
 #[derive(Debug, Clone, Copy)]
 pub struct StrategyCfg<'a> {
     pub name: &'a str,
-    pub authenticate: &'a str,
+    pub authenticate: &'a HookRef,
     pub activates_on: &'a Activation,
     pub surfaces: &'a SurfaceSet,
 }
@@ -828,7 +833,7 @@ mod tests {
                 surfaces,
             } => {
                 assert_eq!(name, "api-key");
-                assert_eq!(authenticate, "hooks.auth.api_key");
+                assert_eq!(authenticate.reference(), "hooks.auth.api_key");
                 assert!(
                     matches!(activates_on, Activation::Header { header } if header == "x-api-key")
                 );

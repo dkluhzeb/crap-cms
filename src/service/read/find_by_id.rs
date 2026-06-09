@@ -32,11 +32,11 @@ pub fn find_document_by_id(
     let access_ref = if input.include_deleted {
         def.access.resolve_trash()
     } else {
-        def.access.read.as_deref()
+        def.access.read.as_ref()
     };
 
     let access = hooks.check_access(&AccessCheckInput {
-        access_ref,
+        access: access_ref,
         user: ctx.user,
         id: Some(input.id),
         data: None,

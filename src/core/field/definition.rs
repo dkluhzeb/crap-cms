@@ -1,7 +1,7 @@
 //! Complete definition of a single field within a collection.
 
 use crate::core::{
-    BlockDefinition, FieldAdmin, FieldTab, FieldType, RelationshipConfig, SelectOption,
+    BlockDefinition, FieldAdmin, FieldTab, FieldType, HookRef, RelationshipConfig, SelectOption,
     field::JoinConfig,
 };
 use crate::typegen::lua::{LuaAlias, LuaAnnotation, LuaFieldTypeViews, LuaTypeAlias};
@@ -96,13 +96,16 @@ pub struct FieldHookFn;
 pub struct FieldAccess {
     /// Hook ref for field read access control.
     #[serde(default)]
-    pub read: Option<String>,
+    #[lua(ty = "string | crap.HookRef", optional)]
+    pub read: Option<HookRef>,
     /// Hook ref for field create access control.
     #[serde(default)]
-    pub create: Option<String>,
+    #[lua(ty = "string | crap.HookRef", optional)]
+    pub create: Option<HookRef>,
     /// Hook ref for field update access control.
     #[serde(default)]
-    pub update: Option<String>,
+    #[lua(ty = "string | crap.HookRef", optional)]
+    pub update: Option<HookRef>,
 }
 
 /// Lua function references for field-level lifecycle hooks.
@@ -111,20 +114,20 @@ pub struct FieldAccess {
 pub struct FieldHooks {
     /// Hook refs to run before field validation (value normalizers).
     #[serde(default)]
-    #[lua(optional)]
-    pub before_validate: Vec<String>,
+    #[lua(ty = "(string | crap.HookRef)[]", optional)]
+    pub before_validate: Vec<HookRef>,
     /// Hook refs to run after validation, before write.
     #[serde(default)]
-    #[lua(optional)]
-    pub before_change: Vec<String>,
+    #[lua(ty = "(string | crap.HookRef)[]", optional)]
+    pub before_change: Vec<HookRef>,
     /// Hook refs to run after create/update write.
     #[serde(default)]
-    #[lua(optional)]
-    pub after_change: Vec<String>,
+    #[lua(ty = "(string | crap.HookRef)[]", optional)]
+    pub after_change: Vec<HookRef>,
     /// Hook refs to run after read, before response.
     #[serde(default)]
-    #[lua(optional)]
-    pub after_read: Vec<String>,
+    #[lua(ty = "(string | crap.HookRef)[]", optional)]
+    pub after_read: Vec<HookRef>,
 }
 
 /// Which locales a `required` *localized* field must be filled in for a
@@ -191,8 +194,8 @@ pub struct FieldDefinition {
     /// The predicate receives the validate context (`ctx.data` = the full
     /// document), so it can require this field based on other fields' values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[lua(optional)]
-    pub required_when: Option<String>,
+    #[lua(ty = "string | crap.HookRef", optional)]
+    pub required_when: Option<HookRef>,
     /// Unique constraint (default: false).
     #[serde(default)]
     #[lua(optional)]
@@ -203,8 +206,8 @@ pub struct FieldDefinition {
     pub index: bool,
     /// Lua function ref called as `crap.ValidateFunction`.
     #[serde(default)]
-    #[lua(optional)]
-    pub validate: Option<String>,
+    #[lua(ty = "string | crap.HookRef", optional)]
+    pub validate: Option<HookRef>,
     /// Default value on create.
     #[serde(default)]
     #[lua(ty = "any", optional)]
@@ -457,7 +460,7 @@ impl FieldDefinitionBuilder {
 
     /// Set a Lua predicate ref that makes the field conditionally required.
     #[must_use]
-    pub fn required_when(mut self, v: impl Into<String>) -> Self {
+    pub fn required_when(mut self, v: impl Into<HookRef>) -> Self {
         self.inner.required_when = Some(v.into());
         self
     }
@@ -485,7 +488,7 @@ impl FieldDefinitionBuilder {
 
     /// Set the name of the Lua validation function.
     #[must_use]
-    pub fn validate(mut self, v: impl Into<String>) -> Self {
+    pub fn validate(mut self, v: impl Into<HookRef>) -> Self {
         self.inner.validate = Some(v.into());
         self
     }

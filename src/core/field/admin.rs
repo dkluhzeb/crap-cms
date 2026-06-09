@@ -1,6 +1,6 @@
 //! Admin UI display hints for fields.
 
-use crate::core::LocalizedString;
+use crate::core::{HookRef, LocalizedString};
 use crate::typegen::lua::{LuaAlias, LuaAnnotation};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
@@ -159,8 +159,8 @@ pub struct FieldAdmin {
     ///
     /// See `docs/src/admin-ui/guides/display-conditions.md`.
     #[serde(default)]
-    #[lua(optional)]
-    pub condition: Option<String>,
+    #[lua(ty = "string | crap.HookRef", optional)]
+    pub condition: Option<HookRef>,
     /// Step value for number inputs (default: "any"). Use "1" for integers, "0.01" for cents, etc.
     #[serde(default)]
     #[lua(optional)]
@@ -439,7 +439,7 @@ impl FieldAdminBuilder {
 
     /// Set Lua function ref for conditional visibility.
     #[must_use]
-    pub fn condition(mut self, v: impl Into<String>) -> Self {
+    pub fn condition(mut self, v: impl Into<HookRef>) -> Self {
         self.inner.condition = Some(v.into());
         self
     }

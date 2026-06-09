@@ -29,6 +29,7 @@ use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
 use crap_cms::core::DocumentFields;
+use crap_cms::core::HookRef;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::{
@@ -1264,7 +1265,7 @@ fn setup_app_with_admin_gate(
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.admin.require_auth = false;
-    config.admin.access = Some("access.admin_only".to_string());
+    config.admin.access = Some(HookRef::new("access.admin_only"));
 
     let tmp = tempfile::tempdir().expect("tempdir");
 

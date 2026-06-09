@@ -28,6 +28,7 @@ use crap_cms::api::content;
 use crap_cms::api::content::content_api_server::ContentApi;
 use crap_cms::api::handlers::{ContentService, ContentServiceDeps};
 use crap_cms::config::*;
+use crap_cms::core::HookRef;
 use crap_cms::core::Registry;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
@@ -561,7 +562,7 @@ return M
     };
     let score_f = FieldDefinition {
         name: "score".to_string(),
-        validate: Some("hooks.score_validator.check".to_string()),
+        validate: Some(HookRef::new("hooks.score_validator.check")),
         ..Default::default()
     };
     def.fields = vec![name_f, score_f];
@@ -701,7 +702,7 @@ return M
     let slug_f = FieldDefinition {
         name: "slug".to_string(),
         hooks: FieldHooks {
-            before_change: vec!["hooks.slug_gen.auto_slug".to_string()],
+            before_change: vec![HookRef::new("hooks.slug_gen.auto_slug")],
             ..Default::default()
         },
         ..Default::default()
@@ -823,7 +824,7 @@ return M
         name: "name".to_string(),
         required: true,
         hooks: FieldHooks {
-            after_read: vec!["hooks.transform.uppercase_on_read".to_string()],
+            after_read: vec![HookRef::new("hooks.transform.uppercase_on_read")],
             ..Default::default()
         },
         ..Default::default()
@@ -961,7 +962,7 @@ return M
         ..Default::default()
     };
     def.fields = vec![title_f, computed_f];
-    def.hooks.after_read = vec!["hooks.note_hooks.add_computed".to_string()];
+    def.hooks.after_read = vec![HookRef::new("hooks.note_hooks.add_computed")];
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
     let shared = Registry::shared();
@@ -1087,7 +1088,7 @@ return M
         ..Default::default()
     };
     def.fields = vec![title_f];
-    def.hooks.before_validate = vec!["hooks.moderator.reject_forbidden".to_string()];
+    def.hooks.before_validate = vec![HookRef::new("hooks.moderator.reject_forbidden")];
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
     let shared = Registry::shared();

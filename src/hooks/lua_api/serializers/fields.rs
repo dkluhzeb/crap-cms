@@ -4,9 +4,12 @@
 use mlua::{Lua, Result as LuaResult, Table};
 use serde_json::Value as JsonValue;
 
-use crate::core::{FieldAccess, FieldDefinition, FieldHooks};
+use crate::core::{FieldAccess, FieldDefinition, FieldHooks, HookRef};
 
-use super::{admin::field_admin_to_lua, helpers::localized_string_to_lua};
+use super::{
+    admin::field_admin_to_lua,
+    helpers::{hook_ref_list_to_lua, hook_ref_to_lua, localized_string_to_lua},
+};
 
 /// Convert a `FieldDefinition` to a full Lua table compatible with `parse_fields()`.
 ///
@@ -17,7 +20,7 @@ use super::{admin::field_admin_to_lua, helpers::localized_string_to_lua};
 pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
 
-    set_field_basics(&tbl, f)?;
+    set_field_basics(lua, &tbl, f)?;
     set_field_options(lua, &tbl, f)?;
 
     if let Some(admin) = field_admin_to_lua(lua, &f.admin)? {
@@ -42,7 +45,7 @@ pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> LuaResult<T
 /// Set the scalar flags (`name`, `type`, `required`, `unique`, `localized`,
 /// `hidden`, `validate`, `default_value`, `picker_appearance`, `timezone`,
 /// `default_timezone`, scalar `has_many`).
-fn set_field_basics(tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
+fn set_field_basics(lua: &Lua, tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
     tbl.set("name", f.name.as_str())?;
     tbl.set("type", f.field_type.as_str())?;
 
@@ -59,7 +62,7 @@ fn set_field_basics(tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
         tbl.set("hidden", true)?;
     }
     if let Some(ref v) = f.validate {
-        tbl.set("validate", v.as_str())?;
+        tbl.set("validate", hook_ref_to_lua(lua, v)?)?;
     }
     if let Some(ref dv) = f.default_value {
         set_default_value(tbl, dv)?;
@@ -211,7 +214,7 @@ fn set_field_tabs(lua: &Lua, tbl: &Table, f: &FieldDefinition) -> LuaResult<()> 
 
 /// Convert a `FieldHooks` to a Lua table. Returns `None` if no hooks are set.
 fn field_hooks_to_lua(lua: &Lua, hooks: &FieldHooks) -> LuaResult<Option<Table>> {
-    let pairs: &[(&str, &[String])] = &[
+    let pairs: &[(&str, &[HookRef])] = &[
         ("before_validate", &hooks.before_validate),
         ("before_change", &hooks.before_change),
         ("after_change", &hooks.after_change),
@@ -226,13 +229,7 @@ fn field_hooks_to_lua(lua: &Lua, hooks: &FieldHooks) -> LuaResult<Option<Table>>
 
     for (key, list) in pairs {
         if !list.is_empty() {
-            let arr = lua.create_table()?;
-
-            for (i, s) in list.iter().enumerate() {
-                arr.set(i + 1, s.as_str())?;
-            }
-
-            tbl.set(*key, arr)?;
+            tbl.set(*key, hook_ref_list_to_lua(lua, list)?)?;
         }
     }
 
@@ -248,15 +245,15 @@ fn field_access_to_lua(lua: &Lua, access: &FieldAccess) -> LuaResult<Option<Tabl
     let tbl = lua.create_table()?;
 
     if let Some(ref s) = access.read {
-        tbl.set("read", s.as_str())?;
+        tbl.set("read", hook_ref_to_lua(lua, s)?)?;
     }
 
     if let Some(ref s) = access.create {
-        tbl.set("create", s.as_str())?;
+        tbl.set("create", hook_ref_to_lua(lua, s)?)?;
     }
 
     if let Some(ref s) = access.update {
-        tbl.set("update", s.as_str())?;
+        tbl.set("update", hook_ref_to_lua(lua, s)?)?;
     }
 
     Ok(Some(tbl))
@@ -392,14 +389,14 @@ mod tests {
                     .build(),
             )
             .hooks(FieldHooks {
-                before_validate: vec!["hooks.field.trim".to_string()],
-                before_change: vec!["hooks.field.upper".to_string()],
+                before_validate: vec![HookRef::new("hooks.field.trim")],
+                before_change: vec![HookRef::new("hooks.field.upper")],
                 after_change: Vec::new(),
-                after_read: vec!["hooks.field.format".to_string()],
+                after_read: vec![HookRef::new("hooks.field.format")],
             })
             .access(FieldAccess {
-                read: Some("hooks.access.check".to_string()),
-                create: Some("hooks.access.admin".to_string()),
+                read: Some(HookRef::new("hooks.access.check")),
+                create: Some(HookRef::new("hooks.access.admin")),
                 update: None,
             })
             .build();

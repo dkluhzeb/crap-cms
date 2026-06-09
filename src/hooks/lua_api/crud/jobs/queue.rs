@@ -118,7 +118,7 @@ fn queue_job_inner(
         let result = check_access_with_lua(
             lua,
             &AccessCheckInput {
-                access_ref: job_def.access.as_deref(),
+                access: job_def.access.as_ref(),
                 user: user_doc.as_ref(),
                 id: None,
                 data: payload.as_ref(),

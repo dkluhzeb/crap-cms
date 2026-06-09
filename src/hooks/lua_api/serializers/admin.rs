@@ -4,7 +4,7 @@ use mlua::{Lua, Result as LuaResult, Table};
 
 use crate::core::FieldAdmin;
 
-use super::helpers::localized_string_to_lua;
+use super::helpers::{hook_ref_to_lua, localized_string_to_lua};
 
 /// Convert a `FieldAdmin` to a Lua table. Returns `None` if all defaults.
 pub(super) fn field_admin_to_lua(lua: &Lua, admin: &FieldAdmin) -> LuaResult<Option<Table>> {
@@ -48,7 +48,7 @@ pub(super) fn field_admin_to_lua(lua: &Lua, admin: &FieldAdmin) -> LuaResult<Opt
         tbl.set("position", v.as_str())?;
     }
     if let Some(ref v) = admin.condition {
-        tbl.set("condition", v.as_str())?;
+        tbl.set("condition", hook_ref_to_lua(lua, v)?)?;
     }
     if let Some(ref v) = admin.step {
         tbl.set("step", v.as_str())?;

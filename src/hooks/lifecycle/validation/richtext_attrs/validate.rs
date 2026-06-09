@@ -182,9 +182,10 @@ fn validate_node_instance(
         checks::check_date_field(attr_def, &data_key, value, is_empty, errors);
 
         // Custom Lua validate function
-        if let Some(ref validate_ref) = attr_def.validate
+        if let Some(ref validate) = attr_def.validate
             && let Some(val) = value
         {
+            let validate_ref = validate.reference();
             let data: HashMap<String, Value> = inst.attrs.clone();
             match run_validate_function_inner(
                 ctx.lua,
@@ -198,6 +199,7 @@ fn validate_node_instance(
                     locale: ctx.locale,
                     operation: ctx.operation,
                     id: ctx.id,
+                    options: validate.options(),
                 },
             ) {
                 Ok(Some(err_msg)) => {
@@ -221,6 +223,7 @@ fn validate_node_instance(
 mod tests {
     use super::super::before_validate::run_before_validate_on_node_attrs;
     use super::*;
+    use crate::core::HookRef;
     use crate::core::{
         FieldAdmin, FieldDefinition, FieldHooks, FieldType, LocalizedString, Registry,
         SelectOption, richtext::RichtextNodeDef,
@@ -600,7 +603,7 @@ mod tests {
                 .attrs(vec![
                     FieldDefinition::builder("text", FieldType::Text)
                         .hooks(FieldHooks {
-                            before_validate: vec!["hooks.trim".to_string()],
+                            before_validate: vec![HookRef::new("hooks.trim")],
                             ..Default::default()
                         })
                         .build(),
@@ -787,7 +790,7 @@ mod tests {
                 .attrs(vec![
                     FieldDefinition::builder("label", FieldType::Text)
                         .hooks(FieldHooks {
-                            before_validate: vec!["hooks.upper".to_string()],
+                            before_validate: vec![HookRef::new("hooks.upper")],
                             ..Default::default()
                         })
                         .build(),
@@ -854,7 +857,7 @@ mod tests {
                 .attrs(vec![
                     FieldDefinition::builder("text", FieldType::Text)
                         .hooks(FieldHooks {
-                            before_validate: vec!["hooks.add_quote".to_string()],
+                            before_validate: vec![HookRef::new("hooks.add_quote")],
                             ..Default::default()
                         })
                         .build(),
