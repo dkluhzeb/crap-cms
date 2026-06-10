@@ -15,7 +15,7 @@ use crate::{
     core::{DocumentFields, FieldDefinition, FieldType, RequiredLocales, validate::FieldError},
     db::{
         DbValue, LocaleContext,
-        query::helpers::{join_table, locale_column, prefixed_name},
+        query::helpers::{join_table, locale_column, prefixed_name, walk_leaf_fields},
     },
     hooks::lifecycle::validation::custom::{ValidateCtxSource, run_required_condition_inner},
 };
@@ -72,7 +72,7 @@ pub(in crate::hooks::lifecycle::validation) fn check_localized_completeness(
         lctx,
     };
     let mut targets: Vec<Target> = Vec::new();
-    collect_required_localized(&cctx, fields, "", false, &mut targets, errors);
+    collect_required_localized(&cctx, fields, &mut targets, errors);
     if targets.is_empty() {
         return;
     }
@@ -165,61 +165,59 @@ fn join_row_exists(ctx: &ValidationCtx, data_key: &str, loc: &str) -> bool {
         .is_some()
 }
 
-/// Collect a [`Target`] for every localized required field, recursing through
-/// layout containers (mirrors the walker's prefix + inherited-localized
-/// traversal). Group sub-fields can't be localized arrays/blocks themselves, so
-/// those join tables keep the group prefix in `data_key`.
+/// Collect a [`Target`] for every localized required field. The flat-column
+/// walk ([`walk_leaf_fields`]) supplies the `group__child` data keys and
+/// localization inheritance, matching the migration DDL — only groups carry
+/// `localized` down to their children; a `localized` flag on a transparent
+/// layout wrapper creates no per-locale columns and therefore must not make
+/// the wrapper's children locale-scoped here either. Group sub-fields can't
+/// be localized arrays/blocks themselves, so those join tables keep the group
+/// prefix in `data_key`.
 fn collect_required_localized(
     cctx: &CompletenessCtx<'_>,
     fields: &[FieldDefinition],
-    prefix: &str,
-    inherited_localized: bool,
     out: &mut Vec<Target>,
     errors: &mut Vec<FieldError>,
 ) {
-    for field in fields {
-        let data_key = prefixed_name(prefix, &field.name);
-        let localized = inherited_localized || field.localized;
-
-        match field.field_type {
-            FieldType::Group => {
-                collect_required_localized(cctx, &field.fields, &data_key, localized, out, errors);
-            }
-            FieldType::Row | FieldType::Collapsible => {
-                collect_required_localized(cctx, &field.fields, prefix, localized, out, errors);
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    collect_required_localized(cctx, &tab.fields, prefix, localized, out, errors);
-                }
-            }
+    let _ = walk_leaf_fields(
+        fields,
+        "",
+        false,
+        &mut |field, prefix, inherited_localized| {
             // Checkboxes always have a value (default off), so `required` is a
             // no-op for them — `check_required` skips them, and completeness
             // must agree, or an unchecked localized checkbox would block writes.
-            FieldType::Checkbox => {}
-            _ => {
-                // A localized field is required either statically (`required`) or
-                // when its `required_when` predicate is truthy. The submit-time
-                // walker skips the predicate for locale-scoped fields (required
-                // is delegated here), so this is the only place it runs for them.
-                let required = field.is_locale_scoped(inherited_localized)
-                    && (field.required || required_when_truthy(cctx, field, &data_key, errors));
-
-                if required {
-                    let kind = if field.has_parent_column() {
-                        FieldKind::Scalar
-                    } else {
-                        FieldKind::Join
-                    };
-                    out.push(Target {
-                        data_key,
-                        locales: effective_locales(field, cctx.ctx, cctx.lctx),
-                        kind,
-                    });
-                }
+            if field.field_type == FieldType::Checkbox {
+                return Ok(());
             }
-        }
-    }
+
+            let data_key = prefixed_name(prefix, &field.name);
+
+            // A localized field is required either statically (`required`) or
+            // when its `required_when` predicate is truthy. The submit-time
+            // walker skips the predicate for locale-scoped fields (required
+            // is delegated here), so this is the only place it runs for them.
+            let required = field.is_locale_scoped(inherited_localized)
+                && (field.required || required_when_truthy(cctx, field, &data_key, errors));
+
+            if !required {
+                return Ok(());
+            }
+
+            let kind = if field.has_parent_column() {
+                FieldKind::Scalar
+            } else {
+                FieldKind::Join
+            };
+            out.push(Target {
+                data_key,
+                locales: effective_locales(field, cctx.ctx, cctx.lctx),
+                kind,
+            });
+
+            Ok(())
+        },
+    );
 }
 
 /// Evaluate a localized field's `required_when` predicate against the submitted
@@ -426,6 +424,43 @@ mod tests {
         assert!(
             errors2.is_empty(),
             "falsy required_when must not require the localized field, got: {errors2:?}"
+        );
+    }
+
+    /// Regression: a `localized` flag on a transparent layout wrapper must NOT
+    /// make the wrapper's children locale-scoped. The migration DDL
+    /// (`walk_leaf_fields`) only propagates localization through groups — a
+    /// localized Row creates no per-locale columns, so the old bespoke walker
+    /// (which propagated the wrapper's flag) could demand locale values for
+    /// columns that don't exist and falsely block the write.
+    #[test]
+    fn localized_layout_wrapper_does_not_scope_children() {
+        let lua = Lua::new();
+        let fields = vec![
+            FieldDefinition::builder("row", FieldType::Row)
+                .localized(true)
+                .fields(vec![
+                    FieldDefinition::builder("title", FieldType::Text)
+                        .required(true)
+                        .build(),
+                ])
+                .build(),
+        ];
+        let lctx = en_de_ctx();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let ctx = ValidationCtx::builder(&conn, "docs")
+            .locale_ctx(Some(&lctx))
+            .build();
+
+        // `title` is required but NOT locale-scoped (its column is not
+        // localized) — completeness must not produce a required_locale error.
+        let data = DocumentFields::new();
+        let mut errors = Vec::new();
+        check_localized_completeness(&lua, &fields, &data, &ctx, &mut errors);
+        assert!(
+            errors.is_empty(),
+            "non-localized child of a 'localized' wrapper must not be \
+             locale-gated, got: {errors:?}"
         );
     }
 }

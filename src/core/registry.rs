@@ -7,10 +7,11 @@ use std::{
 use tracing::{debug, warn};
 
 use crate::core::{
-    CollectionDefinition, FieldDefinition, FieldType, HookRef, Slug,
+    CollectionDefinition, FieldDefinition, HookRef, Slug,
     collection::{Activation, AuthMethod, GlobalDefinition, Surface},
     job::JobDefinition,
     richtext::RichtextNodeDef,
+    walk::{prefixed_name, walk_leaf_fields},
 };
 
 /// Materialised pointer to a single `AuthMethod::Strategy` in the
@@ -176,24 +177,22 @@ impl Registry {
         }
     }
 
-    /// Check if a field name exists, recursing into layout wrappers.
+    /// Check whether `name` is a real parent-table column: a top-level field, a
+    /// field promoted through a layout wrapper, or a group sub-field by its flat
+    /// `group__child` column name. Uses the same flat-column resolution as the
+    /// schema/FTS/column walkers ([`walk_leaf_fields`]) so a valid `list_columns`
+    /// / `list_searchable_fields` entry like `seo__title` is not flagged as
+    /// "not a field". Array/Blocks appear by their own name (leaf columns); their
+    /// sub-fields live in join tables and are intentionally not matched.
     fn field_exists_recursive(name: &str, fields: &[FieldDefinition]) -> bool {
-        fields.iter().any(|f| {
-            if f.name == name {
-                return true;
+        let mut found = false;
+        let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
+            if prefixed_name(prefix, &field.name) == name {
+                found = true;
             }
-
-            match f.field_type {
-                FieldType::Row | FieldType::Collapsible => {
-                    Self::field_exists_recursive(name, &f.fields)
-                }
-                FieldType::Tabs => f
-                    .tabs
-                    .iter()
-                    .any(|tab| Self::field_exists_recursive(name, &tab.fields)),
-                _ => false,
-            }
-        })
+            Ok(())
+        });
+        found
     }
 
     /// Register a global definition, keyed by slug. Overwrites any existing definition.
@@ -465,5 +464,22 @@ mod tests {
                 "Should not find nonexistent field in {container:?}"
             );
         }
+    }
+
+    #[test]
+    fn field_exists_recursive_resolves_group_subfield_by_column_name() {
+        // Regression: a group sub-field referenced by its flat `group__child`
+        // column name (e.g. in list_columns / list_searchable_fields) must
+        // resolve — previously only layout wrappers were descended, so this
+        // spuriously logged "not a field".
+        let fields = vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("title", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+        assert!(Registry::field_exists_recursive("seo__title", &fields));
+        assert!(!Registry::field_exists_recursive("seo__missing", &fields));
     }
 }

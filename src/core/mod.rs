@@ -58,6 +58,7 @@ pub mod slug;
 pub mod timezone;
 pub mod upload;
 pub mod validate;
+pub mod walk;
 
 // Leaf-module types: flat re-export.
 pub use auth::{AuthUser, Claims, HashedPassword, JwtSecret, ResetTokenError};
@@ -75,7 +76,7 @@ pub use field::{
     LocalizedString, McpFieldConfig, PickerAppearance, RelationshipConfig, RequiredLocales,
     SelectOption, ValidateFunction, to_title_case, validate_template_name,
 };
-pub use field_denial::{DenialSeg, FieldDenial};
+pub use field_denial::{DenialSeg, FieldDenial, JsonRoot};
 pub use hook_ref::HookRef;
 pub use job::{JobDefinition, JobLabels, JobRun, JobStatus};
 pub use lua_lease::{LocalLease, LuaVmLease};
@@ -85,6 +86,10 @@ pub use req_context::ReqContext;
 pub use richtext::RichtextNodeDef;
 pub use slug::Slug;
 pub use validate::{FieldError, ValidationError};
+pub use walk::{
+    NestStep, VisitAction, any_field, flatten_array_sub_fields, walk_nested, walk_nested_mut,
+};
+pub(crate) use walk::{SchemaStep, find_field, prefixed_name, walk_all_fields, walk_leaf_fields};
 
 // Namespace-module exception: `Shared*` handle types (Arc-wrapped
 // trait objects) and self-documenting runtime values are flat. Their

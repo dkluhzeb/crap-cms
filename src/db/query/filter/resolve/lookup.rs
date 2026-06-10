@@ -1,6 +1,6 @@
 //! Field-tree lookups shared by normalize and `resolve_filter` paths.
 
-use crate::core::{FieldDefinition, FieldType};
+use crate::core::{FieldDefinition, FieldType, find_field};
 
 /// Look up the [`FieldType`] for a DB column name on the parent table.
 ///
@@ -17,7 +17,7 @@ use crate::core::{FieldDefinition, FieldType};
 /// callers fall back to `DbValue::Text` binding.
 pub(super) fn lookup_column_field_type(col: &str, fields: &[FieldDefinition]) -> Option<FieldType> {
     // Fast path: a top-level scalar/layout leaf named exactly `col`.
-    if let Some(f) = find_field_recursive(col, fields)
+    if let Some(f) = find_field(col, fields)
         && !matches!(
             f.field_type,
             FieldType::Group | FieldType::Array | FieldType::Blocks | FieldType::Relationship
@@ -59,7 +59,7 @@ fn walk_group_path(parts: &[&str], fields: &[FieldDefinition]) -> Option<FieldTy
 
     for (i, seg) in parts.iter().enumerate() {
         let is_last = i == parts.len() - 1;
-        let found = find_field_recursive(seg, current)?;
+        let found = find_field(seg, current)?;
 
         if is_last {
             leaf_type = Some(found.field_type.clone());
@@ -75,36 +75,6 @@ fn walk_group_path(parts: &[&str], fields: &[FieldDefinition]) -> Option<FieldTy
     }
 
     leaf_type
-}
-
-/// Find a field by name, recursing into transparent layout wrappers (Row, Collapsible, Tabs).
-pub(super) fn find_field_recursive<'a>(
-    name: &str,
-    fields: &'a [FieldDefinition],
-) -> Option<&'a FieldDefinition> {
-    for f in fields {
-        if f.name == name {
-            return Some(f);
-        }
-
-        match f.field_type {
-            FieldType::Row | FieldType::Collapsible => {
-                if let Some(found) = find_field_recursive(name, &f.fields) {
-                    return Some(found);
-                }
-            }
-            FieldType::Tabs => {
-                for tab in &f.tabs {
-                    if let Some(found) = find_field_recursive(name, &tab.fields) {
-                        return Some(found);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    None
 }
 
 #[cfg(test)]
@@ -223,7 +193,7 @@ mod tests {
             lookup_column_field_type("meta_title", &fields),
             Some(FieldType::Text)
         );
-        assert!(find_field_recursive("first", &fields).is_some());
-        assert!(find_field_recursive("missing", &fields).is_none());
+        assert!(find_field("first", &fields).is_some());
+        assert!(find_field("missing", &fields).is_none());
     }
 }

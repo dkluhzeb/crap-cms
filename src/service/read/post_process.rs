@@ -13,7 +13,10 @@ use crate::{
     },
     db::{DbConnection, LocaleContext, SharedPopulateSingleflight, Singleflight, query},
     hooks::lifecycle::AfterReadCtx,
-    service::{ServiceContext, helpers, hooks::ReadHooksJoinGuard},
+    service::{
+        ServiceContext, helpers, hooks::ReadHooksJoinGuard,
+        read::populated_strip::EmbeddedDocStripper,
+    },
 };
 
 /// Fields needed by post-processing. Implemented by all read input structs.
@@ -128,6 +131,18 @@ pub(crate) fn post_process_single(
 
     doc.strip_fields(&denied);
 
+    // Strip field-read-denied fields from populated relationship targets — each
+    // embedded doc belongs to another collection with its own field access.
+    if let Some(registry) = opts.registry() {
+        EmbeddedDocStripper::new(
+            registry,
+            hooks,
+            user,
+            opts.locale_ctx().map(LocaleContext::access_locale),
+        )
+        .strip(doc, &def.fields);
+    }
+
     let ar_ctx = AfterReadCtx {
         hooks: &def.hooks,
         fields: &def.fields,
@@ -142,6 +157,35 @@ pub(crate) fn post_process_single(
     let placeholder = Document::new(String::new());
     let owned = mem::replace(doc, placeholder);
     *doc = hooks.after_read_one(&ar_ctx, owned);
+}
+
+/// Strip read-denied + API-hidden fields from a batch of documents: first the
+/// documents' own fields, then the field-access-denied fields of any populated
+/// relationship targets (via [`EmbeddedDocStripper`], which memoizes per-target
+/// denials across the batch). `registry` is `None` when populate was not run.
+fn strip_read_denied_from_docs(
+    docs: &mut [Document],
+    fields: &[crate::core::FieldDefinition],
+    hooks: &dyn crate::service::hooks::ReadHooks,
+    user: Option<&Document>,
+    locale: Option<&str>,
+    registry: Option<&Registry>,
+) {
+    let mut denied = hooks.field_read_denied(fields, user, locale);
+    denied.extend(helpers::collect_api_hidden_field_names(fields, ""));
+
+    if !denied.is_empty() {
+        for doc in docs.iter_mut() {
+            doc.strip_fields(&denied);
+        }
+    }
+
+    if let Some(registry) = registry {
+        let stripper = EmbeddedDocStripper::new(registry, hooks, user, locale);
+        for doc in docs.iter_mut() {
+            stripper.strip(doc, fields);
+        }
+    }
 }
 
 /// Shared post-processing for find: hydrate, populate, upload sizes,
@@ -246,18 +290,14 @@ pub(crate) fn post_process_docs(
         }
     }
 
-    let mut denied = hooks.field_read_denied(
+    strip_read_denied_from_docs(
+        docs,
         &def.fields,
+        hooks,
         user,
         opts.locale_ctx().map(LocaleContext::access_locale),
+        opts.registry(),
     );
-    denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
-
-    if !denied.is_empty() {
-        for doc in docs.iter_mut() {
-            doc.strip_fields(&denied);
-        }
-    }
 
     let ar_ctx = AfterReadCtx {
         hooks: &def.hooks,

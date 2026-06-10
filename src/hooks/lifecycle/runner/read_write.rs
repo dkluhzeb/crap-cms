@@ -5,10 +5,8 @@ use serde_json::Value;
 
 use super::run::{FieldHooksCall, FieldWriteCtx};
 use crate::{
-    core::{
-        Document, DocumentFields, FieldDefinition, FieldError, FieldType, Hooks, ValidationError,
-    },
-    db::{DbConnection, LocaleContext, query::helpers::prefixed_name},
+    core::{Document, DocumentFields, FieldDefinition, FieldError, Hooks, ValidationError},
+    db::{DbConnection, LocaleContext},
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
         lifecycle::{
@@ -16,7 +14,8 @@ use crate::{
             execution::{AfterReadCtx, apply_after_read_inner, has_field_hooks_for_event},
             types::{FieldHookEvent, TxContextGuard},
             validation::{
-                richtext_attrs::run_before_validate_on_node_attrs, validate_fields_inner,
+                richtext_attrs::{collect_richtext_fields, run_before_validate_on_node_attrs},
+                validate_fields_inner,
             },
         },
     },
@@ -285,7 +284,7 @@ impl HookRunner {
         data: &mut DocumentFields,
         collection: &str,
     ) {
-        let richtext_fields = collect_richtext_fields_recursive(fields, "");
+        let richtext_fields = collect_richtext_fields(fields);
 
         if richtext_fields.is_empty() {
             return;
@@ -374,120 +373,5 @@ impl HookRunner {
             ui_locale: ctx.ui_locale,
         };
         validate_fields_inner(&lua, fields, data, &enriched_ctx)
-    }
-}
-
-/// Walk the field tree recursively and collect all Richtext fields that have
-/// custom nodes configured, along with their data key (the `__`-separated
-/// column name used in the flat data map).
-///
-/// - **Group**: adds `group__` prefix to children
-/// - **Row / Collapsible**: transparent — passes through unchanged
-/// - **Tabs**: transparent — iterates each tab's fields
-fn collect_richtext_fields_recursive<'a>(
-    fields: &'a [FieldDefinition],
-    prefix: &str,
-) -> Vec<(&'a FieldDefinition, String)> {
-    let mut out = Vec::new();
-    for field in fields {
-        match field.field_type {
-            FieldType::Group => {
-                let new_prefix = prefixed_name(prefix, &field.name);
-                out.extend(collect_richtext_fields_recursive(
-                    &field.fields,
-                    &new_prefix,
-                ));
-            }
-            FieldType::Row | FieldType::Collapsible => {
-                out.extend(collect_richtext_fields_recursive(&field.fields, prefix));
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    out.extend(collect_richtext_fields_recursive(&tab.fields, prefix));
-                }
-            }
-            FieldType::Richtext if !field.admin.nodes.is_empty() => {
-                out.push((field, prefixed_name(prefix, &field.name)));
-            }
-            _ => {}
-        }
-    }
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::{FieldAdmin, FieldTab};
-    fn rt_field(name: &str) -> FieldDefinition {
-        FieldDefinition::builder(name, crate::core::FieldType::Richtext)
-            .admin(FieldAdmin::builder().nodes(vec!["cta".to_string()]).build())
-            .build()
-    }
-
-    fn text_field(name: &str) -> FieldDefinition {
-        FieldDefinition::builder(name, crate::core::FieldType::Text).build()
-    }
-
-    #[test]
-    fn collect_top_level_richtext() {
-        let fields = vec![rt_field("content"), text_field("title")];
-        let result = collect_richtext_fields_recursive(&fields, "");
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].1, "content");
-    }
-
-    #[test]
-    fn collect_richtext_inside_group() {
-        let fields = vec![
-            FieldDefinition::builder("seo", crate::core::FieldType::Group)
-                .fields(vec![rt_field("body")])
-                .build(),
-        ];
-        let result = collect_richtext_fields_recursive(&fields, "");
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].1, "seo__body");
-    }
-
-    #[test]
-    fn collect_richtext_inside_tabs() {
-        let fields = vec![
-            FieldDefinition::builder("layout", crate::core::FieldType::Tabs)
-                .tabs(vec![FieldTab::new("Tab1", vec![rt_field("content")])])
-                .build(),
-        ];
-        let result = collect_richtext_fields_recursive(&fields, "");
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].1, "content");
-    }
-
-    #[test]
-    fn collect_richtext_group_inside_tabs() {
-        let fields = vec![
-            FieldDefinition::builder("layout", crate::core::FieldType::Tabs)
-                .tabs(vec![FieldTab::new(
-                    "SEO",
-                    vec![
-                        FieldDefinition::builder("seo", crate::core::FieldType::Group)
-                            .fields(vec![rt_field("desc")])
-                            .build(),
-                    ],
-                )])
-                .build(),
-        ];
-        let result = collect_richtext_fields_recursive(&fields, "");
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].1, "seo__desc");
-    }
-
-    #[test]
-    fn collect_skips_richtext_without_nodes() {
-        let fields =
-            vec![FieldDefinition::builder("body", crate::core::FieldType::Richtext).build()];
-        let result = collect_richtext_fields_recursive(&fields, "");
-        assert!(
-            result.is_empty(),
-            "richtext without nodes should be skipped"
-        );
     }
 }

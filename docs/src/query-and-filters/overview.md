@@ -426,7 +426,7 @@ All filter operators (equals, contains, like, in, greater_than, etc.) work with 
 
 ## Full-Text Search
 
-Use the `search` parameter for fast full-text search powered by SQLite FTS5. This searches across all text-like fields (text, textarea, richtext, email, code) or the fields specified in `list_searchable_fields` in the collection's admin config.
+Use the `search` parameter for fast full-text search powered by SQLite FTS5. This searches across all text-like fields (text, textarea, richtext, email, code) — including text-like fields inside groups, indexed under their `group__field` column name — or the fields specified in `list_searchable_fields` in the collection's admin config (which may also reference group sub-fields by their `group__field` name).
 
 **Lua:**
 

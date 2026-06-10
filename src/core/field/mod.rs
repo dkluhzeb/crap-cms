@@ -14,9 +14,13 @@ pub use admin::{
 pub use block_definition::{BlockDefinition, FieldTab};
 pub use definition::{
     FieldAccess, FieldDefinition, FieldDefinitionBuilder, FieldHookFn, FieldHooks, McpFieldConfig,
-    PickerAppearance, RequiredLocales, ValidateFunction, flatten_array_sub_fields, to_title_case,
+    PickerAppearance, RequiredLocales, ValidateFunction, to_title_case,
 };
 pub use field_type::FieldType;
 pub use localized_string::LocalizedString;
 pub use relationship::{JoinConfig, RelationshipConfig};
 pub use select_option::SelectOption;
+
+// The field-tree walkers live in `core::walk`; re-export `flatten_array_sub_fields`
+// here so existing `core::field::flatten_array_sub_fields` call sites resolve.
+pub use crate::core::walk::flatten_array_sub_fields;

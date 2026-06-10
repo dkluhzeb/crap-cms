@@ -61,7 +61,21 @@ pub fn list_versions(
     }
 
     let total = query::count_versions(conn, &table, input.parent_id)?;
-    let versions = query::list_versions(conn, &table, input.parent_id, input.limit, input.offset)?;
+    let mut versions =
+        query::list_versions(conn, &table, input.parent_id, input.limit, input.offset)?;
+
+    // Strip read-denied + API-hidden fields from every snapshot — parity with
+    // `find_version_by_id`; otherwise denied fields leak through the list.
+    let mut denied = hooks.field_read_denied(ctx.fields()?, ctx.user, None);
+    denied.extend(crate::service::helpers::collect_api_hidden_field_names(
+        ctx.fields()?,
+        "",
+    ));
+    if !denied.is_empty() {
+        for version in &mut versions {
+            super::find::strip_snapshot_fields(&mut version.snapshot, &denied);
+        }
+    }
 
     let limit = input.limit.unwrap_or(total);
     let offset = input.offset.unwrap_or(0);

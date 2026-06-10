@@ -167,6 +167,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **A `localized` flag on a layout wrapper (Row/Collapsible/Tabs) no longer
+  locale-gates the fields inside it.** The localized-completeness publish gate
+  propagated a wrapper's `localized` flag down to its children, but the schema
+  layer never creates per-locale columns for wrapper children — only groups
+  carry localization down. A required field inside a `localized` Row could
+  therefore be reported as "required in locale X" for a locale it has no column
+  for, blocking the write. Completeness now resolves locale scope exactly like
+  the migration DDL.
+
+- **Text fields inside groups are now full-text searchable by default.** The
+  default FTS field set (used when a collection doesn't configure
+  `list_searchable_fields`) only collected text-like fields at the top level and
+  inside layout wrappers — fields inside a group (real columns like
+  `seo__title`) were silently left out of the search index. Group sub-fields are
+  now indexed as their `group__field` columns, with group localization inherited
+  (a text field in a localized group expands per-locale), and group-nested
+  richtext is JSON-extracted rather than indexed as raw JSON. `list_columns` /
+  `list_searchable_fields` may now also reference a group sub-field by its
+  `group__field` name without being flagged as "not a field". The FTS index is
+  rebuilt on startup, so existing databases pick the new columns up automatically.
+
+- **Field-level read access is now enforced on populated relationship targets.**
+  When a relationship/upload field was populated (its id expanded into the full
+  related document), the embedded document was returned with *all* of its fields
+  — including fields the requesting user is denied read access to on the *target*
+  collection (via `access.read` or `hidden`). Collection-level read access was
+  already enforced (a denied target yields an empty array / null), but the
+  target's own field-level rules were skipped, so a field hidden on collection B
+  leaked whenever a collection-A document populated a B reference. The denied
+  fields are now stripped from every embedded target at any populate depth,
+  recursively, before the document leaves the read path. The shared populate
+  cache still stores full documents (the strip is per-user, applied to the
+  per-request copy), and the pass is skipped entirely when no collection
+  configures any field-level read control.
+
 - **The `[admin] access` panel gate now fails closed.** If the database pool was
   exhausted (or the access task failed to join) while running the configured
   `admin.access` hook, the gate previously returned "allowed" — admitting the

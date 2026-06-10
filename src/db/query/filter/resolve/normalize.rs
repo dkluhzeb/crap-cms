@@ -1,6 +1,6 @@
 //! Rewrite dot-notation Group paths to flat `__`-joined column names.
 
-use crate::core::{FieldDefinition, FieldType};
+use crate::core::{FieldDefinition, FieldType, find_field};
 use crate::db::FilterClause;
 
 /// Rewrite dot notation for group fields: `seo.meta_title` → `seo__meta_title`.
@@ -38,28 +38,7 @@ fn normalize_field_name(field: &mut String, fields: &[FieldDefinition]) {
 
 /// Check if a field name refers to a Group, recursing into transparent layout wrappers.
 fn is_group_field(name: &str, fields: &[FieldDefinition]) -> bool {
-    for f in fields {
-        if f.name == name && f.field_type == FieldType::Group {
-            return true;
-        }
-
-        // Recurse into transparent layout wrappers
-        match f.field_type {
-            FieldType::Row | FieldType::Collapsible if is_group_field(name, &f.fields) => {
-                return true;
-            }
-            FieldType::Tabs => {
-                for tab in &f.tabs {
-                    if is_group_field(name, &tab.fields) {
-                        return true;
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    false
+    find_field(name, fields).is_some_and(|f| f.field_type == FieldType::Group)
 }
 
 #[cfg(test)]

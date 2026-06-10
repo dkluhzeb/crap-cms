@@ -12,5 +12,5 @@ mod before_validate;
 mod extract;
 mod validate;
 
-pub(crate) use before_validate::run_before_validate_on_node_attrs;
+pub(crate) use before_validate::{collect_richtext_fields, run_before_validate_on_node_attrs};
 pub(crate) use validate::{RichtextValidationCtx, validate_richtext_node_attrs};

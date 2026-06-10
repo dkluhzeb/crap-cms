@@ -6,10 +6,7 @@ use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use serde_json::Value;
 
-use crate::{
-    core::{FieldDefinition, FieldType},
-    db::DbValue,
-};
+use crate::{core::FieldType, db::DbValue};
 
 use super::sanitize_locale;
 
@@ -275,58 +272,11 @@ pub(crate) fn coerce_date_value_json(
     coerce_date_value(field_type, s, tz)
 }
 
-/// Build a prefixed name: `"prefix__name"` or just `"name"` when prefix is empty.
-///
-/// Used by field walkers that track group nesting (backfill, back-references, columns).
-pub(crate) fn prefixed_name(prefix: &str, name: &str) -> String {
-    if prefix.is_empty() {
-        name.to_string()
-    } else {
-        format!("{prefix}__{name}")
-    }
-}
-
-/// Walk a field tree, calling `visit` for each non-layout field.
-///
-/// Handles Group (prefixed recursion with localized propagation),
-/// Row/Collapsible (passthrough), and Tabs (per-tab recursion).
-/// The visitor receives `(field, prefix, inherited_localized)` and decides
-/// what to do — including whether to skip non-parent-column fields.
-pub(crate) fn walk_leaf_fields<'a, F>(
-    fields: &'a [FieldDefinition],
-    prefix: &str,
-    inherited_localized: bool,
-    visit: &mut F,
-) -> Result<()>
-where
-    F: FnMut(&'a FieldDefinition, &str, bool) -> Result<()>,
-{
-    for field in fields {
-        match field.field_type {
-            FieldType::Group => {
-                let new_prefix = prefixed_name(prefix, &field.name);
-
-                walk_leaf_fields(
-                    &field.fields,
-                    &new_prefix,
-                    inherited_localized || field.localized,
-                    visit,
-                )?;
-            }
-            FieldType::Row | FieldType::Collapsible => {
-                walk_leaf_fields(&field.fields, prefix, inherited_localized, visit)?;
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    walk_leaf_fields(&tab.fields, prefix, inherited_localized, visit)?;
-                }
-            }
-            _ => visit(field, prefix, inherited_localized)?,
-        }
-    }
-
-    Ok(())
-}
+// The field-tree walkers `prefixed_name` and `walk_leaf_fields` now live in
+// `core::walk` (the single home for every field-tree traversal). Re-exported
+// here so the many `query::helpers::{prefixed_name, walk_leaf_fields}` call
+// sites keep their import path.
+pub(crate) use crate::core::walk::{prefixed_name, walk_leaf_fields};
 
 /// Build a locale-suffixed column name: `"field__en"`, `"seo__title__de"`.
 ///

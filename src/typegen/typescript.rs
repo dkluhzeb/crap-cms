@@ -1,7 +1,10 @@
 //! TypeScript type definition generator — interfaces for gRPC client wrappers.
 
+use std::slice::from_ref;
+
 use crate::core::{
     CollectionDefinition, FieldDefinition, FieldType, Registry, collection::GlobalDefinition,
+    flatten_array_sub_fields,
 };
 
 use super::helpers::{
@@ -135,26 +138,12 @@ fn write_polymorphic_comment(out: &mut String, field: &FieldDefinition, indent: 
 
 /// Write a single field's type definition.
 fn write_field(out: &mut String, field: &FieldDefinition, parent_pascal: &str) {
-    // Row is layout-only — promote sub-fields to parent level (no prefix)
-    if field.field_type == FieldType::Row {
-        for sub in &field.fields {
+    // Layout wrappers are transparent — emit their sub-fields at this level.
+    // The canonical wrapper-flatten (`flatten_array_sub_fields`) owns the
+    // promotion rules.
+    if field.field_type.is_layout_wrapper() {
+        for sub in flatten_array_sub_fields(from_ref(field)) {
             write_field(out, sub, parent_pascal);
-        }
-        return;
-    }
-    // Collapsible is layout-only — promote sub-fields to parent level (no prefix)
-    if field.field_type == FieldType::Collapsible {
-        for sub in &field.fields {
-            write_field(out, sub, parent_pascal);
-        }
-        return;
-    }
-    // Tabs is layout-only — promote sub-fields to parent level (no prefix)
-    if field.field_type == FieldType::Tabs {
-        for tab in &field.tabs {
-            for sub in &tab.fields {
-                write_field(out, sub, parent_pascal);
-            }
         }
         return;
     }

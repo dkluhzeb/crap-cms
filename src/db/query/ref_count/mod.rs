@@ -18,4 +18,4 @@ pub use api::{
     get_ref_count, get_ref_count_locked, lock_ref_targets_from_data, snapshot_outgoing_refs,
 };
 pub use outgoing_ref::OutgoingRef;
-pub(crate) use walk::{RefPathSeg, walk_blocks_with, walk_nested_with};
+pub(crate) use walk::{walk_blocks_with, walk_nested_with};

@@ -10,11 +10,32 @@ use serde_json::Value;
 
 use crate::{
     core::{
-        FieldDefinition, HookRef, Registry,
+        FieldDefinition, FieldType, HookRef, Registry, prefixed_name,
         richtext::renderer::{extract_attr_value, html_escape_attr},
+        walk_leaf_fields,
     },
     hooks::{lifecycle::execution::resolve_hook_function, lua_api},
 };
+
+/// Collect richtext fields with custom nodes, paired with their flat
+/// `group__child` column name (the key in the flat data map). The flat-column
+/// walk ([`walk_leaf_fields`]) handles Group prefixing and transparent layout
+/// wrappers; Array/Blocks sub-fields (join-table data) are visited as opaque
+/// leaf columns and filtered out by the richtext check.
+pub(crate) fn collect_richtext_fields(
+    fields: &[FieldDefinition],
+) -> Vec<(&FieldDefinition, String)> {
+    let mut out = Vec::new();
+
+    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
+        if field.field_type == FieldType::Richtext && !field.admin.nodes.is_empty() {
+            out.push((field, prefixed_name(prefix, &field.name)));
+        }
+        Ok(())
+    });
+
+    out
+}
 
 ///
 /// Returns the (potentially modified) content string.
@@ -301,5 +322,81 @@ mod tests {
             run_before_validate_on_node_attrs(&lua, content, &field, &registry, "posts"),
             content
         );
+    }
+
+    // ── collect_richtext_fields ─────────────────────────────────────────────
+
+    fn richtext_with_nodes(name: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Richtext)
+            .admin(FieldAdmin::builder().nodes(vec!["callout".into()]).build())
+            .build()
+    }
+
+    fn keys(fields: &[FieldDefinition]) -> Vec<String> {
+        collect_richtext_fields(fields)
+            .into_iter()
+            .map(|(_, key)| key)
+            .collect()
+    }
+
+    #[test]
+    fn collects_top_level_richtext_with_nodes_only() {
+        let fields = vec![
+            richtext_with_nodes("body"),
+            // no custom nodes → skipped
+            FieldDefinition::builder("notes", FieldType::Richtext).build(),
+            FieldDefinition::builder("title", FieldType::Text).build(),
+        ];
+        assert_eq!(keys(&fields), vec!["body".to_string()]);
+    }
+
+    #[test]
+    fn group_richtext_uses_double_underscore_data_key() {
+        let fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![richtext_with_nodes("body")])
+                .build(),
+        ];
+        assert_eq!(keys(&fields), vec!["meta__body".to_string()]);
+    }
+
+    #[test]
+    fn layout_wrappers_are_transparent_no_prefix() {
+        let fields = vec![
+            FieldDefinition::builder("row", FieldType::Row)
+                .fields(vec![richtext_with_nodes("body")])
+                .build(),
+        ];
+        assert_eq!(keys(&fields), vec!["body".to_string()]);
+    }
+
+    #[test]
+    fn recurses_into_tabs() {
+        let fields = vec![
+            FieldDefinition::builder("tabs", FieldType::Tabs)
+                .tabs(vec![crate::core::field::FieldTab::new(
+                    "Content",
+                    vec![richtext_with_nodes("body")],
+                )])
+                .build(),
+        ];
+        assert_eq!(keys(&fields), vec!["body".to_string()]);
+    }
+
+    #[test]
+    fn group_inside_tabs_keeps_group_prefix() {
+        let fields = vec![
+            FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![crate::core::field::FieldTab::new(
+                    "SEO",
+                    vec![
+                        FieldDefinition::builder("seo", FieldType::Group)
+                            .fields(vec![richtext_with_nodes("desc")])
+                            .build(),
+                    ],
+                )])
+                .build(),
+        ];
+        assert_eq!(keys(&fields), vec!["seo__desc".to_string()]);
     }
 }

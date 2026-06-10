@@ -187,10 +187,11 @@ pub(crate) fn flatten_group_fields(
     let mut map = DocumentFields::new();
 
     for (k, v) in data.as_map() {
-        if names_a_group(fields, k)
+        if let Some(field) = lookup_field(fields, k)
+            && field.field_type == FieldType::Group
             && let Some(obj) = v.as_object()
         {
-            flatten_group_obj(k, obj, &mut map);
+            flatten_group_obj(k, obj, &field.fields, &mut map);
 
             continue;
         }
@@ -201,28 +202,49 @@ pub(crate) fn flatten_group_fields(
     map
 }
 
-/// Whether `key` names a `Group` field at the flattened top level — i.e. a
-/// direct top-level group, or one reached through only transparent layout
-/// wrappers (Row/Collapsible/Tabs), which don't contribute a data key of their
-/// own. Without seeing through the wrappers, a group nested under a top-level
-/// Row would arrive nested but never get flattened, so the validator would look
-/// it up by flat `group__child` key and miss it.
-fn names_a_group(fields: &[FieldDefinition], key: &str) -> bool {
-    fields.iter().any(|f| match f.field_type {
-        FieldType::Group => f.name == key,
-        FieldType::Row | FieldType::Collapsible => names_a_group(&f.fields, key),
-        FieldType::Tabs => f.tabs.iter().any(|t| names_a_group(&t.fields, key)),
-        _ => false,
-    })
+/// Find the field a data key resolves to at the flattened top level — a direct
+/// top-level field, or one reached through only transparent layout wrappers
+/// (Row/Collapsible/Tabs), which contribute no data key of their own. First
+/// match wins. Returns `None` if no field has that name.
+fn lookup_field<'a>(fields: &'a [FieldDefinition], key: &str) -> Option<&'a FieldDefinition> {
+    for f in fields {
+        if f.name == key {
+            return Some(f);
+        }
+
+        let nested = match f.field_type {
+            FieldType::Row | FieldType::Collapsible => lookup_field(&f.fields, key),
+            FieldType::Tabs => f.tabs.iter().find_map(|t| lookup_field(&t.fields, key)),
+            _ => None,
+        };
+        if nested.is_some() {
+            return nested;
+        }
+    }
+
+    None
 }
 
-/// Recursively flatten a group object into `prefix__key` typed pairs.
-fn flatten_group_obj(prefix: &str, obj: &JsonMap<String, JsonValue>, map: &mut DocumentFields) {
+/// Flatten a group object into `prefix__key` pairs, recursing ONLY into nested
+/// `Group` sub-fields. A non-group object value (a `Json` field, or an array)
+/// is kept as a single value for its own column — recursing into it would
+/// flatten it onto a non-existent `prefix__sub__key` column and drop it on
+/// persist.
+fn flatten_group_obj(
+    prefix: &str,
+    obj: &JsonMap<String, JsonValue>,
+    fields: &[FieldDefinition],
+    map: &mut DocumentFields,
+) {
     for (sub_key, sub_val) in obj {
         let flat_key = format!("{prefix}__{sub_key}");
 
-        if let JsonValue::Object(nested) = sub_val {
-            flatten_group_obj(&flat_key, nested, map);
+        let sub_field = lookup_field(fields, sub_key);
+        if let Some(f) = sub_field
+            && f.field_type == FieldType::Group
+            && let JsonValue::Object(nested) = sub_val
+        {
+            flatten_group_obj(&flat_key, nested, &f.fields, map);
         } else {
             map.insert(flat_key, sub_val.clone());
         }
@@ -398,6 +420,38 @@ mod tests {
 
         let map = ctx.to_value_map(&fields);
         assert_eq!(map.get("seo"), Some(&json!("plain-string")));
+    }
+
+    #[test]
+    fn json_subfield_in_group_kept_whole_not_flattened() {
+        // Regression (data loss): a Json (object-valued) sub-field inside a
+        // group must stay as the single `group__json` column value, NOT get
+        // recursively flattened into `group__json__key` (which lands on a
+        // non-existent column and is dropped on persist).
+        let mut data = HashMap::new();
+        data.insert(
+            "seo".to_string(),
+            json!({ "config": { "a": 1, "b": 2 }, "title": "T" }),
+        );
+
+        let ctx = HookContext::builder("posts", "create").data(data).build();
+
+        let fields = vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("config", FieldType::Json).build(),
+                    FieldDefinition::builder("title", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+
+        let map = ctx.to_value_map(&fields);
+        assert_eq!(map.get("seo__config"), Some(&json!({ "a": 1, "b": 2 })));
+        assert_eq!(map.get("seo__title"), Some(&json!("T")));
+        assert!(
+            !map.contains_key("seo__config__a"),
+            "Json sub-field must not be flattened into columns"
+        );
     }
 
     #[test]

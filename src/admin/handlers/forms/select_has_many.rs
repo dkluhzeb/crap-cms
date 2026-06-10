@@ -12,13 +12,60 @@
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
-use crate::core::{FieldDefinition, FieldType};
-/// Normalize `has_many` select/text/number form values into canonical JSON array strings.
+use crate::core::{FieldDefinition, FieldType, prefixed_name, walk_leaf_fields};
+
+/// Normalize `has_many` select/text/number form values into canonical JSON
+/// array strings. The flat-column walk ([`walk_leaf_fields`]) handles Group
+/// `__`-prefixing and transparent layout wrappers.
 pub(crate) fn transform_select_has_many(
     form: &mut HashMap<String, String>,
     field_defs: &[FieldDefinition],
 ) {
-    transform_has_many_recursive(form, field_defs, "");
+    // Collect transforms first to avoid double-borrow on `form`
+    let mut updates: Vec<(String, String)> = Vec::new();
+
+    let _ = walk_leaf_fields(field_defs, "", false, &mut |field, prefix, _| {
+        let is_multi_leaf = matches!(
+            field.field_type,
+            FieldType::Select | FieldType::Text | FieldType::Number
+        );
+        if !is_multi_leaf || !field.has_many {
+            return Ok(());
+        }
+
+        let full_name = prefixed_name(prefix, &field.name);
+        let json_val = form
+            .get(&full_name)
+            .map_or_else(|| "[]".to_string(), |val| canonical_json_array(val));
+        updates.push((full_name, json_val));
+
+        Ok(())
+    });
+
+    for (name, val) in updates {
+        form.insert(name, val);
+    }
+}
+
+/// Normalize one raw form value into a canonical JSON string array.
+fn canonical_json_array(val: &str) -> String {
+    if val.is_empty() {
+        return "[]".to_string();
+    }
+
+    // JSON API / validate endpoint — already an array of strings.
+    if let Some(canonical) = parse_as_json_string_array(val) {
+        return canonical;
+    }
+
+    // Traditional HTML form — comma-separated.
+    let values: Vec<&str> = val
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    json!(values).to_string()
 }
 
 /// If `val` already parses as a JSON array of strings, return it re-serialized
@@ -36,67 +83,6 @@ fn parse_as_json_string_array(val: &str) -> Option<String> {
     let strings: Vec<&str> = arr.iter().map(|v| v.as_str()).collect::<Option<_>>()?;
 
     Some(json!(strings).to_string())
-}
-
-/// Recursive helper for `transform_select_has_many`.
-/// `prefix` accumulates `__`-separated Group names.
-/// Layout wrappers (Row/Collapsible/Tabs) pass through transparently.
-fn transform_has_many_recursive(
-    form: &mut HashMap<String, String>,
-    field_defs: &[FieldDefinition],
-    prefix: &str,
-) {
-    // Collect transforms first to avoid double-borrow on `form`
-    let mut updates: Vec<(String, String)> = Vec::new();
-
-    for field in field_defs {
-        let full_name = if prefix.is_empty() {
-            field.name.clone()
-        } else {
-            format!("{}__{}", prefix, field.name)
-        };
-
-        match field.field_type {
-            FieldType::Select | FieldType::Text | FieldType::Number if field.has_many => {
-                if let Some(val) = form.get(&full_name) {
-                    let json_val = if val.is_empty() {
-                        "[]".to_string()
-                    } else if let Some(canonical) = parse_as_json_string_array(val) {
-                        // JSON API / validate endpoint — already an array of strings.
-                        canonical
-                    } else {
-                        // Traditional HTML form — comma-separated.
-                        let values: Vec<&str> = val
-                            .split(',')
-                            .map(str::trim)
-                            .filter(|s| !s.is_empty())
-                            .collect();
-
-                        json!(values).to_string()
-                    };
-                    updates.push((full_name, json_val));
-                } else {
-                    updates.push((full_name, "[]".to_string()));
-                }
-            }
-            FieldType::Group => {
-                transform_has_many_recursive(form, &field.fields, &full_name);
-            }
-            FieldType::Row | FieldType::Collapsible => {
-                transform_has_many_recursive(form, &field.fields, prefix);
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    transform_has_many_recursive(form, &tab.fields, prefix);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    for (name, val) in updates {
-        form.insert(name, val);
-    }
 }
 
 #[cfg(test)]

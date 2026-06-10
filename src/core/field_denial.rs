@@ -19,6 +19,7 @@ pub trait JsonRoot {
     fn root_get(&self, key: &str) -> Option<&Value>;
     fn root_get_mut(&mut self, key: &str) -> Option<&mut Value>;
     fn root_remove(&mut self, key: &str);
+    fn root_insert(&mut self, key: String, value: Value);
 }
 
 impl JsonRoot for HashMap<String, Value> {
@@ -31,6 +32,9 @@ impl JsonRoot for HashMap<String, Value> {
     fn root_remove(&mut self, key: &str) {
         self.remove(key);
     }
+    fn root_insert(&mut self, key: String, value: Value) {
+        self.insert(key, value);
+    }
 }
 
 impl JsonRoot for Map<String, Value> {
@@ -42,6 +46,9 @@ impl JsonRoot for Map<String, Value> {
     }
     fn root_remove(&mut self, key: &str) {
         self.remove(key);
+    }
+    fn root_insert(&mut self, key: String, value: Value) {
+        self.insert(key, value);
     }
 }
 

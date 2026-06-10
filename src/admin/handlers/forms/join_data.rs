@@ -3,73 +3,50 @@
 use serde_json::Value;
 use std::collections::HashMap;
 
-use crate::core::{DocumentFields, FieldDefinition, FieldType};
+use crate::core::{DocumentFields, FieldDefinition, FieldType, prefixed_name, walk_leaf_fields};
 
 use super::composite::parse_composite_form_data;
 
-/// Extract join table data from form submission for has-many relationships and array fields.
-/// Returns a map suitable for `query::save_join_table_data`.
+/// Extract join table data from form submission for has-many relationships and
+/// array fields. Returns a map suitable for `query::save_join_table_data`.
+///
+/// The flat-column walk ([`walk_leaf_fields`]) handles Group `__`-prefixing and
+/// transparent layout wrappers; Array/Blocks/has-many-Relationship are visited
+/// as the leaf columns that own join tables.
 pub(crate) fn extract_join_data_from_form(
     form: &HashMap<String, String>,
     field_defs: &[FieldDefinition],
 ) -> DocumentFields {
     let mut join_data = DocumentFields::new();
 
-    extract_join_data_recursive(form, field_defs, "", &mut join_data);
-
-    join_data
-}
-
-/// Recursive helper for `extract_join_data_from_form`.
-/// `prefix` accumulates `__`-separated Group names for nested Groups.
-/// Layout wrappers (Row/Collapsible/Tabs) pass through transparently.
-fn extract_join_data_recursive(
-    form: &HashMap<String, String>,
-    field_defs: &[FieldDefinition],
-    prefix: &str,
-    join_data: &mut DocumentFields,
-) {
-    for field in field_defs {
-        let full_name = if prefix.is_empty() {
-            field.name.clone()
-        } else {
-            format!("{}__{}", prefix, field.name)
-        };
-
+    let _ = walk_leaf_fields(field_defs, "", false, &mut |field, prefix, _| {
         match field.field_type {
             FieldType::Relationship => {
                 if let Some(ref rc) = field.relationship
                     && rc.has_many
                 {
-                    if let Some(val) = form.get(&full_name) {
-                        join_data.insert(full_name, Value::String(val.clone()));
-                    } else {
-                        join_data.insert(full_name, Value::String(String::new()));
-                    }
+                    let full_name = prefixed_name(prefix, &field.name);
+                    let val = form.get(&full_name).cloned().unwrap_or_default();
+                    join_data.insert(full_name, Value::String(val));
                 }
             }
             FieldType::Array => {
+                let full_name = prefixed_name(prefix, &field.name);
                 let json_rows = parse_composite_form_data(form, &full_name, &field.fields);
                 join_data.insert(full_name, Value::Array(json_rows));
             }
             FieldType::Blocks => {
+                let full_name = prefixed_name(prefix, &field.name);
                 let json_rows = parse_composite_form_data(form, &full_name, &[]);
                 join_data.insert(full_name, Value::Array(json_rows));
             }
-            FieldType::Group => {
-                extract_join_data_recursive(form, &field.fields, &full_name, join_data);
-            }
-            FieldType::Row | FieldType::Collapsible => {
-                extract_join_data_recursive(form, &field.fields, prefix, join_data);
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    extract_join_data_recursive(form, &tab.fields, prefix, join_data);
-                }
-            }
             _ => {}
         }
-    }
+
+        Ok(())
+    });
+
+    join_data
 }
 
 #[cfg(test)]

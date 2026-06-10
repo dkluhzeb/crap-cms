@@ -8,6 +8,7 @@ mod draft_visibility;
 mod find;
 mod find_by_id;
 mod get_global;
+mod populated_strip;
 pub(crate) mod post_process;
 mod search;
 mod validate_filters;

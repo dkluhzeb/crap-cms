@@ -7,7 +7,7 @@ use anyhow::Result;
 use crate::{
     config::LocaleConfig,
     core::{CollectionDefinition, FieldDefinition, FieldType, Registry},
-    db::query::helpers::locale_column,
+    db::query::helpers::{locale_column, prefixed_name, walk_leaf_fields},
 };
 
 /// Field types that live in separate tables and have no column on the parent table.
@@ -20,14 +20,28 @@ const CONTAINER_FIELD_TYPES: &[FieldType] = &[
     FieldType::Tabs,
 ];
 
+/// Text-like field types eligible for default FTS indexing.
+fn is_text_like(field_type: &FieldType) -> bool {
+    matches!(
+        field_type,
+        FieldType::Text
+            | FieldType::Textarea
+            | FieldType::Richtext
+            | FieldType::Email
+            | FieldType::Code
+    )
+}
+
 /// Determine which logical fields should be indexed in the FTS5 table.
 ///
 /// Uses `list_searchable_fields` if configured, otherwise falls back to all
-/// text-like fields (Text, Textarea, Richtext, Email, Code) at the parent level
-/// (no group sub-fields, no array/block sub-fields).
+/// text-like fields (Text, Textarea, Richtext, Email, Code) — including those
+/// nested in groups (collected as `group__field` columns) and promoted through
+/// layout wrappers. Array/Blocks sub-fields are excluded (they live in join
+/// tables, not on the parent row).
 ///
 /// Container types (array, blocks, group, row, collapsible, tabs) are always
-/// excluded because they don't have columns on the parent table.
+/// excluded as their own names because they don't have columns on the parent table.
 #[must_use]
 pub fn get_fts_fields(def: &CollectionDefinition) -> Vec<String> {
     if !def.admin.list_searchable_fields.is_empty() {
@@ -46,49 +60,35 @@ pub fn get_fts_fields(def: &CollectionDefinition) -> Vec<String> {
     collect_fts_defaults(&def.fields)
 }
 
-/// Check if a field name refers to an FTS-eligible column, recursing into
-/// layout wrappers (Row, Collapsible, Tabs) that promote children.
+/// Check if a field name refers to an FTS-eligible column. Resolves the same
+/// flat-column names FTS indexes (`walk_leaf_fields`): top-level and
+/// wrapper-promoted fields by bare name, group sub-fields as `group__field`.
+/// Array/Blocks (and the wrapper/group containers themselves) are not eligible.
 fn is_fts_eligible_field(name: &str, fields: &[FieldDefinition]) -> bool {
-    fields.iter().any(|f| {
-        if f.name == name && !CONTAINER_FIELD_TYPES.contains(&f.field_type) {
-            return true;
+    let mut eligible = false;
+    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
+        if prefixed_name(prefix, &field.name) == name
+            && !CONTAINER_FIELD_TYPES.contains(&field.field_type)
+        {
+            eligible = true;
         }
-
-        if matches!(
-            f.field_type,
-            FieldType::Row | FieldType::Collapsible | FieldType::Tabs
-        ) {
-            return is_fts_eligible_field(name, &f.fields);
-        }
-
-        false
-    })
+        Ok(())
+    });
+    eligible
 }
 
-/// Collect default FTS fields (text-like) from top level and layout wrappers.
+/// Collect default FTS fields (text-like) — top level, group sub-fields (as
+/// `group__field` columns), and layout-wrapper-promoted children. Array/Blocks
+/// sub-fields are excluded (they live in join tables, visited here as opaque
+/// leaf columns and filtered out by the text-like check).
 fn collect_fts_defaults(fields: &[FieldDefinition]) -> Vec<String> {
     let mut result = Vec::new();
-
-    for f in fields {
-        if matches!(
-            f.field_type,
-            FieldType::Text
-                | FieldType::Textarea
-                | FieldType::Richtext
-                | FieldType::Email
-                | FieldType::Code
-        ) {
-            result.push(f.name.clone());
+    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
+        if is_text_like(&field.field_type) {
+            result.push(prefixed_name(prefix, &field.name));
         }
-
-        if matches!(
-            f.field_type,
-            FieldType::Row | FieldType::Collapsible | FieldType::Tabs
-        ) {
-            result.extend(collect_fts_defaults(&f.fields));
-        }
-    }
-
+        Ok(())
+    });
     result
 }
 
@@ -134,38 +134,52 @@ pub fn get_fts_columns(
     Ok(columns)
 }
 
-/// Find a field by name and return its `localized` flag, descending transparent
-/// layout wrappers (Row/Collapsible/Tabs) so a wrapper-promoted field resolves.
-/// `None` if no such field exists at the parent level.
+/// Find a field by its flat-column name and return whether it is localized,
+/// resolving the same way FTS collects columns (`walk_leaf_fields`): group
+/// sub-fields by their `group__field` name, with group `localized` inherited by
+/// children — so a field inside a localized group expands per-locale even if the
+/// field itself isn't marked localized. `None` if no such column exists.
 fn field_localized(name: &str, fields: &[FieldDefinition]) -> Option<bool> {
-    for f in fields {
-        if f.name == name {
-            return Some(f.localized);
-        }
-
-        if matches!(
-            f.field_type,
-            FieldType::Row | FieldType::Collapsible | FieldType::Tabs
-        ) && let Some(localized) = field_localized(name, &f.fields)
-        {
-            return Some(localized);
-        }
-    }
-
-    None
+    let mut result = None;
+    let _ = walk_leaf_fields(
+        fields,
+        "",
+        false,
+        &mut |field, prefix, inherited_localized| {
+            if result.is_none() && prefixed_name(prefix, &field.name) == name {
+                result = Some(inherited_localized || field.localized);
+            }
+            Ok(())
+        },
+    );
+    result
 }
 
-/// Build a set of column names that are JSON-format richtext fields.
-/// Checks both bare field names and locale-expanded variants (`field__locale`).
+/// Build a set of column names that are JSON-format richtext fields — including
+/// group-nested ones (as `group__field`), so a richtext field indexed by FTS is
+/// JSON-extracted rather than treated as plain text wherever it lives.
 pub(super) fn json_richtext_columns(def: &CollectionDefinition) -> HashSet<String> {
     let mut set = HashSet::new();
-    for f in &def.fields {
-        if f.field_type == FieldType::Richtext && f.admin.richtext_format.as_deref() == Some("json")
+    let _ = walk_leaf_fields(&def.fields, "", false, &mut |field, prefix, _| {
+        if field.field_type == FieldType::Richtext
+            && field.admin.richtext_format.as_deref() == Some("json")
         {
-            set.insert(f.name.clone());
+            set.insert(prefixed_name(prefix, &field.name));
         }
-    }
+        Ok(())
+    });
     set
+}
+
+/// Whether an FTS column holds JSON richtext — either a richtext column name in
+/// `json_rt_cols`, or its per-locale form `column__locale`. The locale is the
+/// trailing `__` segment, so it's stripped from the tail (`seo__body__en` →
+/// `seo__body`), never the head.
+pub(super) fn is_json_richtext_column(col_name: &str, json_rt_cols: &HashSet<String>) -> bool {
+    json_rt_cols.contains(col_name)
+        || col_name
+            .rsplit_once("__")
+            .is_some_and(|(base, _locale)| json_rt_cols.contains(base))
 }
 
 /// Build a map of node type name → searchable attr names from collection definition
@@ -178,7 +192,10 @@ pub(super) fn build_node_searchable_map<'a>(
     let (Some(def), Some(registry)) = (def, registry) else {
         return map;
     };
-    for field in &def.fields {
+    // Descend groups so a JSON-richtext field nested in a group contributes its
+    // searchable node attrs too (the map is keyed by node type, so the column
+    // prefix is irrelevant here — only reaching every richtext field matters).
+    let _ = walk_leaf_fields(&def.fields, "", false, &mut |field, _prefix, _| {
         if field.field_type == FieldType::Richtext
             && field.admin.richtext_format.as_deref() == Some("json")
         {
@@ -197,7 +214,8 @@ pub(super) fn build_node_searchable_map<'a>(
                 }
             }
         }
-    }
+        Ok(())
+    });
     map
 }
 
@@ -248,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn get_fts_fields_excludes_non_parent() {
+    fn get_fts_fields_includes_group_subfields_excludes_array() {
         let def = simple_def(vec![
             text_field("title"),
             FieldDefinition::builder("items", FieldType::Array)
@@ -258,8 +276,79 @@ mod tests {
                 .fields(vec![text_field("description")])
                 .build(),
         ]);
-        // Only "title" at parent level — Array and Group are not text-like
-        assert_eq!(get_fts_fields(&def), vec!["title"]);
+        // Group sub-fields ARE parent-table columns (`meta__description`) and are
+        // indexed; Array sub-fields live in a join table and are not.
+        assert_eq!(get_fts_fields(&def), vec!["title", "meta__description"]);
+    }
+
+    #[test]
+    fn default_fts_includes_group_nested_text() {
+        // Regression: a text field inside a group must be FTS-default as its real
+        // `group__field` column — previously groups were skipped entirely.
+        let def = simple_def(vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![text_field("title"), text_field("description")])
+                .build(),
+        ]);
+        assert_eq!(get_fts_fields(&def), vec!["seo__title", "seo__description"]);
+    }
+
+    #[test]
+    fn searchable_accepts_group_subfield_by_prefixed_name() {
+        // A user can now list a group sub-field as `seo__title` in
+        // list_searchable_fields and have it resolve.
+        let mut def = simple_def(vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![text_field("title"), text_field("desc")])
+                .build(),
+        ]);
+        def.admin.list_searchable_fields = vec!["seo__title".into()];
+        assert_eq!(get_fts_fields(&def), vec!["seo__title"]);
+    }
+
+    #[test]
+    fn get_fts_columns_expands_localized_group_subfield() {
+        // A localized text field inside a group expands per-locale as
+        // `seo__title__en` / `seo__title__de`.
+        let def = simple_def(vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![localized_field("title")])
+                .build(),
+        ]);
+        let cols = get_fts_columns(&def, &locale_en_de()).unwrap();
+        assert_eq!(cols, vec!["seo__title__en", "seo__title__de"]);
+    }
+
+    #[test]
+    fn json_richtext_columns_includes_group_nested() {
+        let mut body = FieldDefinition::builder("body", FieldType::Richtext).build();
+        body.admin.richtext_format = Some("json".into());
+        let def = simple_def(vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![body])
+                .build(),
+        ]);
+        let cols = json_richtext_columns(&def);
+        assert!(
+            cols.contains("seo__body"),
+            "group-nested json richtext must be detected as seo__body, got {cols:?}"
+        );
+    }
+
+    #[test]
+    fn is_json_richtext_column_handles_group_prefix_and_locale_suffix() {
+        let cols: HashSet<String> = ["seo__body".to_string(), "body".to_string()]
+            .into_iter()
+            .collect();
+        // group, non-localized + localized; top-level non-localized + localized
+        assert!(is_json_richtext_column("seo__body", &cols));
+        assert!(is_json_richtext_column("seo__body__en", &cols));
+        assert!(is_json_richtext_column("body", &cols));
+        assert!(is_json_richtext_column("body__de", &cols));
+        // a plain text group column must NOT be mis-detected (locale strip is
+        // tail-only, so `seo__title` does not resolve to the group root `seo`)
+        assert!(!is_json_richtext_column("seo__title", &cols));
+        assert!(!is_json_richtext_column("seo", &cols));
     }
 
     #[test]

@@ -13,7 +13,7 @@ use serde_json::Value as JsonValue;
 use tracing::debug;
 
 use crate::{
-    core::{DocumentFields, FieldDefinition, FieldType, HookRef, field::FieldHooks},
+    core::{DocumentFields, FieldDefinition, FieldType, HookRef, any_field, field::FieldHooks},
     db::query::helpers::prefixed_name,
     hooks::{
         lifecycle::{
@@ -331,25 +331,8 @@ impl FieldHookWalker<'_> {
 /// Recursively check if any field (including nested Group/Row/Collapsible/Tabs
 /// children) has hooks registered for the given event.
 pub(super) fn has_any_field_hook(fields: &[FieldDefinition], event: &FieldHookEvent) -> bool {
-    fields.iter().any(|f| {
-        if !get_field_hook_refs(&f.hooks, event).is_empty() {
-            return true;
-        }
-
-        match f.field_type {
-            FieldType::Group | FieldType::Row | FieldType::Collapsible | FieldType::Array => {
-                has_any_field_hook(&f.fields, event)
-            }
-            FieldType::Tabs => f
-                .tabs
-                .iter()
-                .any(|tab| has_any_field_hook(&tab.fields, event)),
-            FieldType::Blocks => f
-                .blocks
-                .iter()
-                .any(|b| has_any_field_hook(&b.fields, event)),
-            _ => false,
-        }
+    any_field(fields, &|f| {
+        !get_field_hook_refs(&f.hooks, event).is_empty()
     })
 }
 

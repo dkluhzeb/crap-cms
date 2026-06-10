@@ -5,6 +5,7 @@
 
 use crate::core::{
     CollectionDefinition, FieldDefinition, FieldType, Registry, collection::GlobalDefinition,
+    flatten_array_sub_fields,
 };
 
 use super::helpers::{
@@ -292,26 +293,15 @@ fn render_global_impl(out: &mut String, global: &GlobalDefinition) {
 }
 
 /// Render field extraction lines for a struct's `from_document` body.
+/// The canonical wrapper-flatten (`flatten_array_sub_fields`) promotes
+/// Row/Collapsible/Tabs sub-fields to this level.
 fn render_field_extractions(
     out: &mut String,
     fields: &[FieldDefinition],
     parent_pascal: &str,
     doc_var: &str,
 ) {
-    for f in fields {
-        // Layout-only wrappers — promote sub-fields
-        if f.field_type == FieldType::Row || f.field_type == FieldType::Collapsible {
-            render_field_extractions(out, &f.fields, parent_pascal, doc_var);
-            continue;
-        }
-
-        if f.field_type == FieldType::Tabs {
-            for tab in &f.tabs {
-                render_field_extractions(out, &tab.fields, parent_pascal, doc_var);
-            }
-            continue;
-        }
-
+    for f in flatten_array_sub_fields(fields) {
         let extraction = field_extraction(f, parent_pascal, doc_var);
         w!(out, "            {}: {},", f.name, extraction);
     }

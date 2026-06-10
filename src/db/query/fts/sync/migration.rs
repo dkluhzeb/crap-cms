@@ -8,7 +8,9 @@ use anyhow::{Context as _, Result, bail};
 use crate::config::LocaleConfig;
 use crate::core::CollectionDefinition;
 use crate::db::query::fts::extract::extract_prosemirror_text;
-use crate::db::query::fts::fields::{get_fts_columns, json_richtext_columns};
+use crate::db::query::fts::fields::{
+    get_fts_columns, is_json_richtext_column, json_richtext_columns,
+};
 use crate::db::query::fts::search::fts_table_name;
 use crate::db::query::is_valid_identifier;
 use crate::db::{DbConnection, DbValue};
@@ -166,11 +168,7 @@ fn bulk_populate_slow(
         for (i, col_name) in fts_fields.iter().enumerate() {
             let raw = row.text_at(i + 1).unwrap_or("").to_string();
 
-            let is_json_rt = json_rt_cols.contains(col_name)
-                || col_name
-                    .split("__")
-                    .next()
-                    .is_some_and(|base| json_rt_cols.contains(base));
+            let is_json_rt = is_json_richtext_column(col_name, json_rt_cols);
 
             let text = if is_json_rt && !raw.is_empty() {
                 extract_prosemirror_text(&raw)

@@ -10,9 +10,9 @@
 
 use std::collections::HashSet;
 
-use crate::core::{FieldDefinition, FieldType, field::to_title_case};
+use crate::core::{FieldDefinition, FieldType, NestStep, any_field, field::to_title_case};
 use crate::db::query::join::find_all_array_rows_with_parent;
-use crate::db::query::ref_count::{RefPathSeg, walk_blocks_with, walk_nested_with};
+use crate::db::query::ref_count::{walk_blocks_with, walk_nested_with};
 
 use super::helpers::field_display_label;
 use super::types::{BackRefScan, BackReference};
@@ -65,30 +65,21 @@ impl PathAccumulator {
 /// Whether any relationship/upload field in this subtree could target
 /// `target` — used to skip loading join tables that can't contribute.
 fn fields_may_target(fields: &[FieldDefinition], target: &str) -> bool {
-    fields.iter().any(|f| match f.field_type {
-        FieldType::Relationship | FieldType::Upload => f
-            .relationship
-            .as_ref()
-            .is_some_and(|rc| rc.all_collections().contains(&target)),
-        FieldType::Group | FieldType::Array | FieldType::Row | FieldType::Collapsible => {
-            fields_may_target(&f.fields, target)
-        }
-        FieldType::Blocks => f
-            .blocks
-            .iter()
-            .any(|b| fields_may_target(&b.fields, target)),
-        FieldType::Tabs => f.tabs.iter().any(|t| fields_may_target(&t.fields, target)),
-        _ => false,
+    any_field(fields, &|f| {
+        matches!(f.field_type, FieldType::Relationship | FieldType::Upload)
+            && f.relationship
+                .as_ref()
+                .is_some_and(|rc| rc.all_collections().contains(&target))
     })
 }
 
 /// The dotted `field_name` path: ancestor segment names plus the leaf field.
-fn path_names(path: &[RefPathSeg<'_>], leaf: &FieldDefinition) -> String {
+fn path_names(path: &[NestStep<'_>], leaf: &FieldDefinition) -> String {
     let mut parts: Vec<&str> = path
         .iter()
         .map(|seg| match seg {
-            RefPathSeg::Field(f) => f.name.as_str(),
-            RefPathSeg::Block(b) => b.block_type.as_str(),
+            NestStep::Field(f) => f.name.as_str(),
+            NestStep::Block(b) => b.block_type.as_str(),
         })
         .collect();
     parts.push(leaf.name.as_str());
@@ -98,13 +89,13 @@ fn path_names(path: &[RefPathSeg<'_>], leaf: &FieldDefinition) -> String {
 
 /// The human label: container prefix, then each ancestor segment's display
 /// label, then the leaf field's label — joined with ` > `.
-fn build_label(prefix: &str, path: &[RefPathSeg<'_>], leaf: &FieldDefinition) -> String {
+fn build_label(prefix: &str, path: &[NestStep<'_>], leaf: &FieldDefinition) -> String {
     let mut parts: Vec<String> = vec![prefix.to_string()];
 
     for seg in path {
         parts.push(match seg {
-            RefPathSeg::Field(f) => field_display_label(f),
-            RefPathSeg::Block(b) => b.label.as_ref().map_or_else(
+            NestStep::Field(f) => field_display_label(f),
+            NestStep::Block(b) => b.label.as_ref().map_or_else(
                 || to_title_case(&b.block_type),
                 |l| l.resolve_default().to_string(),
             ),

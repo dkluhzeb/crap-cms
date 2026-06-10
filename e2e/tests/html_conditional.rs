@@ -103,15 +103,15 @@ async fn show_when_visible_false_returns_hidden() {
     );
 }
 
-// ── unknown_condition_ref_rejected ───────────────────────────────────────
+// ── client_sent_ref_ignored_server_uses_configured_ref ───────────────────
 //
-// Security gate: the handler validates each condition ref against the set
-// of refs declared in the collection's field defs. Calling an arbitrary
-// Lua function is rejected (treated as "visible" to fail open rather than
-// silently hiding fields).
+// Security gate: the handler resolves each field's OWN configured
+// `admin.condition` ref server-side — the client-sent ref string is never
+// trusted or called. A request smuggling an arbitrary Lua ref for a known
+// condition field still evaluates the field's configured condition.
 
 #[tokio::test]
-async fn unknown_condition_ref_treated_as_visible() {
+async fn client_sent_ref_ignored_server_uses_configured_ref() {
     let app = setup_with_condition_hook();
     let user_id = create_test_user(&app, "cond3@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "cond3@test.com");
@@ -139,8 +139,57 @@ async fn unknown_condition_ref_treated_as_visible() {
     let parsed: Value = serde_json::from_str(&body_string(resp.into_body()).await).unwrap();
     assert_eq!(
         parsed["url"],
+        json!(false),
+        "the client-sent ref must be ignored — the field's configured \
+         show_when_online condition (online=false) decides visibility"
+    );
+}
+
+// ── unknown_condition_field_fails_open ───────────────────────────────────
+//
+// A field name with no configured `admin.condition` (or not a field at all)
+// has nothing to evaluate server-side: it fails open (visible) rather than
+// silently hiding the field.
+
+#[tokio::test]
+async fn unknown_condition_field_fails_open() {
+    let app = setup_with_condition_hook();
+    let user_id = create_test_user(&app, "cond4@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "cond4@test.com");
+
+    let body = json!({
+        "form_data": { "online": false, "url": "" },
+        "conditions": {
+            "title": "hooks.conditions.show_when_online",
+            "no_such_field": "hooks.conditions.show_when_online"
+        }
+    })
+    .to_string();
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/admin/collections/events/evaluate-conditions")
+                .header("Cookie", auth_and_csrf(&cookie))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed: Value = serde_json::from_str(&body_string(resp.into_body()).await).unwrap();
+    assert_eq!(
+        parsed["title"],
         json!(true),
-        "unknown condition refs must fail open (visible), not silently hide"
+        "a field without a configured condition must fail open (visible)"
+    );
+    assert_eq!(
+        parsed["no_such_field"],
+        json!(true),
+        "a nonexistent field name must fail open (visible)"
     );
 }
 

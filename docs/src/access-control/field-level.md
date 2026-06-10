@@ -41,6 +41,8 @@ After a query, denied fields are **stripped from the response**. The field still
 
 Fields with `admin.hidden = true` are also stripped from all API responses, regardless of access rules.
 
+This also applies to **populated relationship and upload targets**: when a reference is expanded into the full related document, the target collection's own field-level read rules (and `admin.hidden` flags) are evaluated for the requesting user and denied fields are stripped from the embedded document — at any populate depth, including references nested inside groups, arrays, and blocks.
+
 ## Example
 
 ```lua

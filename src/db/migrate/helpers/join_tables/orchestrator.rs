@@ -1,17 +1,19 @@
-//! Recursive walker that dispatches each field to the per-type sync helper.
+//! Field-tree planner that dispatches each join-bearing field to the per-type
+//! sync helper.
 //!
 //! Split into two halves: a pure planner ([`plan_join_tables`]) that walks
-//! the field tree and produces the flat list of join tables to sync — with
-//! all the prefix/localized-inheritance/layout-transparency logic — and a
-//! thin executor that runs the DDL for each plan entry. The walk carries no
-//! I/O, so it is unit-tested directly.
+//! the field tree and produces the flat list of join tables to sync — the
+//! prefix/localized-inheritance/layout-transparency rules come from the
+//! canonical flat-column walk ([`walk_leaf_fields`]) — and a thin executor
+//! that runs the DDL for each plan entry. The walk carries no I/O, so it is
+//! unit-tested directly.
 
 use anyhow::Result;
 
 use crate::config::LocaleConfig;
 use crate::core::{FieldDefinition, FieldType};
 use crate::db::DbConnection;
-use crate::db::query::helpers::prefixed_name;
+use crate::db::query::helpers::{prefixed_name, walk_leaf_fields};
 
 use super::array::sync_array_table;
 use super::blocks::sync_blocks_table;
@@ -44,86 +46,40 @@ struct JoinTablePlan<'a> {
 
 /// Walk the field tree and produce the flat, ordered list of join tables to
 /// sync. Pure — no DB I/O. Depth-first, matching the executor's apply order.
+/// The flat-column walk ([`walk_leaf_fields`]) supplies the Group `__` prefix,
+/// localized-group inheritance, and layout-wrapper transparency; join-bearing
+/// leaves (Relationship/Upload/Array/Blocks) become plan entries.
 fn plan_join_tables<'a>(
     fields: &'a [FieldDefinition],
     locale_config: &LocaleConfig,
 ) -> Vec<JoinTablePlan<'a>> {
     let mut plans = Vec::new();
-    collect_join_table_plans(fields, locale_config, "", false, &mut plans);
+
+    let _ = walk_leaf_fields(
+        fields,
+        "",
+        false,
+        &mut |field, prefix, inherited_localized| {
+            let kind = match field.field_type {
+                FieldType::Relationship | FieldType::Upload => JoinTableKind::Relationship,
+                FieldType::Array => JoinTableKind::Array,
+                FieldType::Blocks => JoinTableKind::Blocks,
+                _ => return Ok(()),
+            };
+
+            plans.push(JoinTablePlan {
+                kind,
+                field,
+                full_name: prefixed_name(prefix, &field.name),
+                has_locale_col: (inherited_localized || field.localized)
+                    && locale_config.is_enabled(),
+            });
+
+            Ok(())
+        },
+    );
+
     plans
-}
-
-/// Recursive core of [`plan_join_tables`]. `prefix` accumulates the `__`
-/// group path; `inherited_localized` propagates a localized group down to its
-/// children (mirroring the `_locale`-column decision).
-fn collect_join_table_plans<'a>(
-    fields: &'a [FieldDefinition],
-    locale_config: &LocaleConfig,
-    prefix: &str,
-    inherited_localized: bool,
-    plans: &mut Vec<JoinTablePlan<'a>>,
-) {
-    for field in fields {
-        let has_locale_col = (inherited_localized || field.localized) && locale_config.is_enabled();
-        let full_name = prefixed_name(prefix, &field.name);
-
-        match field.field_type {
-            FieldType::Relationship | FieldType::Upload => {
-                plans.push(JoinTablePlan {
-                    kind: JoinTableKind::Relationship,
-                    field,
-                    full_name,
-                    has_locale_col,
-                });
-            }
-            FieldType::Array => {
-                plans.push(JoinTablePlan {
-                    kind: JoinTableKind::Array,
-                    field,
-                    full_name,
-                    has_locale_col,
-                });
-            }
-            FieldType::Blocks => {
-                plans.push(JoinTablePlan {
-                    kind: JoinTableKind::Blocks,
-                    field,
-                    full_name,
-                    has_locale_col,
-                });
-            }
-            FieldType::Group => {
-                collect_join_table_plans(
-                    &field.fields,
-                    locale_config,
-                    &full_name,
-                    inherited_localized || field.localized,
-                    plans,
-                );
-            }
-            FieldType::Row | FieldType::Collapsible => {
-                collect_join_table_plans(
-                    &field.fields,
-                    locale_config,
-                    prefix,
-                    inherited_localized,
-                    plans,
-                );
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    collect_join_table_plans(
-                        &tab.fields,
-                        locale_config,
-                        prefix,
-                        inherited_localized,
-                        plans,
-                    );
-                }
-            }
-            _ => {}
-        }
-    }
 }
 
 /// Run the DDL for a single planned join table.

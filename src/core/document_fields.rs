@@ -75,6 +75,9 @@ impl JsonRoot for DocumentFields {
     fn root_remove(&mut self, key: &str) {
         self.0.remove(key);
     }
+    fn root_insert(&mut self, key: String, value: Value) {
+        self.0.insert(key, value);
+    }
 }
 
 impl Deref for DocumentFields {

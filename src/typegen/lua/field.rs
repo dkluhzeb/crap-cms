@@ -2,7 +2,9 @@
 //! `---@field name? type` line) and `field_to_lua_type` (maps a
 //! [`FieldDefinition`] to its `LuaLS` type string).
 
-use crate::core::{FieldDefinition, FieldType};
+use std::slice::from_ref;
+
+use crate::core::{FieldDefinition, FieldType, flatten_array_sub_fields};
 
 use super::super::helpers::{is_optional, rel_has_many, to_pascal_case, w};
 
@@ -27,26 +29,12 @@ fn write_field_inner(
     parent_pascal: &str,
     force_optional: bool,
 ) {
-    // Row is layout-only — promote sub-fields to parent level (no prefix)
-    if field.field_type == FieldType::Row {
-        for sub in &field.fields {
+    // Layout wrappers are transparent — emit their sub-fields at this level.
+    // The canonical wrapper-flatten (`flatten_array_sub_fields`) owns the
+    // promotion rules.
+    if field.field_type.is_layout_wrapper() {
+        for sub in flatten_array_sub_fields(from_ref(field)) {
             write_field_inner(out, sub, parent_pascal, force_optional);
-        }
-        return;
-    }
-    // Collapsible is layout-only — promote sub-fields to parent level (no prefix)
-    if field.field_type == FieldType::Collapsible {
-        for sub in &field.fields {
-            write_field_inner(out, sub, parent_pascal, force_optional);
-        }
-        return;
-    }
-    // Tabs is layout-only — promote sub-fields to parent level (no prefix)
-    if field.field_type == FieldType::Tabs {
-        for tab in &field.tabs {
-            for sub in &tab.fields {
-                write_field_inner(out, sub, parent_pascal, force_optional);
-            }
         }
         return;
     }

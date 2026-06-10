@@ -6,7 +6,9 @@ use serde_json::{Map, Value};
 
 use crate::{
     admin::Translations,
-    core::{DocumentFields, FieldAdmin, FieldDefinition, FieldType, ValidationError, field},
+    core::{
+        DocumentFields, FieldAdmin, FieldDefinition, FieldType, ValidationError, field, find_field,
+    },
     db::DbPool,
     hooks::HookRunner,
     service::{ServiceContext, document_info::get_ref_count},
@@ -84,16 +86,11 @@ pub fn flatten_document_values(
 }
 
 /// True iff `name` refers to a Group field at the effective top level of
-/// `field_defs`. Recurses through Tabs/Row/Collapsible — those wrappers are
+/// `field_defs`. Descends Tabs/Row/Collapsible — those wrappers are
 /// transparent for column-naming purposes, so a Group nested in any of
 /// them is still a "top-level Group" for the form-flatten contract.
 fn is_group_field(field_defs: &[FieldDefinition], name: &str) -> bool {
-    field_defs.iter().any(|f| match f.field_type {
-        FieldType::Group => f.name == name,
-        FieldType::Row | FieldType::Collapsible => is_group_field(&f.fields, name),
-        FieldType::Tabs => f.tabs.iter().any(|t| is_group_field(&t.fields, name)),
-        _ => false,
-    })
+    find_field(name, field_defs).is_some_and(|f| f.field_type == FieldType::Group)
 }
 
 /// Recursively flatten a group object into `prefix__key` pairs.

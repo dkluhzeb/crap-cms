@@ -14,16 +14,19 @@
 //! different mechanisms at runtime.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 use anyhow::{Result, bail};
 use mlua::Lua;
 use tracing::warn;
 
 use crate::core::{
-    Access, FieldDefinition, FieldType, HookRef, Hooks, Registry, RequiredLocales, Slug,
+    Access, FieldDefinition, FieldType, HookRef, Hooks, Registry, RequiredLocales, SchemaStep,
+    Slug,
     collection::{Activation, AuthMethod, Surface},
+    walk_all_fields,
 };
-use crate::db::query::helpers::{global_table, join_table, prefixed_name};
+use crate::db::query::helpers::{global_table, join_table, prefixed_name, walk_leaf_fields};
 use crate::hooks::lifecycle::resolve_hook_function;
 
 /// Validate every statically-known hook and access reference in the registry.
@@ -310,7 +313,7 @@ fn walk_fields_for_collisions(
     source: &str,
     out: &mut Vec<String>,
 ) {
-    for f in fields {
+    walk_all_fields(fields, &mut Vec::new(), &mut |f, _| {
         for loc in locales {
             let suffix = format!("__{loc}");
             if f.name.ends_with(&suffix) && f.name.len() > suffix.len() {
@@ -320,17 +323,7 @@ fn walk_fields_for_collisions(
                 ));
             }
         }
-
-        if !f.fields.is_empty() {
-            walk_fields_for_collisions(&f.fields, locales, source, out);
-        }
-        for block in &f.blocks {
-            walk_fields_for_collisions(&block.fields, locales, source, out);
-        }
-        for tab in &f.tabs {
-            walk_fields_for_collisions(&tab.fields, locales, source, out);
-        }
-    }
+    });
 }
 
 /// Validate every `required_locales` setting against the configured locales, so
@@ -356,7 +349,6 @@ pub fn validate_required_locales(registry: &Registry, locales: &[String]) -> Res
         );
         walk_fields_for_required_locales(
             &def.fields,
-            false,
             locales,
             &format!("collection '{slug}'"),
             &mut errors,
@@ -367,7 +359,6 @@ pub fn validate_required_locales(registry: &Registry, locales: &[String]) -> Res
     for (slug, def) in &registry.globals {
         walk_fields_for_required_locales(
             &def.fields,
-            false,
             locales,
             &format!("global '{slug}'"),
             &mut errors,
@@ -417,68 +408,51 @@ fn check_required_locales_value(
     }
 }
 
-/// Recurse through a field tree validating every `required_locales` override.
+/// Walk a field tree validating every `required_locales` override.
+///
+/// Fields nested inside Array/Blocks rows are skipped: completeness treats
+/// those as opaque leaf join targets, so a `required_locales` nested inside
+/// one is inert and not validated here. Localization scope matches the
+/// completeness check (and the migration DDL): only enclosing *groups* carry
+/// `localized` down — layout wrappers don't.
 fn walk_fields_for_required_locales(
     fields: &[FieldDefinition],
-    inherited_localized: bool,
     locales: &[String],
     source: &str,
     out: &mut Vec<String>,
 ) {
-    for f in fields {
-        if let Some(rl) = f.required_locales.as_ref() {
-            let ctx = format!("{source} field '{}'", f.name);
-
-            // `required_locales` is only meaningful on a locale-scoped field —
-            // one that is `localized`, or inherits localization from an
-            // enclosing group. This honors inheritance (the per-field parser
-            // can't), matching how the completeness check resolves scope.
-            if !f.is_locale_scoped(inherited_localized) {
-                out.push(format!(
-                    "{ctx}: required_locales only applies to localized fields \
-                     (mark the field — or its enclosing group — localized)"
-                ));
-            }
-
-            check_required_locales_value(Some(rl), locales, &ctx, out);
+    walk_all_fields(fields, &mut Vec::new(), &mut |f, path| {
+        let inside_join_subtree = path.iter().any(|s| {
+            matches!(s, SchemaStep::Field(p)
+                if matches!(p.field_type, FieldType::Array | FieldType::Blocks))
+        });
+        if inside_join_subtree {
+            return;
         }
 
-        // Recurse exactly as the completeness check does: through groups
-        // (which carry localization down) and the transparent layout wrappers.
-        // Array/Blocks inner fields are intentionally NOT walked — completeness
-        // treats those as opaque leaf join targets, so a `required_locales`
-        // nested inside one is inert and not validated here.
-        match f.field_type {
-            FieldType::Group => walk_fields_for_required_locales(
-                &f.fields,
-                inherited_localized || f.localized,
-                locales,
-                source,
-                out,
-            ),
-            FieldType::Row | FieldType::Collapsible => {
-                walk_fields_for_required_locales(
-                    &f.fields,
-                    inherited_localized,
-                    locales,
-                    source,
-                    out,
-                );
-            }
-            FieldType::Tabs => {
-                for tab in &f.tabs {
-                    walk_fields_for_required_locales(
-                        &tab.fields,
-                        inherited_localized,
-                        locales,
-                        source,
-                        out,
-                    );
-                }
-            }
-            _ => {}
+        let Some(rl) = f.required_locales.as_ref() else {
+            return;
+        };
+
+        let ctx = format!("{source} field '{}'", f.name);
+
+        // `required_locales` is only meaningful on a locale-scoped field —
+        // one that is `localized`, or inherits localization from an
+        // enclosing group. This honors inheritance (the per-field parser
+        // can't), matching how the completeness check resolves scope.
+        let inherited_localized = path.iter().any(|s| {
+            matches!(s, SchemaStep::Field(p)
+                if p.field_type == FieldType::Group && p.localized)
+        });
+        if !f.is_locale_scoped(inherited_localized) {
+            out.push(format!(
+                "{ctx}: required_locales only applies to localized fields \
+                 (mark the field — or its enclosing group — localized)"
+            ));
         }
-    }
+
+        check_required_locales_value(Some(rl), locales, &ctx, out);
+    });
 }
 
 /// Reject definitions whose generated DB table names collide.
@@ -501,7 +475,7 @@ pub fn validate_table_name_collisions(registry: &Registry) -> Result<()> {
             slug.to_string(),
             format!("collection '{slug}'"),
         );
-        collect_field_tables(slug, &def.fields, "", &mut owners, &mut conflicts);
+        collect_field_tables(slug, &def.fields, &mut owners, &mut conflicts);
     }
 
     for slug in registry.globals.keys() {
@@ -547,15 +521,17 @@ fn claim_table(
 }
 
 /// Walk a field tree collecting the join-table names it generates, mirroring
-/// the migration orchestrator's traversal (`sync_join_tables_inner`).
+/// the migration orchestrator's traversal (`sync_join_tables_inner`). The
+/// flat-column walk ([`walk_leaf_fields`]) handles Group `__`-prefixing and
+/// transparent layout wrappers; Array/Blocks/has-many fields are the leaf
+/// columns that own join tables.
 fn collect_field_tables(
     slug: &str,
     fields: &[FieldDefinition],
-    prefix: &str,
     owners: &mut HashMap<String, String>,
     conflicts: &mut Vec<String>,
 ) {
-    for field in fields {
+    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
         let full_name = prefixed_name(prefix, &field.name);
 
         match field.field_type {
@@ -577,20 +553,11 @@ fn collect_field_tables(
                     format!("field '{full_name}' of collection '{slug}'"),
                 );
             }
-            FieldType::Group => {
-                collect_field_tables(slug, &field.fields, &full_name, owners, conflicts);
-            }
-            FieldType::Row | FieldType::Collapsible => {
-                collect_field_tables(slug, &field.fields, prefix, owners, conflicts);
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    collect_field_tables(slug, &tab.fields, prefix, owners, conflicts);
-                }
-            }
             _ => {}
         }
-    }
+
+        Ok(())
+    });
 }
 
 /// Collect any unresolved refs in an `Access` struct.
@@ -623,11 +590,34 @@ fn check_access(lua: &Lua, access: &Access, source: &str, out: &mut Vec<String>)
     }
 }
 
+/// Render the `{source} field 'a' block 'b' …` source label for a field from
+/// its [`SchemaStep`] ancestor chain.
+fn field_source_label(source: &str, path: &[SchemaStep<'_>], field: &FieldDefinition) -> String {
+    let mut label = String::from(source);
+
+    for step in path {
+        match step {
+            SchemaStep::Field(f) => {
+                let _ = write!(label, " field '{}'", f.name);
+            }
+            SchemaStep::Block(b) => {
+                let _ = write!(label, " block '{}'", b.block_type);
+            }
+            SchemaStep::Tab { index, tab } => {
+                let _ = write!(label, " tab #{} ('{}')", index, tab.label);
+            }
+        }
+    }
+
+    let _ = write!(label, " field '{}'", field.name);
+    label
+}
+
 /// Walk a field list (including layout wrappers, groups, arrays, blocks, tabs)
 /// and collect every unresolved field hook / access reference.
 fn check_field_list(lua: &Lua, fields: &[FieldDefinition], source: &str, out: &mut Vec<String>) {
-    for f in fields {
-        let field_src = format!("{source} field '{}'", f.name);
+    walk_all_fields(fields, &mut Vec::new(), &mut |f, path| {
+        let field_src = field_source_label(source, path, f);
 
         // field-level hooks
         let hook_pairs: [(&str, &[HookRef]); 4] = [
@@ -665,20 +655,7 @@ fn check_field_list(lua: &Lua, fields: &[FieldDefinition], source: &str, out: &m
                 out.push(format!("{field_src}: {kind}: '{r}'"));
             }
         }
-
-        // Recurse into subtrees: sub-fields, block sub-fields, tab sub-fields.
-        if !f.fields.is_empty() {
-            check_field_list(lua, &f.fields, &field_src, out);
-        }
-        for block in &f.blocks {
-            let block_src = format!("{field_src} block '{}'", block.block_type);
-            check_field_list(lua, &block.fields, &block_src, out);
-        }
-        for (idx, tab) in f.tabs.iter().enumerate() {
-            let tab_src = format!("{field_src} tab #{} ('{}')", idx, tab.label);
-            check_field_list(lua, &tab.fields, &tab_src, out);
-        }
-    }
+    });
 }
 
 #[cfg(test)]

@@ -3,13 +3,13 @@
 
 use anyhow::{Result, anyhow, bail};
 
-use crate::core::{FieldDefinition, FieldType};
+use crate::core::{FieldDefinition, FieldType, find_field};
 use crate::db::query::helpers::join_table;
 use crate::db::query::is_valid_identifier;
 use crate::db::{DbConnection, LocaleContext, LocaleMode};
 
 use super::blocks::walk_block_fields;
-use super::lookup::{find_field_recursive, lookup_column_field_type};
+use super::lookup::lookup_column_field_type;
 use super::types::{ResolvedFilter, SubqueryCondition};
 
 /// Resolve a dot-notation filter field to its SQL representation.
@@ -46,7 +46,7 @@ pub(in crate::db::query::filter) fn resolve_filter(
     let root = &field[..dot_pos];
     let rest = &field[dot_pos + 1..];
 
-    let field_def = find_field_recursive(root, fields)
+    let field_def = find_field(root, fields)
         .ok_or_else(|| anyhow!("Unknown field '{root}' in filter path '{field}'"))?;
 
     // The junction table has a `_locale` column iff the container field is
@@ -126,7 +126,7 @@ fn resolve_array_filter(ctx: SubFilterCtx<'_>) -> Result<ResolvedFilter> {
                 // Access nested values via json_extract.
                 let extract_expr = ctx.conn.json_extract_expr(first_seg, remaining);
                 let field_type = sub_def
-                    .and_then(|g| find_field_recursive(remaining, &g.fields))
+                    .and_then(|g| find_field(remaining, &g.fields))
                     .map(|f| f.field_type.clone());
                 Ok(ResolvedFilter::Subquery {
                     join_table: ctx.join_table,

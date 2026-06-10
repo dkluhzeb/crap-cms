@@ -5,10 +5,11 @@ use mlua::{Lua, Result as LuaResult, Table, Value};
 use tracing::warn;
 
 use crate::core::{
-    FieldDefinition, HookRef,
+    FieldDefinition, HookRef, SchemaStep,
     collection::{
         Access, Hooks, IndexDefinition, Labels, LiveMode, LiveSetting, McpConfig, VersionsConfig,
     },
+    walk_all_fields,
 };
 
 use super::{
@@ -70,23 +71,19 @@ pub(super) fn validate_shared_nested_keys(config: &Table) -> Result<()> {
 }
 
 /// Compute the maximum nesting depth of a field list.
-/// Top-level fields are depth 1, their sub-fields are depth 2, etc.
+/// Top-level fields are depth 1, their sub-fields are depth 2, etc. — block
+/// and tab steps share their owning field's level, so only container-field
+/// ancestors count.
 pub(super) fn max_field_nesting(fields: &[FieldDefinition], current: usize) -> usize {
     let mut max = current;
 
-    for f in fields {
-        let sub = current + 1;
-
-        max = max.max(max_field_nesting(&f.fields, sub));
-
-        for block in &f.blocks {
-            max = max.max(max_field_nesting(&block.fields, sub));
-        }
-
-        for tab in &f.tabs {
-            max = max.max(max_field_nesting(&tab.fields, sub));
-        }
-    }
+    walk_all_fields(fields, &mut Vec::new(), &mut |_, path| {
+        let containers = path
+            .iter()
+            .filter(|s| matches!(s, SchemaStep::Field(_)))
+            .count();
+        max = max.max(current + 1 + containers);
+    });
 
     max
 }

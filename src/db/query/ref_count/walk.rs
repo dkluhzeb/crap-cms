@@ -10,114 +10,68 @@
 //! JSON, so a single recursive walker covers every combination at any depth,
 //! counting both has-one and has-many relationships.
 //!
-//! [`walk_nested_with`] is the single source of truth for this traversal.
-//! Ref-counting wraps it to collect [`OutgoingRef`]s (ignoring the path);
-//! the back-reference scanner wraps it to record the field-name path to each
-//! matched reference (for precise `field_name`/label reporting). No other
-//! code should re-encode the container-recursion rules.
+//! [`walk_nested_with`] is the reference-resolution layer over the canonical
+//! read walker [`crate::core::walk_nested`]: the core walker owns the
+//! container-recursion rules (shared with validation, field hooks, and the
+//! field-access strip via its mutate twin); this layer turns each visited
+//! relationship/upload leaf into resolved `(collection, id)` refs. Ref-counting
+//! wraps it to collect [`OutgoingRef`]s (ignoring the path); the back-reference
+//! scanner wraps it to record the field-name path to each matched reference (for
+//! precise `field_name`/label reporting). No code re-encodes the recursion rules.
 
 use std::collections::HashSet;
 
 use serde_json::{Map, Value};
 
-use crate::core::{BlockDefinition, FieldDefinition, FieldType, RelationshipConfig};
+use crate::core::walk_nested;
+use crate::core::{BlockDefinition, FieldDefinition, FieldType, NestStep, RelationshipConfig};
 use crate::db::query::join::{parse_id_list, parse_polymorphic_values};
 
 use super::outgoing_ref::{OutgoingRef, push_ref};
 
-/// One segment of the path from a nested walk's root to a matched reference.
+/// Reference-resolution walker over one nested-composite object.
 ///
-/// Transparent layout wrappers (Row/Collapsible/Tabs) contribute no segment;
-/// Group/Array push their own [`FieldDefinition`]; Blocks push their field
-/// then the matched [`BlockDefinition`]. The leaf relationship field is passed
-/// to the visitor separately, so it is not on the stack.
-pub(crate) enum RefPathSeg<'a> {
-    Field(&'a FieldDefinition),
-    Block(&'a BlockDefinition),
-}
-
-/// Generic nested-composite walker — the single traversal primitive.
-///
-/// Calls `visit(leaf_field, ancestor_path, target_collection, target_id,
-/// is_polymorphic)` once per resolved relationship/upload reference, at any
-/// nesting depth. Has-many values are deduplicated within a single field value
-/// (mirroring the junction `SELECT DISTINCT`); malformed/empty refs are
-/// dropped.
+/// Drives the canonical [`walk_nested`] and, for every relationship/upload leaf
+/// it visits, calls `visit(leaf_field, ancestor_path, target_collection,
+/// target_id, is_polymorphic)` once per resolved reference. Has-many values are
+/// deduplicated within a single field value (mirroring the junction
+/// `SELECT DISTINCT`); malformed/empty refs are dropped. Container recursion —
+/// Group/Array/Blocks/Row/Collapsible/Tabs at any depth — is the core walker's.
 pub(crate) fn walk_nested_with<'a, V>(
     obj: &Map<String, Value>,
     fields: &'a [FieldDefinition],
-    stack: &mut Vec<RefPathSeg<'a>>,
+    stack: &mut Vec<NestStep<'a>>,
     visit: &mut V,
 ) where
-    V: FnMut(&'a FieldDefinition, &[RefPathSeg<'a>], &str, &str, bool),
+    V: FnMut(&'a FieldDefinition, &[NestStep<'a>], &str, &str, bool),
 {
-    for field in fields {
-        match field.field_type {
-            FieldType::Relationship | FieldType::Upload => {
-                let Some(rc) = &field.relationship else {
-                    continue;
-                };
-                let Some(value) = obj.get(&field.name) else {
-                    continue;
-                };
-
-                emit_rel(field, rc, value, stack, visit);
-            }
-
-            FieldType::Group => {
-                if let Some(Value::Object(inner)) = obj.get(&field.name) {
-                    stack.push(RefPathSeg::Field(field));
-                    walk_nested_with(inner, &field.fields, stack, visit);
-                    stack.pop();
-                }
-            }
-
-            FieldType::Array => {
-                if let Some(Value::Array(rows)) = obj.get(&field.name) {
-                    stack.push(RefPathSeg::Field(field));
-                    for row in rows {
-                        if let Value::Object(row_obj) = row {
-                            walk_nested_with(row_obj, &field.fields, stack, visit);
-                        }
-                    }
-                    stack.pop();
-                }
-            }
-
-            FieldType::Blocks => {
-                if let Some(Value::Array(blocks)) = obj.get(&field.name) {
-                    stack.push(RefPathSeg::Field(field));
-                    walk_blocks_with(blocks, &field.blocks, stack, visit);
-                    stack.pop();
-                }
-            }
-
-            FieldType::Row | FieldType::Collapsible => {
-                walk_nested_with(obj, &field.fields, stack, visit);
-            }
-
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    walk_nested_with(obj, &tab.fields, stack, visit);
-                }
-            }
-
-            _ => {}
+    walk_nested(obj, fields, stack, &mut |field, value, path| {
+        if !matches!(
+            field.field_type,
+            FieldType::Relationship | FieldType::Upload
+        ) {
+            return;
         }
-    }
+
+        if let (Some(rc), Some(value)) = (&field.relationship, value) {
+            emit_rel(field, rc, value, path, visit);
+        }
+    });
 }
 
-/// Walk a list of block instances (`_block_type` + nested data fields),
-/// matching each to its definition and recursing into its fields. Pushes a
-/// [`RefPathSeg::Block`] for the matched definition so the visitor sees the
-/// block type in the path.
+/// Walk a standalone list of block instances (`_block_type` + nested data
+/// fields), matching each to its definition and recursing into its fields via
+/// [`walk_nested_with`]. Pushes a [`NestStep::Block`] for the matched definition
+/// so the visitor sees the block type in the path. Used where block data is
+/// reconstructed per-block and walked directly (not reached through a parent
+/// Blocks field, which the core walker already descends internally).
 pub(crate) fn walk_blocks_with<'a, V>(
     blocks: &[Value],
     defs: &'a [BlockDefinition],
-    stack: &mut Vec<RefPathSeg<'a>>,
+    stack: &mut Vec<NestStep<'a>>,
     visit: &mut V,
 ) where
-    V: FnMut(&'a FieldDefinition, &[RefPathSeg<'a>], &str, &str, bool),
+    V: FnMut(&'a FieldDefinition, &[NestStep<'a>], &str, &str, bool),
 {
     for block in blocks {
         let Value::Object(obj) = block else {
@@ -130,7 +84,7 @@ pub(crate) fn walk_blocks_with<'a, V>(
             continue;
         };
 
-        stack.push(RefPathSeg::Block(def));
+        stack.push(NestStep::Block(def));
         walk_nested_with(obj, &def.fields, stack, visit);
         stack.pop();
     }
@@ -143,10 +97,10 @@ fn emit_rel<'a, V>(
     field: &'a FieldDefinition,
     rc: &RelationshipConfig,
     value: &Value,
-    stack: &mut [RefPathSeg<'a>],
+    stack: &[NestStep<'a>],
     visit: &mut V,
 ) where
-    V: FnMut(&'a FieldDefinition, &[RefPathSeg<'a>], &str, &str, bool),
+    V: FnMut(&'a FieldDefinition, &[NestStep<'a>], &str, &str, bool),
 {
     let collection: &str = &rc.collection;
 
@@ -425,8 +379,8 @@ mod tests {
                 let names: Vec<String> = path
                     .iter()
                     .map(|seg| match seg {
-                        RefPathSeg::Field(f) => f.name.clone(),
-                        RefPathSeg::Block(b) => b.block_type.clone(),
+                        NestStep::Field(f) => f.name.clone(),
+                        NestStep::Block(b) => b.block_type.clone(),
                     })
                     .chain(std::iter::once(leaf.name.clone()))
                     .collect();

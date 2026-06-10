@@ -7,7 +7,7 @@ use mlua::Lua;
 use tracing::warn;
 
 use crate::{
-    core::{DenialSeg, Document, FieldDefinition, FieldDenial, FieldType, HookRef},
+    core::{DenialSeg, Document, FieldDefinition, FieldDenial, FieldType, HookRef, any_field},
     db::{AccessResult, query::helpers::prefixed_name},
     hooks::lifecycle::{AccessCheckInput, access::collection::check_access_with_lua},
 };
@@ -115,23 +115,7 @@ pub(crate) fn has_any_field_access(
     fields: &[FieldDefinition],
     extractor: fn(&FieldDefinition) -> Option<&HookRef>,
 ) -> bool {
-    fields.iter().any(|field| {
-        extractor(field).is_some()
-            || match field.field_type {
-                FieldType::Group | FieldType::Row | FieldType::Collapsible | FieldType::Array => {
-                    has_any_field_access(&field.fields, extractor)
-                }
-                FieldType::Tabs => field
-                    .tabs
-                    .iter()
-                    .any(|tab| has_any_field_access(&tab.fields, extractor)),
-                FieldType::Blocks => field
-                    .blocks
-                    .iter()
-                    .any(|block| has_any_field_access(&block.fields, extractor)),
-                _ => false,
-            }
-    })
+    any_field(fields, &|field| extractor(field).is_some())
 }
 
 /// Shared denial-tree walker at the document level (flat columns).

@@ -6,7 +6,9 @@ use anyhow::{Context as _, Result};
 
 use crate::core::{CollectionDefinition, Document, Registry};
 use crate::db::query::fts::extract::extract_prosemirror_text_with_nodes;
-use crate::db::query::fts::fields::{build_node_searchable_map, json_richtext_columns};
+use crate::db::query::fts::fields::{
+    build_node_searchable_map, is_json_richtext_column, json_richtext_columns,
+};
 use crate::db::query::fts::search::fts_table_name;
 use crate::db::{DbConnection, DbValue};
 
@@ -92,11 +94,7 @@ fn extract_field_texts(
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
-            let is_json_rt = json_rt_cols.contains(col_name)
-                || col_name
-                    .split("__")
-                    .next()
-                    .is_some_and(|base| json_rt_cols.contains(base));
+            let is_json_rt = is_json_richtext_column(col_name, json_rt_cols);
 
             if is_json_rt && !raw.is_empty() {
                 extract_prosemirror_text_with_nodes(raw, node_searchable)

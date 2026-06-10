@@ -70,8 +70,9 @@ pub fn find_version_by_id(
     Ok(Some(version))
 }
 
-/// Strip `__`-separated field names from a snapshot `Value::Object`.
-fn strip_snapshot_fields(snapshot: &mut Value, denied: &[FieldDenial]) {
+/// Strip denied fields from a snapshot `Value::Object` (flat, group `__`, and
+/// fields nested inside array/blocks rows). Shared with `list_versions`.
+pub(super) fn strip_snapshot_fields(snapshot: &mut Value, denied: &[FieldDenial]) {
     let Some(map) = snapshot.as_object_mut() else {
         return;
     };

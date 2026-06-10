@@ -84,6 +84,17 @@ pub enum FieldType {
 }
 
 impl FieldType {
+    /// True for the transparent layout wrappers (Row/Collapsible/Tabs) — they
+    /// contribute nothing to column/table names and every walk treats their
+    /// sub-fields as living at the wrapper's own level.
+    #[must_use]
+    pub fn is_layout_wrapper(&self) -> bool {
+        matches!(
+            self,
+            FieldType::Row | FieldType::Collapsible | FieldType::Tabs
+        )
+    }
+
     /// Parse a string into a `FieldType`, defaulting to `Text` if unknown.
     pub fn parse_lossy(s: &str) -> Self {
         match s.to_lowercase().as_str() {
