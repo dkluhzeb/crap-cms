@@ -1869,6 +1869,111 @@ return M
     );
 }
 
+/// Regression: the bulk `update_many` path must pass the incoming write data
+/// to the update access fn as `ctx.data`, exactly like the single-update path
+/// (it once passed `None` while single update was already fixed — the access
+/// fn was blind to the patch on bulk updates only).
+#[test]
+fn bulk_update_many_access_fn_receives_incoming_data() {
+    let tmp = tempfile::tempdir().unwrap();
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("widgets.lua"),
+        r#"
+crap.collections.define("widgets", {
+    access = { update = "hooks.gate.require_live_status" },
+    fields = {
+        { name = "name", type = "text" },
+        { name = "status", type = "text" },
+    },
+})
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("gate.lua"),
+        r#"
+local M = {}
+
+-- Gate on the INCOMING data: only a patch that sets status = "live" may pass.
+-- This is only decidable if the bulk path forwards the patch as ctx.data.
+function M.require_live_status(ctx)
+    if ctx.data == nil then
+        error("NO_DATA: bulk update access fn did not receive ctx.data")
+    end
+    return ctx.data.status == "live"
+end
+
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+
+    let conn = db_pool.get().unwrap();
+
+    // Allowed patch: the access fn reads ctx.data.status == "live".
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
+        crap.collections.create("widgets", { name = "a", status = "draft" })
+        crap.collections.create("widgets", { name = "b", status = "draft" })
+
+        local r = crap.collections.update_many("widgets",
+            { where = { status = "draft" } },
+            { status = "live" }
+        )
+        if r.modified ~= 2 then return "WRONG_MODIFIED:" .. tostring(r.modified) end
+        return "ok"
+        "#,
+            &conn,
+            None,
+        )
+        .expect("update_many with status=live must pass the data-gating access fn");
+    assert_eq!(
+        result, "ok",
+        "access fn must see ctx.data.status == \"live\" and allow the bulk update"
+    );
+
+    // Denied patch: same fn, ctx.data.status != "live" → access denies. Only
+    // possible if the bulk path actually forwards the incoming data.
+    let err = runner
+        .eval_lua_with_conn(
+            r#"
+        crap.collections.update_many("widgets",
+            { where = { status = "live" } },
+            { status = "archived" }
+        )
+        return "unreachable"
+        "#,
+            &conn,
+            None,
+        )
+        .expect_err("update_many with status=archived must be denied via ctx.data");
+    let msg = err.to_string();
+    assert!(
+        !msg.contains("NO_DATA"),
+        "bulk update access fn received no ctx.data: {msg}"
+    );
+}
+
 /// Regression: a soft delete is a "trash" operation. The configured
 /// `access.trash` function must see `ctx.operation == "trash"` (matching the
 /// admin permission grid), not `"delete"` — so a function that branches on the

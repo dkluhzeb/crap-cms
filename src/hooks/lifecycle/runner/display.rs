@@ -155,20 +155,9 @@ impl HookRunner {
         for pair in pages_table.pairs::<String, Table>() {
             let Ok((slug, opts)) = pair else { continue };
 
-            // `access` is a bare string or a `{ ref, options }` table — let
-            // HookRef's serde shape decode either via `lua.from_value`.
-            let access = match opts.get::<Value>("access") {
-                Ok(Value::Nil) | Err(_) => None,
-                Ok(v) => lua.from_value::<HookRef>(v).ok(),
-            };
-
-            out.push(CustomPage {
-                slug,
-                section: opts.get::<String>("section").ok(),
-                label: opts.get::<String>("label").ok(),
-                icon: opts.get::<String>("icon").ok(),
-                access,
-            });
+            if let Some(page) = page_from_entry(&lua, slug, &opts) {
+                out.push(page);
+            }
         }
 
         out
@@ -245,4 +234,93 @@ fn execute_render_hooks(lua: &Lua, mut context: JsonValue) -> JsonValue {
     }
 
     context
+}
+
+/// Convert one `slug → opts` page-registry entry into a [`CustomPage`].
+///
+/// `access` is a bare string or a `{ ref, options }` table — [`HookRef`]'s
+/// serde shape decodes either via `lua.from_value`. `crap.pages.register` validates
+/// the shape at load, so a decode failure here means a corrupted registry
+/// entry — fail CLOSED by returning `None` (the page is dropped) rather than
+/// serving the page without its access gate.
+fn page_from_entry(lua: &Lua, slug: String, opts: &Table) -> Option<CustomPage> {
+    let access = match opts.get::<Value>("access") {
+        Ok(Value::Nil) | Err(_) => None,
+        Ok(v) => match lua.from_value::<HookRef>(v) {
+            Ok(hook_ref) => Some(hook_ref),
+            Err(e) => {
+                warn!(
+                    "custom page '{slug}': undecodable access value ({e}); \
+                     dropping the page instead of serving it ungated"
+                );
+                return None;
+            }
+        },
+    };
+
+    Some(CustomPage {
+        slug,
+        section: opts.get::<String>("section").ok(),
+        label: opts.get::<String>("label").ok(),
+        icon: opts.get::<String>("icon").ok(),
+        access,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(lua: &Lua) -> Table {
+        lua.create_table().unwrap()
+    }
+
+    #[test]
+    fn page_entry_decodes_bare_ref_and_options_table() {
+        let lua = Lua::new();
+
+        let bare = entry(&lua);
+        bare.set("access", "hooks.access.admin").unwrap();
+        let page = page_from_entry(&lua, "status".into(), &bare).unwrap();
+        assert_eq!(
+            page.access.as_ref().map(HookRef::reference),
+            Some("hooks.access.admin")
+        );
+
+        let with_options = entry(&lua);
+        let access = lua.create_table().unwrap();
+        access.set("ref", "hooks.access.admin").unwrap();
+        let options = lua.create_table().unwrap();
+        options.set("role", "editor").unwrap();
+        access.set("options", options).unwrap();
+        with_options.set("access", access).unwrap();
+        let page = page_from_entry(&lua, "reports".into(), &with_options).unwrap();
+        assert!(page.access.unwrap().options().is_some());
+    }
+
+    #[test]
+    fn page_without_access_has_no_gate() {
+        let lua = Lua::new();
+        let opts = entry(&lua);
+        opts.set("label", "Status").unwrap();
+
+        let page = page_from_entry(&lua, "status".into(), &opts).unwrap();
+        assert!(page.access.is_none());
+        assert_eq!(page.label.as_deref(), Some("Status"));
+    }
+
+    /// Regression: an undecodable `access` value must drop the page entirely
+    /// (fail closed), never yield a page with `access: None` (fail open —
+    /// the page would be served publicly without its configured gate).
+    #[test]
+    fn corrupted_access_value_drops_the_page() {
+        let lua = Lua::new();
+        let opts = entry(&lua);
+        opts.set("access", 42).unwrap();
+
+        assert!(
+            page_from_entry(&lua, "status".into(), &opts).is_none(),
+            "a page whose access gate can't be decoded must not be served"
+        );
+    }
 }

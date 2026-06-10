@@ -290,6 +290,7 @@ fn build_delete_filters(
             override_access,
             access_fn: access_ref,
             id: None,
+            data: None,
             // Soft delete → "trash" (trash access fn); hard delete → "delete".
             deny_msg: if soft_delete {
                 "Trash access denied"

@@ -167,6 +167,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`crap.collections.update_many` now passes the incoming patch to the update
+  access function as `ctx.data` on its pre-flight check.** The bulk path checks
+  update access twice: once up front (to merge filter-returning access
+  constraints into the WHERE clause) and once per matched document. The
+  per-document check already received the patch, but the pre-flight ran the
+  access function with `ctx.data = nil` — so a data-gating update access
+  function (e.g. one that only allows certain status transitions) denied or
+  errored on every Lua-surface bulk update before the real check could run.
+  Both checks now see the same `ctx.data`.
+
+- **A custom admin page whose `access` value fails to decode is now dropped
+  instead of served ungated.** `crap.pages.register` validates the access ref
+  at load, so this is unreachable in practice — but the extraction fallback
+  used to fail open (decode failure → page public, without its gate); it now
+  fails closed (page dropped, warning logged).
+
 - **A `localized` flag on a layout wrapper (Row/Collapsible/Tabs) no longer
   locale-gates the fields inside it.** The localized-completeness publish gate
   propagated a wrapper's `localized` flag down to its children, but the schema

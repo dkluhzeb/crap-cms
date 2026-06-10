@@ -150,8 +150,6 @@ fn collections_update_many(
     let lua_infra = hook_lua_infra(lua);
     let def = resolve_collection(reg, &collection)?;
 
-    let filters = build_update_filters(lua, &def, &collection, opts.override_access, query)?;
-
     let (hooks_enabled, _guard) = check_hook_depth(lua, opts.hooks, &collection, "update_many");
 
     let stringified = lua_table_to_hashmap(&data)?;
@@ -168,6 +166,17 @@ fn collections_update_many(
         .filter(|(_, v)| !matches!(v, serde_json::Value::String(_)))
         .collect();
     data_map.extend(composite_data);
+
+    // Built before the access pre-flight so the update access fn sees the
+    // incoming patch as `ctx.data` — same contract as the per-document check.
+    let filters = build_update_filters(
+        lua,
+        &def,
+        &collection,
+        opts.override_access,
+        query,
+        &data_map,
+    )?;
 
     let write_hooks = LuaWriteHooks::builder(lua)
         .user(user.as_ref())
@@ -233,12 +242,14 @@ pub(crate) fn register_update_many(
 }
 
 /// Build filters for the bulk update query, enforcing access constraints.
+/// `data` is the incoming patch, surfaced to the access fn as `ctx.data`.
 fn build_update_filters(
     lua: &Lua,
     def: &CollectionDefinition,
     collection: &str,
     override_access: bool,
     query: UpdateManyQueryInput,
+    data: &DocumentFields,
 ) -> LuaResult<Vec<FilterClause>> {
     let mut find_query = query.into_find_query()?;
     normalize_filter_fields(&mut find_query.filters, &def.fields);
@@ -251,6 +262,7 @@ fn build_update_filters(
             override_access,
             access_fn: def.access.update.as_ref(),
             id: None,
+            data: Some(data),
             deny_msg: "Update access denied",
             operation: "update",
             injecting_status: false,

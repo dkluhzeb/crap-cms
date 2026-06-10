@@ -121,6 +121,11 @@ pub(crate) struct EnforceAccessParams<'a> {
     pub override_access: bool,
     pub access_fn: Option<&'a HookRef>,
     pub id: Option<&'a str>,
+    /// The incoming write data, surfaced to the access fn as `ctx.data` —
+    /// `update_many` passes the patch so data-gating access fns work on the
+    /// bulk pre-flight exactly like on the per-document check; `delete_many`
+    /// has no incoming data and passes `None`.
+    pub data: Option<&'a DocumentFields>,
     pub deny_msg: &'a str,
     /// The operation reported to the access function as `ctx.operation`
     /// (e.g. `"update"` for `update_many`, `"delete"` for `delete_many`).
@@ -154,7 +159,7 @@ pub(crate) fn enforce_access(
             access: params.access_fn,
             user: user_doc.as_ref(),
             id: params.id,
-            data: None,
+            data: params.data,
             locale: None,
             operation: params.operation,
             collection: params.slug,
