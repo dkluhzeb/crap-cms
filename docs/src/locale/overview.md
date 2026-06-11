@@ -85,6 +85,19 @@ column-backed fields (text, number, …) and join-backed fields (arrays, blocks,
 has-many relationships) — for the latter, "present in a locale" means the
 field has at least one row for that locale.
 
+**Sub-fields inside a localized array's rows are different:** a required
+sub-field is enforced on **every submitted row, in every locale**. This is
+deliberate, not an inconsistency. The default-locale leniency above works
+because top-level scalars *fall back* — an untranslated `title` serves the
+default locale's value, so a `required` field always reaches API consumers.
+Rows have no per-field fallback: once a locale has its own rows they replace
+the default set, and an empty required sub-field would surface as a missing
+value (and contradict the generated client types, which mark required
+sub-fields non-nullable). Translating gradually still works without friction —
+a save that submits *no* rows for a locale validates nothing; the rule is only
+"if you add a row, finish it". For half-finished rows, save a draft (required
+is not enforced on drafts).
+
 Locale codes in `required_locales` are checked against `[locale].locales` at
 startup: a typo (e.g. `"de-DE"` when only `"de"` is configured), or setting
 `required_locales` while localization is disabled, fails to boot with a clear

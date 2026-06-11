@@ -19,6 +19,9 @@ This reads as: "Show me all documents in the `posts` collection where `posts.aut
 | `collection` | string | yes | Target collection slug to query |
 | `on` | string | yes | Field name on the target collection that holds the reference |
 
+Both `collection` and `on` are required non-empty strings — a missing,
+wrong-typed, or empty value is a hard error at load time.
+
 ## Behavior
 
 - **No database column** — join fields are virtual. No migration, no storage.

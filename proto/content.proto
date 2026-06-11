@@ -1268,6 +1268,11 @@ message MutationEvent {
   // The document field values at the time of the event.
   // For delete events, this is an empty struct.
   google.protobuf.Struct data = 7;
+
+  // NOTE: events deliberately do NOT identify the editing user — exposing
+  // editor ids/emails to every subscriber would leak PII. Editor-based
+  // suppression/transformation belongs in the server-side `live` filter and
+  // `before_broadcast` hooks, whose contexts carry `edited_by`.
 }
 
 // ListVersionsRequest retrieves the version history of a specific document.

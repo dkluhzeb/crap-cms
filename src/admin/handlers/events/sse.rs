@@ -282,6 +282,16 @@ fn build_event_payload(
         Map::new() // metadata mode: no data
     };
 
+    // Editor identity is server-side only — leaking the editor's id/email to
+    // every subscriber is a PII exposure. Subscribers get a boolean "was this
+    // my own edit" computed here instead; editor-based logic belongs in the
+    // server-side `live` filter / `before_broadcast` hooks, whose contexts
+    // keep the full `edited_by`.
+    let is_self = match (&event.edited_by, user_doc) {
+        (Some(editor), Some(user)) => editor.id == *user.id,
+        _ => false,
+    };
+
     Some(json!({
         "sequence": event.sequence,
         "timestamp": event.timestamp,
@@ -289,7 +299,7 @@ fn build_event_payload(
         "operation": op_str,
         "collection": event.collection,
         "document_id": event.document_id,
-        "edited_by": event.edited_by,
+        "self": is_self,
         "data": data,
     }))
 }
@@ -510,6 +520,7 @@ mod tests {
 
     use super::*;
     use crate::core::HookRef;
+    use crate::core::event::EventUser;
 
     #[test]
     fn sse_slot_acquire_within_limit() {
@@ -551,6 +562,11 @@ mod tests {
         def.access = Access::default();
         def.fields = vec![
             FieldDefinition::builder("title", FieldType::Text).build(),
+            // A USER-DEFINED field that happens to be named `edited_by` — it
+            // lives inside the payload's `data` and goes through the normal
+            // field-access pipeline, unlike the removed top-level transport
+            // key of the same name.
+            FieldDefinition::builder("edited_by", FieldType::Text).build(),
             FieldDefinition {
                 name: "secret".to_string(),
                 field_type: FieldType::Text,
@@ -688,6 +704,101 @@ mod tests {
         assert!(
             data_obj.is_empty(),
             "metadata mode must emit empty data object; got {data_obj:?}"
+        );
+    }
+
+    /// Security: the SSE payload must never expose the editing user's
+    /// identity (id/email) to subscribers — only the server-computed `self`
+    /// boolean, true exactly when the authenticated subscriber IS the editor.
+    /// (It previously sent the full `edited_by` `{id, email}` object to every
+    /// subscriber.)
+    #[test]
+    fn sse_payload_exposes_self_flag_but_never_editor_identity() {
+        let (runner, registry, _posts) = build_runner_and_registry();
+
+        let mut collections = HashSet::new();
+        collections.insert(Slug::new("posts"));
+
+        let access = SseAccess {
+            collections,
+            globals: HashSet::new(),
+            denied_fields: HashMap::new(),
+            constraints: HashMap::new(),
+            modes: HashMap::new(),
+        };
+
+        let mut event = make_event("posts", DocumentFields::new());
+        event.edited_by = Some(EventUser::new("user-1", "editor@example.com"));
+
+        // Anonymous subscriber → self = false, and no identity anywhere in
+        // the serialized payload.
+        let payload = build_event_payload(&event, &access, &runner, &registry, None)
+            .expect("payload yielded");
+        assert_eq!(payload.get("self"), Some(&json!(false)));
+        assert!(
+            payload.get("edited_by").is_none(),
+            "edited_by must not be in the payload: {payload}"
+        );
+        let raw = payload.to_string();
+        assert!(
+            !raw.contains("user-1") && !raw.contains("editor@example.com"),
+            "payload must not leak editor identity: {raw}"
+        );
+
+        // The subscriber IS the editor → self = true.
+        let me = Document::new("user-1");
+        let payload = build_event_payload(&event, &access, &runner, &registry, Some(&me))
+            .expect("payload yielded");
+        assert_eq!(payload.get("self"), Some(&json!(true)));
+
+        // A different authenticated subscriber → self = false.
+        let other = Document::new("user-2");
+        let payload = build_event_payload(&event, &access, &runner, &registry, Some(&other))
+            .expect("payload yielded");
+        assert_eq!(payload.get("self"), Some(&json!(false)));
+    }
+
+    /// A USER-DEFINED field named `edited_by` is ordinary document data: it
+    /// must flow through to `payload.data` (subject to field access like any
+    /// other field). Only the old top-level transport key of the same name —
+    /// the editor-identity leak — is gone.
+    #[test]
+    fn user_field_named_edited_by_still_flows_through_data() {
+        let (runner, registry, _posts) = build_runner_and_registry();
+
+        let mut modes: HashMap<String, LiveMode> = HashMap::new();
+        modes.insert("posts".to_string(), LiveMode::Full);
+
+        let mut collections = HashSet::new();
+        collections.insert(Slug::new("posts"));
+
+        let access = SseAccess {
+            collections,
+            globals: HashSet::new(),
+            denied_fields: HashMap::new(),
+            constraints: HashMap::new(),
+            modes,
+        };
+
+        let mut data = DocumentFields::new();
+        data.insert("edited_by".to_string(), json!("a plain document value"));
+        let mut event = make_event("posts", data);
+        event.edited_by = Some(EventUser::new("user-1", "editor@example.com"));
+
+        let payload = build_event_payload(&event, &access, &runner, &registry, None)
+            .expect("payload yielded");
+
+        // The user field is present inside `data`...
+        assert_eq!(
+            payload.get("data").and_then(|d| d.get("edited_by")),
+            Some(&json!("a plain document value")),
+            "user-defined edited_by field must pass through: {payload}"
+        );
+        // ...while the editor's identity still appears nowhere.
+        let raw = payload.to_string();
+        assert!(
+            !raw.contains("user-1") && !raw.contains("editor@example.com"),
+            "payload must not leak editor identity: {raw}"
         );
     }
 }

@@ -25,7 +25,18 @@ pub(super) fn parse_field_relationship(
     }
 
     // Legacy flat syntax: relation_to = "collection"
-    parse_legacy_relation_to(field_tbl)
+    if let Some(rc) = parse_legacy_relation_to(field_tbl)? {
+        return Ok(Some(rc));
+    }
+
+    // No (or wrong-typed) config at all: the field would migrate as a plain
+    // TEXT column with no target collection — no populate, no ref-counting,
+    // no delete protection. Fail at load instead of silently degrading.
+    let name = get_string(field_tbl, "name").unwrap_or_default();
+    Err(RuntimeError(format!(
+        "Field '{name}': {} fields require relationship = {{ collection = \"...\" }}",
+        field_type.as_str()
+    )))
 }
 
 /// Parse the `relationship = { ... }` table syntax.
@@ -41,8 +52,10 @@ fn parse_relationship_table(
     )
     .map_err(|e| RuntimeError(e.to_string()))?;
 
+    let name = get_string(field_tbl, "name").unwrap_or_default();
+
     let (collection, polymorphic) = if *field_type == FieldType::Relationship {
-        parse_relationship_collection(rel_tbl)
+        parse_relationship_collection(rel_tbl, &name)?
     } else {
         (
             get_string(rel_tbl, "collection").unwrap_or_default(),
@@ -51,15 +64,25 @@ fn parse_relationship_table(
     };
 
     if collection.is_empty() {
-        let name = get_string(field_tbl, "name").unwrap_or_default();
-
         return Err(RuntimeError(format!(
             "Field '{name}': relationship.collection is required"
         )));
     }
 
     let has_many = get_bool(rel_tbl, "has_many", false)?;
-    let max_depth = rel_tbl.get::<Option<i32>>("max_depth").ok().flatten();
+
+    // A wrong-typed `max_depth` used to be silently dropped (`.ok()`), making
+    // the configured depth limit vanish. Hard-error instead.
+    let max_depth = rel_tbl.get::<Option<i32>>("max_depth").map_err(|e| {
+        RuntimeError(format!(
+            "Field '{name}': relationship.max_depth must be an integer: {e}"
+        ))
+    })?;
+    if max_depth.is_some_and(|d| d < 0) {
+        return Err(RuntimeError(format!(
+            "Field '{name}': relationship.max_depth must not be negative"
+        )));
+    }
 
     let mut rc = RelationshipConfig::new(collection, has_many);
 
@@ -132,16 +155,18 @@ mod tests {
         assert!(rel.max_depth.is_none());
     }
 
+    /// Flipped from `..._returns_none`: a config-less relationship used to
+    /// parse (and migrate as a dumb TEXT column); it is now a load error.
     #[test]
-    fn test_parse_fields_relationship_no_relation_to_returns_none() {
+    fn test_parse_fields_relationship_no_config_rejected() {
         let lua = Lua::new();
         let fields_tbl = lua.create_table().unwrap();
         let field = lua.create_table().unwrap();
         field.set("name", "ref").unwrap();
         field.set("type", "relationship").unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&lua, &fields_tbl).unwrap();
-        assert!(fields[0].relationship.is_none());
+        let err = parse_fields(&lua, &fields_tbl).unwrap_err().to_string();
+        assert!(err.contains("require relationship"), "{err}");
     }
 
     #[test]
@@ -213,15 +238,97 @@ mod tests {
         );
     }
 
+    /// Flipped from accepting a config-less upload: now a load error.
     #[test]
-    fn test_parse_fields_upload_no_relation_to() {
+    fn test_parse_fields_upload_no_config_rejected() {
         let lua = Lua::new();
         let fields_tbl = lua.create_table().unwrap();
         let field = lua.create_table().unwrap();
         field.set("name", "doc").unwrap();
         field.set("type", "upload").unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&lua, &fields_tbl).unwrap();
-        assert!(fields[0].relationship.is_none());
+        let err = parse_fields(&lua, &fields_tbl).unwrap_err().to_string();
+        assert!(err.contains("require relationship"), "{err}");
+    }
+
+    /// Build one field table, run the full parse, return the Result.
+    fn parse_one(
+        lua: &Lua,
+        set: impl FnOnce(&mlua::Table),
+    ) -> anyhow::Result<Vec<crate::core::FieldDefinition>> {
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "rel").unwrap();
+        set(&field);
+        fields_tbl.set(1, field).unwrap();
+        parse_fields(lua, &fields_tbl)
+    }
+
+    /// Regression: a relationship/upload field with NO config parsed fine and
+    /// migrated as a plain TEXT column — no populate, no ref-counting, no
+    /// delete protection. Now a load-time error.
+    #[test]
+    fn test_relationship_without_config_rejected() {
+        let lua = Lua::new();
+        let err = parse_one(&lua, |f| {
+            f.set("type", "relationship").unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("require relationship"), "{err}");
+
+        let err = parse_one(&lua, |f| {
+            f.set("type", "upload").unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("require relationship"), "{err}");
+    }
+
+    /// Regression: a wrong-typed `max_depth` was silently dropped (`.ok()`),
+    /// erasing the configured depth limit.
+    #[test]
+    fn test_relationship_bad_max_depth_rejected() {
+        let lua = Lua::new();
+        let err = parse_one(&lua, |f| {
+            f.set("type", "relationship").unwrap();
+            let rel = lua.create_table().unwrap();
+            rel.set("collection", "users").unwrap();
+            rel.set("max_depth", "deep").unwrap();
+            f.set("relationship", rel).unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("max_depth"), "{err}");
+
+        let err = parse_one(&lua, |f| {
+            f.set("type", "relationship").unwrap();
+            let rel = lua.create_table().unwrap();
+            rel.set("collection", "users").unwrap();
+            rel.set("max_depth", -1i32).unwrap();
+            f.set("relationship", rel).unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("negative"), "{err}");
+    }
+
+    /// Regression: a non-string entry in a polymorphic `collection` array was
+    /// silently SKIPPED, shrinking the target set.
+    #[test]
+    fn test_polymorphic_non_string_entry_rejected() {
+        let lua = Lua::new();
+        let err = parse_one(&lua, |f| {
+            f.set("type", "relationship").unwrap();
+            let rel = lua.create_table().unwrap();
+            let arr = lua.create_table().unwrap();
+            arr.set(1, "posts").unwrap();
+            arr.set(2, 42i64).unwrap();
+            rel.set("collection", arr).unwrap();
+            f.set("relationship", rel).unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("entries must be strings"), "{err}");
     }
 }

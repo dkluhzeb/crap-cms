@@ -1,15 +1,17 @@
 //! Global document unpublish.
 
+use std::{cell::RefCell, rc::Rc};
+
 use anyhow::Context as _;
 
 use serde_json::Value;
 
 use crate::{
-    core::Document,
+    core::{Document, event::EventOperation},
     db::{AccessResult, LocaleContext, query, query::helpers::global_table},
-    hooks::{AccessCheckInput, HookContext, HookEvent},
+    hooks::{AccessCheckInput, HookContext, HookEvent, LuaCrudInfra},
     service::{
-        AfterChangeInput, RunnerWriteHooks, ServiceContext, ServiceError, helpers,
+        AfterChangeInput, RunnerWriteHooks, ServiceContext, ServiceError, flush_queue, helpers,
         hooks::WriteHooks, run_after_change_hooks, unpublish_with_snapshot,
     },
 };
@@ -30,7 +32,13 @@ pub fn unpublish_global_document(ctx: &ServiceContext) -> Result<Document> {
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    let mut wh = RunnerWriteHooks::new(runner).with_conn(&tx);
+    let queue = Rc::new(RefCell::new(Vec::new()));
+
+    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), None);
+
+    let mut wh = RunnerWriteHooks::new(runner)
+        .with_conn(&tx)
+        .with_infra(infra);
 
     if ctx.override_access {
         wh = wh.with_override_access();
@@ -117,6 +125,14 @@ pub fn unpublish_global_document(ctx: &ServiceContext) -> Result<Document> {
     doc.strip_fields(&read_denied);
 
     tx.commit().context("Commit transaction")?;
+
+    ctx.clear_cache();
+
+    // Same post-commit sequence as `update_global_document` / the collection
+    // unpublish path: notify subscribers of the status change, then flush any
+    // events queued by nested hook CRUD.
+    ctx.publish_mutation_event(EventOperation::Update, &doc.id, &doc.fields);
+    flush_queue(ctx, &queue);
 
     Ok(doc)
 }

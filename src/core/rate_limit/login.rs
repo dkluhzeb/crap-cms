@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use tracing::warn;
+use tracing::{error, warn};
 
 use super::{MemoryRateLimitBackend, SharedRateLimitBackend};
 
@@ -55,13 +55,23 @@ impl LoginRateLimiter {
     }
 
     /// Check if a key is currently blocked (too many recent failures).
+    ///
+    /// Fails CLOSED: when the backend can't be reached (e.g. a Redis outage),
+    /// the key is treated as blocked. Failing open here would silently
+    /// disable brute-force protection for exactly as long as the outage —
+    /// an attacker-friendly window. The error is logged so operators can
+    /// tell infrastructure trouble from real lockouts.
     #[must_use]
     pub fn is_blocked(&self, key: &str) -> bool {
         let pkey = self.prefixed_key(key);
 
-        self.backend
-            .count(&pkey, self.window_secs)
-            .is_ok_and(|count| count >= self.max_attempts)
+        match self.backend.count(&pkey, self.window_secs) {
+            Ok(count) => count >= self.max_attempts,
+            Err(e) => {
+                error!("Rate limit backend unavailable — failing closed: {e:#}");
+                true
+            }
+        }
     }
 
     /// Record a failed attempt for the given key.
@@ -145,5 +155,40 @@ mod tests {
         login.record_failure("a@b.com");
         assert!(login.is_blocked("a@b.com"));
         assert!(!forgot.is_blocked("a@b.com"));
+    }
+
+    /// Security: a backend failure must fail CLOSED (blocked), not silently
+    /// disable brute-force protection for the duration of the outage.
+    #[test]
+    fn backend_error_fails_closed() {
+        struct FailingBackend;
+        impl super::super::RateLimitBackend for FailingBackend {
+            fn count(&self, _key: &str, _window_secs: u64) -> anyhow::Result<u32> {
+                anyhow::bail!("backend down")
+            }
+            fn record(&self, _key: &str, _window_secs: u64) -> anyhow::Result<()> {
+                anyhow::bail!("backend down")
+            }
+            fn clear(&self, _key: &str) -> anyhow::Result<()> {
+                anyhow::bail!("backend down")
+            }
+            fn check_and_record(
+                &self,
+                _key: &str,
+                _max_count: u32,
+                _window_secs: u64,
+            ) -> anyhow::Result<bool> {
+                anyhow::bail!("backend down")
+            }
+            fn kind(&self) -> &'static str {
+                "failing"
+            }
+        }
+
+        let limiter = LoginRateLimiter::with_backend(Arc::new(FailingBackend), "t", 5, 60);
+        assert!(
+            limiter.is_blocked("user@example.com"),
+            "backend failure must block (fail closed)"
+        );
     }
 }

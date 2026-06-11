@@ -52,7 +52,7 @@ Renders as the appropriate HTML5 input type based on `picker_appearance`. For `d
 
 ## Date Constraints
 
-Use `min_date` and `max_date` to restrict the allowed range. Values are validated server-side and set as HTML `min`/`max` attributes on the input.
+Use `min_date` and `max_date` to restrict the allowed range. Values are validated server-side and set as HTML `min`/`max` attributes on the input. Each bound must be a `YYYY-MM-DD` string, and `min_date` must not be after `max_date` — anything else is a hard error at load time.
 
 ```lua
 crap.fields.date({

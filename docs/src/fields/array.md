@@ -35,6 +35,11 @@ crap.fields.array({
 
 Sub-fields support the same properties as regular fields (name, type, required, default_value, admin, etc.), and may themselves be composites — **groups, arrays, blocks, and relationships nest to any depth**.
 
+One locale-related nuance: on a **localized** array, `required` sub-fields are
+enforced on every submitted row in **every** locale (rows have no per-field
+fallback, so leniency would publish rows with missing required values). See
+[Required across locales](../locale/overview.md#required-across-locales).
+
 Scalar sub-fields (and has-one relationships) are stored as columns in the array's join table. Composites nested *inside* an array row — a group, a nested array, a nested blocks field — are stored as JSON within the row (not as their own relational tables), and are still queryable via dot-notation filters (`items.dimensions.width` → `json_extract` / `json_each`; see [Query & Filters](../query-and-filters/overview.md)). Reference-counting, back-references, validation, and field-level access all descend into this nested JSON at any depth.
 
 ### Layout Wrappers in Sub-Fields

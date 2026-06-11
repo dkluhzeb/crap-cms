@@ -73,21 +73,18 @@ const sheet = css`
 `;
 
 /**
- * @typedef {{ id: string, email: string }} Editor
- *
  * @typedef {{
  *   operation: 'create' | 'update' | 'delete',
  *   collection: string,
  *   document_id?: string,
  *   target?: 'global' | 'collection',
- *   edited_by?: Editor,
+ *   self?: boolean,
  * }} MutationEvent
  *
  * @typedef {{
  *   docId: string,
  *   collectionSlug: string,
  *   globalSlug: string,
- *   currentUserId: string,
  * }} EditFormCtx
  */
 
@@ -104,7 +101,6 @@ function readEditFormCtx() {
     docId: form.dataset.documentId || '',
     collectionSlug: form.dataset.collectionSlug || '',
     globalSlug: form.dataset.globalSlug || '',
-    currentUserId: form.dataset.currentUserId || '',
   };
 }
 
@@ -195,10 +191,7 @@ class CrapLiveEvents extends HTMLElement {
 
     const ctx = readEditFormCtx();
     if (ctx && this._isStaleEvent(event, ctx)) {
-      this._showStaleWarning(
-        event.operation === 'delete' ? 'deleted' : 'updated',
-        event.edited_by || null,
-      );
+      this._showStaleWarning(event.operation === 'delete' ? 'deleted' : 'updated');
       return;
     }
     this._toastMutation(event);
@@ -215,8 +208,9 @@ class CrapLiveEvents extends HTMLElement {
     const op = event.operation;
     if (op !== 'update' && op !== 'delete') return false;
     if (!eventTargetsCurrentDoc(event, ctx)) return false;
-    const isSelf = ctx.currentUserId && event.edited_by?.id === ctx.currentUserId;
-    const isOwnSave = isSelf && Date.now() - this._lastSaveTime < SAVE_GRACE_MS;
+    // `self` is computed server-side (the event payload carries no editor
+    // identity) — true when the subscriber made the change.
+    const isOwnSave = event.self === true && Date.now() - this._lastSaveTime < SAVE_GRACE_MS;
     return !isOwnSave;
   }
 
@@ -245,15 +239,14 @@ class CrapLiveEvents extends HTMLElement {
    * Disables the form's inputs when the document was deleted.
    *
    * @param {'updated'|'deleted'} action
-   * @param {Editor|null} editedBy
    */
-  _showStaleWarning(action, editedBy) {
+  _showStaleWarning(action) {
     CrapLiveEvents._injectStyles();
     const form = document.getElementById('edit-form');
     if (!form?.parentNode) return;
 
     const banner = this._ensureBanner(form);
-    banner.replaceChildren(...this._buildBannerChildren(action, editedBy, banner));
+    banner.replaceChildren(...this._buildBannerChildren(action, banner));
 
     if (action === 'deleted') this._disableForm(form);
   }
@@ -272,12 +265,11 @@ class CrapLiveEvents extends HTMLElement {
 
   /**
    * @param {'updated'|'deleted'} action
-   * @param {Editor|null} editedBy
    * @param {HTMLElement} banner Reference passed so the dismiss button can self-remove.
    */
-  _buildBannerChildren(action, editedBy, banner) {
+  _buildBannerChildren(action, banner) {
     const isDeleted = action === 'deleted';
-    const who = editedBy?.email || t('another_user');
+    const who = t('another_user');
     const message = isDeleted ? t('stale_deleted', { who }) : t('stale_updated', { who });
 
     return [

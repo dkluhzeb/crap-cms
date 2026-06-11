@@ -151,22 +151,38 @@ pub(super) fn get_bool(tbl: &Table, key: &str, default: bool) -> mlua::Result<bo
 /// - A plain string -> single-collection relationship, returns `(collection, vec![])`.
 /// - A Lua array of strings -> polymorphic relationship, returns `(first, all_slugs)`.
 ///   `collection` is set to the first slug; `polymorphic` holds all slugs.
-pub(super) fn parse_relationship_collection(rel_tbl: &Table) -> (String, Vec<String>) {
-    match rel_tbl.get::<Value>("collection") {
-        Ok(Value::String(s)) => {
-            let col = s.to_str().ok().map(|v| v.to_string()).unwrap_or_default();
-            (col, vec![])
-        }
-        Ok(Value::Table(arr)) => {
-            let slugs: Vec<String> = arr
-                .sequence_values::<String>()
-                .filter_map(std::result::Result::ok)
-                .collect();
+pub(super) fn parse_relationship_collection(
+    rel_tbl: &Table,
+    field_name: &str,
+) -> mlua::Result<(String, Vec<String>)> {
+    match rel_tbl.get::<Value>("collection")? {
+        Value::String(s) => Ok((s.to_str()?.to_string(), vec![])),
+        Value::Table(arr) => {
+            // Every entry must be a string slug — a non-string entry used to
+            // be silently SKIPPED, shrinking the polymorphic target set.
+            let mut slugs = Vec::new();
+            for v in arr.sequence_values::<Value>() {
+                match v? {
+                    Value::String(s) => slugs.push(s.to_str()?.to_string()),
+                    other => {
+                        return Err(mlua::Error::RuntimeError(format!(
+                            "Field '{field_name}': relationship.collection array \
+                             entries must be strings, got {}",
+                            other.type_name()
+                        )));
+                    }
+                }
+            }
             let first = slugs.first().cloned().unwrap_or_default();
 
-            (first, slugs)
+            Ok((first, slugs))
         }
-        _ => (String::new(), vec![]),
+        Value::Nil => Ok((String::new(), vec![])),
+        other => Err(mlua::Error::RuntimeError(format!(
+            "Field '{field_name}': relationship.collection must be a string or \
+             an array of strings, got {}",
+            other.type_name()
+        ))),
     }
 }
 
@@ -448,7 +464,7 @@ mod tests {
     fn test_parse_relationship_collection_missing() {
         let lua = Lua::new();
         let rel_tbl = lua.create_table().unwrap();
-        let (col, poly) = parse_relationship_collection(&rel_tbl);
+        let (col, poly) = parse_relationship_collection(&rel_tbl, "f").unwrap();
         assert_eq!(col, "");
         assert!(poly.is_empty());
     }
@@ -461,7 +477,7 @@ mod tests {
         arr.set(1, "posts").unwrap();
         arr.set(2, "pages").unwrap();
         rel_tbl.set("collection", arr).unwrap();
-        let (col, poly) = parse_relationship_collection(&rel_tbl);
+        let (col, poly) = parse_relationship_collection(&rel_tbl, "f").unwrap();
         assert_eq!(col, "posts");
         assert_eq!(poly, vec!["posts", "pages"]);
     }
@@ -562,7 +578,7 @@ mod tests {
         let rel_tbl = lua.create_table().unwrap();
         let arr = lua.create_table().unwrap();
         rel_tbl.set("collection", arr).unwrap();
-        let (col, poly) = parse_relationship_collection(&rel_tbl);
+        let (col, poly) = parse_relationship_collection(&rel_tbl, "f").unwrap();
         assert_eq!(col, "");
         assert!(poly.is_empty());
     }

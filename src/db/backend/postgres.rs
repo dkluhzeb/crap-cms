@@ -202,7 +202,7 @@ fn pg_greatest_expr(a: &str, b: &str) -> String {
 fn pg_column_type_for(ft: &FieldType) -> &'static str {
     match ft {
         FieldType::Number => "DOUBLE PRECISION",
-        FieldType::Checkbox => "BIGINT",
+        FieldType::Checkbox => "SMALLINT",
         _ => "TEXT",
     }
 }
@@ -536,6 +536,35 @@ impl DbConnection for PgTransaction<'_> {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
+/// An integer parameter that adapts to the statement's inferred Postgres
+/// type. `DbValue::Integer` is an `i64`, but tokio-postgres type-checks
+/// params strictly — a plain `i64` binding is rejected for an INT2/INT4
+/// target (e.g. the SMALLINT checkbox columns). Serializes per the expected
+/// type with range checks.
+#[derive(Debug)]
+struct AdaptiveInt(i64);
+
+impl tokio_postgres::types::ToSql for AdaptiveInt {
+    fn to_sql(
+        &self,
+        ty: &Type,
+        out: &mut bytes::BytesMut,
+    ) -> std::result::Result<tokio_postgres::types::IsNull, Box<dyn std::error::Error + Sync + Send>>
+    {
+        match *ty {
+            Type::INT2 => i16::try_from(self.0)?.to_sql(ty, out),
+            Type::INT4 => i32::try_from(self.0)?.to_sql(ty, out),
+            _ => self.0.to_sql(ty, out),
+        }
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(*ty, Type::INT2 | Type::INT4 | Type::INT8)
+    }
+
+    tokio_postgres::types::to_sql_checked!();
+}
+
 /// Convert `DbValue` slice to tokio-postgres parameter boxes.
 fn to_pg_params(params: &[DbValue]) -> Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> {
     params
@@ -543,9 +572,7 @@ fn to_pg_params(params: &[DbValue]) -> Vec<Box<dyn tokio_postgres::types::ToSql 
         .map(|v| -> Box<dyn tokio_postgres::types::ToSql + Sync + Send> {
             match v {
                 DbValue::Null => Box::new(None::<String>),
-                // Always send as i64 (BIGINT). Postgres implicitly downcasts
-                // BIGINT to INTEGER for column inserts/updates.
-                DbValue::Integer(i) => Box::new(*i),
+                DbValue::Integer(i) => Box::new(AdaptiveInt(*i)),
                 DbValue::Real(f) => Box::new(*f),
                 DbValue::Text(s) => Box::new(s.clone()),
                 DbValue::Blob(b) => Box::new(b.clone()),
@@ -648,7 +675,7 @@ mod tests {
     #[test]
     fn column_type_maps_number_checkbox_else_text() {
         assert_eq!(pg_column_type_for(&FieldType::Number), "DOUBLE PRECISION");
-        assert_eq!(pg_column_type_for(&FieldType::Checkbox), "BIGINT");
+        assert_eq!(pg_column_type_for(&FieldType::Checkbox), "SMALLINT");
         assert_eq!(pg_column_type_for(&FieldType::Text), "TEXT");
     }
 
@@ -713,6 +740,42 @@ mod tests {
         assert_eq!(
             pg_normalize_timestamp("2026-01-01T00:00:00.000Z"),
             "2026-01-01T00:00:00.000Z"
+        );
+    }
+
+    /// `AdaptiveInt` must serialize per the statement's expected type —
+    /// a plain i64 binding is rejected by tokio-postgres for INT2/INT4
+    /// targets (SMALLINT checkbox columns).
+    #[test]
+    fn adaptive_int_serializes_per_expected_type() {
+        use tokio_postgres::types::ToSql;
+
+        // accepts all three integer widths
+        assert!(<AdaptiveInt as ToSql>::accepts(&Type::INT2));
+        assert!(<AdaptiveInt as ToSql>::accepts(&Type::INT4));
+        assert!(<AdaptiveInt as ToSql>::accepts(&Type::INT8));
+        assert!(!<AdaptiveInt as ToSql>::accepts(&Type::TEXT));
+
+        // INT2 encoding matches a native i16 (2 bytes)
+        let mut ours = bytes::BytesMut::new();
+        AdaptiveInt(1).to_sql(&Type::INT2, &mut ours).unwrap();
+        let mut native = bytes::BytesMut::new();
+        1i16.to_sql(&Type::INT2, &mut native).unwrap();
+        assert_eq!(ours, native);
+
+        // INT8 encoding matches a native i64 (8 bytes)
+        let mut ours = bytes::BytesMut::new();
+        AdaptiveInt(1).to_sql(&Type::INT8, &mut ours).unwrap();
+        let mut native = bytes::BytesMut::new();
+        1i64.to_sql(&Type::INT8, &mut native).unwrap();
+        assert_eq!(ours, native);
+
+        // out-of-range for the narrow target is an error, not truncation
+        let mut out = bytes::BytesMut::new();
+        assert!(
+            AdaptiveInt(i64::from(i16::MAX) + 1)
+                .to_sql(&Type::INT2, &mut out)
+                .is_err()
         );
     }
 }

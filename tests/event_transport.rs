@@ -141,3 +141,65 @@ fn factory_rejects_redis_without_feature() {
         "unexpected error: {err}"
     );
 }
+
+// ── Service-layer event emission ────────────────────────────────────────
+
+/// Regression: `unpublish_global_document` must emit a mutation event after
+/// commit, exactly like `update_global_document` and the collection unpublish
+/// path. It used to commit silently — subscribers never learned a global was
+/// unpublished, and the global cache was never cleared.
+#[tokio::test]
+async fn global_unpublish_emits_mutation_event() {
+    use crap_cms::config::CrapConfig;
+    use crap_cms::hooks::{self, HookRunner};
+    use crap_cms::service::{ServiceContext, unpublish_global_document};
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let globals_dir = tmp.path().join("globals");
+    std::fs::create_dir_all(&globals_dir).unwrap();
+    std::fs::write(
+        globals_dir.join("site.lua"),
+        r#"
+crap.globals.define("site", {
+    versions = true,
+    fields = {
+        { name = "title", type = "text" },
+    },
+})
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let pool = crap_cms::db::pool::create_pool(tmp.path(), &config).expect("pool");
+    crap_cms::db::migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .expect("runner");
+
+    let transport: SharedEventTransport = Arc::new(InProcessEventBus::new(16));
+    let mut rx = transport.subscribe();
+
+    let def = registry.get_global("site").expect("global def");
+    let ctx = ServiceContext::global("site", def)
+        .pool(&pool)
+        .runner(&runner)
+        .event_transport(Some(transport.clone()))
+        .build();
+
+    unpublish_global_document(&ctx).expect("unpublish global");
+
+    let ev = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .expect("no mutation event emitted within 5s of global unpublish")
+        .expect("mutation event after global unpublish");
+    assert_eq!(ev.target, EventTarget::Global);
+    assert_eq!(ev.operation, EventOperation::Update);
+    assert_eq!(ev.collection.as_ref(), "site");
+}

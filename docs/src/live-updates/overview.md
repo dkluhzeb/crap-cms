@@ -40,7 +40,7 @@ Live-update subscribers (gRPC Subscribe or admin SSE) can be terminated by the s
 
 Each collection can control what data events carry:
 
-- **`metadata`** (default) — events carry only metadata: sequence, timestamp, operation, collection, document_id, edited_by. No document data is included. Metadata mode skips the per-subscriber `after_read` hooks and field-level read-access stripping on the event payload, because there is no payload to transform. The `before_broadcast` hook **still runs** (once per event, pre-dispatch) and the collection's `live` filter function still gates whether the event is broadcast at all. Clients re-fetch via `FindByID` if they need document data.
+- **`metadata`** (default) — events carry only metadata: sequence, timestamp, operation, collection, document_id (plus `self` on admin SSE). No document data is included. Metadata mode skips the per-subscriber `after_read` hooks and field-level read-access stripping on the event payload, because there is no payload to transform. The `before_broadcast` hook **still runs** (once per event, pre-dispatch) and the collection's `live` filter function still gates whether the event is broadcast at all. Clients re-fetch via `FindByID` if they need document data.
 
 - **`full`** — events carry complete document data, processed through `after_read` hooks and field-level access stripping — the same data a `Find` or `FindByID` call would return. Opt-in per collection.
 
@@ -114,7 +114,11 @@ Access is snapshotted at subscribe time. Permission changes require reconnect.
 | `collection` | Collection or global slug | ✅ | ✅ |
 | `document_id` | Document ID | ✅ | ✅ |
 | `data` | Document fields (hook-processed) | empty | ✅ |
-| `edited_by` | User who made the change | ✅ | ✅ |
+| `self` | Whether the subscriber made the change (admin SSE only) | ✅ | ✅ |
+
+Events never identify the editing user to subscribers — exposing editor
+ids/emails would leak PII. The server-side `live` filter and
+`before_broadcast` contexts carry `edited_by` for editor-based logic.
 
 ## Event Pipeline
 

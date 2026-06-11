@@ -3,7 +3,8 @@
 //! access, hooks).
 
 use anyhow::{Result, anyhow, bail};
-use mlua::{Lua, Table};
+use chrono::NaiveDate;
+use mlua::{Lua, Table, Value};
 
 use crate::{
     core::{
@@ -214,7 +215,7 @@ fn parse_field_parts(lua: &Lua, field_tbl: &Table) -> Result<ParsedFieldParts> {
     let sub_fields = parse_sub_fields(lua, field_tbl, &field_type)?;
     let block_defs = parse_block_defs(lua, field_tbl, &field_type)?;
     let tab_defs = parse_tab_defs(lua, field_tbl, &field_type)?;
-    let join = parse_join(field_tbl, &field_type);
+    let join = parse_join(field_tbl, &field_type, &name)?;
     let mcp = parse_mcp(field_tbl)?;
 
     Ok(ParsedFieldParts {
@@ -262,15 +263,36 @@ fn parse_tab_defs(
     get_table(field_tbl, "tabs").map_or(Ok(Vec::new()), |tbl| parse_tab_definitions(lua, &tbl))
 }
 
-/// Build the `JoinConfig` for `FieldType::Join`. Missing `collection`/`on`
-/// default to empty strings — schema validation surfaces the error later.
-fn parse_join(field_tbl: &Table, field_type: &FieldType) -> Option<JoinConfig> {
+/// Build the `JoinConfig` for `FieldType::Join`. `collection` and `on` are
+/// required non-empty strings — a join without them can never resolve, so a
+/// missing, wrong-typed, or empty value is a load-time error instead of a
+/// silently-empty config that matches nothing at populate time.
+fn parse_join(field_tbl: &Table, field_type: &FieldType, name: &str) -> Result<Option<JoinConfig>> {
     if *field_type != FieldType::Join {
-        return None;
+        return Ok(None);
     }
-    let collection = get_string(field_tbl, "collection").unwrap_or_default();
-    let on = get_string(field_tbl, "on").unwrap_or_default();
-    Some(JoinConfig::new(collection, on))
+
+    let required = |key: &str| -> Result<String> {
+        match field_tbl.get::<Value>(key)? {
+            Value::String(s) => {
+                let s = s.to_str()?.to_string();
+                if s.is_empty() {
+                    bail!("join field '{name}': '{key}' must be a non-empty string");
+                }
+                Ok(s)
+            }
+            Value::Nil => bail!("join field '{name}': missing required key '{key}'"),
+            other => bail!(
+                "join field '{name}': '{key}' must be a string, got {}",
+                other.type_name()
+            ),
+        }
+    };
+
+    let collection = required("collection")?;
+    let on = required("on")?;
+
+    Ok(Some(JoinConfig::new(collection, on)))
 }
 
 /// Parse the optional `mcp` sub-table for MCP introspection metadata.
@@ -365,7 +387,7 @@ fn assemble_field_definition(
     }
 
     fd_builder = apply_constraint_bounds(fd_builder, &parts.constraints);
-    fd_builder = apply_date_bounds(fd_builder, field_tbl);
+    fd_builder = apply_date_bounds(fd_builder, field_tbl, &parts.name)?;
 
     if parts.timezone {
         fd_builder = fd_builder.timezone(true);
@@ -410,18 +432,51 @@ fn apply_constraint_bounds(
     builder
 }
 
-/// Apply the optional `min_date`/`max_date` string bounds.
+/// Apply the optional `min_date`/`max_date` bounds. Each bound must be a
+/// `YYYY-MM-DD` string: the runtime check compares the submitted value's date
+/// part lexically against the bound, so a wrong type or format would make the
+/// bound silently never (or always) match. `min_date` after `max_date` is
+/// rejected outright.
 fn apply_date_bounds(
     mut builder: crate::core::FieldDefinitionBuilder,
     field_tbl: &Table,
-) -> crate::core::FieldDefinitionBuilder {
-    if let Some(v) = get_string(field_tbl, "min_date") {
+    name: &str,
+) -> Result<crate::core::FieldDefinitionBuilder> {
+    let min = get_date_bound(field_tbl, "min_date", name)?;
+    let max = get_date_bound(field_tbl, "max_date", name)?;
+
+    if let (Some(min), Some(max)) = (&min, &max)
+        && min > max
+    {
+        bail!("date field '{name}': min_date '{min}' is after max_date '{max}'");
+    }
+
+    if let Some(v) = min {
         builder = builder.min_date(v);
     }
-    if let Some(v) = get_string(field_tbl, "max_date") {
+    if let Some(v) = max {
         builder = builder.max_date(v);
     }
-    builder
+
+    Ok(builder)
+}
+
+/// Read one strict `YYYY-MM-DD` date bound.
+fn get_date_bound(field_tbl: &Table, key: &str, name: &str) -> Result<Option<String>> {
+    match field_tbl.get::<Value>(key)? {
+        Value::Nil => Ok(None),
+        Value::String(s) => {
+            let s = s.to_str()?.to_string();
+            if NaiveDate::parse_from_str(&s, "%Y-%m-%d").is_err() {
+                bail!("date field '{name}': {key} '{s}' is not a YYYY-MM-DD date");
+            }
+            Ok(Some(s))
+        }
+        other => bail!(
+            "date field '{name}': {key} must be a YYYY-MM-DD string, got {}",
+            other.type_name()
+        ),
+    }
 }
 
 /// Parse a field's `access` sub-table. Each rule is a string hook reference;
@@ -1395,5 +1450,115 @@ mod tests {
             parse_one(&lua, name, "text")
                 .unwrap_or_else(|e| panic!("'{name}' should be a valid field name, got: {e}"));
         }
+    }
+
+    // ── join strictness ─────────────────────────────────────────────────
+
+    /// Regression: a join field with missing / wrong-typed / empty
+    /// `collection`/`on` used to silently become empty strings ("validated
+    /// later" — which never happened) and matched nothing at populate time.
+    /// All three are now load-time errors.
+    #[test]
+    fn test_join_missing_collection_rejected() {
+        let lua = Lua::new();
+        let err = field_with(&lua, |f| {
+            f.set("type", "join").unwrap();
+            f.set("on", "author").unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("collection"), "{err}");
+    }
+
+    #[test]
+    fn test_join_non_string_on_rejected() {
+        let lua = Lua::new();
+        let err = field_with(&lua, |f| {
+            f.set("type", "join").unwrap();
+            f.set("collection", "posts").unwrap();
+            f.set("on", true).unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("'on'") && err.contains("boolean"), "{err}");
+    }
+
+    #[test]
+    fn test_join_empty_collection_rejected() {
+        let lua = Lua::new();
+        let err = field_with(&lua, |f| {
+            f.set("type", "join").unwrap();
+            f.set("collection", "").unwrap();
+            f.set("on", "author").unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("non-empty"), "{err}");
+    }
+
+    #[test]
+    fn test_join_valid_config_parses() {
+        let lua = Lua::new();
+        field_with(&lua, |f| {
+            f.set("type", "join").unwrap();
+            f.set("collection", "posts").unwrap();
+            f.set("on", "author").unwrap();
+        })
+        .expect("valid join must parse");
+    }
+
+    // ── date-bound strictness ───────────────────────────────────────────
+
+    /// Regression: `min_date`/`max_date` used to silently drop non-string
+    /// values and accept arbitrary strings — the runtime compares the bound
+    /// lexically against the value's date part, so a malformed bound never
+    /// (or always) matched. Wrong type, bad format, and inverted ranges are
+    /// now load-time errors.
+    #[test]
+    fn test_date_bound_non_string_rejected() {
+        let lua = Lua::new();
+        let err = field_with(&lua, |f| {
+            f.set("type", "date").unwrap();
+            f.set("min_date", 2024i64).unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("min_date"), "{err}");
+    }
+
+    #[test]
+    fn test_date_bound_bad_format_rejected() {
+        let lua = Lua::new();
+        let err = field_with(&lua, |f| {
+            f.set("type", "date").unwrap();
+            f.set("max_date", "01.02.2024").unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("YYYY-MM-DD"), "{err}");
+    }
+
+    #[test]
+    fn test_date_bounds_inverted_range_rejected() {
+        let lua = Lua::new();
+        let err = field_with(&lua, |f| {
+            f.set("type", "date").unwrap();
+            f.set("min_date", "2024-12-31").unwrap();
+            f.set("max_date", "2024-01-01").unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("after max_date"), "{err}");
+    }
+
+    #[test]
+    fn test_date_bounds_valid_range_parses() {
+        let lua = Lua::new();
+        field_with(&lua, |f| {
+            f.set("type", "date").unwrap();
+            f.set("min_date", "2024-01-01").unwrap();
+            f.set("max_date", "2024-12-31").unwrap();
+        })
+        .expect("valid date bounds must parse");
     }
 }

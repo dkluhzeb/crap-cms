@@ -19,13 +19,18 @@ message SubscribeRequest {
 message MutationEvent {
   uint64 sequence = 1;
   string timestamp = 2;
-  string target = 3;          // "collection" or "global"
-  string operation = 4;       // "create", "update", "delete"
+  MutationTarget target = 3;       // COLLECTION or GLOBAL
+  MutationOperation operation = 4; // CREATE, UPDATE, or DELETE
   string collection = 5;
   string document_id = 6;
   google.protobuf.Struct data = 7;
 }
 ```
+
+Events deliberately do **not** identify the editing user — exposing editor
+ids/emails to every subscriber would leak PII. Editor-based suppression or
+transformation belongs in the server-side `live` filter and `before_broadcast`
+hooks, whose contexts carry `edited_by` (see [Hooks](hooks.md)).
 
 ## Usage with grpcurl
 

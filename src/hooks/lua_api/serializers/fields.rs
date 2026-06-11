@@ -4,7 +4,7 @@
 use mlua::{Lua, Result as LuaResult, Table};
 use serde_json::Value as JsonValue;
 
-use crate::core::{FieldAccess, FieldDefinition, FieldHooks, HookRef};
+use crate::core::{FieldAccess, FieldDefinition, FieldHooks, HookRef, RequiredLocales};
 
 use super::{
     admin::field_admin_to_lua,
@@ -33,6 +33,8 @@ pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> LuaResult<T
         tbl.set("access", access)?;
     }
 
+    set_field_constraints(lua, &tbl, f)?;
+    set_field_join(&tbl, f)?;
     set_field_mcp(lua, &tbl, f)?;
     set_field_relationship(lua, &tbl, f)?;
     set_field_sub_fields(lua, &tbl, f)?;
@@ -40,6 +42,78 @@ pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> LuaResult<T
     set_field_tabs(lua, &tbl, f)?;
 
     Ok(tbl)
+}
+
+/// Set the validation-constraint keys: `index`, `required_when`,
+/// `required_locales`, `min`/`max`, `min_length`/`max_length`,
+/// `min_rows`/`max_rows`, `integer`, `min_date`/`max_date`.
+///
+/// Every one of these used to be DROPPED by the definition→Lua round-trip, so
+/// a plugin reading a collection and re-defining it (the documented extension
+/// pattern) silently lost the constraints.
+fn set_field_constraints(lua: &Lua, tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
+    if f.index {
+        tbl.set("index", true)?;
+    }
+    if let Some(ref v) = f.required_when {
+        tbl.set("required_when", hook_ref_to_lua(lua, v)?)?;
+    }
+
+    match f.required_locales {
+        Some(RequiredLocales::All) => tbl.set("required_locales", "all")?,
+        Some(RequiredLocales::List(ref locales)) => {
+            let t = lua.create_table()?;
+            for (i, loc) in locales.iter().enumerate() {
+                t.set(i + 1, loc.as_str())?;
+            }
+            tbl.set("required_locales", t)?;
+        }
+        None => {}
+    }
+
+    if let Some(v) = f.min_rows {
+        tbl.set("min_rows", v)?;
+    }
+    if let Some(v) = f.max_rows {
+        tbl.set("max_rows", v)?;
+    }
+    if let Some(v) = f.min_length {
+        tbl.set("min_length", v)?;
+    }
+    if let Some(v) = f.max_length {
+        tbl.set("max_length", v)?;
+    }
+    if let Some(v) = f.min {
+        tbl.set("min", v)?;
+    }
+    if let Some(v) = f.max {
+        tbl.set("max", v)?;
+    }
+    if f.integer {
+        tbl.set("integer", true)?;
+    }
+    if let Some(ref v) = f.min_date {
+        tbl.set("min_date", v.as_str())?;
+    }
+    if let Some(ref v) = f.max_date {
+        tbl.set("max_date", v.as_str())?;
+    }
+
+    Ok(())
+}
+
+/// Set the join field's top-level `collection`/`on` keys (required for
+/// `type = "join"`; the strict parser rejects a join without them, so
+/// dropping them used to break every plugin re-define of a join-bearing
+/// collection).
+fn set_field_join(tbl: &Table, f: &FieldDefinition) -> LuaResult<()> {
+    let Some(ref jc) = f.join else {
+        return Ok(());
+    };
+
+    tbl.set("collection", &*jc.collection)?;
+    tbl.set("on", jc.on.as_str())?;
+    Ok(())
 }
 
 /// Set the scalar flags (`name`, `type`, `required`, `unique`, `localized`,
@@ -138,7 +212,20 @@ fn set_field_relationship(lua: &Lua, tbl: &Table, f: &FieldDefinition) -> LuaRes
         return Ok(());
     };
     let rel = lua.create_table()?;
-    rel.set("collection", &*rc.collection)?;
+
+    // Polymorphic relationships parse `collection` as an array of slugs
+    // (stored as `polymorphic` + first slug in `collection`) — emit the array
+    // back, or the round-trip collapses the relationship to its first target.
+    if rc.is_polymorphic() {
+        let arr = lua.create_table()?;
+        for (i, slug) in rc.polymorphic.iter().enumerate() {
+            arr.set(i + 1, &**slug)?;
+        }
+        rel.set("collection", arr)?;
+    } else {
+        rel.set("collection", &*rc.collection)?;
+    }
+
     if rc.has_many {
         rel.set("has_many", true)?;
     }
@@ -659,5 +746,88 @@ mod tests {
         // singular should not be present
         let singular_val: Value = labels.get("singular").unwrap();
         assert!(matches!(singular_val, Value::Nil));
+    }
+
+    /// Regression: the definition→Lua round-trip used to DROP every
+    /// validation-constraint key (`index`, `required_when`,
+    /// `required_locales`, `min`/`max`, `min_length`/`max_length`,
+    /// `min_rows`/`max_rows`, `integer`, `min_date`/`max_date`) and a join
+    /// field's `collection`/`on` — a plugin re-defining a collection silently
+    /// lost all of them (and, with the strict join parser, now fails loudly).
+    #[test]
+    fn test_field_config_to_lua_round_trips_constraints_and_join() {
+        let lua = mlua::Lua::new();
+
+        let mut number = FieldDefinition::builder("qty", FieldType::Number).build();
+        number.index = true;
+        number.required_when = Some(HookRef::new("hooks.validate.needs_qty"));
+        number.required_locales = Some(crate::core::RequiredLocales::List(vec![
+            "en".to_string(),
+            "de".to_string(),
+        ]));
+        number.min = Some(1.0);
+        number.max = Some(99.0);
+        number.integer = true;
+        number.min_rows = Some(2);
+        number.max_rows = Some(5);
+
+        let tbl = field_config_to_lua(&lua, &number).unwrap();
+        assert!(tbl.get::<bool>("index").unwrap());
+        assert_eq!(
+            tbl.get::<String>("required_when").unwrap(),
+            "hooks.validate.needs_qty"
+        );
+        let rl: Vec<String> = tbl.get("required_locales").unwrap();
+        assert_eq!(rl, vec!["en".to_string(), "de".to_string()]);
+        assert!((tbl.get::<f64>("min").unwrap() - 1.0).abs() < f64::EPSILON);
+        assert!((tbl.get::<f64>("max").unwrap() - 99.0).abs() < f64::EPSILON);
+        assert!(tbl.get::<bool>("integer").unwrap());
+        assert_eq!(tbl.get::<usize>("min_rows").unwrap(), 2);
+        assert_eq!(tbl.get::<usize>("max_rows").unwrap(), 5);
+
+        let mut text = FieldDefinition::builder("slug", FieldType::Text).build();
+        text.min_length = Some(3);
+        text.max_length = Some(64);
+        let tbl = field_config_to_lua(&lua, &text).unwrap();
+        assert_eq!(tbl.get::<usize>("min_length").unwrap(), 3);
+        assert_eq!(tbl.get::<usize>("max_length").unwrap(), 64);
+
+        let mut date = FieldDefinition::builder("due", FieldType::Date).build();
+        date.min_date = Some("2026-01-01".to_string());
+        date.max_date = Some("2026-12-31".to_string());
+        let tbl = field_config_to_lua(&lua, &date).unwrap();
+        assert_eq!(tbl.get::<String>("min_date").unwrap(), "2026-01-01");
+        assert_eq!(tbl.get::<String>("max_date").unwrap(), "2026-12-31");
+
+        let mut join = FieldDefinition::builder("posts", FieldType::Join).build();
+        join.join = Some(crate::core::JoinConfig::new("posts", "author"));
+        let tbl = field_config_to_lua(&lua, &join).unwrap();
+        assert_eq!(tbl.get::<String>("collection").unwrap(), "posts");
+        assert_eq!(tbl.get::<String>("on").unwrap(), "author");
+
+        // `required_locales = "all"` keeps its string form.
+        let mut loc = FieldDefinition::builder("title", FieldType::Text).build();
+        loc.required_locales = Some(crate::core::RequiredLocales::All);
+        let tbl = field_config_to_lua(&lua, &loc).unwrap();
+        assert_eq!(tbl.get::<String>("required_locales").unwrap(), "all");
+    }
+
+    /// Regression: the serializer emitted only `rc.collection` (the FIRST
+    /// slug) for polymorphic relationships — a plugin re-define collapsed the
+    /// relationship to a single target. The array form must round-trip.
+    #[test]
+    fn test_field_config_to_lua_round_trips_polymorphic_collection() {
+        let lua = mlua::Lua::new();
+
+        let mut rc = RelationshipConfig::new("posts", false);
+        rc.polymorphic = vec!["posts".into(), "pages".into()];
+        let f = FieldDefinition::builder("target", FieldType::Relationship)
+            .relationship(rc)
+            .build();
+
+        let tbl = field_config_to_lua(&lua, &f).unwrap();
+        let rel: mlua::Table = tbl.get("relationship").unwrap();
+        let slugs: Vec<String> = rel.get("collection").unwrap();
+        assert_eq!(slugs, vec!["posts".to_string(), "pages".to_string()]);
     }
 }

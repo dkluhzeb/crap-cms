@@ -1,6 +1,7 @@
 //! Dynamic schema migration: syncs `SQLite` tables to match Lua collection definitions.
 
 mod backfill_ref_counts;
+mod checkbox_columns;
 #[cfg(not(test))]
 mod collection;
 #[cfg(test)]

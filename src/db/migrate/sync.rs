@@ -14,7 +14,7 @@ use crate::{
     db::{DbConnection, DbPool, query::jobs as job_query},
 };
 
-use super::{backfill_ref_counts, collection, global};
+use super::{backfill_ref_counts, checkbox_columns, collection, global};
 
 /// Sync all collection tables with their Lua definitions.
 ///
@@ -44,6 +44,7 @@ pub fn sync_all(pool: &DbPool, registry: &Registry, locale_config: &LocaleConfig
     }
 
     backfill_ref_counts::backfill_if_needed(&tx, registry, locale_config)?;
+    checkbox_columns::migrate_if_needed(&tx, registry)?;
 
     tx.commit()
         .context("Failed to commit migration transaction")?;

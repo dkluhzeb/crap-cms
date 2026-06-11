@@ -101,8 +101,10 @@ pub fn consume_reset_token(
         });
     }
 
-    query::update_password(conn, ctx.slug, &user.id, new_password)?;
-    query::clear_reset_token(conn, ctx.slug, &user.id)?;
+    // One statement: password change + token clear must be atomic so a
+    // mid-flow failure can never leave the consumed token alive after the
+    // password actually changed.
+    query::update_password_clearing_reset_token(conn, ctx.slug, &user.id, new_password)?;
 
     Ok(())
 }
@@ -201,6 +203,33 @@ mod tests {
             .build();
         let result = consume_reset_token(&ctx, "tok123", "newpass123");
         assert!(result.is_ok());
+    }
+
+    /// Regression: the token must be cleared in the SAME statement as the
+    /// password update (it used to be a second UPDATE — a mid-flow failure
+    /// could leave the consumed token alive). Single-use: the second consume
+    /// with the same token must fail.
+    #[test]
+    fn consume_reset_token_is_single_use() {
+        let (conn, def, _) = setup();
+        let exp = Utc::now().timestamp() + 3600;
+        conn.execute(
+            "UPDATE users SET _reset_token = 'tok-once', _reset_token_exp = ?1 WHERE id = 'u1'",
+            [exp],
+        )
+        .unwrap();
+
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+        consume_reset_token(&ctx, "tok-once", "newpass123").expect("first consume succeeds");
+
+        let err = consume_reset_token(&ctx, "tok-once", "otherpass456")
+            .expect_err("second consume with the same token must fail");
+        assert!(
+            matches!(err, ServiceError::InvalidToken { .. }),
+            "expected InvalidToken, got: {err:?}"
+        );
     }
 
     #[test]

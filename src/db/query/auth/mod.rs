@@ -6,7 +6,10 @@ mod status;
 mod tokens;
 
 pub use mfa::{set_mfa_code, verify_mfa_code};
-pub use password::{find_by_email, get_password_hash, has_password, update_password};
+pub use password::{
+    find_by_email, get_password_hash, has_password, update_password,
+    update_password_clearing_reset_token,
+};
 pub use status::{
     bump_session_version, get_session_version, is_locked, is_verified, lock_user, unlock_user,
     user_exists,

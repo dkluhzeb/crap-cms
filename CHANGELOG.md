@@ -8,6 +8,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Relationship/Upload fields require a relationship config at load.** A
+  `type = "relationship"` or `"upload"` field with no `relationship = { ... }`
+  (and no legacy `relation_to`) used to parse anyway and migrate as a plain
+  TEXT column — no populate, no ref-counting, no delete protection. It is now
+  a hard load-time error. Also hardened: a wrong-typed `relationship.max_depth`
+  was silently dropped (now an error, and negatives are rejected), and a
+  non-string entry in a polymorphic `collection` array was silently skipped
+  (now an error).
+
+- **Join fields reject missing or malformed `collection`/`on` at load.** A
+  `type = "join"` field with a missing, wrong-typed, or empty `collection` or
+  `on` value silently became an empty join config that matched nothing at
+  populate time. Both keys are now required non-empty strings; anything else
+  is a hard load-time error.
+
+- **`min_date`/`max_date` must be valid `YYYY-MM-DD` strings.** A
+  present-but-non-string bound was silently dropped, and an arbitrary string
+  was accepted as-is — the runtime check compares the bound lexically against
+  the submitted value's date part, so a malformed bound silently never (or
+  always) matched. Wrong types, non-`YYYY-MM-DD` formats, and
+  `min_date > max_date` are now hard load-time errors.
+
 - **Collection-hook `ctx.locale` is now the resolved content locale, not `nil`
   on default-locale writes.** Previously a collection-level hook
   (`before_change`, `after_change`, `after_read`, …) saw `ctx.locale = nil` when
@@ -165,7 +187,66 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `fit` values remain `cover` / `contain` / `inside` / `fill`; an absent
   `max_file_size` still inherits the global default.
 
+### Security
+
+- **Checkbox columns are SMALLINT on Postgres.** A 0/1 flag was stored as
+  BIGINT (8 bytes). New tables use SMALLINT, and a one-time idempotent
+  migration (versioned via `_crap_meta`, introspection-guarded so only
+  currently-BIGINT checkbox columns are touched — locale variants and array
+  join tables included) retypes existing databases on startup. Integer query
+  parameters now adapt to the statement's expected Postgres type (INT2/INT4/
+  INT8) with range checks. SQLite is unaffected (INTEGER storage is already
+  variable-width).
+
+- **Login rate limiting fails closed on backend errors.** With the Redis
+  rate-limit backend, a Redis outage made `is_blocked` report "not blocked"
+  for everyone — silently disabling login/forgot-password brute-force
+  protection for the duration of the outage. A backend error now blocks the
+  attempt (matching the gRPC limiter) and logs the infrastructure error.
+
+- **Live events no longer expose the editing user's identity to subscribers.**
+  The admin SSE payload sent `edited_by` as a full `{ id, email }` object to
+  every subscriber — any user with read access to a collection learned which
+  user (including their email address) made each change. The payload now
+  carries a server-computed `self` boolean instead (`true` when the
+  authenticated subscriber is the editor), which is all the admin UI needs to
+  suppress stale-content warnings for your own saves. The gRPC `MutationEvent`
+  never carried identity and deliberately stays that way. Editor-based
+  suppression/transformation remains fully available server-side: the `live`
+  filter and `before_broadcast` hook contexts keep the complete `edited_by`.
+  Breaking for SSE consumers that read `edited_by` from the event payload.
+
 ### Fixed
+
+- **Polymorphic relationships survive the plugin round-trip.** The
+  definition→Lua serializer emitted only the FIRST target slug for a
+  polymorphic relationship, so a plugin re-defining the collection collapsed
+  `collection = { "posts", "pages" }` to a single target. The array form now
+  round-trips.
+
+- **Password-reset tokens are consumed atomically.** The reset flow updated
+  the password and cleared the token in two separate statements — a mid-flow
+  failure could leave the consumed token alive after the password had already
+  changed. Both now happen in a single UPDATE (single-use is guaranteed).
+
+- **Plugins no longer silently strip field constraints when re-defining a
+  collection.** The definition→Lua round-trip (what a plugin reads via the
+  registry before calling `crap.collections.define` again — the documented
+  extension pattern) dropped `index`, `required_when`, `required_locales`,
+  `min`/`max`, `min_length`/`max_length`, `min_rows`/`max_rows`, `integer`,
+  `min_date`/`max_date`, and a join field's `collection`/`on`. Any plugin that
+  touched a collection silently erased those constraints (and left join fields
+  matching nothing). All field properties now round-trip. Flushed out by the
+  new strict join parsing, which turned the silent join breakage into a hard
+  load error.
+
+- **Global unpublish now emits a mutation event.** `unpublish_global_document`
+  committed its transaction without notifying subscribers (and without
+  clearing the global cache) — both `update_global_document` and the
+  collection unpublish path already did. Subscribers silently missed global
+  unpublishes; cached reads could serve the stale published state. The
+  unpublish path now follows the same post-commit sequence: clear cache,
+  publish the mutation event, flush events queued by nested hook CRUD.
 
 - **`crap.collections.update_many` now passes the incoming patch to the update
   access function as `ctx.data` on its pre-flight check.** The bulk path checks
