@@ -202,6 +202,7 @@ impl CrapConfig {
         self.validate_logging()?;
         self.validate_mcp()?;
         self.validate_live()?;
+        self.validate_cors()?;
         self.validate_cache();
 
         Ok(())

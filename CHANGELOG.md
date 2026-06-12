@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **`[cors]` config is validated at load.** Invalid entries used to be
+  silently dropped while building the CORS layer (`filter_map(.parse().ok())`),
+  and entries that parsed but could never match a browser `Origin` header
+  weren't caught at all — a schemeless origin (`example.com`), a trailing
+  slash (`https://x.com/`), or `"*"` mixed with explicit origins produced an
+  allowlist entry that silently never matched, surfacing only as blocked
+  requests in production. All of these now fail config load with a message
+  naming the entry, as does the spec-invalid `allow_credentials = true` +
+  wildcard combination (previously downgraded with a warning).
+
 - **Admin list pages return 400 on invalid query params.** A
   present-but-invalid `where[...]` filter (unknown operator, unknown field,
   system column, malformed key), an unknown/unsortable `sort` field, or an
@@ -253,6 +263,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **`server.public_url` is validated to include a scheme.** A value without
+  `http://` or `https://` (e.g. `public_url = "cms.example.com"`) was accepted
+  and used verbatim to build absolute links — so password-reset emails carried
+  a broken relative URL (`cms.example.com/admin/reset-password?...`). A
+  schemeless or blank `public_url` now fails at config load.
+
+- **Duplicate and degenerate locale codes are rejected at load.** A repeated
+  locale (`locales = ["en", "en"]`) generated the same `field__en` column
+  twice, crashing migration with a confusing "duplicate column" error at
+  startup; a separator-only code (`"---"`) produced a malformed column name.
+  Both are now clear config-load errors.
 
 - **CLI `trash purge` / `trash empty` respect reference counting.** The CLI
   purge path hard-deleted trashed documents with raw SQL, bypassing both

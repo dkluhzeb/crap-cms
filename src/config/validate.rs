@@ -2,9 +2,10 @@
 //! `validate()` orchestrator lives on `types.rs`; each helper here
 //! checks one config section in isolation so test cases stay narrow.
 
-use std::net::IpAddr;
+use std::{net::IpAddr, str::FromStr};
 
 use anyhow::{Result, bail};
+use axum::http::{HeaderName, HeaderValue, Method};
 use ipnet::IpNet;
 use tracing::warn;
 
@@ -56,6 +57,22 @@ impl CrapConfig {
             bail!("server.bulk_max_documents must be >= 0 (0 = no limit)");
         }
 
+        if let Some(url) = &self.server.public_url {
+            let trimmed = url.trim();
+            if trimmed.is_empty() {
+                bail!(
+                    "server.public_url must not be blank (omit it to auto-derive from host/port)"
+                );
+            }
+            if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+                bail!(
+                    "server.public_url must include a scheme (http:// or https://); got {url:?}. \
+                     It is used to build absolute links such as password-reset emails, which \
+                     break without one."
+                );
+            }
+        }
+
         self.validate_trusted_proxies()?;
 
         Ok(())
@@ -101,6 +118,92 @@ impl CrapConfig {
                 "server.trusted_proxies contains \"*\" -- X-Forwarded-For is \
                  honoured from any peer. Use only for development or when \
                  the admin port is not exposed to untrusted networks."
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Validate the `[cors]` section. Only runs when CORS is enabled
+    /// (non-empty `allowed_origins`) — an empty list means the layer is
+    /// never built.
+    ///
+    /// Every entry used to be converted with `filter_map(.parse().ok())`
+    /// at layer-build time, silently dropping anything unparseable — and
+    /// values that *parse* but can never match a browser `Origin` header
+    /// (no scheme, trailing slash/path) weren't caught at all. All of
+    /// these are now load-time errors.
+    pub(super) fn validate_cors(&self) -> Result<()> {
+        let origins = &self.cors.allowed_origins;
+        if origins.is_empty() {
+            return Ok(());
+        }
+
+        let has_wildcard = origins.iter().any(|o| o == "*");
+        if has_wildcard && origins.len() > 1 {
+            bail!(
+                "cors.allowed_origins: \"*\" must be the only entry — mixed with explicit \
+                 origins it is matched literally and never allows anything"
+            );
+        }
+
+        if has_wildcard && self.cors.allow_credentials {
+            bail!(
+                "cors.allow_credentials = true is incompatible with the wildcard origin \
+                 \"*\" (forbidden by the CORS spec). List explicit origins instead."
+            );
+        }
+
+        for origin in origins.iter().filter(|o| *o != "*") {
+            Self::validate_cors_origin(origin)?;
+        }
+
+        for method in &self.cors.allowed_methods {
+            if Method::from_str(method).is_err() {
+                bail!("cors.allowed_methods entry {method:?} is not a valid HTTP method token");
+            }
+        }
+
+        for (list, header) in std::iter::empty()
+            .chain(self.cors.allowed_headers.iter().map(|h| ("allowed", h)))
+            .chain(self.cors.exposed_headers.iter().map(|h| ("exposed", h)))
+        {
+            if HeaderName::from_str(header).is_err() {
+                bail!("cors.{list}_headers entry {header:?} is not a valid header name");
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate a single explicit CORS origin: it must be exactly what a
+    /// browser sends in the `Origin` header (`scheme://host[:port]`, no
+    /// path, no trailing slash) or it will never match.
+    fn validate_cors_origin(origin: &str) -> Result<()> {
+        if HeaderValue::from_str(origin).is_err() || origin.chars().any(char::is_whitespace) {
+            bail!("cors.allowed_origins entry {origin:?} is not a valid header value");
+        }
+
+        let rest = origin
+            .strip_prefix("https://")
+            .or_else(|| origin.strip_prefix("http://"))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "cors.allowed_origins entry {origin:?} must include a scheme \
+                     (http:// or https://) — browsers send the full origin, so a \
+                     schemeless entry never matches"
+                )
+            })?;
+
+        if rest.is_empty() {
+            bail!("cors.allowed_origins entry {origin:?} has no host");
+        }
+
+        if rest.contains('/') {
+            bail!(
+                "cors.allowed_origins entry {origin:?} must not contain a path or \
+                 trailing slash — the browser `Origin` header is scheme://host[:port] \
+                 only, so this entry would never match"
             );
         }
 
@@ -322,6 +425,98 @@ mod tests {
     #[test]
     fn validate_default_config_passes() {
         let config = CrapConfig::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_cors_schemeless_origin_errors() {
+        let mut config = CrapConfig::default();
+        config.cors.allowed_origins = vec!["example.com".to_string()];
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("scheme"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn validate_cors_origin_with_path_errors() {
+        let mut config = CrapConfig::default();
+        config.cors.allowed_origins = vec!["https://example.com/".to_string()];
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("path or"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn validate_cors_wildcard_mixed_with_origins_errors() {
+        let mut config = CrapConfig::default();
+        config.cors.allowed_origins = vec!["*".to_string(), "https://x.com".to_string()];
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("only entry"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn validate_cors_wildcard_with_credentials_errors() {
+        let mut config = CrapConfig::default();
+        config.cors.allowed_origins = vec!["*".to_string()];
+        config.cors.allow_credentials = true;
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("allow_credentials"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn validate_cors_invalid_header_name_errors() {
+        let mut config = CrapConfig::default();
+        config.cors.allowed_origins = vec!["https://example.com".to_string()];
+        config.cors.allowed_headers = vec!["X Custom".to_string()];
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("header name"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn validate_cors_invalid_method_errors() {
+        let mut config = CrapConfig::default();
+        config.cors.allowed_origins = vec!["https://example.com".to_string()];
+        config.cors.allowed_methods = vec!["GE T".to_string()];
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("HTTP method"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn validate_cors_valid_config_passes() {
+        let mut config = CrapConfig::default();
+        config.cors.allowed_origins = vec![
+            "https://example.com".to_string(),
+            "http://localhost:5173".to_string(),
+        ];
+        config.cors.allow_credentials = true;
+        assert!(config.validate().is_ok());
+
+        config.cors.allowed_origins = vec!["*".to_string()];
+        config.cors.allow_credentials = false;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_public_url_without_scheme_errors() {
+        let mut config = CrapConfig::default();
+        config.server.public_url = Some("example.com".to_string());
+        let err = config.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("public_url") && err.contains("scheme"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_public_url_blank_errors() {
+        let mut config = CrapConfig::default();
+        config.server.public_url = Some("   ".to_string());
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("public_url"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn validate_public_url_with_scheme_passes() {
+        let mut config = CrapConfig::default();
+        config.server.public_url = Some("https://cms.example.com".to_string());
         assert!(config.validate().is_ok());
     }
 

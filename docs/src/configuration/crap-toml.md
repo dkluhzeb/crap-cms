@@ -122,8 +122,8 @@ require_auth = true      # Block admin when no auth collection exists (default: 
 
 # [admin.csp]                    # Content-Security-Policy (enabled by default)
 # enabled = true
-# script_src = ["'self'", "'unsafe-inline'", "https://unpkg.com"]
-# style_src = ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"]
+# script_src = ["'self'"]        # inline <script> allowed only via the per-request nonce
+# style_src = ["'self'", "https://fonts.googleapis.com"]
 # font_src = ["'self'", "https://fonts.gstatic.com"]
 # img_src = ["'self'", "data:"]
 # connect_src = ["'self'"]
@@ -313,8 +313,8 @@ Content-Security-Policy header configuration for the admin UI. Each field is a l
 |-------|------|---------|-------------|
 | `enabled` | boolean | `true` | Enable the CSP header. Set to `false` to disable entirely. |
 | `default_src` | string[] | `["'self'"]` | Fallback for any directive not explicitly set. |
-| `script_src` | string[] | `["'self'", "'unsafe-inline'", "https://unpkg.com"]` | Allowed script sources. Includes `'unsafe-inline'` for theme bootstrap and CSRF injection scripts. |
-| `style_src` | string[] | `["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"]` | Allowed stylesheet sources. Includes `'unsafe-inline'` for Web Component Shadow DOM styles. |
+| `script_src` | string[] | `["'self'"]` | Allowed script sources. `'unsafe-inline'` is deliberately absent — inline `<script>` tags are allowed only via the per-request nonce (`nonce="{{crap.csp_nonce}}"`); all built-in scripts (htmx, CodeMirror, ProseMirror) are vendored and served same-origin. |
+| `style_src` | string[] | `["'self'", "https://fonts.googleapis.com"]` | Allowed stylesheet sources. `'unsafe-inline'` is deliberately absent — Web Components use constructable stylesheets (CSP-exempt) and templates avoid `style="..."` attributes. |
 | `font_src` | string[] | `["'self'", "https://fonts.gstatic.com"]` | Allowed font sources. Includes Google Fonts for Material Symbols icons. |
 | `img_src` | string[] | `["'self'", "data:"]` | Allowed image sources. Includes `data:` for inline SVGs. |
 | `connect_src` | string[] | `["'self'"]` | Allowed targets for `fetch`, XHR, and WebSocket connections. |
@@ -326,12 +326,18 @@ Content-Security-Policy header configuration for the admin UI. Each field is a l
 
 ```toml
 [admin.csp]
-script_src = ["'self'", "'unsafe-inline'", "https://unpkg.com", "https://cdn.example.com", "https://analytics.example.com"]
-style_src = ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://cdn.example.com"]
+script_src = ["'self'", "https://cdn.example.com", "https://analytics.example.com"]
+style_src = ["'self'", "https://fonts.googleapis.com", "https://cdn.example.com"]
 font_src = ["'self'", "https://fonts.gstatic.com", "https://cdn.example.com"]
 img_src = ["'self'", "data:", "https://cdn.example.com"]
 connect_src = ["'self'", "https://analytics.example.com"]
 ```
+
+Overriding a directive replaces the default list, so repeat `'self'` (and
+any default entries you still need). For inline scripts, prefer the nonce
+mechanism over adding `'unsafe-inline'`: an inline `<script>` in an
+overlay template can carry `nonce="{{crap.csp_nonce}}"` instead (the
+nonce applies to `script-src` only).
 
 ### `[auth]`
 
@@ -548,9 +554,17 @@ Enable this to enforce a "secure by default" posture — every collection must e
 | `allowed_headers` | string[] | `["Content-Type", "Authorization"]` | Request headers allowed in CORS requests. |
 | `exposed_headers` | string[] | `[]` (empty) | Response headers the browser is allowed to access. |
 | `max_age` | integer/string | `3600` (`"1h"`) | How long browsers may cache preflight results. Accepts seconds or human-readable. |
-| `allow_credentials` | boolean | `false` | Allow credentials (cookies, `Authorization` header). **Cannot be used with `allowed_origins = ["*"]`** — if both are set, credentials are ignored with a warning. |
+| `allow_credentials` | boolean | `false` | Allow credentials (cookies, `Authorization` header). **Cannot be used with `allowed_origins = ["*"]`** — that combination fails config load. |
 
 When CORS is enabled, the layer is added to both the admin UI (Axum) and gRPC API (Tonic) servers. CORS runs before CSRF middleware, so preflight `OPTIONS` requests get CORS headers without triggering CSRF validation.
+
+The section is validated at config load: every origin must be exactly
+what a browser sends in its `Origin` header — `scheme://host[:port]`
+with no path or trailing slash (`https://app.example.com`, not
+`app.example.com` or `https://app.example.com/`) — `"*"` must be the
+only entry when used, and method/header entries must be valid HTTP
+tokens. Invalid entries fail startup instead of being silently dropped
+from the allowlist.
 
 ### `[mcp]`
 

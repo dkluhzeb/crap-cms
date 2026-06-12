@@ -179,6 +179,13 @@ nothing. The full list:
   (e.g. `"covr"`) fell back to `cover`; a malformed
   `upload.max_file_size` silently inherited the global default. All
   three now error at definition time.
+- **`[cors]` in `crap.toml` is validated.** Origins must be
+  `scheme://host[:port]` exactly (no path, no trailing slash —
+  `https://app.example.com`, not `app.example.com`), `"*"` must be the
+  only entry when used, method/header entries must be valid tokens,
+  and `allow_credentials = true` with the wildcard origin is an error.
+  Invalid entries used to be silently dropped from the allowlist (or
+  kept but never matched), surfacing only as blocked requests.
 
 ### 7. Runtime option tables also reject unknown keys
 

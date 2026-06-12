@@ -46,6 +46,14 @@ impl LocaleConfig {
             Self::validate_locale_code(locale)?;
         }
 
+        // Duplicate locales would generate the same `field__<locale>` column
+        // twice, crashing migration with a confusing "duplicate column" error.
+        for (i, locale) in self.locales.iter().enumerate() {
+            if self.locales[..i].contains(locale) {
+                bail!("Duplicate locale '{locale}' in the locales list");
+            }
+        }
+
         // When locales are enabled, the default locale must be in the list
         if !self.locales.is_empty() && !self.locales.contains(&self.default_locale) {
             bail!(
@@ -72,6 +80,12 @@ impl LocaleConfig {
             );
         }
 
+        // A code of only separators (e.g. "---") would produce a degenerate
+        // SQL column name like `field____`.
+        if !code.chars().any(|c| c.is_ascii_alphanumeric()) {
+            bail!("Invalid locale code '{code}': must contain at least one alphanumeric character");
+        }
+
         Ok(())
     }
 }
@@ -93,6 +107,31 @@ mod tests {
         assert!(
             with_locales.is_enabled(),
             "non-empty locales should be enabled"
+        );
+    }
+
+    #[test]
+    fn locale_validation_rejects_duplicates() {
+        let config = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string(), "en".to_string()],
+            fallback: true,
+        };
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("Duplicate locale 'en'"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn locale_validation_rejects_separator_only_code() {
+        let config = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "---".to_string()],
+            fallback: true,
+        };
+        let err = config.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("at least one alphanumeric"),
+            "unexpected: {err}"
         );
     }
 
