@@ -201,6 +201,20 @@ mod tests {
         assert!(!is_verified(&conn, "users", "nonexistent").unwrap());
     }
 
+    /// A genuine query failure (here: the table doesn't exist) must
+    /// propagate as `Err`, NOT collapse to `Ok(false)`. Login handlers
+    /// rely on this to fail CLOSED — a fail-open `is_locked` would let a
+    /// locked account in on a transient DB error.
+    #[test]
+    fn is_locked_propagates_query_error() {
+        let (_dir, conn) = setup();
+        assert!(
+            is_locked(&conn, "nonexistent_table", "user1").is_err(),
+            "a real query failure must be Err, not Ok(false)"
+        );
+        assert!(is_verified(&conn, "nonexistent_table", "user1").is_err());
+    }
+
     #[test]
     fn is_locked_null_treated_as_false() {
         let (_dir, conn) = setup();

@@ -86,13 +86,16 @@ fn login_blocking(input: &LoginBlockingInput) -> Result<Option<(Document, u64)>,
             {
                 let ctx = ServiceContext::slug_only(&input.slug).conn(&conn).build();
 
-                // Strategy-authenticated users still need locked/verified checks
-                if service::auth::is_locked(&ctx, &doc.id).unwrap_or(false) {
+                // Strategy-authenticated users still need locked/verified
+                // checks. A lookup failure must fail CLOSED (deny) — letting
+                // a locked account in on a transient DB error is an auth
+                // bypass. Matches the `get_session_version` call below.
+                if service::auth::is_locked(&ctx, &doc.id).map_err(Status::from)? {
                     return Ok(None);
                 }
 
                 if input.check_verify_email
-                    && !service::auth::is_verified(&ctx, &doc.id).unwrap_or(false)
+                    && !service::auth::is_verified(&ctx, &doc.id).map_err(Status::from)?
                 {
                     return Ok(None);
                 }

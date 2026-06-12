@@ -235,6 +235,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **Strategy login fails closed when the locked/verified lookup errors.** The
+  custom-strategy login path (admin and gRPC) checked `is_locked` /
+  `is_verified` with `.unwrap_or(false)`, so a transient database error during
+  those checks — right after a successful strategy authentication — was treated
+  as "not locked / verification not required" and let the account in. A locked
+  account could thus log in during a DB hiccup. The checks now propagate the
+  error and deny the login, matching the `get_session_version` call beside them
+  and the fail-closed token-auth path. (Bearer/cookie token auth was already
+  fail-closed; only the strategy login path was affected.)
+
 - **Checkbox columns are SMALLINT on Postgres.** A 0/1 flag was stored as
   BIGINT (8 bytes). New tables use SMALLINT, and a one-time idempotent
   migration (versioned via `_crap_meta`, introspection-guarded so only

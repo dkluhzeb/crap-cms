@@ -139,13 +139,17 @@ fn verify_credentials_blocking(
     {
         let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
 
-        // Strategy-authenticated users still need locked/verified checks
-        if service::auth::is_locked(&ctx, &user.id).unwrap_or(false) {
+        // Strategy-authenticated users still need locked/verified checks.
+        // A lookup failure must fail CLOSED (deny) — letting a locked
+        // account in on a transient DB error is an auth bypass. Matches
+        // the `get_session_version` call below.
+        if service::auth::is_locked(&ctx, &user.id).map_err(ServiceError::into_anyhow)? {
             debug!("Login denied for {}: account locked", user.id);
             return Ok(None);
         }
 
-        if params.verify_email_flag && !service::auth::is_verified(&ctx, &user.id).unwrap_or(false)
+        if params.verify_email_flag
+            && !service::auth::is_verified(&ctx, &user.id).map_err(ServiceError::into_anyhow)?
         {
             debug!("Login denied for {}: email not verified", user.id);
             return Ok(None);
