@@ -8,6 +8,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Admin list pages return 400 on invalid query params.** A
+  present-but-invalid `where[...]` filter (unknown operator, unknown field,
+  system column, malformed key), an unknown/unsortable `sort` field, or an
+  invalid `_status` filter value used to be silently ignored — the list
+  rendered unfiltered or default-sorted results, which could mislead.
+  They now render a 400 Bad Request error page naming the offending
+  parameter (parity with the MCP and gRPC surfaces, which already
+  hard-error). Invalid pagination params now also return 400 instead of
+  500. URLs produced by the admin filter UI are unaffected.
+
+- **`crap.http.request` and `crap.email.send`/`crap.email.queue` options
+  reject unknown keys.** Both option tables silently ignored typo'd keys —
+  e.g. `timout = 5` ran the request with the default 30-second timeout, and
+  `retires = 3` queued the email with the default retry count. Unknown keys
+  are now a hard runtime error (parity with every other strict Lua options
+  table).
+
+- **`crap.pages.register` options and `crap.richtext.register_node` specs
+  reject unknown keys.** Both tables silently ignored typo'd or unsupported
+  keys (e.g. `sction` instead of `section`, `lable` instead of `label`); they
+  now hard-error at load time with a did-you-mean suggestion — parity with
+  every other strict Lua schema table. Passing a non-table value as the page
+  options is also a hard error now. Additionally, a non-string entry in a
+  custom node's `searchable_attrs` array was silently dropped from the FTS
+  index; it is now a load error.
+
+- **Field `admin = {...}` values are strictly typed at load.** A
+  present-but-wrong-typed admin value was silently dropped (or, for `rows`,
+  silently ignored): `label`/`placeholder`/`description`/`labels.singular`/
+  `labels.plural` must be strings or locale tables, `width`/`label_field`/
+  `row_label`/`position`/`step`/`language`/`picker`/`format`/`template` must
+  be strings, `rows` must be a non-negative integer, `languages`/`features`/
+  `nodes` must be arrays of strings, and `labels`/`extra` must be tables. The
+  `labels` sub-table also rejects unknown keys now. Anything else is a hard
+  load-time error instead of a silently missing admin knob.
+
 - **Relationship/Upload fields require a relationship config at load.** A
   `type = "relationship"` or `"upload"` field with no `relationship = { ... }`
   (and no legacy `relation_to`) used to parse anyway and migrate as a plain
@@ -539,6 +575,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   files, so trashed documents remain restorable.)
 
 ### Added
+
+- **`crap.http.request` accepts fractional `timeout` seconds.** The timeout
+  option is now a number instead of an integer, so sub-second timeouts are
+  expressible (`timeout = 0.5` = 500 ms). The unit stays seconds. Zero,
+  negative, and non-finite values are rejected with a load error (a zero
+  timeout previously parsed and made every request fail instantly).
 
 - **Config-customizable hooks: a hook ref can carry per-config `options`,
   surfaced to the hook as `ctx.options`.** Any hook reference may now be written

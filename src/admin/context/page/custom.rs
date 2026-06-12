@@ -1,9 +1,9 @@
 //! Typed page context for filesystem-routed custom admin pages.
 //!
 //! Drop a template at `<config_dir>/templates/pages/<slug>.hbs` and it
-//! auto-routes to `/admin/p/<slug>` against this context. Frontmatter
-//! comments (`@nav-section`, `@nav-label`, `@nav-icon`) drive the
-//! sidebar entry.
+//! auto-routes to `/admin/p/<slug>` against this context. The sidebar
+//! entry (section, label, icon) and the optional access gate come from
+//! `crap.pages.register("<slug>", { ... })` in `init.lua`.
 
 use schemars::JsonSchema;
 use serde::Serialize;

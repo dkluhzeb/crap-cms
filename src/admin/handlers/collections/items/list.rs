@@ -20,9 +20,9 @@ use crate::{
                 resolve_columns, thumbnail_url,
             },
             shared::{
-                ListUrlContext, PaginationParams, extract_editor_locale, extract_status_filter,
-                extract_where_params, not_found, parse_where_params, paths, render_page,
-                server_error, service_error_to_admin_response, task_join_error_response,
+                ListUrlContext, PaginationParams, bad_request, extract_editor_locale,
+                extract_status_filter, extract_where_params, not_found, parse_where_params, paths,
+                render_page, service_error_to_admin_response, task_join_error_response,
                 validate_sort,
             },
         },
@@ -250,11 +250,24 @@ fn parse_list_inputs(
         )
         .map_err(|e| {
             warn!("Invalid pagination params: {}", e);
-            Box::new(server_error(state, "Invalid pagination parameters"))
+            Box::new(bad_request(state, "Invalid pagination parameters"))
         })?;
 
-    let sort = params.sort.as_deref().and_then(|s| validate_sort(s, def));
-    let url_filters = parse_where_params(&raw_query, def);
+    // Present-but-invalid URL params hard-error with 400 (parity with the
+    // MCP/gRPC surfaces) instead of silently rendering wrong/unfiltered or
+    // default-sorted results.
+    let sort = match params.sort.as_deref() {
+        None => None,
+        Some(s) => Some(validate_sort(s, def).ok_or_else(|| {
+            Box::new(bad_request(
+                state,
+                &format!("Unknown or unsortable sort field '{s}'"),
+            ))
+        })?),
+    };
+
+    let url_filters =
+        parse_where_params(&raw_query, def).map_err(|e| Box::new(bad_request(state, &e)))?;
 
     // The filter UI exposes `_status` for collections with drafts (see
     // `build_filter_fields`); the URL it produces (`where[_status][equals]=X`,
@@ -264,20 +277,26 @@ fn parse_list_inputs(
     // (`validate_user_filters`). See `extract_status_filter` for the
     // parsing rule. Multiple values widen to `_status IN (...)` at
     // injection time.
-    let status_filter = extract_status_filter(&raw_query).and_then(|values| {
-        if !def.has_drafts() {
-            return None;
+    let status_filter = match extract_status_filter(&raw_query) {
+        None => None,
+        Some(values) => {
+            if !def.has_drafts() {
+                return Err(Box::new(bad_request(
+                    state,
+                    "Status filter is not available on this collection (drafts are disabled)",
+                )));
+            }
+
+            if let Some(bad) = values.iter().find(|s| *s != "draft" && *s != "published") {
+                return Err(Box::new(bad_request(
+                    state,
+                    &format!("Unknown status filter value '{bad}' (valid: draft, published)"),
+                )));
+            }
+
+            Some(values)
         }
-        let filtered: Vec<String> = values
-            .into_iter()
-            .filter(|s| s == "draft" || s == "published")
-            .collect();
-        if filtered.is_empty() {
-            None
-        } else {
-            Some(filtered)
-        }
-    });
+    };
 
     let order_by = if is_trash {
         Some("-_deleted_at".to_string())

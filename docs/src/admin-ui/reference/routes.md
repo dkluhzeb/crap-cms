@@ -1,37 +1,56 @@
 # Routes
 
-The admin UI exposes the routes below. All under `/admin/` are
-authenticated and CSRF-protected (where applicable). `/static/` and
-`/uploads/` are public.
+The admin UI exposes the routes below. The auth-flow routes (login,
+logout, forgot/reset password, email verification, MFA, auth
+callbacks) are reachable without a session; every other `/admin/`
+route sits behind the auth middleware **when at least one auth
+collection exists or `admin.require_auth` is set** (without either,
+the admin runs unauthenticated). All state-changing routes are
+CSRF-protected. `/static/` and `/uploads/` are public.
 
 ## HTML routes
 
-| Route | Description |
-|---|---|
-| `/admin` | Dashboard |
-| `/admin/login` | Login page (public) |
-| `/admin/logout` | Logout |
-| `/admin/forgot-password` | Forgot password page (public) |
-| `/admin/reset-password` | Reset password page (public, requires token) |
-| `/admin/verify-email` | Email verification (public, requires token) |
-| `/admin/collections` | Collection list |
-| `/admin/collections/{slug}` | Collection items list |
-| `/admin/collections/{slug}/create` | Create form |
-| `/admin/collections/{slug}/{id}` | Edit form |
-| `/admin/collections/{slug}/{id}/delete` | Delete confirmation |
-| `/admin/collections/{slug}/{id}/versions` | Version history |
-| `/admin/collections/{slug}/{id}/versions/{version_id}/restore` | Restore a version (POST) |
-| `/admin/globals/{slug}` | Global edit form |
-| `/admin/globals/{slug}/versions` | Global version history |
-| `/admin/globals/{slug}/versions/{version_id}/restore` | Restore global version (POST) |
+| Route | Method | Description |
+|---|---|---|
+| `/` | GET | Dashboard (same handler as `/admin`) |
+| `/admin` | GET | Dashboard |
+| `/admin/login` | GET, POST | Login page / login action (public) |
+| `/admin/logout` | POST | Logout |
+| `/admin/mfa` | GET, POST | MFA challenge page / code verification (public auth flow) |
+| `/admin/auth/callback/{name}` | GET, POST | External auth-method callback (public auth flow) |
+| `/admin/forgot-password` | GET, POST | Forgot password page / action (public) |
+| `/admin/reset-password` | GET, POST | Reset password page / action (public, requires token) |
+| `/admin/verify-email` | GET | Email verification (public, requires token) |
+| `/admin/collections` | GET | Collection list |
+| `/admin/collections/{slug}` | GET, POST | Collection items list / create action |
+| `/admin/collections/{slug}/create` | GET | Create form |
+| `/admin/collections/{slug}/{id}` | GET, POST/PUT, DELETE | Edit form / update action / delete action |
+| `/admin/collections/{slug}/{id}/delete` | GET | Delete confirmation |
+| `/admin/collections/{slug}/{id}/undelete` | POST | Restore a soft-deleted item from trash |
+| `/admin/collections/{slug}/empty-trash` | POST | Permanently delete everything in trash |
+| `/admin/collections/{slug}/{id}/versions` | GET | Version history |
+| `/admin/collections/{slug}/{id}/versions/{version_id}/restore` | GET, POST | Restore confirmation / restore action |
+| `/admin/globals/{slug}` | GET, POST | Global edit form / update action |
+| `/admin/globals/{slug}/versions` | GET | Global version history |
+| `/admin/globals/{slug}/versions/{version_id}/restore` | GET, POST | Restore confirmation / restore action |
+
+The collection items list validates its query parameters strictly: a
+present-but-invalid `where[...]` filter (unknown operator or field,
+system column, malformed key), an unknown/unsortable `sort` field, an
+invalid `_status` value, or invalid pagination params returns **400
+Bad Request** naming the offending parameter — invalid params are
+never silently ignored.
 
 ## API routes (admin)
 
 | Route | Method | Description |
 |---|---|---|
-| `/admin/collections/{slug}/validate` | POST | Inline validation |
+| `/admin/collections/{slug}/validate` | POST | Inline validation (create form) |
+| `/admin/collections/{slug}/{id}/validate` | POST | Inline validation (edit form) |
 | `/admin/collections/{slug}/evaluate-conditions` | POST | Display condition evaluation |
+| `/admin/collections/{slug}/{id}/back-references` | GET | Lazy-loaded back-reference list for the delete dialog |
 | `/admin/globals/{slug}/validate` | POST | Global inline validation |
+| `/admin/globals/{slug}/evaluate-conditions` | POST | Global display condition evaluation |
 | `/admin/events` | GET | SSE live update stream |
 | `/admin/api/search/{slug}` | GET | Relationship search |
 | `/admin/api/session-refresh` | POST | Reissue session cookie before expiry |
@@ -46,7 +65,8 @@ authenticated and CSRF-protected (where applicable). `/static/` and
 | `/ready` | Readiness check |
 | `/static/*` | Static assets (overlay-served — see [Static files guide](../guides/static-files.md)) |
 | `/uploads/{collection_slug}/{filename}` | Uploaded files |
-| `/api/upload/{slug}` | File upload endpoint (POST) |
+| `/api/upload/{slug}` | File upload endpoint (POST; Bearer-token authenticated) |
+| `/api/upload/{slug}/{id}` | Replace file (PATCH) / delete file (DELETE; Bearer-token authenticated) |
 | `/mcp` | MCP HTTP endpoint (POST, when MCP is enabled) |
 
 ## Session refresh endpoint
@@ -54,7 +74,7 @@ authenticated and CSRF-protected (where applicable). `/static/` and
 `POST /admin/api/session-refresh` reissues the admin session cookie
 when the user is about to be logged out by token expiry.
 
-- **Triggered by the client.** The `<crap-session-guard>` web
+- **Triggered by the client.** The `<crap-session-dialog>` web
   component (`static/components/session-guard.js`) shows a
   pre-expiry warning toast and POSTs here when the operator clicks
   "Stay signed in". Not polled on a fixed interval — only fired in

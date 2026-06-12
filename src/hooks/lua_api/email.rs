@@ -20,7 +20,9 @@ use crate::hooks::lua_api::crud::get_tx_conn;
 use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
 /// Options table for `crap.email.send` / `crap.email.queue`.
+/// Unknown keys are rejected.
 #[derive(Deserialize, LuaAnnotation)]
+#[serde(deny_unknown_fields)]
 #[lua(class = "crap.EmailOptions")]
 pub(crate) struct EmailOptions {
     /// Recipient email address.
@@ -195,6 +197,22 @@ mod tests {
         register_email(&lua, &CrapConfig::test_default()).unwrap();
         lua.set_app_data(InitPhase);
         lua
+    }
+
+    #[test]
+    fn email_options_reject_unknown_key() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("to", "a@example.com").unwrap();
+        tbl.set("subject", "hi").unwrap();
+        tbl.set("html", "<p>hi</p>").unwrap();
+        tbl.set("retires", 3).unwrap();
+
+        let Err(err) = EmailOptions::from_lua(Value::Table(tbl), &lua) else {
+            panic!("unknown key must be rejected");
+        };
+        let err = err.to_string();
+        assert!(err.contains("unknown field `retires`"), "unexpected: {err}");
     }
 
     #[test]

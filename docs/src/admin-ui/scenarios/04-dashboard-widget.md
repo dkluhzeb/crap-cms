@@ -72,7 +72,7 @@ crap.template_data.register("weather_now", function(ctx)
     method = "GET",
     url = "https://api.weather.example/current?location=berlin",
     headers = { ["Authorization"] = "Bearer " .. api_key },
-    timeout = 5000,  -- ms
+    timeout = 5,  -- seconds (default 30)
   })
 
   if response.status ~= 200 then

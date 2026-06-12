@@ -51,47 +51,54 @@ document.dispatchEvent(new CustomEvent(EV_TOAST_REQUEST, {
 |---|---|---|---|
 | `message` | `string` | yes | The message to display. |
 | `type` | `'info' \| 'success' \| 'warning' \| 'error'` | no | Default `'info'`. Controls colour and icon. |
-| `duration` | `number` | no | Auto-dismiss after N ms. `0` keeps it open until manually dismissed. Default 3500. |
+| `duration` | `number` | no | Auto-dismiss after N ms. `0` keeps it open until manually dismissed. Default 3000. |
 
 **Convenience wrapper** — the canonical helper is `window.crap.toast({...})`, which dispatches the event for you.
 
+Toast is the only singleton whose request event carries the payload
+directly. The remaining singleton-request events are **discovery
+only**: dispatch with an empty `detail`, the singleton writes back
+`detail.instance = this`, and you call its public methods. The
+`_internal/util/discover.js::discoverSingleton(eventName)` helper
+wraps the dance.
+
 ### `EV_DRAWER_REQUEST` — `crap:drawer-request`
 
-Open the right-side drawer with arbitrary content.
+Discover the right-side drawer, then drive it via its methods:
 
 ```js
-document.dispatchEvent(new CustomEvent(EV_DRAWER_REQUEST, {
-  detail: { url: '/admin/collections/posts/123', title: 'Edit post' },
-}));
-```
+import { discoverSingleton } from '/static/components/_internal/util/discover.js';
 
-Pass `{ detail: {} }` to **discover the singleton instance** — the
-drawer writes back `detail.instance = this`. See `util/discover.js`
-for the helper.
+const drawer = discoverSingleton('crap:drawer-request');
+drawer?.open({ title: 'Edit post' });
+drawer?.body.append(myContent); // mount content after open()
+```
 
 ### `EV_CONFIRM_DIALOG_REQUEST` — `crap:confirm-dialog-request`
 
-Ask the user a yes/no question.
+Discover the confirm dialog, then ask a yes/no question via
+`instance.prompt(message)`, which returns `Promise<boolean>`:
 
 ```js
-document.dispatchEvent(new CustomEvent(EV_CONFIRM_DIALOG_REQUEST, {
-  detail: {
-    message: 'Discard changes?',
-    onConfirm: () => navigateAway(),
-    onCancel: () => null,
-  },
-}));
+const dialog = discoverSingleton('crap:confirm-dialog-request');
+const ok = await dialog?.prompt('Discard changes?');
 ```
+
+The dialog also intercepts HTMX's native `hx-confirm` flow
+automatically — no dispatch needed for that path.
 
 ### `EV_DELETE_DIALOG_REQUEST` — `crap:delete-dialog-request`
 
-Open the delete-confirmation dialog. The dialog handles soft-delete /
-hard-delete / reference-counting automatically.
+Discover the delete-confirmation dialog
+(`instance.open({ slug, id, title, softDelete, canPermanentlyDelete? })`).
+The dialog handles soft-delete / hard-delete / reference-counting
+automatically.
 
 ### `EV_CREATE_PANEL_REQUEST` — `crap:create-panel-request`
 
-Open the inline create-panel drawer (used by relationship pickers
-that allow creating the related document inline).
+Discover the inline create panel
+(`instance.open({ collection, title, onCreated })`; used by
+relationship pickers that allow creating the related document inline).
 
 ## Change notifications
 
@@ -101,13 +108,17 @@ Bubbling event fired by **form-shaped components** when their value
 changes. Listened to by the surrounding `<crap-dirty-form>` to mark
 the form as having unsaved changes.
 
-Emitting components: `<crap-tags>`, `<crap-code>`, `<crap-richtext>`,
-`<crap-relationship-search>`, `<crap-uploads>`, `<crap-focal-point>`,
-`<crap-conditions>`.
+Emitting components: `<crap-tags>`, `<crap-code>`,
+`<crap-relationship-search>`. (`<crap-upload-preview>` listens and
+relays internally; richtext and other fields sync their hidden
+input natively instead.)
 
-Plain `Event` — no `detail`. The current value is on the host
-element (read via the standard form-element APIs or the component's
-`.value` property).
+No `detail` payload is guaranteed — tags and relationship-search
+dispatch a plain `Event`; code dispatches a `CustomEvent` with
+`{ name, value }` detail, and only when its **language picker**
+changes (content edits reach the form as native `input` events from
+the editor). The current value is on the host element (read via the
+standard form-element APIs or the component's hidden input).
 
 ```js
 // Listen on a parent for any change in nested form-shaped components.
@@ -131,6 +142,14 @@ selects an item. The parent search field listens to set its value.
 
 Emitted by `<crap-block-picker>` when a block type is chosen. Picked
 up by the surrounding `<crap-array-field>` to insert a new block row.
+
+## Server-sent events (SSE)
+
+Live document updates arrive over `GET /admin/events` (consumed by
+`<crap-live-events>`), not as DOM events. The payload shape —
+including the `self: bool` flag that marks the subscriber's own
+edits — is documented in
+[Live Updates → Admin SSE](../../live-updates/admin-sse.md).
 
 ## Adding behavior — capture-phase listener pattern
 

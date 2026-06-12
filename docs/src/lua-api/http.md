@@ -14,7 +14,10 @@ Make a blocking HTTP request.
   - `method` (string, optional) — HTTP method. Default: `"GET"`. Supported: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`.
   - `headers` (table, optional) — Request headers as key-value pairs.
   - `body` (string, optional) — Request body.
-  - `timeout` (integer, optional) — Timeout in seconds. Default: `30`.
+  - `timeout` (number, optional) — Timeout in seconds; fractional values allowed (`0.5` = 500 ms). Must be positive. Default: `30`.
+
+  Unknown keys in `opts` are a hard error (a typo like `timout` can't
+  silently fall back to the default).
 
 **Returns:** table — Response with fields:
 - `status` (integer) — HTTP status code.

@@ -38,6 +38,8 @@ Send an email immediately (blocking). Use when you need to know if the send succ
 | `html` | string | yes | HTML email body |
 | `text` | string | no | Plain text fallback body |
 
+Unknown keys in `opts` are a hard error (same for `crap.email.queue`).
+
 **Returns:** `true` on success.
 
 ```lua

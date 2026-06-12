@@ -9,7 +9,8 @@ use crate::{
 };
 
 use super::helpers::{
-    deny_unknown_keys, get_bool, get_localized_string, get_optional_hook_ref, get_string, get_table,
+    deny_unknown_keys, get_bool, get_localized_string_strict, get_optional_hook_ref,
+    get_optional_table, get_string_sequence, get_string_strict,
 };
 
 /// Every key accepted in a field's `admin = {...}` sub-table. Mirrors the
@@ -53,11 +54,11 @@ pub(super) fn parse_field_admin(admin_tbl: &Table) -> LuaResult<FieldAdmin> {
         .map_err(|e| RuntimeError(e.to_string()))?;
 
     let mut builder = parse_admin_booleans(admin_tbl)?;
-    builder = apply_localized_strings(builder, admin_tbl);
+    builder = apply_localized_strings(builder, admin_tbl)?;
     builder = apply_identifier_strings(builder, admin_tbl)?;
-    builder = apply_label_overrides(builder, admin_tbl);
-    builder = apply_rows(builder, admin_tbl);
-    builder = apply_sequence_lists(builder, admin_tbl);
+    builder = apply_label_overrides(builder, admin_tbl)?;
+    builder = apply_rows(builder, admin_tbl)?;
+    builder = apply_sequence_lists(builder, admin_tbl)?;
     builder = apply_template(builder, admin_tbl)?;
     builder = apply_extra(builder, admin_tbl)?;
     Ok(builder.build())
@@ -75,18 +76,22 @@ fn parse_admin_booleans(admin_tbl: &Table) -> LuaResult<FieldAdminBuilder> {
 }
 
 /// Apply the three localized-string fields (`label`, `placeholder`,
-/// `description`). Each is optional.
-fn apply_localized_strings(mut builder: FieldAdminBuilder, admin_tbl: &Table) -> FieldAdminBuilder {
-    if let Some(v) = get_localized_string(admin_tbl, "label") {
+/// `description`). Each is optional; a present-but-wrong-typed value is a
+/// hard error.
+fn apply_localized_strings(
+    mut builder: FieldAdminBuilder,
+    admin_tbl: &Table,
+) -> LuaResult<FieldAdminBuilder> {
+    if let Some(v) = get_localized_string_strict(admin_tbl, "label", "field admin")? {
         builder = builder.label(v);
     }
-    if let Some(v) = get_localized_string(admin_tbl, "placeholder") {
+    if let Some(v) = get_localized_string_strict(admin_tbl, "placeholder", "field admin")? {
         builder = builder.placeholder(v);
     }
-    if let Some(v) = get_localized_string(admin_tbl, "description") {
+    if let Some(v) = get_localized_string_strict(admin_tbl, "description", "field admin")? {
         builder = builder.description(v);
     }
-    builder
+    Ok(builder)
 }
 
 /// Apply the optional plain-string admin knobs (`width`, `label_field`,
@@ -96,16 +101,16 @@ fn apply_identifier_strings(
     mut builder: FieldAdminBuilder,
     admin_tbl: &Table,
 ) -> LuaResult<FieldAdminBuilder> {
-    if let Some(v) = get_string(admin_tbl, "width") {
+    if let Some(v) = get_string_strict(admin_tbl, "width", "field admin")? {
         builder = builder.width(v);
     }
-    if let Some(v) = get_string(admin_tbl, "label_field") {
+    if let Some(v) = get_string_strict(admin_tbl, "label_field", "field admin")? {
         builder = builder.label_field(v);
     }
-    if let Some(v) = get_string(admin_tbl, "row_label") {
+    if let Some(v) = get_string_strict(admin_tbl, "row_label", "field admin")? {
         builder = builder.row_label(v);
     }
-    if let Some(v) = get_string(admin_tbl, "position") {
+    if let Some(v) = get_string_strict(admin_tbl, "position", "field admin")? {
         builder = builder.position(v);
     }
     if let Some(v) = get_optional_hook_ref(admin_tbl, "condition", "admin condition")
@@ -113,62 +118,70 @@ fn apply_identifier_strings(
     {
         builder = builder.condition(v);
     }
-    if let Some(v) = get_string(admin_tbl, "step") {
+    if let Some(v) = get_string_strict(admin_tbl, "step", "field admin")? {
         builder = builder.step(v);
     }
-    if let Some(v) = get_string(admin_tbl, "language") {
+    if let Some(v) = get_string_strict(admin_tbl, "language", "field admin")? {
         builder = builder.language(v);
     }
-    if let Some(v) = get_string(admin_tbl, "picker") {
+    if let Some(v) = get_string_strict(admin_tbl, "picker", "field admin")? {
         builder = builder.picker(v);
     }
-    if let Some(v) = get_string(admin_tbl, "format") {
+    if let Some(v) = get_string_strict(admin_tbl, "format", "field admin")? {
         builder = builder.richtext_format(v);
     }
     Ok(builder)
 }
 
 /// Apply the singular/plural label overrides from the `labels` sub-table.
-fn apply_label_overrides(mut builder: FieldAdminBuilder, admin_tbl: &Table) -> FieldAdminBuilder {
-    let Ok(labels_tbl) = get_table(admin_tbl, "labels") else {
-        return builder;
+/// A present-but-non-table `labels`, an unknown key inside it, or a
+/// wrong-typed value is a hard error.
+fn apply_label_overrides(
+    mut builder: FieldAdminBuilder,
+    admin_tbl: &Table,
+) -> LuaResult<FieldAdminBuilder> {
+    let Some(labels_tbl) = get_optional_table(admin_tbl, "labels", "field admin")? else {
+        return Ok(builder);
     };
-    if let Some(v) = get_localized_string(&labels_tbl, "singular") {
+
+    deny_unknown_keys(&labels_tbl, "field admin labels", &["singular", "plural"])
+        .map_err(|e| RuntimeError(e.to_string()))?;
+
+    if let Some(v) = get_localized_string_strict(&labels_tbl, "singular", "field admin labels")? {
         builder = builder.labels_singular(v);
     }
-    if let Some(v) = get_localized_string(&labels_tbl, "plural") {
+    if let Some(v) = get_localized_string_strict(&labels_tbl, "plural", "field admin labels")? {
         builder = builder.labels_plural(v);
     }
-    builder
+    Ok(builder)
 }
 
-/// Apply the optional `rows: u32` textarea knob.
-fn apply_rows(mut builder: FieldAdminBuilder, admin_tbl: &Table) -> FieldAdminBuilder {
-    if let Some(v) = admin_tbl.get::<Option<u32>>("rows").ok().flatten() {
+/// Apply the optional `rows: u32` textarea knob. A present value that is not
+/// a non-negative integer is a hard error.
+fn apply_rows(mut builder: FieldAdminBuilder, admin_tbl: &Table) -> LuaResult<FieldAdminBuilder> {
+    let rows = admin_tbl.get::<Option<u32>>("rows").map_err(|e| {
+        RuntimeError(format!(
+            "field admin 'rows' must be a non-negative integer: {e}"
+        ))
+    })?;
+
+    if let Some(v) = rows {
         builder = builder.rows(v);
     }
-    builder
+    Ok(builder)
 }
 
 /// Apply the three sequence-typed lists (`languages`, `features`, `nodes`).
-/// Each is always set on the builder; an absent or invalid Lua sequence
-/// becomes an empty Vec.
-fn apply_sequence_lists(mut builder: FieldAdminBuilder, admin_tbl: &Table) -> FieldAdminBuilder {
-    builder = builder.languages(string_sequence(admin_tbl, "languages"));
-    builder = builder.features(string_sequence(admin_tbl, "features"));
-    builder = builder.nodes(string_sequence(admin_tbl, "nodes"));
-    builder
-}
-
-/// Collect a Lua sequence at `key` into a `Vec<String>`. Returns an empty
-/// vec when the key is absent or the value isn't a sequence of strings.
-fn string_sequence(admin_tbl: &Table, key: &str) -> Vec<String> {
-    let Ok(tbl) = get_table(admin_tbl, key) else {
-        return Vec::new();
-    };
-    tbl.sequence_values::<String>()
-        .filter_map(std::result::Result::ok)
-        .collect()
+/// Each is always set on the builder; absent → empty Vec, but a present
+/// non-table value or a non-string entry is a hard error.
+fn apply_sequence_lists(
+    mut builder: FieldAdminBuilder,
+    admin_tbl: &Table,
+) -> LuaResult<FieldAdminBuilder> {
+    builder = builder.languages(get_string_sequence(admin_tbl, "languages", "field admin")?);
+    builder = builder.features(get_string_sequence(admin_tbl, "features", "field admin")?);
+    builder = builder.nodes(get_string_sequence(admin_tbl, "nodes", "field admin")?);
+    Ok(builder)
 }
 
 /// Apply the optional `template` ref, validating it against the allowed
@@ -177,7 +190,7 @@ fn apply_template(
     mut builder: FieldAdminBuilder,
     admin_tbl: &Table,
 ) -> LuaResult<FieldAdminBuilder> {
-    if let Some(v) = get_string(admin_tbl, "template") {
+    if let Some(v) = get_string_strict(admin_tbl, "template", "field admin")? {
         validate_template_name(&v)
             .map_err(|e| RuntimeError(format!("crap.fields.*: invalid `admin.template`: {e}")))?;
         builder = builder.template(v);
@@ -189,7 +202,7 @@ fn apply_template(
 /// field's template can read at `{{admin.extra.<key>}}`. Parsed once at
 /// field-definition time; static per field instance.
 fn apply_extra(mut builder: FieldAdminBuilder, admin_tbl: &Table) -> LuaResult<FieldAdminBuilder> {
-    let Ok(extra_tbl) = get_table(admin_tbl, "extra") else {
+    let Some(extra_tbl) = get_optional_table(admin_tbl, "extra", "field admin")? else {
         return Ok(builder);
     };
     let json = lua_to_json(&Value::Table(extra_tbl)).map_err(|e| {
@@ -361,5 +374,101 @@ mod tests {
         let admin_tbl = lua.create_table().unwrap();
         let admin = parse_field_admin(&admin_tbl).unwrap();
         assert!(admin.extra.is_empty());
+    }
+
+    /// Assert that `parse_field_admin` rejects the given table with an error
+    /// mentioning `needle`.
+    fn assert_rejected(admin_tbl: &Table, needle: &str) {
+        let err = parse_field_admin(admin_tbl).unwrap_err().to_string();
+        assert!(
+            err.contains(needle),
+            "expected error containing {needle:?}, got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_non_string_width() {
+        let lua = Lua::new();
+        let admin_tbl = lua.create_table().unwrap();
+        admin_tbl.set("width", true).unwrap();
+        assert_rejected(&admin_tbl, "'width' must be a string");
+    }
+
+    #[test]
+    fn rejects_non_string_label() {
+        let lua = Lua::new();
+        let admin_tbl = lua.create_table().unwrap();
+        admin_tbl.set("label", false).unwrap();
+        assert_rejected(&admin_tbl, "'label' must be a string");
+    }
+
+    #[test]
+    fn rejects_empty_localized_label_table() {
+        let lua = Lua::new();
+        let admin_tbl = lua.create_table().unwrap();
+        admin_tbl.set("label", lua.create_table().unwrap()).unwrap();
+        assert_rejected(&admin_tbl, "must not be empty");
+    }
+
+    #[test]
+    fn rejects_non_table_labels() {
+        let lua = Lua::new();
+        let admin_tbl = lua.create_table().unwrap();
+        admin_tbl.set("labels", "Item").unwrap();
+        assert_rejected(&admin_tbl, "'labels' must be a table");
+    }
+
+    #[test]
+    fn rejects_unknown_labels_key() {
+        let lua = Lua::new();
+        let admin_tbl = lua.create_table().unwrap();
+        let labels_tbl = lua.create_table().unwrap();
+        labels_tbl.set("singular", "Item").unwrap();
+        labels_tbl.set("plurral", "Items").unwrap();
+        admin_tbl.set("labels", labels_tbl).unwrap();
+        assert_rejected(&admin_tbl, "plurral");
+    }
+
+    #[test]
+    fn rejects_non_integer_rows() {
+        let lua = Lua::new();
+        let admin_tbl = lua.create_table().unwrap();
+        admin_tbl.set("rows", true).unwrap();
+        assert_rejected(&admin_tbl, "'rows' must be a non-negative integer");
+    }
+
+    #[test]
+    fn rejects_non_table_features() {
+        let lua = Lua::new();
+        let admin_tbl = lua.create_table().unwrap();
+        admin_tbl.set("features", "bold").unwrap();
+        assert_rejected(&admin_tbl, "'features' must be a table");
+    }
+
+    #[test]
+    fn rejects_non_string_feature_entry() {
+        let lua = Lua::new();
+        let admin_tbl = lua.create_table().unwrap();
+        let features = lua.create_table().unwrap();
+        features.set(1, "bold").unwrap();
+        features.set(2, true).unwrap();
+        admin_tbl.set("features", features).unwrap();
+        assert_rejected(&admin_tbl, "'features' must be an array of strings");
+    }
+
+    #[test]
+    fn rejects_non_string_template() {
+        let lua = Lua::new();
+        let admin_tbl = lua.create_table().unwrap();
+        admin_tbl.set("template", true).unwrap();
+        assert_rejected(&admin_tbl, "'template' must be a string");
+    }
+
+    #[test]
+    fn rejects_non_table_extra() {
+        let lua = Lua::new();
+        let admin_tbl = lua.create_table().unwrap();
+        admin_tbl.set("extra", "star").unwrap();
+        assert_rejected(&admin_tbl, "'extra' must be a table");
     }
 }

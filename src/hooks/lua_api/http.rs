@@ -21,8 +21,9 @@ use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn,
 const MAX_REDIRECTS: u8 = 10;
 const ALLOWED_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"];
 
-/// Options table for `crap.http.request`.
+/// Options table for `crap.http.request`. Unknown keys are rejected.
 #[derive(Deserialize, LuaAnnotation)]
+#[serde(deny_unknown_fields)]
 #[lua(class = "crap.HttpRequest")]
 pub(crate) struct HttpRequest {
     /// Request URL.
@@ -34,8 +35,9 @@ pub(crate) struct HttpRequest {
     pub(crate) headers: Option<HashMap<String, String>>,
     /// Request body.
     pub(crate) body: Option<String>,
-    /// Request timeout in seconds (default: `30`).
-    pub(crate) timeout: Option<u64>,
+    /// Request timeout in seconds; fractional values allowed
+    /// (e.g. `0.5` = 500 ms). Default: `30`.
+    pub(crate) timeout: Option<f64>,
 }
 
 impl FromLua for HttpRequest {
@@ -179,7 +181,7 @@ fn parse_request_opts(opts: HttpRequest) -> LuaResult<RequestOpts> {
         .parse()
         .map_err(|e| RuntimeError(format!("invalid HTTP method: {e}")))?;
 
-    let timeout = Duration::from_secs(opts.timeout.unwrap_or(30));
+    let timeout = parse_timeout(opts.timeout)?;
     let headers = opts
         .headers
         .map(|h| h.into_iter().collect())
@@ -192,6 +194,21 @@ fn parse_request_opts(opts: HttpRequest) -> LuaResult<RequestOpts> {
         body: opts.body,
         headers,
     })
+}
+
+/// Convert the optional `timeout` seconds value (fractional allowed) into a
+/// `Duration`. Zero, negative, NaN, and non-finite values are hard errors.
+fn parse_timeout(timeout: Option<f64>) -> LuaResult<Duration> {
+    let secs = timeout.unwrap_or(30.0);
+
+    if secs.is_nan() || secs <= 0.0 {
+        return Err(RuntimeError(format!(
+            "invalid timeout: must be a positive number of seconds, got {secs}"
+        )));
+    }
+
+    Duration::try_from_secs_f64(secs)
+        .map_err(|e| RuntimeError(format!("invalid timeout {secs}: {e}")))
 }
 
 /// Resolve DNS and build a pinned HTTP client (or unpinned if private networks allowed).
@@ -371,6 +388,47 @@ fn build_client(pin: Option<(&str, SocketAddr)>, timeout: Duration) -> StdResult
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn http_request_rejects_unknown_key() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("url", "https://example.com").unwrap();
+        tbl.set("timout", 5).unwrap();
+
+        let Err(err) = HttpRequest::from_lua(Value::Table(tbl), &lua) else {
+            panic!("unknown key must be rejected");
+        };
+        let err = err.to_string();
+        assert!(err.contains("unknown field `timout`"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn parse_timeout_defaults_to_30s() {
+        assert_eq!(parse_timeout(None).unwrap(), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn parse_timeout_accepts_fractional_seconds() {
+        assert_eq!(
+            parse_timeout(Some(0.5)).unwrap(),
+            Duration::from_millis(500)
+        );
+    }
+
+    #[test]
+    fn parse_timeout_rejects_zero_negative_and_nan() {
+        for bad in [0.0, -1.0, f64::NAN] {
+            let err = parse_timeout(Some(bad)).unwrap_err().to_string();
+            assert!(err.contains("invalid timeout"), "unexpected: {err}");
+        }
+    }
+
+    #[test]
+    fn parse_timeout_rejects_infinite() {
+        let err = parse_timeout(Some(f64::INFINITY)).unwrap_err().to_string();
+        assert!(err.contains("invalid timeout"), "unexpected: {err}");
+    }
 
     #[test]
     fn validate_url_rejects_loopback() {

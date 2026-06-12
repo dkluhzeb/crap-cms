@@ -18,12 +18,12 @@ Click the palette icon in the admin header to open the theme picker. The selecte
 
 ## How Themes Work
 
-The default Light theme is defined in `:root` CSS custom properties in `styles.css`. Additional themes live in `themes.css` and override these variables using `html[data-theme="<name>"]` selectors.
+The default Light theme is defined in `:root` CSS custom properties in `static/styles/tokens.css`. Additional themes live in `static/styles/themes/default.css` and override these variables using `html[data-theme="<name>"]` selectors.
 
-> **Theme values are static CSS.** Every theme's custom-property values are hardcoded in CSS files — either the built-in `themes.css` or an operator-supplied stylesheet under `<config_dir>/static/`. Crap CMS does **not** read theme values from the database, `crap.toml`, or any other operator input and inject them into the stylesheet. There is no template/string interpolation in the theme pipeline, so there is no CSS-injection surface from operator configuration.
+> **Theme values are static CSS.** Every theme's custom-property values are hardcoded in CSS files — either the built-in `styles/themes/default.css` or an operator-supplied stylesheet under `<config_dir>/static/`. Crap CMS does **not** read theme values from the database, `crap.toml`, or any other operator input and inject them into the stylesheet. There is no template/string interpolation in the theme pipeline, so there is no CSS-injection surface from operator configuration.
 
 ```css
-/* Default light theme (styles.css) */
+/* Default light theme (styles/tokens.css) */
 :root {
   color-scheme: light;
   --color-primary: #1677ff;

@@ -209,6 +209,31 @@ pub fn render_or_error(state: &AdminState, template: &str, data: &Value) -> Resp
     .into_response()
 }
 
+/// Render a 400 Bad Request page with the given message. Used when a
+/// present-but-invalid query parameter must hard-error instead of being
+/// silently ignored (e.g. an unknown list-filter operator).
+pub fn bad_request(state: &AdminState, message: &str) -> Response {
+    let ctx = ErrorPage {
+        base: BasePageContext::for_handler(
+            state,
+            None,
+            None,
+            PageMeta::new(PageType::Error400, "bad_request_page_title"),
+        ),
+        message: message.to_string(),
+    };
+
+    let data = to_value(&ctx).expect("ErrorPage serializes infallibly");
+    let data = state.hook_runner.run_before_render(data);
+
+    let html = match state.render("errors/400", &data) {
+        Ok(html) => Html(html),
+        Err(_) => Html(format!("<h1>400</h1><p>{}</p>", html_escape(message))),
+    };
+
+    (StatusCode::BAD_REQUEST, html).into_response()
+}
+
 /// Render a 404 Not Found page with the given message.
 pub fn not_found(state: &AdminState, message: &str) -> Response {
     let ctx = ErrorPage {

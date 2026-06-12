@@ -4,7 +4,7 @@ use mlua::{Error::RuntimeError, FromLua, Function, Lua, Result as LuaResult, Tab
 use serde_json::Value as JsonValue;
 use tracing::warn;
 
-use super::parse::fields::parse_fields;
+use super::parse::{deny_unknown_keys, fields::parse_fields};
 use crate::core::{
     FieldDefinition, RichtextNodeDef, SharedRegistry,
     richtext::{render_html_custom_nodes, render_prosemirror_to_html},
@@ -53,6 +53,13 @@ impl FromLua for RichtextNodeSpec {
             )));
         };
 
+        deny_unknown_keys(
+            &tbl,
+            "crap.richtext.register_node spec",
+            &["label", "inline", "attrs", "searchable_attrs", "render"],
+        )
+        .map_err(|e| RuntimeError(e.to_string()))?;
+
         let attrs = match tbl.get::<Option<Table>>("attrs")? {
             Some(attrs_tbl) => parse_fields(lua, &attrs_tbl)
                 .map_err(|e| RuntimeError(format!("Invalid node attrs: {e:#}")))?,
@@ -62,8 +69,13 @@ impl FromLua for RichtextNodeSpec {
         let searchable_attrs = match tbl.get::<Option<Table>>("searchable_attrs")? {
             Some(sa_tbl) => sa_tbl
                 .sequence_values::<String>()
-                .filter_map(Result::ok)
-                .collect(),
+                .collect::<LuaResult<Vec<_>>>()
+                .map_err(|e| {
+                    RuntimeError(format!(
+                        "crap.richtext.register_node: `searchable_attrs` must be \
+                         an array of strings: {e}"
+                    ))
+                })?,
             None => Vec::new(),
         };
 
@@ -482,6 +494,48 @@ mod tests {
         assert!(!node.attrs[1].required);
         assert_eq!(node.searchable_attrs, vec!["text"]);
         assert!(!node.has_render);
+    }
+
+    /// Regression: an unknown spec key (e.g. a typo'd `label`) must be
+    /// rejected at load time, not silently dropped — parity with every other
+    /// strict Lua schema table.
+    #[test]
+    fn register_node_unknown_spec_key_rejected() {
+        let (lua, _registry) = setup_lua();
+
+        let err = lua
+            .load(r#"crap.richtext.register_node("cta", { lable = "CTA" })"#)
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("lable") && err.contains("label"),
+            "expected unknown-key error with suggestion, got: {err}"
+        );
+    }
+
+    /// Regression: a non-string `searchable_attrs` entry must hard-error
+    /// instead of being silently dropped from the FTS index.
+    #[test]
+    fn register_node_non_string_searchable_attr_rejected() {
+        let (lua, _registry) = setup_lua();
+
+        let err = lua
+            .load(
+                r#"
+                crap.richtext.register_node("cta", {
+                    attrs = { crap.fields.text({ name = "text" }) },
+                    searchable_attrs = { "text", true },
+                })
+            "#,
+            )
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("searchable_attrs") && err.contains("array of strings"),
+            "expected searchable_attrs type error, got: {err}"
+        );
     }
 
     #[test]

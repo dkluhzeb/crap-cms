@@ -132,7 +132,7 @@ Display conditions work on fields in any position, including sidebar fields (`ad
 
 ## Complexity Limits
 
-There are **no built-in depth, length, or array-size limits** on condition tables returned from Lua. The evaluator (`evaluate_condition_table`) recurses through arrays of conditions until it bottoms out, and each leaf object is a single AND clause.
+There are **no built-in depth, length, or array-size limits** on condition tables returned from Lua. The evaluator (`ConditionExpr::evaluate` in `src/core/condition.rs`) recurses through arrays of conditions until it bottoms out, and each leaf object is a single AND clause.
 
 In practice, keep condition tables small and flat:
 

@@ -24,6 +24,9 @@ use crate::{
 
 use super::url::url_decode;
 
+/// Valid operator names, listed in error messages on an unknown operator.
+const VALID_OPS: &str = "equals, not_equals, contains, like, gt, lt, gte, lte, exists, not_exists";
+
 /// Parse an operator string and value into a `FilterOp`.
 fn parse_filter_op(op_str: &str, value: String) -> Option<FilterOp> {
     match op_str {
@@ -73,33 +76,67 @@ fn parse_or_key(key: &str) -> Option<(usize, usize, String, String)> {
     Some((group, bucket, field.to_string(), op_str.to_string()))
 }
 
-/// Decode a single `&`-separated query entry into a `ParsedRow`. Rejects
-/// system-column fields (`_*`) so user-supplied filters can't reference them — those
-/// flow through the dedicated typed extractors (`extract_status_filter`).
-fn parse_one_entry(part: &str, def: &CollectionDefinition) -> Option<ParsedRow> {
+/// Decode a single `&`-separated query entry. `Ok(None)` for entries that are
+/// not user filters at all (other query params, plus the typed `_status`
+/// path); a present-but-invalid `where[...]` entry — malformed key, unknown
+/// field, system column, unknown operator — is a hard error so the list page
+/// can return 400 instead of silently rendering wrong/unfiltered results.
+fn parse_one_entry(part: &str, def: &CollectionDefinition) -> Result<Option<ParsedRow>, String> {
     let known_cols = ["id", "created_at", "updated_at"];
-    let (key, value) = part.split_once('=')?;
+
+    let Some((key, value)) = part.split_once('=') else {
+        let key = url_decode(part);
+        if key.starts_with("where[") {
+            return Err(format!("Malformed filter parameter '{key}' (missing '=')"));
+        }
+        return Ok(None);
+    };
+
     let key = url_decode(key);
+    if !key.starts_with("where[") {
+        return Ok(None);
+    }
     let value = url_decode(value);
 
     let (or_position, field, op_str) = if let Some((g, n, f, o)) = parse_or_key(&key) {
         (Some((g, n)), f, o)
-    } else {
-        let (f, o) = parse_top_key(&key)?;
+    } else if let Some((f, o)) = parse_top_key(&key) {
         (None, f, o)
+    } else {
+        return Err(format!("Malformed filter parameter '{key}'"));
     };
+
+    // `_status` rides the typed extractor (`extract_status_filter`), not the
+    // generic path — see the doc comment there. Only `equals` is supported.
+    if field == "_status" {
+        if op_str == "equals" {
+            return Ok(None);
+        }
+        return Err(format!(
+            "Unsupported filter operator '{op_str}' on '_status' (only 'equals')"
+        ));
+    }
+
+    if field.starts_with('_') {
+        return Err(format!("Cannot filter on system column '{field}'"));
+    }
 
     let field_valid =
         known_cols.contains(&field.as_str()) || def.fields.iter().any(|f| f.name == field);
     if !field_valid {
-        return None;
+        return Err(format!("Unknown filter field '{field}'"));
     }
 
-    let op = parse_filter_op(&op_str, value)?;
-    Some(ParsedRow {
+    let Some(op) = parse_filter_op(&op_str, value) else {
+        return Err(format!(
+            "Unknown filter operator '{op_str}' (valid: {VALID_OPS})"
+        ));
+    };
+
+    Ok(Some(ParsedRow {
         or_position,
         filter: Filter { field, op },
-    })
+    }))
 }
 
 /// Within one AND-context, collapse `(field, Equals)` rows into a single
@@ -167,17 +204,26 @@ fn merge_same_field_equals(filters: Vec<Filter>) -> Vec<Filter> {
 
 /// Parse `where[field][op]=value` and `where[or][N][field][op]=value` parameters from
 /// a raw URL query string. Returns the resulting `Vec<FilterClause>` ready for the
-/// service-layer read pipeline. Best-effort: malformed entries are silently skipped.
+/// service-layer read pipeline. Strict: a present-but-invalid `where[...]` entry
+/// (malformed key, unknown field, system column, unknown operator) is an `Err` so
+/// the caller can return 400 instead of silently rendering wrong/unfiltered results.
 ///
-/// This function does NOT filter out system columns. The service-layer read
-/// entrypoints ([`find_documents`](crate::service::find_documents) /
-/// [`count_documents`](crate::service::count_documents)) apply the
-/// `_*`-column rejection uniformly across every read surface; for the admin UI the
-/// per-entry decode here also rejects them so they cannot ride the generic path.
-pub(crate) fn parse_where_params(raw_query: &str, def: &CollectionDefinition) -> Vec<FilterClause> {
+/// The per-entry decode rejects system columns (`_*`) so they cannot ride the
+/// generic path; the service-layer read entrypoints
+/// ([`find_documents`](crate::service::find_documents) /
+/// [`count_documents`](crate::service::count_documents)) apply the same rejection
+/// uniformly across every read surface.
+pub(crate) fn parse_where_params(
+    raw_query: &str,
+    def: &CollectionDefinition,
+) -> Result<Vec<FilterClause>, String> {
     let parsed: Vec<ParsedRow> = raw_query
         .split('&')
-        .filter_map(|part| parse_one_entry(part, def))
+        .filter(|p| !p.is_empty())
+        .map(|part| parse_one_entry(part, def))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
         .collect();
 
     // Partition into top-level AND rows and OR rows grouped by `(group, bucket)`.
@@ -220,7 +266,7 @@ pub(crate) fn parse_where_params(raw_query: &str, def: &CollectionDefinition) ->
         }
     }
 
-    clauses
+    Ok(clauses)
 }
 
 /// Extract only `where[...]` params from a raw query string (for pagination link preservation).
@@ -311,14 +357,14 @@ mod tests {
     #[test]
     fn parse_where_empty_query() {
         let def = test_def();
-        let result = parse_where_params("", &def);
+        let result = parse_where_params("", &def).unwrap();
         assert!(result.is_empty());
     }
 
     #[test]
     fn parse_where_equals_filter() {
         let def = test_def();
-        let result = parse_where_params("where[title][equals]=hello", &def);
+        let result = parse_where_params("where[title][equals]=hello", &def).unwrap();
         assert_eq!(result.len(), 1);
         match &result[0] {
             FilterClause::Single(f) => {
@@ -332,21 +378,78 @@ mod tests {
     #[test]
     fn parse_where_multiple_filters() {
         let def = test_def();
-        let result = parse_where_params("where[title][contains]=foo&where[count][gt]=5", &def);
+        let result =
+            parse_where_params("where[title][contains]=foo&where[count][gt]=5", &def).unwrap();
         assert_eq!(result.len(), 2);
     }
 
     #[test]
-    fn parse_where_invalid_field_ignored() {
+    fn parse_where_invalid_field_rejected() {
         let def = test_def();
-        let result = parse_where_params("where[nonexistent][equals]=foo", &def);
+        let err = parse_where_params("where[nonexistent][equals]=foo", &def).unwrap_err();
+        assert!(
+            err.contains("Unknown filter field 'nonexistent'"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_where_invalid_op_rejected() {
+        let def = test_def();
+        let err = parse_where_params("where[title][invalid]=foo", &def).unwrap_err();
+        assert!(
+            err.contains("Unknown filter operator 'invalid'") && err.contains("equals"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_where_status_equals_skips_to_typed_extractor() {
+        let def = test_def();
+        // `_status` + equals is the typed-extractor path — NOT an error and
+        // NOT a generic filter.
+        let result = parse_where_params("where[_status][equals]=draft", &def).unwrap();
         assert!(result.is_empty());
     }
 
     #[test]
-    fn parse_where_invalid_op_ignored() {
+    fn parse_where_status_non_equals_rejected() {
         let def = test_def();
-        let result = parse_where_params("where[title][invalid]=foo", &def);
+        let err = parse_where_params("where[_status][not_equals]=draft", &def).unwrap_err();
+        assert!(err.contains("only 'equals'"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn parse_where_system_column_rejected() {
+        let def = test_def();
+        let err = parse_where_params("where[_deleted_at][exists]=", &def).unwrap_err();
+        assert!(
+            err.contains("system column '_deleted_at'"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_where_malformed_or_key_rejected() {
+        let def = test_def();
+        let err = parse_where_params("where[or][abc][0][title][equals]=x", &def).unwrap_err();
+        assert!(
+            err.contains("Malformed filter parameter"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_where_missing_value_rejected() {
+        let def = test_def();
+        let err = parse_where_params("where[title][equals]", &def).unwrap_err();
+        assert!(err.contains("missing '='"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn parse_where_other_params_skipped() {
+        let def = test_def();
+        let result = parse_where_params("page=2&sort=-title&search=foo&trash=1", &def).unwrap();
         assert!(result.is_empty());
     }
 
@@ -354,14 +457,14 @@ mod tests {
     fn parse_where_system_column() {
         let def = test_def();
         // `created_at` is a known timestamp column (not underscore-prefixed) and is still filterable
-        let result = parse_where_params("where[created_at][gt]=2024-01-01", &def);
+        let result = parse_where_params("where[created_at][gt]=2024-01-01", &def).unwrap();
         assert_eq!(result.len(), 1);
     }
 
     #[test]
     fn parse_where_exists_op() {
         let def = test_def();
-        let result = parse_where_params("where[title][exists]=", &def);
+        let result = parse_where_params("where[title][exists]=", &def).unwrap();
         assert_eq!(result.len(), 1);
         match &result[0] {
             FilterClause::Single(f) => assert!(matches!(f.op, FilterOp::Exists)),
@@ -372,7 +475,7 @@ mod tests {
     #[test]
     fn parse_where_encoded_value() {
         let def = test_def();
-        let result = parse_where_params("where[title][equals]=hello%20world", &def);
+        let result = parse_where_params("where[title][equals]=hello%20world", &def).unwrap();
         assert_eq!(result.len(), 1);
         match &result[0] {
             FilterClause::Single(f) => {
@@ -385,7 +488,8 @@ mod tests {
     #[test]
     fn parse_where_two_equals_same_field_merges_to_in() {
         let def = test_def();
-        let result = parse_where_params("where[title][equals]=foo&where[title][equals]=bar", &def);
+        let result =
+            parse_where_params("where[title][equals]=foo&where[title][equals]=bar", &def).unwrap();
         assert_eq!(result.len(), 1);
         match &result[0] {
             FilterClause::Single(f) => {
@@ -405,7 +509,8 @@ mod tests {
         let result = parse_where_params(
             "where[title][equals]=a&where[title][equals]=b&where[title][equals]=c",
             &def,
-        );
+        )
+        .unwrap();
         assert_eq!(result.len(), 1);
         match &result[0] {
             FilterClause::Single(f) => match &f.op {
@@ -422,7 +527,8 @@ mod tests {
         let result = parse_where_params(
             "where[title][not_equals]=a&where[title][not_equals]=b",
             &def,
-        );
+        )
+        .unwrap();
         assert_eq!(result.len(), 1);
         match &result[0] {
             FilterClause::Single(f) => assert!(matches!(&f.op, FilterOp::NotIn(v) if v.len() == 2)),
@@ -435,7 +541,8 @@ mod tests {
         let def = test_def();
         // `equals=a` is mergeable, `contains=b` is not; result has both as separate
         // ANDed Singles.
-        let result = parse_where_params("where[title][equals]=a&where[title][contains]=b", &def);
+        let result =
+            parse_where_params("where[title][equals]=a&where[title][contains]=b", &def).unwrap();
         assert_eq!(result.len(), 2);
     }
 
@@ -443,7 +550,8 @@ mod tests {
     fn parse_where_dedupes_repeated_equals_value() {
         let def = test_def();
         // Same value twice → still just one Equals (no In of size 1).
-        let result = parse_where_params("where[title][equals]=foo&where[title][equals]=foo", &def);
+        let result =
+            parse_where_params("where[title][equals]=foo&where[title][equals]=foo", &def).unwrap();
         assert_eq!(result.len(), 1);
         match &result[0] {
             FilterClause::Single(f) => {
@@ -460,7 +568,8 @@ mod tests {
         let result = parse_where_params(
             "where[or][0][0][title][equals]=A&where[or][0][1][slug][equals]=B",
             &def,
-        );
+        )
+        .unwrap();
         assert_eq!(result.len(), 1);
         match &result[0] {
             FilterClause::Or(groups) => {
@@ -480,7 +589,7 @@ mod tests {
         let result = parse_where_params(
             "where[or][0][0][title][equals]=A&where[or][0][0][slug][equals]=p&where[or][0][1][title][equals]=B",
             &def,
-        );
+        ).unwrap();
         assert_eq!(result.len(), 1);
         match &result[0] {
             FilterClause::Or(groups) => {
@@ -498,7 +607,7 @@ mod tests {
         let result = parse_where_params(
             "where[title][equals]=hello&where[or][0][0][slug][equals]=a&where[or][0][1][slug][equals]=b",
             &def,
-        );
+        ).unwrap();
         assert_eq!(result.len(), 2, "top-level Single + one Or-clause");
         assert!(matches!(&result[0], FilterClause::Single(_)));
         assert!(matches!(&result[1], FilterClause::Or(g) if g.len() == 2));
@@ -511,7 +620,7 @@ mod tests {
         let result = parse_where_params(
             "where[or][0][0][title][equals]=A&where[or][0][0][title][equals]=B&where[or][0][1][slug][equals]=c",
             &def,
-        );
+        ).unwrap();
         match &result[0] {
             FilterClause::Or(groups) => {
                 assert_eq!(groups.len(), 2);
@@ -534,7 +643,7 @@ mod tests {
         let def = test_def();
         // Single bucket inside a single group → no real OR. Flatten so SQL
         // doesn't wrap with a no-op `(x)`.
-        let result = parse_where_params("where[or][0][0][title][equals]=A", &def);
+        let result = parse_where_params("where[or][0][0][title][equals]=A", &def).unwrap();
         assert_eq!(result.len(), 1);
         assert!(matches!(&result[0], FilterClause::Single(_)));
     }
@@ -548,7 +657,8 @@ mod tests {
             "where[or][0][0][title][equals]=A&where[or][0][1][title][equals]=B\
              &where[or][1][0][slug][equals]=C&where[or][1][1][slug][equals]=D",
             &def,
-        );
+        )
+        .unwrap();
         assert_eq!(result.len(), 2, "two independent Or-clauses");
         for clause in &result {
             assert!(matches!(clause, FilterClause::Or(g) if g.len() == 2));
@@ -561,7 +671,7 @@ mod tests {
         let result = parse_where_params(
             "where%5Bor%5D%5B0%5D%5B0%5D%5Btitle%5D%5Bequals%5D=A&where%5Bor%5D%5B0%5D%5B1%5D%5Btitle%5D%5Bequals%5D=B",
             &def,
-        );
+        ).unwrap();
         match &result[0] {
             FilterClause::Or(groups) => assert_eq!(groups.len(), 2),
             _ => panic!("expected Or, got {result:?}"),
@@ -577,7 +687,8 @@ mod tests {
         let result = parse_where_params(
             "where[or][0][0][_status][equals]=draft&where[or][0][1][title][equals]=B",
             &def,
-        );
+        )
+        .unwrap();
         // bucket 0 dropped, only bucket 1 survives → degenerate single bucket
         // flattens to top-level AND Single.
         assert_eq!(result.len(), 1);

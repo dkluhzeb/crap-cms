@@ -40,6 +40,8 @@ pub enum PageType {
     AuthReset,
     /// The MFA code entry page.
     AuthMfa,
+    /// Bad request error page (400).
+    Error400,
     /// Forbidden error page (403).
     Error403,
     /// Not found error page (404).
@@ -73,6 +75,7 @@ impl PageType {
         PageType::AuthForgot,
         PageType::AuthReset,
         PageType::AuthMfa,
+        PageType::Error400,
         PageType::Error403,
         PageType::Error404,
         PageType::Error500,
@@ -98,6 +101,7 @@ impl PageType {
             PageType::AuthForgot => "auth_forgot",
             PageType::AuthReset => "auth_reset",
             PageType::AuthMfa => "auth_mfa",
+            PageType::Error400 => "error_400",
             PageType::Error403 => "error_403",
             PageType::Error404 => "error_404",
             PageType::Error500 => "error_500",

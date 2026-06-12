@@ -24,7 +24,6 @@ All static files are served under `/static/`:
 static/
   components/         # Web Components — public ones flat, plumbing in _internal/
     _internal/        # framework-reserved: h.js, css.js, util/, …
-    _defaults/        # parallel route — always serves embedded upstream
     custom.js         # auto-imported user seam (optional)
     toast.js  drawer.js  …  # public components
     richtext/  list-settings/

@@ -30,9 +30,11 @@ use anyhow::Result;
 use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::Deserialize;
 
-use crate::core::HookRef;
-use crate::hooks::lifecycle::InitPhase;
-use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
+use crate::{
+    core::HookRef,
+    hooks::{lifecycle::InitPhase, lua_api::parse::deny_unknown_keys},
+    typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
+};
 
 /// Sidebar / access metadata for a custom admin page.
 #[derive(Default, Deserialize, LuaAnnotation)]
@@ -56,7 +58,20 @@ impl FromLua for PageOptions {
     fn from_lua(value: Value, lua: &Lua) -> LuaResult<Self> {
         match value {
             Value::Nil => Ok(Self::default()),
-            other => lua.from_value(other),
+            Value::Table(ref tbl) => {
+                deny_unknown_keys(
+                    tbl,
+                    "crap.pages.register",
+                    &["section", "label", "icon", "access"],
+                )
+                .map_err(|e| RuntimeError(e.to_string()))?;
+
+                lua.from_value(value)
+            }
+            other => Err(RuntimeError(format!(
+                "crap.pages.register options must be a table, got {}",
+                other.type_name()
+            ))),
         }
     }
 }
@@ -231,6 +246,41 @@ mod tests {
         let pages: Table = lua.named_registry_value(PAGES_KEY).unwrap();
         let entry: Result<Table, _> = pages.get("status");
         assert!(entry.is_err(), "page must NOT be registered when refused");
+    }
+
+    /// Regression: an unknown options key (e.g. a typo'd `section`) must be
+    /// rejected at load time, not silently dropped — parity with every other
+    /// strict Lua schema table.
+    #[test]
+    fn unknown_option_key_is_rejected() {
+        let lua = lua_in_init_phase();
+
+        let err = lua
+            .load(r#"crap.pages.register("status", { sction = "Tools" })"#)
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("sction") && err.contains("section"),
+            "expected unknown-key error with suggestion, got: {err}"
+        );
+    }
+
+    /// Regression: non-table options must hard-error instead of being
+    /// half-interpreted by serde.
+    #[test]
+    fn non_table_options_rejected() {
+        let lua = lua_in_init_phase();
+
+        let err = lua
+            .load(r#"crap.pages.register("status", "Tools")"#)
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("must be a table"),
+            "expected type error, got: {err}"
+        );
     }
 
     #[test]

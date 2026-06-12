@@ -14,15 +14,30 @@
 //! preprocesses each per-page schema into a flat `DocContext` struct that
 //! the template renders.
 
+use std::sync::LazyLock;
+
 use handlebars::Handlebars;
+use regex::Regex;
 use schemars::{Schema, schema_for};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::admin::custom_pages::CustomPage as RegisteredCustomPage;
+use crate::core::{ConditionExpr, ConditionRow, DocumentFields};
+
 use crate::admin::context::{
-    AuthBasePageContext, BasePageContext, Breadcrumb, CollectionContext, CrapMeta, DocumentRef,
-    EditorLocaleOption, FieldContext, GlobalContext, NavData, PageMeta, PaginationContext,
-    UserContext,
+    AdminMeta, AuthBasePageContext, AuthMeta, BasePageContext, Breadcrumb, CollectionContext,
+    CollectionPermissions, CrapMeta, DocumentRef, EditorLocaleOption, FieldAdminMeta, FieldContext,
+    FieldMeta, GlobalContext, GlobalPermissions, NavData, PageMeta, PaginationContext, UploadMeta,
+    UserContext, VersionsMeta,
+    field::{
+        ArrayField, ArrayRow, BaseFieldData, BlockDefinition, BlockRow, BlocksField, CheckboxField,
+        ChoiceField, CodeField, ConditionData, DateField, GroupField, JoinField, JoinItem,
+        NumberField, RelationshipField, RelationshipSelectedItem, RichtextField,
+        RichtextNodeAttrCtx, RichtextNodeAttrOption, RichtextNodeDefCtx, RowField, SelectOption,
+        TabPanel, TabsField, TextField, TextareaField, TimezoneOption, UploadField,
+        ValidationAttrs,
+    },
     locale_template::LocaleTemplateOption,
     nav::{NavCollection, NavGlobal},
     page::{
@@ -33,6 +48,7 @@ use crate::admin::context::{
             CollectionRestoreConfirmPage, CollectionVersionsListPage, UploadFormContext,
             UploadInfo,
         },
+        custom::CustomPage,
         dashboard::{CollectionCard, DashboardPage, GlobalCard},
         errors::ErrorPage,
         globals::{
@@ -83,12 +99,20 @@ Every page above flattens [BasePageContext](#basepagecontext) (or [AuthBasePageC
 {{#each definitions}}
 ### {{name}}
 
+{{#if description}}
+{{description}}
+
+{{/if}}
 {{#if fields}}
 {{#each fields}}
 - **`{{name}}`** ({{{ty}}}){{#unless required}} _(optional)_{{/unless}}{{#if description}} — {{description}}{{/if}}
 {{/each}}
 {{else}}
+{{#if enum_note}}
+{{enum_note}}
+{{else}}
 _(No fields.)_
+{{/if}}
 {{/if}}
 
 {{/each}}
@@ -113,6 +137,11 @@ struct PageDoc {
 #[derive(Serialize)]
 struct TypeDoc {
     name: &'static str,
+    /// Type-level doc comment from the Rust struct/enum (may be empty).
+    description: String,
+    /// For property-less enum schemas: a rendered one-liner listing the
+    /// variant discriminators (empty for plain structs).
+    enum_note: String,
     fields: Vec<FieldDoc>,
 }
 
@@ -163,9 +192,9 @@ const AUTH_PAGES: &[PageEntry] = &[
 ];
 
 const ERROR_PAGES: &[PageEntry] = &[PageEntry {
-    heading: "Error pages (403 / 404 / 500)",
-    page_type: "error_403 | error_404 | error_500",
-    template: "errors/{403,404,500}",
+    heading: "Error pages (400 / 403 / 404 / 500)",
+    page_type: "error_400 | error_403 | error_404 | error_500",
+    template: "errors/{400,403,404,500}",
     schema: || schema_for!(ErrorPage),
 }];
 
@@ -254,6 +283,13 @@ const GLOBAL_PAGES: &[PageEntry] = &[
     },
 ];
 
+const CUSTOM_PAGES: &[PageEntry] = &[PageEntry {
+    heading: "Custom admin page",
+    page_type: "custom_page",
+    template: "pages/{slug}",
+    schema: || schema_for!(CustomPage),
+}];
+
 fn pages() -> impl Iterator<Item = &'static PageEntry> {
     AUTH_PAGES
         .iter()
@@ -261,6 +297,7 @@ fn pages() -> impl Iterator<Item = &'static PageEntry> {
         .chain(DASHBOARD_PAGES)
         .chain(COLLECTION_PAGES)
         .chain(GLOBAL_PAGES)
+        .chain(CUSTOM_PAGES)
 }
 
 fn definitions() -> Vec<(&'static str, Schema)> {
@@ -277,10 +314,58 @@ fn definitions() -> Vec<(&'static str, Schema)> {
         ("LocaleTemplateOption", schema_for!(LocaleTemplateOption)),
         ("Breadcrumb", schema_for!(Breadcrumb)),
         ("CollectionContext", schema_for!(CollectionContext)),
+        ("CollectionPermissions", schema_for!(CollectionPermissions)),
+        ("AdminMeta", schema_for!(AdminMeta)),
+        ("AuthMeta", schema_for!(AuthMeta)),
+        ("UploadMeta", schema_for!(UploadMeta)),
+        ("VersionsMeta", schema_for!(VersionsMeta)),
+        ("FieldMeta", schema_for!(FieldMeta)),
+        ("FieldAdminMeta", schema_for!(FieldAdminMeta)),
         ("GlobalContext", schema_for!(GlobalContext)),
+        ("GlobalPermissions", schema_for!(GlobalPermissions)),
         ("DocumentRef", schema_for!(DocumentRef)),
+        ("DocumentFields", schema_for!(DocumentFields)),
+        ("ConditionExpr", schema_for!(ConditionExpr)),
+        ("ConditionRow", schema_for!(ConditionRow)),
+        ("TimezoneOption", schema_for!(TimezoneOption)),
+        ("CustomPage", schema_for!(RegisteredCustomPage)),
         ("PaginationContext", schema_for!(PaginationContext)),
         ("FieldContext", schema_for!(FieldContext)),
+        ("BaseFieldData", schema_for!(BaseFieldData)),
+        ("ValidationAttrs", schema_for!(ValidationAttrs)),
+        ("ConditionData", schema_for!(ConditionData)),
+        ("TextField", schema_for!(TextField)),
+        ("TextareaField", schema_for!(TextareaField)),
+        ("NumberField", schema_for!(NumberField)),
+        ("CodeField", schema_for!(CodeField)),
+        ("RichtextField", schema_for!(RichtextField)),
+        ("RichtextNodeDefCtx", schema_for!(RichtextNodeDefCtx)),
+        ("RichtextNodeAttrCtx", schema_for!(RichtextNodeAttrCtx)),
+        (
+            "RichtextNodeAttrOption",
+            schema_for!(RichtextNodeAttrOption),
+        ),
+        ("DateField", schema_for!(DateField)),
+        ("CheckboxField", schema_for!(CheckboxField)),
+        ("ChoiceField", schema_for!(ChoiceField)),
+        ("SelectOption", schema_for!(SelectOption)),
+        ("RelationshipField", schema_for!(RelationshipField)),
+        (
+            "RelationshipSelectedItem",
+            schema_for!(RelationshipSelectedItem),
+        ),
+        ("UploadField", schema_for!(UploadField)),
+        ("JoinField", schema_for!(JoinField)),
+        ("JoinItem", schema_for!(JoinItem)),
+        ("GroupField", schema_for!(GroupField)),
+        ("RowField", schema_for!(RowField)),
+        ("TabsField", schema_for!(TabsField)),
+        ("TabPanel", schema_for!(TabPanel)),
+        ("ArrayField", schema_for!(ArrayField)),
+        ("ArrayRow", schema_for!(ArrayRow)),
+        ("BlocksField", schema_for!(BlocksField)),
+        ("BlockDefinition", schema_for!(BlockDefinition)),
+        ("BlockRow", schema_for!(BlockRow)),
         ("AuthCollection", schema_for!(AuthCollection)),
         ("CollectionEntry", schema_for!(CollectionEntry)),
         ("CollectionCard", schema_for!(CollectionCard)),
@@ -309,14 +394,100 @@ fn fields_from_schema(schema: &Value) -> Vec<FieldDoc> {
             name: name.clone(),
             ty: render_type(prop),
             required: required.contains(&name.as_str()),
-            description: prop
-                .get("description")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .trim()
-                .replace('\n', " "),
+            description: strip_rustdoc_links(
+                &prop
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .replace('\n', " "),
+            ),
         })
         .collect()
+}
+
+/// Type-level doc comment from a schema root (empty when absent). Line
+/// structure is preserved so Markdown lists in doc comments render; rustdoc
+/// cross-links are stripped (their targets mean nothing in mdbook).
+fn description_from_schema(schema: &Value) -> String {
+    let raw = schema
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+
+    strip_rustdoc_links(raw)
+}
+
+/// Convert rustdoc link syntax to plain inline code: `` [`X`](path) `` and
+/// `` [`X`] `` both become `` `X` ``. Doc comments are written for rustdoc;
+/// their link targets (`crate::…`, `super::…`) are dead in mdbook output.
+fn strip_rustdoc_links(s: &str) -> String {
+    static LINKED: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\[(`[^`\]]+`)\]\([A-Za-z0-9_:#.]+\)").expect("valid regex"));
+    static BARE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\[(`[^`\]]+`)\]([^(]|$)").expect("valid regex"));
+
+    let s = LINKED.replace_all(s, "$1");
+    BARE.replace_all(&s, "$1$2").into_owned()
+}
+
+/// For a property-less internally-tagged enum schema (e.g. `FieldContext`):
+/// render a one-liner naming the tag field and listing every discriminator
+/// value. Returns an empty string for plain struct schemas.
+fn enum_note_from_schema(schema: &Value) -> String {
+    // Tagged enums render as `oneOf`; untagged ones as `anyOf`.
+    let Some(variants) = schema
+        .get("oneOf")
+        .or_else(|| schema.get("anyOf"))
+        .and_then(|v| v.as_array())
+    else {
+        return String::new();
+    };
+
+    // The tag field is the one property every variant pins to a constant.
+    // Without one the enum is untagged — render the union of variant types.
+    let Some(tag_field) = variants
+        .first()
+        .and_then(|v| v.get("properties"))
+        .and_then(|p| p.as_object())
+        .and_then(|props| {
+            props
+                .iter()
+                .find(|(_, p)| p.get("const").is_some())
+                .map(|(k, _)| k.clone())
+        })
+    else {
+        let union = variants
+            .iter()
+            .map(render_type)
+            .collect::<Vec<_>>()
+            .join(" \\| ");
+        return format!("Untagged union — one of: {union}.");
+    };
+
+    let tags: Vec<String> = variants
+        .iter()
+        .filter_map(|v| {
+            v.get("properties")?
+                .get(&tag_field)?
+                .get("const")?
+                .as_str()
+                .map(|s| format!("`{s}`"))
+        })
+        .collect();
+
+    if tags.is_empty() {
+        return String::new();
+    }
+
+    format!(
+        "Internally tagged enum — `{tag_field}` selects the variant: {}. \
+         Every variant flattens its variant struct (defined below) into the \
+         top level, so templates read `{tag_field}` plus the struct's fields \
+         directly.",
+        tags.join(", ")
+    )
 }
 
 /// Render a JSON-schema property's type as a Rust-ish string. Refs become
@@ -397,9 +568,14 @@ fn build_doc_context() -> DocContext {
 
     let definitions: Vec<TypeDoc> = definitions()
         .into_iter()
-        .map(|(name, schema)| TypeDoc {
-            name,
-            fields: fields_from_schema(&schema.to_value()),
+        .map(|(name, schema)| {
+            let value = schema.to_value();
+            TypeDoc {
+                name,
+                description: description_from_schema(&value),
+                enum_note: enum_note_from_schema(&value),
+                fields: fields_from_schema(&value),
+            }
         })
         .collect();
 

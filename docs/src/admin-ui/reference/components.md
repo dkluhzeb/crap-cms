@@ -26,29 +26,29 @@ Every component is **registered automatically** by importing
 
 A component dispatches a CustomEvent with that name, then reads
 `event.detail.instance` populated by the singleton's listener. The
-`util/discover.js::discoverSingleton(eventName)` helper handles the
-dance:
+`_internal/util/discover.js::discoverSingleton(eventName)` helper
+handles the dance:
 
 ```js
-import { discoverSingleton } from './util/discover.js';
+import { discoverSingleton } from './_internal/util/discover.js';
 
 const drawer = discoverSingleton('crap:drawer-request');
-drawer?.open({ title: 'Settings', html: '<p>…</p>' });
+drawer?.open({ title: 'Settings' });
 ```
 
 ### `window.crap` namespace (sugar)
 
-`static/components/global.js` exposes a flat namespace as the
-console-friendly / inline-template convenience layer:
+`static/components/_internal/global.js` exposes a flat namespace as
+the console-friendly / inline-template convenience layer:
 
 ```js
 window.crap.toast({ message: 'Saved', type: 'success' });
 window.crap.confirm('Delete this?').then((ok) => { … });
-window.crap.drawer.open({ title: '…', html: '…' });
-window.crap.deleteDialog.open({ slug, id, title });
-window.crap.createPanel.open({ collection, onCreated });
+window.crap.drawer.open({ title: '…' });
+window.crap.deleteDialog.open({ slug, id, title, softDelete });
+window.crap.createPanel.open({ collection, title, onCreated });
 window.crap.theme.set('tokyo-night');
-window.crap.csrf();          // shorthand for util/cookies.js::readCsrfCookie
+window.crap.csrf();          // shorthand for _internal/util/cookies.js::readCsrfCookie
 ```
 
 Both layers reach the same singleton instance — `window.crap` is sugar
@@ -63,15 +63,15 @@ over the canonical event-discovery + module APIs documented above.
 | `<crap-confirm-dialog>`   | Promise-based confirm      | `crap:confirm-dialog-request`      | `static/components/confirm-dialog.js`     |
 | `<crap-delete-dialog>`    | Delete-document confirm    | `crap:delete-dialog-request`       | `static/components/delete-dialog.js`      |
 | `<crap-create-panel>`     | Inline create-from-relation | `crap:create-panel-request`       | `static/components/create-panel.js`       |
-| `<crap-session-dialog>`   | Idle-session warn / stay   | (mounted by `<crap-session-guard>`) | `static/components/session-guard.js`     |
+| `<crap-session-dialog>`   | Idle-session warn / stay   | (mounted directly by `layout/base.hbs`) | `static/components/session-guard.js`     |
 
 ### `<crap-toast>` — `toast({ message, type?, duration? })`
 
 ```js
-import { toast } from './util/toast.js';
+import { toast } from './_internal/util/toast.js';
 toast({ message: 'Saved', type: 'success' });
 // types: 'success' | 'error' | 'info' (default)
-// duration: ms (default 3500)
+// duration: ms (default 3000; 0 = stays until dismissed)
 ```
 
 Or via the event directly:
@@ -84,9 +84,9 @@ document.dispatchEvent(new CustomEvent('crap:toast-request', {
 
 ### `<crap-drawer>` — `instance.open(opts)` / `instance.close()`
 
-`opts`: `{ title, html?, url? }`. If `url` is given the drawer fetches
-the URL into its body via HTMX-style swap. `html` is a literal HTML
-string (escape user input before passing).
+`opts`: `{ title }`. Opening clears the drawer body; the caller then
+mounts its own content into the `instance.body` container (a plain
+`HTMLDivElement` getter) after `open()` returns.
 
 ### `<crap-confirm-dialog>` — `instance.prompt(message, opts?)`
 
@@ -95,13 +95,13 @@ Confirm, `false` on Cancel/Escape/backdrop. `<crap-confirm>` (the form-
 intercepting variant) consumes this dialog automatically and falls back
 to `window.confirm()` when no dialog is mounted.
 
-### `<crap-delete-dialog>` — `instance.open({ slug, id, title, soft, canPerm })`
+### `<crap-delete-dialog>` — `instance.open({ slug, id, title, softDelete, canPermanentlyDelete? })`
 
 Backs all `[data-delete-id]` buttons in the admin. Dispatches
 `crap:document-deleted` after a successful delete so list pages can
 refresh.
 
-### `<crap-create-panel>` — `instance.open({ collection, onCreated, title? })`
+### `<crap-create-panel>` — `instance.open({ collection, title, onCreated })`
 
 Inline create modal for relationship/upload fields. `onCreated(doc)` is
 invoked with the new document on success.
@@ -110,8 +110,8 @@ invoked with the new document on success.
 
 These wrap form-bound inputs. Their tags **must remain in light DOM**
 (or a slot-projected light child) for the browser to submit the value.
-Most also dispatch `crap:change` (`{ name, value }`) on edit so
-`<crap-validate-form>` and `<crap-conditions>` can react.
+Some also dispatch a bubbling `crap:change` event on edit so
+`<crap-dirty-form>` can react (see the contract below).
 
 | Tag                          | Wraps                       | Notes                                                  |
 | ---------------------------- | --------------------------- | ------------------------------------------------------ |
@@ -130,10 +130,16 @@ Most also dispatch `crap:change` (`{ name, value }`) on edit so
 
 ### `crap:change` event contract
 
-Every editable field component dispatches `new CustomEvent('crap:change',
-{ detail: { name, value }, bubbles: true })` whenever the underlying
-form value changes. This is the canonical signal for form-watchers
-(`crap-conditions`, `crap-dirty-form`, `crap-validate-form`).
+`<crap-tags>` and `<crap-relationship-search>` dispatch a bubbling
+`crap:change` event whenever the underlying form value changes;
+`<crap-code>` dispatches one only when its **language picker** changes
+(content edits reach the form as native `input` events from the
+editor). No `detail` payload is guaranteed — tags and
+relationship-search dispatch a plain `Event`, code a `CustomEvent`
+with `{ name, value }` detail — so read the current value from the
+host element / its hidden input. This is the canonical signal for
+form-watchers (`<crap-dirty-form>` listens; `<crap-upload-preview>`
+relays it internally).
 
 ## Page enhancers
 
@@ -148,14 +154,13 @@ Tag-only enhancements that auto-init on connect; no public API.
 | `<crap-tabs>`                | Tab switcher inside group fields                           |
 | `<crap-sidebar>`             | Mobile sidebar toggle                                      |
 | `<crap-scroll-restore>`      | Preserves scroll position across HTMX swaps                |
-| `<crap-session-guard>`       | Idle-session warning + auto-extend                         |
 | `<crap-live-events>`         | SSE subscription for live document updates                 |
 | `<crap-time>`                | Locale-aware datetime formatter                            |
 
 ### Three pickers via `CrapPickerBase`
 
-`static/components/picker-base.js` is the shared toggle/dropdown/
-outside-click base class for:
+`static/components/_internal/picker-base.js` is the shared toggle/
+dropdown/outside-click base class for:
 
 - `<crap-locale-picker>` — content-locale switcher (cookie-driven)
 - `<crap-ui-locale-picker>` — admin-UI locale (server-persisted)
@@ -167,23 +172,24 @@ Subclasses declare static selectors (`toggleSelector`, `dropdownSelector`,
 
 ## Util modules
 
-Re-exported from `static/components/util/index.js`:
+Util modules live in the framework-reserved `_internal/` namespace.
+Re-exported from `static/components/_internal/util/index.js`:
 
-| Module                | Exports                                                                    |
-| --------------------- | -------------------------------------------------------------------------- |
-| `util/cookies.js`     | `readCookie(name)`, `readCsrfCookie()`, `writeCookie(name, value, opts)`   |
-| `util/toast.js`       | `toast({ message, type?, duration? })`                                     |
-| `util/htmx.js`        | `getHttpVerb(event)` — normalise HTMX `htmx:configRequest` verb to upper   |
-| `util/discover.js`    | `discoverSingleton(eventName)` — returns the discovered instance or `null` |
-| `util/json.js`        | `parseJsonAttribute(el, attr, fallback)`, `readDataIsland(host, id, fallback)` |
+| Module                          | Exports                                                                    |
+| ------------------------------- | -------------------------------------------------------------------------- |
+| `_internal/util/cookies.js`     | `readCookie(name)`, `readCsrfCookie()`, `writeCookie(name, value, opts)`   |
+| `_internal/util/toast.js`       | `toast({ message, type?, duration? })`                                     |
+| `_internal/util/htmx.js`        | `getHttpVerb(event)` — normalise HTMX `htmx:configRequest` verb to upper   |
+| `_internal/util/discover.js`    | `discoverSingleton(eventName)` — returns the discovered instance or `null` |
+| `_internal/util/json.js`        | `parseJsonAttribute(el, attr, fallback)`, `readDataIsland(host, id, fallback)` |
 
 ## Internal helpers (not part of the public API)
 
-- `static/components/h.js` — `h(tag, props, ...children)` typed DOM
-  builder. Replaces `innerHTML` template strings.
-- `static/components/css.js` — `` css`…` `` tagged template that
-  returns a `CSSStyleSheet` for `adoptedStyleSheets`.
-- `static/components/i18n.js` — `t(key)` reads the `crap-i18n` data
+- `static/components/_internal/h.js` — `h(tag, props, ...children)`
+  typed DOM builder. Replaces `innerHTML` template strings.
+- `static/components/_internal/css.js` — `` css`…` `` tagged template
+  that returns a `CSSStyleSheet` for `adoptedStyleSheets`.
+- `static/components/_internal/i18n.js` — `t(key)` reads the `crap-i18n` data
   island injected by `layout/base.hbs`. The island body is emitted by
   the server-side `{{{admin_i18n}}}` helper, which serialises a
   curated set of keys for the active `_locale` as a single JSON
@@ -217,8 +223,10 @@ class CustomToast extends Base {
 customElements.define('crap-toast', CustomToast);
 ```
 
-Util modules are individually overrideable too —
-`static/components/util/cookies.js` etc.
+The `_internal/` modules are technically overrideable file-by-file
+too (`static/components/_internal/util/cookies.js` etc.), but the
+underscore namespace is framework-reserved — no stability contract,
+override at your own risk.
 
 ## Tooling contract
 
@@ -229,7 +237,7 @@ Util modules are individually overrideable too —
 - **HTMX**: components don't fight HTMX swaps. They store cleanup state
   in `disconnectedCallback` so HTMX-replaced subtrees re-initialise
   cleanly on the next `connectedCallback`.
-- **Tests**: `tests/e2e/browser_*.rs` exercise each component via
+- **Tests**: `e2e/tests/browser_*.rs` exercise each component via
   chromiumoxide. Add a regression test when changing public behaviour.
 
 ## Template partials

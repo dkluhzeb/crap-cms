@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Result, bail};
-use mlua::{Table, Value};
+use mlua::{Error::RuntimeError, Result as LuaResult, Table, Value};
 
 use crate::{
     core::{HookRef, LocalizedString, SelectOption, collection::Hooks},
@@ -124,6 +124,108 @@ pub(super) fn get_localized_string(tbl: &Table, key: &str) -> Option<LocalizedSt
         }
         _ => None,
     }
+}
+
+/// Strict optional string: absent / `nil` → `None`, a string → `Some`,
+/// numbers are coerced Lua-style (`50` → `"50"`); any other present value →
+/// a hard error naming the key and the actual type.
+///
+/// Unlike [`get_string`], a present-but-wrong-typed value is NOT silently
+/// dropped.
+pub(super) fn get_string_strict(
+    tbl: &Table,
+    key: &str,
+    context: &str,
+) -> LuaResult<Option<String>> {
+    match tbl.get::<Value>(key)? {
+        Value::Nil => Ok(None),
+        Value::String(s) => Ok(Some(s.to_str()?.to_string())),
+        Value::Integer(i) => Ok(Some(i.to_string())),
+        Value::Number(n) => Ok(Some(n.to_string())),
+        other => Err(RuntimeError(format!(
+            "{context} '{key}' must be a string, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// Strict variant of [`get_localized_string`]: absent / `nil` → `None`, a
+/// string → `Plain`, a non-empty table of `locale = "string"` pairs →
+/// `Localized`. Anything else — wrong type, empty table, non-string pair —
+/// is a hard error instead of a silent drop.
+pub(super) fn get_localized_string_strict(
+    tbl: &Table,
+    key: &str,
+    context: &str,
+) -> LuaResult<Option<LocalizedString>> {
+    match tbl.get::<Value>(key)? {
+        Value::Nil => Ok(None),
+        Value::String(s) => Ok(Some(LocalizedString::Plain(s.to_str()?.to_string()))),
+        Value::Table(t) => {
+            let mut map = HashMap::new();
+
+            for pair in t.pairs::<Value, Value>() {
+                let (k, v) = pair?;
+                let (Value::String(k), Value::String(v)) = (&k, &v) else {
+                    return Err(RuntimeError(format!(
+                        "{context} '{key}' table entries must be locale = \"string\" pairs, \
+                         got {} = {}",
+                        k.type_name(),
+                        v.type_name()
+                    )));
+                };
+                map.insert(k.to_str()?.to_string(), v.to_str()?.to_string());
+            }
+
+            if map.is_empty() {
+                return Err(RuntimeError(format!(
+                    "{context} '{key}' table must not be empty \
+                     (expected locale = \"string\" pairs)"
+                )));
+            }
+
+            Ok(Some(LocalizedString::Localized(map)))
+        }
+        other => Err(RuntimeError(format!(
+            "{context} '{key}' must be a string or a table of locale = \"string\" pairs, \
+             got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// Strict optional sub-table: absent / `nil` → `None`, a table → `Some`,
+/// any other present value → a hard error.
+pub(super) fn get_optional_table(
+    tbl: &Table,
+    key: &str,
+    context: &str,
+) -> LuaResult<Option<Table>> {
+    match tbl.get::<Value>(key)? {
+        Value::Nil => Ok(None),
+        Value::Table(t) => Ok(Some(t)),
+        other => Err(RuntimeError(format!(
+            "{context} '{key}' must be a table, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// Strict string sequence: absent / `nil` → empty vec; a table → every entry
+/// collected as a string; a non-table value or a non-string entry → a hard
+/// error.
+pub(super) fn get_string_sequence(tbl: &Table, key: &str, context: &str) -> LuaResult<Vec<String>> {
+    let Some(seq) = get_optional_table(tbl, key, context)? else {
+        return Ok(Vec::new());
+    };
+
+    seq.sequence_values::<String>()
+        .collect::<LuaResult<Vec<_>>>()
+        .map_err(|e| {
+            RuntimeError(format!(
+                "{context} '{key}' must be an array of strings: {e}"
+            ))
+        })
 }
 
 /// Read a boolean field from a Lua table.

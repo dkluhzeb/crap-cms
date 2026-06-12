@@ -1634,13 +1634,13 @@ crap.http = {}
 --- @return crap.HttpResponse
 function crap.http.request(opts) end
 
---- Options table for `crap.http.request`.
+--- Options table for `crap.http.request`. Unknown keys are rejected.
 --- @class crap.HttpRequest
 --- @field url string Request URL.
 --- @field method? string HTTP method (default: `"GET"`).
 --- @field headers? table<string, string> Request headers.
 --- @field body? string Request body.
---- @field timeout? integer Request timeout in seconds (default: `30`).
+--- @field timeout? number Request timeout in seconds; fractional values allowed (e.g. `0.5` = 500 ms). Default: `30`.
 
 --- Response returned by `crap.http.request(opts)`. Both `LuaAnnotation`
 --- (for `types/crap.lua`) and `Serialize` (for the runtime
@@ -1678,6 +1678,7 @@ function crap.email.queue(opts) end
 function crap.email.register(handler) end
 
 --- Options table for `crap.email.send` / `crap.email.queue`.
+--- Unknown keys are rejected.
 --- @class crap.EmailOptions
 --- @field to string Recipient email address.
 --- @field subject string Email subject line.
