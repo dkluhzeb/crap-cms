@@ -128,6 +128,12 @@ impl PostProcessOpts for FindByIdInput<'_> {
     fn depth(&self) -> i32 {
         self.depth
     }
+    fn include_drafts(&self) -> bool {
+        // `use_draft` means the caller asked for the draft overlay — i.e.
+        // an editor previewing — so draft relationship targets are visible.
+        // A normal (published) read hides them.
+        self.use_draft
+    }
     fn hydrate(&self) -> bool {
         false
     }

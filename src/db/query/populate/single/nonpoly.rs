@@ -5,17 +5,14 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 use super::populate_relationships_cached;
+use crate::core::{CollectionDefinition, Document, upload};
 use crate::db::query::populate::{
     PopulateContext, PopulateCtx, PopulateOpts, document_to_json, locale_cache_key,
     populate_cache_key,
 };
-use crate::{
-    core::{CollectionDefinition, Document, upload},
-    db::query::read::{find_by_id, find_by_ids},
-};
 
 use crate::db::query::populate::helpers::{
-    CacheOrFetch, cache_get_doc, cache_or_fetch_doc, cache_set_doc,
+    CacheOrFetch, cache_get_doc, cache_or_fetch_doc, cache_set_doc, fetch_target, fetch_targets,
 };
 
 /// Populate a non-polymorphic has-many field.
@@ -41,13 +38,7 @@ pub(super) fn populate_nonpoly_has_many(
         .cloned()
         .collect();
 
-    let fetched = find_by_ids(
-        ctx.conn,
-        rel_collection,
-        rel_def,
-        &fetch_ids,
-        ctx.locale_ctx,
-    )?;
+    let fetched = fetch_targets(ctx, rel_collection, rel_def, &fetch_ids)?;
     let mut fetched_map: HashMap<String, Document> =
         fetched.into_iter().map(|d| (d.id.to_string(), d)).collect();
 
@@ -59,7 +50,12 @@ pub(super) fn populate_nonpoly_has_many(
         }
 
         let locale_key = locale_cache_key(ctx.locale_ctx);
-        let key = populate_cache_key(rel_collection, id, locale_key.as_deref());
+        let key = populate_cache_key(
+            rel_collection,
+            id,
+            locale_key.as_deref(),
+            ctx.published_only,
+        );
 
         if let Some(cached) = cache_get_doc(ctx.cache, &key)? {
             populated.push(document_to_json(&cached, rel_collection));
@@ -89,6 +85,7 @@ pub(super) fn populate_nonpoly_has_many(
                 depth: ctx.effective_depth - 1,
                 select: None,
                 locale_ctx: ctx.locale_ctx,
+                published_only: ctx.published_only,
                 join_access: None,
                 user: None,
             },
@@ -123,10 +120,15 @@ pub(super) fn populate_nonpoly_has_one(
     }
 
     let locale_key = locale_cache_key(ctx.locale_ctx);
-    let key = populate_cache_key(rel_collection, &id, locale_key.as_deref());
+    let key = populate_cache_key(
+        rel_collection,
+        &id,
+        locale_key.as_deref(),
+        ctx.published_only,
+    );
 
     let mut related_doc = match cache_or_fetch_doc(ctx.cache, ctx.singleflight, &key, || {
-        find_by_id(ctx.conn, rel_collection, rel_def, &id, ctx.locale_ctx)
+        fetch_target(ctx, rel_collection, rel_def, &id)
             .ok()
             .flatten()
     }) {
@@ -164,6 +166,7 @@ pub(super) fn populate_nonpoly_has_one(
             depth: ctx.effective_depth - 1,
             select: None,
             locale_ctx: ctx.locale_ctx,
+            published_only: ctx.published_only,
             join_access: None,
             user: None,
         },
@@ -259,6 +262,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -339,6 +343,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -412,6 +417,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -468,6 +474,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -479,6 +486,93 @@ mod tests {
             doc.fields.get("author"),
             Some(&serde_json::Value::Null),
             "missing has-one target should be null"
+        );
+    }
+
+    /// Regression: a draft target must be hidden from population when the
+    /// reader is not allowed to see drafts (`published_only`), and visible
+    /// when drafts are allowed. Previously populate ignored `_status`
+    /// entirely, leaking a never-published draft referenced by a published
+    /// document to readers who could not see drafts directly.
+    #[test]
+    fn populate_has_one_draft_target_hidden_when_published_only() {
+        use crate::core::VersionsConfig;
+
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE authors (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                _status TEXT NOT NULL DEFAULT 'published',
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                author TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO authors (id, name, _status, created_at, updated_at)
+                VALUES ('a1', 'Secret Draft', 'draft', '2024-01-01', '2024-01-01');
+            INSERT INTO posts (id, title, author, created_at, updated_at)
+                VALUES ('p1', 'Hello', 'a1', '2024-01-01', '2024-01-01');",
+        )
+        .unwrap();
+
+        let mut authors_def = make_authors_def();
+        authors_def.versions = Some(VersionsConfig::new(true, 0)); // enables has_drafts()
+        assert!(authors_def.has_drafts());
+
+        let posts_def = make_posts_def();
+        let mut registry = Registry::new();
+        registry.register_collection(posts_def.clone());
+        registry.register_collection(authors_def);
+
+        let run = |published_only: bool| {
+            let mut doc = Document::new("p1".to_string());
+            doc.fields.insert("author".to_string(), json!("a1"));
+            let mut visited = HashSet::new();
+            populate_relationships_cached(
+                &PopulateContext {
+                    conn: &conn,
+                    registry: &registry,
+                    collection_slug: "posts",
+                    def: &posts_def,
+                },
+                &mut doc,
+                &mut visited,
+                &PopulateOpts {
+                    depth: 1,
+                    select: None,
+                    locale_ctx: None,
+                    published_only,
+                    join_access: None,
+                    user: None,
+                },
+                &NoneCache,
+            )
+            .unwrap();
+            doc.fields.get("author").cloned()
+        };
+
+        // Published-only read: the draft author is hidden (null).
+        assert_eq!(
+            run(true),
+            Some(serde_json::Value::Null),
+            "draft target must be hidden from a published-only read"
+        );
+
+        // Drafts allowed: the draft author is populated.
+        let allowed = run(false).expect("author field present");
+        assert!(
+            allowed.is_object(),
+            "draft target must be visible when drafts are allowed"
+        );
+        assert_eq!(
+            allowed.get("name").and_then(|v| v.as_str()),
+            Some("Secret Draft")
         );
     }
 
@@ -532,6 +626,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -601,6 +696,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -642,6 +738,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -671,7 +768,7 @@ mod tests {
             .insert("name".to_string(), json!("CachedAlice"));
         cache
             .set(
-                &populate_cache_key("authors", "a1", None),
+                &populate_cache_key("authors", "a1", None, false),
                 &serde_json::to_vec(&cached_author).unwrap(),
             )
             .unwrap();
@@ -693,6 +790,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -740,7 +838,7 @@ mod tests {
             .insert("name".to_string(), json!("CachedTech"));
         cache
             .set(
-                &populate_cache_key("categories", "c1", None),
+                &populate_cache_key("categories", "c1", None, false),
                 &serde_json::to_vec(&cached_cat).unwrap(),
             )
             .unwrap();
@@ -762,6 +860,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },

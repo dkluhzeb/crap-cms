@@ -6,7 +6,7 @@ use tracing::info;
 
 use crate::{
     config::LocaleConfig,
-    core::CollectionDefinition,
+    core::{CollectionDefinition, collection::Auth},
     db::{
         DbConnection,
         migrate::helpers::collect_column_specs,
@@ -149,6 +149,34 @@ fn collect_compound_indexes(
 /// Sync B-tree indexes for a collection table: field-level `index: true` and
 /// collection-level compound `indexes`. Idempotent — creates missing indexes,
 /// drops stale ones. Only manages indexes with the `idx_{slug}_` naming prefix.
+/// Index the auth token columns. Reset / verification flows look a user up
+/// by `WHERE _reset_token = ?` / `WHERE _verification_token = ?`; without an
+/// index those are full table scans of the user table on every attempt.
+fn collect_auth_token_indexes(
+    slug: &str,
+    def: &CollectionDefinition,
+    desired: &mut HashSet<String>,
+    stmts: &mut Vec<String>,
+) {
+    if !def.is_auth_collection() {
+        return;
+    }
+
+    let mut add = |col: &str| {
+        let idx_name = format!("idx_{slug}_{col}");
+        desired.insert(idx_name.clone());
+        stmts.push(format!(
+            "CREATE INDEX IF NOT EXISTS {idx_name} ON {slug} ({col})"
+        ));
+    };
+
+    add("_reset_token");
+
+    if def.auth.as_ref().is_some_and(Auth::requires_verify_email) {
+        add("_verification_token");
+    }
+}
+
 pub(super) fn sync_indexes(
     conn: &dyn DbConnection,
     slug: &str,
@@ -161,6 +189,7 @@ pub(super) fn sync_indexes(
     collect_field_indexes(slug, def, locale_config, &mut desired, &mut stmts)?;
     collect_soft_delete_unique_indexes(slug, def, locale_config, &mut desired, &mut stmts)?;
     collect_compound_indexes(slug, def, locale_config, &mut desired, &mut stmts)?;
+    collect_auth_token_indexes(slug, def, &mut desired, &mut stmts);
 
     // Drop stale indexes (in existing but not in desired)
     let prefix = format!("idx_{slug}_");
@@ -200,6 +229,36 @@ mod tests {
         .into_iter()
         .filter_map(|r| r.get_string("name").ok())
         .collect()
+    }
+
+    #[test]
+    fn sync_indexes_creates_auth_token_indexes() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let mut def = simple_collection("users", vec![]);
+        def.auth = Some(Auth::new(true));
+        create_collection_table(&conn, "users", &def, &no_locale()).unwrap();
+        sync_indexes(&conn, "users", &def, &no_locale()).unwrap();
+
+        let indexes = get_indexes(&conn, "users");
+        assert!(
+            indexes.contains("idx_users__reset_token"),
+            "auth collection should index _reset_token; got {indexes:?}"
+        );
+        // verify_email is off by default → no verification-token index.
+        assert!(!indexes.contains("idx_users__verification_token"));
+    }
+
+    #[test]
+    fn sync_indexes_skips_auth_tokens_for_non_auth_collection() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection("posts", vec![]);
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_indexes(&conn, "posts", &def, &no_locale()).unwrap();
+
+        let indexes = get_indexes(&conn, "posts");
+        assert!(!indexes.contains("idx_posts__reset_token"));
     }
 
     #[test]

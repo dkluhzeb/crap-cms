@@ -218,6 +218,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -275,6 +276,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -322,6 +324,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -372,6 +375,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -423,6 +427,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -468,6 +473,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -507,7 +513,7 @@ mod tests {
         cached_article
             .fields
             .insert("title".to_string(), json!("CachedFromBatchCache"));
-        let key = populate_cache_key("articles", "a1", None);
+        let key = populate_cache_key("articles", "a1", None, false);
         cache
             .set(&key, &serde_json::to_vec(&cached_article).unwrap())
             .unwrap();
@@ -524,6 +530,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -582,6 +589,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -623,6 +631,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -671,6 +680,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -703,7 +713,7 @@ mod tests {
         cached_article
             .fields
             .insert("title".to_string(), json!("CachedTitle"));
-        let key = populate_cache_key("articles", "a1", None);
+        let key = populate_cache_key("articles", "a1", None, false);
         cache
             .set(&key, &serde_json::to_vec(&cached_article).unwrap())
             .unwrap();
@@ -725,6 +735,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },

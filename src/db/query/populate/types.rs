@@ -37,12 +37,38 @@ pub trait JoinAccessCheck {
 
 /// Build a cache key for a populated document.
 ///
-/// Format: `populate:{collection}:{id}` or `populate:{collection}:{id}:{locale}`
-pub(crate) fn populate_cache_key(collection: &str, id: &str, locale: Option<&str>) -> String {
-    match locale {
+/// Format: `populate:{collection}:{id}[:{locale}][:pub]`. The `:pub` suffix
+/// is appended for published-only reads so a draft target fetched under a
+/// drafts-visible read can never be served from cache to a reader who is
+/// not allowed to see drafts. Mirrors the override-access cache separation.
+pub(crate) fn populate_cache_key(
+    collection: &str,
+    id: &str,
+    locale: Option<&str>,
+    published_only: bool,
+) -> String {
+    let mut key = match locale {
         Some(l) => format!("populate:{collection}:{id}:{l}"),
         None => format!("populate:{collection}:{id}"),
+    };
+    if published_only {
+        key.push_str(":pub");
     }
+    key
+}
+
+/// Whether a populated target document must be hidden because the reader is
+/// not allowed to see drafts and the target is a draft. Only draft-enabled
+/// target collections carry a `_status` column, so non-draft targets are
+/// always visible.
+pub(crate) fn target_hidden_by_draft(
+    doc: &Document,
+    rel_def: &CollectionDefinition,
+    published_only: bool,
+) -> bool {
+    published_only
+        && rel_def.has_drafts()
+        && doc.fields.get("_status").and_then(|v| v.as_str()) != Some("published")
 }
 
 /// Derive the locale portion of the cache key from an optional `LocaleContext`.
@@ -71,6 +97,10 @@ pub(crate) struct PopulateCtx<'a> {
     pub registry: &'a Registry,
     pub effective_depth: i32,
     pub locale_ctx: Option<&'a LocaleContext>,
+    /// When true, draft target documents are hidden from population (the
+    /// reader did not opt into drafts). Threaded from the parent read's
+    /// `include_drafts`. See [`target_hidden_by_draft`].
+    pub published_only: bool,
     pub cache: &'a dyn CacheBackend,
     /// Deduplicates concurrent cache-miss fetches for the same target. The
     /// top-level entry point constructs this fresh per populate call; service
@@ -109,6 +139,10 @@ pub struct PopulateOpts<'a> {
     pub(crate) depth: i32,
     pub(crate) select: Option<&'a [String]>,
     pub(crate) locale_ctx: Option<&'a LocaleContext>,
+    /// When true, draft target documents are excluded from population.
+    /// Set by the service read layer from `!include_drafts`. Defaults to
+    /// false (drafts visible) for internal/legacy callers.
+    pub(crate) published_only: bool,
     /// Optional access-check for join-field target collections. When `None`,
     /// join population proceeds without a target-collection access check
     /// (legacy / internal callers). When `Some`, the check is invoked for
@@ -126,9 +160,18 @@ impl<'a> PopulateOpts<'a> {
             depth,
             select: None,
             locale_ctx: None,
+            published_only: false,
             join_access: None,
             user: None,
         }
+    }
+
+    /// Hide draft target documents from population (reader is not allowed
+    /// to see drafts). Threads the parent read's `!include_drafts`.
+    #[must_use]
+    pub fn published_only(mut self, published_only: bool) -> Self {
+        self.published_only = published_only;
+        self
     }
 
     #[must_use]
@@ -163,13 +206,16 @@ mod tests {
 
     #[test]
     fn populate_cache_key_no_locale() {
-        assert_eq!(populate_cache_key("posts", "p1", None), "populate:posts:p1");
+        assert_eq!(
+            populate_cache_key("posts", "p1", None, false),
+            "populate:posts:p1"
+        );
     }
 
     #[test]
     fn populate_cache_key_with_locale() {
         assert_eq!(
-            populate_cache_key("posts", "p1", Some("de")),
+            populate_cache_key("posts", "p1", Some("de"), false),
             "populate:posts:p1:de"
         );
     }

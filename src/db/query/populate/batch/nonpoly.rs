@@ -5,13 +5,11 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 use super::populate_relationships_batch_cached;
+use crate::core::{CollectionDefinition, Document, upload};
+use crate::db::query::populate::helpers::fetch_targets;
 use crate::db::query::populate::{
     PopulateContext, PopulateCtx, PopulateOpts, document_to_json, locale_cache_key,
     populate_cache_key,
-};
-use crate::{
-    core::{CollectionDefinition, Document, upload},
-    db::query::read::find_by_ids,
 };
 
 /// Batch fetch and distribute for non-polymorphic has-many fields.
@@ -134,7 +132,7 @@ pub(super) fn batch_fetch_single_collection(
     let locale_key = locale_cache_key(ctx.locale_ctx);
 
     for id in all_ids {
-        let key = populate_cache_key(collection, id, locale_key.as_deref());
+        let key = populate_cache_key(collection, id, locale_key.as_deref(), ctx.published_only);
 
         let cached = ctx
             .cache
@@ -151,8 +149,7 @@ pub(super) fn batch_fetch_single_collection(
     }
 
     if !uncached_ids.is_empty() {
-        let mut fetched =
-            find_by_ids(ctx.conn, collection, rel_def, &uncached_ids, ctx.locale_ctx)?;
+        let mut fetched = fetch_targets(ctx, collection, rel_def, &uncached_ids)?;
 
         for d in &mut fetched {
             if let Some(ref uc) = rel_def.upload
@@ -175,6 +172,7 @@ pub(super) fn batch_fetch_single_collection(
                     depth: ctx.effective_depth - 1,
                     select: None,
                     locale_ctx: ctx.locale_ctx,
+                    published_only: ctx.published_only,
                     join_access: None,
                     user: None,
                 },
@@ -183,7 +181,12 @@ pub(super) fn batch_fetch_single_collection(
         }
 
         for d in fetched {
-            let key = populate_cache_key(collection, d.id.as_ref(), locale_key.as_deref());
+            let key = populate_cache_key(
+                collection,
+                d.id.as_ref(),
+                locale_key.as_deref(),
+                ctx.published_only,
+            );
 
             if let Ok(bytes) = serde_json::to_vec(&d) {
                 let _ = ctx.cache.set(&key, &bytes);
@@ -259,6 +262,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -352,6 +356,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -386,7 +391,7 @@ mod tests {
         cached_author
             .fields
             .insert("name".to_string(), json!("CachedBatchAuthor"));
-        let key = populate_cache_key("authors", "a1", None);
+        let key = populate_cache_key("authors", "a1", None, false);
         cache
             .set(&key, &serde_json::to_vec(&cached_author).unwrap())
             .unwrap();
@@ -409,6 +414,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -455,7 +461,7 @@ mod tests {
         cached_cat
             .fields
             .insert("name".to_string(), json!("CachedCategory"));
-        let key = populate_cache_key("categories", "c1", None);
+        let key = populate_cache_key("categories", "c1", None, false);
         cache
             .set(&key, &serde_json::to_vec(&cached_cat).unwrap())
             .unwrap();
@@ -478,6 +484,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -531,6 +538,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -589,6 +597,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -649,6 +658,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -706,6 +716,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -763,6 +774,7 @@ mod tests {
                 depth: 2,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -816,6 +828,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },

@@ -235,6 +235,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **Relationship population respects draft visibility.** Populating a
+  relationship resolved the target document regardless of its publish
+  `_status`, while the top-level read is gated by the service layer
+  (`_status = 'published'` when the reader did not opt into drafts). So a
+  reader without draft access who fetched a published document with `depth > 0`
+  could see the content of a referenced **never-published draft** target that
+  they could not have read directly. Population now hides draft targets unless
+  the read opted into drafts (`include_drafts` / `use_draft`), and the populate
+  cache key is namespaced by published-vs-drafts so a draft target cached under
+  an editor read can't be served to a published-only reader. Field-level read
+  stripping on populated documents was already enforced; this closes the
+  publish-status dimension.
+
+- **Login email lookup is case-insensitive.** A user stored as
+  `Test@Example.com` could not log in or reset their password by typing
+  `test@example.com` (the lookup compared the address case-sensitively). The
+  lookup now matches case-insensitively. (Preventing creation of case-variant
+  *duplicate* accounts — normalize-on-write plus a case-insensitive unique
+  index — remains a separate follow-up.)
+
 - **Strategy login fails closed when the locked/verified lookup errors.** The
   custom-strategy login path (admin and gRPC) checked `is_locked` /
   `is_verified` with `.unwrap_or(false)`, so a transient database error during
@@ -273,6 +293,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **Auth token columns are indexed.** Password-reset and email-verification
+  lookups (`WHERE _reset_token = ?` / `WHERE _verification_token = ?`) were
+  full table scans of the user collection. Auth collections now get an index on
+  `_reset_token` (and `_verification_token` when email verification is enabled),
+  created automatically on the next schema sync.
 
 - **`server.public_url` is validated to include a scheme.** A value without
   `http://` or `https://` (e.g. `public_url = "cms.example.com"`) was accepted

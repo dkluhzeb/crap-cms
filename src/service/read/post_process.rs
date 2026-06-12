@@ -22,6 +22,10 @@ use crate::{
 /// Fields needed by post-processing. Implemented by all read input structs.
 pub(crate) trait PostProcessOpts {
     fn depth(&self) -> i32;
+    /// Whether this read is allowed to see draft documents. When false,
+    /// relationship population hides draft targets (parity with the
+    /// service-layer `_status = 'published'` filter on the top-level read).
+    fn include_drafts(&self) -> bool;
     fn hydrate(&self) -> bool;
     fn select(&self) -> Option<&[String]>;
     fn locale_ctx(&self) -> Option<&LocaleContext>;
@@ -57,7 +61,8 @@ pub(crate) fn post_process_single(
     {
         let mut visited = HashSet::new();
         let pop_ctx = query::PopulateContext::new(conn, registry, slug, def);
-        let mut pop_opts = query::PopulateOpts::new(opts.depth());
+        let mut pop_opts =
+            query::PopulateOpts::new(opts.depth()).published_only(!opts.include_drafts());
         if let Some(s) = opts.select() {
             pop_opts = pop_opts.select(s);
         }
@@ -227,7 +232,8 @@ pub(crate) fn post_process_docs(
         && let Some(registry) = opts.registry()
     {
         let pop_ctx = query::PopulateContext::new(conn, registry, slug, def);
-        let mut pop_opts = query::PopulateOpts::new(opts.depth());
+        let mut pop_opts =
+            query::PopulateOpts::new(opts.depth()).published_only(!opts.include_drafts());
 
         if let Some(s) = opts.select() {
             pop_opts = pop_opts.select(s);
@@ -367,6 +373,9 @@ mod tests {
     impl PostProcessOpts for FakeOpts<'_> {
         fn depth(&self) -> i32 {
             1
+        }
+        fn include_drafts(&self) -> bool {
+            true
         }
         fn hydrate(&self) -> bool {
             false

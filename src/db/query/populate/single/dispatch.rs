@@ -76,6 +76,7 @@ pub(crate) fn populate_relationships_cached_inner(
         registry: ctx.registry,
         effective_depth: opts.depth,
         locale_ctx: opts.locale_ctx,
+        published_only: opts.published_only,
         cache,
         singleflight,
     };
@@ -125,6 +126,7 @@ fn populate_flat_relationships(
             registry: ctx.registry,
             effective_depth,
             locale_ctx: opts.locale_ctx,
+            published_only: opts.published_only,
             cache,
             singleflight,
         };

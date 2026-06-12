@@ -178,6 +178,9 @@ impl PostProcessOpts for FindDocumentsInput<'_> {
     fn depth(&self) -> i32 {
         self.depth
     }
+    fn include_drafts(&self) -> bool {
+        self.include_drafts
+    }
     fn hydrate(&self) -> bool {
         self.hydrate
     }

@@ -4,8 +4,39 @@ use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::core::{Document, DocumentFields, cache::CacheBackend};
+use crate::core::{CollectionDefinition, Document, DocumentFields, cache::CacheBackend};
 use crate::db::query::populate::Singleflight;
+use crate::db::query::populate::{PopulateCtx, target_hidden_by_draft};
+use crate::db::query::read::{find_by_id, find_by_ids};
+
+/// Fetch a single relationship target, hiding it when the reader is not
+/// allowed to see drafts and the target is a draft (see
+/// [`target_hidden_by_draft`]). The single choke point for draft-visibility
+/// on populated relationships.
+pub(super) fn fetch_target(
+    ctx: &PopulateCtx<'_>,
+    slug: &str,
+    def: &CollectionDefinition,
+    id: &str,
+) -> Result<Option<Document>> {
+    let doc = find_by_id(ctx.conn, slug, def, id, ctx.locale_ctx)?;
+    Ok(doc.filter(|d| !target_hidden_by_draft(d, def, ctx.published_only)))
+}
+
+/// Batch variant of [`fetch_target`] — drops draft targets hidden from the
+/// reader before the caller distributes results.
+pub(super) fn fetch_targets(
+    ctx: &PopulateCtx<'_>,
+    slug: &str,
+    def: &CollectionDefinition,
+    ids: &[String],
+) -> Result<Vec<Document>> {
+    let docs = find_by_ids(ctx.conn, slug, def, ids, ctx.locale_ctx)?;
+    Ok(docs
+        .into_iter()
+        .filter(|d| !target_hidden_by_draft(d, def, ctx.published_only))
+        .collect())
+}
 
 /// The shape `document_to_json` emits — a populated relationship reference
 /// embedded in a parent document's `fields`. `id` and `collection` are the

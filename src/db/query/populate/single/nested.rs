@@ -14,7 +14,6 @@ use crate::db::query::populate::{
     PopulateContext, PopulateCtx, PopulateOpts, document_to_json, locale_cache_key, parse_poly_ref,
     populate_cache_key,
 };
-use crate::db::query::read::find_by_id;
 
 /// Walk top-level container fields (Group, Blocks, Array) in a document and
 /// populate any relationship/upload sub-fields within them.
@@ -278,7 +277,9 @@ fn populate_rel_in_map(
     Ok(())
 }
 
-use crate::db::query::populate::helpers::{CacheOrFetch, cache_or_fetch_doc, cache_set_doc};
+use crate::db::query::populate::helpers::{
+    CacheOrFetch, cache_or_fetch_doc, cache_set_doc, fetch_target,
+};
 
 /// Populate a non-polymorphic has-one field within a JSON map.
 fn populate_has_one_in_map(
@@ -300,10 +301,15 @@ fn populate_has_one_in_map(
     }
 
     let locale_key = locale_cache_key(pctx.locale_ctx);
-    let key = populate_cache_key(rel_collection, &id, locale_key.as_deref());
+    let key = populate_cache_key(
+        rel_collection,
+        &id,
+        locale_key.as_deref(),
+        pctx.published_only,
+    );
 
     let mut related_doc = match cache_or_fetch_doc(pctx.cache, pctx.singleflight, &key, || {
-        find_by_id(pctx.conn, rel_collection, rel_def, &id, pctx.locale_ctx)
+        fetch_target(pctx, rel_collection, rel_def, &id)
             .ok()
             .flatten()
     }) {
@@ -334,6 +340,7 @@ fn populate_has_one_in_map(
             depth: effective_depth - 1,
             select: None,
             locale_ctx: pctx.locale_ctx,
+            published_only: pctx.published_only,
             join_access: None,
             user: None,
         },
@@ -375,10 +382,15 @@ fn populate_has_many_in_map(
         }
 
         let locale_key = locale_cache_key(pctx.locale_ctx);
-        let key = populate_cache_key(rel_collection, id, locale_key.as_deref());
+        let key = populate_cache_key(
+            rel_collection,
+            id,
+            locale_key.as_deref(),
+            pctx.published_only,
+        );
 
         let mut related_doc = match cache_or_fetch_doc(pctx.cache, pctx.singleflight, &key, || {
-            find_by_id(pctx.conn, rel_collection, rel_def, id, pctx.locale_ctx)
+            fetch_target(pctx, rel_collection, rel_def, id)
                 .ok()
                 .flatten()
         }) {
@@ -412,6 +424,7 @@ fn populate_has_many_in_map(
                 depth: effective_depth - 1,
                 select: None,
                 locale_ctx: pctx.locale_ctx,
+                published_only: pctx.published_only,
                 join_access: None,
                 user: None,
             },
@@ -452,12 +465,10 @@ fn populate_poly_has_one_in_map(
     };
 
     let locale_key = locale_cache_key(pctx.locale_ctx);
-    let key = populate_cache_key(&col, &id, locale_key.as_deref());
+    let key = populate_cache_key(&col, &id, locale_key.as_deref(), pctx.published_only);
 
     let mut rd = match cache_or_fetch_doc(pctx.cache, pctx.singleflight, &key, || {
-        find_by_id(pctx.conn, &col, &item_def, &id, pctx.locale_ctx)
-            .ok()
-            .flatten()
+        fetch_target(pctx, &col, &item_def, &id).ok().flatten()
     }) {
         CacheOrFetch::Hit(cached) => {
             map.insert(name.to_string(), document_to_json(&cached, &col));
@@ -486,6 +497,7 @@ fn populate_poly_has_one_in_map(
             depth: effective_depth - 1,
             select: None,
             locale_ctx: pctx.locale_ctx,
+            published_only: pctx.published_only,
             join_access: None,
             user: None,
         },
@@ -532,12 +544,10 @@ fn populate_poly_has_many_in_map(
         };
 
         let locale_key = locale_cache_key(pctx.locale_ctx);
-        let key = populate_cache_key(&col, &id, locale_key.as_deref());
+        let key = populate_cache_key(&col, &id, locale_key.as_deref(), pctx.published_only);
 
         let mut rd = match cache_or_fetch_doc(pctx.cache, pctx.singleflight, &key, || {
-            find_by_id(pctx.conn, &col, &item_def, &id, pctx.locale_ctx)
-                .ok()
-                .flatten()
+            fetch_target(pctx, &col, &item_def, &id).ok().flatten()
         }) {
             CacheOrFetch::Hit(cached) => {
                 populated.push(document_to_json(&cached, &col));
@@ -569,6 +579,7 @@ fn populate_poly_has_many_in_map(
                 depth: effective_depth - 1,
                 select: None,
                 locale_ctx: pctx.locale_ctx,
+                published_only: pctx.published_only,
                 join_access: None,
                 user: None,
             },

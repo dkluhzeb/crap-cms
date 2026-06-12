@@ -5,16 +5,15 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 use super::populate_relationships_cached;
+use crate::core::{Document, upload};
 use crate::db::query::populate::{
     PopulateContext, PopulateCtx, PopulateOpts, document_to_json, locale_cache_key, parse_poly_ref,
     populate_cache_key,
 };
-use crate::{
-    core::{Document, upload},
-    db::query::read::{find_by_id, find_by_ids},
-};
 
-use crate::db::query::populate::helpers::{CacheOrFetch, cache_or_fetch_doc, cache_set_doc};
+use crate::db::query::populate::helpers::{
+    CacheOrFetch, cache_or_fetch_doc, cache_set_doc, fetch_target, fetch_targets,
+};
 
 /// Outcome of resolving a single polymorphic reference.
 enum PolyResolution {
@@ -74,6 +73,7 @@ fn resolve_poly_item(
             depth: ctx.effective_depth - 1,
             select: None,
             locale_ctx: ctx.locale_ctx,
+            published_only: ctx.published_only,
             join_access: None,
             user: None,
         },
@@ -81,7 +81,12 @@ fn resolve_poly_item(
     )?;
 
     let locale_key = locale_cache_key(ctx.locale_ctx);
-    let key = populate_cache_key(&col, rd.id.as_ref(), locale_key.as_deref());
+    let key = populate_cache_key(
+        &col,
+        rd.id.as_ref(),
+        locale_key.as_deref(),
+        ctx.published_only,
+    );
     let _ = cache_set_doc(ctx.cache, &key, &rd);
 
     Ok(PolyResolution::Populated(document_to_json(&rd, &col)))
@@ -117,7 +122,7 @@ pub(super) fn populate_poly_has_many(
     for (col, col_ids) in &ids_by_collection {
         if let Some(item_def) = ctx.registry.get_collection(col) {
             let item_def = item_def.clone();
-            let fetched = find_by_ids(ctx.conn, col, &item_def, col_ids, ctx.locale_ctx)?;
+            let fetched = fetch_targets(ctx, col, &item_def, col_ids)?;
             let doc_map: HashMap<String, Document> =
                 fetched.into_iter().map(|d| (d.id.to_string(), d)).collect();
             fetched_map.insert(col.clone(), doc_map);
@@ -166,12 +171,10 @@ pub(super) fn populate_poly_has_one(
 
     let item_def = item_def.clone();
     let locale_key = locale_cache_key(ctx.locale_ctx);
-    let key = populate_cache_key(&col, &id, locale_key.as_deref());
+    let key = populate_cache_key(&col, &id, locale_key.as_deref(), ctx.published_only);
 
     let mut rd = match cache_or_fetch_doc(ctx.cache, ctx.singleflight, &key, || {
-        find_by_id(ctx.conn, &col, &item_def, &id, ctx.locale_ctx)
-            .ok()
-            .flatten()
+        fetch_target(ctx, &col, &item_def, &id).ok().flatten()
     }) {
         CacheOrFetch::Hit(cached) => {
             doc.fields
@@ -205,6 +208,7 @@ pub(super) fn populate_poly_has_one(
             depth: ctx.effective_depth - 1,
             select: None,
             locale_ctx: ctx.locale_ctx,
+            published_only: ctx.published_only,
             join_access: None,
             user: None,
         },
@@ -261,6 +265,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -310,6 +315,7 @@ mod tests {
                 depth: 0,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -370,6 +376,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -425,6 +432,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -459,7 +467,7 @@ mod tests {
             .insert("title".to_string(), json!("Cached Article"));
         cache
             .set(
-                &populate_cache_key("articles", "a1", None),
+                &populate_cache_key("articles", "a1", None, false),
                 &serde_json::to_vec(&cached_article).unwrap(),
             )
             .unwrap();
@@ -482,6 +490,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -532,6 +541,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -581,6 +591,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -634,6 +645,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -695,6 +707,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -747,6 +760,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },
@@ -794,6 +808,7 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                published_only: false,
                 join_access: None,
                 user: None,
             },

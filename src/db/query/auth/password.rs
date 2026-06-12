@@ -18,15 +18,21 @@ pub fn find_by_email(
     def: &CollectionDefinition,
     email: &str,
 ) -> Result<Option<Document>> {
+    // Email is matched case-insensitively: addresses are case-insensitive in
+    // practice, and a user who registered as "Test@Example.com" must be able
+    // to log in / reset their password typing "test@example.com". Both sides
+    // are lowercased so the comparison is symmetric. (Preventing creation of
+    // case-variant duplicate accounts is a separate write-path/unique-index
+    // concern — see CHANGELOG.)
     let column_names = get_column_names(def);
     let sql = format!(
-        "SELECT {} FROM \"{}\" WHERE email = {}",
+        "SELECT {} FROM \"{}\" WHERE LOWER(email) = {}",
         column_names.join(", "),
         slug,
         conn.placeholder(1)
     );
 
-    let Some(row) = conn.query_one(&sql, &[DbValue::Text(email.to_string())])? else {
+    let Some(row) = conn.query_one(&sql, &[DbValue::Text(email.to_lowercase())])? else {
         return Ok(None);
     };
 
@@ -187,6 +193,21 @@ mod tests {
         let result = find_by_email(&conn, "users", &auth_def(), "test@example.com").unwrap();
         assert!(result.is_some());
         assert_eq!(result.unwrap().id, "user1");
+    }
+
+    /// Regression: lookup is case-insensitive so a user stored as
+    /// `test@example.com` can authenticate / reset typing a different case.
+    #[test]
+    fn find_by_email_is_case_insensitive() {
+        let (_dir, conn) = setup();
+        for variant in ["Test@Example.com", "TEST@EXAMPLE.COM", "test@example.COM"] {
+            let result = find_by_email(&conn, "users", &auth_def(), variant).unwrap();
+            assert_eq!(
+                result.map(|d| d.id.to_string()),
+                Some("user1".to_string()),
+                "lookup must match regardless of case: {variant}"
+            );
+        }
     }
 
     #[test]
