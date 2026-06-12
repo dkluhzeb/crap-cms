@@ -127,6 +127,25 @@ fn render_plugin_lua(name: &str, base_type: &str, label: &str) -> Result<String>
 mod tests {
     use super::*;
 
+    /// The scaffolded field template must already satisfy `crap-cms fmt`
+    /// — otherwise a fresh `make field` immediately fails the user's
+    /// pre-commit `fmt --check`.
+    #[test]
+    fn generated_template_is_formatter_clean() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        make_field(&MakeFieldOptions {
+            config_dir: tmp.path(),
+            name: "rating",
+            base_type: None,
+            force: false,
+        })
+        .unwrap();
+
+        let src = fs::read_to_string(tmp.path().join("templates/fields/rating.hbs")).unwrap();
+        let formatted = crate::fmt::format(&src).unwrap();
+        assert_eq!(formatted, src, "make field output must be fmt-clean");
+    }
+
     #[test]
     fn writes_three_coordinated_files() {
         let tmp = tempfile::tempdir().expect("tempdir");

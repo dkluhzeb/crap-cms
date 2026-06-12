@@ -254,6 +254,54 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **CLI `trash purge` / `trash empty` respect reference counting.** The CLI
+  purge path hard-deleted trashed documents with raw SQL, bypassing both
+  delete protection (a trashed document still referenced by others was
+  deleted anyway) and the ref-count decrement for the documents it
+  referenced (their `_ref_count` stayed inflated, blocking future deletes).
+  Purge now skips still-referenced documents (reported in the summary) and
+  decrements outgoing references — parity with the admin empty-trash path.
+
+- **CLI `user delete` decrements localized reference columns.** The
+  ref-count adjustment ran with a default locale config, so locale-variant
+  relationship columns (`field__de`, …) were not decremented on delete. It
+  now uses the configured locales.
+
+- **`import` keeps reference counts consistent.** Imported relationship
+  values never adjusted `_ref_count` — and the startup backfill is
+  version-gated, so it would never repair them — leaving imported
+  references invisible to delete protection. Import now snapshots and
+  diffs each document's outgoing refs exactly like the service layer
+  (create, idempotent re-import, and reference-clearing all covered).
+
+- **`db restore` is crash-safe and WAL-safe.** Restore copied the backup
+  directly over the live database file (an interrupt destroyed it with no
+  recovery), then opened the restored file while the previous database's
+  WAL/SHM sidecars were still on disk — stale WAL frames could be replayed
+  into the restored database — and ignored sidecar-removal failures. The
+  new sequence: checkpoint the old DB, stage the copy next to the target,
+  remove sidecars (hard error on failure), keep the previous database as
+  `*.pre-restore`, and atomically rename the staged copy into place. Also
+  warns when the backup was taken by a different crap-cms version and
+  refuses non-SQLite backends explicitly.
+
+- **`db backup` writes the uploads archive atomically.** An interrupted
+  `tar` left a truncated `uploads.tar.gz` indistinguishable from a valid
+  one; the archive is now staged and renamed on success, and a failure to
+  read the final size is reported instead of recorded as success.
+
+- **`update` PATH relink is atomic.** Replacing the binary on `$PATH` used
+  remove-then-symlink — dying between the two steps left no `crap-cms` on
+  PATH. The symlink is now created under a temp name and renamed over the
+  target. The `SHA256SUMS` download is also size-capped now.
+
+- **Scaffolded templates pass `crap-cms fmt --check`.** The `make page`,
+  `make slot`, and `make field` generators emitted Handlebars that the
+  project's own formatter would reflow (inline multi-line `<p>` bodies,
+  collapsed close tag after a stacked attribute list) — so a fresh scaffold
+  immediately failed the pre-commit format gate. The templates now emit
+  formatter-canonical output, with regression tests pinning fmt-cleanliness.
+
 - **gRPC rate limiter logs backend failures.** A rate-limit backend error
   (e.g. Redis outage) already failed closed — the request was denied — but
   silently: operators got no signal that the backend was unhealthy. Backend
@@ -814,6 +862,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   behavior without any configuration.
 
 ### Changed
+
+- **`status --check` exits with code 2 when the audit finds warnings**
+  (previously always 0), so it can gate CI. A clean audit still exits 0.
 
 - **Whole-valued `number` fields now serialize as integers.** A
   `number` field is stored as floating-point, so an integer value

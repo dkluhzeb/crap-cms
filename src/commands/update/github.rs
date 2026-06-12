@@ -6,7 +6,12 @@
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
-use std::{fs::File, io::Write, path::Path, time::Duration};
+use std::{
+    fs::File,
+    io::{Read as _, Write},
+    path::Path,
+    time::Duration,
+};
 
 pub const DEFAULT_REPO: &str = "dkluhzeb/crap-cms";
 
@@ -71,6 +76,10 @@ pub(super) fn download_asset(repo: &str, tag: &str, asset: &str, dest: &Path) ->
     Ok(())
 }
 
+/// Hard cap for the `SHA256SUMS` manifest — a handful of hash lines. Anything
+/// bigger is not our manifest; refuse instead of buffering it.
+const MAX_SHA256SUMS_BYTES: u64 = 64 * 1024;
+
 /// Fetch `SHA256SUMS` as text.
 pub(super) fn fetch_sha256sums(repo: &str, tag: &str) -> Result<String> {
     let url = format!("https://github.com/{repo}/releases/download/{tag}/SHA256SUMS");
@@ -81,5 +90,14 @@ pub(super) fn fetch_sha256sums(repo: &str, tag: &str) -> Result<String> {
     if !resp.status().is_success() {
         bail!("no SHA256SUMS published for {tag} (HTTP {})", resp.status());
     }
-    resp.text().context("reading SHA256SUMS body")
+
+    let mut body = String::new();
+    resp.take(MAX_SHA256SUMS_BYTES)
+        .read_to_string(&mut body)
+        .context("reading SHA256SUMS body")?;
+    if body.len() as u64 == MAX_SHA256SUMS_BYTES {
+        bail!("SHA256SUMS is unexpectedly large (> {MAX_SHA256SUMS_BYTES} bytes) — refusing");
+    }
+
+    Ok(body)
 }

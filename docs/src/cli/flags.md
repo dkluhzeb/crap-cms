@@ -181,6 +181,9 @@ crap-cms status                # project overview
 crap-cms status --check        # overview + health audit
 ```
 
+`status --check` exits with code `2` when the audit finds warnings and
+`0` when clean — usable as a CI gate.
+
 ### `bench` — Benchmark hooks, queries, and write cycles
 
 Developer performance profiling tool. Measures hook execution time, query latency, and end-to-end write cycle duration.

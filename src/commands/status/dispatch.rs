@@ -65,7 +65,14 @@ pub fn run(config_dir: &Path, run_check: bool) -> Result<()> {
     display::print_jobs(&registry, &conn, &config_dir);
 
     if run_check {
-        check::run_checks(&cfg, &registry, &conn, &pool, &config_dir);
+        let warnings = check::run_checks(&cfg, &registry, &conn, &pool, &config_dir);
+
+        // CI usability: an audit that found problems must be
+        // distinguishable from a clean one by exit code. Mirrors
+        // `update check` exiting 1 when an update is available.
+        if warnings > 0 {
+            std::process::exit(2);
+        }
     }
 
     Ok(())

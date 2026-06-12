@@ -112,6 +112,28 @@ fn render_slot_hbs(slot: &str, file: &str) -> Result<String> {
 mod tests {
     use super::*;
 
+    /// The scaffolded widget must already satisfy `crap-cms fmt` —
+    /// otherwise a fresh `make slot` immediately fails the user's
+    /// pre-commit `fmt --check`.
+    #[test]
+    fn generated_template_is_formatter_clean() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        make_slot(&MakeSlotOptions {
+            config_dir: tmp.path(),
+            slot: "dashboard_widgets",
+            file: None,
+            force: false,
+        })
+        .unwrap();
+
+        let path = tmp
+            .path()
+            .join("templates/slots/dashboard_widgets/widget.hbs");
+        let src = fs::read_to_string(path).unwrap();
+        let formatted = crate::fmt::format(&src).unwrap();
+        assert_eq!(formatted, src, "make slot output must be fmt-clean");
+    }
+
     #[test]
     fn writes_slot_widget() {
         let tmp = tempfile::tempdir().expect("tempdir");

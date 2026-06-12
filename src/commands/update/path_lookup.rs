@@ -200,16 +200,22 @@ fn relink_inner(store: &store::Store, on_path: &Path, yes: bool) -> Result<()> {
         return Ok(());
     }
 
-    fs::remove_file(on_path).with_context(|| format!("removing {}", on_path.display()))?;
-
+    // Create the symlink under a temp name and rename it over the target —
+    // remove-then-create would leave the user without a `crap-cms` on PATH
+    // if the process died between the two steps.
     #[cfg(unix)]
-    std::os::unix::fs::symlink(store.current_link(), on_path).with_context(|| {
-        format!(
-            "symlinking {} → {}",
-            on_path.display(),
-            store.current_link().display()
-        )
-    })?;
+    {
+        let tmp = on_path.with_extension("crap-relink-tmp");
+        let _ = fs::remove_file(&tmp);
+        std::os::unix::fs::symlink(store.current_link(), &tmp).with_context(|| {
+            format!(
+                "symlinking {} → {}",
+                tmp.display(),
+                store.current_link().display()
+            )
+        })?;
+        fs::rename(&tmp, on_path).with_context(|| format!("replacing {}", on_path.display()))?;
+    }
 
     cli::success(&format!(
         "Relinked {} → {}.",

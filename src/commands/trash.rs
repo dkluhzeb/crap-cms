@@ -8,7 +8,7 @@ use super::TrashAction;
 use crate::{
     cli::{self, Table},
     commands::helpers::init_stack,
-    config::{CrapConfig, UploadStorage},
+    config::{CrapConfig, LocaleConfig, UploadStorage},
     core::{
         CollectionDefinition, Document, Registry, upload,
         upload::{StorageBackend, create_storage_with_lease},
@@ -182,6 +182,7 @@ struct PurgeParams<'a> {
     registry: &'a Registry,
     pool: &'a DbPool,
     storage: &'a dyn StorageBackend,
+    locale: &'a LocaleConfig,
     collection: Option<&'a str>,
     older_than: &'a str,
     dry_run: bool,
@@ -200,6 +201,7 @@ fn run_purge(p: &PurgeParams<'_>) -> Result<()> {
 
     let mut conn = p.pool.get().context("Failed to get DB connection")?;
     let mut total = 0u64;
+    let mut total_skipped = 0u64;
 
     for slug in &slugs {
         let Some(def) = p.registry.collections.get(slug.as_str()) else {
@@ -222,11 +224,15 @@ fn run_purge(p: &PurgeParams<'_>) -> Result<()> {
             // writes (DELETEs + FTS sync) on the same tx. DEFERRED would
             // risk `SQLITE_BUSY_SNAPSHOT` against concurrent writers.
             let tx = conn.transaction_immediate().context("Start transaction")?;
-            purge_documents(&tx, slug, def, &ids, p.storage)?;
+            let skipped = purge_documents(&tx, slug, def, &ids, p.storage, p.locale)?;
             tx.commit().context("Commit purge")?;
 
             // Re-acquire connection after commit (tx consumed it)
             conn = p.pool.get().context("Failed to get DB connection")?;
+
+            total_skipped += skipped;
+            total += ids.len() as u64 - skipped;
+            continue;
         }
 
         total += ids.len() as u64;
@@ -236,31 +242,51 @@ fn run_purge(p: &PurgeParams<'_>) -> Result<()> {
         cli::info(&format!("{total} document(s) would be purged."));
     } else {
         cli::success(&format!("Purged {total} trashed document(s)."));
+        if total_skipped > 0 {
+            cli::info(&format!(
+                "{total_skipped} document(s) skipped — still referenced."
+            ));
+        }
     }
 
     Ok(())
 }
 
-/// Permanently delete a list of documents, cleaning up uploads and FTS.
+/// Permanently delete a list of documents, cleaning up uploads, FTS, and
+/// reference counts. Documents that are still referenced by others
+/// (`_ref_count > 0`) are skipped — the same delete protection the server
+/// surfaces enforce. Returns the number of skipped documents.
 fn purge_documents(
     tx: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
     ids: &[String],
     storage: &dyn StorageBackend,
-) -> Result<()> {
+    locale: &LocaleConfig,
+) -> Result<u64> {
+    let mut skipped = 0u64;
+
     for id in ids {
+        if query::ref_count::get_ref_count(tx, slug, id)?.unwrap_or(0) > 0 {
+            cli::warning(&format!(
+                "Skipping {slug} / {id} — still referenced by other documents"
+            ));
+            skipped += 1;
+            continue;
+        }
+
         if def.is_upload_collection()
             && let Ok(Some(doc)) = query::find_by_id_unfiltered(tx, slug, def, id, None)
         {
             upload::delete_upload_files(storage, &doc.fields);
         }
 
+        query::ref_count::before_hard_delete(tx, slug, id, &def.fields, locale)?;
         query::fts::fts_delete(tx, slug, id)?;
         query::delete(tx, slug, id)?;
     }
 
-    Ok(())
+    Ok(skipped)
 }
 
 /// Find IDs of soft-deleted documents eligible for purging in a collection.
@@ -339,6 +365,7 @@ fn run_empty(
     registry: &Registry,
     pool: &DbPool,
     storage: &dyn StorageBackend,
+    locale: &LocaleConfig,
     collection: &str,
     confirm: bool,
 ) -> Result<()> {
@@ -375,15 +402,20 @@ fn run_empty(
     // same tx. See the matching note in `run_purge`.
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    purge_documents(&tx, collection, &def, &ids, storage)?;
+    let skipped = purge_documents(&tx, collection, &def, &ids, storage, locale)?;
 
     tx.commit().context("Commit empty trash")?;
 
     cli::success(&format!(
         "Permanently deleted {} document(s) from '{}'.",
-        ids.len(),
+        ids.len() as u64 - skipped,
         collection
     ));
+    if skipped > 0 {
+        cli::info(&format!(
+            "{skipped} document(s) skipped — still referenced."
+        ));
+    }
 
     Ok(())
 }
@@ -426,6 +458,7 @@ pub fn run(action: TrashAction, config_dir: &Path) -> Result<()> {
             registry: &registry,
             pool: &pool,
             storage: &*storage,
+            locale: &cfg.locale,
             collection: collection.as_deref(),
             older_than: &older_than,
             dry_run,
@@ -436,13 +469,154 @@ pub fn run(action: TrashAction, config_dir: &Path) -> Result<()> {
         TrashAction::Empty {
             collection,
             confirm,
-        } => run_empty(&registry, &pool, &*storage, &collection, confirm),
+        } => run_empty(
+            &registry,
+            &pool,
+            &*storage,
+            &cfg.locale,
+            &collection,
+            confirm,
+        ),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        config::DatabaseConfig,
+        core::field::{FieldDefinition, FieldType, RelationshipConfig},
+        db::{DbValue, migrate, pool},
+    };
+
+    // ── purge_documents ref-count semantics ──────────────────────────────
+
+    fn setup_db(collections: &[CollectionDefinition]) -> (tempfile::TempDir, DbPool, Registry) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
+
+        let registry_shared = Registry::shared();
+        {
+            let mut reg = registry_shared.write().unwrap();
+            for c in collections {
+                reg.register_collection(c.clone());
+            }
+        }
+        let registry = (*Registry::snapshot(&registry_shared)).clone();
+        migrate::sync_all(&db_pool, &registry, &LocaleConfig::default()).expect("sync");
+
+        (tmp, db_pool, registry)
+    }
+
+    fn defs_with_relationship() -> (CollectionDefinition, CollectionDefinition) {
+        let media = CollectionDefinition::new("media");
+        let mut posts = CollectionDefinition::new("posts");
+        posts.fields = vec![
+            FieldDefinition::builder("image", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("media", false))
+                .build(),
+        ];
+        (media, posts)
+    }
+
+    fn insert_referencing_post(conn: &dyn DbConnection) {
+        conn.execute(
+            "INSERT INTO media (id) VALUES (?1)",
+            &[DbValue::Text("m1".into())],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO posts (id, image) VALUES (?1, ?2)",
+            &[DbValue::Text("p1".into()), DbValue::Text("m1".into())],
+        )
+        .unwrap();
+        query::ref_count::after_create(
+            conn,
+            "posts",
+            "p1",
+            &[FieldDefinition::builder("image", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("media", false))
+                .build()],
+            &LocaleConfig::default(),
+        )
+        .unwrap();
+    }
+
+    fn ref_count(conn: &dyn DbConnection, table: &str, id: &str) -> Option<i64> {
+        query::ref_count::get_ref_count(conn, table, id).unwrap()
+    }
+
+    /// Regression: purging a trashed document must decrement the ref counts
+    /// of the documents it references — the raw-delete path used to skip
+    /// `before_hard_delete`, leaving targets with inflated `_ref_count`.
+    #[test]
+    fn purge_decrements_referenced_targets() {
+        let (media, posts) = defs_with_relationship();
+        let posts_def = posts.clone();
+        let (tmp, db_pool, _) = setup_db(&[media, posts]);
+        let storage = upload::create_storage(tmp.path(), &CrapConfig::default().upload).unwrap();
+
+        let mut conn = db_pool.get().unwrap();
+        insert_referencing_post(&conn);
+        assert_eq!(ref_count(&conn, "media", "m1"), Some(1));
+
+        let tx = conn.transaction_immediate().unwrap();
+        let skipped = purge_documents(
+            &tx,
+            "posts",
+            &posts_def,
+            &["p1".to_string()],
+            &*storage,
+            &LocaleConfig::default(),
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        assert_eq!(skipped, 0);
+        let conn = db_pool.get().unwrap();
+        assert_eq!(ref_count(&conn, "media", "m1"), Some(0));
+        assert_eq!(ref_count(&conn, "posts", "p1"), None, "p1 must be gone");
+    }
+
+    /// Regression: purging must skip documents that are still referenced by
+    /// others — the raw-delete path used to bypass delete protection.
+    #[test]
+    fn purge_skips_still_referenced_documents() {
+        let (media, posts) = defs_with_relationship();
+        let media_def = media.clone();
+        let (tmp, db_pool, _) = setup_db(&[media, posts]);
+        let storage = upload::create_storage(tmp.path(), &CrapConfig::default().upload).unwrap();
+
+        let mut conn = db_pool.get().unwrap();
+        insert_referencing_post(&conn);
+
+        let tx = conn.transaction_immediate().unwrap();
+        let skipped = purge_documents(
+            &tx,
+            "media",
+            &media_def,
+            &["m1".to_string()],
+            &*storage,
+            &LocaleConfig::default(),
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        assert_eq!(skipped, 1);
+        let conn = db_pool.get().unwrap();
+        assert_eq!(
+            ref_count(&conn, "media", "m1"),
+            Some(1),
+            "still-referenced m1 must survive the purge"
+        );
+    }
 
     // ── parse_older_than ──────────────────────────────────────────────────
 

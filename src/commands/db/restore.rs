@@ -88,10 +88,29 @@ fn read_and_display_manifest(backup_dir: &Path) -> Result<()> {
         cli::kv("Uploads", &format!("{size} bytes"));
     }
 
+    if manifest.crap_version != env!("CARGO_PKG_VERSION") {
+        cli::warning(&format!(
+            "Backup was taken with crap-cms {} but this binary is {} — the restored \
+             database will be schema-migrated on the next start.",
+            manifest.crap_version,
+            env!("CARGO_PKG_VERSION")
+        ));
+    }
+
     Ok(())
 }
 
-/// Copy the backup database to the target path and clean up sidecar files.
+/// Replace the live database with the backup copy — crash-safe at every step.
+///
+/// Sequence:
+/// 1. checkpoint the current DB so its WAL folds into the main file (a stale
+///    WAL applied to the restored file would corrupt it; folding it first
+///    also keeps the kept-aside copy self-consistent),
+/// 2. stage the backup copy next to the target (same dir → atomic rename),
+/// 3. delete the old sidecars (hard error — never proceed past a leftover),
+/// 4. move the old DB aside as `*.pre-restore` and rename the staged copy
+///    into place. An interrupt at any point leaves either the old or the
+///    new database intact on disk, never a half-written one.
 #[cfg(not(tarpaulin_include))]
 fn restore_database(
     config_dir: &Path,
@@ -104,26 +123,74 @@ fn restore_database(
             .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
     }
 
+    let sidecars = checkpoint_and_list_sidecars(config_dir, cfg, db_path)?;
+
     let spin = Spinner::new("Restoring database...");
 
-    fs::copy(backup_dir.join("crap.db"), db_path)
-        .with_context(|| format!("Failed to copy database to {}", db_path.display()))?;
+    let staged = db_path.with_extension("db.restore-tmp");
+    fs::copy(backup_dir.join("crap.db"), &staged)
+        .with_context(|| format!("Failed to stage database copy at {}", staged.display()))?;
 
-    spin.finish_success("Database restored");
-
-    // Remove sidecar files (WAL/SHM) left from the previous database
-    let pool = pool::create_pool(config_dir, cfg).context("Failed to create database pool")?;
-    let conn = pool.get().context("Failed to get DB connection")?;
-
-    for ext in conn.sidecar_extensions() {
-        let sidecar = db_path.with_extension(ext);
-
+    for sidecar in &sidecars {
         if sidecar.exists() {
-            let _ = fs::remove_file(&sidecar);
+            fs::remove_file(sidecar).with_context(|| {
+                format!(
+                    "Failed to remove {} — aborting before touching the database",
+                    sidecar.display()
+                )
+            })?;
         }
     }
 
+    let aside = db_path.with_extension("db.pre-restore");
+    if db_path.exists() {
+        fs::rename(db_path, &aside).with_context(|| {
+            format!(
+                "Failed to move the previous database to {}",
+                aside.display()
+            )
+        })?;
+    }
+
+    fs::rename(&staged, db_path)
+        .with_context(|| format!("Failed to move restored database to {}", db_path.display()))?;
+
+    spin.finish_success("Database restored");
+
+    if aside.exists() {
+        cli::info(&format!(
+            "Previous database kept at {} — delete it once the restore is verified.",
+            aside.display()
+        ));
+    }
+
     Ok(())
+}
+
+/// Open the *current* database, fold its WAL into the main file, and return
+/// the sidecar paths to clean up. Refuses non-SQLite backends — the backup
+/// format is a `SQLite` file.
+#[cfg(not(tarpaulin_include))]
+fn checkpoint_and_list_sidecars(
+    config_dir: &Path,
+    cfg: &CrapConfig,
+    db_path: &Path,
+) -> Result<Vec<std::path::PathBuf>> {
+    let pool = pool::create_pool(config_dir, cfg).context("Failed to create database pool")?;
+    let conn = pool.get().context("Failed to get DB connection")?;
+
+    if conn.kind() != "sqlite" {
+        bail!("restore supports the SQLite backend only");
+    }
+
+    conn.query_all("PRAGMA wal_checkpoint(TRUNCATE)", &[])
+        .context("Failed to checkpoint the current database")?;
+
+    Ok(conn
+        .sidecar_extensions()
+        .iter()
+        .map(|ext| db_path.with_extension(ext))
+        .collect())
 }
 
 /// Extract the uploads.tar.gz archive from the backup directory.

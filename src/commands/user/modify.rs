@@ -17,6 +17,7 @@ use super::helpers::{get_user_email, require_verify_email, resolve_user};
 pub struct UserDeleteParams<'a> {
     pub pool: &'a DbPool,
     pub registry: &'a Registry,
+    pub locale: &'a LocaleConfig,
     pub collection: &'a str,
     pub email: Option<String>,
     pub id: Option<String>,
@@ -56,13 +57,12 @@ pub fn user_delete(p: UserDeleteParams<'_>) -> Result<()> {
     let def = reg
         .get_collection(p.collection)
         .ok_or_else(|| anyhow!("Collection '{}' not found in registry", p.collection))?;
-    let lc = LocaleConfig::default();
 
     let tx = conn
         .transaction_immediate()
         .context("Failed to start transaction")?;
 
-    query::ref_count::before_hard_delete(&tx, p.collection, &doc.id, &def.fields, &lc)
+    query::ref_count::before_hard_delete(&tx, p.collection, &doc.id, &def.fields, p.locale)
         .context("Failed to adjust ref counts")?;
 
     query::delete(&tx, p.collection, &doc.id).context("Failed to delete user")?;

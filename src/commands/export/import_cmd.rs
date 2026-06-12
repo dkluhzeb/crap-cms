@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 use crate::{
     cli,
     commands::{export::file::ExportFile, load_config_and_sync},
-    config::CrapConfig,
+    config::{CrapConfig, LocaleConfig},
     core::{CollectionDefinition, DocumentFields, FieldDefinition, FieldType},
     db::{DbConnection, DbValue, query},
 };
@@ -173,11 +173,17 @@ fn collect_import_columns(
 }
 
 /// Import a single document into a collection via upsert + join table data.
+///
+/// Reference counts are kept consistent: outgoing refs are snapshotted
+/// before the write (empty for a new document) and diffed afterwards, so
+/// imported relationships participate in delete protection exactly like
+/// documents written through the service layer.
 fn import_single_document(
     doc_val: &Value,
     slug: &str,
     def: &CollectionDefinition,
     tx: &dyn DbConnection,
+    locale: &LocaleConfig,
 ) -> Result<()> {
     let doc_obj = doc_val
         .as_object()
@@ -187,6 +193,9 @@ fn import_single_document(
         .get("id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("Document missing 'id' in '{slug}'"))?;
+
+    let old_refs = query::ref_count::snapshot_outgoing_refs(tx, slug, id, &def.fields, locale)
+        .with_context(|| format!("Failed to snapshot refs for {id} in '{slug}'"))?;
 
     let row = collect_import_columns(doc_obj, def, id);
 
@@ -205,6 +214,9 @@ fn import_single_document(
         query::save_join_table_data(tx, slug, &def.fields, id, &row.join_data, None)?;
     }
 
+    query::ref_count::after_update(tx, slug, id, &def.fields, locale, &old_refs)
+        .with_context(|| format!("Failed to update ref counts for {id} in '{slug}'"))?;
+
     Ok(())
 }
 
@@ -216,6 +228,7 @@ fn import_single_document(
 /// per-document write fails.
 #[cfg(not(tarpaulin_include))]
 pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<&str>) -> Result<()> {
+    let cfg = CrapConfig::load(config_dir).context("Failed to load config")?;
     let (pool, registry) = load_config_and_sync(config_dir)?;
 
     let content =
@@ -256,7 +269,7 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<&str>) -
         let tx = conn.transaction().context("Failed to begin transaction")?;
 
         for doc_val in docs_array {
-            import_single_document(doc_val, slug, def, &tx)?;
+            import_single_document(doc_val, slug, def, &tx, &cfg.locale)?;
             total_imported += 1;
         }
 
@@ -280,6 +293,95 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::{
+        config::DatabaseConfig,
+        core::{Registry, field::RelationshipConfig},
+        db::{migrate, pool},
+    };
+
+    fn setup_media_posts() -> (tempfile::TempDir, crate::db::DbPool, CollectionDefinition) {
+        let media = CollectionDefinition::new("media");
+        let mut posts = CollectionDefinition::new("posts");
+        posts.fields = vec![
+            FieldDefinition::builder("image", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("media", false))
+                .build(),
+        ];
+        let posts_def = posts.clone();
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
+
+        let registry_shared = Registry::shared();
+        {
+            let mut reg = registry_shared.write().unwrap();
+            reg.register_collection(media);
+            reg.register_collection(posts);
+        }
+        let registry = (*Registry::snapshot(&registry_shared)).clone();
+        migrate::sync_all(&db_pool, &registry, &LocaleConfig::default()).expect("sync");
+
+        (tmp, db_pool, posts_def)
+    }
+
+    /// Regression: imported relationships must adjust `_ref_count` — the
+    /// raw upsert used to skip ref counting entirely, leaving imported
+    /// references invisible to delete protection (and the backfill is
+    /// version-gated, so it would never repair them).
+    #[test]
+    fn import_adjusts_ref_counts() {
+        let (_tmp, db_pool, posts_def) = setup_media_posts();
+        let lc = LocaleConfig::default();
+
+        let mut conn = db_pool.get().unwrap();
+        conn.execute("INSERT INTO media (id) VALUES ('m1')", &[])
+            .unwrap();
+
+        // New document referencing m1 → count goes to 1.
+        let doc = json!({ "id": "p1", "image": "m1" });
+        let tx = conn.transaction().unwrap();
+        import_single_document(&doc, "posts", &posts_def, &tx, &lc).unwrap();
+        tx.commit().unwrap();
+
+        let conn2 = db_pool.get().unwrap();
+        assert_eq!(
+            query::ref_count::get_ref_count(&conn2, "media", "m1").unwrap(),
+            Some(1)
+        );
+        drop(conn2);
+
+        // Re-import the same document unchanged → count stays 1 (upsert
+        // diffs old vs new refs, no double counting).
+        let tx = conn.transaction().unwrap();
+        import_single_document(&doc, "posts", &posts_def, &tx, &lc).unwrap();
+        tx.commit().unwrap();
+
+        let conn2 = db_pool.get().unwrap();
+        assert_eq!(
+            query::ref_count::get_ref_count(&conn2, "media", "m1").unwrap(),
+            Some(1)
+        );
+        drop(conn2);
+
+        // Re-import with the reference cleared → count drops to 0.
+        let doc_cleared = json!({ "id": "p1", "image": null });
+        let tx = conn.transaction().unwrap();
+        import_single_document(&doc_cleared, "posts", &posts_def, &tx, &lc).unwrap();
+        tx.commit().unwrap();
+
+        let conn2 = db_pool.get().unwrap();
+        assert_eq!(
+            query::ref_count::get_ref_count(&conn2, "media", "m1").unwrap(),
+            Some(0)
+        );
+    }
 
     #[test]
     fn json_to_db_value_null() {

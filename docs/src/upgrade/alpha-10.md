@@ -9,6 +9,11 @@ were loose or silently-wrong are tightened so they can freeze. Most
 projects need no changes — the items below only bite definitions that
 were already relying on ignored or malformed input.
 
+Definition errors are reported as the loader hits them, one file at a
+time (post-parse checks then aggregate). A project with several latent
+problems may need a couple of fix-and-restart cycles before it boots
+clean.
+
 ## TL;DR
 
 - **Replace your binary, restart.** DB schema migrations apply
@@ -237,8 +242,9 @@ arrays/relationships to `[]`); there is no per-locale delete.
 - **Checkbox columns become `SMALLINT` on Postgres.** They were stored
   as `BIGINT`. A one-time, idempotent, introspection-guarded migration
   retypes existing columns (locale variants and array join tables
-  included) on first startup — expect it once; no manual action. SQLite
-  is unaffected.
+  included) on first startup — expect it once; no manual action. The
+  `ALTER` takes an exclusive lock per table, so very large tables make
+  that first startup correspondingly slower. SQLite is unaffected.
 - **Login rate limiting fails closed on backend errors.** With the
   Redis rate-limit backend, an outage used to silently disable
   login/forgot-password brute-force protection. A backend error now
@@ -283,7 +289,10 @@ Wire-contract changes — regenerate your gRPC stubs and adjust:
   `delete_many` run in a single transaction on every surface (gRPC, Lua,
   admin, MCP). Previously they committed in batches of 500, so a
   failure partway through left earlier batches committed — partial
-  state. Any failure now rolls the whole operation back.
+  state. Any failure now rolls the whole operation back. The trade-off:
+  a very large bulk op holds the write transaction for its whole
+  duration — cap it with `[server] bulk_max_documents` if untrusted or
+  over-broad bulk calls are a concern.
 - **Transient storage failures serve 503, not a false 404.** Serving an
   upload from a remote backend (S3 / custom) now distinguishes a genuine
   missing key (404) from a transient infrastructure failure, which

@@ -141,12 +141,15 @@ fn backup_uploads(config_dir: &Path, backup_dir: &Path) -> Option<u64> {
     }
 
     let archive_path = backup_dir.join("uploads.tar.gz");
+    // Write to a temp name and rename on success — an interrupted tar must
+    // never leave a truncated uploads.tar.gz that looks like a valid backup.
+    let staged_path = backup_dir.join("uploads.tar.gz.tmp");
     let spin = Spinner::new("Compressing uploads...");
 
     let status = process::Command::new("tar")
         .args([
             "czf",
-            &archive_path.to_string_lossy(),
+            &staged_path.to_string_lossy(),
             "-C",
             &config_dir.to_string_lossy(),
             "uploads",
@@ -155,21 +158,34 @@ fn backup_uploads(config_dir: &Path, backup_dir: &Path) -> Option<u64> {
 
     match status {
         Ok(s) if s.success() => {
-            let size = fs::metadata(&archive_path).map(|m| m.len()).ok();
+            if let Err(e) = fs::rename(&staged_path, &archive_path) {
+                spin.finish_warning(&format!("Failed to finalize uploads archive: {e}"));
+                return None;
+            }
 
-            spin.finish_success(&format!(
-                "Uploads archive: {} ({} bytes)",
-                archive_path.display(),
-                size.unwrap_or(0)
-            ));
-
-            size
+            match fs::metadata(&archive_path).map(|m| m.len()) {
+                Ok(size) => {
+                    spin.finish_success(&format!(
+                        "Uploads archive: {} ({size} bytes)",
+                        archive_path.display()
+                    ));
+                    Some(size)
+                }
+                Err(e) => {
+                    spin.finish_warning(&format!(
+                        "Uploads archive written but its size could not be read: {e}"
+                    ));
+                    None
+                }
+            }
         }
         Ok(s) => {
+            let _ = fs::remove_file(&staged_path);
             spin.finish_warning(&format!("tar exited with status {s}"));
             None
         }
         Err(e) => {
+            let _ = fs::remove_file(&staged_path);
             spin.finish_warning(&format!(
                 "tar not found or failed: {e}. Skipping uploads backup."
             ));

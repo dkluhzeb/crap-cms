@@ -175,6 +175,28 @@ mod tests {
         assert!(err.to_string().to_lowercase().contains("invalid"));
     }
 
+    /// The scaffolded template must already satisfy `crap-cms fmt` —
+    /// otherwise a fresh `make page` immediately fails the user's
+    /// pre-commit `fmt --check`.
+    #[test]
+    fn generated_template_is_formatter_clean() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        make_page(&MakePageOptions {
+            config_dir: tmp.path(),
+            slug: "status",
+            label: None,
+            section: None,
+            icon: None,
+            access: None,
+            force: false,
+        })
+        .unwrap();
+
+        let src = fs::read_to_string(tmp.path().join("templates/pages/status.hbs")).unwrap();
+        let formatted = crate::fmt::format(&src).unwrap();
+        assert_eq!(formatted, src, "make page output must be fmt-clean");
+    }
+
     #[test]
     fn accepts_hyphenated_slug() {
         let tmp = tempfile::tempdir().expect("tempdir");

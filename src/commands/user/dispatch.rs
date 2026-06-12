@@ -67,11 +67,13 @@ pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
             id,
             confirm,
         } => {
+            let cfg = CrapConfig::load(config_dir).context("Failed to load config")?;
             let (pool, registry) = load_config_and_sync(config_dir)?;
 
             user_delete(UserDeleteParams {
                 pool: &pool,
                 registry: &registry,
+                locale: &cfg.locale,
                 collection: &collection,
                 email,
                 id,

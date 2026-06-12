@@ -261,6 +261,7 @@ fn cmd_user_delete_with_confirm_by_email() {
     commands::user_delete(commands::UserDeleteParams {
         pool: &pool,
         registry: &registry,
+        locale: &crap_cms::config::LocaleConfig::default(),
         collection: "users",
         email: Some("deleteme@example.com".to_string()),
         id: None,
@@ -293,6 +294,7 @@ fn cmd_user_delete_with_confirm_by_id() {
     commands::user_delete(commands::UserDeleteParams {
         pool: &pool,
         registry: &registry,
+        locale: &crap_cms::config::LocaleConfig::default(),
         collection: "users",
         email: None,
         id: Some(id.clone()),
@@ -313,6 +315,7 @@ fn cmd_user_delete_nonexistent_email_errors() {
     let result = commands::user_delete(commands::UserDeleteParams {
         pool: &pool,
         registry: &registry,
+        locale: &crap_cms::config::LocaleConfig::default(),
         collection: "users",
         email: Some("nonexistent@example.com".to_string()),
         id: None,
@@ -443,6 +446,7 @@ fn cmd_user_delete_non_auth_errors() {
     let result = commands::user_delete(commands::UserDeleteParams {
         pool: &pool,
         registry: &registry,
+        locale: &crap_cms::config::LocaleConfig::default(),
         collection: "posts",
         email: Some("anyone@example.com".to_string()),
         id: None,

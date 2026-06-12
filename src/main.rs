@@ -199,7 +199,11 @@ enum Command {
         output: Option<PathBuf>,
     },
 
-    /// Import collection data from JSON
+    /// Import collection data from JSON (raw upsert)
+    ///
+    /// Documents whose `id` already exists are updated, others are
+    /// created. Writes are raw: hooks and validators do NOT run.
+    /// Reference counts are kept consistent automatically.
     Import {
         /// JSON file to import
         file: PathBuf,
