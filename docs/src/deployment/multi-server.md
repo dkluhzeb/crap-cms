@@ -96,6 +96,12 @@ rate_limit_backend = "redis"
 # rate_limit_redis_url defaults to cache.redis_url if empty
 ```
 
+**Failure mode: fail-closed.** When the Redis rate-limit backend is
+unreachable, rate-limited requests (logins, per-IP-limited gRPC calls)
+are **denied**, not waved through — an outage degrades availability of
+those paths rather than silently disabling brute-force protection.
+Backend failures are logged at `error` level; monitor for them.
+
 ### 5. Live Updates (SSE / gRPC Subscribe)
 
 Two transports are available:

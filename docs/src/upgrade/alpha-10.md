@@ -26,6 +26,12 @@ were already relying on ignored or malformed input.
   `created_at` / `updated_at`, or one starting with `_`, is now
   rejected at definition time (it always collided with a generated
   column — previously it crashed at migration or silently shadowed).
+- **Schema authors: silently-ignored definition values now error at
+  load.** Wrong-typed `access` rules, malformed relationship / join /
+  upload / date-bound config, invalid `live.mode`, and unknown keys in
+  the last few lenient sub-tables all hard-error now (item 6).
+- **Hook authors: `ctx.locale` is the resolved content locale** on
+  default-locale writes too, no longer `nil` (item 8).
 
 ## Required action items
 
@@ -129,6 +135,116 @@ crap.collections.define("posts", {
 
 If present, config load now fails with `unknown field "default_mode"`.
 
+### 6. Fix definitions that relied on silently-ignored values
+
+alpha.10 makes every Lua schema table strict: a present-but-wrong value
+that was previously ignored or coerced is now a load-time error. A
+definition only breaks if it was already relying on input that did
+nothing. The full list:
+
+- **Unknown keys error everywhere.** `crap.pages.register` options,
+  `crap.richtext.register_node` specs, the per-collection
+  `live = { ... }` sub-table, `mcp.operations`, and the field
+  `admin.labels` sub-table now reject unknown keys (every other schema
+  table already did). Typos error with a did-you-mean suggestion.
+- **`access` rules must be strings.** A present-but-non-string access
+  rule (e.g. `read = some_function` or `read = true`) was silently
+  dropped, falling back to the default policy — a security footgun.
+  String hook references and omitting the rule are unchanged.
+- **Field `admin = { ... }` values are strictly typed.** A wrong-typed
+  `label` / `width` / `rows` / `features` / etc. was silently dropped;
+  now it errors. Numbers where strings are expected (e.g. `width = 50`)
+  still coerce.
+- **`live.mode` is validated.** An unrecognized mode was silently
+  coerced to `metadata`; now only `"full"` / `"metadata"` are accepted,
+  and `filter` must be a string.
+- **Relationship / Upload fields require a `relationship = { ... }`
+  config.** Such a field without one used to migrate as a plain TEXT
+  column — no populate, no ref-counting, no delete protection. Also:
+  `relationship.max_depth` must be a non-negative integer, and entries
+  in a polymorphic `collection` array must be strings.
+- **Join fields require non-empty string `collection` and `on`.** A
+  missing or malformed value used to produce a join that silently
+  matched nothing.
+- **`min_date` / `max_date` must be valid `YYYY-MM-DD` strings**, with
+  `min_date <= max_date`. Malformed bounds used to silently never (or
+  always) match.
+- **Upload config is validated.** An `image_sizes` entry missing
+  `name` / `width` / `height` used to vanish; an unknown `fit` value
+  (e.g. `"covr"`) fell back to `cover`; a malformed
+  `upload.max_file_size` silently inherited the global default. All
+  three now error at definition time.
+
+### 7. Runtime option tables also reject unknown keys
+
+Beyond the CRUD options in item 1, the remaining Lua option tables are
+now strict too:
+
+- **`crap.http.request`** — a typo like `timout = 5` used to silently
+  run with the default 30-second timeout; now it errors. (The `timeout`
+  value itself now also accepts fractional seconds, e.g. `0.5`.)
+- **`crap.email.send` / `crap.email.queue`** — e.g. a typo'd `retires`
+  used to silently queue with the default retry count.
+- **`crap.jobs.queue`** — the options argument accepts only
+  `priority`, `delay`, and `unique`.
+- **MCP `where` clauses** — an unknown filter operator (e.g.
+  `gretaer_than`) now fails the tool call instead of silently dropping
+  that condition and returning more rows than intended.
+
+### 8. Hook authors: `ctx.locale` is now the resolved content locale
+
+Collection-level hooks (`before_change`, `after_change`, `after_read`,
+…) used to see `ctx.locale = nil` when writing the default locale,
+while field hooks, validators, and access functions saw the resolved
+code (e.g. `"en"`). All hook surfaces now agree: `ctx.locale` is the
+content locale the operation targets, and is `nil` only when
+localization is disabled (and on the locale-agnostic `before_delete` /
+`after_delete`). A hook that treated `nil` as "default locale" should
+compare against the configured default locale instead.
+
+### 9. Remove `locale` from `crap.collections.delete` options
+
+Single delete is locale-agnostic — it removes the whole row across all
+locales — and never read the key; it was a silently-ignored no-op and
+is now an error. To remove one locale's content, **update** the
+document with that locale's fields set to `null` (and localized
+arrays/relationships to `[]`); there is no per-locale delete.
+
+## Admin UI behavior
+
+- **List pages return 400 on invalid query params.** A
+  present-but-invalid `where[...]` filter (unknown operator or field,
+  system column, malformed key), an unknown/unsortable `sort` field, or
+  an invalid `_status` value used to be silently ignored — the list
+  rendered unfiltered or default-sorted results. They now render a 400
+  Bad Request page naming the offending parameter (parity with MCP and
+  gRPC, which already hard-error). URLs produced by the admin filter UI
+  are unaffected; only hand-edited or stale bookmarked URLs with
+  since-renamed fields can be affected.
+
+## Security fixes
+
+- **Admin SSE events no longer carry the editor's identity.** The
+  `/admin/events` payload used to send `edited_by` as a full
+  `{ id, email }` object to every subscriber — anyone with read access
+  to a collection learned which user (including their email) made each
+  change. The payload now carries a server-computed `self` boolean
+  (`true` when the subscriber is the editor) instead. **Breaking for
+  custom SSE consumers that read `edited_by`** — switch to `self`.
+  Server-side, the `live` filter and `before_broadcast` hook contexts
+  still receive the complete `edited_by`; the gRPC `MutationEvent`
+  never carried identity.
+- **Checkbox columns become `SMALLINT` on Postgres.** They were stored
+  as `BIGINT`. A one-time, idempotent, introspection-guarded migration
+  retypes existing columns (locale variants and array join tables
+  included) on first startup — expect it once; no manual action. SQLite
+  is unaffected.
+- **Login rate limiting fails closed on backend errors.** With the
+  Redis rate-limit backend, an outage used to silently disable
+  login/forgot-password brute-force protection. A backend error now
+  blocks the attempt and logs the infrastructure error — an outage
+  degrades login availability instead of security.
+
 ## gRPC clients (regenerate from `proto/content.proto`)
 
 Wire-contract changes — regenerate your gRPC stubs and adjust:
@@ -163,6 +279,17 @@ Wire-contract changes — regenerate your gRPC stubs and adjust:
 
 ## Bug fixes (no action needed)
 
+- **Bulk operations are now atomic.** `create_many`, `update_many`, and
+  `delete_many` run in a single transaction on every surface (gRPC, Lua,
+  admin, MCP). Previously they committed in batches of 500, so a
+  failure partway through left earlier batches committed — partial
+  state. Any failure now rolls the whole operation back.
+- **Transient storage failures serve 503, not a false 404.** Serving an
+  upload from a remote backend (S3 / custom) now distinguishes a genuine
+  missing key (404) from a transient infrastructure failure, which
+  returns a retryable 503 instead of a cacheable 404 for a file that
+  exists. Custom storage `get` handlers should return `nil` for a
+  missing key and raise only on real failures.
 - **`crap-cms serve --only grpc`** is now accepted (matching the
   `[server] grpc_*` config keys). `--only api` still works as an alias,
   so no script changes are required.
@@ -220,6 +347,24 @@ Wire-contract changes — regenerate your gRPC stubs and adjust:
   numbers as protobuf `double`, not JSON.)
 
 ## Additive features (alpha.10)
+
+### Hook refs accept per-config `options` (`ctx.options`)
+
+Any hook reference — collection/global lifecycle hooks, field hooks,
+`access` rules, field `validate` / `required_when`, and the other ref
+sites — can now be written either as a bare string or as a table:
+
+```lua
+before_change = { ref = "hooks.shared.slugify",
+                  options = { from = "title", to = "slug" } }
+```
+
+The `options` table reaches the hook as `ctx.options` (`nil` for a
+bare-string ref), so one hook function can be reused across collections
+and fields with different configuration. Hook contexts also gained more
+data across the board this release (e.g. display conditions see
+`ctx.operation` / `ctx.user` / `ctx.locale`, field hooks see `ctx.id`)
+— see the CHANGELOG for the full list.
 
 ### MCP writes accept `locale`, `draft`, and `force_hard_delete`
 

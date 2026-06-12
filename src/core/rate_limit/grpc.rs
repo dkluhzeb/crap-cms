@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use tracing::error;
+
 use super::{MemoryRateLimitBackend, SharedRateLimitBackend};
 
 /// Per-IP gRPC rate limiter. Sliding-window counter per IP address.
@@ -48,6 +50,7 @@ impl GrpcRateLimiter {
 
         self.backend
             .check_and_record(&key, self.max_requests, self.window_secs)
+            .inspect_err(|e| error!("Rate limit backend unavailable — failing closed: {e:#}"))
             .unwrap_or(false)
     }
 }
@@ -84,6 +87,41 @@ mod tests {
         assert!(limiter.check_and_record("1.2.3.4"));
         assert!(!limiter.check_and_record("1.2.3.4"));
         assert!(limiter.check_and_record("5.6.7.8"));
+    }
+
+    /// Security: a backend failure must fail CLOSED (denied), not silently
+    /// disable per-IP limiting for the duration of the outage.
+    #[test]
+    fn backend_error_fails_closed() {
+        struct FailingBackend;
+        impl super::super::RateLimitBackend for FailingBackend {
+            fn count(&self, _key: &str, _window_secs: u64) -> anyhow::Result<u32> {
+                anyhow::bail!("backend down")
+            }
+            fn record(&self, _key: &str, _window_secs: u64) -> anyhow::Result<()> {
+                anyhow::bail!("backend down")
+            }
+            fn clear(&self, _key: &str) -> anyhow::Result<()> {
+                anyhow::bail!("backend down")
+            }
+            fn check_and_record(
+                &self,
+                _key: &str,
+                _max_count: u32,
+                _window_secs: u64,
+            ) -> anyhow::Result<bool> {
+                anyhow::bail!("backend down")
+            }
+            fn kind(&self) -> &'static str {
+                "failing"
+            }
+        }
+
+        let limiter = GrpcRateLimiter::with_backend(Arc::new(FailingBackend), 5, 60);
+        assert!(
+            !limiter.check_and_record("1.2.3.4"),
+            "backend failure must deny (fail closed)"
+        );
     }
 
     #[test]

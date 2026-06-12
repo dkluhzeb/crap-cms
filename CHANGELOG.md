@@ -254,6 +254,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **gRPC rate limiter logs backend failures.** A rate-limit backend error
+  (e.g. Redis outage) already failed closed — the request was denied — but
+  silently: operators got no signal that the backend was unhealthy. Backend
+  failures are now logged at `error` level, matching the login rate limiter.
+
 - **Polymorphic relationships survive the plugin round-trip.** The
   definition→Lua serializer emitted only the FIRST target slug for a
   polymorphic relationship, so a plugin re-defining the collection collapsed

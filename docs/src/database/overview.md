@@ -32,7 +32,7 @@ url = "host=db.example.com user=crap dbname=crap_cms"
 
 ## WAL Mode (SQLite)
 
-The database runs in WAL (Write-Ahead Logging) mode for better concurrent read performance. This is set automatically when the connection pool is created.
+The database runs in WAL (Write-Ahead Logging) mode for better concurrent read performance. This is set automatically on every pooled connection, along with `synchronous = NORMAL`, `foreign_keys = ON`, `temp_store = MEMORY`, and the configurable `busy_timeout`, `wal_autocheckpoint`, `cache_size`, and `mmap_size` pragmas from `[database]`.
 
 ## Schema
 
@@ -54,12 +54,12 @@ CREATE TABLE posts (
 
 Column types are determined by field types:
 
-| Field Type | SQLite Type |
-|-----------|-------------|
-| text, textarea, richtext, select, date, email, json | TEXT |
-| number | REAL |
-| checkbox | INTEGER |
-| relationship (has-one) | TEXT |
+| Field Type | SQLite Type | PostgreSQL Type |
+|-----------|-------------|-----------------|
+| text, textarea, richtext, select, date, email, json | TEXT | TEXT |
+| number | REAL | DOUBLE PRECISION |
+| checkbox | INTEGER | SMALLINT |
+| relationship (has-one) | TEXT | TEXT |
 
 Auth collections also get a `_password_hash TEXT` column.
 
@@ -125,7 +125,8 @@ Schema sync runs in a single transaction. If anything fails, all changes are rol
 
 ## Connection Pool
 
-The r2d2 pool provides connections for both reads and writes:
+The connection pool (r2d2 on SQLite, deadpool on PostgreSQL) provides
+connections for both reads and writes:
 
 - **Read operations** — `db/ops.rs` gets a connection from the pool, calls `query::*` functions
 - **Write operations** — callers get a connection, open a transaction, call `query::*`, then commit

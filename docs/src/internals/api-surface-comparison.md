@@ -1,6 +1,11 @@
 # API Surface Comparison
 
-This document compares the three API surfaces — **Admin UI**, **gRPC API**, and **Lua CRUD** (hook local API) — to track feature consistency.
+This document compares the API surfaces — **Admin UI**, **gRPC API**, and **Lua CRUD** (hook local API) — to track feature consistency.
+
+**MCP** is the fourth surface; its tools call the same service-layer
+operations as gRPC (including event publishing, with an opt-out
+`events` argument), so the **gRPC column applies to MCP** throughout
+this document.
 
 ## CREATE Lifecycle
 
@@ -18,7 +23,7 @@ This document compares the three API surfaces — **Admin UI**, **gRPC API**, an
 | Versioning (status + snapshot + prune) | Yes | Yes | Yes |
 | after_change (field + collection + registered) | Yes | Yes | Yes |
 | Publish event (SSE/WebSocket) | Yes | Yes | No (in-transaction) |
-| Verification email (auth + verify_email) | Yes | Yes | No |
+| Verification email (auth + verify_email) | Yes | Yes | Queued (flushed by the caller after commit) |
 
 ## UPDATE Lifecycle
 
@@ -79,12 +84,29 @@ This document compares the three API surfaces — **Admin UI**, **gRPC API**, an
 | Select field stripping | Yes | Yes | Yes |
 | Field-level read stripping | Yes | Yes | Yes (overrideAccess) |
 
+## Operation Availability
+
+The lifecycles above cover the shared single-document operations. The
+full operation set per surface:
+
+- **All surfaces** (admin, gRPC, Lua, MCP): create, update, delete,
+  undelete, unpublish, find, find-by-id, count, validate, version
+  list/restore. The admin UI exposes some of these through UI flows
+  rather than standalone calls — validate via the inline-validation
+  endpoints, count via list pagination, versions via the history pages.
+- **API surfaces only** (gRPC, Lua, MCP): the bulk operations
+  `create_many` / `update_many` / `delete_many`. The admin UI operates
+  on single documents by design (except empty-trash, which is a bulk
+  hard-delete of trashed items).
+
 ## Remaining By-Design Differences
 
 | Feature | Admin | gRPC | Lua CRUD | Reason |
 |---------|-------|------|----------|--------|
 | Event publishing | Yes | Yes | No | Lua runs inside the caller's transaction; event publishing is fire-and-forget after commit. The caller (admin/gRPC) publishes the event. |
 | Upload file cleanup on delete | Yes | Yes | Yes | Lua CRUD reads ConfigDir from Lua app_data; admin/gRPC clean up after commit. |
-| Verification email on create | Yes | Yes | No | Email sending is async, post-commit. |
+| Verification email on create | Yes | Yes | Queued | Email sending is async, post-commit. Lua runs inside the caller's transaction, so it pushes the email onto a verification queue that the caller flushes after commit. |
+| Filter operator names | Short | Long | Long | The admin list URL grammar uses `gt` / `lt` / `gte` / `lte` (and synthesizes `in` / `not_in` from repeated `equals`) for URL ergonomics; gRPC, Lua, and MCP `where` clauses use `greater_than` / `less_than` / `greater_than_or_equal` / `less_than_or_equal` plus explicit `in` / `not_in`. Semantics are identical. |
+| Invalid filter / sort input | 400 page | INVALID_ARGUMENT | Lua error | All surfaces hard-error on unknown operators, unknown fields, and malformed clauses — nothing is silently dropped. |
 | Locale from request | Yes | Yes | Explicit opt | Admin/gRPC infer from request; Lua passes explicitly via opts.locale. |
 | Default depth | Varies | Config | 0 | Lua defaults to 0 to avoid N+1 in hooks. Callers pass depth explicitly. |

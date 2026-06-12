@@ -1,6 +1,6 @@
 # Cache Backend
 
-Crap CMS uses a pluggable cache backend for cross-request caching of populated relationship documents. The cache is cleared automatically on any write operation (create, update, delete) and optionally on a periodic timer.
+Crap CMS uses a pluggable cache backend for cross-request caching of populated relationship documents. Keys are per document: `populate:{collection}:{id}` (with a `:{locale}` suffix for localized reads); the Redis backend additionally applies the configured `prefix`. The cache is cleared automatically on any write operation (create, update, delete) and optionally on a periodic timer.
 
 ## Backends
 
@@ -57,23 +57,36 @@ backend = "none"
 
 ## Cache Stampede
 
-There is no built-in singleflight / request coalescing on miss. Under concurrent load against a cold (or freshly-invalidated) key, every in-flight request independently hits the database until the first one completes and populates the cache. This is the classic "thundering herd" behavior.
+Concurrent misses for the same key are collapsed by a built-in
+**singleflight**: the first request runs the database fetch and writes
+the cache; concurrent requests for the same key block until that fetch
+completes and receive the same result (a "not found" outcome dedupes
+too). A cold or freshly-invalidated key costs one database fetch — not
+one per concurrent reader. Nested document fetches during relationship
+population go through the same deduplication.
 
-**Impact**: CPU / DB spikes on cold-start, on cache flushes, and immediately after any write (since every write invalidates the cache globally).
+What singleflight does **not** remove:
 
-**Mitigations**:
+- A cache clear (every write clears the whole cache) still cold-starts
+  every **distinct** key — one fetch per document, even if each fetch is
+  deduplicated across its concurrent readers.
+- The per-request assembly work after the fetch (recursive population of
+  the raw document) still runs per caller; only the database queries are
+  collapsed.
 
-- Keep `max_age_secs` long enough that steady-state hit rates are high — short TTLs compound the effect.
-- Put a CDN or front-proxy cache in front of public read endpoints so the origin isn't the first line of defense.
-- Rate-limit pathological clients at the edge (the load balancer or CDN), not the application, so stampedes can't be induced externally.
+**Recommendations** for read-heavy deployments:
 
-This is a **known limitation**. Singleflight / request coalescing is a candidate future enhancement; until then, the design assumes the DB can absorb the worst-case fan-out of one uncached fetch per concurrent reader per invalidation event.
+- Keep `max_age_secs` long enough that steady-state hit rates are high.
+- Put a CDN or front-proxy cache in front of public read endpoints so
+  the origin isn't the first line of defense.
+- Rate-limit pathological clients at the edge (the load balancer or
+  CDN), not the application.
 
 ## Cache Invalidation
 
 The cache uses two invalidation strategies:
 
-1. **Write-through invalidation** — every `Create`, `Update`, `Delete`, `Restore`, `UpdateMany`, `DeleteMany`, `UpdateGlobal`, and `RestoreVersion` operation clears the entire cache. This is the primary invalidation mechanism.
+1. **Write-through invalidation** — every write operation clears the entire cache: collection create / update / delete / undelete / unpublish, the bulk variants (create-many / update-many / delete-many), global update / unpublish, and version restore (collection and global). This is the primary invalidation mechanism.
 
 2. **Periodic full clear** — when `max_age_secs > 0`, a background task clears the entire cache on a timer. This handles external database mutations that bypass the API.
 
