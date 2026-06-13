@@ -62,7 +62,7 @@ fn parse_or_clause(value: &JsonValue) -> Result<FilterClause, String> {
         groups.push(group);
     }
 
-    Ok(FilterClause::Or(groups))
+    Ok(FilterClause::or_groups(groups))
 }
 
 /// Parse a JSON `where` clause string into a list of filter clauses.
@@ -159,8 +159,17 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
-    use crate::db::{FilterClause, FilterOp};
+    use crate::db::{Filter, FilterClause, FilterOp};
     use serde_json::json;
+
+    /// Unwrap an OR alternative that is a single filter (the shape `or_groups`
+    /// produces for one-field groups, since it collapses them to `Single`).
+    fn as_single(clause: &FilterClause) -> &Filter {
+        match clause {
+            FilterClause::Single(f) => f,
+            other => panic!("expected Single alternative, got {other:?}"),
+        }
+    }
 
     /// Strategy producing arbitrary JSON values (objects, arrays, scalars,
     /// nested) to exercise the structured parse paths — operator objects,
@@ -236,13 +245,13 @@ mod tests {
         let clauses = parse_where_json(input).unwrap();
         assert_eq!(clauses.len(), 1);
         match &clauses[0] {
-            FilterClause::Or(groups) => {
-                assert_eq!(groups.len(), 2);
-                assert_eq!(groups[0].len(), 1);
-                assert_eq!(groups[0][0].field, "status");
-                assert!(matches!(&groups[0][0].op, FilterOp::Equals(v) if v == "active"));
-                assert_eq!(groups[1][0].field, "status");
-                assert!(matches!(&groups[1][0].op, FilterOp::Equals(v) if v == "pending"));
+            FilterClause::Or(alts) => {
+                assert_eq!(alts.len(), 2);
+                let (f0, f1) = (as_single(&alts[0]), as_single(&alts[1]));
+                assert_eq!(f0.field, "status");
+                assert!(matches!(&f0.op, FilterOp::Equals(v) if v == "active"));
+                assert_eq!(f1.field, "status");
+                assert!(matches!(&f1.op, FilterOp::Equals(v) if v == "pending"));
             }
             _ => panic!("expected Or clause"),
         }
@@ -259,10 +268,10 @@ mod tests {
         let clauses = parse_where_json(input).unwrap();
         assert_eq!(clauses.len(), 1);
         match &clauses[0] {
-            FilterClause::Or(groups) => {
-                assert_eq!(groups.len(), 2);
-                assert!(matches!(&groups[0][0].op, FilterOp::GreaterThan(v) if v == "18"));
-                assert!(matches!(&groups[1][0].op, FilterOp::Equals(v) if v == "admin"));
+            FilterClause::Or(alts) => {
+                assert_eq!(alts.len(), 2);
+                assert!(matches!(&as_single(&alts[0]).op, FilterOp::GreaterThan(v) if v == "18"));
+                assert!(matches!(&as_single(&alts[1]).op, FilterOp::Equals(v) if v == "admin"));
             }
             _ => panic!("expected Or clause"),
         }
@@ -325,10 +334,10 @@ mod tests {
         let clauses = parse_where_json(input).unwrap();
         assert_eq!(clauses.len(), 1);
         match &clauses[0] {
-            FilterClause::Or(groups) => {
-                assert_eq!(groups.len(), 2);
-                assert!(matches!(&groups[0][0].op, FilterOp::Equals(v) if v == "true"));
-                assert!(matches!(&groups[1][0].op, FilterOp::Equals(v) if v == "0"));
+            FilterClause::Or(alts) => {
+                assert_eq!(alts.len(), 2);
+                assert!(matches!(&as_single(&alts[0]).op, FilterOp::Equals(v) if v == "true"));
+                assert!(matches!(&as_single(&alts[1]).op, FilterOp::Equals(v) if v == "0"));
             }
             _ => panic!("Expected Or filter"),
         }

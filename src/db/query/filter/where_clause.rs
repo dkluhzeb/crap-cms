@@ -155,46 +155,68 @@ pub fn build_where_clause(
         return Ok(String::new());
     }
 
-    let mut conditions = Vec::new();
+    let mut conditions = Vec::with_capacity(filters.len());
     for clause in filters {
-        match clause {
-            FilterClause::Single(f) => {
-                conditions.push(build_filter_sql(conn, f, slug, fields, locale_ctx, params)?);
-            }
-            FilterClause::Or(groups) => {
-                if groups.len() == 1 && groups[0].len() == 1 {
-                    conditions.push(build_filter_sql(
-                        conn,
-                        &groups[0][0],
-                        slug,
-                        fields,
-                        locale_ctx,
-                        params,
-                    )?);
-                } else {
-                    let mut or_parts = Vec::new();
-                    for group in groups {
-                        if group.len() == 1 {
-                            or_parts.push(build_filter_sql(
-                                conn, &group[0], slug, fields, locale_ctx, params,
-                            )?);
-                        } else {
-                            let and_parts: Vec<String> = group
-                                .iter()
-                                .map(|f| {
-                                    build_filter_sql(conn, f, slug, fields, locale_ctx, params)
-                                })
-                                .collect::<Result<_, _>>()?;
-                            or_parts.push(format!("({})", and_parts.join(" AND ")));
-                        }
-                    }
-                    conditions.push(format!("({})", or_parts.join(" OR ")));
-                }
-            }
-        }
+        conditions.push(build_clause_sql(
+            conn, clause, slug, fields, locale_ctx, params,
+        )?);
     }
 
     Ok(format!(" WHERE {}", conditions.join(" AND ")))
+}
+
+/// Render one [`FilterClause`] tree node to SQL, recursing through `And`/`Or`.
+///
+/// Multi-child junctions are parenthesized so nesting composes correctly; a
+/// single child renders bare. An empty `And` is `1=1` (matches all), an empty
+/// `Or` is `1=0` (matches none).
+fn build_clause_sql(
+    conn: &dyn DbConnection,
+    clause: &FilterClause,
+    slug: &str,
+    fields: &[FieldDefinition],
+    locale_ctx: Option<&LocaleContext>,
+    params: &mut Vec<DbValue>,
+) -> Result<String> {
+    match clause {
+        FilterClause::Single(f) => build_filter_sql(conn, f, slug, fields, locale_ctx, params),
+        FilterClause::And(subs) => {
+            build_junction_sql(conn, subs, "AND", "1=1", slug, fields, locale_ctx, params)
+        }
+        FilterClause::Or(subs) => {
+            build_junction_sql(conn, subs, "OR", "1=0", slug, fields, locale_ctx, params)
+        }
+    }
+}
+
+/// Render a conjunction/disjunction of sub-clauses joined by `sep`, using
+/// `empty` as the identity when there are none. A single sub-clause renders
+/// without wrapping parens.
+#[allow(clippy::too_many_arguments)]
+fn build_junction_sql(
+    conn: &dyn DbConnection,
+    subs: &[FilterClause],
+    sep: &str,
+    empty: &str,
+    slug: &str,
+    fields: &[FieldDefinition],
+    locale_ctx: Option<&LocaleContext>,
+    params: &mut Vec<DbValue>,
+) -> Result<String> {
+    if subs.is_empty() {
+        return Ok(empty.to_string());
+    }
+
+    let mut parts: Vec<String> = subs
+        .iter()
+        .map(|c| build_clause_sql(conn, c, slug, fields, locale_ctx, params))
+        .collect::<Result<_>>()?;
+
+    if parts.len() == 1 {
+        return Ok(parts.swap_remove(0));
+    }
+
+    Ok(format!("({})", parts.join(&format!(" {sep} "))))
 }
 
 /// Resolve filter clauses to use locale-specific column names.
@@ -215,34 +237,36 @@ pub fn resolve_filters(
 ) -> Result<Vec<FilterClause>> {
     filters
         .iter()
-        .map(|clause| match clause {
-            FilterClause::Single(f) => {
-                let resolved = resolve_filter_column(&f.field, def, locale_ctx)?;
-                Ok(FilterClause::Single(Filter {
-                    field: resolved,
-                    op: f.op.clone(),
-                }))
-            }
-            FilterClause::Or(groups) => {
-                let resolved_groups: Result<Vec<Vec<Filter>>> = groups
-                    .iter()
-                    .map(|group| {
-                        group
-                            .iter()
-                            .map(|f| {
-                                let resolved = resolve_filter_column(&f.field, def, locale_ctx)?;
-                                Ok(Filter {
-                                    field: resolved,
-                                    op: f.op.clone(),
-                                })
-                            })
-                            .collect()
-                    })
-                    .collect();
+        .map(|clause| resolve_clause(clause, def, locale_ctx))
+        .collect()
+}
 
-                Ok(FilterClause::Or(resolved_groups?))
-            }
-        })
+/// Locale-rewrite one [`FilterClause`] tree node, recursing through `And`/`Or`.
+/// Structure-preserving — variants and arity are kept exactly; only leaf field
+/// names are remapped.
+fn resolve_clause(
+    clause: &FilterClause,
+    def: &CollectionDefinition,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<FilterClause> {
+    match clause {
+        FilterClause::Single(f) => Ok(FilterClause::Single(Filter {
+            field: resolve_filter_column(&f.field, def, locale_ctx)?,
+            op: f.op.clone(),
+        })),
+        FilterClause::And(subs) => Ok(FilterClause::And(resolve_clauses(subs, def, locale_ctx)?)),
+        FilterClause::Or(subs) => Ok(FilterClause::Or(resolve_clauses(subs, def, locale_ctx)?)),
+    }
+}
+
+/// Locale-rewrite a slice of sub-clauses, preserving order.
+fn resolve_clauses(
+    subs: &[FilterClause],
+    def: &CollectionDefinition,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<Vec<FilterClause>> {
+    subs.iter()
+        .map(|c| resolve_clause(c, def, locale_ctx))
         .collect()
 }
 
@@ -460,7 +484,7 @@ mod tests {
     #[test]
     fn where_clause_or_groups() {
         let (_dir, conn) = test_conn();
-        let filters = vec![FilterClause::Or(vec![
+        let filters = vec![FilterClause::or_groups(vec![
             vec![Filter {
                 field: "a".into(),
                 op: FilterOp::Equals("1".into()),
@@ -485,7 +509,7 @@ mod tests {
     #[test]
     fn where_clause_or_single_item_group() {
         let (_dir, conn) = test_conn();
-        let filters = vec![FilterClause::Or(vec![vec![Filter {
+        let filters = vec![FilterClause::or_groups(vec![vec![Filter {
             field: "a".into(),
             op: FilterOp::Equals("1".into()),
         }]])];
@@ -493,6 +517,67 @@ mod tests {
         let sql = build_where_clause(&conn, &filters, "test", &[], None, &mut params).unwrap();
         // Single-item OR should simplify to just the condition
         assert_eq!(sql, " WHERE a = ?1");
+    }
+
+    /// The recursive tree expresses nesting the old flat OR-of-AND-groups could
+    /// not: an `Or` whose arms are `And`s, one of which nests another `Or`.
+    /// This is exactly the shape the access-view union produces, so the builder
+    /// must parenthesize every level correctly.
+    #[test]
+    fn where_clause_nested_and_or_compose() {
+        let (_dir, conn) = test_conn();
+        let single = |f: &str, v: &str| {
+            FilterClause::Single(Filter {
+                field: f.into(),
+                op: FilterOp::Equals(v.into()),
+            })
+        };
+        let filters = vec![FilterClause::Or(vec![
+            FilterClause::And(vec![single("a", "1"), single("b", "2")]),
+            FilterClause::And(vec![
+                single("c", "3"),
+                FilterClause::Or(vec![single("d", "4"), single("e", "5")]),
+            ]),
+        ])];
+        let mut params: Vec<DbValue> = Vec::new();
+        let sql = build_where_clause(&conn, &filters, "test", &[], None, &mut params).unwrap();
+        assert_eq!(
+            sql,
+            " WHERE ((a = ?1 AND b = ?2) OR (c = ?3 AND (d = ?4 OR e = ?5)))"
+        );
+        assert_eq!(params.len(), 5);
+    }
+
+    /// Empty junctions render their boolean identity: an empty `And` matches all
+    /// rows (`1=1`), an empty `Or` matches none (`1=0`). A denied view branch in
+    /// the union relies on this.
+    #[test]
+    fn where_clause_empty_junction_identities() {
+        let (_dir, conn) = test_conn();
+
+        let mut p1: Vec<DbValue> = Vec::new();
+        let and_empty = build_where_clause(
+            &conn,
+            &[FilterClause::And(vec![])],
+            "test",
+            &[],
+            None,
+            &mut p1,
+        )
+        .unwrap();
+        assert_eq!(and_empty, " WHERE 1=1");
+
+        let mut p2: Vec<DbValue> = Vec::new();
+        let or_empty = build_where_clause(
+            &conn,
+            &[FilterClause::Or(vec![])],
+            "test",
+            &[],
+            None,
+            &mut p2,
+        )
+        .unwrap();
+        assert_eq!(or_empty, " WHERE 1=0");
     }
 
     // ── build_where_clause with subqueries ──────────────────────────────
@@ -530,7 +615,7 @@ mod tests {
             make_field("status", FieldType::Text, false),
             make_has_many_field("tags", "tags"),
         ];
-        let filters = vec![FilterClause::Or(vec![
+        let filters = vec![FilterClause::or_groups(vec![
             vec![Filter {
                 field: "status".into(),
                 op: FilterOp::Equals("draft".into()),
@@ -868,7 +953,7 @@ mod tests {
             mode: LocaleMode::Single("de".into()),
             config: locale_config_en_de(),
         };
-        let filters = vec![FilterClause::Or(vec![
+        let filters = vec![FilterClause::or_groups(vec![
             vec![Filter {
                 field: "title".into(),
                 op: FilterOp::Equals("A".into()),
@@ -880,9 +965,13 @@ mod tests {
         ])];
         let resolved = resolve_filters(&filters, &def, Some(&ctx)).unwrap();
         match &resolved[0] {
-            FilterClause::Or(groups) => {
-                assert_eq!(groups[0][0].field, "title__de");
-                assert_eq!(groups[1][0].field, "title__de");
+            FilterClause::Or(alts) => {
+                let (FilterClause::Single(f0), FilterClause::Single(f1)) = (&alts[0], &alts[1])
+                else {
+                    panic!("expected single-filter alternatives");
+                };
+                assert_eq!(f0.field, "title__de");
+                assert_eq!(f1.field, "title__de");
             }
             other => panic!("Expected Or, got {other:?}"),
         }

@@ -178,18 +178,7 @@ pub fn validate_query_fields(
     let (exact_columns, prefix_roots) = get_valid_filter_paths(def, locale_ctx);
 
     for clause in &query.filters {
-        match clause {
-            FilterClause::Single(f) => {
-                validate_filter_field(&f.field, &exact_columns, &prefix_roots)?;
-            }
-            FilterClause::Or(groups) => {
-                for group in groups {
-                    for f in group {
-                        validate_filter_field(&f.field, &exact_columns, &prefix_roots)?;
-                    }
-                }
-            }
-        }
+        validate_clause_fields(clause, &exact_columns, &prefix_roots)?;
     }
 
     // order_by only supports flat columns (no sub-field sorting)
@@ -287,6 +276,25 @@ pub(crate) fn validate_filter_field(
         all.sort();
         all.join(", ")
     })
+}
+
+/// Recursively validate every leaf field in a [`FilterClause`] tree against the
+/// collection's valid filter paths. Shared by `validate_query_fields` and the
+/// count path so both walk the tree identically.
+pub(crate) fn validate_clause_fields(
+    clause: &FilterClause,
+    exact_columns: &HashSet<String>,
+    prefix_roots: &HashSet<String>,
+) -> Result<()> {
+    match clause {
+        FilterClause::Single(f) => validate_filter_field(&f.field, exact_columns, prefix_roots),
+        FilterClause::And(subs) | FilterClause::Or(subs) => {
+            for c in subs {
+                validate_clause_fields(c, exact_columns, prefix_roots)?;
+            }
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]

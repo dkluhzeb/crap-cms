@@ -262,7 +262,7 @@ pub(crate) fn parse_where_params(
                     clauses.push(FilterClause::Single(f));
                 }
             }
-            _ => clauses.push(FilterClause::Or(groups)),
+            _ => clauses.push(FilterClause::or_groups(groups)),
         }
     }
 
@@ -572,11 +572,14 @@ mod tests {
         .unwrap();
         assert_eq!(result.len(), 1);
         match &result[0] {
-            FilterClause::Or(groups) => {
-                assert_eq!(groups.len(), 2);
-                assert_eq!(groups[0].len(), 1);
-                assert_eq!(groups[0][0].field, "title");
-                assert_eq!(groups[1][0].field, "slug");
+            FilterClause::Or(alts) => {
+                assert_eq!(alts.len(), 2);
+                let (FilterClause::Single(f0), FilterClause::Single(f1)) = (&alts[0], &alts[1])
+                else {
+                    panic!("expected single-filter buckets, got {result:?}");
+                };
+                assert_eq!(f0.field, "title");
+                assert_eq!(f1.field, "slug");
             }
             _ => panic!("expected Or, got {result:?}"),
         }
@@ -592,10 +595,16 @@ mod tests {
         ).unwrap();
         assert_eq!(result.len(), 1);
         match &result[0] {
-            FilterClause::Or(groups) => {
-                assert_eq!(groups.len(), 2);
-                assert_eq!(groups[0].len(), 2, "bucket 0 has two AND'd filters");
-                assert_eq!(groups[1].len(), 1);
+            FilterClause::Or(alts) => {
+                assert_eq!(alts.len(), 2);
+                let FilterClause::And(b0) = &alts[0] else {
+                    panic!("bucket 0 should AND two filters");
+                };
+                assert_eq!(b0.len(), 2, "bucket 0 has two AND'd filters");
+                assert!(
+                    matches!(&alts[1], FilterClause::Single(_)),
+                    "bucket 1 is a single filter"
+                );
             }
             _ => panic!("expected Or"),
         }
@@ -622,14 +631,12 @@ mod tests {
             &def,
         ).unwrap();
         match &result[0] {
-            FilterClause::Or(groups) => {
-                assert_eq!(groups.len(), 2);
-                assert_eq!(
-                    groups[0].len(),
-                    1,
-                    "bucket 0 collapsed two equals into one In"
-                );
-                match &groups[0][0].op {
+            FilterClause::Or(alts) => {
+                assert_eq!(alts.len(), 2);
+                let FilterClause::Single(f0) = &alts[0] else {
+                    panic!("bucket 0 collapsed two equals into one In → Single");
+                };
+                match &f0.op {
                     FilterOp::In(vals) => assert_eq!(vals.len(), 2),
                     other => panic!("expected In inside bucket 0, got {other:?}"),
                 }

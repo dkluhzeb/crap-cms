@@ -22,12 +22,21 @@ pub fn matches_constraints(data: &DocumentFields, constraints: &[FilterClause]) 
         return true;
     }
 
-    constraints.iter().all(|clause| match clause {
+    constraints
+        .iter()
+        .all(|clause| matches_clause(data, clause))
+}
+
+/// Evaluate one [`FilterClause`] tree node against document data, recursing
+/// through `And`/`Or`. An empty `And` matches (`all` over none is `true`); an
+/// empty `Or` does not (`any` over none is `false`) — the same identities the
+/// SQL builder renders as `1=1` / `1=0`.
+fn matches_clause(data: &DocumentFields, clause: &FilterClause) -> bool {
+    match clause {
         FilterClause::Single(filter) => matches_filter(data, filter),
-        FilterClause::Or(groups) => groups
-            .iter()
-            .any(|group| group.iter().all(|filter| matches_filter(data, filter))),
-    })
+        FilterClause::And(subs) => subs.iter().all(|c| matches_clause(data, c)),
+        FilterClause::Or(subs) => subs.iter().any(|c| matches_clause(data, c)),
+    }
 }
 
 /// Evaluate a single filter against document data.
@@ -104,6 +113,8 @@ fn matches_like(value: &str, pattern: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::slice::from_ref;
+
     use serde_json::json;
 
     use super::*;
@@ -358,7 +369,7 @@ mod tests {
     #[test]
     fn or_group_first_matches() {
         let d = data(&[("role", json!("admin"))]);
-        let clause = FilterClause::Or(vec![
+        let clause = FilterClause::or_groups(vec![
             vec![Filter {
                 field: "role".to_string(),
                 op: FilterOp::Equals("admin".to_string()),
@@ -374,7 +385,7 @@ mod tests {
     #[test]
     fn or_group_second_matches() {
         let d = data(&[("role", json!("editor"))]);
-        let clause = FilterClause::Or(vec![
+        let clause = FilterClause::or_groups(vec![
             vec![Filter {
                 field: "role".to_string(),
                 op: FilterOp::Equals("admin".to_string()),
@@ -390,7 +401,7 @@ mod tests {
     #[test]
     fn or_group_none_match() {
         let d = data(&[("role", json!("viewer"))]);
-        let clause = FilterClause::Or(vec![
+        let clause = FilterClause::or_groups(vec![
             vec![Filter {
                 field: "role".to_string(),
                 op: FilterOp::Equals("admin".to_string()),
@@ -401,6 +412,28 @@ mod tests {
             }],
         ]);
         assert!(!matches_constraints(&d, &[clause]));
+    }
+
+    /// Recursive evaluation of a nested tree the flat type could not hold:
+    /// `(a AND b) OR (c AND (d OR e))`. Mirrors the SQL builder's nesting test
+    /// so the two evaluators stay in agreement.
+    #[test]
+    fn nested_and_or_evaluates() {
+        let clause = FilterClause::Or(vec![
+            FilterClause::And(vec![eq("a", "1"), eq("b", "2")]),
+            FilterClause::And(vec![
+                eq("c", "3"),
+                FilterClause::Or(vec![eq("d", "4"), eq("e", "5")]),
+            ]),
+        ]);
+
+        // Second arm matches: c = 3 and (the OR's) e = 5.
+        let hit = data(&[("c", json!("3")), ("e", json!("5"))]);
+        assert!(matches_constraints(&hit, from_ref(&clause)));
+
+        // c matches but neither d nor e does → the AND arm fails, no match.
+        let miss = data(&[("c", json!("3")), ("e", json!("nope"))]);
+        assert!(!matches_constraints(&miss, from_ref(&clause)));
     }
 
     // ── Null values ─────────────────────────────────────────────────

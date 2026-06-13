@@ -8,7 +8,7 @@ use crate::db::{
     query::{
         filter::{build_where_clause, resolve_filters},
         fts, is_valid_identifier,
-        validation::{get_valid_filter_paths, validate_filter_field},
+        validation::{get_valid_filter_paths, validate_clause_fields},
     },
 };
 
@@ -48,16 +48,7 @@ pub fn count_with_search(
 ) -> Result<i64> {
     let (exact, prefixes) = get_valid_filter_paths(def, locale_ctx);
     for clause in filters {
-        match clause {
-            FilterClause::Single(f) => validate_filter_field(&f.field, &exact, &prefixes)?,
-            FilterClause::Or(groups) => {
-                for group in groups {
-                    for f in group {
-                        validate_filter_field(&f.field, &exact, &prefixes)?;
-                    }
-                }
-            }
-        }
+        validate_clause_fields(clause, &exact, &prefixes)?;
     }
 
     let mut sql = format!("SELECT COUNT(*) FROM \"{slug}\"");

@@ -256,31 +256,40 @@ fn constraints_to_lua(lua: &Lua, clauses: &[FilterClause]) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
 
     for clause in clauses {
-        match clause {
-            FilterClause::Single(filter) => {
-                let value = filter_op_to_lua(lua, &filter.op)?;
-                tbl.set(filter.field.as_str(), value)?;
-            }
-            FilterClause::Or(groups) => {
-                let or_tbl = lua.create_table()?;
-
-                for (i, group) in groups.iter().enumerate() {
-                    let group_tbl = lua.create_table()?;
-
-                    for filter in group {
-                        let value = filter_op_to_lua(lua, &filter.op)?;
-                        group_tbl.set(filter.field.as_str(), value)?;
-                    }
-
-                    or_tbl.set(i + 1, group_tbl)?;
-                }
-
-                tbl.set("_or", or_tbl)?;
-            }
-        }
+        write_clause_to_lua(lua, &tbl, clause)?;
     }
 
     Ok(tbl)
+}
+
+/// Write one [`FilterClause`] tree node into a Lua table. `And` writes its
+/// sub-clauses as sibling keys (a table's keys are implicitly AND-ed); `Or`
+/// writes an `_or` array of per-alternative tables; recurses through both.
+fn write_clause_to_lua(lua: &Lua, tbl: &Table, clause: &FilterClause) -> LuaResult<()> {
+    match clause {
+        FilterClause::Single(filter) => {
+            let value = filter_op_to_lua(lua, &filter.op)?;
+            tbl.set(filter.field.as_str(), value)?;
+        }
+        FilterClause::And(subs) => {
+            for c in subs {
+                write_clause_to_lua(lua, tbl, c)?;
+            }
+        }
+        FilterClause::Or(subs) => {
+            let or_tbl = lua.create_table()?;
+
+            for (i, c) in subs.iter().enumerate() {
+                let group_tbl = lua.create_table()?;
+                write_clause_to_lua(lua, &group_tbl, c)?;
+                or_tbl.set(i + 1, group_tbl)?;
+            }
+
+            tbl.set("_or", or_tbl)?;
+        }
+    }
+
+    Ok(())
 }
 
 /// Convert a single `FilterOp` to a Lua value.

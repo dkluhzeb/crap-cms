@@ -37,12 +37,60 @@ pub struct Filter {
     pub op: FilterOp,
 }
 
-/// A filter clause: either a single condition or an OR group.
-/// Each OR element is a group of AND-ed filters: `(a AND b) OR (c AND d)`.
+/// A boolean filter expression over document fields.
+///
+/// A recursive tree: leaves are [`Filter`] conditions combined with `AND`/`OR`
+/// to any depth. Composition is by construction — no normal-form expansion — so
+/// callers nest freely and every evaluator (SQL generation, in-memory matching,
+/// locale rewriting, validation) walks the tree with a single recursive pass.
+///
+/// Empty cases follow boolean algebra: an empty [`And`](FilterClause::And)
+/// matches everything (`1=1`), an empty [`Or`](FilterClause::Or) matches nothing
+/// (`1=0`).
 #[derive(Debug, Clone)]
 pub enum FilterClause {
+    /// A single field condition.
     Single(Filter),
-    Or(Vec<Vec<Filter>>),
+    /// Conjunction — every sub-clause must match.
+    And(Vec<FilterClause>),
+    /// Disjunction — at least one sub-clause must match.
+    Or(Vec<FilterClause>),
+}
+
+impl FilterClause {
+    /// Combine clauses with `AND`, collapsing a single clause to itself so the
+    /// tree carries no redundant one-child nodes.
+    #[must_use]
+    pub fn and(mut clauses: Vec<FilterClause>) -> FilterClause {
+        if clauses.len() == 1 {
+            clauses.swap_remove(0)
+        } else {
+            FilterClause::And(clauses)
+        }
+    }
+
+    /// Combine clauses with `OR`, collapsing a single clause to itself.
+    #[must_use]
+    pub fn or(mut clauses: Vec<FilterClause>) -> FilterClause {
+        if clauses.len() == 1 {
+            clauses.swap_remove(0)
+        } else {
+            FilterClause::Or(clauses)
+        }
+    }
+
+    /// Build an OR-of-AND-groups from raw filter groups — the shape the query
+    /// parsers (proto, admin URL filters, Lua) produce: `(g0…) OR (g1…)`. Each
+    /// group's filters are AND-ed; the groups are OR-ed.
+    #[must_use]
+    pub fn or_groups(groups: Vec<Vec<Filter>>) -> FilterClause {
+        FilterClause::or(
+            groups
+                .into_iter()
+                .map(|g| FilterClause::and(g.into_iter().map(FilterClause::Single).collect()))
+                .collect(),
+        )
+    }
 }
 
 /// Parameters for a find query: filters, ordering, pagination, and field selection.

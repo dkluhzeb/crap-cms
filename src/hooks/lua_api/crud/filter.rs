@@ -267,7 +267,7 @@ pub(crate) fn convert_where_clause(
         if field == "or" {
             let groups: Vec<OrGroup> = serde_json::from_value(value)
                 .map_err(|e| RuntimeError(format!("invalid `or` clause: {e}")))?;
-            out.push(FilterClause::Or(build_or_groups(groups)?));
+            out.push(FilterClause::or_groups(build_or_groups(groups)?));
             continue;
         }
 
@@ -467,7 +467,7 @@ mod tests {
                 assert_eq!(f.field, "status");
                 assert!(scalar_eq(&f.op, "published"));
             }
-            FilterClause::Or(_) => panic!("expected Single, got Or"),
+            other => panic!("expected Single, got {other:?}"),
         }
     }
 
@@ -482,7 +482,7 @@ mod tests {
                 assert_eq!(f.field, "title");
                 assert!(matches!(&f.op, FilterOp::Contains(v) if v == "lua"));
             }
-            FilterClause::Or(_) => panic!("expected Single, got Or"),
+            other => panic!("expected Single, got {other:?}"),
         }
     }
 
@@ -498,13 +498,15 @@ mod tests {
         );
         let clauses = convert_where_clause(w).unwrap();
         assert_eq!(clauses.len(), 1);
-        let FilterClause::Or(groups) = &clauses[0] else {
+        let FilterClause::Or(alts) = &clauses[0] else {
             panic!("expected Or");
         };
-        assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0].len(), 1);
-        assert_eq!(groups[0][0].field, "author");
-        assert_eq!(groups[1][0].field, "tag");
+        assert_eq!(alts.len(), 2);
+        let (FilterClause::Single(f0), FilterClause::Single(f1)) = (&alts[0], &alts[1]) else {
+            panic!("expected single-filter alternatives");
+        };
+        assert_eq!(f0.field, "author");
+        assert_eq!(f1.field, "tag");
     }
 
     #[test]

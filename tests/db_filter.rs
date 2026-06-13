@@ -367,7 +367,7 @@ fn filter_not_exists() {
 fn filter_or_clause() {
     let (_tmp, pool, def) = seed_posts();
     let q = query::FindQuery::builder()
-        .filters(vec![query::FilterClause::Or(vec![
+        .filters(vec![query::FilterClause::or_groups(vec![
             vec![query::Filter {
                 field: "title".to_string(),
                 op: query::FilterOp::Contains("Alpha".to_string()),
@@ -390,7 +390,7 @@ fn filter_or_multi_condition_groups() {
     let (_tmp, pool, def) = seed_posts();
     // (status = "published" AND title contains "Alpha") OR (title contains "Gamma")
     let q = query::FindQuery::builder()
-        .filters(vec![query::FilterClause::Or(vec![
+        .filters(vec![query::FilterClause::or_groups(vec![
             vec![
                 query::Filter {
                     field: "status".to_string(),
@@ -424,7 +424,7 @@ fn filter_or_with_and_top_level() {
                 field: "status".to_string(),
                 op: query::FilterOp::Equals("published".to_string()),
             }),
-            query::FilterClause::Or(vec![
+            query::FilterClause::or_groups(vec![
                 vec![query::Filter {
                     field: "title".to_string(),
                     op: query::FilterOp::Contains("Alpha".to_string()),
@@ -1036,7 +1036,7 @@ fn filter_or_with_subquery() {
     // OR group with subquery filters:
     // variants.color = "red" OR content._block_type = "section"
     let q = query::FindQuery::builder()
-        .filters(vec![query::FilterClause::Or(vec![
+        .filters(vec![query::FilterClause::or_groups(vec![
             vec![query::Filter {
                 field: "variants.color".to_string(),
                 op: query::FilterOp::Equals("red".to_string()),

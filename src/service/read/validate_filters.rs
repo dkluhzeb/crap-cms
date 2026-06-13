@@ -47,20 +47,17 @@ use crate::{
 ///
 /// Returns `HookError` for the first filter whose first dot-segment starts with `_`.
 pub fn validate_user_filters(filters: &[FilterClause]) -> Result<(), ServiceError> {
-    for clause in filters {
-        match clause {
-            FilterClause::Single(f) => check_single_filter(f)?,
-            FilterClause::Or(groups) => {
-                for group in groups {
-                    for f in group {
-                        check_single_filter(f)?;
-                    }
-                }
-            }
+    filters.iter().try_for_each(walk_user_filter)
+}
+
+/// Recursively check every leaf of a user-supplied [`FilterClause`] tree.
+fn walk_user_filter(clause: &FilterClause) -> Result<(), ServiceError> {
+    match clause {
+        FilterClause::Single(f) => check_single_filter(f),
+        FilterClause::And(subs) | FilterClause::Or(subs) => {
+            subs.iter().try_for_each(walk_user_filter)
         }
     }
-
-    Ok(())
 }
 
 /// Check a single filter's field against the system-column rule.
@@ -105,20 +102,25 @@ pub fn validate_access_constraints(
     injecting_status: bool,
     slug: &str,
 ) -> Result<(), ServiceError> {
-    for clause in filters {
-        match clause {
-            FilterClause::Single(f) => check_access_filter(f, trash, injecting_status, slug)?,
-            FilterClause::Or(groups) => {
-                for group in groups {
-                    for f in group {
-                        check_access_filter(f, trash, injecting_status, slug)?;
-                    }
-                }
-            }
-        }
-    }
+    filters
+        .iter()
+        .try_for_each(|c| walk_access_filter(c, trash, injecting_status, slug))
+}
 
-    Ok(())
+/// Recursively check every leaf of an access-hook [`FilterClause`] tree against
+/// the constrained system-column rule.
+fn walk_access_filter(
+    clause: &FilterClause,
+    trash: bool,
+    injecting_status: bool,
+    slug: &str,
+) -> Result<(), ServiceError> {
+    match clause {
+        FilterClause::Single(f) => check_access_filter(f, trash, injecting_status, slug),
+        FilterClause::And(subs) | FilterClause::Or(subs) => subs
+            .iter()
+            .try_for_each(|c| walk_access_filter(c, trash, injecting_status, slug)),
+    }
 }
 
 /// Check a single access-hook filter against the constrained system-column rule.
@@ -193,7 +195,7 @@ mod tests {
 
     #[test]
     fn validates_walks_or_groups() {
-        let filters = vec![FilterClause::Or(vec![
+        let filters = vec![FilterClause::or_groups(vec![
             vec![Filter {
                 field: "title".to_string(),
                 op: FilterOp::Equals("ok".to_string()),
@@ -281,7 +283,7 @@ mod tests {
     /// OR groups are walked just like in `validate_user_filters`.
     #[test]
     fn validates_access_constraints_walks_or_groups() {
-        let filters = vec![FilterClause::Or(vec![
+        let filters = vec![FilterClause::or_groups(vec![
             vec![Filter {
                 field: "author_id".to_string(),
                 op: FilterOp::Equals("u1".to_string()),

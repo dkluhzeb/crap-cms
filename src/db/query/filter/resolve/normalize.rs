@@ -10,14 +10,18 @@ use crate::db::FilterClause;
 /// because they map to flat `{group}__{sub}` columns on the parent table.
 pub fn normalize_filter_fields(filters: &mut [FilterClause], fields: &[FieldDefinition]) {
     for clause in filters.iter_mut() {
-        match clause {
-            FilterClause::Single(f) => normalize_field_name(&mut f.field, fields),
-            FilterClause::Or(groups) => {
-                for group in groups.iter_mut() {
-                    for f in group.iter_mut() {
-                        normalize_field_name(&mut f.field, fields);
-                    }
-                }
+        normalize_clause(clause, fields);
+    }
+}
+
+/// Rewrite group dot-paths in one [`FilterClause`] tree node, recursing through
+/// `And`/`Or`.
+fn normalize_clause(clause: &mut FilterClause, fields: &[FieldDefinition]) {
+    match clause {
+        FilterClause::Single(f) => normalize_field_name(&mut f.field, fields),
+        FilterClause::And(subs) | FilterClause::Or(subs) => {
+            for c in subs.iter_mut() {
+                normalize_clause(c, fields);
             }
         }
     }
@@ -127,7 +131,7 @@ mod tests {
     #[test]
     fn normalize_in_or_groups() {
         let fields = vec![make_field("seo", FieldType::Group, false)];
-        let mut filters = vec![FilterClause::Or(vec![
+        let mut filters = vec![FilterClause::or_groups(vec![
             vec![Filter {
                 field: "seo.title".into(),
                 op: FilterOp::Equals("a".into()),
@@ -139,9 +143,13 @@ mod tests {
         ])];
         normalize_filter_fields(&mut filters, &fields);
         match &filters[0] {
-            FilterClause::Or(groups) => {
-                assert_eq!(groups[0][0].field, "seo__title");
-                assert_eq!(groups[1][0].field, "seo__desc");
+            FilterClause::Or(alts) => {
+                let (FilterClause::Single(f0), FilterClause::Single(f1)) = (&alts[0], &alts[1])
+                else {
+                    panic!("expected single-filter alternatives");
+                };
+                assert_eq!(f0.field, "seo__title");
+                assert_eq!(f1.field, "seo__desc");
             }
             other => panic!("Expected Or, got {other:?}"),
         }
