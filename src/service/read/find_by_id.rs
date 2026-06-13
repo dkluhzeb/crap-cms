@@ -1,17 +1,88 @@
 //! Single-document lookup by ID with the full read lifecycle.
 
 use crate::{
-    core::Document,
-    db::{AccessResult, LocaleContext, ops},
-    hooks::AccessCheckInput,
-    service::{FindByIdInput, ServiceContext, ServiceError},
+    core::{CollectionDefinition, Document},
+    db::{FilterClause, LocaleContext, ops},
+    service::{
+        FindByIdInput, ReadAccessCtx, ReadHooks, ServiceContext, ServiceError, requested_views,
+        resolve_trash_scope, resolve_view_scope,
+    },
 };
 
-use super::draft_visibility::draft_visibility_filter;
 use super::post_process::post_process_single;
-use super::validate_filters::validate_access_constraints;
 
 type Result<T> = std::result::Result<T, ServiceError>;
+
+/// The access-scoped outcome of a single-document lookup: the row constraints to
+/// apply, and whether to overlay the latest draft snapshot.
+struct ByIdScope {
+    constraints: Vec<FilterClause>,
+    /// Whether `find_by_id_full` should overlay the draft version snapshot. The
+    /// caller's `use_draft` is downgraded to `false` when the draft view is not
+    /// visible, so a reader without draft access never sees draft content
+    /// overlaid onto a published row.
+    use_draft_overlay: bool,
+}
+
+/// Resolve the live (non-trash) lookup scope via the published/draft view union.
+fn resolve_live_by_id(
+    hooks: &dyn ReadHooks,
+    ctx: &ServiceContext,
+    def: &CollectionDefinition,
+    input: &FindByIdInput,
+) -> Result<ByIdScope> {
+    let read_ctx = ReadAccessCtx {
+        def,
+        slug: ctx.slug,
+        user: ctx.user,
+        id: Some(input.id),
+        locale: input.locale_ctx.map(LocaleContext::access_locale),
+        operation: "find_by_id",
+        ui_locale: None,
+    };
+
+    let scope = resolve_view_scope(hooks, &read_ctx, requested_views(None, input.use_draft))?;
+
+    if !scope.is_anything_visible() {
+        return Err(ServiceError::AccessDenied("Read access denied".into()));
+    }
+
+    // Overlay the draft snapshot only when the draft view is actually visible —
+    // a read-only caller opting into drafts is downgraded to the published row.
+    let use_draft_overlay = input.use_draft && scope.draft_visible();
+
+    Ok(ByIdScope {
+        constraints: scope.into_filters(),
+        use_draft_overlay,
+    })
+}
+
+/// Resolve the trash lookup scope: gated by `access.trash`, independent of the
+/// published/draft status union.
+fn resolve_trash_by_id(
+    hooks: &dyn ReadHooks,
+    ctx: &ServiceContext,
+    input: &FindByIdInput,
+) -> Result<ByIdScope> {
+    let def = ctx.collection_def()?;
+    let constraints = resolve_trash_scope(
+        hooks,
+        &ReadAccessCtx {
+            def,
+            slug: ctx.slug,
+            user: ctx.user,
+            id: Some(input.id),
+            locale: input.locale_ctx.map(LocaleContext::access_locale),
+            operation: "find_by_id",
+            ui_locale: None,
+        },
+    )?;
+
+    Ok(ByIdScope {
+        constraints,
+        use_draft_overlay: input.use_draft,
+    })
+}
 
 /// Look up a single document by ID with the full read lifecycle.
 ///
@@ -30,65 +101,18 @@ pub fn find_document_by_id(
     let hooks = ctx.read_hooks()?;
     let def = ctx.collection_def()?;
 
-    // A draft read (opting into unpublished content) is gated at edit level
-    // (`access.draft ?? access.update`), not by `access.read` — a plain reader
-    // must not be able to pull unpublished content via the `draft` opt-in.
-    // Mirrors the stricter `resolve_trash` gate used for the trash view.
-    let wants_draft = input.use_draft && def.has_drafts();
-
-    let access_ref = if input.include_deleted {
-        def.access.resolve_trash()
-    } else if wants_draft {
-        def.access.resolve_draft()
+    let mut scope = if input.include_deleted {
+        resolve_trash_by_id(hooks, ctx, input)?
     } else {
-        def.access.read.as_ref()
+        resolve_live_by_id(hooks, ctx, def, input)?
     };
 
-    let access = hooks.check_access(&AccessCheckInput {
-        access: access_ref,
-        user: ctx.user,
-        id: Some(input.id),
-        data: None,
-        locale: input.locale_ctx.map(LocaleContext::access_locale),
-        operation: "find_by_id",
-        collection: ctx.slug,
-        ui_locale: None,
-    })?;
-
-    if matches!(access, AccessResult::Denied) {
-        let msg = if input.include_deleted {
-            "Trash access denied"
-        } else if wants_draft {
-            "Draft access denied"
-        } else {
-            "Read access denied"
-        };
-        return Err(ServiceError::AccessDenied(msg.into()));
+    // Merge any caller-supplied constraints (e.g. relationship-search scoping).
+    if let Some(extra) = &input.access_constraints {
+        scope.constraints.extend(extra.iter().cloned());
     }
 
-    // Hide never-published drafts on a non-draft read. The `find`/`search`
-    // list paths share `draft_visibility_filter`; `find_by_id` must apply the
-    // identical rule or a document created as a draft and never published —
-    // whose content lives in the main row with `_status = 'draft'` — would leak
-    // here (e.g. via the public `GET /{collection}/{id}` surface). When
-    // `use_draft` is true the caller opted into drafts and `find_by_id_full`'s
-    // snapshot overlay handles them, so no filter is injected. Because the
-    // service now actually injects `_status = 'published'`, access-hook filters
-    // that mention `_status` are legitimately allowed (`injecting_status`).
-    let draft_filter = draft_visibility_filter(def, input.use_draft);
-    let injecting_status = draft_filter.is_some();
-
-    let mut constraints = input.access_constraints.clone().unwrap_or_default();
-    if let Some(f) = draft_filter {
-        constraints.push(f);
-    }
-
-    if let AccessResult::Constrained(extra) = access {
-        validate_access_constraints(&extra, input.include_deleted, injecting_status, ctx.slug)?;
-        constraints.extend(extra);
-    }
-
-    let constraints = (!constraints.is_empty()).then_some(constraints);
+    let constraints = (!scope.constraints.is_empty()).then_some(scope.constraints);
 
     hooks.before_read(
         &def.hooks,
@@ -104,7 +128,7 @@ pub fn find_document_by_id(
         id: input.id,
         locale_ctx: input.locale_ctx,
         constraints,
-        use_draft: input.use_draft,
+        use_draft: scope.use_draft_overlay,
         include_deleted: input.include_deleted,
     })?
     else {
@@ -276,10 +300,11 @@ mod tests {
 
     /// A draft read is gated at edit level (`access.draft ?? access.update`),
     /// not by `access.read`. A reader who passes `access.read` but not the
-    /// edit-level gate is denied when opting into drafts — they cannot pull
-    /// unpublished content via `use_draft`.
+    /// edit-level gate, opting into drafts, downgrades to the published view:
+    /// the never-published draft is hidden (returns `None`), never leaked. The
+    /// published view stays available — reads downgrade, they don't error.
     #[test]
-    fn draft_read_is_gated_by_edit_access_not_read() {
+    fn draft_read_without_draft_access_downgrades_to_published() {
         let (conn, mut def) = drafts_collection_with_rows();
         def.access.read = Some(HookRef::new("read_fn"));
         def.access.update = Some(HookRef::new("update_fn"));
@@ -294,14 +319,27 @@ mod tests {
         let published = find_document_by_id(&ctx, &FindByIdInput::builder("pub1").build()).unwrap();
         assert!(published.is_some(), "published read uses access.read");
 
-        // A draft read resolves to the edit-level gate (`update_fn`) → denied.
-        let denied = find_document_by_id(
+        // Opting into drafts without the edit-level gate downgrades: the draft
+        // view is dropped, so the never-published draft is hidden — not errored.
+        let downgraded = find_document_by_id(
             &ctx,
             &FindByIdInput::builder("draft1").use_draft(true).build(),
-        );
+        )
+        .unwrap();
         assert!(
-            matches!(denied, Err(ServiceError::AccessDenied(_))),
-            "draft read must be gated by edit-level access, not read"
+            downgraded.is_none(),
+            "draft read without draft access must downgrade (draft hidden), not leak"
+        );
+
+        // The published view is still reachable for the same reader.
+        let still_published = find_document_by_id(
+            &ctx,
+            &FindByIdInput::builder("pub1").use_draft(true).build(),
+        )
+        .unwrap();
+        assert!(
+            still_published.is_some(),
+            "published content stays visible under draft downgrade"
         );
     }
 }

@@ -1,35 +1,58 @@
 //! Paginated find query with the full read lifecycle.
 
 use crate::{
-    core::{CollectionDefinition, Document, HookRef},
-    db::{AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query},
-    hooks::AccessCheckInput,
-    service::{FindDocumentsInput, PaginatedResult, ServiceContext, ServiceError, helpers},
+    core::{CollectionDefinition, Document},
+    db::{Filter, FilterClause, FilterOp, LocaleContext, query},
+    service::{
+        FindDocumentsInput, PaginatedResult, ReadAccessCtx, ReadHooks, ServiceContext,
+        ServiceError, helpers, requested_views, resolve_trash_scope, resolve_view_scope,
+    },
 };
 
-/// Resolve the access ref and denial message for a find, based on whether the
-/// effective query targets the trash view, exposes drafts, or is a normal
-/// published read. Trash and draft views are gated at edit level
-/// (`resolve_trash` / `resolve_draft`); a plain read uses `access.read`.
-fn find_access_gate(
-    def: &CollectionDefinition,
-    trash: bool,
-    wants_draft: bool,
-) -> (Option<&HookRef>, &'static str) {
-    if trash {
-        (def.access.resolve_trash(), "Trash access denied")
-    } else if wants_draft {
-        (def.access.resolve_draft(), "Draft access denied")
-    } else {
-        (def.access.read.as_ref(), "Read access denied")
-    }
-}
-
-use super::draft_visibility::{draft_visibility_filter, read_exposes_drafts};
 use super::post_process::post_process_docs;
-use super::validate_filters::{validate_access_constraints, validate_user_filters};
+use super::validate_filters::validate_user_filters;
 
 type Result<T> = std::result::Result<T, ServiceError>;
+
+/// Resolve the access-scoped filters to AND into a find.
+///
+/// Two independent axes: the **lifecycle** axis (live vs trash) and, within the
+/// live view, the **status** union (published vs draft). Trash is a distinct
+/// mode gated by `access.trash`; the live view is the published/draft union
+/// resolved through [`ViewScope`](crate::db::ViewScope), which downgrades denied
+/// views away rather than erroring.
+fn scoped_read_filters(
+    hooks: &dyn ReadHooks,
+    ctx: &ServiceContext,
+    def: &CollectionDefinition,
+    input: &FindDocumentsInput,
+) -> Result<Vec<FilterClause>> {
+    let read_ctx = ReadAccessCtx {
+        def,
+        slug: ctx.slug,
+        user: ctx.user,
+        id: None,
+        locale: input.locale_ctx.map(LocaleContext::access_locale),
+        operation: "find",
+        ui_locale: None,
+    };
+
+    if input.trash && def.soft_delete {
+        return resolve_trash_scope(hooks, &read_ctx);
+    }
+
+    let scope = resolve_view_scope(
+        hooks,
+        &read_ctx,
+        requested_views(input.status_filter.as_deref(), input.include_drafts),
+    )?;
+
+    if !scope.is_anything_visible() {
+        return Err(ServiceError::AccessDenied("Read access denied".into()));
+    }
+
+    Ok(scope.into_filters())
+}
 
 /// Execute a paginated find query with the full read lifecycle.
 ///
@@ -52,45 +75,18 @@ pub fn find_documents(
     let hooks = ctx.read_hooks()?;
     let def = ctx.collection_def()?;
 
-    let wants_draft =
-        read_exposes_drafts(def, input.status_filter.as_deref(), input.include_drafts);
-    let (access_ref, denied_msg) = find_access_gate(def, input.trash, wants_draft);
+    let mut fq = input.query.clone();
+    fq.filters
+        .extend(scoped_read_filters(hooks, ctx, def, input)?);
 
-    let access = hooks.check_access(&AccessCheckInput {
-        access: access_ref,
-        user: ctx.user,
-        id: None,
-        data: None,
-        locale: input.locale_ctx.map(LocaleContext::access_locale),
-        operation: "find",
-        collection: ctx.slug,
-        ui_locale: None,
-    })?;
-
-    if matches!(access, AccessResult::Denied) {
-        return Err(ServiceError::AccessDenied(denied_msg.into()));
-    }
-
-    let mut fq = build_effective_query(
-        input.query,
-        def,
-        input.trash,
-        input.include_drafts,
-        input.status_filter.as_deref(),
-    );
-
-    // `_status` filtering is "happening" if the service-layer injected
-    // either the published-only default OR an explicit user-supplied
-    // status. Access-constraint hooks that mention `_status` are
-    // permitted in either case (the SQL `_status` column is being
-    // queried regardless of which value).
-    let injecting_status = (input.status_filter.is_some()
-        || (!input.include_drafts && def.has_drafts()))
-        && def.has_drafts();
-
-    if let AccessResult::Constrained(extra) = access {
-        validate_access_constraints(&extra, input.trash, injecting_status, ctx.slug)?;
-        fq.filters.extend(extra);
+    // Trash is a lifecycle mode orthogonal to the status union: restrict to
+    // soft-deleted rows once `scoped_read_filters` has cleared `access.trash`.
+    if input.trash && def.soft_delete {
+        fq.include_deleted = true;
+        fq.filters.push(FilterClause::Single(Filter {
+            field: "_deleted_at".to_string(),
+            op: FilterOp::Exists,
+        }));
     }
 
     hooks.before_read(
@@ -162,150 +158,4 @@ pub fn find_documents(
         total,
         pagination,
     })
-}
-
-/// Clone the user-supplied query and inject service-owned system filters
-/// (`_status` and `_deleted_at`) based on the typed flags.
-///
-/// Runs *after* `validate_user_filters` so the injected filters bypass the
-/// system-column rule that user filters are subject to.
-///
-/// Status precedence: an explicit `status_filter` (translated by the admin
-/// list handler from `?where[_status][equals]=X` URL params, including
-/// OR-bucket forms) wins. One value injects `_status = X`; multiple
-/// values widen to `_status IN (X, Y, …)`. Otherwise the
-/// default-when-drafts rule fires: `include_drafts = false` &&
-/// `def.has_drafts()` injects `_status = "published"`.
-fn build_effective_query(
-    user_query: &FindQuery,
-    def: &CollectionDefinition,
-    trash: bool,
-    include_drafts: bool,
-    status_filter: Option<&[String]>,
-) -> FindQuery {
-    let mut fq = user_query.clone();
-
-    match status_filter {
-        Some(values) if def.has_drafts() && !values.is_empty() => {
-            let op = if values.len() == 1 {
-                FilterOp::Equals(values[0].clone())
-            } else {
-                FilterOp::In(values.to_vec())
-            };
-            fq.filters.push(FilterClause::Single(Filter {
-                field: "_status".to_string(),
-                op,
-            }));
-        }
-        // No explicit status filter → apply the shared default-draft rule.
-        _ => {
-            if let Some(f) = draft_visibility_filter(def, include_drafts) {
-                fq.filters.push(f);
-            }
-        }
-    }
-
-    if trash && def.soft_delete {
-        fq.include_deleted = true;
-        fq.filters.push(FilterClause::Single(Filter {
-            field: "_deleted_at".to_string(),
-            op: FilterOp::Exists,
-        }));
-    }
-
-    fq
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::core::CollectionDefinition;
-    use crate::core::collection::VersionsConfig;
-
-    use super::*;
-
-    fn drafts_collection() -> CollectionDefinition {
-        let mut def = CollectionDefinition::new("posts");
-        def.versions = Some(VersionsConfig::new(true, 5));
-        def
-    }
-
-    /// Extract the `_status` filter op, if any was injected.
-    fn status_op(fq: &FindQuery) -> Option<&FilterOp> {
-        fq.filters.iter().find_map(|c| match c {
-            FilterClause::Single(f) if f.field == "_status" => Some(&f.op),
-            _ => None,
-        })
-    }
-
-    /// SECURITY-CRITICAL: a drafts collection with `include_drafts = false`
-    /// and no explicit status filter must inject `_status = "published"`, so
-    /// unpublished drafts never leak to a default read.
-    #[test]
-    fn drafts_hidden_by_default_inject_published_status() {
-        let fq = build_effective_query(
-            &FindQuery::default(),
-            &drafts_collection(),
-            false,
-            false,
-            None,
-        );
-        assert!(
-            matches!(status_op(&fq), Some(FilterOp::Equals(v)) if v == "published"),
-            "expected _status = published, got {:?}",
-            status_op(&fq)
-        );
-    }
-
-    #[test]
-    fn include_drafts_true_adds_no_status_filter() {
-        let fq = build_effective_query(
-            &FindQuery::default(),
-            &drafts_collection(),
-            false,
-            true,
-            None,
-        );
-        assert!(status_op(&fq).is_none());
-    }
-
-    #[test]
-    fn non_drafts_collection_never_filters_status() {
-        let def = CollectionDefinition::new("posts"); // no versions → no drafts
-        let fq = build_effective_query(&FindQuery::default(), &def, false, false, None);
-        assert!(status_op(&fq).is_none());
-    }
-
-    #[test]
-    fn explicit_status_filter_uses_equals_for_one_in_for_many() {
-        let one = build_effective_query(
-            &FindQuery::default(),
-            &drafts_collection(),
-            false,
-            false,
-            Some(&["draft".to_string()]),
-        );
-        assert!(matches!(status_op(&one), Some(FilterOp::Equals(v)) if v == "draft"));
-
-        let many = build_effective_query(
-            &FindQuery::default(),
-            &drafts_collection(),
-            false,
-            false,
-            Some(&["draft".to_string(), "published".to_string()]),
-        );
-        assert!(matches!(status_op(&many), Some(FilterOp::In(v)) if v.len() == 2));
-    }
-
-    #[test]
-    fn trash_includes_deleted_and_requires_deleted_at() {
-        let mut def = drafts_collection();
-        def.soft_delete = true;
-        let fq = build_effective_query(&FindQuery::default(), &def, true, true, None);
-
-        assert!(fq.include_deleted);
-        assert!(fq.filters.iter().any(|c| matches!(
-            c,
-            FilterClause::Single(f) if f.field == "_deleted_at" && matches!(f.op, FilterOp::Exists)
-        )));
-    }
 }

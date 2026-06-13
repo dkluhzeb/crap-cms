@@ -1,19 +1,22 @@
 //! Document counting with access control.
 
 use crate::{
-    db::{AccessResult, Filter, FilterClause, FilterOp, LocaleContext, query},
-    hooks::AccessCheckInput,
-    service::{CountDocumentsInput, ServiceContext, ServiceError},
+    db::{Filter, FilterClause, FilterOp, LocaleContext, query},
+    service::{
+        CountDocumentsInput, ReadAccessCtx, ServiceContext, ServiceError, requested_views,
+        resolve_trash_scope, resolve_view_scope,
+    },
 };
 
-use super::validate_filters::{validate_access_constraints, validate_user_filters};
+use super::validate_filters::validate_user_filters;
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
 /// Count documents matching the given filters, with access control.
 ///
-/// Steps: validate user filters -> access check -> inject system filters
-/// (`_status`/`_deleted_at`) -> count.
+/// Steps: validate user filters -> resolve the access-scoped view (trash mode
+/// or the published/draft union) -> count. Status visibility is composed by
+/// [`ViewScope`](crate::db::ViewScope) exactly as in `find`.
 ///
 /// # Errors
 ///
@@ -28,62 +31,35 @@ pub fn count_documents(ctx: &ServiceContext, input: &CountDocumentsInput) -> Res
     let def = ctx.collection_def()?;
 
     let trash_active = input.trash && def.soft_delete;
-    let wants_draft = input.include_drafts && def.has_drafts();
 
-    // Counting trash / drafts is gated at edit level (resolve_trash /
-    // resolve_draft), not by `access.read` — a plain reader must not be able to
-    // enumerate (or count) unpublished or trashed content. Matches `find`.
-    let access_ref = if trash_active {
-        def.access.resolve_trash()
-    } else if wants_draft {
-        def.access.resolve_draft()
-    } else {
-        def.access.read.as_ref()
-    };
-
-    let access = hooks.check_access(&AccessCheckInput {
-        access: access_ref,
+    let read_ctx = ReadAccessCtx {
+        def,
+        slug: ctx.slug,
         user: ctx.user,
         id: None,
-        data: None,
         locale: input.locale_ctx.map(LocaleContext::access_locale),
         operation: "count",
-        collection: ctx.slug,
         ui_locale: None,
-    })?;
-
-    if matches!(access, AccessResult::Denied) {
-        let msg = if trash_active {
-            "Trash access denied"
-        } else if wants_draft {
-            "Draft access denied"
-        } else {
-            "Read access denied"
-        };
-        return Err(ServiceError::AccessDenied(msg.into()));
-    }
+    };
 
     let mut merged = input.filters.to_vec();
 
-    let injecting_status = !input.include_drafts && def.has_drafts();
-
-    if injecting_status {
-        merged.push(FilterClause::Single(Filter {
-            field: "_status".to_string(),
-            op: FilterOp::Equals("published".to_string()),
-        }));
-    }
-
     if trash_active {
+        merged.extend(resolve_trash_scope(hooks, &read_ctx)?);
         merged.push(FilterClause::Single(Filter {
             field: "_deleted_at".to_string(),
             op: FilterOp::Exists,
         }));
-    }
-
-    if let AccessResult::Constrained(extra) = access {
-        validate_access_constraints(&extra, trash_active, injecting_status, ctx.slug)?;
-        merged.extend(extra);
+    } else {
+        let scope = resolve_view_scope(
+            hooks,
+            &read_ctx,
+            requested_views(None, input.include_drafts),
+        )?;
+        if !scope.is_anything_visible() {
+            return Err(ServiceError::AccessDenied("Read access denied".into()));
+        }
+        merged.extend(scope.into_filters());
     }
 
     let count = query::count_with_search(

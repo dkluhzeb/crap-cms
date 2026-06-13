@@ -46,6 +46,7 @@
 //!   (or `Option<T>` for owned handles) so a caller can pass through
 //!   a parent's optional field without `if let Some(x) = ...`.
 
+pub(crate) mod access;
 pub mod auth;
 mod collections;
 mod context;
@@ -64,6 +65,7 @@ pub(crate) mod user_settings;
 pub(crate) mod versions;
 pub(crate) mod write;
 
+pub(crate) use access::{ReadAccessCtx, requested_views, resolve_trash_scope, resolve_view_scope};
 pub use context::{Def, ServiceContext};
 pub use error::ServiceError;
 pub(crate) use types::AfterChangeInput;

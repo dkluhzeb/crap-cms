@@ -3,10 +3,10 @@
 use serde_json::Value;
 
 use crate::{
-    core::{Document, collection::GlobalDefinition},
+    core::{Document, HookRef, collection::GlobalDefinition},
     db::{AccessResult, DbConnection, LocaleContext, ops, query, query::helpers::global_table},
     hooks::{AccessCheckInput, lifecycle::AfterReadCtx},
-    service::{GetGlobalInput, ServiceContext, ServiceError, helpers},
+    service::{GetGlobalInput, ReadHooks, ServiceContext, ServiceError, helpers},
 };
 
 type Result<T> = std::result::Result<T, ServiceError>;
@@ -26,15 +26,16 @@ fn resolve_global_doc(
     conn: &dyn DbConnection,
     slug: &str,
     def: &GlobalDefinition,
-    input: &GetGlobalInput,
+    include_drafts: bool,
+    locale_ctx: Option<&LocaleContext>,
 ) -> anyhow::Result<Document> {
     if !def.has_drafts() {
-        return query::get_global(conn, slug, def, input.locale_ctx);
+        return query::get_global(conn, slug, def, locale_ctx);
     }
 
     let gtable = global_table(slug);
 
-    if input.include_drafts {
+    if include_drafts {
         if let Some(version) = query::find_latest_version(conn, &gtable, "default")?
             && version.status == "draft"
             && let Some(doc) = ops::document_from_snapshot("default", &version.snapshot)
@@ -42,10 +43,10 @@ fn resolve_global_doc(
             return Ok(doc);
         }
 
-        return query::get_global(conn, slug, def, input.locale_ctx);
+        return query::get_global(conn, slug, def, locale_ctx);
     }
 
-    let main = query::get_global(conn, slug, def, input.locale_ctx)?;
+    let main = query::get_global(conn, slug, def, locale_ctx)?;
 
     if main.fields.get("_status").and_then(Value::as_str) == Some("draft") {
         return published_global_or_empty(conn, &gtable);
@@ -68,6 +69,43 @@ fn published_global_or_empty(conn: &dyn DbConnection, gtable: &str) -> anyhow::R
     Ok(Document::builder("default").build())
 }
 
+/// Resolve a single global view (published or draft) to a boolean visibility.
+/// Globals are single-row and so do not support filter-based access: a
+/// `Constrained` result is a configuration error, not a row filter.
+///
+/// # Errors
+///
+/// Returns [`ServiceError::HookError`] if the access hook returns a filter
+/// table, or propagates a hook execution error.
+fn global_view_visible(
+    hooks: &dyn ReadHooks,
+    ctx: &ServiceContext,
+    access_ref: Option<&HookRef>,
+    input: &GetGlobalInput,
+) -> Result<bool> {
+    let access = hooks.check_access(&AccessCheckInput {
+        access: access_ref,
+        user: ctx.user,
+        id: None,
+        data: None,
+        locale: input.locale_ctx.map(LocaleContext::access_locale),
+        // Match this global-read's own `before_read` / `after_read` hooks, which
+        // report `"get"` — a global has no collection-style `find`.
+        operation: "get",
+        collection: ctx.slug,
+        ui_locale: input.ui_locale,
+    })?;
+
+    match access {
+        AccessResult::Allowed => Ok(true),
+        AccessResult::Denied => Ok(false),
+        AccessResult::Constrained(_) => Err(ServiceError::HookError(format!(
+            "Access hook for global '{}' returned a filter table; globals don't support filter-based access — return true/false based on ctx.user fields instead.",
+            ctx.slug
+        ))),
+    }
+}
+
 /// Read a global document with the full read lifecycle.
 ///
 /// Steps: `before_read` -> `get_global` -> field-level read strip -> `after_read`.
@@ -82,44 +120,18 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
     let hooks = ctx.read_hooks()?;
     let def = ctx.global_def()?;
 
-    // Reading a global's draft (unpublished) content is gated at edit level
-    // (`access.draft ?? access.update`), not by `access.read` — identical to the
-    // collection draft gate, so a plain reader cannot pull an unpublished global
-    // via the `draft` opt-in.
-    let wants_draft = input.include_drafts && def.has_drafts();
-    let access_ref = if wants_draft {
-        def.access.resolve_draft()
-    } else {
-        def.access.read.as_ref()
-    };
+    // Two independent views, exactly as for collections: published content gated
+    // by `access.read`, draft content gated by `access.draft ?? access.update`.
+    // Reads downgrade — a reader opting into drafts without the edit-level gate
+    // still sees the published global rather than an error.
+    let published_visible = global_view_visible(hooks, ctx, def.access.read.as_ref(), input)?;
 
-    let access = hooks.check_access(&AccessCheckInput {
-        access: access_ref,
-        user: ctx.user,
-        id: None,
-        data: None,
-        locale: input.locale_ctx.map(LocaleContext::access_locale),
-        // Match this global-read's own `before_read` / `after_read` hooks, which
-        // report `"get"` — a global has no collection-style `find`.
-        operation: "get",
-        collection: ctx.slug,
-        ui_locale: input.ui_locale,
-    })?;
+    let draft_visible = input.include_drafts
+        && def.has_drafts()
+        && global_view_visible(hooks, ctx, def.access.resolve_draft(), input)?;
 
-    if matches!(access, AccessResult::Denied) {
-        let msg = if wants_draft {
-            "Draft access denied"
-        } else {
-            "Read access denied"
-        };
-        return Err(ServiceError::AccessDenied(msg.into()));
-    }
-
-    if matches!(access, AccessResult::Constrained(_)) {
-        return Err(ServiceError::HookError(format!(
-            "Access hook for global '{}' returned a filter table; globals don't support filter-based access — return true/false based on ctx.user fields instead.",
-            ctx.slug
-        )));
+    if !published_visible && !draft_visible {
+        return Err(ServiceError::AccessDenied("Read access denied".into()));
     }
 
     hooks.before_read(
@@ -130,8 +142,9 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
     )?;
 
     // Resolve the document with draft visibility applied identically to the
-    // collection `find_by_id` path (see `resolve_global_doc`).
-    let mut doc = resolve_global_doc(conn, ctx.slug, def, input)?;
+    // collection `find_by_id` path (see `resolve_global_doc`). `draft_visible`
+    // is the downgraded opt-in: a denied draft view falls back to published.
+    let mut doc = resolve_global_doc(conn, ctx.slug, def, draft_visible, input.locale_ctx)?;
 
     let mut denied = hooks.field_read_denied(
         &def.fields,

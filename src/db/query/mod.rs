@@ -21,6 +21,7 @@ pub(crate) mod helpers;
 mod locale;
 mod types;
 mod validation;
+mod view_scope;
 
 pub use columns::{get_column_names, get_expected_column_names};
 pub use cursor::{SortDirection, SortValue};
@@ -35,6 +36,7 @@ pub use validation::{
     get_valid_filter_paths, is_valid_identifier, reject_system_field, sanitize_locale,
     validate_field_name, validate_query_fields, validate_slug, validate_template_slug,
 };
+pub use view_scope::{RequestedViews, ViewScope};
 
 pub(crate) use helpers::coerce_json_value;
 pub(crate) use locale::{group_locale_fields, locale_write_column};

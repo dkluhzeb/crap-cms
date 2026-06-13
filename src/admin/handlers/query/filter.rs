@@ -286,8 +286,8 @@ pub(crate) fn extract_where_params(raw_query: &str) -> String {
 /// `parse_where_params` and `validate_user_filters`. The admin filter drawer routes
 /// it through this typed extractor instead so it can ride a service-layer typed
 /// param (`FindDocumentsInput::status_filter`) and bypass user-filter validation
-/// safely. Two values across the URL widen to `_status IN (…)` at injection time;
-/// see `service::read::find::build_effective_query`.
+/// safely. The service maps these status values to the requested content views
+/// (`service::requested_views`), which `ViewScope` resolves and gates per view.
 ///
 /// Accepts both raw (`where[_status][equals]=draft`) and URL-encoded
 /// (`where%5B_status%5D%5Bequals%5D=draft`) forms. Recognises the OR-clause form

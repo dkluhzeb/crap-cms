@@ -2,13 +2,12 @@
 
 use crate::{
     core::{Document, upload},
-    db::{AccessResult, LocaleContext, query},
-    hooks::AccessCheckInput,
-    service::{PaginatedResult, SearchDocumentsInput, ServiceContext, ServiceError, helpers},
+    db::{LocaleContext, query},
+    service::{
+        PaginatedResult, ReadAccessCtx, SearchDocumentsInput, ServiceContext, ServiceError,
+        helpers, requested_views, resolve_view_scope,
+    },
 };
-
-use super::draft_visibility::draft_visibility_filter;
-use super::validate_filters::validate_access_constraints;
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -31,47 +30,29 @@ pub fn search_documents(
     let hooks = ctx.read_hooks()?;
     let def = ctx.collection_def()?;
 
-    // Searching drafts (opting into unpublished content) is gated at edit level
-    // (`access.draft ?? access.update`), not by `access.read`, so a plain reader
-    // cannot surface unpublished content through search. Mirrors the trash gate.
-    let wants_draft = input.include_drafts && def.has_drafts();
-    let access_ref = if wants_draft {
-        def.access.resolve_draft()
-    } else {
-        def.access.read.as_ref()
-    };
+    // Status visibility is the published/draft union, gated per view; a reader
+    // who can see nothing gets an empty result (search downgrades, never errors).
+    // Search has no trash mode — it never reaches soft-deleted rows.
+    let scope = resolve_view_scope(
+        hooks,
+        &ReadAccessCtx {
+            def,
+            slug: ctx.slug,
+            user: ctx.user,
+            id: None,
+            locale: input.locale_ctx.map(LocaleContext::access_locale),
+            operation: "search",
+            ui_locale: None,
+        },
+        requested_views(None, input.include_drafts),
+    )?;
 
-    let access = hooks.check_access(&AccessCheckInput {
-        access: access_ref,
-        user: ctx.user,
-        id: None,
-        data: None,
-        locale: input.locale_ctx.map(LocaleContext::access_locale),
-        operation: "search",
-        collection: ctx.slug,
-        ui_locale: None,
-    })?;
-
-    if matches!(access, AccessResult::Denied) {
+    if !scope.is_anything_visible() {
         return Ok(PaginatedResult::default());
     }
 
     let mut fq = input.query.clone();
-    let draft_filter = draft_visibility_filter(def, input.include_drafts);
-
-    if let AccessResult::Constrained(extra) = access {
-        // `_status` is allowed when the service is about to inject
-        // `_status = "published"` (matches `find_documents`' behaviour);
-        // otherwise `_status` from an access hook is rejected as a
-        // probable typo. `_deleted_at` is always rejected here — search
-        // never reaches trashed rows.
-        validate_access_constraints(&extra, false, draft_filter.is_some(), ctx.slug)?;
-        fq.filters.extend(extra);
-    }
-
-    if let Some(f) = draft_filter {
-        fq.filters.push(f);
-    }
+    fq.filters.extend(scope.into_filters());
 
     let had_cursor = fq.after_cursor.is_some() || fq.before_cursor.is_some();
     let overfetch = input.cursor_enabled && had_cursor;
