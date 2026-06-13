@@ -275,7 +275,7 @@ fn multiple_versions_latest_flag() {
     assert!(v3.latest);
 
     // Only the latest version should have _latest=1
-    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
+    let versions = query::list_versions(&conn, "articles", &doc.id, false, None, None).unwrap();
     assert_eq!(versions.len(), 3);
     // Newest first
     assert!(versions[0].latest);
@@ -297,7 +297,7 @@ fn list_versions_newest_first() {
     query::create_version(&conn, "articles", &doc.id, "draft", &snap).unwrap();
     query::create_version(&conn, "articles", &doc.id, "published", &snap).unwrap();
 
-    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
+    let versions = query::list_versions(&conn, "articles", &doc.id, false, None, None).unwrap();
     assert_eq!(versions.len(), 3);
     assert_eq!(versions[0].version, 3);
     assert_eq!(versions[1].version, 2);
@@ -318,7 +318,7 @@ fn list_versions_with_limit() {
         query::create_version(&conn, "articles", &doc.id, "published", &snap).unwrap();
     }
 
-    let limited = query::list_versions(&conn, "articles", &doc.id, Some(3), None).unwrap();
+    let limited = query::list_versions(&conn, "articles", &doc.id, false, Some(3), None).unwrap();
     assert_eq!(limited.len(), 3);
     // Should be the 3 newest
     assert_eq!(limited[0].version, 5);
@@ -388,7 +388,7 @@ fn prune_versions_keeps_newest() {
         query::create_version(&conn, "articles", &doc.id, "published", &snap).unwrap();
     }
     assert_eq!(
-        query::list_versions(&conn, "articles", &doc.id, None, None)
+        query::list_versions(&conn, "articles", &doc.id, false, None, None)
             .unwrap()
             .len(),
         10
@@ -396,7 +396,7 @@ fn prune_versions_keeps_newest() {
 
     // Prune to 3
     query::prune_versions(&conn, "articles", &doc.id, 3).unwrap();
-    let remaining = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
+    let remaining = query::list_versions(&conn, "articles", &doc.id, false, None, None).unwrap();
     assert_eq!(remaining.len(), 3);
     // Newest kept
     assert_eq!(remaining[0].version, 10);
@@ -421,7 +421,7 @@ fn prune_versions_zero_means_unlimited() {
     // max_versions=0 should not prune
     query::prune_versions(&conn, "articles", &doc.id, 0).unwrap();
     assert_eq!(
-        query::list_versions(&conn, "articles", &doc.id, None, None)
+        query::list_versions(&conn, "articles", &doc.id, false, None, None)
             .unwrap()
             .len(),
         5
@@ -515,7 +515,7 @@ fn restore_version_updates_main_table() {
     assert_eq!(after_restore.get_str("body"), Some("Original body"));
 
     // Restore should create a new version (v3)
-    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
+    let versions = query::list_versions(&conn, "articles", &doc.id, false, None, None).unwrap();
     assert_eq!(versions.len(), 3);
     assert_eq!(versions[0].version, 3);
 }
@@ -632,7 +632,7 @@ fn delete_document_cascades_to_versions() {
     query::create_version(&conn, "articles", &doc.id, "draft", &snap).unwrap();
 
     assert_eq!(
-        query::list_versions(&conn, "articles", &doc.id, None, None)
+        query::list_versions(&conn, "articles", &doc.id, false, None, None)
             .unwrap()
             .len(),
         2
@@ -643,7 +643,7 @@ fn delete_document_cascades_to_versions() {
 
     // Versions should be cascade-deleted
     assert_eq!(
-        query::list_versions(&conn, "articles", &doc.id, None, None)
+        query::list_versions(&conn, "articles", &doc.id, false, None, None)
             .unwrap()
             .len(),
         0
@@ -978,7 +978,7 @@ fn service_create_published_creates_version() {
 
     let conn = pool.get().unwrap();
     // Should have created a version
-    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
+    let versions = query::list_versions(&conn, "articles", &doc.id, false, None, None).unwrap();
     assert_eq!(versions.len(), 1);
     assert_eq!(versions[0].status, "published");
 
@@ -1006,7 +1006,7 @@ fn service_create_draft_creates_draft_version() {
             .unwrap();
 
     let conn = pool.get().unwrap();
-    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
+    let versions = query::list_versions(&conn, "articles", &doc.id, false, None, None).unwrap();
     assert_eq!(versions.len(), 1);
     assert_eq!(versions[0].status, "draft");
 
@@ -1059,7 +1059,7 @@ fn service_update_draft_is_version_only() {
     assert_eq!(current.get_str("title"), Some("Original Title"));
 
     // But there should be 2 versions now (create + draft update)
-    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
+    let versions = query::list_versions(&conn, "articles", &doc.id, false, None, None).unwrap();
     assert_eq!(versions.len(), 2);
     assert_eq!(versions[0].status, "draft");
     assert_eq!(versions[1].status, "published");
@@ -1188,7 +1188,7 @@ fn service_update_draft_preserves_join_data_in_snapshot() {
 
     // The draft version snapshot must contain the draft block data
     let conn = pool.get().unwrap();
-    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
+    let versions = query::list_versions(&conn, "articles", &doc.id, false, None, None).unwrap();
     assert_eq!(versions.len(), 2); // create + draft update
     let draft_snap = &versions[0].snapshot;
     let blocks = draft_snap

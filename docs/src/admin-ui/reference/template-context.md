@@ -578,6 +578,7 @@ Field semantics:
 - **`update`** (boolean)
 - **`delete`** (boolean)
 - **`trash`** (boolean)
+- **`draft`** (boolean) — Whether the user may view draft (unpublished) content — gated on `resolve_draft()` (`access.draft`, or `access.update` as the fallback), mirroring what the read paths enforce. Drives whether admin list/search requests drafts for this user.
 
 ### AdminMeta
 
@@ -652,6 +653,7 @@ Per-user permissions for a global page. Globals only have `read` and
 
 - **`read`** (boolean)
 - **`update`** (boolean)
+- **`draft`** (boolean) — Whether the user may view the global's draft (unpublished) content — gated on `resolve_draft()` (`access.draft`, or `access.update`).
 
 ### DocumentRef
 

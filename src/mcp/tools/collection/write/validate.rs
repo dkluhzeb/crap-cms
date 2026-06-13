@@ -45,7 +45,10 @@ pub(in crate::mcp::tools) fn exec_validate(
 
     let data = extract_data_from_args(args, &["id", "password", "locale", "draft"]);
 
-    let write_hooks = RunnerWriteHooks::new(ctx.runner);
+    // Attach the connection so field-level write-access denials are actually
+    // evaluated (a connless hooks object skips them, diverging from the real
+    // write path).
+    let write_hooks = RunnerWriteHooks::new(ctx.runner).with_conn(&conn);
 
     let validate_ctx = ValidateContext {
         slug,

@@ -540,7 +540,16 @@ pub(in crate::mcp) fn global_input_schema(def: &GlobalDefinition, op: CrudOp) ->
 
     match op {
         CrudOp::Find => {
-            json!({ "type": "object", "properties": { "locale": locale_prop } })
+            json!({
+                "type": "object",
+                "properties": {
+                    "locale": locale_prop,
+                    "draft": {
+                        "type": "boolean",
+                        "description": "Read unpublished (draft) content (default: false)"
+                    }
+                }
+            })
         }
         CrudOp::Update => {
             let mut schema = fields_to_object_schema(&def.fields);

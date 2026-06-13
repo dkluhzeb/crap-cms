@@ -37,6 +37,11 @@ pub struct CollectionPermissions {
     pub update: bool,
     pub delete: bool,
     pub trash: bool,
+    /// Whether the user may view draft (unpublished) content — gated on
+    /// `resolve_draft()` (`access.draft`, or `access.update` as the fallback),
+    /// mirroring what the read paths enforce. Drives whether admin list/search
+    /// requests drafts for this user.
+    pub draft: bool,
 }
 
 impl CollectionPermissions {
@@ -107,6 +112,22 @@ impl CollectionPermissions {
             false
         };
 
+        // Mirror the read paths' draft gate: viewing drafts is gated on
+        // `resolve_draft()` (the `draft` fn, or `update` as the fallback), with
+        // the `"find"` operation the list path reports.
+        let draft = if def.has_drafts() {
+            has_access_with_conn(
+                state,
+                def.access.resolve_draft(),
+                user_doc,
+                &tx,
+                "find",
+                &def.slug,
+            )
+        } else {
+            false
+        };
+
         let _ = tx.commit();
 
         Self {
@@ -115,6 +136,7 @@ impl CollectionPermissions {
             update,
             delete,
             trash,
+            draft,
         }
     }
 }
@@ -125,6 +147,9 @@ impl CollectionPermissions {
 pub struct GlobalPermissions {
     pub read: bool,
     pub update: bool,
+    /// Whether the user may view the global's draft (unpublished) content —
+    /// gated on `resolve_draft()` (`access.draft`, or `access.update`).
+    pub draft: bool,
 }
 
 impl GlobalPermissions {
@@ -161,8 +186,27 @@ impl GlobalPermissions {
             &def.slug,
         );
 
+        // Mirror the global read path's draft gate: viewing the draft is gated
+        // on `resolve_draft()`, with the `"get"` operation the read reports.
+        let draft = if def.has_drafts() {
+            has_access_with_conn(
+                state,
+                def.access.resolve_draft(),
+                user_doc,
+                &tx,
+                "get",
+                &def.slug,
+            )
+        } else {
+            false
+        };
+
         let _ = tx.commit();
 
-        Self { read, update }
+        Self {
+            read,
+            update,
+            draft,
+        }
     }
 }

@@ -29,6 +29,7 @@ struct GetGlobalBlockingInput {
     def: GlobalDefinition,
     token: Option<String>,
     locale_ctx: Option<LocaleContext>,
+    include_drafts: bool,
 }
 
 fn get_global_blocking(input: GetGlobalBlockingInput) -> Result<content::Document, Status> {
@@ -61,7 +62,8 @@ fn get_global_blocking(input: GetGlobalBlockingInput) -> Result<content::Documen
         .user(user_doc)
         .build();
 
-    let get_input = GetGlobalInput::new(input.locale_ctx.as_ref(), None);
+    let get_input =
+        GetGlobalInput::new(input.locale_ctx.as_ref(), None).include_drafts(input.include_drafts);
 
     let doc = get_global_document(&ctx, &get_input).map_err(Status::from)?;
 
@@ -95,6 +97,7 @@ impl ContentService {
             token,
             headers,
             locale_ctx,
+            include_drafts: req.draft.unwrap_or(false),
         };
 
         let proto_doc = task::spawn_blocking(move || get_global_blocking(input))

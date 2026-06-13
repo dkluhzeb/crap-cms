@@ -76,8 +76,13 @@ context**.
 
 Get a global's current value. Returns the typed document.
 
-**Options:** `locale` (string) — locale code (e.g. `"en"`, `"de"`).
-Fetches locale-specific field values; omit for default locale.
+**Options:**
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `locale` | string | Locale code (e.g. `"en"`, `"de"`). Fetches locale-specific field values; omit for default locale. |
+| `overrideAccess` | boolean | Bypass the global's `access.read` check (default `false`). |
+| `draft` | boolean | Read unpublished (draft) content (default `false`). When the global has drafts enabled and has been unpublished, a normal read serves the last published snapshot; set `true` to read the draft. |
 
 ```lua
 local settings = crap.globals.site_settings.get()
@@ -86,6 +91,9 @@ print(settings.id)         -- always "default"
 
 -- Fetch German locale data
 local settings_de = crap.globals.site_settings.get({ locale = "de" })
+
+-- Read the unpublished draft of an unpublished global
+local draft = crap.globals.site_settings.get({ draft = true })
 ```
 
 ### `crap.globals.<slug>.update(data, opts?)`

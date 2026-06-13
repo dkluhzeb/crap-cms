@@ -116,24 +116,73 @@ pub fn find_latest_version(
     Ok(Some(row_to_version(&row)?))
 }
 
-/// Count total versions for a parent document.
+/// Find the most recent *published* version snapshot for a parent (the highest
+/// `_version` whose `_status` is `"published"`), if any.
+///
+/// Unlike [`find_latest_version`] this ignores the `_latest` flag — after an
+/// unpublish the latest version is a draft, but the last published snapshot is
+/// still needed to serve published-only readers.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT fails or the row fails to parse.
+pub fn find_latest_published_version(
+    conn: &dyn DbConnection,
+    slug: &str,
+    parent_id: &str,
+) -> Result<Option<VersionSnapshot>> {
+    let table = version_table(slug);
+    let p1 = conn.placeholder(1);
+    let sql = format!(
+        "SELECT id, _parent, _version, _status, _latest, snapshot \
+         FROM {table} WHERE _parent = {p1} AND _status = 'published' \
+         ORDER BY _version DESC LIMIT 1"
+    );
+
+    let Some(row) = conn.query_one(&sql, &[DbValue::Text(parent_id.to_string())])? else {
+        return Ok(None);
+    };
+
+    Ok(Some(row_to_version(&row)?))
+}
+
+/// The `_status = 'published'` clause appended when a caller may only see
+/// published versions (a reader without draft/edit access). `'published'` is a
+/// fixed literal, so there is no parameter to bind.
+fn published_only_clause(published_only: bool) -> &'static str {
+    if published_only {
+        " AND _status = 'published'"
+    } else {
+        ""
+    }
+}
+
+/// Count versions for a parent document. When `published_only` is true, only
+/// `_status = 'published'` snapshots are counted (draft versions are edit-gated).
 ///
 /// # Errors
 ///
 /// Returns a backend error if the COUNT query fails.
-pub fn count_versions(conn: &dyn DbConnection, slug: &str, parent_id: &str) -> Result<i64> {
+pub fn count_versions(
+    conn: &dyn DbConnection,
+    slug: &str,
+    parent_id: &str,
+    published_only: bool,
+) -> Result<i64> {
     let table = version_table(slug);
     let p1 = conn.placeholder(1);
+    let status = published_only_clause(published_only);
     let row = conn
         .query_one(
-            &format!("SELECT COUNT(*) AS cnt FROM {table} WHERE _parent = {p1}"),
+            &format!("SELECT COUNT(*) AS cnt FROM {table} WHERE _parent = {p1}{status}"),
             &[DbValue::Text(parent_id.to_string())],
         )?
         .context("Failed to count versions")?;
     row.get_i64("cnt")
 }
 
-/// List versions for a parent document, newest first.
+/// List versions for a parent document, newest first. When `published_only` is
+/// true, only `_status = 'published'` snapshots are returned.
 ///
 /// # Errors
 ///
@@ -142,11 +191,13 @@ pub fn list_versions(
     conn: &dyn DbConnection,
     slug: &str,
     parent_id: &str,
+    published_only: bool,
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<VersionSnapshot>> {
     let table = version_table(slug);
     let p1 = conn.placeholder(1);
+    let status = published_only_clause(published_only);
     let mut params: Vec<DbValue> = vec![DbValue::Text(parent_id.to_string())];
     let mut idx = 2;
 
@@ -171,7 +222,7 @@ pub fn list_versions(
 
     let sql = format!(
         "SELECT id, _parent, _version, _status, _latest, snapshot \
-         FROM {table} WHERE _parent = {p1} ORDER BY _version DESC{limit_clause}{offset_clause}"
+         FROM {table} WHERE _parent = {p1}{status} ORDER BY _version DESC{limit_clause}{offset_clause}"
     );
 
     conn.query_all(&sql, &params)?
@@ -372,13 +423,13 @@ mod tests {
     #[test]
     fn count_versions_empty_and_populated() {
         let (_dir, conn) = setup_versions_db();
-        assert_eq!(count_versions(&conn, "posts", "p1").unwrap(), 0);
+        assert_eq!(count_versions(&conn, "posts", "p1", false).unwrap(), 0);
 
         create_version(&conn, "posts", "p1", "published", &json!({})).unwrap();
-        assert_eq!(count_versions(&conn, "posts", "p1").unwrap(), 1);
+        assert_eq!(count_versions(&conn, "posts", "p1", false).unwrap(), 1);
 
         create_version(&conn, "posts", "p1", "draft", &json!({})).unwrap();
-        assert_eq!(count_versions(&conn, "posts", "p1").unwrap(), 2);
+        assert_eq!(count_versions(&conn, "posts", "p1", false).unwrap(), 2);
     }
 
     #[test]
@@ -389,19 +440,19 @@ mod tests {
         }
 
         // List all, newest first
-        let all = list_versions(&conn, "posts", "p1", None, None).unwrap();
+        let all = list_versions(&conn, "posts", "p1", false, None, None).unwrap();
         assert_eq!(all.len(), 5);
         assert_eq!(all[0].version, 5); // newest first
         assert_eq!(all[4].version, 1);
 
         // Limit
-        let limited = list_versions(&conn, "posts", "p1", Some(2), None).unwrap();
+        let limited = list_versions(&conn, "posts", "p1", false, Some(2), None).unwrap();
         assert_eq!(limited.len(), 2);
         assert_eq!(limited[0].version, 5);
         assert_eq!(limited[1].version, 4);
 
         // Offset
-        let offset = list_versions(&conn, "posts", "p1", Some(2), Some(2)).unwrap();
+        let offset = list_versions(&conn, "posts", "p1", false, Some(2), Some(2)).unwrap();
         assert_eq!(offset.len(), 2);
         assert_eq!(offset[0].version, 3);
         assert_eq!(offset[1].version, 2);
@@ -471,7 +522,7 @@ mod tests {
         }
         // max_versions = 0 means unlimited -- should not delete anything
         prune_versions(&conn, "posts", "p1", 0).unwrap();
-        assert_eq!(count_versions(&conn, "posts", "p1").unwrap(), 5);
+        assert_eq!(count_versions(&conn, "posts", "p1", false).unwrap(), 5);
     }
 
     #[test]
@@ -481,10 +532,10 @@ mod tests {
             create_version(&conn, "posts", "p1", "published", &json!({})).unwrap();
         }
         prune_versions(&conn, "posts", "p1", 3).unwrap();
-        assert_eq!(count_versions(&conn, "posts", "p1").unwrap(), 3);
+        assert_eq!(count_versions(&conn, "posts", "p1", false).unwrap(), 3);
 
         // The remaining should be the 3 newest
-        let remaining = list_versions(&conn, "posts", "p1", None, None).unwrap();
+        let remaining = list_versions(&conn, "posts", "p1", false, None, None).unwrap();
         assert_eq!(remaining[0].version, 5);
         assert_eq!(remaining[2].version, 3);
     }

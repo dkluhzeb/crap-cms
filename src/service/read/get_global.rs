@@ -1,13 +1,72 @@
 //! Global document read with the full read lifecycle.
 
+use serde_json::Value;
+
 use crate::{
-    core::Document,
-    db::{AccessResult, LocaleContext, query},
+    core::{Document, collection::GlobalDefinition},
+    db::{AccessResult, DbConnection, LocaleContext, ops, query, query::helpers::global_table},
     hooks::{AccessCheckInput, lifecycle::AfterReadCtx},
     service::{GetGlobalInput, ServiceContext, ServiceError, helpers},
 };
 
 type Result<T> = std::result::Result<T, ServiceError>;
+
+/// Resolve the global document to serve, applying draft visibility identically
+/// to the collection `find_by_id` path so the two behave the same:
+///
+/// - **No drafts configured** — read the single row as-is.
+/// - **Drafts, reader opted in** (`include_drafts`) — overlay the latest draft
+///   version snapshot when one exists (a pending draft *edit* lives in the
+///   version table while the main row stays published), mirroring
+///   `find_by_id_full(use_draft = true)`. Falls back to the main row otherwise.
+/// - **Drafts, reader did not opt in** — hide an unpublished global (main row
+///   `_status = 'draft'`) by serving the last published snapshot, or empty
+///   content when nothing was ever published.
+fn resolve_global_doc(
+    conn: &dyn DbConnection,
+    slug: &str,
+    def: &GlobalDefinition,
+    input: &GetGlobalInput,
+) -> anyhow::Result<Document> {
+    if !def.has_drafts() {
+        return query::get_global(conn, slug, def, input.locale_ctx);
+    }
+
+    let gtable = global_table(slug);
+
+    if input.include_drafts {
+        if let Some(version) = query::find_latest_version(conn, &gtable, "default")?
+            && version.status == "draft"
+            && let Some(doc) = ops::document_from_snapshot("default", &version.snapshot)
+        {
+            return Ok(doc);
+        }
+
+        return query::get_global(conn, slug, def, input.locale_ctx);
+    }
+
+    let main = query::get_global(conn, slug, def, input.locale_ctx)?;
+
+    if main.fields.get("_status").and_then(Value::as_str) == Some("draft") {
+        return published_global_or_empty(conn, &gtable);
+    }
+
+    Ok(main)
+}
+
+/// The published content to serve when an unpublished global is read without a
+/// draft opt-in: the most recent `published` version snapshot, or an empty
+/// global when nothing was ever published. `gtable` is the `_global_{slug}`
+/// table name (the version-table base for globals).
+fn published_global_or_empty(conn: &dyn DbConnection, gtable: &str) -> anyhow::Result<Document> {
+    if let Some(version) = query::find_latest_published_version(conn, gtable, "default")?
+        && let Some(doc) = ops::document_from_snapshot("default", &version.snapshot)
+    {
+        return Ok(doc);
+    }
+
+    Ok(Document::builder("default").build())
+}
 
 /// Read a global document with the full read lifecycle.
 ///
@@ -23,8 +82,19 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
     let hooks = ctx.read_hooks()?;
     let def = ctx.global_def()?;
 
+    // Reading a global's draft (unpublished) content is gated at edit level
+    // (`access.draft ?? access.update`), not by `access.read` — identical to the
+    // collection draft gate, so a plain reader cannot pull an unpublished global
+    // via the `draft` opt-in.
+    let wants_draft = input.include_drafts && def.has_drafts();
+    let access_ref = if wants_draft {
+        def.access.resolve_draft()
+    } else {
+        def.access.read.as_ref()
+    };
+
     let access = hooks.check_access(&AccessCheckInput {
-        access: def.access.read.as_ref(),
+        access: access_ref,
         user: ctx.user,
         id: None,
         data: None,
@@ -37,7 +107,12 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
     })?;
 
     if matches!(access, AccessResult::Denied) {
-        return Err(ServiceError::AccessDenied("Read access denied".into()));
+        let msg = if wants_draft {
+            "Draft access denied"
+        } else {
+            "Read access denied"
+        };
+        return Err(ServiceError::AccessDenied(msg.into()));
     }
 
     if matches!(access, AccessResult::Constrained(_)) {
@@ -54,7 +129,9 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
         input.locale_ctx.map(LocaleContext::access_locale),
     )?;
 
-    let mut doc = query::get_global(conn, ctx.slug, def, input.locale_ctx)?;
+    // Resolve the document with draft visibility applied identically to the
+    // collection `find_by_id` path (see `resolve_global_doc`).
+    let mut doc = resolve_global_doc(conn, ctx.slug, def, input)?;
 
     let mut denied = hooks.field_read_denied(
         &def.fields,
@@ -76,4 +153,202 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
     };
 
     Ok(hooks.after_read_one(&ar_ctx, doc))
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod tests {
+    use anyhow::Result;
+    use rusqlite::Connection;
+
+    use super::*;
+    use crate::{
+        core::{
+            Document, FieldDefinition, FieldDenial, FieldType, GlobalDefinition, Hooks,
+            collection::VersionsConfig,
+        },
+        hooks::lifecycle::AfterReadCtx,
+        service::hooks::ReadHooks,
+    };
+
+    struct NoopReadHooks;
+
+    impl ReadHooks for NoopReadHooks {
+        fn before_read(
+            &self,
+            _hooks: &Hooks,
+            _slug: &str,
+            _op: &str,
+            _locale: Option<&str>,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn after_read_one(&self, _ctx: &AfterReadCtx, doc: Document) -> Document {
+            doc
+        }
+
+        fn check_access(&self, _input: &AccessCheckInput<'_>) -> Result<AccessResult> {
+            Ok(AccessResult::Allowed)
+        }
+
+        fn field_read_denied(
+            &self,
+            _fields: &[FieldDefinition],
+            _user: Option<&Document>,
+            _locale: Option<&str>,
+        ) -> Vec<FieldDenial> {
+            Vec::new()
+        }
+    }
+
+    /// Build a drafts-enabled global whose main row is unpublished
+    /// (`_status = 'draft'`), optionally with a prior published version snapshot.
+    fn unpublished_global(with_published_version: bool) -> (Connection, GlobalDefinition) {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _global_settings (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                _status TEXT DEFAULT 'published',
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE _versions__global_settings (
+                id TEXT PRIMARY KEY,
+                _parent TEXT,
+                _version INTEGER,
+                _status TEXT,
+                _latest INTEGER DEFAULT 0,
+                snapshot TEXT
+            );
+            INSERT INTO _global_settings (id, title, _status)
+                VALUES ('default', 'UNPUBLISHED DRAFT', 'draft');",
+        )
+        .unwrap();
+
+        if with_published_version {
+            conn.execute_batch(
+                "INSERT INTO _versions__global_settings
+                    (id, _parent, _version, _status, _latest, snapshot)
+                 VALUES ('v1', 'default', 1, 'published', 0, '{\"title\": \"Published\"}'),
+                        ('v2', 'default', 2, 'draft', 1, '{\"title\": \"UNPUBLISHED DRAFT\"}');",
+            )
+            .unwrap();
+        }
+
+        let mut def = GlobalDefinition::new("settings");
+        def.fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
+        def.versions = Some(VersionsConfig::new(true, 0));
+
+        (conn, def)
+    }
+
+    /// Regression: a non-draft read of an unpublished global must not leak the
+    /// draft sitting in the main row. It serves the last published snapshot.
+    #[test]
+    fn unpublished_global_hidden_from_public_read() {
+        let (conn, def) = unpublished_global(true);
+        let rh = NoopReadHooks;
+        let ctx = ServiceContext::global("settings", &def)
+            .conn(&conn)
+            .read_hooks(&rh)
+            .build();
+
+        let public = get_global_document(&ctx, &GetGlobalInput::new(None, None)).unwrap();
+        assert_eq!(
+            public.fields.get("title").and_then(Value::as_str),
+            Some("Published"),
+            "public read must serve the last published snapshot, not the draft"
+        );
+
+        // An editor opting into drafts still sees the unpublished content.
+        let editor =
+            get_global_document(&ctx, &GetGlobalInput::new(None, None).include_drafts(true))
+                .unwrap();
+        assert_eq!(
+            editor.fields.get("title").and_then(Value::as_str),
+            Some("UNPUBLISHED DRAFT"),
+            "draft opt-in must surface the unpublished content"
+        );
+    }
+
+    /// When nothing was ever published, a non-draft read yields empty content
+    /// rather than leaking the draft.
+    #[test]
+    fn unpublished_global_with_no_published_version_reads_empty() {
+        let (conn, def) = unpublished_global(false);
+        let rh = NoopReadHooks;
+        let ctx = ServiceContext::global("settings", &def)
+            .conn(&conn)
+            .read_hooks(&rh)
+            .build();
+
+        let public = get_global_document(&ctx, &GetGlobalInput::new(None, None)).unwrap();
+        assert_ne!(
+            public.fields.get("title").and_then(Value::as_str),
+            Some("UNPUBLISHED DRAFT"),
+            "draft content must not leak when no published version exists"
+        );
+    }
+
+    /// Parity with collection `find_by_id`: a *published* global with a pending
+    /// draft edit (saved to the version table while the main row stays
+    /// published) surfaces the draft edit when drafts are opted into, and the
+    /// published main row otherwise.
+    #[test]
+    fn published_global_with_pending_draft_edit_overlays_on_opt_in() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _global_settings (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                _status TEXT DEFAULT 'published',
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE _versions__global_settings (
+                id TEXT PRIMARY KEY,
+                _parent TEXT,
+                _version INTEGER,
+                _status TEXT,
+                _latest INTEGER DEFAULT 0,
+                snapshot TEXT
+            );
+            INSERT INTO _global_settings (id, title, _status)
+                VALUES ('default', 'Published Main', 'published');
+            INSERT INTO _versions__global_settings
+                (id, _parent, _version, _status, _latest, snapshot)
+             VALUES ('v1', 'default', 1, 'published', 0, '{\"title\": \"Published Main\"}'),
+                    ('v2', 'default', 2, 'draft', 1, '{\"title\": \"Pending Draft Edit\"}');",
+        )
+        .unwrap();
+
+        let mut def = GlobalDefinition::new("settings");
+        def.fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
+        def.versions = Some(VersionsConfig::new(true, 0));
+
+        let rh = NoopReadHooks;
+        let ctx = ServiceContext::global("settings", &def)
+            .conn(&conn)
+            .read_hooks(&rh)
+            .build();
+
+        // Opt-in surfaces the pending draft edit (matches find_by_id).
+        let editor =
+            get_global_document(&ctx, &GetGlobalInput::new(None, None).include_drafts(true))
+                .unwrap();
+        assert_eq!(
+            editor.fields.get("title").and_then(Value::as_str),
+            Some("Pending Draft Edit"),
+            "draft opt-in must overlay the pending draft version"
+        );
+
+        // A normal read still serves the published main row.
+        let public = get_global_document(&ctx, &GetGlobalInput::new(None, None)).unwrap();
+        assert_eq!(
+            public.fields.get("title").and_then(Value::as_str),
+            Some("Published Main"),
+            "a published global serves its main row to non-draft readers"
+        );
+    }
 }

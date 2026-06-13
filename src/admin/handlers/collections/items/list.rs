@@ -39,8 +39,9 @@ use crate::{
 ///
 /// `is_trash` is a presentation flag from the request — the service layer
 /// injects `_deleted_at EXISTS` and flips `include_deleted` itself. The admin
-/// list view always wants to see drafts alongside published rows (admins
-/// manage both), so `include_drafts` is set unconditionally.
+/// list view shows drafts alongside published rows for users who can view them
+/// (edit-level access); a read-only viewer sees published only (see
+/// `fetch_list_documents`).
 /// Arguments for [`fetch_list_documents`]. All fields are required; constructed
 /// at the single call site in [`list_items`] — plain struct literal per
 /// CLAUDE.md's "single call site" exception to the builder rule.
@@ -73,12 +74,19 @@ fn fetch_list_documents(
         .user(user_doc.as_ref())
         .build();
 
+    // Only request drafts for a user who can actually view them (edit-level
+    // access). A read-only admin sees published rows; an editor sees drafts
+    // too. Requesting drafts unconditionally would make the read paths reject
+    // the whole list for a reader who lacks the draft gate.
+    let can_view_drafts =
+        CollectionPermissions::for_user(args.state, args.def, args.auth_user.as_ref()).draft;
+
     let input = FindDocumentsInput::builder(args.find_query)
         .hydrate(false)
         .locale_ctx(args.locale_ctx)
         .cursor_enabled(args.cursor_enabled)
         .trash(args.is_trash)
-        .include_drafts(true)
+        .include_drafts(can_view_drafts)
         .status_filter(args.status_filter)
         .build();
 

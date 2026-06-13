@@ -235,6 +235,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **Version history now requires edit-level access (breaking).** Listing a
+  document's versions (`list_versions`) and reading a single version snapshot
+  (`find_version_by_id`) were gated by `access.read`, so any reader could
+  enumerate every past snapshot — including unpublished draft states. Both are
+  now gated at edit level via the new `access.draft` (falling back to
+  `access.update`), consistent with draft reads; `restore_version` was already
+  on `access.update`. The admin version sidebar degrades gracefully (a viewer
+  without edit access simply sees no version list rather than an error).
+
+- **Reading drafts now requires edit-level access (breaking).** Draft
+  (unpublished) reads were gated by `access.read` — the same rule as published
+  content — so anyone who could read a collection or global could pull its
+  unpublished content by opting in (`draft = true` / `use_draft` /
+  `include_drafts`, or a `_status = "draft"` filter). A public `read` rule
+  therefore exposed drafts. Draft reads (and the trash-style "count/list of
+  drafts") are now gated by a new `access.draft` hook that **falls back to
+  `access.update`**, mirroring how `trash` falls back to `update` — so by
+  default only users who can edit can preview drafts, and `read` gates
+  published content only. Applies uniformly to collections and globals and to
+  every surface (gRPC/REST, Lua, MCP, admin). **Action:** if you intentionally
+  allowed public/anonymous draft previews, set `access.draft` to a rule that
+  permits them; otherwise no change is needed. The admin list/search/edit views
+  request drafts only for users who pass the draft gate, so a read-only admin
+  now sees published content instead of being denied.
+
 - **Relationship population respects draft visibility.** Populating a
   relationship resolved the target document regardless of its publish
   `_status`, while the top-level read is gated by the service layer
@@ -247,6 +272,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   an editor read can't be served to a published-only reader. Field-level read
   stripping on populated documents was already enforced; this closes the
   publish-status dimension.
+
+- **`find_by_id` no longer leaks never-published drafts.** Fetching a single
+  document by id (e.g. the public `GET /{collection}/{id}` surface) read the
+  main row without injecting the `_status = 'published'` filter that the
+  `find`/`search` list paths share. A document created as a draft and never
+  published — whose content lives in the main row with `_status = 'draft'` —
+  was therefore returned to readers that did not opt into drafts. `find_by_id`
+  now applies the same draft-visibility rule; the draft is still reachable with
+  an explicit draft opt-in (`use_draft`).
+
+- **Unpublished globals are no longer served to public readers.** After a
+  global was unpublished (its main row flipped to `_status = 'draft'`),
+  `get_global` returned that draft content to every reader because it applied no
+  status filter. A non-draft read now serves the last published version
+  snapshot instead — or empty content when nothing was ever published — while
+  the admin edit form still opts into drafts so the global stays editable.
+
+- **MFA codes expire at their exact timestamp.** The MFA verification check
+  used `exp >= now`, accepting a code for one extra second past its expiry. It
+  now expires at the boundary (`now < exp`), matching the reset/verification
+  token checks.
+
+- **Validation endpoints enforce field-level write access.** The gRPC `Validate`
+  RPC and the MCP `validate` tool built their write-hooks bundle without a
+  database connection, so field-level write-access denials were silently skipped
+  and the dry-run validated fields the caller cannot write — diverging from the
+  real write path, which strips them first. Both now attach the connection.
 
 - **Login email lookup is case-insensitive.** A user stored as
   `Test@Example.com` could not log in or reset their password by typing
@@ -293,6 +345,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **Bulk `update_many(draft = true)` saves a draft instead of publishing.** The
+  bulk update path threaded the `draft` flag from the API but ignored it on the
+  write side, writing the main row directly — so a bulk "save as draft" silently
+  published every matched document. It now routes to the version table and
+  leaves the published main row untouched, matching the single-document update,
+  and its validation context honors `draft` (skipping completeness/required
+  checks that drafts are exempt from).
+
+- **Global draft reads match collection draft reads.** A global draft *edit*
+  (`update(draft = true)`) is saved to the version table while the main row
+  stays published, but reading the global only ever returned the published main
+  row — so a "save as draft" appeared to vanish on reload (it lived only in the
+  version sidebar). Global reads now overlay the latest draft version when
+  drafts are opted into (`draft = true` on the Lua/MCP/gRPC surfaces, or the
+  admin edit form), exactly like collection `find_by_id`. Draft visibility on
+  both is gated solely by `access.read`; there is no separate draft permission.
+
+- **Draft edits to a join field nested in a group no longer vanish.** Saving a
+  draft that edited an array, blocks, or has-many relationship nested *inside a
+  group* (e.g. `meta: { related: [...] }`) silently dropped the edit: the draft
+  snapshot rebuilt the group's join data from the database (the pre-edit state)
+  and the overlay step didn't descend into groups. The overlay now restores
+  group-nested (and layout-wrapped) join data at any depth, keyed by the
+  flattened `group__child` name. (Pre-existing; surfaced during review.)
+
+- **Draft edits to group sub-fields no longer revert.** Saving a draft that
+  edited a sub-field of a group via the nested data shape (`{ seo: { title } }`,
+  as the gRPC/MCP/admin surfaces send) lost the edit: the snapshot kept both the
+  stale flat column (`seo__title`) and the new nested object, and snapshot
+  hydration rebuilt the group from the stale column. The draft overlay now
+  flattens group data before merging, so the edit wins.
 
 - **Auth token columns are indexed.** Password-reset and email-verification
   lookups (`WHERE _reset_token = ?` / `WHERE _verification_token = ?`) were

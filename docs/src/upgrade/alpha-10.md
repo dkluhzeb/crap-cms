@@ -257,6 +257,49 @@ arrays/relationships to `[]`); there is no per-locale delete.
   login/forgot-password brute-force protection. A backend error now
   blocks the attempt and logs the infrastructure error — an outage
   degrades login availability instead of security.
+- **Version history now requires edit-level access.** `list_versions` and
+  reading a single version snapshot were gated by `access.read`, so any reader
+  could enumerate every past snapshot (including unpublished states). Both now
+  use `access.draft` (falling back to `access.update`), like draft reads;
+  `restore` was already on `access.update`. The admin version sidebar degrades
+  gracefully (no list rather than an error) for viewers without edit access.
+- **Reading drafts now requires edit-level access (`access.draft`).** Draft
+  reads were gated by `access.read`, so any reader could pull unpublished
+  content by opting in (`draft = true` / `use_draft` / `include_drafts`, or a
+  `_status = "draft"` filter) — a public `read` rule exposed drafts. A new
+  `access.draft` hook gates draft reads and **falls back to `access.update`**
+  (the same way `trash` falls back to `update`), so by default only editors can
+  preview drafts and `read` covers published content only. Uniform across
+  collections, globals, and every surface. **Action:** only if you deliberately
+  exposed drafts to readers who lack edit access — set `access.draft` to permit
+  them. The admin list/search/edit views request drafts only for users who pass
+  the gate, so read-only admins see published content (no denial).
+- **`find_by_id` hides never-published drafts.** Fetching a single
+  document by id (including the public `GET /{collection}/{id}` surface)
+  did not inject the `_status = 'published'` filter that the `find` /
+  `search` list paths apply, so a document created as a draft and never
+  published was returned to readers that did not opt into drafts. It now
+  applies the same draft-visibility rule; pass an explicit draft opt-in
+  (`use_draft` / Lua `draft = true`) to read the draft.
+- **Unpublished globals are hidden from public reads.** After a global
+  was unpublished, `get_global` still served the now-draft content to
+  every reader. A non-draft read now serves the last published version
+  snapshot (or empty content when nothing was ever published); the admin
+  edit form opts into drafts so the global stays editable. The Lua
+  `crap.globals.get` and MCP global-read surfaces now also hide an
+  unpublished global by default — a behavior change only for globals that
+  have been unpublished. To read the draft on purpose, pass the new
+  `draft = true` option (Lua `crap.globals.<slug>.get({ draft = true })`,
+  the MCP `draft` arg, or the gRPC `GetGlobalRequest.draft` field),
+  symmetric with the collection `find_by_id` draft opt-in.
+- **MFA codes expire at their exact timestamp** (`now < exp` rather than
+  `exp >= now`), matching the reset/verification token checks. A code is
+  no longer honored for one extra second past expiry.
+- **Live validation enforces field-level write access.** The gRPC
+  `Validate` RPC and MCP `validate` tool skipped field-level write-access
+  denials (their write-hooks bundle had no DB connection), so the dry-run
+  validated fields the caller cannot write. They now evaluate denials like
+  the real write path.
 
 ## gRPC clients (regenerate from `proto/content.proto`)
 
@@ -286,12 +329,31 @@ Wire-contract changes — regenerate your gRPC stubs and adjust:
   before relying on those shape errors.
 - **Additive:** `CountRequest.trash` counts soft-deleted documents
   (mirrors `FindRequest.trash`). Non-breaking.
+- **Additive:** `GetGlobalRequest.draft` reads the unpublished draft of an
+  unpublished global (mirrors `FindByIdRequest.draft`). Non-breaking.
 - **Doc-only:** `Create`/`Update` now document that a UNIQUE-constraint
   conflict maps to `ALREADY_EXISTS` (the runtime mapping was already
   `ALREADY_EXISTS`; only the proto comment was stale).
 
 ## Bug fixes (no action needed)
 
+- **Bulk `update_many(draft = true)` saves a draft instead of
+  publishing.** The bulk path accepted the `draft` flag but ignored it
+  on the write side, writing the main row directly — so a bulk "save as
+  draft" silently published every matched document. It now routes to the
+  version table and leaves the published row untouched, matching the
+  single-document update.
+- **Draft edits to a join field nested in a group no longer vanish.** An array,
+  blocks, or has-many relationship nested inside a group, edited as a draft, was
+  silently dropped (the snapshot rebuilt the group's join data from the DB). The
+  draft overlay now restores group-nested join data at any depth. (Pre-existing;
+  found during review.)
+- **Draft edits to group sub-fields no longer revert.** Saving a draft
+  that edited a group sub-field via the nested data shape
+  (`{ seo: { title } }`, as the gRPC/MCP/admin surfaces send) lost the
+  edit on restore, because the snapshot kept both the stale flat column
+  and the new nested object. The draft overlay now flattens group data
+  before merging.
 - **Bulk operations are now atomic.** `create_many`, `update_many`, and
   `delete_many` run in a single transaction on every surface (gRPC, Lua,
   admin, MCP). Previously they committed in batches of 500, so a

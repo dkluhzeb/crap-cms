@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use crate::{
     admin::{
         AdminState,
+        context::CollectionPermissions,
         handlers::{collections::shared::thumbnail_url, shared::get_user_doc},
     },
     core::{Document, auth::AuthUser},
@@ -113,15 +114,17 @@ pub async fn search_collection(
         .user(user_doc)
         .build();
 
+    // Editors picking a related document should see drafts too (work-in-progress
+    // content), but only if they can actually view drafts — otherwise the read
+    // path's edit-level draft gate would reject the whole search and return no
+    // results at all. A read-only admin sees published candidates.
+    let can_view_drafts = CollectionPermissions::for_user(&state, def, auth_user.as_ref()).draft;
+
     let search_input = service::SearchDocumentsInput {
         query: &fq,
         locale_ctx: locale_ctx.as_ref(),
         cursor_enabled: false,
-        // Admins picking a related document should see drafts too — they
-        // often need to link to work-in-progress content. The underlying
-        // access hook still decides whether to return Constrained (e.g.
-        // `published_or_author`): that filter continues to apply.
-        include_drafts: true,
+        include_drafts: can_view_drafts,
     };
 
     let Ok(result) = service::search_documents(&ctx, &search_input) else {

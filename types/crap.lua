@@ -497,6 +497,7 @@ function crap.fields.join(config) end
 --- @field update? string | crap.HookRef Hook ref for update access control.
 --- @field delete? string | crap.HookRef Hook ref for delete access control.
 --- @field trash? string | crap.HookRef Hook ref for soft-delete (trash) access control. Falls back to `update` when unset, so most collections don't set this explicitly. Set to lock trashing behind a different policy than update — e.g. only editors can trash, but authors can still update their own drafts.
+--- @field draft? string | crap.HookRef Hook ref for reading draft (unpublished) content — a read that opts into drafts (`draft = true` / `use_draft` / `include_drafts`). Falls back to `update` when unset, so previewing a draft requires edit-level access by default (drafts are not exposed to plain readers). Set to gate draft previews behind a different policy than editing.
 
 --- Context passed to `strategy`-type auth `authenticate` hooks.
 --- @class crap.AuthStrategyContext
@@ -1238,6 +1239,7 @@ function crap.globals.config.list() end
 --- @class crap.GlobalGetOptions
 --- @field locale? string Locale code for localized fields. Nil = default locale.
 --- @field overrideAccess? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass the global's read access function.
+--- @field draft? boolean Include unpublished (draft) content (default: `false`). When the global has drafts enabled and has been unpublished, a normal read serves the last published snapshot; set this to `true` to read the draft instead.
 
 --- Optional options for `crap.globals.update`.
 --- @class crap.GlobalUpdateOptions

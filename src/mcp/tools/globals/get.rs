@@ -21,6 +21,7 @@ pub(in crate::mcp::tools) fn exec_read_global(
 
     let locale = args.get("locale").and_then(|v| v.as_str());
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
+    let draft = args.get("draft").and_then(Value::as_bool).unwrap_or(false);
 
     let svc_ctx = ServiceContext::global(slug, def)
         .pool(ctx.pool)
@@ -29,7 +30,7 @@ pub(in crate::mcp::tools) fn exec_read_global(
         .override_access(true)
         .build();
 
-    let input = GetGlobalInput::new(locale_ctx.as_ref(), None);
+    let input = GetGlobalInput::new(locale_ctx.as_ref(), None).include_drafts(draft);
 
     match get_global_document(&svc_ctx, &input).map_err(ServiceError::into_anyhow) {
         Ok(d) => Ok(to_string_pretty(&doc_to_json(&d))?),

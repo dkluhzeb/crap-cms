@@ -660,6 +660,7 @@ async fn get_global_default() {
         .get_global(Request::new(content::GetGlobalRequest {
             slug: "settings".to_string(),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap()
@@ -689,6 +690,7 @@ async fn update_global_and_read_back() {
         .get_global(Request::new(content::GetGlobalRequest {
             slug: "settings".to_string(),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap()
@@ -751,6 +753,7 @@ async fn validate_global_reports_field_errors_without_persisting() {
         .get_global(Request::new(content::GetGlobalRequest {
             slug: "settings".to_string(),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap()
@@ -769,6 +772,7 @@ async fn get_global_nonexistent() {
         .get_global(Request::new(content::GetGlobalRequest {
             slug: "nope".to_string(),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap_err();
@@ -1008,6 +1012,7 @@ async fn grpc_global_read_access_denied_returns_permission_denied() {
     let mut req = Request::new(content::GetGlobalRequest {
         slug: "restricted_settings".to_string(),
         locale: None,
+        draft: None,
     });
     req.metadata_mut()
         .insert("authorization", format!("Bearer {token}").parse().unwrap());

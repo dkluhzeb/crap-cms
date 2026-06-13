@@ -27,6 +27,10 @@ pub fn find_version_by_id(
     let hooks = ctx.read_hooks()?;
     let table = ctx.version_table();
 
+    // Reading a version snapshot is gated by `access.read`; a DRAFT snapshot
+    // additionally requires edit-level access (`access.draft ?? access.update`),
+    // so a published-only reader can't fetch a draft snapshot by id. Mirrors the
+    // version-list and document draft-visibility gates.
     let access = hooks.check_access(&AccessCheckInput {
         access: ctx.read_access_ref(),
         user: ctx.user,
@@ -45,6 +49,25 @@ pub fn find_version_by_id(
     let Some(mut version) = query::find_version_by_id(conn, &table, version_id)? else {
         return Ok(None);
     };
+
+    // Hide a draft snapshot from a reader who lacks edit-level access — they may
+    // see published version history, not work-in-progress.
+    if version.status == "draft" {
+        let draft_access = hooks.check_access(&AccessCheckInput {
+            access: ctx.draft_access_ref(),
+            user: ctx.user,
+            id: None,
+            data: None,
+            locale: None,
+            operation: "find_by_id",
+            collection: ctx.slug,
+            ui_locale: None,
+        })?;
+
+        if matches!(draft_access, AccessResult::Denied) {
+            return Ok(None);
+        }
+    }
 
     // Constrained: for collections enforce against the version's parent id;
     // for globals, the filter table is meaningless (single row) and is rejected.

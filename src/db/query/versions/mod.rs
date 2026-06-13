@@ -5,8 +5,8 @@ mod restore;
 mod snapshot;
 
 pub use crud::{
-    count_versions, create_version, find_latest_version, find_version_by_id, get_document_status,
-    list_versions, prune_versions, set_document_status,
+    count_versions, create_version, find_latest_published_version, find_latest_version,
+    find_version_by_id, get_document_status, list_versions, prune_versions, set_document_status,
 };
 
 pub use snapshot::build_snapshot;

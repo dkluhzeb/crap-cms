@@ -27,6 +27,11 @@ pub fn list_versions(
     let hooks = ctx.read_hooks()?;
     let table = ctx.version_table();
 
+    // Listing a document's version history is gated by `access.read` — you can
+    // see the published version history if you can read the document. DRAFT
+    // version snapshots are additionally gated at edit level
+    // (`access.draft ?? access.update`): a reader without that access sees only
+    // published versions, mirroring document draft visibility.
     let access = hooks.check_access(&AccessCheckInput {
         access: ctx.read_access_ref(),
         user: ctx.user,
@@ -41,6 +46,20 @@ pub fn list_versions(
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Read access denied".into()));
     }
+
+    // Draft versions need read AND edit-level access. A denied draft check
+    // restricts the listing to published snapshots.
+    let draft_access = hooks.check_access(&AccessCheckInput {
+        access: ctx.draft_access_ref(),
+        user: ctx.user,
+        id: Some(input.parent_id),
+        data: None,
+        locale: None,
+        operation: "find",
+        collection: ctx.slug,
+        ui_locale: None,
+    })?;
+    let published_only = matches!(draft_access, AccessResult::Denied);
 
     // Constrained handling depends on the target: for collections we enforce
     // the filters against the parent document id (reusing the count-based
@@ -60,9 +79,15 @@ pub fn list_versions(
         }
     }
 
-    let total = query::count_versions(conn, &table, input.parent_id)?;
-    let mut versions =
-        query::list_versions(conn, &table, input.parent_id, input.limit, input.offset)?;
+    let total = query::count_versions(conn, &table, input.parent_id, published_only)?;
+    let mut versions = query::list_versions(
+        conn,
+        &table,
+        input.parent_id,
+        published_only,
+        input.limit,
+        input.offset,
+    )?;
 
     // Strip read-denied + API-hidden fields from every snapshot — parity with
     // `find_version_by_id`; otherwise denied fields leak through the list.
@@ -133,6 +158,45 @@ mod tests {
 
         fn check_access(&self, _input: &AccessCheckInput<'_>) -> Result<AccessResult> {
             Ok(AccessResult::Allowed)
+        }
+
+        fn field_read_denied(
+            &self,
+            _fields: &[FieldDefinition],
+            _user: Option<&Document>,
+            _locale: Option<&str>,
+        ) -> Vec<FieldDenial> {
+            Vec::new()
+        }
+    }
+
+    /// Read hooks that allow access only when the access ref is the `read`
+    /// function — so a version read (which resolves to the edit-level
+    /// `draft`/`update` ref) is denied.
+    struct OnlyReadFnAllowed;
+
+    impl ReadHooks for OnlyReadFnAllowed {
+        fn before_read(
+            &self,
+            _hooks: &Hooks,
+            _slug: &str,
+            _op: &str,
+            _locale: Option<&str>,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn after_read_one(&self, _ctx: &AfterReadCtx, doc: Document) -> Document {
+            doc
+        }
+
+        fn check_access(&self, input: &AccessCheckInput<'_>) -> Result<AccessResult> {
+            let is_read_fn = input.access.map(crate::core::HookRef::reference) == Some("read_fn");
+            Ok(if is_read_fn {
+                AccessResult::Allowed
+            } else {
+                AccessResult::Denied
+            })
         }
 
         fn field_read_denied(
@@ -311,6 +375,42 @@ mod tests {
         let result = list_versions(&ctx, &input).unwrap();
         assert_eq!(result.total, 3);
         assert_eq!(result.docs.len(), 2);
+    }
+
+    /// Listing versions is gated by `read`; a draft version additionally needs
+    /// edit-level access. A reader with `read` but not edit access sees only
+    /// published versions, while an editor sees draft versions too.
+    #[test]
+    fn version_list_filters_drafts_for_readers_without_edit_access() {
+        let (conn, mut def) = setup_versioned_collection();
+        def.access.read = Some(crate::core::HookRef::new("read_fn"));
+        def.access.update = Some(crate::core::HookRef::new("update_fn"));
+        conn.execute_batch(
+            "INSERT INTO _versions_posts (id, _parent, _version, _status, _latest, snapshot) \
+             VALUES ('v1', 'p1', 1, 'published', 0, '{}'),
+                    ('v2', 'p1', 2, 'draft', 1, '{}');",
+        )
+        .unwrap();
+
+        // Reader: `read_fn` allowed, edit-level (`update_fn`) denied → published only.
+        let reader = OnlyReadFnAllowed;
+        let reader_ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .read_hooks(&reader)
+            .build();
+        let res = list_versions(&reader_ctx, &ListVersionsInput::builder("p1").build()).unwrap();
+        assert_eq!(res.total, 1, "reader sees only published versions");
+        assert_eq!(res.docs.len(), 1);
+        assert_eq!(res.docs[0].status, "published");
+
+        // Editor (allow-all hooks pass the edit-level check too) → all versions.
+        let editor = NoopReadHooks;
+        let editor_ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .read_hooks(&editor)
+            .build();
+        let res2 = list_versions(&editor_ctx, &ListVersionsInput::builder("p1").build()).unwrap();
+        assert_eq!(res2.total, 2, "editor sees draft versions too");
     }
 
     #[test]

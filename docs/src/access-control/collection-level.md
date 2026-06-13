@@ -24,17 +24,26 @@ field-level `access` and global `access`.
 
 | Property | Controls | Fallback |
 |----------|----------|----------|
-| `read` | `Find` and `FindByID` operations | — |
+| `read` | `Find` / `FindByID` / `count` / `search` of **published** content | — |
 | `create` | `Create` operation | — |
 | `update` | `Update` operation | — |
 | `trash` | Soft-delete (move to trash) and restore. Only relevant when `soft_delete = true`. | `update` |
 | `delete` | Permanent deletion, empty trash. For collections without `soft_delete`, this is the only delete permission. | — |
+| `draft` | Reading **unpublished (draft)** content — any read that opts into drafts (`draft = true` / `use_draft` / `include_drafts`, or a `_status` filter naming a draft status) — **and version history** (`list_versions` / reading a version snapshot, which expose past draft states). Only relevant when `drafts`/`versions` are enabled. | `update` |
 
 > **Note:** When `soft_delete = true`, `trash` and `delete` are separate permissions.
 > `trash` controls the reversible action (low privilege), `delete` controls the
 > destructive action (high privilege). If `trash` is not set, it falls back to
 > `update`. If `delete` is not set, permanent deletion is restricted to the
 > auto-purge scheduler. See [Soft Deletes](../collections/soft-deletes.md).
+
+> **Drafts require edit-level access.** A plain `read` rule gates **published**
+> content only. Pulling unpublished content (via the `draft` opt-in or a
+> `_status = "draft"` filter) is gated by `draft`, which **falls back to
+> `update`** when unset — so by default only users who can edit can preview
+> drafts, and a public `read` rule never exposes unpublished content. Set
+> `draft` explicitly to gate previews behind a different policy than editing.
+> The same rule applies to globals. See [Drafts](../collections/drafts.md).
 
 ## Writing Access Functions
 

@@ -31,8 +31,18 @@ pub fn search_documents(
     let hooks = ctx.read_hooks()?;
     let def = ctx.collection_def()?;
 
+    // Searching drafts (opting into unpublished content) is gated at edit level
+    // (`access.draft ?? access.update`), not by `access.read`, so a plain reader
+    // cannot surface unpublished content through search. Mirrors the trash gate.
+    let wants_draft = input.include_drafts && def.has_drafts();
+    let access_ref = if wants_draft {
+        def.access.resolve_draft()
+    } else {
+        def.access.read.as_ref()
+    };
+
     let access = hooks.check_access(&AccessCheckInput {
-        access: def.access.read.as_ref(),
+        access: access_ref,
         user: ctx.user,
         id: None,
         data: None,

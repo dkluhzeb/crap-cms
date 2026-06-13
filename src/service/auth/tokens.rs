@@ -8,6 +8,7 @@
 use anyhow::anyhow;
 use chrono::Utc;
 use nanoid::nanoid;
+use tracing::error;
 
 use crate::{
     core::DocumentId,
@@ -131,12 +132,14 @@ pub fn consume_verification_token(ctx: &ServiceContext, token: &str) -> Result<b
     };
 
     if Utc::now().timestamp() >= exp {
-        let _ = query::clear_verification_token(conn, ctx.slug, &user.id);
+        let _ = query::clear_verification_token(conn, ctx.slug, &user.id)
+            .inspect_err(|e| error!("failed to clear expired verification token: {e:#}"));
         return Ok(false);
     }
 
     if query::is_locked(conn, ctx.slug, &user.id)? {
-        let _ = query::clear_verification_token(conn, ctx.slug, &user.id);
+        let _ = query::clear_verification_token(conn, ctx.slug, &user.id)
+            .inspect_err(|e| error!("failed to clear verification token for locked user: {e:#}"));
         return Ok(false);
     }
 

@@ -797,7 +797,7 @@ async fn restore_confirm_get_renders_for_existing_version() {
 
     let version = {
         let conn = app.pool.get().unwrap();
-        query::list_versions(&conn, "articles", &doc.id, None, None)
+        query::list_versions(&conn, "articles", &doc.id, false, None, None)
             .unwrap()
             .into_iter()
             .next()

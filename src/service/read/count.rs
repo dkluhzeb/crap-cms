@@ -27,8 +27,22 @@ pub fn count_documents(ctx: &ServiceContext, input: &CountDocumentsInput) -> Res
     let hooks = ctx.read_hooks()?;
     let def = ctx.collection_def()?;
 
+    let trash_active = input.trash && def.soft_delete;
+    let wants_draft = input.include_drafts && def.has_drafts();
+
+    // Counting trash / drafts is gated at edit level (resolve_trash /
+    // resolve_draft), not by `access.read` — a plain reader must not be able to
+    // enumerate (or count) unpublished or trashed content. Matches `find`.
+    let access_ref = if trash_active {
+        def.access.resolve_trash()
+    } else if wants_draft {
+        def.access.resolve_draft()
+    } else {
+        def.access.read.as_ref()
+    };
+
     let access = hooks.check_access(&AccessCheckInput {
-        access: def.access.read.as_ref(),
+        access: access_ref,
         user: ctx.user,
         id: None,
         data: None,
@@ -39,7 +53,14 @@ pub fn count_documents(ctx: &ServiceContext, input: &CountDocumentsInput) -> Res
     })?;
 
     if matches!(access, AccessResult::Denied) {
-        return Err(ServiceError::AccessDenied("Read access denied".into()));
+        let msg = if trash_active {
+            "Trash access denied"
+        } else if wants_draft {
+            "Draft access denied"
+        } else {
+            "Read access denied"
+        };
+        return Err(ServiceError::AccessDenied(msg.into()));
     }
 
     let mut merged = input.filters.to_vec();
@@ -52,8 +73,6 @@ pub fn count_documents(ctx: &ServiceContext, input: &CountDocumentsInput) -> Res
             op: FilterOp::Equals("published".to_string()),
         }));
     }
-
-    let trash_active = input.trash && def.soft_delete;
 
     if trash_active {
         merged.push(FilterClause::Single(Filter {

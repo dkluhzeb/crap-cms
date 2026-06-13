@@ -244,6 +244,19 @@ impl<'a> ServiceContext<'a> {
         }
     }
 
+    /// Get the draft access hook ref (`access.draft ?? access.update`) from the
+    /// definition. Used to gate views of unpublished/historical content —
+    /// version history, like draft reads — at edit level rather than by
+    /// `access.read`.
+    #[must_use]
+    pub fn draft_access_ref(&self) -> Option<&HookRef> {
+        match &self.def {
+            Def::Collection(d) => d.access.resolve_draft(),
+            Def::Global(d) => d.access.resolve_draft(),
+            Def::None => None,
+        }
+    }
+
     /// Get field definitions from either collection or global def. Errors
     /// if the context was built with `Def::None`.
     ///

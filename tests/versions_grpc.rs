@@ -1231,7 +1231,7 @@ fn persist_create_published() {
     assert!(found.is_some());
 
     // Version snapshot should exist with status "published"
-    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
+    let versions = query::list_versions(&conn, "articles", &doc.id, false, None, None).unwrap();
     assert_eq!(versions.len(), 1);
     assert_eq!(versions[0].status, "published");
 
@@ -1261,7 +1261,7 @@ fn persist_create_draft() {
     assert_eq!(status.as_deref(), Some("draft"));
 
     // Version snapshot should exist with status "draft"
-    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
+    let versions = query::list_versions(&conn, "articles", &doc.id, false, None, None).unwrap();
     assert_eq!(versions.len(), 1);
     assert_eq!(versions[0].status, "draft");
 }
@@ -1306,7 +1306,7 @@ fn persist_update_publishes() {
     assert_eq!(found.get_str("title"), Some("After Update"));
 
     // Version snapshot should exist with status "published"
-    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
+    let versions = query::list_versions(&conn, "articles", &doc.id, false, None, None).unwrap();
     assert_eq!(versions.len(), 1);
     assert_eq!(versions[0].status, "published");
 }
@@ -1350,7 +1350,7 @@ fn persist_draft_version_merges_data() {
     assert_eq!(main.get_str("title"), Some("Original"));
 
     // Draft version snapshot should have the merged "Draft Title"
-    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
+    let versions = query::list_versions(&conn, "articles", &doc.id, false, None, None).unwrap();
     assert_eq!(versions.len(), 1);
     assert_eq!(versions[0].status, "draft");
     assert_eq!(
@@ -1392,7 +1392,7 @@ fn persist_unpublish_sets_draft_status() {
     assert_eq!(status.as_deref(), Some("draft"));
 
     // A draft version snapshot should have been created
-    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
+    let versions = query::list_versions(&conn, "articles", &doc.id, false, None, None).unwrap();
     assert_eq!(versions.len(), 1);
     assert_eq!(versions[0].status, "draft");
 }
@@ -1516,7 +1516,7 @@ fn service_update_draft_uses_locale_context() {
     // 5. The draft version snapshot should have the new DE title
     {
         let conn = db_pool.get().unwrap();
-        let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
+        let versions = query::list_versions(&conn, "articles", &doc.id, false, None, None).unwrap();
         // Should have 2 versions: initial published create + draft update
         assert_eq!(versions.len(), 2);
         assert_eq!(versions[0].status, "draft");

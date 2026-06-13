@@ -790,6 +790,11 @@ message GetGlobalRequest {
 
   // BCP-47 locale for localized field reads.
   optional string locale = 2;
+
+  // When true, reads unpublished (draft) content for a global that has drafts
+  // enabled and has been unpublished. Default false serves the last published
+  // snapshot. Subject to the global's read access.
+  optional bool draft = 3;
 }
 
 // GetGlobalResponse wraps the global's document.

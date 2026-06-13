@@ -24,6 +24,30 @@ pub(crate) fn draft_visibility_filter(
     })
 }
 
+/// Whether a read's effective query would expose draft (unpublished) rows, and
+/// therefore must be gated at edit level (`access.draft ?? access.update`)
+/// rather than by `access.read`.
+///
+/// Mirrors `build_effective_query`'s status logic so the access gate and the
+/// query agree: an explicit `status_filter` exposes drafts when it names any
+/// non-`published` status; otherwise the default-draft rule exposes them when
+/// the caller opted in via `include_drafts`. Non-draft collections never
+/// expose drafts.
+pub(crate) fn read_exposes_drafts(
+    def: &CollectionDefinition,
+    status_filter: Option<&[String]>,
+    include_drafts: bool,
+) -> bool {
+    if !def.has_drafts() {
+        return false;
+    }
+
+    match status_filter {
+        Some(values) if !values.is_empty() => values.iter().any(|s| s != "published"),
+        _ => include_drafts,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::core::collection::VersionsConfig;
@@ -56,5 +80,41 @@ mod tests {
     fn none_when_collection_has_no_drafts() {
         // include_drafts=false but no drafts configured → nothing to hide.
         assert!(draft_visibility_filter(&CollectionDefinition::new("posts"), false).is_none());
+    }
+
+    #[test]
+    fn exposes_drafts_via_include_drafts_opt_in() {
+        let def = drafts_def();
+        assert!(read_exposes_drafts(&def, None, true));
+        assert!(!read_exposes_drafts(&def, None, false));
+    }
+
+    #[test]
+    fn exposes_drafts_when_status_filter_names_non_published() {
+        let def = drafts_def();
+        // A status filter naming a draft status exposes drafts even with
+        // include_drafts=false — the gate must catch `?where[_status]=draft`.
+        let draft_only = [String::from("draft")];
+        assert!(read_exposes_drafts(&def, Some(&draft_only), false));
+
+        let mixed = [String::from("draft"), String::from("published")];
+        assert!(read_exposes_drafts(&def, Some(&mixed), false));
+    }
+
+    #[test]
+    fn published_only_status_filter_does_not_expose_drafts() {
+        let def = drafts_def();
+        let published_only = [String::from("published")];
+        // Restricting to published must NOT trip the draft gate, even with
+        // include_drafts=true (the filter wins and hides drafts).
+        assert!(!read_exposes_drafts(&def, Some(&published_only), true));
+    }
+
+    #[test]
+    fn non_draft_collection_never_exposes_drafts() {
+        let def = CollectionDefinition::new("posts");
+        let draft_only = [String::from("draft")];
+        assert!(!read_exposes_drafts(&def, Some(&draft_only), true));
+        assert!(!read_exposes_drafts(&def, None, true));
     }
 }

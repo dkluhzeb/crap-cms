@@ -1,13 +1,31 @@
 //! Paginated find query with the full read lifecycle.
 
 use crate::{
-    core::{CollectionDefinition, Document},
+    core::{CollectionDefinition, Document, HookRef},
     db::{AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query},
     hooks::AccessCheckInput,
     service::{FindDocumentsInput, PaginatedResult, ServiceContext, ServiceError, helpers},
 };
 
-use super::draft_visibility::draft_visibility_filter;
+/// Resolve the access ref and denial message for a find, based on whether the
+/// effective query targets the trash view, exposes drafts, or is a normal
+/// published read. Trash and draft views are gated at edit level
+/// (`resolve_trash` / `resolve_draft`); a plain read uses `access.read`.
+fn find_access_gate(
+    def: &CollectionDefinition,
+    trash: bool,
+    wants_draft: bool,
+) -> (Option<&HookRef>, &'static str) {
+    if trash {
+        (def.access.resolve_trash(), "Trash access denied")
+    } else if wants_draft {
+        (def.access.resolve_draft(), "Draft access denied")
+    } else {
+        (def.access.read.as_ref(), "Read access denied")
+    }
+}
+
+use super::draft_visibility::{draft_visibility_filter, read_exposes_drafts};
 use super::post_process::post_process_docs;
 use super::validate_filters::{validate_access_constraints, validate_user_filters};
 
@@ -34,11 +52,9 @@ pub fn find_documents(
     let hooks = ctx.read_hooks()?;
     let def = ctx.collection_def()?;
 
-    let access_ref = if input.trash {
-        def.access.resolve_trash()
-    } else {
-        def.access.read.as_ref()
-    };
+    let wants_draft =
+        read_exposes_drafts(def, input.status_filter.as_deref(), input.include_drafts);
+    let (access_ref, denied_msg) = find_access_gate(def, input.trash, wants_draft);
 
     let access = hooks.check_access(&AccessCheckInput {
         access: access_ref,
@@ -52,12 +68,7 @@ pub fn find_documents(
     })?;
 
     if matches!(access, AccessResult::Denied) {
-        let msg = if input.trash {
-            "Trash access denied"
-        } else {
-            "Read access denied"
-        };
-        return Err(ServiceError::AccessDenied(msg.into()));
+        return Err(ServiceError::AccessDenied(denied_msg.into()));
     }
 
     let mut fq = build_effective_query(

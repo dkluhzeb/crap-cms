@@ -29,6 +29,11 @@ pub(crate) struct GlobalGetOptions {
     #[serde(rename = "overrideAccess")]
     #[lua(rename = "overrideAccess", optional)]
     pub(crate) override_access: bool,
+    /// Include unpublished (draft) content (default: `false`). When the global
+    /// has drafts enabled and has been unpublished, a normal read serves the
+    /// last published snapshot; set this to `true` to read the draft instead.
+    #[lua(optional)]
+    pub(crate) draft: bool,
 }
 
 impl FromLua for GlobalGetOptions {
@@ -82,7 +87,8 @@ fn globals_get(
         .override_access(opts.override_access)
         .build();
 
-    let input = GetGlobalInput::new(locale_ctx.as_ref(), ui_locale.as_deref());
+    let input =
+        GetGlobalInput::new(locale_ctx.as_ref(), ui_locale.as_deref()).include_drafts(opts.draft);
 
     let doc = get_global_document(&ctx, &input).map_err(|e| RuntimeError(format!("{e}")))?;
 

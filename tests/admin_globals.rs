@@ -610,8 +610,15 @@ async fn global_restore_version() {
         .unwrap();
 
     let conn = app.pool.get().unwrap();
-    let versions = query::list_versions(&conn, "_global_site_config", "default", Some(10), None)
-        .unwrap_or_default();
+    let versions = query::list_versions(
+        &conn,
+        "_global_site_config",
+        "default",
+        false,
+        Some(10),
+        None,
+    )
+    .unwrap_or_default();
     drop(conn);
 
     if let Some(v) = versions.first() {

@@ -386,7 +386,7 @@ mod tests {
         assert_eq!(block_count, 1, "blocks from snapshot should be restored");
 
         // Verify a version was created for the restore
-        let version_count = count_versions(&conn, "posts", "p1").unwrap();
+        let version_count = count_versions(&conn, "posts", "p1", false).unwrap();
         assert_eq!(version_count, 1);
     }
 

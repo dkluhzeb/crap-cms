@@ -694,6 +694,7 @@ async fn update_global_with_nested_fields() {
         .get_global(Request::new(content::GetGlobalRequest {
             slug: "site_config".to_string(),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap()

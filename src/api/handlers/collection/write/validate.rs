@@ -52,7 +52,11 @@ fn validate_blocking(input: ValidateBlockingInput) -> Result<content::ValidateRe
 
     let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
 
-    let write_hooks = RunnerWriteHooks::new(&input.runner);
+    // Attach the connection so field-level write-access denials are actually
+    // evaluated. Without it `field_write_denied` returns an empty list and the
+    // dry-run validates fields the user cannot write, diverging from the real
+    // write path (which strips them first).
+    let write_hooks = RunnerWriteHooks::new(&input.runner).with_conn(&conn);
 
     let ctx = ValidateContext {
         slug: &input.collection,

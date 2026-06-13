@@ -48,7 +48,9 @@ struct ReadParams {
     id: String,
     def: CollectionDefinition,
     locale_ctx: Option<LocaleContext>,
-    has_drafts: bool,
+    /// Whether to load the draft version — true only when the user can view
+    /// drafts (edit-level access). A read-only viewer gets the published doc.
+    use_draft: bool,
     user_doc: Option<Document>,
 }
 
@@ -65,7 +67,7 @@ fn read_document_blocking(params: &ReadParams) -> Result<Option<Document>, Servi
         .build();
 
     let input = FindByIdInput::builder(&params.id)
-        .use_draft(params.has_drafts)
+        .use_draft(params.use_draft)
         .locale_ctx(params.locale_ctx.as_ref())
         .build();
 
@@ -355,6 +357,12 @@ async fn load_document(
     locale_ctx: Option<LocaleContext>,
     auth_user: Option<&Extension<AuthUser>>,
 ) -> Result<Document, Response> {
+    // Load the draft only for a user who can view drafts (edit-level access).
+    // A read-only viewer sees the published version — gating `use_draft` keeps
+    // the read on the `read` access gate rather than the stricter draft gate,
+    // so they aren't denied the document outright.
+    let can_view_drafts = CollectionPermissions::for_user(state, def, auth_user).draft;
+
     let read_params = ReadParams {
         pool: state.pool.clone(),
         runner: state.hook_runner.clone(),
@@ -362,7 +370,7 @@ async fn load_document(
         id: id.to_string(),
         def: def.clone(),
         locale_ctx,
-        has_drafts: def.has_drafts(),
+        use_draft: can_view_drafts,
         user_doc: auth_user.map(|Extension(au)| au.user_doc.clone()),
     };
 

@@ -40,6 +40,9 @@ struct ReadParams {
     locale_ctx: Option<crate::db::LocaleContext>,
     user_doc: Option<Document>,
     user_ui_locale: Option<String>,
+    /// Whether to surface the global's draft — true only when the user can view
+    /// drafts (edit-level access). A read-only viewer sees published content.
+    include_drafts: bool,
 }
 
 /// Fetch the global document via the shared service layer read lifecycle.
@@ -59,7 +62,10 @@ fn read_global_document_blocking(params: &ReadParams) -> Result<Document, Servic
         .user(params.user_doc.as_ref())
         .build();
 
-    let input = GetGlobalInput::new(params.locale_ctx.as_ref(), params.user_ui_locale.as_deref());
+    // Surface the unpublished global only for a user who can view drafts
+    // (edit-level access); a read-only viewer sees the published content.
+    let input = GetGlobalInput::new(params.locale_ctx.as_ref(), params.user_ui_locale.as_deref())
+        .include_drafts(params.include_drafts);
 
     get_global_document(&ctx, &input)
 }
@@ -146,6 +152,8 @@ pub async fn edit_form(
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let (locale_ctx, locale_data) = build_locale_template_data(&state, editor_locale.as_deref());
 
+    let can_view_drafts = GlobalPermissions::for_user(&state, &def, auth_user.as_ref()).draft;
+
     let read_params = ReadParams {
         pool: state.pool.clone(),
         runner: state.hook_runner.clone(),
@@ -154,6 +162,7 @@ pub async fn edit_form(
         locale_ctx,
         user_doc: auth_user.as_ref().map(|Extension(au)| au.user_doc.clone()),
         user_ui_locale: auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone()),
+        include_drafts: can_view_drafts,
     };
 
     let read_result =

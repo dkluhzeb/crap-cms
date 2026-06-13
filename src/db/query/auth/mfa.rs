@@ -77,7 +77,11 @@ pub fn verify_mfa_code(
 
     // Compare BEFORE clearing so we know whether to return success.
     let codes_match = stored_code.as_bytes().ct_eq(code.as_bytes());
-    let not_expired = exp >= now;
+
+    // Expire at the boundary (`now == exp` is already expired), matching the
+    // reset/verification token checks (`now >= exp`). Fail-closed by one second
+    // rather than honoring a code at its exact expiry timestamp.
+    let not_expired = now < exp;
 
     // Always clear — single-use regardless of outcome. Prevents
     // brute-force across attempts.

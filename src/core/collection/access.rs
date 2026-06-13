@@ -35,6 +35,14 @@ pub struct Access {
     #[serde(default)]
     #[lua(ty = "string | crap.HookRef", optional)]
     pub trash: Option<HookRef>,
+    /// Hook ref for reading draft (unpublished) content — a read that opts
+    /// into drafts (`draft = true` / `use_draft` / `include_drafts`). Falls
+    /// back to `update` when unset, so previewing a draft requires edit-level
+    /// access by default (drafts are not exposed to plain readers). Set to
+    /// gate draft previews behind a different policy than editing.
+    #[serde(default)]
+    #[lua(ty = "string | crap.HookRef", optional)]
+    pub draft: Option<HookRef>,
 }
 
 impl Access {
@@ -56,6 +64,16 @@ impl Access {
     pub fn resolve_trash(&self) -> Option<&HookRef> {
         self.trash.as_ref().or(self.update.as_ref())
     }
+
+    /// Resolve the access function for draft (unpublished) reads.
+    /// Returns `access.draft` when set, otherwise falls back to `access.update`
+    /// so that previewing a draft requires edit-level access by default — a
+    /// plain reader (only `access.read`) cannot pull unpublished content via
+    /// the `draft = true` opt-in.
+    #[must_use]
+    pub fn resolve_draft(&self) -> Option<&HookRef> {
+        self.draft.as_ref().or(self.update.as_ref())
+    }
 }
 
 /// Builder for [`Access`]. Created via [`Access::builder`].
@@ -66,6 +84,7 @@ pub struct AccessBuilder {
     update: Option<HookRef>,
     delete: Option<HookRef>,
     trash: Option<HookRef>,
+    draft: Option<HookRef>,
 }
 
 impl AccessBuilder {
@@ -109,6 +128,13 @@ impl AccessBuilder {
     }
 
     #[must_use]
+    pub fn draft(mut self, draft: Option<HookRef>) -> Self {
+        self.draft = draft;
+
+        self
+    }
+
+    #[must_use]
     pub fn build(self) -> Access {
         Access {
             read: self.read,
@@ -116,6 +142,7 @@ impl AccessBuilder {
             update: self.update,
             delete: self.delete,
             trash: self.trash,
+            draft: self.draft,
         }
     }
 }
@@ -148,5 +175,37 @@ mod tests {
     fn resolve_trash_returns_none_when_both_unset() {
         let access = Access::default();
         assert!(access.resolve_trash().is_none());
+    }
+
+    #[test]
+    fn resolve_draft_prefers_draft_over_update() {
+        let access = Access {
+            draft: Some(HookRef::new("draft_fn")),
+            update: Some(HookRef::new("update_fn")),
+            ..Default::default()
+        };
+        assert_eq!(access.resolve_draft(), Some(&HookRef::new("draft_fn")));
+    }
+
+    #[test]
+    fn resolve_draft_falls_back_to_update() {
+        let access = Access {
+            draft: None,
+            update: Some(HookRef::new("update_fn")),
+            ..Default::default()
+        };
+        assert_eq!(access.resolve_draft(), Some(&HookRef::new("update_fn")));
+    }
+
+    #[test]
+    fn resolve_draft_does_not_fall_back_to_read() {
+        // A plain reader (only `read` set) must NOT gain draft access — draft
+        // reads require edit-level access, so with no draft/update rule this
+        // resolves to None (default policy), never to `read`.
+        let access = Access {
+            read: Some(HookRef::new("read_fn")),
+            ..Default::default()
+        };
+        assert!(access.resolve_draft().is_none());
     }
 }
