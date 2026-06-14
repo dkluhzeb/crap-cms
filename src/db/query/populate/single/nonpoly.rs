@@ -4,15 +4,13 @@ use anyhow::Result;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
-use super::populate_relationships_cached;
-use crate::core::{CollectionDefinition, Document, upload};
-use crate::db::query::populate::{
-    PopulateContext, PopulateCtx, PopulateOpts, document_to_json, locale_cache_key,
-    populate_cache_key,
-};
-
+use super::dispatch::{finalize_target, resolve_single_target};
+use crate::core::{CollectionDefinition, Document};
 use crate::db::query::populate::helpers::{
-    CacheOrFetch, cache_get_doc, cache_or_fetch_doc, cache_set_doc, fetch_target, fetch_targets,
+    cache_get_doc, cache_set_doc, fetch_targets, resolve_target_access,
+};
+use crate::db::query::populate::{
+    PopulateCtx, document_to_json, locale_cache_key, populate_cache_key,
 };
 
 /// Populate a non-polymorphic has-many field.
@@ -32,15 +30,31 @@ pub(super) fn populate_nonpoly_has_many(
         _ => return Ok(()),
     };
 
-    let fetch_ids: Vec<String> = ids
-        .iter()
-        .filter(|id| !visited.contains(&(rel_collection.to_string(), (*id).clone())))
-        .cloned()
-        .collect();
+    // Resolve the target collection's `read` access once for the whole field.
+    let access = resolve_target_access(ctx, rel_collection, rel_def)?;
+    let locale_key = locale_cache_key(ctx.locale_ctx);
 
-    let fetched = fetch_targets(ctx, rel_collection, rel_def, &fetch_ids)?;
-    let mut fetched_map: HashMap<String, Document> =
-        fetched.into_iter().map(|d| (d.id.to_string(), d)).collect();
+    // Gather raw docs: serve cache hits, then one batched DB fetch for the rest.
+    let mut raws: HashMap<String, Document> = HashMap::new();
+    let mut to_fetch: Vec<String> = Vec::new();
+    for id in &ids {
+        if visited.contains(&(rel_collection.to_string(), id.clone())) {
+            continue;
+        }
+        let key = populate_cache_key(rel_collection, id, locale_key.as_deref());
+        if let Some(raw) = cache_get_doc(ctx.cache, &key)? {
+            raws.insert(id.clone(), raw);
+        } else {
+            to_fetch.push(id.clone());
+        }
+    }
+    if !to_fetch.is_empty() {
+        for raw in fetch_targets(ctx, rel_collection, rel_def, &to_fetch)? {
+            let key = populate_cache_key(rel_collection, raw.id.as_ref(), locale_key.as_deref());
+            let _ = cache_set_doc(ctx.cache, &key, &raw);
+            raws.insert(raw.id.to_string(), raw);
+        }
+    }
 
     let mut populated = Vec::new();
     for id in &ids {
@@ -49,51 +63,23 @@ pub(super) fn populate_nonpoly_has_many(
             continue;
         }
 
-        let locale_key = locale_cache_key(ctx.locale_ctx);
-        let key = populate_cache_key(
-            rel_collection,
-            id,
-            locale_key.as_deref(),
-            ctx.published_only,
-        );
-
-        if let Some(cached) = cache_get_doc(ctx.cache, &key)? {
-            populated.push(document_to_json(&cached, rel_collection));
-            continue;
-        }
-
-        // DB miss (soft-deleted or truly missing): omit from the array.
-        let Some(mut related_doc) = fetched_map.remove(id) else {
+        // DB miss (truly missing): omit from the array.
+        let Some(raw) = raws.remove(id) else {
             continue;
         };
 
-        if let Some(ref uc) = rel_def.upload
-            && uc.enabled
-        {
-            upload::assemble_sizes_object(&mut related_doc, uc);
-        }
-        populate_relationships_cached(
-            &PopulateContext {
-                conn: ctx.conn,
-                registry: ctx.registry,
-                collection_slug: rel_collection,
-                def: rel_def,
-            },
-            &mut related_doc,
+        // Per-request draft + access filter, then populate. Hidden → omit.
+        if let Some(target) = finalize_target(
+            ctx,
+            rel_collection,
+            rel_def,
+            raw,
+            &access,
+            ctx.effective_depth,
             visited,
-            &PopulateOpts {
-                depth: ctx.effective_depth - 1,
-                select: None,
-                locale_ctx: ctx.locale_ctx,
-                published_only: ctx.published_only,
-                join_access: None,
-                user: None,
-            },
-            ctx.cache,
-        )?;
-
-        let _ = cache_set_doc(ctx.cache, &key, &related_doc);
-        populated.push(document_to_json(&related_doc, rel_collection));
+        )? {
+            populated.push(document_to_json(&target, rel_collection));
+        }
     }
 
     doc.fields
@@ -119,67 +105,29 @@ pub(super) fn populate_nonpoly_has_one(
         return Ok(());
     }
 
-    let locale_key = locale_cache_key(ctx.locale_ctx);
-    let key = populate_cache_key(
-        rel_collection,
-        &id,
-        locale_key.as_deref(),
-        ctx.published_only,
-    );
+    let access = resolve_target_access(ctx, rel_collection, rel_def)?;
 
-    let mut related_doc = match cache_or_fetch_doc(ctx.cache, ctx.singleflight, &key, || {
-        fetch_target(ctx, rel_collection, rel_def, &id)
-            .ok()
-            .flatten()
-    }) {
-        CacheOrFetch::Hit(cached) => {
+    match resolve_single_target(
+        ctx,
+        rel_collection,
+        rel_def,
+        &id,
+        &access,
+        ctx.effective_depth,
+        visited,
+    )? {
+        Some(target) => {
             doc.fields.insert(
                 field_name.to_string(),
-                document_to_json(&cached, rel_collection),
+                document_to_json(&target, rel_collection),
             );
-            return Ok(());
         }
-        CacheOrFetch::Fresh(Some(d)) => d,
-        CacheOrFetch::Fresh(None) => {
-            // DB miss (soft-deleted or truly missing): set the field to null.
+        None => {
+            // Missing, or hidden by draft visibility / `read` access: null out.
             doc.fields.insert(field_name.to_string(), Value::Null);
-            return Ok(());
         }
-    };
-
-    if let Some(ref uc) = rel_def.upload
-        && uc.enabled
-    {
-        upload::assemble_sizes_object(&mut related_doc, uc);
     }
 
-    populate_relationships_cached(
-        &PopulateContext {
-            conn: ctx.conn,
-            registry: ctx.registry,
-            collection_slug: rel_collection,
-            def: rel_def,
-        },
-        &mut related_doc,
-        visited,
-        &PopulateOpts {
-            depth: ctx.effective_depth - 1,
-            select: None,
-            locale_ctx: ctx.locale_ctx,
-            published_only: ctx.published_only,
-            join_access: None,
-            user: None,
-        },
-        ctx.cache,
-    )?;
-
-    // Overwrite with the populated version so future cache hits skip the
-    // recursive population work.
-    let _ = cache_set_doc(ctx.cache, &key, &related_doc);
-    doc.fields.insert(
-        field_name.to_string(),
-        document_to_json(&related_doc, rel_collection),
-    );
     Ok(())
 }
 
@@ -187,11 +135,16 @@ pub(super) fn populate_nonpoly_has_one(
 mod tests {
     use serde_json::json;
 
-    use super::populate_relationships_cached;
+    use super::super::populate_relationships_cached;
+    use serde_json::Value;
+
     use crate::core::cache::{CacheBackend, MemoryCache, NoneCache};
-    use crate::core::{Document, Registry, field::*};
+    use crate::core::{Document, HookRef, Registry, field::*};
     use crate::db::query::populate::test_helpers::*;
-    use crate::db::query::populate::{PopulateContext, PopulateOpts, populate_cache_key};
+    use crate::db::query::populate::{
+        JoinAccessCheck, PopulateContext, PopulateOpts, populate_cache_key,
+    };
+    use crate::db::{AccessResult, Filter, FilterClause, FilterOp};
     use rusqlite::Connection;
     use std::collections::HashSet;
 
@@ -768,7 +721,7 @@ mod tests {
             .insert("name".to_string(), json!("CachedAlice"));
         cache
             .set(
-                &populate_cache_key("authors", "a1", None, false),
+                &populate_cache_key("authors", "a1", None),
                 &serde_json::to_vec(&cached_author).unwrap(),
             )
             .unwrap();
@@ -838,7 +791,7 @@ mod tests {
             .insert("name".to_string(), json!("CachedTech"));
         cache
             .set(
-                &populate_cache_key("categories", "c1", None, false),
+                &populate_cache_key("categories", "c1", None),
                 &serde_json::to_vec(&cached_cat).unwrap(),
             )
             .unwrap();
@@ -876,6 +829,243 @@ mod tests {
             arr[0].get("name").and_then(|v| v.as_str()),
             Some("CachedTech"),
             "should use cached document, not DB version"
+        );
+    }
+
+    // ── Relationship target read-access (Option 3 leak fix) ───────────────────
+
+    struct DenyAll;
+    impl JoinAccessCheck for DenyAll {
+        fn check(
+            &self,
+            _: Option<&HookRef>,
+            _: Option<&Document>,
+            _: &str,
+        ) -> anyhow::Result<AccessResult> {
+            Ok(AccessResult::Denied)
+        }
+    }
+
+    struct AllowAll;
+    impl JoinAccessCheck for AllowAll {
+        fn check(
+            &self,
+            _: Option<&HookRef>,
+            _: Option<&Document>,
+            _: &str,
+        ) -> anyhow::Result<AccessResult> {
+            Ok(AccessResult::Allowed)
+        }
+    }
+
+    /// Constrain the target collection to rows whose `name` equals the value.
+    struct ConstrainName(&'static str);
+    impl JoinAccessCheck for ConstrainName {
+        fn check(
+            &self,
+            _: Option<&HookRef>,
+            _: Option<&Document>,
+            _: &str,
+        ) -> anyhow::Result<AccessResult> {
+            Ok(AccessResult::Constrained(vec![FilterClause::Single(
+                Filter {
+                    field: "name".to_string(),
+                    op: FilterOp::Equals(self.0.to_string()),
+                },
+            )]))
+        }
+    }
+
+    /// Populate `p1`'s `author` has-one (→ `authors`, a1 = "Alice") under the
+    /// given access check and cache, returning the parent doc.
+    fn populate_author(join_access: &dyn JoinAccessCheck, cache: &dyn CacheBackend) -> Document {
+        let conn = setup_populate_db();
+        let registry = make_registry_with_posts_and_authors();
+        let posts_def = make_posts_def();
+
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("author".to_string(), json!("a1"));
+
+        let mut visited = HashSet::new();
+        populate_relationships_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "posts",
+                def: &posts_def,
+            },
+            &mut doc,
+            &mut visited,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+                published_only: false,
+                join_access: Some(join_access),
+                user: None,
+            },
+            cache,
+        )
+        .unwrap();
+        doc
+    }
+
+    /// A relationship target on a collection the reader cannot read must be
+    /// nulled — not exfiltrated through population (the depth>0 leak this fix
+    /// closes). Join fields already did this; relationship fields now match.
+    #[test]
+    fn relationship_has_one_denied_is_nulled() {
+        let doc = populate_author(&DenyAll, &NoneCache);
+        assert_eq!(
+            doc.fields.get("author"),
+            Some(&Value::Null),
+            "denied relationship target must be null, not leaked"
+        );
+    }
+
+    #[test]
+    fn relationship_has_one_allowed_populates() {
+        let doc = populate_author(&AllowAll, &NoneCache);
+        assert!(
+            doc.fields
+                .get("author")
+                .is_some_and(serde_json::Value::is_object),
+            "allowed relationship target populates"
+        );
+    }
+
+    /// THE cross-user isolation test: user A's allowed read caches the RAW
+    /// author; user B, denied, reads the SAME cache and must NOT inherit A's
+    /// view. Access is re-evaluated per request even on a cache hit — the whole
+    /// reason the cache stores raw, user-independent content.
+    #[test]
+    fn cross_user_cache_isolation_no_leak() {
+        let cache = MemoryCache::new(10_000);
+
+        let doc_a = populate_author(&AllowAll, &cache);
+        assert!(
+            doc_a
+                .fields
+                .get("author")
+                .is_some_and(serde_json::Value::is_object),
+            "user A (allowed) sees the author"
+        );
+
+        let doc_b = populate_author(&DenyAll, &cache);
+        assert_eq!(
+            doc_b.fields.get("author"),
+            Some(&Value::Null),
+            "user B (denied) must not inherit user A's cached author view"
+        );
+    }
+
+    /// A `Constrained` access decision is matched against the target's RAW
+    /// fields (a1's `name` is "Alice").
+    #[test]
+    fn relationship_constrained_matches_raw_fields() {
+        let visible = populate_author(&ConstrainName("Alice"), &NoneCache);
+        assert!(
+            visible
+                .fields
+                .get("author")
+                .is_some_and(serde_json::Value::is_object),
+            "constraint matching the raw author keeps it"
+        );
+
+        let hidden = populate_author(&ConstrainName("Bob"), &NoneCache);
+        assert_eq!(
+            hidden.fields.get("author"),
+            Some(&Value::Null),
+            "constraint not matching the raw author hides it"
+        );
+    }
+
+    /// Depth-2 recursion forwards the access check: posts → author (allowed) →
+    /// team (denied). The author populates, but its nested `team` is nulled —
+    /// proving the recursion no longer passes `join_access: None`.
+    #[test]
+    fn nested_depth_two_target_denied() {
+        struct DenyTeams;
+        impl JoinAccessCheck for DenyTeams {
+            fn check(
+                &self,
+                _: Option<&HookRef>,
+                _: Option<&Document>,
+                collection: &str,
+            ) -> anyhow::Result<AccessResult> {
+                if collection == "teams" {
+                    Ok(AccessResult::Denied)
+                } else {
+                    Ok(AccessResult::Allowed)
+                }
+            }
+        }
+
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE teams (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
+             CREATE TABLE authors (id TEXT PRIMARY KEY, name TEXT, team TEXT, created_at TEXT, updated_at TEXT);
+             CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, author TEXT, created_at TEXT, updated_at TEXT);
+             INSERT INTO teams VALUES ('t1', 'Core', '2024-01-01', '2024-01-01');
+             INSERT INTO authors VALUES ('a1', 'Alice', 't1', '2024-01-01', '2024-01-01');
+             INSERT INTO posts VALUES ('p1', 'Hello', 'a1', '2024-01-01', '2024-01-01');",
+        )
+        .unwrap();
+
+        let teams_def = make_collection_def("teams", vec![make_field("name", FieldType::Text)]);
+        let mut team_field = make_field("team", FieldType::Relationship);
+        team_field.relationship = Some(RelationshipConfig::new("teams", false));
+        let authors_def = make_collection_def(
+            "authors",
+            vec![make_field("name", FieldType::Text), team_field],
+        );
+        let mut author_field = make_field("author", FieldType::Relationship);
+        author_field.relationship = Some(RelationshipConfig::new("authors", false));
+        let posts_def = make_collection_def(
+            "posts",
+            vec![make_field("title", FieldType::Text), author_field],
+        );
+
+        let mut registry = Registry::new();
+        registry.register_collection(posts_def.clone());
+        registry.register_collection(authors_def);
+        registry.register_collection(teams_def);
+
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("author".to_string(), json!("a1"));
+
+        let mut visited = HashSet::new();
+        let deny_teams = DenyTeams;
+        populate_relationships_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "posts",
+                def: &posts_def,
+            },
+            &mut doc,
+            &mut visited,
+            &PopulateOpts {
+                depth: 2,
+                select: None,
+                locale_ctx: None,
+                published_only: false,
+                join_access: Some(&deny_teams),
+                user: None,
+            },
+            &NoneCache,
+        )
+        .unwrap();
+
+        let author = doc.fields.get("author").expect("author present");
+        assert!(
+            author.is_object(),
+            "depth-1 author is allowed and populates"
+        );
+        assert_eq!(
+            author.get("team"),
+            Some(&Value::Null),
+            "depth-2 team is denied → null (recursion forwards the access check)"
         );
     }
 }

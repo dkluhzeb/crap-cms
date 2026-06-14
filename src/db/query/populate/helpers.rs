@@ -5,37 +5,62 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::core::{CollectionDefinition, Document, DocumentFields, cache::CacheBackend};
+use crate::db::query::AccessResult;
+use crate::db::query::filter::memory::matches_constraints;
+use crate::db::query::populate::PopulateCtx;
 use crate::db::query::populate::Singleflight;
-use crate::db::query::populate::{PopulateCtx, target_hidden_by_draft};
 use crate::db::query::read::{find_by_id, find_by_ids};
 
-/// Fetch a single relationship target, hiding it when the reader is not
-/// allowed to see drafts and the target is a draft (see
-/// [`target_hidden_by_draft`]). The single choke point for draft-visibility
-/// on populated relationships.
+/// Fetch a single **raw** relationship target by id. The result is the
+/// unfiltered document content — draft visibility and `read` access are applied
+/// per request by the caller, so the raw doc can be shared in the cross-user
+/// populate cache. See [`resolve_target_access`] / [`target_visible`] and
+/// [`target_hidden_by_draft`].
 pub(super) fn fetch_target(
     ctx: &PopulateCtx<'_>,
     slug: &str,
     def: &CollectionDefinition,
     id: &str,
 ) -> Result<Option<Document>> {
-    let doc = find_by_id(ctx.conn, slug, def, id, ctx.locale_ctx)?;
-    Ok(doc.filter(|d| !target_hidden_by_draft(d, def, ctx.published_only)))
+    find_by_id(ctx.conn, slug, def, id, ctx.locale_ctx)
 }
 
-/// Batch variant of [`fetch_target`] — drops draft targets hidden from the
-/// reader before the caller distributes results.
+/// Batch variant of [`fetch_target`] — returns raw documents; the caller applies
+/// the per-request draft and access filters.
 pub(super) fn fetch_targets(
     ctx: &PopulateCtx<'_>,
     slug: &str,
     def: &CollectionDefinition,
     ids: &[String],
 ) -> Result<Vec<Document>> {
-    let docs = find_by_ids(ctx.conn, slug, def, ids, ctx.locale_ctx)?;
-    Ok(docs
-        .into_iter()
-        .filter(|d| !target_hidden_by_draft(d, def, ctx.published_only))
-        .collect())
+    find_by_ids(ctx.conn, slug, def, ids, ctx.locale_ctx)
+}
+
+/// Resolve a relationship target collection's `read` access decision once for a
+/// field-population call. Returns `Allowed` when no access check is wired
+/// (legacy/internal callers). The decision is collection-level — it does not
+/// depend on the individual target row — so the caller resolves it once and
+/// applies it to every target of the field.
+pub(super) fn resolve_target_access(
+    ctx: &PopulateCtx<'_>,
+    slug: &str,
+    def: &CollectionDefinition,
+) -> Result<AccessResult> {
+    match ctx.join_access {
+        Some(check) => check.check(def.access.read.as_ref(), ctx.user, slug),
+        None => Ok(AccessResult::Allowed),
+    }
+}
+
+/// Whether a raw target document is visible under the resolved access decision.
+/// `Constrained` filters are matched against the **raw** fields (before any
+/// population turns relationship fields into objects).
+pub(super) fn target_visible(access: &AccessResult, raw: &Document) -> bool {
+    match access {
+        AccessResult::Denied => false,
+        AccessResult::Allowed => true,
+        AccessResult::Constrained(filters) => matches_constraints(&raw.fields, filters),
+    }
 }
 
 /// The shape `document_to_json` emits — a populated relationship reference
@@ -74,47 +99,28 @@ pub(super) fn cache_set_doc(cache: &dyn CacheBackend, key: &str, doc: &Document)
     Ok(())
 }
 
-/// Result of a cache-or-fetch attempt.
+/// Fetch a **raw** target document by key: cache first, else the singleflight
+/// runs `fetch` once (deduplicating concurrent misses for the same key) and
+/// caches the raw result. Returns the raw doc, or `None` if missing.
 ///
-/// Callers can tell a cache hit (already fully populated) from a fresh fetch
-/// (caller still needs to run recursive population and write the populated
-/// version back to the cache).
-pub(super) enum CacheOrFetch {
-    /// Cache hit: returned document is already fully populated. Callers MUST
-    /// use it as-is and skip the recursive populate step.
-    Hit(Document),
-    /// Fresh fetch via singleflight: returned `Some(doc)` is a raw (not yet
-    /// recursively populated) document; `None` means the target is missing.
-    Fresh(Option<Document>),
-}
-
-/// Get a populated document from the cache, or fetch it via the singleflight
-/// (deduplicating concurrent misses for the same key).
-///
-/// On cache hit, returns `Hit(doc)` without consulting the singleflight.
-/// On miss, the first thread runs `fetch` and writes the result into the
-/// cache; concurrent misses for the same key wait for that fetch to
-/// complete and receive the same value — collapsing N concurrent DB queries
-/// into one. The resulting `Fresh(...)` value is the raw (pre-populate)
-/// document; callers are still expected to recursively populate it and then
-/// update the cache with the populated version.
-///
-/// `fetch` returns `Option<Document>` so a "not found" result also dedupes
-/// (all concurrent waiters learn the miss without re-querying).
+/// The cache only ever holds raw, user-independent content; population, draft
+/// filtering, and `read` access filtering are applied per request by the caller
+/// on every retrieval (hit and miss). `fetch` returns `Option<Document>` so a
+/// "not found" result also dedupes (all concurrent waiters learn the miss).
 pub(super) fn cache_or_fetch_doc<F>(
     cache: &dyn CacheBackend,
     singleflight: &Singleflight<Option<Document>>,
     key: &str,
     fetch: F,
-) -> CacheOrFetch
+) -> Option<Document>
 where
     F: FnOnce() -> Option<Document>,
 {
     if let Ok(Some(doc)) = cache_get_doc(cache, key) {
-        return CacheOrFetch::Hit(doc);
+        return Some(doc);
     }
 
-    let fresh = singleflight.get_or_fetch(key, || {
+    singleflight.get_or_fetch(key, || {
         let doc = fetch();
 
         if let Some(ref d) = doc {
@@ -122,9 +128,7 @@ where
         }
 
         doc
-    });
-
-    CacheOrFetch::Fresh(fresh)
+    })
 }
 
 /// Parse a polymorphic reference "collection/id" into `(collection, id)`.
@@ -199,10 +203,7 @@ mod tests {
         });
 
         assert_eq!(counter.load(Ordering::SeqCst), 0);
-        match result {
-            CacheOrFetch::Hit(d) => assert_eq!(d.id.as_ref(), "d1"),
-            _ => panic!("expected cache hit"),
-        }
+        assert_eq!(result.expect("cache hit").id.as_ref(), "d1");
     }
 
     #[test]
@@ -219,10 +220,7 @@ mod tests {
         });
 
         assert_eq!(counter.load(Ordering::SeqCst), 1);
-        match result {
-            CacheOrFetch::Fresh(Some(d)) => assert_eq!(d.id.as_ref(), "d1"),
-            _ => panic!("expected fresh Some"),
-        }
+        assert_eq!(result.expect("fresh fetch").id.as_ref(), "d1");
 
         // Second call should hit the cache now (fetch closure must not run).
         let result2 = cache_or_fetch_doc(&cache, &sf, "k", || {
@@ -231,7 +229,7 @@ mod tests {
         });
 
         assert_eq!(counter.load(Ordering::SeqCst), 1, "fetch should not re-run");
-        assert!(matches!(result2, CacheOrFetch::Hit(_)));
+        assert_eq!(result2.expect("cache hit").id.as_ref(), "d1");
     }
 
     #[test]
@@ -244,7 +242,7 @@ mod tests {
             counter.fetch_add(1, Ordering::SeqCst);
             None
         });
-        assert!(matches!(r, CacheOrFetch::Fresh(None)));
+        assert!(r.is_none());
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
@@ -281,28 +279,19 @@ mod tests {
             }));
         }
 
-        let mut got_hit = 0;
-        let mut got_fresh = 0;
-
+        let mut got = 0;
         for h in handles {
-            match h.join().unwrap() {
-                CacheOrFetch::Hit(_) => got_hit += 1,
-                CacheOrFetch::Fresh(Some(_)) => got_fresh += 1,
-                CacheOrFetch::Fresh(None) => panic!("unexpected None"),
-            }
+            assert!(h.join().unwrap().is_some(), "every caller gets the raw doc");
+            got += 1;
         }
 
-        // Exactly one thread ran the DB fetch.
+        // Exactly one thread ran the DB fetch; all N got the shared raw doc.
         assert_eq!(
             counter.load(Ordering::SeqCst),
             1,
             "concurrent cache misses must collapse into a single fetch"
         );
-        // All N threads got a result; some via Fresh (from singleflight),
-        // possibly some via Hit (if scheduling let them observe the cache
-        // write before their singleflight call). The important invariant is
-        // the fetch-count above.
-        assert_eq!(got_hit + got_fresh, n);
+        assert_eq!(got, n);
     }
 
     // ── document_to_json tests ────────────────────────────────────────────────

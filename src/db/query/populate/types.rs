@@ -35,26 +35,19 @@ pub trait JoinAccessCheck {
     ) -> Result<AccessResult>;
 }
 
-/// Build a cache key for a populated document.
+/// Build the shared-cache key for a **raw** (unpopulated) target document.
 ///
-/// Format: `populate:{collection}:{id}[:{locale}][:pub]`. The `:pub` suffix
-/// is appended for published-only reads so a draft target fetched under a
-/// drafts-visible read can never be served from cache to a reader who is
-/// not allowed to see drafts. Mirrors the override-access cache separation.
-pub(crate) fn populate_cache_key(
-    collection: &str,
-    id: &str,
-    locale: Option<&str>,
-    published_only: bool,
-) -> String {
-    let mut key = match locale {
+/// Format: `populate:{collection}:{id}[:{locale}]`. The cached value is the raw
+/// document content, which is independent of the requesting user and of draft
+/// visibility — both the per-request `read` access decision and the
+/// `target_hidden_by_draft` filter are applied *after* retrieval, on every read.
+/// That keeps one cache entry per document shared across all users (the DB fetch
+/// is deduplicated for everyone) without ever caching a user-specific view.
+pub(crate) fn populate_cache_key(collection: &str, id: &str, locale: Option<&str>) -> String {
+    match locale {
         Some(l) => format!("populate:{collection}:{id}:{l}"),
         None => format!("populate:{collection}:{id}"),
-    };
-    if published_only {
-        key.push_str(":pub");
     }
-    key
 }
 
 /// Whether a populated target document must be hidden because the reader is
@@ -107,6 +100,13 @@ pub(crate) struct PopulateCtx<'a> {
     /// layers may in future share a process-wide singleflight here to dedupe
     /// across concurrent requests.
     pub singleflight: &'a Singleflight<Option<Document>>,
+    /// Target-collection `read` access check. When `Some`, every relationship
+    /// target is gated by the target collection's `access.read` (honoring any
+    /// row-level `Constrained` filter); when `None` (legacy/internal callers)
+    /// population proceeds without a target access check.
+    pub join_access: Option<&'a dyn JoinAccessCheck>,
+    /// Current user for the access check. Only consulted alongside `join_access`.
+    pub user: Option<&'a Document>,
 }
 
 /// Collection and registry context for population.
@@ -206,16 +206,13 @@ mod tests {
 
     #[test]
     fn populate_cache_key_no_locale() {
-        assert_eq!(
-            populate_cache_key("posts", "p1", None, false),
-            "populate:posts:p1"
-        );
+        assert_eq!(populate_cache_key("posts", "p1", None), "populate:posts:p1");
     }
 
     #[test]
     fn populate_cache_key_with_locale() {
         assert_eq!(
-            populate_cache_key("posts", "p1", Some("de"), false),
+            populate_cache_key("posts", "p1", Some("de")),
             "populate:posts:p1:de"
         );
     }

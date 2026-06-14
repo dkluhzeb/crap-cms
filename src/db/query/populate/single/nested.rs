@@ -5,15 +5,11 @@ use anyhow::Result;
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 
-use super::populate_relationships_cached;
 use crate::core::{
     BlockDefinition, CollectionDefinition, Document, FieldDefinition, FieldType,
-    field::flatten_array_sub_fields, upload,
+    field::flatten_array_sub_fields,
 };
-use crate::db::query::populate::{
-    PopulateContext, PopulateCtx, PopulateOpts, document_to_json, locale_cache_key, parse_poly_ref,
-    populate_cache_key,
-};
+use crate::db::query::populate::{PopulateCtx, document_to_json, parse_poly_ref};
 
 /// Walk top-level container fields (Group, Blocks, Array) in a document and
 /// populate any relationship/upload sub-fields within them.
@@ -277,9 +273,10 @@ fn populate_rel_in_map(
     Ok(())
 }
 
-use crate::db::query::populate::helpers::{
-    CacheOrFetch, cache_or_fetch_doc, cache_set_doc, fetch_target,
-};
+use super::dispatch::resolve_single_target;
+use crate::db::query::AccessResult;
+use crate::db::query::populate::helpers::resolve_target_access;
+use std::collections::HashMap;
 
 /// Populate a non-polymorphic has-one field within a JSON map.
 fn populate_has_one_in_map(
@@ -300,58 +297,20 @@ fn populate_has_one_in_map(
         return Ok(());
     }
 
-    let locale_key = locale_cache_key(pctx.locale_ctx);
-    let key = populate_cache_key(
+    let access = resolve_target_access(pctx, rel_collection, rel_def)?;
+
+    if let Some(target) = resolve_single_target(
+        pctx,
         rel_collection,
+        rel_def,
         &id,
-        locale_key.as_deref(),
-        pctx.published_only,
-    );
-
-    let mut related_doc = match cache_or_fetch_doc(pctx.cache, pctx.singleflight, &key, || {
-        fetch_target(pctx, rel_collection, rel_def, &id)
-            .ok()
-            .flatten()
-    }) {
-        CacheOrFetch::Hit(cached) => {
-            map.insert(name.to_string(), document_to_json(&cached, rel_collection));
-            return Ok(());
-        }
-        CacheOrFetch::Fresh(Some(d)) => d,
-        CacheOrFetch::Fresh(None) => return Ok(()),
-    };
-
-    if let Some(ref uc) = rel_def.upload
-        && uc.enabled
-    {
-        upload::assemble_sizes_object(&mut related_doc, uc);
-    }
-
-    populate_relationships_cached(
-        &PopulateContext {
-            conn: pctx.conn,
-            registry: pctx.registry,
-            collection_slug: rel_collection,
-            def: rel_def,
-        },
-        &mut related_doc,
+        &access,
+        effective_depth,
         visited,
-        &PopulateOpts {
-            depth: effective_depth - 1,
-            select: None,
-            locale_ctx: pctx.locale_ctx,
-            published_only: pctx.published_only,
-            join_access: None,
-            user: None,
-        },
-        pctx.cache,
-    )?;
-
-    let _ = cache_set_doc(pctx.cache, &key, &related_doc);
-    map.insert(
-        name.to_string(),
-        document_to_json(&related_doc, rel_collection),
-    );
+    )? {
+        map.insert(name.to_string(), document_to_json(&target, rel_collection));
+    }
+    // Missing or hidden (draft/access): leave the raw id reference in place.
 
     Ok(())
 }
@@ -374,6 +333,8 @@ fn populate_has_many_in_map(
         _ => return Ok(()),
     };
 
+    let access = resolve_target_access(pctx, rel_collection, rel_def)?;
+
     let mut populated = Vec::new();
     for id in &ids {
         if visited.contains(&(rel_collection.to_string(), id.clone())) {
@@ -381,58 +342,19 @@ fn populate_has_many_in_map(
             continue;
         }
 
-        let locale_key = locale_cache_key(pctx.locale_ctx);
-        let key = populate_cache_key(
+        match resolve_single_target(
+            pctx,
             rel_collection,
+            rel_def,
             id,
-            locale_key.as_deref(),
-            pctx.published_only,
-        );
-
-        let mut related_doc = match cache_or_fetch_doc(pctx.cache, pctx.singleflight, &key, || {
-            fetch_target(pctx, rel_collection, rel_def, id)
-                .ok()
-                .flatten()
-        }) {
-            CacheOrFetch::Hit(cached) => {
-                populated.push(document_to_json(&cached, rel_collection));
-                continue;
-            }
-            CacheOrFetch::Fresh(Some(d)) => d,
-            CacheOrFetch::Fresh(None) => {
-                populated.push(Value::String(id.clone()));
-                continue;
-            }
-        };
-
-        if let Some(ref uc) = rel_def.upload
-            && uc.enabled
-        {
-            upload::assemble_sizes_object(&mut related_doc, uc);
-        }
-
-        populate_relationships_cached(
-            &PopulateContext {
-                conn: pctx.conn,
-                registry: pctx.registry,
-                collection_slug: rel_collection,
-                def: rel_def,
-            },
-            &mut related_doc,
+            &access,
+            effective_depth,
             visited,
-            &PopulateOpts {
-                depth: effective_depth - 1,
-                select: None,
-                locale_ctx: pctx.locale_ctx,
-                published_only: pctx.published_only,
-                join_access: None,
-                user: None,
-            },
-            pctx.cache,
-        )?;
-
-        let _ = cache_set_doc(pctx.cache, &key, &related_doc);
-        populated.push(document_to_json(&related_doc, rel_collection));
+        )? {
+            Some(target) => populated.push(document_to_json(&target, rel_collection)),
+            // Missing or hidden: keep the raw id reference (nested-array behavior).
+            None => populated.push(Value::String(id.clone())),
+        }
     }
     map.insert(name.to_string(), Value::Array(populated));
     Ok(())
@@ -446,12 +368,12 @@ fn populate_poly_has_one_in_map(
     effective_depth: i32,
     visited: &mut HashSet<(String, String)>,
 ) -> Result<()> {
-    let raw = match map.get(name) {
+    let raw_ref = match map.get(name) {
         Some(Value::String(s)) if !s.is_empty() => s.clone(),
         _ => return Ok(()),
     };
 
-    let Some((col, id)) = parse_poly_ref(&raw) else {
+    let Some((col, id)) = parse_poly_ref(&raw_ref) else {
         return Ok(());
     };
 
@@ -464,48 +386,19 @@ fn populate_poly_has_one_in_map(
         None => return Ok(()),
     };
 
-    let locale_key = locale_cache_key(pctx.locale_ctx);
-    let key = populate_cache_key(&col, &id, locale_key.as_deref(), pctx.published_only);
+    let access = resolve_target_access(pctx, &col, &item_def)?;
 
-    let mut rd = match cache_or_fetch_doc(pctx.cache, pctx.singleflight, &key, || {
-        fetch_target(pctx, &col, &item_def, &id).ok().flatten()
-    }) {
-        CacheOrFetch::Hit(cached) => {
-            map.insert(name.to_string(), document_to_json(&cached, &col));
-            return Ok(());
-        }
-        CacheOrFetch::Fresh(Some(d)) => d,
-        CacheOrFetch::Fresh(None) => return Ok(()),
-    };
-
-    if let Some(ref uc) = item_def.upload
-        && uc.enabled
-    {
-        upload::assemble_sizes_object(&mut rd, uc);
-    }
-
-    populate_relationships_cached(
-        &PopulateContext {
-            conn: pctx.conn,
-            registry: pctx.registry,
-            collection_slug: &col,
-            def: &item_def,
-        },
-        &mut rd,
+    if let Some(target) = resolve_single_target(
+        pctx,
+        &col,
+        &item_def,
+        &id,
+        &access,
+        effective_depth,
         visited,
-        &PopulateOpts {
-            depth: effective_depth - 1,
-            select: None,
-            locale_ctx: pctx.locale_ctx,
-            published_only: pctx.published_only,
-            join_access: None,
-            user: None,
-        },
-        pctx.cache,
-    )?;
-
-    let _ = cache_set_doc(pctx.cache, &key, &rd);
-    map.insert(name.to_string(), document_to_json(&rd, &col));
+    )? {
+        map.insert(name.to_string(), document_to_json(&target, &col));
+    }
 
     Ok(())
 }
@@ -526,6 +419,9 @@ fn populate_poly_has_many_in_map(
         _ => return Ok(()),
     };
 
+    // Resolve each target collection's `read` access once for this field.
+    let mut access_by: HashMap<String, AccessResult> = HashMap::new();
+
     let mut populated = Vec::new();
     for item in &items {
         let Some((col, id)) = parse_poly_ref(item) else {
@@ -543,51 +439,24 @@ fn populate_poly_has_many_in_map(
             continue;
         };
 
-        let locale_key = locale_cache_key(pctx.locale_ctx);
-        let key = populate_cache_key(&col, &id, locale_key.as_deref(), pctx.published_only);
-
-        let mut rd = match cache_or_fetch_doc(pctx.cache, pctx.singleflight, &key, || {
-            fetch_target(pctx, &col, &item_def, &id).ok().flatten()
-        }) {
-            CacheOrFetch::Hit(cached) => {
-                populated.push(document_to_json(&cached, &col));
-                continue;
-            }
-            CacheOrFetch::Fresh(Some(d)) => d,
-            CacheOrFetch::Fresh(None) => {
-                populated.push(Value::String(item.clone()));
-                continue;
-            }
-        };
-
-        if let Some(ref uc) = item_def.upload
-            && uc.enabled
-        {
-            upload::assemble_sizes_object(&mut rd, uc);
+        if !access_by.contains_key(&col) {
+            let resolved = resolve_target_access(pctx, &col, &item_def)?;
+            access_by.insert(col.clone(), resolved);
         }
+        let access = access_by[&col].clone();
 
-        populate_relationships_cached(
-            &PopulateContext {
-                conn: pctx.conn,
-                registry: pctx.registry,
-                collection_slug: &col,
-                def: &item_def,
-            },
-            &mut rd,
+        match resolve_single_target(
+            pctx,
+            &col,
+            &item_def,
+            &id,
+            &access,
+            effective_depth,
             visited,
-            &PopulateOpts {
-                depth: effective_depth - 1,
-                select: None,
-                locale_ctx: pctx.locale_ctx,
-                published_only: pctx.published_only,
-                join_access: None,
-                user: None,
-            },
-            pctx.cache,
-        )?;
-
-        let _ = cache_set_doc(pctx.cache, &key, &rd);
-        populated.push(document_to_json(&rd, &col));
+        )? {
+            Some(target) => populated.push(document_to_json(&target, &col)),
+            None => populated.push(Value::String(item.clone())),
+        }
     }
     map.insert(name.to_string(), Value::Array(populated));
     Ok(())

@@ -154,6 +154,8 @@ fn populate_flat_relationships(
             published_only: opts.published_only,
             cache,
             singleflight,
+            join_access: opts.join_access,
+            user: opts.user,
         };
 
         if rel.is_polymorphic() {
@@ -212,6 +214,8 @@ fn populate_nested_containers(
             published_only: opts.published_only,
             cache,
             singleflight,
+            join_access: opts.join_access,
+            user: opts.user,
         };
 
         nested::populate_containers_in_doc(&nested_pctx, doc, &ctx.def.fields, &mut doc_visited)?;

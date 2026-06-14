@@ -6,10 +6,10 @@ use std::collections::{HashMap, HashSet};
 
 use super::populate_relationships_batch_cached;
 use crate::core::{CollectionDefinition, Document, upload};
-use crate::db::query::populate::helpers::fetch_targets;
+use crate::db::query::populate::helpers::{fetch_targets, resolve_target_access, target_visible};
 use crate::db::query::populate::{
     PopulateContext, PopulateCtx, PopulateOpts, document_to_json, locale_cache_key,
-    populate_cache_key,
+    populate_cache_key, target_hidden_by_draft,
 };
 
 /// Batch fetch and distribute for non-polymorphic has-many fields.
@@ -127,13 +127,17 @@ pub(super) fn batch_fetch_single_collection(
     rel_def: &CollectionDefinition,
     all_ids: &[String],
 ) -> Result<HashMap<String, Document>> {
-    let mut doc_map: HashMap<String, Document> = HashMap::new();
-    let mut uncached_ids: Vec<String> = Vec::new();
     let locale_key = locale_cache_key(ctx.locale_ctx);
 
-    for id in all_ids {
-        let key = populate_cache_key(collection, id, locale_key.as_deref(), ctx.published_only);
+    // Resolve the target collection's `read` access once for the whole batch.
+    let access = resolve_target_access(ctx, collection, rel_def)?;
 
+    // Gather RAW docs: cache hits (the shared cache holds raw, user-independent
+    // content), then one DB fetch for the misses, caching each raw doc.
+    let mut raws: Vec<Document> = Vec::new();
+    let mut uncached_ids: Vec<String> = Vec::new();
+    for id in all_ids {
+        let key = populate_cache_key(collection, id, locale_key.as_deref());
         let cached = ctx
             .cache
             .get(&key)
@@ -142,59 +146,65 @@ pub(super) fn batch_fetch_single_collection(
             .and_then(|bytes| serde_json::from_slice::<Document>(&bytes).ok());
 
         if let Some(doc) = cached {
-            doc_map.insert(id.clone(), doc);
+            raws.push(doc);
         } else {
             uncached_ids.push(id.clone());
         }
     }
-
     if !uncached_ids.is_empty() {
-        let mut fetched = fetch_targets(ctx, collection, rel_def, &uncached_ids)?;
-
-        for d in &mut fetched {
-            if let Some(ref uc) = rel_def.upload
-                && uc.enabled
-            {
-                upload::assemble_sizes_object(d, uc);
-            }
-        }
-
-        if ctx.effective_depth - 1 > 0 {
-            populate_relationships_batch_cached(
-                &PopulateContext {
-                    conn: ctx.conn,
-                    registry: ctx.registry,
-                    collection_slug: collection,
-                    def: rel_def,
-                },
-                &mut fetched,
-                &PopulateOpts {
-                    depth: ctx.effective_depth - 1,
-                    select: None,
-                    locale_ctx: ctx.locale_ctx,
-                    published_only: ctx.published_only,
-                    join_access: None,
-                    user: None,
-                },
-                ctx.cache,
-            )?;
-        }
-
-        for d in fetched {
-            let key = populate_cache_key(
-                collection,
-                d.id.as_ref(),
-                locale_key.as_deref(),
-                ctx.published_only,
-            );
-
-            if let Ok(bytes) = serde_json::to_vec(&d) {
+        for raw in fetch_targets(ctx, collection, rel_def, &uncached_ids)? {
+            let key = populate_cache_key(collection, raw.id.as_ref(), locale_key.as_deref());
+            if let Ok(bytes) = serde_json::to_vec(&raw) {
                 let _ = ctx.cache.set(&key, &bytes);
             }
-
-            doc_map.insert(d.id.to_string(), d);
+            raws.push(raw);
         }
     }
+
+    // Per-request draft + `read` access filter (matched against the RAW fields),
+    // then upload sizes + recursive population. Hidden targets are omitted from
+    // the map, so the distribution step treats them like a missing target.
+    let mut survivors: Vec<Document> = raws
+        .into_iter()
+        .filter(|raw| {
+            !target_hidden_by_draft(raw, rel_def, ctx.published_only)
+                && target_visible(&access, raw)
+        })
+        .collect();
+
+    for d in &mut survivors {
+        if let Some(ref uc) = rel_def.upload
+            && uc.enabled
+        {
+            upload::assemble_sizes_object(d, uc);
+        }
+    }
+
+    if ctx.effective_depth - 1 > 0 {
+        populate_relationships_batch_cached(
+            &PopulateContext {
+                conn: ctx.conn,
+                registry: ctx.registry,
+                collection_slug: collection,
+                def: rel_def,
+            },
+            &mut survivors,
+            &PopulateOpts {
+                depth: ctx.effective_depth - 1,
+                select: None,
+                locale_ctx: ctx.locale_ctx,
+                published_only: ctx.published_only,
+                join_access: ctx.join_access,
+                user: ctx.user,
+            },
+            ctx.cache,
+        )?;
+    }
+
+    let doc_map: HashMap<String, Document> = survivors
+        .into_iter()
+        .map(|d| (d.id.to_string(), d))
+        .collect();
     Ok(doc_map)
 }
 
@@ -391,7 +401,7 @@ mod tests {
         cached_author
             .fields
             .insert("name".to_string(), json!("CachedBatchAuthor"));
-        let key = populate_cache_key("authors", "a1", None, false);
+        let key = populate_cache_key("authors", "a1", None);
         cache
             .set(&key, &serde_json::to_vec(&cached_author).unwrap())
             .unwrap();
@@ -461,7 +471,7 @@ mod tests {
         cached_cat
             .fields
             .insert("name".to_string(), json!("CachedCategory"));
-        let key = populate_cache_key("categories", "c1", None, false);
+        let key = populate_cache_key("categories", "c1", None);
         cache
             .set(&key, &serde_json::to_vec(&cached_cat).unwrap())
             .unwrap();

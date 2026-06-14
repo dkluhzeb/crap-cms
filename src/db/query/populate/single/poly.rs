@@ -4,15 +4,12 @@ use anyhow::Result;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
-use super::populate_relationships_cached;
-use crate::core::{Document, upload};
+use super::dispatch::{finalize_target, resolve_single_target};
+use crate::core::Document;
+use crate::db::query::AccessResult;
+use crate::db::query::populate::helpers::{cache_set_doc, fetch_targets, resolve_target_access};
 use crate::db::query::populate::{
-    PopulateContext, PopulateCtx, PopulateOpts, document_to_json, locale_cache_key, parse_poly_ref,
-    populate_cache_key,
-};
-
-use crate::db::query::populate::helpers::{
-    CacheOrFetch, cache_or_fetch_doc, cache_set_doc, fetch_target, fetch_targets,
+    PopulateCtx, document_to_json, locale_cache_key, parse_poly_ref, populate_cache_key,
 };
 
 /// Outcome of resolving a single polymorphic reference.
@@ -25,11 +22,15 @@ enum PolyResolution {
     Missing,
 }
 
-/// Resolve a single polymorphic ref string to its populated value.
+/// Resolve a single polymorphic ref string to its populated value. `access_by`
+/// holds the per-collection `read` decision resolved once during the batch
+/// fetch. A target hidden by draft visibility or `read` access is treated as
+/// `Missing` (dropped from the array).
 fn resolve_poly_item(
     ctx: &PopulateCtx<'_>,
     item: &str,
     fetched_map: &mut HashMap<String, HashMap<String, Document>>,
+    access_by: &HashMap<String, AccessResult>,
     visited: &mut HashSet<(String, String)>,
 ) -> Result<PolyResolution> {
     let Some((col, id)) = parse_poly_ref(item) else {
@@ -50,46 +51,27 @@ fn resolve_poly_item(
     let item_def = item_def.clone();
 
     // DB miss (soft-deleted or truly missing): signal omission.
-    let Some(mut rd) = col_map.remove(&id) else {
+    let Some(raw) = col_map.remove(&id) else {
         return Ok(PolyResolution::Missing);
     };
 
-    if let Some(ref uc) = item_def.upload
-        && uc.enabled
-    {
-        upload::assemble_sizes_object(&mut rd, uc);
-    }
+    let access = access_by
+        .get(&col)
+        .cloned()
+        .unwrap_or(AccessResult::Allowed);
 
-    populate_relationships_cached(
-        &PopulateContext {
-            conn: ctx.conn,
-            registry: ctx.registry,
-            collection_slug: &col,
-            def: &item_def,
-        },
-        &mut rd,
-        visited,
-        &PopulateOpts {
-            depth: ctx.effective_depth - 1,
-            select: None,
-            locale_ctx: ctx.locale_ctx,
-            published_only: ctx.published_only,
-            join_access: None,
-            user: None,
-        },
-        ctx.cache,
-    )?;
-
-    let locale_key = locale_cache_key(ctx.locale_ctx);
-    let key = populate_cache_key(
+    match finalize_target(
+        ctx,
         &col,
-        rd.id.as_ref(),
-        locale_key.as_deref(),
-        ctx.published_only,
-    );
-    let _ = cache_set_doc(ctx.cache, &key, &rd);
-
-    Ok(PolyResolution::Populated(document_to_json(&rd, &col)))
+        &item_def,
+        raw,
+        &access,
+        ctx.effective_depth,
+        visited,
+    )? {
+        Some(target) => Ok(PolyResolution::Populated(document_to_json(&target, &col))),
+        None => Ok(PolyResolution::Missing),
+    }
 }
 
 /// Populate a polymorphic has-many field.
@@ -117,23 +99,31 @@ pub(super) fn populate_poly_has_many(
         }
     }
 
-    // Batch fetch per collection
+    // Batch-fetch raw docs per collection (caching the raw, user-independent
+    // doc) and resolve each target collection's `read` access once.
+    let locale_key = locale_cache_key(ctx.locale_ctx);
     let mut fetched_map: HashMap<String, HashMap<String, Document>> = HashMap::new();
+    let mut access_by: HashMap<String, AccessResult> = HashMap::new();
     for (col, col_ids) in &ids_by_collection {
         if let Some(item_def) = ctx.registry.get_collection(col) {
             let item_def = item_def.clone();
-            let fetched = fetch_targets(ctx, col, &item_def, col_ids)?;
-            let doc_map: HashMap<String, Document> =
-                fetched.into_iter().map(|d| (d.id.to_string(), d)).collect();
+            access_by.insert(col.clone(), resolve_target_access(ctx, col, &item_def)?);
+
+            let mut doc_map: HashMap<String, Document> = HashMap::new();
+            for raw in fetch_targets(ctx, col, &item_def, col_ids)? {
+                let key = populate_cache_key(col, raw.id.as_ref(), locale_key.as_deref());
+                let _ = cache_set_doc(ctx.cache, &key, &raw);
+                doc_map.insert(raw.id.to_string(), raw);
+            }
             fetched_map.insert(col.clone(), doc_map);
         }
     }
 
-    // Reassemble in original order; drop Missing entries so soft-deleted / vanished
-    // targets do not leak as raw IDs into the populated output.
+    // Reassemble in original order; drop Missing entries so soft-deleted /
+    // vanished / access-hidden targets do not leak as raw IDs into the output.
     let mut populated = Vec::new();
     for item in &items {
-        match resolve_poly_item(ctx, item, &mut fetched_map, visited)? {
+        match resolve_poly_item(ctx, item, &mut fetched_map, &access_by, visited)? {
             PolyResolution::Populated(v) => populated.push(v),
             PolyResolution::KeepAsString(s) => populated.push(Value::String(s)),
             PolyResolution::Missing => {}
@@ -170,54 +160,26 @@ pub(super) fn populate_poly_has_one(
     };
 
     let item_def = item_def.clone();
-    let locale_key = locale_cache_key(ctx.locale_ctx);
-    let key = populate_cache_key(&col, &id, locale_key.as_deref(), ctx.published_only);
+    let access = resolve_target_access(ctx, &col, &item_def)?;
 
-    let mut rd = match cache_or_fetch_doc(ctx.cache, ctx.singleflight, &key, || {
-        fetch_target(ctx, &col, &item_def, &id).ok().flatten()
-    }) {
-        CacheOrFetch::Hit(cached) => {
-            doc.fields
-                .insert(field_name.to_string(), document_to_json(&cached, &col));
-            return Ok(());
-        }
-        CacheOrFetch::Fresh(Some(d)) => d,
-        CacheOrFetch::Fresh(None) => {
-            // DB miss (soft-deleted or truly missing): set field to null.
-            doc.fields.insert(field_name.to_string(), Value::Null);
-            return Ok(());
-        }
-    };
-
-    if let Some(ref uc) = item_def.upload
-        && uc.enabled
-    {
-        upload::assemble_sizes_object(&mut rd, uc);
-    }
-
-    populate_relationships_cached(
-        &PopulateContext {
-            conn: ctx.conn,
-            registry: ctx.registry,
-            collection_slug: &col,
-            def: &item_def,
-        },
-        &mut rd,
+    match resolve_single_target(
+        ctx,
+        &col,
+        &item_def,
+        &id,
+        &access,
+        ctx.effective_depth,
         visited,
-        &PopulateOpts {
-            depth: ctx.effective_depth - 1,
-            select: None,
-            locale_ctx: ctx.locale_ctx,
-            published_only: ctx.published_only,
-            join_access: None,
-            user: None,
-        },
-        ctx.cache,
-    )?;
-
-    let _ = cache_set_doc(ctx.cache, &key, &rd);
-    doc.fields
-        .insert(field_name.to_string(), document_to_json(&rd, &col));
+    )? {
+        Some(target) => {
+            doc.fields
+                .insert(field_name.to_string(), document_to_json(&target, &col));
+        }
+        None => {
+            // Missing, or hidden by draft visibility / `read` access: null out.
+            doc.fields.insert(field_name.to_string(), Value::Null);
+        }
+    }
 
     Ok(())
 }
@@ -226,7 +188,7 @@ pub(super) fn populate_poly_has_one(
 mod tests {
     use serde_json::json;
 
-    use super::populate_relationships_cached;
+    use super::super::populate_relationships_cached;
     use crate::core::cache::{CacheBackend, MemoryCache, NoneCache};
     use crate::core::{Document, Registry, field::*};
     use crate::db::query::populate::test_helpers::*;
@@ -467,7 +429,7 @@ mod tests {
             .insert("title".to_string(), json!("Cached Article"));
         cache
             .set(
-                &populate_cache_key("articles", "a1", None, false),
+                &populate_cache_key("articles", "a1", None),
                 &serde_json::to_vec(&cached_article).unwrap(),
             )
             .unwrap();

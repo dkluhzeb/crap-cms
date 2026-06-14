@@ -513,7 +513,7 @@ mod tests {
         cached_article
             .fields
             .insert("title".to_string(), json!("CachedFromBatchCache"));
-        let key = populate_cache_key("articles", "a1", None, false);
+        let key = populate_cache_key("articles", "a1", None);
         cache
             .set(&key, &serde_json::to_vec(&cached_article).unwrap())
             .unwrap();
@@ -713,7 +713,7 @@ mod tests {
         cached_article
             .fields
             .insert("title".to_string(), json!("CachedTitle"));
-        let key = populate_cache_key("articles", "a1", None, false);
+        let key = populate_cache_key("articles", "a1", None);
         cache
             .set(&key, &serde_json::to_vec(&cached_article).unwrap())
             .unwrap();

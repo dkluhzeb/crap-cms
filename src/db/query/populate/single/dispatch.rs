@@ -4,10 +4,108 @@ use anyhow::Result;
 use std::collections::HashSet;
 
 use crate::core::cache::CacheBackend;
-use crate::core::{Document, FieldType, field::flatten_array_sub_fields};
-use crate::db::query::populate::{PopulateContext, PopulateCtx, PopulateOpts, Singleflight};
+use crate::core::{
+    CollectionDefinition, Document, FieldType, field::flatten_array_sub_fields, upload,
+};
+use crate::db::query::AccessResult;
+use crate::db::query::populate::helpers::{cache_or_fetch_doc, fetch_target, target_visible};
+use crate::db::query::populate::{
+    PopulateContext, PopulateCtx, PopulateOpts, Singleflight, locale_cache_key, populate_cache_key,
+    target_hidden_by_draft,
+};
 
 use super::{join, nested, nonpoly, poly};
+
+/// Apply the per-request filters to a RAW target document and populate it,
+/// returning `None` when the target is hidden by draft visibility or the
+/// `read` access decision.
+///
+/// The shared cache holds only RAW docs (user-independent); draft visibility,
+/// the `read` decision, upload sizes, and recursive population are all applied
+/// here, per request, so a cached raw doc can never leak one user's filtered
+/// view to another. Access constraints are matched against the RAW fields,
+/// before population turns relationship fields into objects.
+///
+/// `access` is the target collection's `read` decision, resolved once by the
+/// caller for the whole field (it is collection-level, not per-row).
+///
+/// # Errors
+///
+/// Propagates a backend error from the recursive population step.
+pub(super) fn finalize_target(
+    ctx: &PopulateCtx<'_>,
+    collection: &str,
+    def: &CollectionDefinition,
+    mut raw: Document,
+    access: &AccessResult,
+    effective_depth: i32,
+    visited: &mut HashSet<(String, String)>,
+) -> Result<Option<Document>> {
+    if target_hidden_by_draft(&raw, def, ctx.published_only) || !target_visible(access, &raw) {
+        return Ok(None);
+    }
+
+    if let Some(uc) = &def.upload
+        && uc.enabled
+    {
+        upload::assemble_sizes_object(&mut raw, uc);
+    }
+
+    // Recurse, forwarding the access checker + user so nested targets are gated
+    // too, and the shared singleflight so nested raw fetches dedup across requests.
+    // `effective_depth` is the field's cap (may be shallower than `ctx`'s).
+    populate_relationships_cached_with_singleflight(
+        &PopulateContext {
+            conn: ctx.conn,
+            registry: ctx.registry,
+            collection_slug: collection,
+            def,
+        },
+        &mut raw,
+        visited,
+        &PopulateOpts {
+            depth: effective_depth - 1,
+            select: None,
+            locale_ctx: ctx.locale_ctx,
+            published_only: ctx.published_only,
+            join_access: ctx.join_access,
+            user: ctx.user,
+        },
+        ctx.cache,
+        ctx.singleflight,
+    )?;
+
+    Ok(Some(raw))
+}
+
+/// Resolve one relationship target by id: fetch its RAW doc (shared cache, else
+/// singleflight), then [`finalize_target`]. Used by the single-fetch paths
+/// (has-one, polymorphic, nested); the batch has-many path fetches raw docs in
+/// one query and calls [`finalize_target`] directly.
+///
+/// # Errors
+///
+/// Propagates a backend error from the recursive population step.
+pub(super) fn resolve_single_target(
+    ctx: &PopulateCtx<'_>,
+    collection: &str,
+    def: &CollectionDefinition,
+    id: &str,
+    access: &AccessResult,
+    effective_depth: i32,
+    visited: &mut HashSet<(String, String)>,
+) -> Result<Option<Document>> {
+    let locale = locale_cache_key(ctx.locale_ctx);
+    let key = populate_cache_key(collection, id, locale.as_deref());
+
+    let Some(raw) = cache_or_fetch_doc(ctx.cache, ctx.singleflight, &key, || {
+        fetch_target(ctx, collection, def, id).ok().flatten()
+    }) else {
+        return Ok(None);
+    };
+
+    finalize_target(ctx, collection, def, raw, access, effective_depth, visited)
+}
 
 /// Recursively populate relationship fields with full document objects.
 ///
@@ -79,6 +177,8 @@ pub(crate) fn populate_relationships_cached_inner(
         published_only: opts.published_only,
         cache,
         singleflight,
+        join_access: opts.join_access,
+        user: opts.user,
     };
 
     nested::populate_containers_in_doc(&nested_pctx, doc, &ctx.def.fields, visited)?;
@@ -129,6 +229,8 @@ fn populate_flat_relationships(
             published_only: opts.published_only,
             cache,
             singleflight,
+            join_access: opts.join_access,
+            user: opts.user,
         };
 
         if rel.is_polymorphic() {
