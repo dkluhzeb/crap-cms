@@ -30,7 +30,7 @@ use crap_cms::config::LiveConfig;
 #[cfg(not(feature = "redis"))]
 use crap_cms::config::LiveTransport;
 use crap_cms::core::{
-    DocumentFields, DocumentId, Slug,
+    DocumentFields, DocumentId, EventViewMeta, Slug,
     event::{
         EventOperation, EventTarget, InProcessEventBus, InProcessInvalidationBus,
         InvalidationTransport, MutationEventInput, RecvError, SharedEventTransport,
@@ -46,6 +46,7 @@ fn sample_input() -> MutationEventInput {
         document_id: DocumentId::new("doc-1"),
         data: DocumentFields::new(),
         edited_by: None,
+        view: EventViewMeta::default(),
     }
 }
 

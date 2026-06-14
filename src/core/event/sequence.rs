@@ -35,6 +35,7 @@ pub(crate) fn stamp_event(input: MutationEventInput, sequence: u64) -> MutationE
         document_id,
         data,
         edited_by,
+        view,
     } = input;
 
     MutationEvent {
@@ -46,6 +47,7 @@ pub(crate) fn stamp_event(input: MutationEventInput, sequence: u64) -> MutationE
         document_id,
         data,
         edited_by,
+        view,
     }
 }
 
@@ -75,6 +77,7 @@ mod tests {
             document_id: DocumentId::new("id1"),
             data: DocumentFields::new(),
             edited_by: None,
+            view: crate::core::EventViewMeta::default(),
         };
         let event = stamp_event(input, 42);
         assert_eq!(event.sequence, 42);

@@ -112,6 +112,7 @@ mod tests {
             document_id: DocumentId::new("id1"),
             data: DocumentFields::new(),
             edited_by: None,
+            view: crate::core::EventViewMeta::default(),
         }
     }
 
@@ -134,6 +135,7 @@ mod tests {
                 document_id: DocumentId::new("id1"),
                 data: DocumentFields::new(),
                 edited_by: Some(EventUser::new("u1", "test@example.com")),
+                view: crate::core::EventViewMeta::default(),
             })
             .expect("should publish with subscriber");
 

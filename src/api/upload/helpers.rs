@@ -14,7 +14,7 @@ use crate::{
     admin::{AdminState, server::load_auth_user},
     core::{
         AuthUser, CollectionDefinition, Document, DocumentFields, HookRef,
-        event::{EventOperation, EventTarget, EventUser},
+        event::{EventOperation, EventTarget, EventUser, EventViewMeta},
     },
     db::AccessResult,
     hooks::{AccessCheckInput, lifecycle::PublishEventInput},
@@ -194,10 +194,19 @@ pub fn publish_upload_event(
     let edited_by =
         auth_user.map(|au| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()));
 
+    // Create/update carry the full upload doc — derive the view from `_status`;
+    // a delete carries no payload, so gate it by the collection's soft-delete
+    // mode (upload collections have no status axis, so status stays `None`).
+    let view = match &data {
+        Some(d) => EventViewMeta::from_fields(d),
+        None => EventViewMeta::for_delete(def.soft_delete, None),
+    };
+
     let mut builder = PublishEventInput::builder(EventTarget::Collection, operation)
         .collection(collection.into())
         .document_id(doc_id.into())
-        .edited_by(edited_by);
+        .edited_by(edited_by)
+        .view(view);
 
     if let Some(d) = data {
         builder = builder.data(d);

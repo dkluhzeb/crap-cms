@@ -11,7 +11,7 @@ use crate::{
     core::{
         CollectionDefinition, Document, DocumentFields, FieldDefinition, GlobalDefinition, HookRef,
         LiveMode, SharedCache, SharedEventTransport, SharedInvalidationTransport,
-        event::{EventOperation, EventTarget, EventUser},
+        event::{EventOperation, EventTarget, EventUser, EventViewMeta},
     },
     db::{BoxedConnection, DbConnection, DbPool, query::helpers::global_table},
     hooks::HookRunner,
@@ -332,6 +332,40 @@ impl<'a> ServiceContext<'a> {
         doc_id: &str,
         data: &DocumentFields,
     ) {
+        // Derive the view-gating metadata from the full document *before* the
+        // `live_mode` payload stripping below — the raw `_status`/`_deleted_at`
+        // must survive even when Metadata mode empties the wire `data`, so
+        // subscribers can still be gated by their per-view access.
+        let view = EventViewMeta::from_fields(data);
+
+        self.publish_event_with_view(operation, doc_id, data, view);
+    }
+
+    /// Publish (or queue) a delete event. A delete carries no document payload,
+    /// so its view-gating metadata is supplied explicitly: a soft-delete moves
+    /// the row to trash (gated by `trash`); a hard-delete is gated by the
+    /// document's pre-deletion status.
+    pub fn publish_delete_event(
+        &self,
+        doc_id: &str,
+        soft_delete: bool,
+        pre_status: Option<String>,
+    ) {
+        let view = EventViewMeta::for_delete(soft_delete, pre_status);
+
+        self.publish_event_with_view(EventOperation::Delete, doc_id, &DocumentFields::new(), view);
+    }
+
+    /// Shared body for [`Self::publish_mutation_event`] and
+    /// [`Self::publish_delete_event`]: apply `live_mode` stripping to the wire
+    /// `data`, attach the (unstripped) `view` metadata, then queue or publish.
+    fn publish_event_with_view(
+        &self,
+        operation: EventOperation,
+        doc_id: &str,
+        data: &DocumentFields,
+        view: EventViewMeta,
+    ) {
         if !self.emit_events {
             return;
         }
@@ -371,6 +405,7 @@ impl<'a> ServiceContext<'a> {
             edited_by,
             hooks,
             live,
+            view,
         };
 
         if let Some(ref queue) = self.event_queue {
@@ -388,6 +423,7 @@ impl<'a> ServiceContext<'a> {
                 .document_id(pending.document_id)
                 .data(pending.data)
                 .edited_by(pending.edited_by)
+                .view(pending.view)
                 .build(),
         );
     }

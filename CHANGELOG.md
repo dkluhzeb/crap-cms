@@ -235,6 +235,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **Live event streams now gate drafts and trash per content view
+  (breaking).** Real-time mutation events (gRPC `Subscribe` and admin SSE)
+  checked collection access once at connect and then applied only the `read`
+  rule's row constraints per event — there was no status-aware filtering. A
+  subscriber with `read` access therefore received create/update events for
+  **draft** (unpublished) documents, and soft-delete events, regardless of
+  whether they could see that content. (Previously drafts were filtered only if
+  an operator hand-wrote a `{_status = "published"}` constraint — which the new
+  access model removes.) Each event is now gated by the content view it belongs
+  to: a published document's event needs `read`, a draft's needs `access.draft`,
+  and a soft-delete needs `access.trash` (a hard-delete is gated by the view the
+  document was last in). The views are independent — a draft-only reviewer
+  (granted `draft`, denied `read`) receives draft events but not published ones.
+  Events now carry this view metadata independent of the collection's `live`
+  mode, so gating holds even in `metadata` mode and for delete events, whose
+  payload is empty. Subscribers that relied on receiving draft or
+  soft-delete events without the corresponding view access will stop receiving
+  them.
+
 - **Version history now requires edit-level access (breaking).** Listing a
   document's versions (`list_versions`) and reading a single version snapshot
   (`find_version_by_id`) were gated by `access.read`, so any reader could

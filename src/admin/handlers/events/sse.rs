@@ -1,7 +1,7 @@
 //! SSE endpoint for real-time mutation events in the admin UI.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     convert::Infallible,
     future::Future,
     pin::Pin,
@@ -28,10 +28,10 @@ use tracing::warn;
 use crate::{
     admin::AdminState,
     core::{
-        AuthUser, Document, EventReceiver, FieldDenial, LiveMode, MutationEvent, Registry, Slug,
+        AuthUser, Document, EventReceiver, FieldDenial, HookRef, LiveMode, MutationEvent, Registry,
         event::{EventOperation, EventTarget, InvalidationReceiver, RecvError},
     },
-    db::{AccessResult, FilterClause, query::filter::memory},
+    db::{AccessResult, DbConnection, EventViewGate, FilterClause, query::filter::memory},
     hooks::{AccessCheckInput, EventAfterReadInput, HookRunner},
 };
 
@@ -95,25 +95,59 @@ fn try_acquire_sse_slot(counter: &AtomicUsize, max: usize) -> bool {
     }
 }
 
-/// Resolved SSE access: allowed slugs, denied fields, row-level constraints, and modes.
+/// Resolved SSE access: per-view visibility (with row constraints) for
+/// collections and globals, field denials, and modes.
 struct SseAccess {
-    collections: HashSet<Slug>,
-    globals: HashSet<Slug>,
+    collection_views: HashMap<String, EventViewGate>,
+    global_views: HashMap<String, EventViewGate>,
     denied_fields: HashMap<String, Vec<FieldDenial>>,
-    constraints: HashMap<String, Vec<FilterClause>>,
     modes: HashMap<String, LiveMode>,
 }
 
-/// Build the set of collection/global slugs the user has read access to,
-/// and cache field-level read-denied fields per collection for stream filtering.
+impl SseAccess {
+    fn empty() -> Self {
+        Self {
+            collection_views: HashMap::new(),
+            global_views: HashMap::new(),
+            denied_fields: HashMap::new(),
+            modes: HashMap::new(),
+        }
+    }
+}
+
+/// Run one content view's access hook and map the outcome to visibility:
+/// `Some(filters)` when allowed (empty for unconstrained), `None` when denied or
+/// the hook errors (fail-closed).
+fn resolve_view(
+    hook_runner: &HookRunner,
+    access_ref: Option<&HookRef>,
+    user_doc: Option<&Document>,
+    conn: &dyn DbConnection,
+    slug: &str,
+) -> Option<Vec<FilterClause>> {
+    match hook_runner.check_access(
+        &AccessCheckInput {
+            access: access_ref,
+            user: user_doc,
+            id: None,
+            data: None,
+            locale: None,
+            operation: "subscribe",
+            collection: slug,
+            ui_locale: None,
+        },
+        conn,
+    ) {
+        Ok(AccessResult::Allowed) => Some(Vec::new()),
+        Ok(AccessResult::Constrained(filters)) => Some(filters),
+        _ => None,
+    }
+}
+
+/// Build per-view access for every collection/global the user can see, caching
+/// field-level read denials and live mode per slug for stream filtering.
 fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document>) -> SseAccess {
-    let mut access = SseAccess {
-        collections: HashSet::new(),
-        globals: HashSet::new(),
-        denied_fields: HashMap::new(),
-        constraints: HashMap::new(),
-        modes: HashMap::new(),
-    };
+    let mut access = SseAccess::empty();
 
     let Ok(mut conn) = state.pool.get() else {
         return access;
@@ -123,74 +157,56 @@ fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document>) -> SseAc
         return access;
     };
 
+    let runner = &state.hook_runner;
+
     for (slug, def) in &state.registry.collections {
-        match state.hook_runner.check_access(
-            &AccessCheckInput {
-                access: def.access.read.as_ref(),
-                user: user_doc,
-                id: None,
-                data: None,
-                locale: None,
-                operation: "subscribe",
-                collection: slug,
-                ui_locale: None,
-            },
-            &tx,
-        ) {
-            Ok(AccessResult::Allowed) => {
-                access.collections.insert(slug.clone());
-            }
-            Ok(AccessResult::Constrained(filters)) => {
-                access.collections.insert(slug.clone());
-                access.constraints.insert(slug.to_string(), filters);
-            }
-            _ => continue,
+        // Draft view only exists with a status axis; trash only with soft-delete.
+        let gate = EventViewGate {
+            published: resolve_view(runner, def.access.read.as_ref(), user_doc, &tx, slug),
+            draft: def
+                .has_drafts()
+                .then(|| resolve_view(runner, def.access.resolve_draft(), user_doc, &tx, slug))
+                .flatten(),
+            trash: def
+                .soft_delete
+                .then(|| resolve_view(runner, def.access.resolve_trash(), user_doc, &tx, slug))
+                .flatten(),
+        };
+
+        if !gate.any_visible() {
+            continue;
         }
 
-        let denied = state
-            .hook_runner
-            .check_field_read_access(&def.fields, user_doc, None, &tx);
+        let denied = runner.check_field_read_access(&def.fields, user_doc, None, &tx);
 
         if !denied.is_empty() {
             access.denied_fields.insert(slug.to_string(), denied);
         }
 
         access.modes.insert(slug.to_string(), def.live_mode);
+        access.collection_views.insert(slug.to_string(), gate);
     }
 
     for (slug, def) in &state.registry.globals {
-        match state.hook_runner.check_access(
-            &AccessCheckInput {
-                access: def.access.read.as_ref(),
-                user: user_doc,
-                id: None,
-                data: None,
-                locale: None,
-                operation: "subscribe",
-                collection: slug,
-                ui_locale: None,
-            },
-            &tx,
-        ) {
-            Ok(AccessResult::Allowed) => {
-                access.globals.insert(slug.clone());
-            }
-            Ok(AccessResult::Constrained(filters)) => {
-                access.globals.insert(slug.clone());
-                access.constraints.insert(slug.to_string(), filters);
-            }
-            _ => continue,
+        // Globals are a single published row — no status or trash axis.
+        let gate = EventViewGate {
+            published: resolve_view(runner, def.access.read.as_ref(), user_doc, &tx, slug),
+            draft: None,
+            trash: None,
+        };
+
+        if !gate.any_visible() {
+            continue;
         }
 
-        let denied = state
-            .hook_runner
-            .check_field_read_access(&def.fields, user_doc, None, &tx);
+        let denied = runner.check_field_read_access(&def.fields, user_doc, None, &tx);
 
         if !denied.is_empty() {
             access.denied_fields.insert(slug.to_string(), denied);
         }
 
         access.modes.insert(slug.to_string(), def.live_mode);
+        access.global_views.insert(slug.to_string(), gate);
     }
 
     if let Err(e) = tx.commit() {
@@ -212,21 +228,23 @@ fn build_event_payload(
     registry: &Registry,
     user_doc: Option<&Document>,
 ) -> Option<Value> {
-    let allowed = match event.target {
-        EventTarget::Collection => access.collections.contains(&event.collection),
-        EventTarget::Global => access.globals.contains(&event.collection),
-    };
-
-    if !allowed {
-        return None;
-    }
-
-    // Row-level constraint check: skip events the subscriber can't access
     let slug_str: &str = event.collection.as_ref();
 
-    if let Some(filters) = access.constraints.get(slug_str)
-        && !memory::matches_constraints(&event.data, filters)
-    {
+    let views = match event.target {
+        EventTarget::Collection => access.collection_views.get(slug_str),
+        EventTarget::Global => access.global_views.get(slug_str),
+    }?;
+
+    // Gate by the content view this event belongs to (trash/draft/published).
+    // `None` means the subscriber cannot see that view, so the event is dropped
+    // — closing the draft/trash leak. The `view` metadata is carried
+    // independent of `live_mode`, so this holds for empty-`data` events too
+    // (metadata-only collections, all deletes).
+    let constraints = views.constraints_for(&event.view)?;
+
+    // Row-level constraints match against the event payload; empty `data`
+    // cannot satisfy a non-empty constraint (fail-closed) — unchanged behavior.
+    if !constraints.is_empty() && !memory::matches_constraints(&event.data, constraints) {
         return None;
     }
 
@@ -458,13 +476,7 @@ pub async fn sse_handler(
     let access = if event_transport.is_some() {
         build_allowed_slugs(&state, user_doc)
     } else {
-        SseAccess {
-            collections: HashSet::new(),
-            globals: HashSet::new(),
-            denied_fields: HashMap::new(),
-            constraints: HashMap::new(),
-            modes: HashMap::new(),
-        }
+        SseAccess::empty()
     };
 
     let hook_runner = state.hook_runner.clone();
@@ -519,8 +531,23 @@ mod tests {
     };
 
     use super::*;
-    use crate::core::HookRef;
-    use crate::core::event::EventUser;
+    use crate::core::Slug;
+    use crate::core::event::{EventUser, EventViewMeta};
+
+    /// A `collection_views` map granting the unconstrained published view for one
+    /// slug — the common fixture for these payload tests.
+    fn published_views(slug: &str) -> HashMap<String, EventViewGate> {
+        let mut views = HashMap::new();
+        views.insert(
+            slug.to_string(),
+            EventViewGate {
+                published: Some(Vec::new()),
+                draft: None,
+                trash: None,
+            },
+        );
+        views
+    }
 
     #[test]
     fn sse_slot_acquire_within_limit() {
@@ -590,6 +617,7 @@ mod tests {
             document_id: DocumentId::new("doc-1"),
             data,
             edited_by: None,
+            view: EventViewMeta::default(),
         }
     }
 
@@ -636,14 +664,10 @@ mod tests {
         let mut modes: HashMap<String, LiveMode> = HashMap::new();
         modes.insert("posts".to_string(), LiveMode::Full);
 
-        let mut collections = HashSet::new();
-        collections.insert(Slug::new("posts"));
-
         let access = SseAccess {
-            collections,
-            globals: HashSet::new(),
+            collection_views: published_views("posts"),
+            global_views: HashMap::new(),
             denied_fields,
-            constraints: HashMap::new(),
             modes,
         };
 
@@ -678,14 +702,10 @@ mod tests {
         let mut modes: HashMap<String, LiveMode> = HashMap::new();
         modes.insert("posts".to_string(), LiveMode::Metadata);
 
-        let mut collections = HashSet::new();
-        collections.insert(Slug::new("posts"));
-
         let access = SseAccess {
-            collections,
-            globals: HashSet::new(),
+            collection_views: published_views("posts"),
+            global_views: HashMap::new(),
             denied_fields: HashMap::new(),
-            constraints: HashMap::new(),
             modes,
         };
 
@@ -716,14 +736,10 @@ mod tests {
     fn sse_payload_exposes_self_flag_but_never_editor_identity() {
         let (runner, registry, _posts) = build_runner_and_registry();
 
-        let mut collections = HashSet::new();
-        collections.insert(Slug::new("posts"));
-
         let access = SseAccess {
-            collections,
-            globals: HashSet::new(),
+            collection_views: published_views("posts"),
+            global_views: HashMap::new(),
             denied_fields: HashMap::new(),
-            constraints: HashMap::new(),
             modes: HashMap::new(),
         };
 
@@ -769,14 +785,10 @@ mod tests {
         let mut modes: HashMap<String, LiveMode> = HashMap::new();
         modes.insert("posts".to_string(), LiveMode::Full);
 
-        let mut collections = HashSet::new();
-        collections.insert(Slug::new("posts"));
-
         let access = SseAccess {
-            collections,
-            globals: HashSet::new(),
+            collection_views: published_views("posts"),
+            global_views: HashMap::new(),
             denied_fields: HashMap::new(),
-            constraints: HashMap::new(),
             modes,
         };
 
@@ -799,6 +811,108 @@ mod tests {
         assert!(
             !raw.contains("user-1") && !raw.contains("editor@example.com"),
             "payload must not leak editor identity: {raw}"
+        );
+    }
+
+    /// Build an `SseAccess` exposing exactly `gate` for the "posts" collection.
+    fn access_with_gate(gate: EventViewGate) -> SseAccess {
+        let mut collection_views = HashMap::new();
+        collection_views.insert("posts".to_string(), gate);
+
+        SseAccess {
+            collection_views,
+            global_views: HashMap::new(),
+            denied_fields: HashMap::new(),
+            modes: HashMap::new(),
+        }
+    }
+
+    fn event_with_view(status: Option<&str>, trashed: bool) -> MutationEvent {
+        let mut event = make_event("posts", DocumentFields::new());
+        event.view = EventViewMeta {
+            status: status.map(str::to_string),
+            trashed,
+        };
+        event
+    }
+
+    /// Regression: a `read`-only subscriber must NOT receive draft mutation
+    /// events. Before P4, drafts streamed regardless of the subscriber's view.
+    #[test]
+    fn draft_event_dropped_when_only_published_visible() {
+        let (runner, registry, _posts) = build_runner_and_registry();
+
+        let access = access_with_gate(EventViewGate {
+            published: Some(Vec::new()),
+            draft: None,
+            trash: None,
+        });
+        let event = event_with_view(Some("draft"), false);
+
+        assert!(
+            build_event_payload(&event, &access, &runner, &registry, None).is_none(),
+            "draft event must be withheld from a published-only subscriber"
+        );
+    }
+
+    #[test]
+    fn draft_event_delivered_when_draft_view_visible() {
+        let (runner, registry, _posts) = build_runner_and_registry();
+
+        let access = access_with_gate(EventViewGate {
+            published: None,
+            draft: Some(Vec::new()),
+            trash: None,
+        });
+        let event = event_with_view(Some("draft"), false);
+
+        assert!(
+            build_event_payload(&event, &access, &runner, &registry, None).is_some(),
+            "a draft-visible subscriber receives draft events"
+        );
+    }
+
+    /// Views are independent: a draft-only reviewer does NOT see published events.
+    #[test]
+    fn published_event_dropped_when_only_draft_visible() {
+        let (runner, registry, _posts) = build_runner_and_registry();
+
+        let access = access_with_gate(EventViewGate {
+            published: None,
+            draft: Some(Vec::new()),
+            trash: None,
+        });
+        let event = event_with_view(Some("published"), false);
+
+        assert!(build_event_payload(&event, &access, &runner, &registry, None).is_none());
+    }
+
+    /// Soft-delete (trashed) events are gated by `trash`, not the status views.
+    #[test]
+    fn trashed_event_gated_by_trash_view() {
+        let (runner, registry, _posts) = build_runner_and_registry();
+        let event = event_with_view(Some("published"), true);
+
+        // Published + draft visible but trash denied → withheld.
+        let denied_trash = access_with_gate(EventViewGate {
+            published: Some(Vec::new()),
+            draft: Some(Vec::new()),
+            trash: None,
+        });
+        assert!(
+            build_event_payload(&event, &denied_trash, &runner, &registry, None).is_none(),
+            "a trashed-doc event must require the trash view"
+        );
+
+        // Trash visible → delivered.
+        let allow_trash = access_with_gate(EventViewGate {
+            published: None,
+            draft: None,
+            trash: Some(Vec::new()),
+        });
+        assert!(
+            build_event_payload(&event, &allow_trash, &runner, &registry, None).is_some(),
+            "a trash-visible subscriber receives soft-delete events"
         );
     }
 }

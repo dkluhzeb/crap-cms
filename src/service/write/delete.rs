@@ -20,19 +20,26 @@ pub(crate) struct DeleteResult {
     pub context: ReqContext,
     /// Upload file fields from the deleted document (for post-commit cleanup).
     pub upload_doc_fields: Option<DocumentFields>,
+    /// The document's `_status` before deletion (draft collections only), used
+    /// to gate a hard-delete event by the status view it was last in. `None`
+    /// for status-less collections and soft-deletes (gated by `trash`).
+    pub pre_status: Option<String>,
 }
 
 /// Load the document's fields once (before deletion removes the row) and build
-/// the delete-hook `data`. Returns `(upload_doc_fields, hook_data)`:
+/// the delete-hook `data`. Returns `(upload_doc_fields, hook_data, pre_status)`:
 ///
 /// - `upload_doc_fields` — fields for post-commit upload-file cleanup (only for
 ///   upload collections; `None` otherwise).
 /// - `hook_data` — the `data` passed to `before_delete` / `after_delete`: the
 ///   document's full fields (when a delete hook will run) plus `id`, and
 ///   `soft_delete` for a soft delete; otherwise just `{ id }` (+ `soft_delete`).
+/// - `pre_status` — the document's `_status` before deletion, for the mutation
+///   event's view gate (draft collections only; `None` otherwise).
 ///
-/// The document is loaded only when an upload collection or a delete hook needs
-/// it, so a plain delete with no hooks does no extra query.
+/// The document is loaded only when an upload collection, a delete hook, or a
+/// status axis needs it, so a plain delete on a status-less, hook-less
+/// collection does no extra query.
 fn prepare_delete_hook_data(
     ctx: &ServiceContext,
     write_hooks: &dyn WriteHooks,
@@ -40,10 +47,10 @@ fn prepare_delete_hook_data(
     conn: &dyn DbConnection,
     id: &str,
     locale_config: Option<&LocaleConfig>,
-) -> Result<(Option<DocumentFields>, DocumentFields)> {
+) -> Result<(Option<DocumentFields>, DocumentFields, Option<String>)> {
     let wants_hook_data = write_hooks.runs_delete_hooks(&def.hooks);
 
-    let doc_fields = if def.is_upload_collection() || wants_hook_data {
+    let doc_fields = if def.is_upload_collection() || wants_hook_data || def.has_drafts() {
         let lc = locale_config.cloned().unwrap_or_default();
         let locale_ctx = LocaleContext::from_locale_string(None, &lc)?;
 
@@ -61,6 +68,11 @@ fn prepare_delete_hook_data(
         None
     };
 
+    // Capture `_status` before `doc_fields` is consumed into `hook_data`.
+    let pre_status = doc_fields
+        .as_ref()
+        .and_then(|f| f.get_str("_status").map(str::to_string));
+
     let mut hook_data = if wants_hook_data {
         doc_fields.unwrap_or_default()
     } else {
@@ -72,7 +84,7 @@ fn prepare_delete_hook_data(
         hook_data.insert("soft_delete".to_string(), Value::Bool(true));
     }
 
-    Ok((upload_doc_fields, hook_data))
+    Ok((upload_doc_fields, hook_data, pre_status))
 }
 
 /// Delete a document on an existing connection/transaction.
@@ -132,7 +144,7 @@ pub(crate) fn delete_document_in_conn(
     // cleanup and the delete-hook context, and build the hook `data`. For a hard
     // delete the row is gone afterwards, so this snapshot is `after_delete`'s
     // only view of what was removed.
-    let (upload_doc_fields, hook_data) =
+    let (upload_doc_fields, hook_data, pre_status) =
         prepare_delete_hook_data(ctx, write_hooks, def, conn, id, locale_config)?;
 
     // Ref count protection (hard delete only).
@@ -215,6 +227,7 @@ pub(crate) fn delete_document_in_conn(
     Ok(DeleteResult {
         context: after_result.context,
         upload_doc_fields,
+        pre_status,
     })
 }
 

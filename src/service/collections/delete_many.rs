@@ -6,7 +6,7 @@ use anyhow::Context as _;
 
 use crate::{
     config::LocaleConfig,
-    core::{DocumentFields, event::EventOperation},
+    core::DocumentFields,
     db::{FilterClause, FindQuery, query},
     hooks::LuaCrudInfra,
     service::{
@@ -139,6 +139,9 @@ fn delete_many_pool(
     let mut skipped_count = 0i64;
     let mut upload_fields_to_clean = Vec::new();
     let mut deleted_ids = Vec::new();
+    // Pre-deletion `_status` per deleted id, in lockstep with `deleted_ids`, to
+    // gate each hard-delete event by the status view the document was last in.
+    let mut pre_statuses = Vec::new();
 
     for id in &doc_ids {
         match delete_document_in_conn(&inner_ctx, id, Some(locale_config)) {
@@ -152,6 +155,7 @@ fn delete_many_pool(
                     }
                 }
                 deleted_ids.push(id.clone());
+                pre_statuses.push(result.pre_status);
             }
             // A referenced document is skipped (best-effort), not a failure.
             Err(ServiceError::Referenced { .. }) => {
@@ -175,8 +179,8 @@ fn delete_many_pool(
     // Nested-hook events queued during the op always flush; user/session
     // invalidation is handled inside `delete_document_in_conn` and is
     // unaffected.
-    for id in &deleted_ids {
-        ctx.publish_mutation_event(EventOperation::Delete, id, &DocumentFields::new());
+    for (id, pre_status) in deleted_ids.iter().zip(&pre_statuses) {
+        ctx.publish_delete_event(id, def.soft_delete, pre_status.clone());
     }
     flush_queue(ctx, &queue);
 
@@ -234,7 +238,7 @@ fn delete_many_conn(
 
                 // Gated by `ctx.emit_events`; in conn mode the enqueued event
                 // flushes after the caller's tx commits.
-                ctx.publish_mutation_event(EventOperation::Delete, id, &DocumentFields::new());
+                ctx.publish_delete_event(id, def.soft_delete, result.pre_status.clone());
                 deleted_ids.push(id.clone());
             }
             Err(ServiceError::Referenced { .. }) => {

@@ -47,8 +47,9 @@ pub mod types;
 pub use connection::{BoxedConnection, BoxedTransaction, DbConnection};
 pub use pool::DbPool;
 pub use query::{
-    AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, LocaleMode,
-    PaginationResult, RequestedViews, SharedPopulateSingleflight, Singleflight, ViewScope,
+    AccessResult, EventViewGate, Filter, FilterClause, FilterOp, FindQuery, LocaleContext,
+    LocaleMode, PaginationResult, RequestedViews, SharedPopulateSingleflight, Singleflight,
+    ViewScope,
 };
 pub(crate) use types::f64_to_exact_i64;
 pub use types::{DbRow, DbValue};

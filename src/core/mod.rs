@@ -103,7 +103,7 @@ pub use auth::{SharedPasswordProvider, SharedTokenProvider};
 pub use cache::SharedCache;
 pub use email::SharedEmailProvider;
 pub use event::{
-    EventReceiver, MutationEvent, MutationEventInput, SharedEventTransport,
+    EventReceiver, EventViewMeta, MutationEvent, MutationEventInput, SharedEventTransport,
     SharedInvalidationTransport,
 };
 pub use rate_limit::SharedRateLimitBackend;

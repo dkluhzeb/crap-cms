@@ -7,8 +7,7 @@ use anyhow::Context as _;
 use crate::{
     config::LocaleConfig,
     core::{
-        DocumentFields, ReqContext,
-        event::EventOperation,
+        ReqContext,
         upload::{self, StorageBackend},
     },
     hooks::LuaCrudInfra,
@@ -85,7 +84,7 @@ fn delete_document_pool(
 
     ctx.clear_cache();
 
-    ctx.publish_mutation_event(EventOperation::Delete, id, &DocumentFields::new());
+    ctx.publish_delete_event(id, def.soft_delete, result.pre_status.clone());
     flush_queue(ctx, &queue);
 
     // Clean up upload files after successful commit (skip for soft-delete to allow restore)
@@ -110,7 +109,7 @@ fn delete_document_conn(
 
     ctx.clear_cache();
 
-    ctx.publish_mutation_event(EventOperation::Delete, id, &DocumentFields::new());
+    ctx.publish_delete_event(id, def.soft_delete, result.pre_status.clone());
 
     if !def.soft_delete
         && let (Some(s), Some(fields)) = (storage, result.upload_doc_fields)

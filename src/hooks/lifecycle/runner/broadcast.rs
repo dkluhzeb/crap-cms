@@ -8,7 +8,7 @@ use crate::{
     core::{
         DocumentFields, DocumentId, Hooks, LiveSetting, MutationEventInput, SharedEventTransport,
         Slug,
-        event::{EventOperation, EventTarget, EventUser},
+        event::{EventOperation, EventTarget, EventUser, EventViewMeta},
     },
     hooks::{
         HookContext, HookEvent, HookRunner,
@@ -30,6 +30,7 @@ pub struct PublishEventInput {
     pub document_id: DocumentId,
     pub data: DocumentFields,
     pub edited_by: Option<EventUser>,
+    pub view: EventViewMeta,
 }
 
 impl PublishEventInput {
@@ -48,6 +49,7 @@ impl PublishEventInput {
             document_id: self.document_id,
             data: self.data,
             edited_by: self.edited_by,
+            view: self.view,
         }
     }
 }
@@ -60,6 +62,7 @@ pub struct PublishEventInputBuilder {
     document_id: Option<DocumentId>,
     data: DocumentFields,
     edited_by: Option<EventUser>,
+    view: EventViewMeta,
 }
 
 impl PublishEventInputBuilder {
@@ -71,6 +74,7 @@ impl PublishEventInputBuilder {
             document_id: None,
             data: DocumentFields::new(),
             edited_by: None,
+            view: EventViewMeta::default(),
         }
     }
 
@@ -94,6 +98,12 @@ impl PublishEventInputBuilder {
         self
     }
 
+    /// Attach the per-view access-gating metadata (see [`EventViewMeta`]).
+    pub fn view(mut self, view: EventViewMeta) -> Self {
+        self.view = view;
+        self
+    }
+
     pub fn build(self) -> PublishEventInput {
         PublishEventInput {
             target: self.target,
@@ -102,6 +112,7 @@ impl PublishEventInputBuilder {
             document_id: self.document_id.expect("document_id is required"),
             data: self.data,
             edited_by: self.edited_by,
+            view: self.view,
         }
     }
 }
@@ -266,6 +277,7 @@ fn publish_event_blocking(
         document_id,
         data,
         edited_by,
+        view,
     } = input;
 
     let broadcast_data = match runner.run_before_broadcast(
@@ -292,6 +304,7 @@ fn publish_event_blocking(
         document_id,
         data: broadcast_data,
         edited_by,
+        view,
     }
     .into_transport_input();
 

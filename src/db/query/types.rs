@@ -1,5 +1,6 @@
 //! Query types: filters, find query, access result.
 
+use crate::core::EventViewMeta;
 use crate::db::query::cursor;
 
 /// Result of an access control check.
@@ -90,6 +91,52 @@ impl FilterClause {
                 .map(|g| FilterClause::and(g.into_iter().map(FilterClause::Single).collect()))
                 .collect(),
         )
+    }
+}
+
+/// Per-view read access for one collection/global, used to gate streamed
+/// mutation events (gRPC Subscribe + admin SSE share this).
+///
+/// Each field holds `Some(constraints)` when that content view is visible to the
+/// subscriber (empty = unconstrained, non-empty = row filter) or `None` when the
+/// view is denied or its axis is absent for the slug. Built once at subscribe
+/// time from the per-view access hooks, then consulted per event via
+/// [`Self::constraints_for`] — the single place that maps an event's
+/// [`EventViewMeta`] to the view that gates it, so the draft/trash leak cannot
+/// be reintroduced by one surface drifting from the other.
+#[derive(Debug, Default, Clone)]
+pub struct EventViewGate {
+    /// Published documents (`read`).
+    pub published: Option<Vec<FilterClause>>,
+    /// Draft documents (`draft`). `None` when the slug has no status axis.
+    pub draft: Option<Vec<FilterClause>>,
+    /// Trashed documents (`trash`). `None` when the slug has no soft-delete.
+    pub trash: Option<Vec<FilterClause>>,
+}
+
+impl EventViewGate {
+    /// Whether any content view is visible — the slug can be subscribed to at all.
+    #[must_use]
+    pub fn any_visible(&self) -> bool {
+        self.published.is_some() || self.draft.is_some() || self.trash.is_some()
+    }
+
+    /// Select the row constraints that gate an event for its content view, or
+    /// `None` when the subscriber cannot see that view (the event must be
+    /// dropped). A trashed document is gated by `trash`; a draft by `draft`;
+    /// anything else (published, or a status-less collection) by `read`. An
+    /// empty slice means the view is visible without row constraints.
+    #[must_use]
+    pub fn constraints_for(&self, view: &EventViewMeta) -> Option<&[FilterClause]> {
+        let selected = if view.trashed {
+            &self.trash
+        } else if view.status.as_deref() == Some("draft") {
+            &self.draft
+        } else {
+            &self.published
+        };
+
+        selected.as_deref()
     }
 }
 
@@ -216,6 +263,89 @@ impl FindQueryBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn name_filter(field: &str) -> FilterClause {
+        FilterClause::Single(Filter {
+            field: field.into(),
+            op: FilterOp::Equals("x".into()),
+        })
+    }
+
+    fn meta(status: Option<&str>, trashed: bool) -> EventViewMeta {
+        EventViewMeta {
+            status: status.map(str::to_string),
+            trashed,
+        }
+    }
+
+    #[test]
+    fn event_view_gate_any_visible_reflects_each_axis() {
+        assert!(!EventViewGate::default().any_visible());
+        assert!(
+            EventViewGate {
+                published: Some(Vec::new()),
+                ..Default::default()
+            }
+            .any_visible()
+        );
+        assert!(
+            EventViewGate {
+                draft: Some(Vec::new()),
+                ..Default::default()
+            }
+            .any_visible()
+        );
+        assert!(
+            EventViewGate {
+                trash: Some(Vec::new()),
+                ..Default::default()
+            }
+            .any_visible()
+        );
+    }
+
+    #[test]
+    fn constraints_for_routes_each_view_to_its_axis() {
+        let gate = EventViewGate {
+            published: Some(vec![name_filter("pub")]),
+            draft: Some(vec![name_filter("draft")]),
+            trash: Some(vec![name_filter("trash")]),
+        };
+
+        // Published / status-less → read view.
+        let pub_c = gate
+            .constraints_for(&meta(Some("published"), false))
+            .unwrap();
+        assert_eq!(pub_c.len(), 1);
+        assert!(matches!(&pub_c[0], FilterClause::Single(f) if f.field == "pub"));
+        let none_c = gate.constraints_for(&meta(None, false)).unwrap();
+        assert!(matches!(&none_c[0], FilterClause::Single(f) if f.field == "pub"));
+
+        // Draft status → draft view.
+        let draft_c = gate.constraints_for(&meta(Some("draft"), false)).unwrap();
+        assert!(matches!(&draft_c[0], FilterClause::Single(f) if f.field == "draft"));
+
+        // Trashed → trash view, regardless of status.
+        let trash_c = gate.constraints_for(&meta(Some("draft"), true)).unwrap();
+        assert!(matches!(&trash_c[0], FilterClause::Single(f) if f.field == "trash"));
+    }
+
+    #[test]
+    fn constraints_for_denied_view_returns_none() {
+        // Only published visible: a draft event and a trash event are dropped,
+        // a published event passes (unconstrained).
+        let gate = EventViewGate {
+            published: Some(Vec::new()),
+            draft: None,
+            trash: None,
+        };
+        assert!(
+            gate.constraints_for(&meta(Some("published"), false))
+                .is_some()
+        );
+        assert!(gate.constraints_for(&meta(Some("draft"), false)).is_none());
+        assert!(gate.constraints_for(&meta(None, true)).is_none());
+    }
 
     #[test]
     fn find_query_default_is_entirely_empty() {

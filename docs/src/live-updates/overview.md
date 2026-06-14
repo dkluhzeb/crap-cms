@@ -93,13 +93,29 @@ Event streams enforce the same access rules as normal read operations:
 
 | Layer | metadata | full | Description |
 |-------|:---:|:---:|-------------|
-| Collection-level access | ✅ | ✅ | Only collections the subscriber can read |
+| Collection-level access | ✅ | ✅ | Only collections with at least one visible content view |
+| Content-view access | ✅ | ✅ | Each event gated by the view it belongs to (`read`/`draft`/`trash`) |
 | Row-level constraints | ✅ | ✅ | Constraint filters evaluated in-memory per event |
 | `after_read` hooks | — | ✅ | Data transformed per subscriber (same as Find) |
 | Field-level access | — | ✅ | Denied fields stripped per subscriber |
 | `before_broadcast` hooks | ✅ | ✅ | Can modify/suppress events before delivery |
 
-Row-level constraints use in-memory evaluation of the same filters that `Find` uses as SQL WHERE conditions. For example, if a user's access returns `{ owner = ctx.user.id }`, only events where `owner` matches are delivered.
+**Content-view gating.** Each mutation event belongs to exactly one content
+view, and is delivered only to subscribers allowed to see that view — the same
+independent `read` (published) / `draft` / `trash` keys that gate normal reads:
+
+- A **published** document's create/update event needs `read`.
+- A **draft** document's create/update event needs `draft` (default: falls back
+  to `update`). A `read`-only subscriber never sees draft events.
+- A **soft-delete** event needs `trash`; a hard-delete is gated by the view the
+  document was last in.
+
+The event carries this view metadata independent of `mode`, so gating holds even
+in `metadata` mode and for delete events, where the payload is empty. The views
+are independent: a draft-only reviewer (granted `draft`, denied `read`) receives
+draft events but not published ones.
+
+Row-level constraints use in-memory evaluation of the same filters that `Find` uses as SQL WHERE conditions. For example, if a user's access returns `{ owner = ctx.user.id }`, only events where `owner` matches are delivered. (An event whose payload is empty — `metadata` mode, or any delete — cannot satisfy a non-empty row constraint, so a constrained subscriber is fail-closed for those events.)
 
 Access is snapshotted at subscribe time. Permission changes require reconnect.
 
@@ -132,7 +148,7 @@ After commit:
        2. before_broadcast hooks (can modify/suppress)
        3. EventBus.publish()
             -> Per subscriber:
-                 a. collection access (cached)
+                 a. content-view access (cached read/draft/trash)
                  b. row-level constraints (cached, in-memory)
                  c. mode:
                     metadata → deliver metadata only

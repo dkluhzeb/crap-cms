@@ -27,7 +27,7 @@ use crate::{
         event::{EventOperation, EventTarget, InvalidationReceiver, RecvError},
     },
     db::{
-        AccessResult, DbConnection, DbPool, FilterClause,
+        AccessResult, DbConnection, DbPool, EventViewGate, FilterClause,
         query::filter::memory::matches_constraints,
     },
     hooks::{AccessCheckInput, EventAfterReadInput, HookRunner},
@@ -83,44 +83,54 @@ impl<S: Stream + Unpin> Stream for GuardedStream<S> {
     }
 }
 
-/// Per-slug access resolution result.
+/// One optional content-view axis for a slug: whether the axis exists (a status
+/// axis for `draft`, soft-delete for `trash`) plus its resolved access fn
+/// (`None` = default policy). An absent axis yields no view.
+struct ViewAxis {
+    present: bool,
+    access: Option<HookRef>,
+}
+
+/// Per-slug access inputs gathered from a collection/global definition: the
+/// `read` (published) ref plus the optional draft and trash view axes.
 struct SlugAccess {
-    access_ref: Option<HookRef>,
+    read_ref: Option<HookRef>,
+    draft: ViewAxis,
+    trash: ViewAxis,
     fields: Vec<FieldDefinition>,
     live_mode: LiveMode,
 }
 
 /// Accumulated access state built during slug resolution.
 struct AccessState {
-    allowed: HashSet<String>,
+    views: HashMap<String, EventViewGate>,
     denied_fields: HashMap<String, Vec<FieldDenial>>,
-    constraints: HashMap<String, Vec<FilterClause>>,
     modes: HashMap<String, LiveMode>,
 }
 
 impl AccessState {
     fn new() -> Self {
         Self {
-            allowed: HashSet::new(),
+            views: HashMap::new(),
             denied_fields: HashMap::new(),
-            constraints: HashMap::new(),
             modes: HashMap::new(),
         }
     }
 }
 
-/// Resolve access for a single slug: check access, cache denied fields, constraints, and mode.
-fn resolve_single_slug(
+/// Run one view's access hook and map the outcome to visibility: `Some(filters)`
+/// when allowed (empty for unconstrained), `None` when denied or the hook errors
+/// (fail-closed).
+fn resolve_view(
+    access_ref: Option<&HookRef>,
     slug: &str,
-    slug_access: &SlugAccess,
     user_doc: Option<&Document>,
     hook_runner: &HookRunner,
     tx: &dyn DbConnection,
-    state: &mut AccessState,
-) {
+) -> Option<Vec<FilterClause>> {
     match hook_runner.check_access(
         &AccessCheckInput {
-            access: slug_access.access_ref.as_ref(),
+            access: access_ref,
             user: user_doc,
             id: None,
             data: None,
@@ -131,14 +141,62 @@ fn resolve_single_slug(
         },
         tx,
     ) {
-        Ok(AccessResult::Allowed) => {
-            state.allowed.insert(slug.to_string());
-        }
-        Ok(AccessResult::Constrained(filters)) => {
-            state.allowed.insert(slug.to_string());
-            state.constraints.insert(slug.to_string(), filters);
-        }
-        _ => return,
+        Ok(AccessResult::Allowed) => Some(Vec::new()),
+        Ok(AccessResult::Constrained(filters)) => Some(filters),
+        _ => None,
+    }
+}
+
+/// Resolve every content view for a single slug, caching per-view visibility,
+/// field-read denials, and live mode. A slug with no visible view is skipped.
+fn resolve_single_slug(
+    slug: &str,
+    slug_access: &SlugAccess,
+    user_doc: Option<&Document>,
+    hook_runner: &HookRunner,
+    tx: &dyn DbConnection,
+    state: &mut AccessState,
+) {
+    // The draft/trash views only exist when their axis is present; an absent
+    // axis (`then` short-circuits) yields no view.
+    let views = EventViewGate {
+        published: resolve_view(
+            slug_access.read_ref.as_ref(),
+            slug,
+            user_doc,
+            hook_runner,
+            tx,
+        ),
+        draft: slug_access
+            .draft
+            .present
+            .then(|| {
+                resolve_view(
+                    slug_access.draft.access.as_ref(),
+                    slug,
+                    user_doc,
+                    hook_runner,
+                    tx,
+                )
+            })
+            .flatten(),
+        trash: slug_access
+            .trash
+            .present
+            .then(|| {
+                resolve_view(
+                    slug_access.trash.access.as_ref(),
+                    slug,
+                    user_doc,
+                    hook_runner,
+                    tx,
+                )
+            })
+            .flatten(),
+    };
+
+    if !views.any_visible() {
+        return;
     }
 
     let denied = hook_runner.check_field_read_access(&slug_access.fields, user_doc, None, tx);
@@ -148,6 +206,7 @@ fn resolve_single_slug(
     }
 
     state.modes.insert(slug.to_string(), slug_access.live_mode);
+    state.views.insert(slug.to_string(), views);
 }
 
 /// Subscriber context captured at connection time for per-event processing.
@@ -163,14 +222,10 @@ struct SubscriberCtx {
 fn process_event(event: &MutationEvent, ctx: &SubscriberCtx) -> Option<content::MutationEvent> {
     let slug_str: &str = event.collection.as_ref();
 
-    let allowed = match event.target {
-        EventTarget::Collection => ctx.access.allowed_collections.contains(slug_str),
-        EventTarget::Global => ctx.access.allowed_globals.contains(slug_str),
-    };
-
-    if !allowed {
-        return None;
-    }
+    let views = match event.target {
+        EventTarget::Collection => ctx.access.collection_views.get(slug_str),
+        EventTarget::Global => ctx.access.global_views.get(slug_str),
+    }?;
 
     let op_str = match event.operation {
         EventOperation::Create => "create",
@@ -182,9 +237,17 @@ fn process_event(event: &MutationEvent, ctx: &SubscriberCtx) -> Option<content::
         return None;
     }
 
-    if let Some(filters) = ctx.access.constraints.get(slug_str)
-        && !matches_constraints(&event.data, filters)
-    {
+    // Gate by the content view this event belongs to (trash/draft/published).
+    // `None` means the subscriber cannot see that view, so the event is dropped
+    // — closing the draft/trash leak. The event's `view` metadata is carried
+    // independent of `live_mode`, so this holds even when `data` is empty
+    // (metadata-only collections, all deletes).
+    let constraints = views.constraints_for(&event.view)?;
+
+    // Row-level constraints match against the event payload. Empty `data`
+    // (metadata mode / deletes) cannot satisfy a non-empty constraint, so a
+    // constrained subscriber is fail-closed for those — unchanged behavior.
+    if !constraints.is_empty() && !matches_constraints(&event.data, constraints) {
         return None;
     }
 
@@ -247,13 +310,14 @@ fn process_event(event: &MutationEvent, ctx: &SubscriberCtx) -> Option<content::
     })
 }
 
-/// Resolved subscribe access: allowed slugs, denied fields, row-level constraints, modes, and user.
+/// Resolved subscribe access: per-view visibility (with row constraints) for
+/// collections and globals, field denials, modes, and the subscriber's user.
 struct SubscribeAccess {
-    allowed_collections: HashSet<String>,
-    allowed_globals: HashSet<String>,
+    /// Per-collection content-view access (published/draft/trash).
+    collection_views: HashMap<String, EventViewGate>,
+    /// Per-global content-view access (globals only carry the published view).
+    global_views: HashMap<String, EventViewGate>,
     denied_fields: HashMap<String, Vec<FieldDenial>>,
-    /// Row-level access constraints per collection (from `Constrained` access results).
-    constraints: HashMap<String, Vec<FilterClause>>,
     /// Per-collection event delivery mode.
     modes: HashMap<String, LiveMode>,
     /// The subscriber's user document (for per-user `after_read` hooks).
@@ -422,7 +486,7 @@ impl ContentService {
             .resolve_subscribe_access(token, headers, req.collections, req.globals)
             .await?;
 
-        if access.allowed_collections.is_empty() && access.allowed_globals.is_empty() {
+        if access.collection_views.is_empty() && access.global_views.is_empty() {
             return Err(Status::permission_denied(
                 "No accessible collections or globals",
             ));
@@ -508,6 +572,83 @@ struct ResolveSubscribeAccessBlockingInput {
 /// configured) under a single transaction, and return the merged access
 /// outcome (allowed slugs, denied fields, hook-supplied filter constraints,
 /// per-slug live-mode).
+/// Resolve per-view access for the requested collections into `state`. Each
+/// collection carries all three view axes (draft only with a status axis, trash
+/// only with soft-delete; see [`crate::core::collection::Access`]).
+fn resolve_collection_views(
+    registry: &Registry,
+    slugs: &[String],
+    user_doc: Option<&Document>,
+    hook_runner: &HookRunner,
+    tx: &dyn DbConnection,
+    state: &mut AccessState,
+) {
+    for slug in slugs {
+        let Some(def) = registry.get_collection(slug) else {
+            continue;
+        };
+
+        resolve_single_slug(
+            slug,
+            &SlugAccess {
+                read_ref: def.access.read.clone(),
+                draft: ViewAxis {
+                    present: def.has_drafts(),
+                    access: def.access.resolve_draft().cloned(),
+                },
+                trash: ViewAxis {
+                    present: def.soft_delete,
+                    access: def.access.resolve_trash().cloned(),
+                },
+                fields: def.fields.clone(),
+                live_mode: def.live_mode,
+            },
+            user_doc,
+            hook_runner,
+            tx,
+            state,
+        );
+    }
+}
+
+/// Resolve per-view access for the requested globals into `state`. Globals are a
+/// single published row — only the `read` view exists.
+fn resolve_global_views(
+    registry: &Registry,
+    slugs: &[String],
+    user_doc: Option<&Document>,
+    hook_runner: &HookRunner,
+    tx: &dyn DbConnection,
+    state: &mut AccessState,
+) {
+    for slug in slugs {
+        let Some(def) = registry.get_global(slug) else {
+            continue;
+        };
+
+        resolve_single_slug(
+            slug,
+            &SlugAccess {
+                read_ref: def.access.read.clone(),
+                draft: ViewAxis {
+                    present: false,
+                    access: None,
+                },
+                trash: ViewAxis {
+                    present: false,
+                    access: None,
+                },
+                fields: def.fields.clone(),
+                live_mode: def.live_mode,
+            },
+            user_doc,
+            hook_runner,
+            tx,
+            state,
+        );
+    }
+}
+
 fn resolve_subscribe_access_blocking(
     input: ResolveSubscribeAccessBlockingInput,
 ) -> Result<SubscribeAccess, Status> {
@@ -546,22 +687,14 @@ fn resolve_subscribe_access_blocking(
         input.collections_req
     };
 
-    for slug in &target_collections {
-        if let Some(def) = input.registry.get_collection(slug) {
-            resolve_single_slug(
-                slug,
-                &SlugAccess {
-                    access_ref: def.access.read.clone(),
-                    fields: def.fields.clone(),
-                    live_mode: def.live_mode,
-                },
-                user_doc,
-                &input.hook_runner,
-                &tx,
-                &mut col_state,
-            );
-        }
-    }
+    resolve_collection_views(
+        &input.registry,
+        &target_collections,
+        user_doc,
+        &input.hook_runner,
+        &tx,
+        &mut col_state,
+    );
 
     let target_globals: Vec<String> = if input.globals_req.is_empty() {
         input
@@ -574,41 +707,32 @@ fn resolve_subscribe_access_blocking(
         input.globals_req
     };
 
-    for slug in &target_globals {
-        if let Some(def) = input.registry.get_global(slug) {
-            resolve_single_slug(
-                slug,
-                &SlugAccess {
-                    access_ref: def.access.read.clone(),
-                    fields: def.fields.clone(),
-                    live_mode: def.live_mode,
-                },
-                user_doc,
-                &input.hook_runner,
-                &tx,
-                &mut global_state,
-            );
-        }
-    }
+    resolve_global_views(
+        &input.registry,
+        &target_globals,
+        user_doc,
+        &input.hook_runner,
+        &tx,
+        &mut global_state,
+    );
 
     if let Err(e) = tx.commit() {
         warn!("tx commit failed: {e}");
     }
 
-    // Merge denied_fields, constraints, and modes (globals share the same maps)
+    // Merge denied_fields and modes (keyed by slug; globals share the same maps).
+    // Per-view access stays split by target to avoid collection/global slug
+    // collisions during per-event lookup.
     let mut denied_fields = col_state.denied_fields;
     denied_fields.extend(global_state.denied_fields);
-    let mut constraints = col_state.constraints;
-    constraints.extend(global_state.constraints);
     let mut modes = col_state.modes;
     modes.extend(global_state.modes);
 
     Ok(SubscribeAccess {
-        allowed_collections: col_state.allowed,
-        allowed_globals: global_state.allowed,
+        collection_views: col_state.views,
+        global_views: global_state.views,
         denied_fields,
         modes,
-        constraints,
         user_doc: auth_user.map(|au| au.user_doc),
     })
 }

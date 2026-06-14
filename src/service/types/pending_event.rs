@@ -5,7 +5,7 @@ use std::{cell::RefCell, rc::Rc};
 use crate::{
     core::{
         DocumentFields, Hooks, LiveSetting,
-        event::{EventOperation, EventTarget, EventUser},
+        event::{EventOperation, EventTarget, EventUser, EventViewMeta},
     },
     hooks::lifecycle::PublishEventInput,
     service::ServiceContext,
@@ -21,6 +21,7 @@ pub struct PendingEvent {
     pub edited_by: Option<EventUser>,
     pub hooks: Hooks,
     pub live: Option<LiveSetting>,
+    pub view: EventViewMeta,
 }
 
 /// Shared queue for events accumulated during a transaction.
@@ -43,6 +44,7 @@ pub(crate) fn flush_queue(ctx: &ServiceContext, queue: &EventQueue) {
                 .document_id(pending.document_id)
                 .data(pending.data)
                 .edited_by(pending.edited_by)
+                .view(pending.view)
                 .build(),
         );
     }

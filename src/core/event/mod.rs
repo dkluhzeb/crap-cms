@@ -26,7 +26,9 @@ pub use receiver::{EventReceiver, InvalidationReceiver, RecvError};
 pub use transport::{
     EventTransport, InvalidationTransport, SharedEventTransport, SharedInvalidationTransport,
 };
-pub use types::{EventOperation, EventTarget, EventUser, MutationEvent, MutationEventInput};
+pub use types::{
+    EventOperation, EventTarget, EventUser, EventViewMeta, MutationEvent, MutationEventInput,
+};
 
 pub(crate) use sequence::{SequenceGen, stamp_event};
 
