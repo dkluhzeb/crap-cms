@@ -101,6 +101,62 @@ pub fn count_with_search(
     Ok(count)
 }
 
+/// The most recent `updated_at` among documents matching `filters`.
+///
+/// Mirrors [`count_with_search`]'s WHERE assembly (validated fields, resolved
+/// filter clauses, soft-delete exclusion) but selects `MAX(updated_at)`, so an
+/// access-scoped caller (e.g. the dashboard) gets a "last activity" timestamp
+/// that never reflects rows the viewer cannot see. Returns `None` when no row
+/// matches.
+///
+/// # Errors
+///
+/// Returns a backend error if the query fails or any filter field is invalid.
+pub fn max_updated_at(
+    conn: &dyn DbConnection,
+    slug: &str,
+    def: &CollectionDefinition,
+    filters: &[FilterClause],
+    locale_ctx: Option<&LocaleContext>,
+    include_deleted: bool,
+) -> Result<Option<String>> {
+    let (exact, prefixes) = get_valid_filter_paths(def, locale_ctx);
+    for clause in filters {
+        validate_clause_fields(clause, &exact, &prefixes)?;
+    }
+
+    let mut sql = format!("SELECT MAX(updated_at) FROM \"{slug}\"");
+    let mut params: Vec<DbValue> = Vec::new();
+
+    let resolved_filters = resolve_filters(filters, def, locale_ctx)?;
+    let where_clause = build_where_clause(
+        conn,
+        &resolved_filters,
+        slug,
+        &def.fields,
+        locale_ctx,
+        &mut params,
+    )?;
+    let mut has_where = !where_clause.is_empty();
+
+    if has_where {
+        sql.push_str(&where_clause);
+    }
+
+    if def.soft_delete && !include_deleted {
+        append_sql_condition(&mut sql, &mut has_where, "_deleted_at IS NULL");
+    }
+
+    let row = conn
+        .query_one(&sql, &params)
+        .with_context(|| format!("Failed to read last_updated for '{slug}'"))?;
+
+    Ok(row.as_ref().and_then(|r| match r.get_value(0) {
+        Some(DbValue::Text(s)) => Some(s.clone()),
+        _ => None,
+    }))
+}
+
 /// Count rows where a field equals a value, optionally excluding an ID.
 /// Used for unique constraint validation.
 ///

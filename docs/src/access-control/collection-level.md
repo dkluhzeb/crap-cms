@@ -29,7 +29,7 @@ field-level `access` and global `access`.
 | `update` | `Update` operation | — |
 | `trash` | Soft-delete (move to trash) and restore. Only relevant when `soft_delete = true`. | `update` |
 | `delete` | Permanent deletion, empty trash. For collections without `soft_delete`, this is the only delete permission. | — |
-| `draft` | Reading **unpublished (draft)** content — any read that opts into drafts (`draft = true` / `use_draft` / `include_drafts`, or a `_status` filter naming a draft status). Only relevant when `drafts` is enabled. | `update` |
+| `draft` | Reading **unpublished (draft)** content — any read that opts into drafts (`draft = true` / `use_draft` / `include_drafts`). Only relevant when `drafts` is enabled. | `update` |
 | `versions` | Reading **version history** (`list_versions` / reading a version snapshot). A *toggle* — set it to deny history access entirely. Only relevant when `versions` is enabled. | **allow** |
 
 > **Note:** When `soft_delete = true`, `trash` and `delete` are separate permissions.
@@ -39,12 +39,16 @@ field-level `access` and global `access`.
 > auto-purge scheduler. See [Soft Deletes](../collections/soft-deletes.md).
 
 > **Drafts require edit-level access.** A plain `read` rule gates **published**
-> content only. Pulling unpublished content (via the `draft` opt-in or a
-> `_status = "draft"` filter) is gated by `draft`, which **falls back to
-> `update`** when unset — so by default only users who can edit can preview
-> drafts, and a public `read` rule never exposes unpublished content. Set
-> `draft` explicitly to gate previews behind a different policy than editing.
+> content only. Pulling unpublished content (via the `draft` opt-in —
+> `draft = true` / `use_draft` / `include_drafts`) is gated by `draft`, which
+> **falls back to `update`** when unset — so by default only users who can edit
+> can preview drafts, and a public `read` rule never exposes unpublished content.
+> Set `draft` explicitly to gate previews behind a different policy than editing.
 > The same rule applies to globals. See [Drafts](../collections/drafts.md).
+>
+> Operators never write `_status` themselves — each access key scopes its own
+> status, and a user-supplied `_status` filter is rejected as a system column.
+> Opting into drafts is always the typed `draft` flag, never a raw filter.
 
 > **Version history is a separate toggle.** `versions` controls *whether* a user
 > may see version history at all. Unlike `trash`/`draft` it does **not** fall

@@ -93,8 +93,8 @@ pub use hooks::{
 pub(crate) use persist::persist_bulk_update;
 pub use persist::{persist_create, persist_draft_version, persist_unpublish, persist_update};
 pub use read::{
-    count_documents, find_document_by_id, find_documents, get_global_document, search_documents,
-    validate_access_constraints, validate_user_filters,
+    CollectionStats, collection_stats, count_documents, find_document_by_id, find_documents,
+    get_global_document, search_documents, validate_access_constraints, validate_user_filters,
 };
 pub(crate) use versions::unpublish_with_snapshot;
 pub use versions::{

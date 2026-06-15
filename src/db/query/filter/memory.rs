@@ -1,8 +1,19 @@
 //! In-memory filter evaluation for `FilterClause` against document data.
 //!
-//! Used by event stream consumers (SSE, gRPC Subscribe) to enforce row-level
-//! access constraints without DB queries. Evaluates the same `FilterClause`
-//! types that `Find` uses as SQL WHERE clauses.
+//! Used where row-level access constraints must be enforced without a DB query:
+//! - **Event streams** (SSE, gRPC `Subscribe`) — gate each event by the
+//!   subscriber's read constraints.
+//! - **Relationship/join population** — gate each embedded target row by the
+//!   target collection's view constraints, matched against the raw cached
+//!   document (see `populate::helpers::target_row_visible`).
+//!
+//! It evaluates the same `FilterClause` types that `Find` compiles to SQL WHERE
+//! clauses, but **in memory it is an approximation of the SQL semantics**: it is
+//! exact for the common access-constraint shapes (`Equals`, `In`, `Exists` on
+//! ownership/tenant fields), but `Like` pattern dialects and cross-type numeric
+//! coercion can differ from the backend's SQL evaluation at the edges. Access
+//! rules should constrain by plain equality on their own fields (the documented
+//! guidance), for which the two paths agree exactly.
 
 use std::cmp::Ordering;
 

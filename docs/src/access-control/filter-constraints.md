@@ -21,17 +21,25 @@ The returned table uses the same format as `crap.collections.find()` filters:
 
 ```lua
 -- Simple equality
-return { status = "published" }
+return { category = "news" }
 
 -- Operator-based filter
-return { status = { not_equals = "archived" } }
+return { category = { not_equals = "archived" } }
 
 -- Multiple constraints (AND)
 return {
-    status = "published",
+    category = "news",
     department = ctx.user.department,
 }
 ```
+
+> **Constrain by your own fields, never by status or lifecycle.** Filter
+> constraints may only reference your collection's own fields. The system
+> columns `_status` (published vs draft) and `_deleted_at` (live vs trashed) are
+> **rejected** — published/draft/trash visibility is the job of the `read`,
+> `draft`, and `trash` access keys, which scope each view automatically. Don't
+> return `{ _status = "published" }` to hide drafts; a plain `read` rule already
+> covers published content only.
 
 ## How Constraints Are Merged
 
@@ -43,6 +51,15 @@ Final WHERE = (user's filters) AND (access constraints)
 
 This means constraints can only **narrow** results, never expand them.
 
+> **Where constraints are evaluated.** On a direct `Find`/`count`, constraints
+> compile to SQL `WHERE` clauses. When the same collection is reached as a
+> *populated* relationship or join target, its constraints are instead matched
+> **in memory** against the embedded row. The two agree exactly for plain
+> equality/membership on your own fields (`{ author = ctx.user.id }`,
+> `{ tenant_id = ... }`); exotic operators like `like` pattern matching or
+> cross-type numeric comparisons can differ at the edges. Keep access
+> constraints to simple field equality — the recommended shape anyway.
+
 ## Example: Multi-Tenant Access
 
 ```lua
@@ -53,18 +70,25 @@ function M.tenant_read(ctx)
 end
 ```
 
-## Example: Published-Only for Anonymous
+## Example: Owner-or-Admin
+
+Published vs draft visibility is **not** something a constraint should express —
+that is what the `read` and `draft` keys are for (a plain `read` rule already
+scopes published content; grant `draft` to expose unpublished content). A
+constraint narrows *which rows within a view* the caller may see, by your own
+fields:
 
 ```lua
-function M.public_or_own(ctx)
-    if ctx.user == nil then
-        return { status = "published" }
-    end
+function M.own_posts(ctx)
+    if ctx.user == nil then return false end  -- anonymous: no access
     if ctx.user.role == "admin" then
         return true  -- admins see everything
     end
-    -- Authors see their own + published
-    -- (Note: complex OR logic isn't supported in filter returns)
+    -- Everyone else sees only their own rows.
+    -- (Note: complex OR logic isn't supported in filter returns.)
     return { author = ctx.user.id }
 end
 ```
+
+To expose published content to anonymous readers, return `true` (or a
+non-ownership constraint) from `read` — the read view is already published-only.

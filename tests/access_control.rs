@@ -26,7 +26,7 @@ use crap_cms::hooks::AccessCheckInput;
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::service::{
     GetGlobalInput, ListVersionsInput, RunnerReadHooks, RunnerWriteHooks, SearchDocumentsInput,
-    ServiceContext, WriteInput, create_document_in_conn, get_global_document,
+    ServiceContext, WriteInput, collection_stats, create_document_in_conn, get_global_document,
     jobs::{QueueJobInput, queue_job},
     list_versions, restore_collection_version, search_documents, update_document,
     update_global_in_conn,
@@ -3228,5 +3228,233 @@ return M
     assert!(
         matches!(err, crap_cms::service::ServiceError::Validation(_)),
         "expected a Validation error, got: {err:?}"
+    );
+}
+
+/// P7 — the `access.draft` and `access.versions` keys must work end-to-end from
+/// *real Lua config*, not just hand-built Rust `Access` structs. The Lua parser
+/// previously dropped `access.draft` entirely (it was unparsed and rejected as
+/// an unknown key), and `access.versions` is a new key — so this whole path was
+/// never exercised. Locks parse → register → enforce for the freeze.
+#[test]
+fn lua_draft_and_versions_access_keys_parse_and_enforce() {
+    let tmp = tempfile::tempdir().unwrap();
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("posts.lua"),
+        r#"
+crap.collections.define("posts", {
+    versions = { drafts = true },
+    fields = {
+        { name = "title", type = "text" },
+    },
+    access = {
+        read     = "hooks.gate.anyone",
+        draft    = "hooks.gate.editors",
+        versions = "hooks.gate.admins",
+    },
+})
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("gate.lua"),
+        r#"
+local M = {}
+function M.anyone(ctx) return true end
+function M.editors(ctx) return ctx.user ~= nil end
+function M.admins(ctx) return ctx.user ~= nil and ctx.user.role == "admin" end
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+
+    let def = registry.get_collection("posts").unwrap().clone();
+
+    // (1) Parser regression — the keys are actually wired from Lua config.
+    assert_eq!(
+        def.access.draft.as_ref().map(HookRef::reference),
+        Some("hooks.gate.editors"),
+        "access.draft must parse from Lua (it was previously dropped)"
+    );
+    assert_eq!(
+        def.access.versions.as_ref().map(HookRef::reference),
+        Some("hooks.gate.admins"),
+        "access.versions must parse from Lua"
+    );
+
+    // Seed a document plus a version snapshot to drive list_versions.
+    let id = {
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Hello"));
+        let mut conn = db_pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
+        query::create_version(
+            &tx,
+            "posts",
+            &doc.id,
+            "published",
+            &json!({ "title": "Hello" }),
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        doc.id.to_string()
+    };
+
+    // (2) The versions toggle is enforced through the Lua-configured ref:
+    // admins-only history.
+    let list_as = |user: &Document| {
+        let conn = db_pool.get().unwrap();
+        let hooks = RunnerReadHooks::new(&runner, &conn, Some(user), None);
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .read_hooks(&hooks)
+            .user(Some(user))
+            .build();
+        list_versions(&ctx, &ListVersionsInput::builder(&id).build())
+    };
+
+    let editor = make_user_doc("e1", "editor");
+    let admin = make_user_doc("a1", "admin");
+
+    let Err(err) = list_as(&editor) else {
+        panic!("versions toggle must deny a non-admin");
+    };
+    assert!(
+        matches!(err, crap_cms::service::ServiceError::AccessDenied(_)),
+        "expected AccessDenied from the versions toggle, got: {err:?}"
+    );
+
+    let ok = list_as(&admin).expect("admin passes the versions toggle");
+    assert!(!ok.docs.is_empty(), "admin sees version history");
+}
+
+/// Follow-up: the dashboard's per-collection count and "last updated" must be
+/// access-scoped — they must never reveal drafts, trashed rows, or other-owner
+/// content the viewer cannot see. `collection_stats` drives both figures from
+/// one resolved view scope.
+#[test]
+fn collection_stats_exclude_drafts_and_trash_the_viewer_cannot_see() {
+    let tmp = tempfile::tempdir().unwrap();
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("posts.lua"),
+        r#"
+crap.collections.define("posts", {
+    versions = { drafts = true },
+    soft_delete = true,
+    fields = { { name = "title", type = "text" } },
+    access = {
+        read  = "hooks.gate.anyone",
+        draft = "hooks.gate.admins",
+    },
+})
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("gate.lua"),
+        r#"
+local M = {}
+function M.anyone(ctx) return true end
+function M.admins(ctx) return ctx.user ~= nil and ctx.user.role == "admin" end
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+
+    let def = registry.get_collection("posts").unwrap().clone();
+
+    // p1 published (live), p2 draft (most recent live edit), p3 published but
+    // trashed (most recent edit overall).
+    {
+        let conn = db_pool.get().unwrap();
+        conn.execute(
+            "INSERT INTO posts (id, title, _status, updated_at, created_at)
+                VALUES ('p1', 'A', 'published', '2024-01-03', '2024-01-01')",
+            &[],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO posts (id, title, _status, updated_at, created_at)
+                VALUES ('p2', 'B', 'draft', '2024-01-05', '2024-01-01')",
+            &[],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO posts (id, title, _status, _deleted_at, updated_at, created_at)
+                VALUES ('p3', 'C', 'published', '2024-01-08', '2024-01-09', '2024-01-01')",
+            &[],
+        )
+        .unwrap();
+    }
+
+    let stats_for = |user: &Document| {
+        let conn = db_pool.get().unwrap();
+        let hooks = RunnerReadHooks::new(&runner, &conn, Some(user), None);
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .read_hooks(&hooks)
+            .user(Some(user))
+            .build();
+        collection_stats(&ctx, true).unwrap()
+    };
+
+    // A non-admin (no draft access): sees only the live published row. The count
+    // excludes the draft and the trashed row, and last_updated is the published
+    // row's timestamp — never the draft's or the trashed row's.
+    let reader = stats_for(&make_user_doc("u1", "editor"));
+    assert_eq!(reader.count, 1, "reader counts only the published live row");
+    assert_eq!(
+        reader.last_updated.as_deref(),
+        Some("2024-01-03"),
+        "last_updated must not reflect the draft or trashed row"
+    );
+
+    // An admin (draft access): sees published + draft (trash still excluded), so
+    // last_updated advances to the draft's more recent timestamp.
+    let admin = stats_for(&make_user_doc("a1", "admin"));
+    assert_eq!(admin.count, 2, "admin counts published + draft");
+    assert_eq!(
+        admin.last_updated.as_deref(),
+        Some("2024-01-05"),
+        "admin's last_updated includes the draft but not the trashed row"
     );
 }

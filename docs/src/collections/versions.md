@@ -199,16 +199,36 @@ Clicking Restore writes the snapshot data back to the main table and redirects t
 
 ## Access Control
 
-Draft operations use the existing `update` access rule. There is no separate access rule for drafts. If you need finer-grained control (e.g., only admins can publish, but editors can save drafts), inspect the incoming `data._status` field in your access hooks:
+**Reading** drafts and version history has dedicated access keys (see
+[Collection-Level Access](../access-control/collection-level.md)):
+
+- `access.draft` — who may read **unpublished (draft)** content. Falls back to
+  `access.update` when unset, so by default only editors preview drafts and a
+  plain `read` rule exposes published content only.
+- `access.versions` — a toggle for who may read **version history**. Defaults to
+  **allow**; *which* snapshots are visible still follows `read` (published
+  snapshots) and `draft` (draft snapshots).
 
 ```lua
-function hooks.access.publish_control(ctx)
+access = {
+    read  = "hooks.access.public_read",   -- published content
+    draft = "hooks.access.editors",       -- preview unpublished content
+    -- versions defaults to allow
+}
+```
+
+**Writing** is status-agnostic — `create`/`update` gate the write regardless of
+publish state. If you want finer-grained *publish* control (e.g. editors may
+save drafts, but only admins may publish), inspect the incoming `data._status`
+in your **write** rule — this is a write-side concern, separate from the
+read-side `access.draft` key above:
+
+```lua
+function hooks.access.publish_control(ctx)  -- used as access.update / access.create
     if ctx.data and ctx.data._status == "draft" then
-        -- Any authenticated user can save drafts
-        return ctx.user ~= nil
+        return ctx.user ~= nil          -- any authenticated user can save a draft
     end
-    -- Only admins can publish
-    return ctx.user and ctx.user.role == "admin"
+    return ctx.user and ctx.user.role == "admin"  -- only admins can publish
 end
 ```
 

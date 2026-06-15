@@ -12,7 +12,7 @@ pub(crate) mod post_process;
 mod search;
 mod validate_filters;
 
-pub use count::count_documents;
+pub use count::{CollectionStats, collection_stats, count_documents};
 pub use find::find_documents;
 pub use find_by_id::find_document_by_id;
 pub use get_global::get_global_document;

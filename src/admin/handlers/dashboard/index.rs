@@ -12,7 +12,9 @@ use crate::{
         handlers::shared::{extract_editor_locale, get_user_doc, has_read_access, render_page},
     },
     core::{AuthUser, Claims, Document},
-    db::{BoxedConnection, DbConnection, ops::count_documents, query::helpers::global_table},
+    db::{BoxedConnection, DbConnection, query::helpers::global_table},
+    hooks::HookRunner,
+    service::{CollectionStats, RunnerReadHooks, ServiceContext, collection_stats},
 };
 
 /// Fetch the most recent `updated_at` value from a table.
@@ -26,25 +28,41 @@ fn last_updated(conn: &BoxedConnection, table: &str, where_clause: &str) -> Opti
 }
 
 /// Build dashboard cards for all readable collections.
+///
+/// The count and "last updated" come from [`collection_stats`], which scopes
+/// them to the viewer's live view (published ∪ draft, downgraded to what they
+/// may see, trashed rows excluded) — so neither figure reveals drafts or
+/// other-owner rows the viewer cannot access.
 fn build_collection_cards(
     state: &AdminState,
     conn: &BoxedConnection,
+    runner: &HookRunner,
     user_doc: Option<&Document>,
 ) -> Vec<CollectionCard> {
+    let hooks = RunnerReadHooks::new(runner, conn, user_doc, None);
+
     let mut cards: Vec<CollectionCard> = state
         .registry
         .collections
         .iter()
         .filter(|(_, def)| has_read_access(state, def.access.read.as_ref(), user_doc, &def.slug))
         .map(|(slug, def)| {
-            let count = count_documents(&state.pool, slug, def, &[], None).unwrap_or(0);
+            let ctx = ServiceContext::collection(slug, def)
+                .conn(conn)
+                .read_hooks(&hooks)
+                .user(user_doc)
+                .build();
+            let card_stats = collection_stats(&ctx, true).unwrap_or(CollectionStats {
+                count: 0,
+                last_updated: None,
+            });
 
             CollectionCard {
                 slug: slug.to_string(),
                 display_name: def.display_name().to_string(),
                 singular_name: def.singular_name().to_string(),
-                count,
-                last_updated: last_updated(conn, slug, ""),
+                count: card_stats.count,
+                last_updated: card_stats.last_updated,
                 is_auth: def.is_auth_collection(),
                 is_upload: def.upload.is_some(),
                 has_versions: def.has_versions(),
@@ -101,7 +119,7 @@ pub async fn index(
     };
 
     let user_doc = get_user_doc(auth_user.as_ref());
-    let collection_cards = build_collection_cards(&state, &conn, user_doc);
+    let collection_cards = build_collection_cards(&state, &conn, &state.hook_runner, user_doc);
     let global_cards = build_global_cards(&state, &conn, user_doc);
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
