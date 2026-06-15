@@ -6,10 +6,12 @@ use std::collections::{HashMap, HashSet};
 
 use super::populate_relationships_batch_cached;
 use crate::core::{CollectionDefinition, Document, upload};
-use crate::db::query::populate::helpers::{fetch_targets, resolve_target_access, target_visible};
+use crate::db::query::populate::helpers::{
+    fetch_targets, resolve_target_views, target_row_visible,
+};
 use crate::db::query::populate::{
     PopulateContext, PopulateCtx, PopulateOpts, document_to_json, locale_cache_key,
-    populate_cache_key, target_hidden_by_draft,
+    populate_cache_key,
 };
 
 /// Batch fetch and distribute for non-polymorphic has-many fields.
@@ -129,8 +131,9 @@ pub(super) fn batch_fetch_single_collection(
 ) -> Result<HashMap<String, Document>> {
     let locale_key = locale_cache_key(ctx.locale_ctx);
 
-    // Resolve the target collection's `read` access once for the whole batch.
-    let access = resolve_target_access(ctx, collection, rel_def)?;
+    // Resolve the target collection's view access (read + draft) once for the
+    // whole batch.
+    let views = resolve_target_views(ctx, collection, rel_def)?;
 
     // Gather RAW docs: cache hits (the shared cache holds raw, user-independent
     // content), then one DB fetch for the misses, caching each raw doc.
@@ -166,10 +169,7 @@ pub(super) fn batch_fetch_single_collection(
     // the map, so the distribution step treats them like a missing target.
     let mut survivors: Vec<Document> = raws
         .into_iter()
-        .filter(|raw| {
-            !target_hidden_by_draft(raw, rel_def, ctx.published_only)
-                && target_visible(&access, raw)
-        })
+        .filter(|raw| target_row_visible(&views, raw, ctx.published_only, rel_def))
         .collect();
 
     for d in &mut survivors {

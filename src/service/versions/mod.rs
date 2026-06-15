@@ -1,6 +1,7 @@
 //! Version management: snapshots, drafts, restore, list, unpublish.
 
 mod find;
+mod gate;
 mod list;
 mod restore;
 mod save_draft;

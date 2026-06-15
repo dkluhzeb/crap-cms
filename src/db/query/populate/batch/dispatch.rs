@@ -26,10 +26,11 @@ struct JoinTarget<'a> {
     target_def: &'a CollectionDefinition,
 }
 use crate::db::{
-    AccessResult, Filter, FilterClause, FilterOp, FindQuery,
+    Filter, FilterClause, FilterOp, FindQuery,
     query::{hydrate_document, read},
 };
 
+use crate::db::query::populate::helpers::{resolve_views, target_row_visible};
 use crate::db::query::populate::single::{nested, populate_relationships_cached};
 
 use super::{nonpoly, poly};
@@ -282,13 +283,16 @@ fn populate_single_join_field(
     visited: &HashSet<(String, String)>,
     target: &JoinTarget<'_>,
 ) -> Result<()> {
-    // Build a shared filter clause for the field — access check runs once
-    // per field, not once per parent doc. Denied → every parent gets [];
-    // Constrained → extra filters merge into the batched query.
-    let Some(shared_filters) = resolve_join_access(opts, target.target_def)? else {
-        assign_empty_array(docs, &target.field.name);
-        return Ok(());
-    };
+    // Resolve the target's view access (read + draft) once per field. Matched
+    // children are filtered per-row below by the independent-views model — a
+    // published child needs `read`, a draft child needs drafts requested
+    // (`!published_only`) AND the target's `draft` access.
+    let views = resolve_views(
+        opts.join_access,
+        opts.user,
+        &target.target_def.slug,
+        target.target_def,
+    )?;
 
     // Collect unique parent ids. Order-preserving so output is deterministic.
     let mut parent_ids: Vec<String> = Vec::with_capacity(docs.len());
@@ -300,11 +304,10 @@ fn populate_single_join_field(
         }
     }
 
-    let mut filters = shared_filters;
-    filters.push(FilterClause::Single(Filter {
+    let filters = vec![FilterClause::Single(Filter {
         field: target.config.on.clone(),
         op: FilterOp::In(parent_ids),
-    }));
+    })];
     let fq = FindQuery::builder().filters(filters).build();
 
     let Ok(matched_docs) = read::find(
@@ -318,7 +321,14 @@ fn populate_single_join_field(
         return Ok(());
     };
 
-    let prepared = prepare_join_children(ctx, opts, cache, visited, target, matched_docs)?;
+    // Per-row visibility filter (RAW fields, before hydration): drop children
+    // the viewer may not see. `find` already excluded trashed rows.
+    let visible: Vec<Document> = matched_docs
+        .into_iter()
+        .filter(|d| target_row_visible(&views, d, opts.published_only, target.target_def))
+        .collect();
+
+    let prepared = prepare_join_children(ctx, opts, cache, visited, target, visible)?;
 
     // Bucket matched docs by their `on` field value so we can emit one
     // array per parent. A single matched doc only belongs to one parent
@@ -341,23 +351,6 @@ fn populate_single_join_field(
     }
 
     Ok(())
-}
-
-/// Run the join-access hook once per field. Returns `None` when access is
-/// denied (caller fills `[]` for every parent), `Some(extra_filters)`
-/// otherwise (possibly empty).
-fn resolve_join_access(
-    opts: &PopulateOpts<'_>,
-    target_def: &CollectionDefinition,
-) -> Result<Option<Vec<FilterClause>>> {
-    let Some(check) = opts.join_access else {
-        return Ok(Some(Vec::new()));
-    };
-    match check.check(target_def.access.read.as_ref(), opts.user, &target_def.slug)? {
-        AccessResult::Denied => Ok(None),
-        AccessResult::Constrained(extra) => Ok(Some(extra)),
-        AccessResult::Allowed => Ok(Some(Vec::new())),
-    }
 }
 
 /// Hydrate + recursively populate each matched join child, at depth-1.

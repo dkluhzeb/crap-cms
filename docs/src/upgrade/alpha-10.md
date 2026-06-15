@@ -257,12 +257,19 @@ arrays/relationships to `[]`); there is no per-locale delete.
   login/forgot-password brute-force protection. A backend error now
   blocks the attempt and logs the infrastructure error — an outage
   degrades login availability instead of security.
-- **Version history now requires edit-level access.** `list_versions` and
-  reading a single version snapshot were gated by `access.read`, so any reader
-  could enumerate every past snapshot (including unpublished states). Both now
-  use `access.draft` (falling back to `access.update`), like draft reads;
-  `restore` was already on `access.update`. The admin version sidebar degrades
-  gracefully (no list rather than an error) for viewers without edit access.
+- **Version history visibility follows the content views, plus a new
+  `access.versions` toggle.** `list_versions` and reading a single snapshot were
+  gated by `access.read`, so any reader could enumerate every past snapshot
+  (including unpublished states). *Which* snapshots are visible is now the same
+  composite as document reads: published snapshots need `read`, draft snapshots
+  additionally need `access.draft` (a published-only reader sees only published
+  history). A new **`access.versions`** rule gates whether history is visible at
+  all — a toggle that, unlike `draft`/`trash`, does **not** fall back to
+  `update`: unset means **allow**. It returns `true`/`false` (a filter table is a
+  configuration error). `restore` remains on `access.update`. **Action:** only if
+  you want history locked behind a stricter policy than reading the document —
+  set `access.versions`. The admin version sidebar degrades gracefully (no list
+  rather than an error) for viewers who cannot see history.
 - **Reading drafts now requires edit-level access (`access.draft`).** Draft
   reads were gated by `access.read`, so any reader could pull unpublished
   content by opting in (`draft = true` / `use_draft` / `include_drafts`, or a
@@ -272,8 +279,19 @@ arrays/relationships to `[]`); there is no per-locale delete.
   preview drafts and `read` covers published content only. Uniform across
   collections, globals, and every surface. **Action:** only if you deliberately
   exposed drafts to readers who lack edit access — set `access.draft` to permit
-  them. The admin list/search/edit views request drafts only for users who pass
-  the gate, so read-only admins see published content (no denial).
+  them. The admin list/search/edit views request every view unconditionally and
+  let the service downgrade per the viewer's access, so a read-only admin simply
+  sees published content (no denial) while an editor sees drafts.
+- **Embedded relationships and join fields gate draft targets by the target's
+  `draft` access.** Populating related content at depth is a read of the target
+  collection. Join fields previously applied no status filter (any reader with
+  `read` saw a target's draft rows through a join — even anonymous callers on
+  public surfaces), and relationship fields gated drafts only by the parent
+  read's opt-in, not the target's `draft` access. A draft target is now embedded
+  only when drafts are requested **and** the viewer holds the target collection's
+  `draft` access. **Action:** only if you relied on embedded drafts showing to
+  readers without the target's `draft` access — grant `access.draft` on the
+  target collection.
 - **`find_by_id` hides never-published drafts.** Fetching a single
   document by id (including the public `GET /{collection}/{id}` surface)
   did not inject the `_status = 'published'` filter that the `find` /

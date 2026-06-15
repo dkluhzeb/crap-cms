@@ -16,7 +16,7 @@ pub use wrappers::{populate_relationships, populate_relationships_batch};
 pub(crate) use batch::populate_relationships_batch_cached;
 pub(crate) use helpers::{document_to_json, parse_poly_ref};
 pub(crate) use single::populate_relationships_cached;
-pub(crate) use types::{PopulateCtx, locale_cache_key, populate_cache_key, target_hidden_by_draft};
+pub(crate) use types::{PopulateCtx, locale_cache_key, populate_cache_key};
 
 /// Shared process-wide singleflight for deduplicating concurrent populate
 /// cache misses across requests.

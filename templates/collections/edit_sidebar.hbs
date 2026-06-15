@@ -124,7 +124,7 @@
       </div>
     {{/partials/sidebar-panel}}
 
-    {{#if collection.versions}}
+    {{#if (and collection.versions perms.versions)}}
       {{> partials/version-sidebar}}
     {{/if}}
 

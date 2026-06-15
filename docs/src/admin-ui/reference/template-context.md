@@ -578,7 +578,8 @@ Field semantics:
 - **`update`** (boolean)
 - **`delete`** (boolean)
 - **`trash`** (boolean)
-- **`draft`** (boolean) — Whether the user may view draft (unpublished) content — gated on `resolve_draft()` (`access.draft`, or `access.update` as the fallback), mirroring what the read paths enforce. Drives whether admin list/search requests drafts for this user.
+- **`draft`** (boolean) — Whether the user may view draft (unpublished) content — gated on `resolve_draft()` (`access.draft`, or `access.update` as the fallback), mirroring what the read paths enforce. A pure UI hint (e.g. a Drafts tab): the read paths request every view unconditionally and the service downgrades per access, so this never gates the request itself.
+- **`versions`** (boolean) — Whether the user may view version history — gated on the `access.versions` toggle (unset means **allow**, matching the service gate). Drives whether the version-history sidebar panel is shown. Only meaningful when `versions` is enabled. A UI hint only; the service enforces the real gate.
 
 ### AdminMeta
 
@@ -653,7 +654,8 @@ Per-user permissions for a global page. Globals only have `read` and
 
 - **`read`** (boolean)
 - **`update`** (boolean)
-- **`draft`** (boolean) — Whether the user may view the global's draft (unpublished) content — gated on `resolve_draft()` (`access.draft`, or `access.update`).
+- **`draft`** (boolean) — Whether the user may view the global's draft (unpublished) content — gated on `resolve_draft()` (`access.draft`, or `access.update`). A UI hint only — the read path requests drafts unconditionally and downgrades.
+- **`versions`** (boolean) — Whether the user may view the global's version history — gated on the `access.versions` toggle (unset means **allow**). Drives whether the version-history panel is shown. A UI hint only.
 
 ### DocumentRef
 

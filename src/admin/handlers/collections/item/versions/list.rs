@@ -70,7 +70,12 @@ fn fetch_version_data(
         .offset(Some(pg.offset))
         .build();
 
-    let result = list_versions(&ctx, &input).unwrap_or_default();
+    // Degrade to an empty list when history is not visible (access denial),
+    // but log first so a real failure — a backend error or a misconfigured
+    // `access.versions` toggle returning a filter table — isn't swallowed.
+    let result = list_versions(&ctx, &input)
+        .inspect_err(|e| error!("Version list for '{slug}/{id}' failed: {e}"))
+        .unwrap_or_default();
 
     let versions: Vec<Value> = result.docs.iter().map(version_to_json).collect();
 

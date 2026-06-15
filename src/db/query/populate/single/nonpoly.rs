@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use super::dispatch::{finalize_target, resolve_single_target};
 use crate::core::{CollectionDefinition, Document};
 use crate::db::query::populate::helpers::{
-    cache_get_doc, cache_set_doc, fetch_targets, resolve_target_access,
+    cache_get_doc, cache_set_doc, fetch_targets, resolve_target_views,
 };
 use crate::db::query::populate::{
     PopulateCtx, document_to_json, locale_cache_key, populate_cache_key,
@@ -30,8 +30,9 @@ pub(super) fn populate_nonpoly_has_many(
         _ => return Ok(()),
     };
 
-    // Resolve the target collection's `read` access once for the whole field.
-    let access = resolve_target_access(ctx, rel_collection, rel_def)?;
+    // Resolve the target collection's view access (read + draft) once for the
+    // whole field.
+    let views = resolve_target_views(ctx, rel_collection, rel_def)?;
     let locale_key = locale_cache_key(ctx.locale_ctx);
 
     // Gather raw docs: serve cache hits, then one batched DB fetch for the rest.
@@ -74,7 +75,7 @@ pub(super) fn populate_nonpoly_has_many(
             rel_collection,
             rel_def,
             raw,
-            &access,
+            &views,
             ctx.effective_depth,
             visited,
         )? {
@@ -105,14 +106,14 @@ pub(super) fn populate_nonpoly_has_one(
         return Ok(());
     }
 
-    let access = resolve_target_access(ctx, rel_collection, rel_def)?;
+    let views = resolve_target_views(ctx, rel_collection, rel_def)?;
 
     match resolve_single_target(
         ctx,
         rel_collection,
         rel_def,
         &id,
-        &access,
+        &views,
         ctx.effective_depth,
         visited,
     )? {
@@ -526,6 +527,100 @@ mod tests {
         assert_eq!(
             allowed.get("name").and_then(|v| v.as_str()),
             Some("Secret Draft")
+        );
+    }
+
+    /// Regression (P6.5): even when drafts are REQUESTED (`published_only =
+    /// false`), a draft target is hidden unless the viewer holds the *target's*
+    /// `draft` access. Draft visibility of a populated target is gated by the
+    /// target collection's draft view, not merely the parent read's draft opt-in.
+    #[test]
+    fn populate_has_one_draft_target_gated_by_target_draft_access() {
+        use crate::core::VersionsConfig;
+
+        // read → Allowed; draft (`draft_fn`) → configurable.
+        struct DraftGate(bool);
+        impl JoinAccessCheck for DraftGate {
+            fn check(
+                &self,
+                access: Option<&HookRef>,
+                _: Option<&Document>,
+                _: &str,
+            ) -> anyhow::Result<AccessResult> {
+                let is_draft = access.map(HookRef::reference) == Some("draft_fn");
+                Ok(if is_draft && !self.0 {
+                    AccessResult::Denied
+                } else {
+                    AccessResult::Allowed
+                })
+            }
+        }
+
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE authors (
+                id TEXT PRIMARY KEY, name TEXT,
+                _status TEXT NOT NULL DEFAULT 'published', created_at TEXT, updated_at TEXT
+            );
+            CREATE TABLE posts (
+                id TEXT PRIMARY KEY, title TEXT, author TEXT, created_at TEXT, updated_at TEXT
+            );
+            INSERT INTO authors (id, name, _status, created_at, updated_at)
+                VALUES ('a1', 'Secret Draft', 'draft', '2024-01-01', '2024-01-01');
+            INSERT INTO posts (id, title, author, created_at, updated_at)
+                VALUES ('p1', 'Hello', 'a1', '2024-01-01', '2024-01-01');",
+        )
+        .unwrap();
+
+        let mut authors_def = make_authors_def();
+        authors_def.versions = Some(VersionsConfig::new(true, 0));
+        authors_def.access.read = Some(HookRef::new("read_fn"));
+        authors_def.access.draft = Some(HookRef::new("draft_fn"));
+
+        let posts_def = make_posts_def();
+        let mut registry = Registry::new();
+        registry.register_collection(posts_def.clone());
+        registry.register_collection(authors_def);
+
+        let run = |draft_allowed: bool| {
+            let gate = DraftGate(draft_allowed);
+            let mut doc = Document::new("p1".to_string());
+            doc.fields.insert("author".to_string(), json!("a1"));
+            let mut visited = HashSet::new();
+            populate_relationships_cached(
+                &PopulateContext {
+                    conn: &conn,
+                    registry: &registry,
+                    collection_slug: "posts",
+                    def: &posts_def,
+                },
+                &mut doc,
+                &mut visited,
+                &PopulateOpts {
+                    depth: 1,
+                    select: None,
+                    locale_ctx: None,
+                    published_only: false, // drafts requested
+                    join_access: Some(&gate),
+                    user: None,
+                },
+                &NoneCache,
+            )
+            .unwrap();
+            doc.fields.get("author").cloned()
+        };
+
+        // Drafts requested but target draft access denied → still hidden.
+        assert_eq!(
+            run(false),
+            Some(serde_json::Value::Null),
+            "draft target must be hidden without the target's draft access"
+        );
+
+        // Target draft access granted → visible.
+        assert!(
+            run(true).is_some_and(|v| v.is_object()),
+            "draft target visible once the target grants draft access"
         );
     }
 

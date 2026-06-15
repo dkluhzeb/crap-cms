@@ -29,7 +29,8 @@ field-level `access` and global `access`.
 | `update` | `Update` operation | — |
 | `trash` | Soft-delete (move to trash) and restore. Only relevant when `soft_delete = true`. | `update` |
 | `delete` | Permanent deletion, empty trash. For collections without `soft_delete`, this is the only delete permission. | — |
-| `draft` | Reading **unpublished (draft)** content — any read that opts into drafts (`draft = true` / `use_draft` / `include_drafts`, or a `_status` filter naming a draft status) — **and version history** (`list_versions` / reading a version snapshot, which expose past draft states). Only relevant when `drafts`/`versions` are enabled. | `update` |
+| `draft` | Reading **unpublished (draft)** content — any read that opts into drafts (`draft = true` / `use_draft` / `include_drafts`, or a `_status` filter naming a draft status). Only relevant when `drafts` is enabled. | `update` |
+| `versions` | Reading **version history** (`list_versions` / reading a version snapshot). A *toggle* — set it to deny history access entirely. Only relevant when `versions` is enabled. | **allow** |
 
 > **Note:** When `soft_delete = true`, `trash` and `delete` are separate permissions.
 > `trash` controls the reversible action (low privilege), `delete` controls the
@@ -44,6 +45,16 @@ field-level `access` and global `access`.
 > drafts, and a public `read` rule never exposes unpublished content. Set
 > `draft` explicitly to gate previews behind a different policy than editing.
 > The same rule applies to globals. See [Drafts](../collections/drafts.md).
+
+> **Version history is a separate toggle.** `versions` controls *whether* a user
+> may see version history at all. Unlike `trash`/`draft` it does **not** fall
+> back to `update` — unset means **allow**, so by default anyone who can read the
+> document can browse its history. *Which* snapshots they see is still the
+> composite of `read` (published snapshots) and `draft` (draft snapshots): a
+> reader without draft access sees only published snapshots. `versions` is a pure
+> toggle — return `true`/`false`; a filter table is a configuration error
+> (row-level scoping belongs on `read`). Restoring a version is a write, still
+> gated by `update`. Only relevant when `versions = true`.
 
 ## Writing Access Functions
 
@@ -86,7 +97,7 @@ return M
 | `false` or `nil` | Operation is denied (403/permission error) |
 | table | Read operation is allowed with additional WHERE filters (see [Filter Constraints](filter-constraints.md)) |
 
-Filter table returns are only meaningful for `read` access. For `create`, `update`, and `delete`, a table return is treated as `Allowed`.
+Filter table returns are only meaningful for `read` (and `draft`/`trash`, which scope their respective views). For `create`, `update`, and `delete`, a table return is treated as `Allowed`. For `versions` — a toggle — a table return is a configuration error.
 
 ## Enforcement Points
 

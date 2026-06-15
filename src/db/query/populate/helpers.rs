@@ -7,15 +7,15 @@ use serde_json::Value;
 use crate::core::{CollectionDefinition, Document, DocumentFields, cache::CacheBackend};
 use crate::db::query::AccessResult;
 use crate::db::query::filter::memory::matches_constraints;
+use crate::db::query::populate::JoinAccessCheck;
 use crate::db::query::populate::PopulateCtx;
 use crate::db::query::populate::Singleflight;
 use crate::db::query::read::{find_by_id, find_by_ids};
 
 /// Fetch a single **raw** relationship target by id. The result is the
-/// unfiltered document content — draft visibility and `read` access are applied
-/// per request by the caller, so the raw doc can be shared in the cross-user
-/// populate cache. See [`resolve_target_access`] / [`target_visible`] and
-/// [`target_hidden_by_draft`].
+/// unfiltered document content — draft visibility and access are applied per
+/// request by the caller, so the raw doc can be shared in the cross-user
+/// populate cache. See [`resolve_target_views`] / [`target_row_visible`].
 pub(super) fn fetch_target(
     ctx: &PopulateCtx<'_>,
     slug: &str,
@@ -36,26 +36,94 @@ pub(super) fn fetch_targets(
     find_by_ids(ctx.conn, slug, def, ids, ctx.locale_ctx)
 }
 
-/// Resolve a relationship target collection's `read` access decision once for a
-/// field-population call. Returns `Allowed` when no access check is wired
-/// (legacy/internal callers). The decision is collection-level — it does not
-/// depend on the individual target row — so the caller resolves it once and
-/// applies it to every target of the field.
-pub(super) fn resolve_target_access(
-    ctx: &PopulateCtx<'_>,
-    slug: &str,
-    def: &CollectionDefinition,
-) -> Result<AccessResult> {
-    match ctx.join_access {
-        Some(check) => check.check(def.access.read.as_ref(), ctx.user, slug),
-        None => Ok(AccessResult::Allowed),
+/// A relationship target collection's resolved view access — the `read` decision
+/// (gates **published** target rows) and the `draft` decision (gates **draft**
+/// target rows, `access.draft ?? access.update`). Both are collection-level (not
+/// per-row), so the caller resolves them once per field and applies them to every
+/// target. See [`target_row_visible`].
+pub(super) struct TargetViews {
+    pub read: AccessResult,
+    pub draft: AccessResult,
+}
+
+impl TargetViews {
+    /// Both views allowed — the no-access-wired default (legacy/internal callers).
+    pub(super) fn allow_all() -> Self {
+        Self {
+            read: AccessResult::Allowed,
+            draft: AccessResult::Allowed,
+        }
     }
 }
 
-/// Whether a raw target document is visible under the resolved access decision.
+/// Resolve a target collection's view access once for a field-population call.
+///
+/// Returns `Allowed` for both views when no access check is wired
+/// (legacy/internal callers). The `draft` decision is only consulted for
+/// draft-enabled targets; it is resolved unconditionally (cheap) so the router
+/// can stay a pure function.
+pub(super) fn resolve_target_views(
+    ctx: &PopulateCtx<'_>,
+    slug: &str,
+    def: &CollectionDefinition,
+) -> Result<TargetViews> {
+    resolve_views(ctx.join_access, ctx.user, slug, def)
+}
+
+/// Resolve a target collection's view access from a raw `(join_access, user)`
+/// pair — shared by the relationship path ([`resolve_target_views`], via
+/// `PopulateCtx`) and the join path (which carries `PopulateOpts`). `read` gates
+/// published rows; `draft` (`access.draft ?? access.update`) gates draft rows.
+pub(super) fn resolve_views(
+    join_access: Option<&dyn JoinAccessCheck>,
+    user: Option<&Document>,
+    slug: &str,
+    def: &CollectionDefinition,
+) -> Result<TargetViews> {
+    let Some(check) = join_access else {
+        return Ok(TargetViews::allow_all());
+    };
+
+    let read = check.check(def.access.read.as_ref(), user, slug)?;
+    let draft = check.check(def.access.resolve_draft(), user, slug)?;
+
+    Ok(TargetViews { read, draft })
+}
+
+/// Whether a raw target document is visible to the viewer, applying the full
+/// independent-views model in memory (the cache holds raw, user-independent
+/// docs, so visibility is decided per request, per row).
+///
+/// - A **published** row needs the target's `read` view.
+/// - A **draft** row needs drafts to be *requested* (`!published_only`, inherited
+///   from the parent read's draft opt-in) **and** the target's `draft` view —
+///   mirroring the top-level read union (requested × allowed). A published-only
+///   read never embeds drafts; a draft-opted read embeds a draft only where the
+///   target grants draft access.
+/// - A non-draft target collection (no `_status` column) is gated by `read` only.
+///
 /// `Constrained` filters are matched against the **raw** fields (before any
 /// population turns relationship fields into objects).
-pub(super) fn target_visible(access: &AccessResult, raw: &Document) -> bool {
+pub(super) fn target_row_visible(
+    views: &TargetViews,
+    raw: &Document,
+    published_only: bool,
+    def: &CollectionDefinition,
+) -> bool {
+    if !def.has_drafts() {
+        return view_allows(&views.read, raw);
+    }
+
+    let is_draft = raw.fields.get("_status").and_then(|v| v.as_str()) != Some("published");
+    if is_draft {
+        return !published_only && view_allows(&views.draft, raw);
+    }
+
+    view_allows(&views.read, raw)
+}
+
+/// Whether a raw target document passes one resolved view decision.
+fn view_allows(access: &AccessResult, raw: &Document) -> bool {
     match access {
         AccessResult::Denied => false,
         AccessResult::Allowed => true,

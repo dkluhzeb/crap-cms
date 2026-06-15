@@ -152,8 +152,9 @@ pub async fn edit_form(
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let (locale_ctx, locale_data) = build_locale_template_data(&state, editor_locale.as_deref());
 
-    let can_view_drafts = GlobalPermissions::for_user(&state, &def, auth_user.as_ref()).draft;
-
+    // Opt into the draft overlay unconditionally — the service read downgrades
+    // (never rejects): an editor sees the latest draft, a read-only viewer falls
+    // back to the published row. `GlobalPermissions` is a UI hint only.
     let read_params = ReadParams {
         pool: state.pool.clone(),
         runner: state.hook_runner.clone(),
@@ -162,7 +163,7 @@ pub async fn edit_form(
         locale_ctx,
         user_doc: auth_user.as_ref().map(|Extension(au)| au.user_doc.clone()),
         user_ui_locale: auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone()),
-        include_drafts: can_view_drafts,
+        include_drafts: true,
     };
 
     let read_result =

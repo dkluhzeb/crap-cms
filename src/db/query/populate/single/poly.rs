@@ -6,8 +6,9 @@ use std::collections::{HashMap, HashSet};
 
 use super::dispatch::{finalize_target, resolve_single_target};
 use crate::core::Document;
-use crate::db::query::AccessResult;
-use crate::db::query::populate::helpers::{cache_set_doc, fetch_targets, resolve_target_access};
+use crate::db::query::populate::helpers::{
+    TargetViews, cache_set_doc, fetch_targets, resolve_target_views,
+};
 use crate::db::query::populate::{
     PopulateCtx, document_to_json, locale_cache_key, parse_poly_ref, populate_cache_key,
 };
@@ -22,15 +23,15 @@ enum PolyResolution {
     Missing,
 }
 
-/// Resolve a single polymorphic ref string to its populated value. `access_by`
-/// holds the per-collection `read` decision resolved once during the batch
-/// fetch. A target hidden by draft visibility or `read` access is treated as
+/// Resolve a single polymorphic ref string to its populated value. `views_by`
+/// holds the per-collection view access (`read` + `draft`) resolved once during
+/// the batch fetch. A target hidden by draft visibility or access is treated as
 /// `Missing` (dropped from the array).
 fn resolve_poly_item(
     ctx: &PopulateCtx<'_>,
     item: &str,
     fetched_map: &mut HashMap<String, HashMap<String, Document>>,
-    access_by: &HashMap<String, AccessResult>,
+    views_by: &HashMap<String, TargetViews>,
     visited: &mut HashSet<(String, String)>,
 ) -> Result<PolyResolution> {
     let Some((col, id)) = parse_poly_ref(item) else {
@@ -55,17 +56,17 @@ fn resolve_poly_item(
         return Ok(PolyResolution::Missing);
     };
 
-    let access = access_by
-        .get(&col)
-        .cloned()
-        .unwrap_or(AccessResult::Allowed);
+    // Every fetched collection has its views resolved in the batch loop; an
+    // absent entry (legacy/internal, no access wired) defaults to allow-all.
+    let fallback = TargetViews::allow_all();
+    let views = views_by.get(&col).unwrap_or(&fallback);
 
     match finalize_target(
         ctx,
         &col,
         &item_def,
         raw,
-        &access,
+        views,
         ctx.effective_depth,
         visited,
     )? {
@@ -103,11 +104,11 @@ pub(super) fn populate_poly_has_many(
     // doc) and resolve each target collection's `read` access once.
     let locale_key = locale_cache_key(ctx.locale_ctx);
     let mut fetched_map: HashMap<String, HashMap<String, Document>> = HashMap::new();
-    let mut access_by: HashMap<String, AccessResult> = HashMap::new();
+    let mut views_by: HashMap<String, TargetViews> = HashMap::new();
     for (col, col_ids) in &ids_by_collection {
         if let Some(item_def) = ctx.registry.get_collection(col) {
             let item_def = item_def.clone();
-            access_by.insert(col.clone(), resolve_target_access(ctx, col, &item_def)?);
+            views_by.insert(col.clone(), resolve_target_views(ctx, col, &item_def)?);
 
             let mut doc_map: HashMap<String, Document> = HashMap::new();
             for raw in fetch_targets(ctx, col, &item_def, col_ids)? {
@@ -123,7 +124,7 @@ pub(super) fn populate_poly_has_many(
     // vanished / access-hidden targets do not leak as raw IDs into the output.
     let mut populated = Vec::new();
     for item in &items {
-        match resolve_poly_item(ctx, item, &mut fetched_map, &access_by, visited)? {
+        match resolve_poly_item(ctx, item, &mut fetched_map, &views_by, visited)? {
             PolyResolution::Populated(v) => populated.push(v),
             PolyResolution::KeepAsString(s) => populated.push(Value::String(s)),
             PolyResolution::Missing => {}
@@ -160,14 +161,14 @@ pub(super) fn populate_poly_has_one(
     };
 
     let item_def = item_def.clone();
-    let access = resolve_target_access(ctx, &col, &item_def)?;
+    let views = resolve_target_views(ctx, &col, &item_def)?;
 
     match resolve_single_target(
         ctx,
         &col,
         &item_def,
         &id,
-        &access,
+        &views,
         ctx.effective_depth,
         visited,
     )? {

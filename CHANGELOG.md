@@ -249,6 +249,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   request, so a document cached for one user is never served to another who
   cannot see it.
 
+- **Populated relationships and join fields now gate draft targets by the
+  target's own `draft` access (breaking).** Embedding related content at depth
+  is a read of the target collection, but draft visibility of those embedded
+  rows was not fully gated. **Join fields** applied *no* status filter at all —
+  any viewer with `read` on a target collection saw its **draft** rows through a
+  join field (on public read surfaces, even anonymous callers), since the new
+  access model removed the `{_status = "published"}` constraint that operators
+  previously hand-wrote. **Relationship fields** hid drafts only by the parent
+  read's draft opt-in (`published_only`), never by the *target's* `draft` access,
+  so a reader who opted into drafts saw target drafts they had no draft access
+  to. Both now apply the full independent-views model per embedded row: a
+  published target needs the target's `read`; a draft target needs drafts to be
+  requested **and** the target's `draft` access (`draft ?? update`), with each
+  view's row-constraints matched against the target's raw fields. (Trashed
+  targets were already excluded.) A reader who could previously see embedded
+  drafts will stop seeing them unless granted the target's `draft` access.
+
 - **Live event streams now gate drafts and trash per content view
   (breaking).** Real-time mutation events (gRPC `Subscribe` and admin SSE)
   checked collection access once at connect and then applied only the `read`
@@ -287,14 +304,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   other content"), since the raw count aggregates references the viewer cannot
   see.
 
-- **Version history now requires edit-level access (breaking).** Listing a
-  document's versions (`list_versions`) and reading a single version snapshot
-  (`find_version_by_id`) were gated by `access.read`, so any reader could
-  enumerate every past snapshot — including unpublished draft states. Both are
-  now gated at edit level via the new `access.draft` (falling back to
-  `access.update`), consistent with draft reads; `restore_version` was already
-  on `access.update`. The admin version sidebar degrades gracefully (a viewer
-  without edit access simply sees no version list rather than an error).
+- **Version history visibility now follows the content views, plus a dedicated
+  `access.versions` toggle (breaking).** Listing a document's versions
+  (`list_versions`) and reading a single snapshot (`find_version_by_id`) were
+  gated by `access.read`, so any reader could enumerate every past snapshot —
+  including unpublished draft states. *Which* snapshots are visible is now the
+  same composite that gates document reads: published snapshots need `read`,
+  draft snapshots additionally need `access.draft` (so a published-only reader
+  sees only published history). On top of that, a new **`access.versions`**
+  rule gates whether a user may see history *at all* — a toggle that, unlike
+  `draft`/`trash`, does **not** fall back to `update`: unset means **allow**, so
+  history follows the read/draft composite by default. Set it to lock the
+  timeline behind a stricter policy than reading the document. It returns
+  `true`/`false`; a filter table is a configuration error (row-level scoping
+  belongs on `read`). Restoring a version remains a write gated by
+  `access.update`. The admin version sidebar degrades gracefully (a viewer who
+  cannot see history gets no version list rather than an error).
 
 - **Reading drafts now requires edit-level access (breaking).** Draft
   (unpublished) reads were gated by `access.read` — the same rule as published

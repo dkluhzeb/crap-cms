@@ -8,11 +8,12 @@ use tracing::warn;
 
 use super::populate_relationships_cached;
 use crate::core::cache::CacheBackend;
+use crate::db::query::populate::helpers::{resolve_views, target_row_visible};
 use crate::db::query::populate::{PopulateContext, PopulateOpts, document_to_json};
 use crate::{
     core::{Document, FieldType, upload},
     db::{
-        AccessResult, Filter, FilterClause, FilterOp, FindQuery,
+        Filter, FilterClause, FilterOp, FindQuery,
         query::{hydrate_document, read::find},
     },
 };
@@ -62,21 +63,17 @@ fn populate_join_docs(
     opts: &PopulateOpts<'_>,
     cache: &dyn CacheBackend,
 ) -> Result<Vec<Value>> {
-    let mut filters = vec![FilterClause::Single(Filter {
+    let filters = vec![FilterClause::Single(Filter {
         field: jc.on.clone(),
         op: FilterOp::Equals(doc.id.to_string()),
     })];
 
-    // Target-collection access check (SEC-G). When hooks are wired in by the
-    // service layer, honor the target's `access.read`. Denied => empty array.
-    // Constrained => merge into filters. Allowed => proceed as-is.
-    if let Some(check) = opts.join_access {
-        match check.check(target_def.access.read.as_ref(), opts.user, &target_def.slug)? {
-            AccessResult::Denied => return Ok(Vec::new()),
-            AccessResult::Constrained(extra) => filters.extend(extra),
-            AccessResult::Allowed => {}
-        }
-    }
+    // Resolve the target collection's view access (read + draft). The matched
+    // children are filtered per row below by the same independent-views model
+    // used for relationships — a published child needs `read`, a draft child
+    // needs drafts requested (`!published_only`) AND the target's `draft`
+    // access. (`find` already excludes trashed rows.)
+    let views = resolve_views(opts.join_access, opts.user, &target_def.slug, target_def)?;
 
     let fq = FindQuery::builder().filters(filters).build();
 
@@ -91,6 +88,13 @@ fn populate_join_docs(
     let mut populated = Vec::new();
 
     for mut matched_doc in matched_docs {
+        // Per-row visibility: drop children the viewer may not see (a draft
+        // child without target draft access, or a row failing a view's
+        // row-constraints), matched against the RAW fields before hydration.
+        if !target_row_visible(&views, &matched_doc, opts.published_only, target_def) {
+            continue;
+        }
+
         hydrate_document(
             ctx.conn,
             &jc.collection,
@@ -237,6 +241,117 @@ mod tests {
             .collect();
         assert!(titles.contains(&"First Post"));
         assert!(titles.contains(&"Second Post"));
+    }
+
+    /// Regression (P6.5 — the join draft leak): a DRAFT join child is hidden
+    /// unless drafts are *requested* (`!published_only`) AND the viewer holds the
+    /// target's `draft` access. Joins previously applied no status filter at all,
+    /// so any reader with `read` saw every collection's draft rows through a join.
+    #[test]
+    fn join_draft_child_gated_by_target_draft_access() {
+        use crate::core::VersionsConfig;
+        use rusqlite::Connection;
+
+        // read → Allowed; draft (`draft_fn`) → configurable.
+        struct DraftGate(bool);
+        impl JoinAccessCheck for DraftGate {
+            fn check(
+                &self,
+                access: Option<&HookRef>,
+                _: Option<&Document>,
+                _: &str,
+            ) -> AnyResult<AccessResult> {
+                let is_draft = access.map(HookRef::reference) == Some("draft_fn");
+                Ok(if is_draft && !self.0 {
+                    AccessResult::Denied
+                } else {
+                    AccessResult::Allowed
+                })
+            }
+        }
+
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE authors (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
+             CREATE TABLE posts (
+                id TEXT PRIMARY KEY, title TEXT, author TEXT,
+                _status TEXT NOT NULL DEFAULT 'published', created_at TEXT, updated_at TEXT
+             );
+             INSERT INTO authors VALUES ('a1', 'Alice', '2024-01-01', '2024-01-01');
+             INSERT INTO posts (id, title, author, _status, created_at, updated_at)
+                VALUES ('p1', 'Published Post', 'a1', 'published', '2024-01-01', '2024-01-01');
+             INSERT INTO posts (id, title, author, _status, created_at, updated_at)
+                VALUES ('p2', 'Draft Post', 'a1', 'draft', '2024-01-01', '2024-01-01');",
+        )
+        .unwrap();
+
+        let authors_def = make_authors_def_with_join();
+        let mut posts_def = make_posts_def_for_join();
+        posts_def.versions = Some(VersionsConfig::new(true, 0)); // has_drafts()
+        posts_def.access.read = Some(HookRef::new("read_fn"));
+        posts_def.access.draft = Some(HookRef::new("draft_fn"));
+        assert!(posts_def.has_drafts());
+
+        let mut registry = Registry::new();
+        registry.register_collection(authors_def.clone());
+        registry.register_collection(posts_def);
+
+        let titles = |published_only: bool, draft_allowed: bool| -> Vec<String> {
+            let mut doc = Document::new("a1".to_string());
+            doc.fields.insert("name".to_string(), json!("Alice"));
+            let gate = DraftGate(draft_allowed);
+            let mut visited = HashSet::new();
+            populate_relationships_cached(
+                &PopulateContext {
+                    conn: &conn,
+                    registry: &registry,
+                    collection_slug: "authors",
+                    def: &authors_def,
+                },
+                &mut doc,
+                &mut visited,
+                &PopulateOpts {
+                    depth: 1,
+                    select: None,
+                    locale_ctx: None,
+                    published_only,
+                    join_access: Some(&gate),
+                    user: None,
+                },
+                &NoneCache,
+            )
+            .unwrap();
+            doc.fields
+                .get("posts")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.get("title").and_then(|t| t.as_str()))
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        // Published-only read: the draft post is never embedded.
+        assert_eq!(
+            titles(true, true),
+            vec!["Published Post"],
+            "published-only join read must exclude draft children"
+        );
+
+        // Drafts REQUESTED but target draft access DENIED: still excluded — this
+        // is the leak the fix closes.
+        assert_eq!(
+            titles(false, false),
+            vec!["Published Post"],
+            "a draft join child must be hidden without the target's draft access"
+        );
+
+        // Drafts requested AND target draft access granted: both visible.
+        let mut both = titles(false, true);
+        both.sort();
+        assert_eq!(both, vec!["Draft Post", "Published Post"]);
     }
 
     #[test]

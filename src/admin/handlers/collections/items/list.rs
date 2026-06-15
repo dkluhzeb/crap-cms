@@ -74,19 +74,17 @@ fn fetch_list_documents(
         .user(user_doc.as_ref())
         .build();
 
-    // Only request drafts for a user who can actually view them (edit-level
-    // access). A read-only admin sees published rows; an editor sees drafts
-    // too. Requesting drafts unconditionally would make the read paths reject
-    // the whole list for a reader who lacks the draft gate.
-    let can_view_drafts =
-        CollectionPermissions::for_user(args.state, args.def, args.auth_user.as_ref()).draft;
-
+    // Request drafts unconditionally — the service read path returns the union
+    // of the views the caller may see and downgrades (never rejects): an editor
+    // gets published + drafts, a read-only admin gets published only. Draft
+    // *visibility* is the service's job; `CollectionPermissions` survives only
+    // as a UI hint (show/hide the Drafts tab), not a request gate.
     let input = FindDocumentsInput::builder(args.find_query)
         .hydrate(false)
         .locale_ctx(args.locale_ctx)
         .cursor_enabled(args.cursor_enabled)
         .trash(args.is_trash)
-        .include_drafts(can_view_drafts)
+        .include_drafts(true)
         .status_filter(args.status_filter)
         .build();
 

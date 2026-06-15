@@ -498,6 +498,7 @@ function crap.fields.join(config) end
 --- @field delete? string | crap.HookRef Hook ref for delete access control.
 --- @field trash? string | crap.HookRef Hook ref for soft-delete (trash) access control. Falls back to `update` when unset, so most collections don't set this explicitly. Set to lock trashing behind a different policy than update — e.g. only editors can trash, but authors can still update their own drafts.
 --- @field draft? string | crap.HookRef Hook ref for reading draft (unpublished) content — a read that opts into drafts (`draft = true` / `use_draft` / `include_drafts`). Falls back to `update` when unset, so previewing a draft requires edit-level access by default (drafts are not exposed to plain readers). Set to gate draft previews behind a different policy than editing.
+--- @field versions? string | crap.HookRef Hook ref restricting access to version history — a *toggle*, not a per-snapshot filter. Unlike `trash`/`draft` it has NO `update` fallback: unset means **allow**, so history visibility follows the regular per-snapshot composite (`read` for published snapshots, `draft` for draft snapshots). Set it to lock the version timeline behind a stricter policy than reading the document — e.g. only editors may inspect history even though anyone may read the published doc. The function returns `true`/`false` (`ctx`-based); returning a filter table is rejected (row-level scoping is `read`'s job).
 
 --- Context passed to `strategy`-type auth `authenticate` hooks.
 --- @class crap.AuthStrategyContext

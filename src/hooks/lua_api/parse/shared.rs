@@ -36,7 +36,9 @@ pub(super) const COLLECTION_HOOK_KEYS: &[&str] = &[
 ];
 
 /// Access-control operation keys accepted on an `access` sub-table.
-pub(super) const ACCESS_KEYS: &[&str] = &["read", "create", "update", "delete", "trash"];
+pub(super) const ACCESS_KEYS: &[&str] = &[
+    "read", "create", "update", "delete", "trash", "draft", "versions",
+];
 
 /// Reject unknown keys in the nested sub-tables shared by collections and
 /// globals (`labels`, `hooks`, `access`, `mcp`, `versions`, `live`, `indexes`). Each
@@ -304,6 +306,8 @@ pub(super) fn parse_access_config(config: &Table) -> Result<Access> {
         .update(get_optional_hook_ref(&access_tbl, "update", "access")?)
         .delete(get_optional_hook_ref(&access_tbl, "delete", "access")?)
         .trash(get_optional_hook_ref(&access_tbl, "trash", "access")?)
+        .draft(get_optional_hook_ref(&access_tbl, "draft", "access")?)
+        .versions(get_optional_hook_ref(&access_tbl, "versions", "access")?)
         .build())
 }
 
@@ -641,6 +645,39 @@ mod tests {
             access.trash.as_ref().map(HookRef::reference),
             Some("hooks.access.editor_or_above")
         );
+    }
+
+    /// Regression: `access.draft` and `access.versions` must actually parse.
+    /// Both were absent from `parse_access_config` (and `ACCESS_KEYS`), so the
+    /// independent-views `draft` gate was unconfigurable from Lua and `draft`/
+    /// `versions` keys were rejected as unknown — the whole draft access model
+    /// could only be exercised via hand-built Rust structs.
+    #[test]
+    fn test_parse_access_config_draft_and_versions() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let access_tbl = lua.create_table().unwrap();
+        access_tbl.set("draft", "hooks.access.editors").unwrap();
+        access_tbl.set("versions", "hooks.access.admins").unwrap();
+        tbl.set("access", access_tbl).unwrap();
+
+        let access = parse_access_config(&tbl).unwrap();
+        assert_eq!(
+            access.draft.as_ref().map(HookRef::reference),
+            Some("hooks.access.editors")
+        );
+        assert_eq!(
+            access.versions.as_ref().map(HookRef::reference),
+            Some("hooks.access.admins")
+        );
+    }
+
+    /// `draft` and `versions` are accepted keys on the `access` sub-table — the
+    /// strict unknown-key validator must not reject them.
+    #[test]
+    fn test_access_keys_accept_draft_and_versions() {
+        assert!(ACCESS_KEYS.contains(&"draft"));
+        assert!(ACCESS_KEYS.contains(&"versions"));
     }
 
     /// Regression: an access rule that is present but not a string must be a

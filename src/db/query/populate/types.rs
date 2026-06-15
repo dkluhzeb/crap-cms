@@ -39,29 +39,15 @@ pub trait JoinAccessCheck {
 ///
 /// Format: `populate:{collection}:{id}[:{locale}]`. The cached value is the raw
 /// document content, which is independent of the requesting user and of draft
-/// visibility — both the per-request `read` access decision and the
-/// `target_hidden_by_draft` filter are applied *after* retrieval, on every read.
-/// That keeps one cache entry per document shared across all users (the DB fetch
-/// is deduplicated for everyone) without ever caching a user-specific view.
+/// visibility — the per-request view-access decision (`read` for published,
+/// `draft` for draft rows) is applied *after* retrieval, on every read. That
+/// keeps one cache entry per document shared across all users (the DB fetch is
+/// deduplicated for everyone) without ever caching a user-specific view.
 pub(crate) fn populate_cache_key(collection: &str, id: &str, locale: Option<&str>) -> String {
     match locale {
         Some(l) => format!("populate:{collection}:{id}:{l}"),
         None => format!("populate:{collection}:{id}"),
     }
-}
-
-/// Whether a populated target document must be hidden because the reader is
-/// not allowed to see drafts and the target is a draft. Only draft-enabled
-/// target collections carry a `_status` column, so non-draft targets are
-/// always visible.
-pub(crate) fn target_hidden_by_draft(
-    doc: &Document,
-    rel_def: &CollectionDefinition,
-    published_only: bool,
-) -> bool {
-    published_only
-        && rel_def.has_drafts()
-        && doc.fields.get("_status").and_then(|v| v.as_str()) != Some("published")
 }
 
 /// Derive the locale portion of the cache key from an optional `LocaleContext`.
@@ -90,9 +76,10 @@ pub(crate) struct PopulateCtx<'a> {
     pub registry: &'a Registry,
     pub effective_depth: i32,
     pub locale_ctx: Option<&'a LocaleContext>,
-    /// When true, draft target documents are hidden from population (the
-    /// reader did not opt into drafts). Threaded from the parent read's
-    /// `include_drafts`. See [`target_hidden_by_draft`].
+    /// When true, drafts were *not* requested (the reader did not opt into
+    /// drafts), so draft target rows are hidden from population regardless of
+    /// access. Threaded from the parent read's `include_drafts`. The "drafts
+    /// requested" axis of the requested×allowed rule in `target_row_visible`.
     pub published_only: bool,
     pub cache: &'a dyn CacheBackend,
     /// Deduplicates concurrent cache-miss fetches for the same target. The

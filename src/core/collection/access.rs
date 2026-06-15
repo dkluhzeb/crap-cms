@@ -43,6 +43,18 @@ pub struct Access {
     #[serde(default)]
     #[lua(ty = "string | crap.HookRef", optional)]
     pub draft: Option<HookRef>,
+    /// Hook ref restricting access to version history — a *toggle*, not a
+    /// per-snapshot filter. Unlike `trash`/`draft` it has NO `update` fallback:
+    /// unset means **allow**, so history visibility follows the regular
+    /// per-snapshot composite (`read` for published snapshots, `draft` for draft
+    /// snapshots). Set it to lock the version timeline behind a stricter policy
+    /// than reading the document — e.g. only editors may inspect history even
+    /// though anyone may read the published doc. The function returns
+    /// `true`/`false` (`ctx`-based); returning a filter table is rejected
+    /// (row-level scoping is `read`'s job).
+    #[serde(default)]
+    #[lua(ty = "string | crap.HookRef", optional)]
+    pub versions: Option<HookRef>,
 }
 
 impl Access {
@@ -85,6 +97,7 @@ pub struct AccessBuilder {
     delete: Option<HookRef>,
     trash: Option<HookRef>,
     draft: Option<HookRef>,
+    versions: Option<HookRef>,
 }
 
 impl AccessBuilder {
@@ -135,6 +148,13 @@ impl AccessBuilder {
     }
 
     #[must_use]
+    pub fn versions(mut self, versions: Option<HookRef>) -> Self {
+        self.versions = versions;
+
+        self
+    }
+
+    #[must_use]
     pub fn build(self) -> Access {
         Access {
             read: self.read,
@@ -143,6 +163,7 @@ impl AccessBuilder {
             delete: self.delete,
             trash: self.trash,
             draft: self.draft,
+            versions: self.versions,
         }
     }
 }

@@ -274,8 +274,7 @@ fn populate_rel_in_map(
 }
 
 use super::dispatch::resolve_single_target;
-use crate::db::query::AccessResult;
-use crate::db::query::populate::helpers::resolve_target_access;
+use crate::db::query::populate::helpers::{TargetViews, resolve_target_views};
 use std::collections::HashMap;
 
 /// Populate a non-polymorphic has-one field within a JSON map.
@@ -297,14 +296,14 @@ fn populate_has_one_in_map(
         return Ok(());
     }
 
-    let access = resolve_target_access(pctx, rel_collection, rel_def)?;
+    let views = resolve_target_views(pctx, rel_collection, rel_def)?;
 
     if let Some(target) = resolve_single_target(
         pctx,
         rel_collection,
         rel_def,
         &id,
-        &access,
+        &views,
         effective_depth,
         visited,
     )? {
@@ -333,7 +332,7 @@ fn populate_has_many_in_map(
         _ => return Ok(()),
     };
 
-    let access = resolve_target_access(pctx, rel_collection, rel_def)?;
+    let views = resolve_target_views(pctx, rel_collection, rel_def)?;
 
     let mut populated = Vec::new();
     for id in &ids {
@@ -347,7 +346,7 @@ fn populate_has_many_in_map(
             rel_collection,
             rel_def,
             id,
-            &access,
+            &views,
             effective_depth,
             visited,
         )? {
@@ -386,17 +385,11 @@ fn populate_poly_has_one_in_map(
         None => return Ok(()),
     };
 
-    let access = resolve_target_access(pctx, &col, &item_def)?;
+    let views = resolve_target_views(pctx, &col, &item_def)?;
 
-    if let Some(target) = resolve_single_target(
-        pctx,
-        &col,
-        &item_def,
-        &id,
-        &access,
-        effective_depth,
-        visited,
-    )? {
+    if let Some(target) =
+        resolve_single_target(pctx, &col, &item_def, &id, &views, effective_depth, visited)?
+    {
         map.insert(name.to_string(), document_to_json(&target, &col));
     }
 
@@ -419,8 +412,8 @@ fn populate_poly_has_many_in_map(
         _ => return Ok(()),
     };
 
-    // Resolve each target collection's `read` access once for this field.
-    let mut access_by: HashMap<String, AccessResult> = HashMap::new();
+    // Resolve each target collection's view access (read + draft) once.
+    let mut views_by: HashMap<String, TargetViews> = HashMap::new();
 
     let mut populated = Vec::new();
     for item in &items {
@@ -439,21 +432,13 @@ fn populate_poly_has_many_in_map(
             continue;
         };
 
-        if !access_by.contains_key(&col) {
-            let resolved = resolve_target_access(pctx, &col, &item_def)?;
-            access_by.insert(col.clone(), resolved);
+        if !views_by.contains_key(&col) {
+            let resolved = resolve_target_views(pctx, &col, &item_def)?;
+            views_by.insert(col.clone(), resolved);
         }
-        let access = access_by[&col].clone();
+        let views = &views_by[&col];
 
-        match resolve_single_target(
-            pctx,
-            &col,
-            &item_def,
-            &id,
-            &access,
-            effective_depth,
-            visited,
-        )? {
+        match resolve_single_target(pctx, &col, &item_def, &id, views, effective_depth, visited)? {
             Some(target) => populated.push(document_to_json(&target, &col)),
             None => populated.push(Value::String(item.clone())),
         }

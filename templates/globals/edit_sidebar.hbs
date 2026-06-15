@@ -81,7 +81,7 @@
     </div>
   {{/partials/sidebar-panel}}
 
-  {{#if global.has_versions}}
+  {{#if (and global.has_versions perms.versions)}}
     {{> partials/version-sidebar}}
   {{/if}}
 </div>

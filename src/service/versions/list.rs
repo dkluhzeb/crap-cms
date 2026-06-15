@@ -6,7 +6,7 @@ use crate::{
     hooks::AccessCheckInput,
     service::{
         Def, ListVersionsInput, PaginatedResult, ServiceContext, ServiceError,
-        helpers::enforce_access_constraints,
+        helpers::enforce_access_constraints, versions::gate::check_versions_gate,
     },
 };
 
@@ -26,6 +26,10 @@ pub fn list_versions(
     let conn = resolved.as_ref();
     let hooks = ctx.read_hooks()?;
     let table = ctx.version_table();
+
+    // The `access.versions` toggle gates history access at all (default allow);
+    // the read/draft composite below then scopes *which* snapshots are visible.
+    check_versions_gate(ctx, hooks, Some(input.parent_id), "find")?;
 
     // Listing a document's version history is gated by `access.read` — you can
     // see the published version history if you can read the document. DRAFT

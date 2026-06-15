@@ -7,11 +7,11 @@ use crate::core::cache::CacheBackend;
 use crate::core::{
     CollectionDefinition, Document, FieldType, field::flatten_array_sub_fields, upload,
 };
-use crate::db::query::AccessResult;
-use crate::db::query::populate::helpers::{cache_or_fetch_doc, fetch_target, target_visible};
+use crate::db::query::populate::helpers::{
+    TargetViews, cache_or_fetch_doc, fetch_target, target_row_visible,
+};
 use crate::db::query::populate::{
     PopulateContext, PopulateCtx, PopulateOpts, Singleflight, locale_cache_key, populate_cache_key,
-    target_hidden_by_draft,
 };
 
 use super::{join, nested, nonpoly, poly};
@@ -26,8 +26,9 @@ use super::{join, nested, nonpoly, poly};
 /// view to another. Access constraints are matched against the RAW fields,
 /// before population turns relationship fields into objects.
 ///
-/// `access` is the target collection's `read` decision, resolved once by the
-/// caller for the whole field (it is collection-level, not per-row).
+/// `views` is the target collection's resolved view access (`read` + `draft`),
+/// resolved once by the caller for the whole field (it is collection-level, not
+/// per-row).
 ///
 /// # Errors
 ///
@@ -37,11 +38,11 @@ pub(super) fn finalize_target(
     collection: &str,
     def: &CollectionDefinition,
     mut raw: Document,
-    access: &AccessResult,
+    views: &TargetViews,
     effective_depth: i32,
     visited: &mut HashSet<(String, String)>,
 ) -> Result<Option<Document>> {
-    if target_hidden_by_draft(&raw, def, ctx.published_only) || !target_visible(access, &raw) {
+    if !target_row_visible(views, &raw, ctx.published_only, def) {
         return Ok(None);
     }
 
@@ -91,7 +92,7 @@ pub(super) fn resolve_single_target(
     collection: &str,
     def: &CollectionDefinition,
     id: &str,
-    access: &AccessResult,
+    views: &TargetViews,
     effective_depth: i32,
     visited: &mut HashSet<(String, String)>,
 ) -> Result<Option<Document>> {
@@ -104,7 +105,7 @@ pub(super) fn resolve_single_target(
         return Ok(None);
     };
 
-    finalize_target(ctx, collection, def, raw, access, effective_depth, visited)
+    finalize_target(ctx, collection, def, raw, views, effective_depth, visited)
 }
 
 /// Recursively populate relationship fields with full document objects.

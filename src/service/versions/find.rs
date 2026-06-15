@@ -6,7 +6,7 @@ use crate::{
     core::{FieldDenial, document::VersionSnapshot},
     db::{AccessResult, query},
     hooks::AccessCheckInput,
-    service::{Def, ServiceContext, ServiceError, helpers},
+    service::{Def, ServiceContext, ServiceError, helpers, versions::gate::check_versions_gate},
 };
 
 /// Look up a single version snapshot by its ID.
@@ -26,6 +26,10 @@ pub fn find_version_by_id(
     let conn = conn.as_ref();
     let hooks = ctx.read_hooks()?;
     let table = ctx.version_table();
+
+    // The `access.versions` toggle gates history access at all (default allow);
+    // the read/draft composite below then scopes *which* snapshots are visible.
+    check_versions_gate(ctx, hooks, None, "find_by_id")?;
 
     // Reading a version snapshot is gated by `access.read`; a DRAFT snapshot
     // additionally requires edit-level access (`access.draft ?? access.update`),
