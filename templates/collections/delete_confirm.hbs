@@ -1,7 +1,5 @@
 {{#if ref_count}}
   {{#> partials/warning-card title_key="delete_has_references"}}
-    <p>{{t "referenced_by_count" count=ref_count}}</p>
-
     <crap-back-refs
       slug="{{collection.slug}}"
       doc-id="{{document_id}}"

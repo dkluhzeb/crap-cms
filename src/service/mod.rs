@@ -65,7 +65,10 @@ pub(crate) mod user_settings;
 pub(crate) mod versions;
 pub(crate) mod write;
 
-pub(crate) use access::{ReadAccessCtx, requested_views, resolve_trash_scope, resolve_view_scope};
+pub(crate) use access::{
+    ReadAccessCtx, requested_views, resolve_trash_scope, resolve_view_scope,
+    resolve_visibility_filter,
+};
 pub use context::{Def, ServiceContext};
 pub use error::ServiceError;
 pub(crate) use types::AfterChangeInput;

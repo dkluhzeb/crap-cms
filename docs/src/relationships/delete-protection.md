@@ -47,10 +47,16 @@ When a referenced document is soft-deleted, it is **omitted** from relationship 
 The delete confirmation page shows a warning when a document has `_ref_count > 0`:
 
 > **This document is referenced by other content.**
-> Referenced by 3 document(s).
 > [Show details]
 
-Clicking **Show details** lazy-loads the full list of referencing documents, fields, and counts via the back-references API endpoint.
+The warning is **non-quantified** — it never renders the raw `_ref_count` as a
+number. The raw count includes references from collections the current user
+cannot read, so exposing it would leak the existence of inaccessible content.
+The block decision itself still uses the raw count (see
+[Access filtering](#access-filtering) below).
+
+Clicking **Show details** lazy-loads the **access-filtered** list of referring
+documents, fields, and counts via the back-references API endpoint.
 
 ## API Behavior
 
@@ -94,23 +100,54 @@ To see which documents reference a target, use the back-references endpoint:
 GET /admin/collections/{slug}/{id}/back-references
 ```
 
-Returns a JSON array:
+Returns a JSON object:
 
 ```json
-[
-    {
-        "owner_slug": "posts",
-        "owner_label": "Posts",
-        "field_name": "image",
-        "field_label": "Image",
-        "document_ids": ["p1", "p2"],
-        "count": 2,
-        "is_global": false
-    }
-]
+{
+    "references": [
+        {
+            "owner_slug": "posts",
+            "owner_label": "Posts",
+            "field_name": "image",
+            "field_label": "Image",
+            "document_ids": ["p1", "p2"],
+            "count": 2,
+            "is_global": false
+        }
+    ],
+    "has_inaccessible": false
+}
 ```
 
 This endpoint performs the full back-reference scan, so it's heavier than the ref count check. It's designed for on-demand use (e.g., the "Show details" button).
+
+## Access filtering
+
+The two questions delete protection answers are gated differently:
+
+- **"Can this document be deleted?"** — uses the raw `_ref_count` and is
+  **visibility-blind**. It is a system-integrity invariant: a document with
+  *any* incoming reference is blocked, even references the current user cannot
+  see. This is what keeps the database free of orphaned references regardless
+  of who is logged in.
+
+- **"Which documents reference it?"** — the back-references list is **fully
+  access-filtered**. Access is resolved once per referring collection/global,
+  through the same view scope that gates normal reads: a referrer appears only
+  if the user could read it via *some* view (published, draft, or trash). For a
+  collection access rule that returns row constraints, those constraints are
+  folded into the scan so only matching referrers are listed.
+
+When the access-filtered list is **smaller** than the raw count — some referrers
+were dropped because the user cannot access them — the response sets
+`has_inaccessible: true`. The UI then shows a non-quantified note:
+
+> Also referenced by documents you don't have access to.
+
+The hidden count is never revealed — only that something exists. This resolves
+the "blocked but nothing visible" case: a user can be correctly prevented from
+deleting a document while seeing *why* without learning what the inaccessible
+referrers are.
 
 ## Migration
 

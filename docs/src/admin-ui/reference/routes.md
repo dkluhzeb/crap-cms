@@ -48,7 +48,7 @@ never silently ignored.
 | `/admin/collections/{slug}/validate` | POST | Inline validation (create form) |
 | `/admin/collections/{slug}/{id}/validate` | POST | Inline validation (edit form) |
 | `/admin/collections/{slug}/evaluate-conditions` | POST | Display condition evaluation |
-| `/admin/collections/{slug}/{id}/back-references` | GET | Lazy-loaded back-reference list for the delete dialog |
+| `/admin/collections/{slug}/{id}/back-references` | GET | Lazy-loaded, access-filtered back-reference list for the delete dialog (`{ references, has_inaccessible }`) |
 | `/admin/globals/{slug}/validate` | POST | Global inline validation |
 | `/admin/globals/{slug}/evaluate-conditions` | POST | Global display condition evaluation |
 | `/admin/events` | GET | SSE live update stream |

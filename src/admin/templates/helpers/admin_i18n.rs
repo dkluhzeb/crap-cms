@@ -99,6 +99,7 @@ const ADMIN_JS_KEYS: &[&str] = &[
     "documents",
     "error",
     "no_details",
+    "back_refs_some_inaccessible",
     "loading",
     "saving",
     "focal_point_hint",

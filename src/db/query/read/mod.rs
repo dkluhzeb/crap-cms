@@ -7,7 +7,7 @@ mod find_by_id;
 mod missing_relations;
 pub(super) mod select;
 
-pub use back_references::{BackReference, find_back_references};
+pub use back_references::{BackReference, filter_visible_ids, find_back_references};
 pub use count::{count, count_where_field_eq, count_with_search};
 pub use find::{find, find_ids};
 pub(crate) use find_by_id::find_by_id_raw;

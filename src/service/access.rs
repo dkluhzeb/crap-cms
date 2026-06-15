@@ -9,7 +9,7 @@
 //! `access.trash`. Both share [`ReadAccessCtx`].
 
 use crate::core::{CollectionDefinition, Document, HookRef};
-use crate::db::{AccessResult, FilterClause, RequestedViews, ViewScope};
+use crate::db::{AccessResult, Filter, FilterClause, FilterOp, RequestedViews, ViewScope};
 use crate::hooks::AccessCheckInput;
 use crate::service::ServiceError;
 use crate::service::hooks::ReadHooks;
@@ -81,6 +81,87 @@ pub(crate) fn resolve_trash_scope(
         // `_deleted_at` guard itself.
         AccessResult::Constrained(extra) => Ok(extra),
     }
+}
+
+/// Resolve the full cross-axis visibility of a collection for the viewer — the
+/// rows of `ctx.def` they may see across BOTH the live status union (published
+/// via `read`, draft via `draft`) AND the trash view (`access.trash`).
+///
+/// Unlike a normal read — which picks a single mode (live *or* trash) — some
+/// surfaces must consider every view at once. Back-references are the canonical
+/// case: a referrer should appear if the viewer could read it through *any*
+/// view, and be hidden (and counted as inaccessible) otherwise.
+///
+/// Returns the filter clauses to intersect candidate rows with:
+/// - `None` — nothing is visible; the viewer sees no rows of this collection.
+/// - `Some(filters)` — visible rows match `filters`; an empty vec means every
+///   row is visible (no status/lifecycle/access narrowing applies).
+///
+/// # Errors
+///
+/// Returns a [`ServiceError`] if an access hook raises or returns an invalid
+/// row constraint.
+pub(crate) fn resolve_visibility_filter(
+    hooks: &dyn ReadHooks,
+    ctx: &ReadAccessCtx<'_>,
+) -> Result<Option<Vec<FilterClause>>, ServiceError> {
+    let mut branches = Vec::new();
+
+    // Live (non-trashed) status union: published ∪ draft.
+    let scope = resolve_view_scope(hooks, ctx, RequestedViews::published_and_draft())?;
+    if scope.is_anything_visible() {
+        let mut parts = Vec::new();
+        if ctx.def.soft_delete {
+            parts.push(deleted_at(FilterOp::NotExists));
+        }
+        parts.extend(scope.into_filters());
+        branches.push(FilterClause::and(parts));
+    }
+
+    // Trash view: soft-deleted rows the viewer may see via `access.trash`.
+    if ctx.def.soft_delete
+        && let Some(trash) = trash_branch(hooks, ctx)?
+    {
+        branches.push(trash);
+    }
+
+    if branches.is_empty() {
+        return Ok(None);
+    }
+
+    match FilterClause::or(branches) {
+        // A single unconstrained branch (no status axis, no soft-delete, read
+        // allowed) collapses to match-all → no narrowing needed.
+        FilterClause::And(parts) if parts.is_empty() => Ok(Some(Vec::new())),
+        clause => Ok(Some(vec![clause])),
+    }
+}
+
+/// Build the trash branch — `_deleted_at IS NOT NULL` AND any `access.trash`
+/// row constraints — or `None` when trash access is denied.
+fn trash_branch(
+    hooks: &dyn ReadHooks,
+    ctx: &ReadAccessCtx<'_>,
+) -> Result<Option<FilterClause>, ServiceError> {
+    let constraints = match check_view(hooks, ctx, ctx.def.access.resolve_trash())? {
+        AccessResult::Denied => return Ok(None),
+        AccessResult::Allowed => Vec::new(),
+        AccessResult::Constrained(extra) => extra,
+    };
+
+    let mut parts = Vec::with_capacity(constraints.len() + 1);
+    parts.push(deleted_at(FilterOp::Exists));
+    parts.extend(constraints);
+
+    Ok(Some(FilterClause::and(parts)))
+}
+
+/// A `_deleted_at` lifecycle guard: `Exists` = trashed, `NotExists` = live.
+fn deleted_at(op: FilterOp) -> FilterClause {
+    FilterClause::Single(Filter {
+        field: "_deleted_at".to_string(),
+        op,
+    })
 }
 
 /// Run one view's access hook with the shared read context, validating any
@@ -318,6 +399,101 @@ mod tests {
         let both = ["published".to_string(), "draft".to_string()];
         let both_views = requested_views(Some(&both), false);
         assert!(both_views.published && both_views.draft);
+    }
+
+    /// A draft+soft-delete collection with read allowed but draft/trash denied
+    /// exposes only live published rows.
+    #[test]
+    fn visibility_published_only_when_draft_and_trash_denied() {
+        let mut def = drafts_def();
+        def.soft_delete = true;
+        def.access.trash = Some(HookRef::new("trash_fn"));
+        let hooks = MockHooks::new(&[("read_fn", AccessResult::Allowed)]);
+
+        let filters = resolve_visibility_filter(&hooks, &ctx(&def))
+            .unwrap()
+            .expect("published is visible");
+
+        // Single live branch: _deleted_at IS NULL AND _status = 'published'.
+        let FilterClause::And(parts) = &filters[0] else {
+            panic!("expected a live AND branch, got {:?}", filters[0]);
+        };
+        assert!(parts.iter().any(|c| matches!(
+            c,
+            FilterClause::Single(Filter { field, op: FilterOp::NotExists }) if field == "_deleted_at"
+        )));
+        assert!(parts.iter().any(|c| matches!(
+            c,
+            FilterClause::Single(Filter { field, op: FilterOp::Equals(v) })
+                if field == "_status" && v == "published"
+        )));
+    }
+
+    /// When every view is denied, nothing is visible — the owner is dropped.
+    #[test]
+    fn visibility_nothing_visible_is_none() {
+        let mut def = drafts_def();
+        def.soft_delete = true;
+        def.access.trash = Some(HookRef::new("trash_fn"));
+        let hooks = MockHooks::new(&[]); // all default to Denied
+
+        assert!(
+            resolve_visibility_filter(&hooks, &ctx(&def))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// Trash access adds a soft-deleted branch alongside the live union.
+    #[test]
+    fn visibility_unions_live_and_trash() {
+        let mut def = drafts_def();
+        def.soft_delete = true;
+        def.access.trash = Some(HookRef::new("trash_fn"));
+        let hooks = MockHooks::new(&[
+            ("read_fn", AccessResult::Allowed),
+            ("trash_fn", AccessResult::Allowed),
+        ]);
+
+        let filters = resolve_visibility_filter(&hooks, &ctx(&def))
+            .unwrap()
+            .expect("live + trash visible");
+
+        let FilterClause::Or(branches) = &filters[0] else {
+            panic!("expected an OR of live + trash, got {:?}", filters[0]);
+        };
+        assert_eq!(branches.len(), 2, "one live branch, one trash branch");
+
+        // The trash branch carries _deleted_at IS NOT NULL (Exists). With no
+        // trash row-constraints it collapses to that single guard clause, so
+        // flatten each branch to its parts before scanning.
+        let has_trash = branches.iter().any(|b| {
+            let parts: &[FilterClause] = match b {
+                FilterClause::And(parts) => parts,
+                other => std::slice::from_ref(other),
+            };
+            parts.iter().any(|c| matches!(
+                c,
+                FilterClause::Single(Filter { field, op: FilterOp::Exists }) if field == "_deleted_at"
+            ))
+        });
+        assert!(has_trash, "trash branch must guard _deleted_at IS NOT NULL");
+    }
+
+    /// A collection with no status axis and no soft-delete, read allowed
+    /// unconstrained, imposes no narrowing — every row is visible.
+    #[test]
+    fn visibility_unconstrained_no_axis_is_match_all() {
+        let mut def = CollectionDefinition::new("pages");
+        def.access = Access::builder()
+            .read(Some(HookRef::new("read_fn")))
+            .build();
+        let hooks = MockHooks::new(&[("read_fn", AccessResult::Allowed)]);
+
+        let filters = resolve_visibility_filter(&hooks, &ctx(&def))
+            .unwrap()
+            .expect("read is allowed");
+        assert!(filters.is_empty(), "match-all imposes no filter");
     }
 
     #[test]

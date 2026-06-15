@@ -28,6 +28,12 @@ import { t } from './_internal/i18n.js';
  * @property {number} count
  */
 
+/**
+ * @typedef {Object} BackRefReport
+ * @property {BackRef[]} references — referrers the viewer may see
+ * @property {boolean} has_inaccessible — some referrers are hidden by access
+ */
+
 const sheet = css`
   :host { display: contents; }
   ul {
@@ -91,10 +97,12 @@ class CrapBackRefs extends HTMLElement {
 
     try {
       const res = await fetch(`/admin/collections/${slug}/${docId}/back-references`);
-      /** @type {BackRef[]} */
-      const refs = await res.json();
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      /** @type {BackRefReport} */
+      const report = await res.json();
+      if (report.error) throw new Error(report.error);
       btn.hidden = true;
-      this._render(refs);
+      this._render(report);
     } catch {
       btn.textContent = originalLabel;
       btn.disabled = false;
@@ -103,32 +111,38 @@ class CrapBackRefs extends HTMLElement {
   }
 
   /**
-   * Render the list, or an empty-state paragraph when there are no refs.
-   * @param {BackRef[]} refs
+   * Render the visible referrers, plus a non-quantified note when some
+   * referrers are hidden by access control.
+   * @param {BackRefReport} report
    */
-  _render(refs) {
+  _render(report) {
     const root = /** @type {ShadowRoot} */ (this.shadowRoot);
-    if (!refs.length) {
-      root.appendChild(h('p', { class: 'empty', text: t('no_details') }));
-      return;
-    }
+    const refs = report.references || [];
 
-    const docs = t('documents');
-    root.appendChild(
-      h(
-        'ul',
-        null,
-        refs.map((item) =>
-          h(
-            'li',
-            null,
-            h('strong', { text: item.owner_label }),
-            ` — ${item.count} ${docs}`,
-            item.field_label && h('span', { class: 'muted', text: ` (${item.field_label})` }),
+    if (refs.length) {
+      const docs = t('documents');
+      root.appendChild(
+        h(
+          'ul',
+          null,
+          refs.map((item) =>
+            h(
+              'li',
+              null,
+              h('strong', { text: item.owner_label }),
+              ` — ${item.count} ${docs}`,
+              item.field_label && h('span', { class: 'muted', text: ` (${item.field_label})` }),
+            ),
           ),
         ),
-      ),
-    );
+      );
+    } else if (!report.has_inaccessible) {
+      root.appendChild(h('p', { class: 'empty', text: t('no_details') }));
+    }
+
+    if (report.has_inaccessible) {
+      root.appendChild(h('p', { class: 'empty', text: t('back_refs_some_inaccessible') }));
+    }
   }
 }
 

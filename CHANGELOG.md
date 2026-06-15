@@ -235,6 +235,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **Relationship population now enforces the target collection's read
+  access.** Populating a relationship/upload field at depth (`depth > 0`)
+  fetched and embedded the target document while checking only the draft
+  filter — never the target collection's `read` rule or its row constraints.
+  A user denied read on a related collection could therefore see its documents
+  embedded inside a collection they *could* read (join fields already enforced
+  this; relationship fields did not). Population now resolves the target
+  collection's access once per relationship field and hides denied targets
+  (has-one resolves to `null`, has-many drops the entry), with row constraints
+  matched against the target's raw fields. The shared populate cache was
+  reworked to store raw, user-independent documents and apply access per
+  request, so a document cached for one user is never served to another who
+  cannot see it.
+
 - **Live event streams now gate drafts and trash per content view
   (breaking).** Real-time mutation events (gRPC `Subscribe` and admin SSE)
   checked collection access once at connect and then applied only the `read`
@@ -253,6 +267,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   payload is empty. Subscribers that relied on receiving draft or
   soft-delete events without the corresponding view access will stop receiving
   them.
+
+- **The back-references list is now access-filtered.** The delete dialog's
+  "Show details" view (`GET /admin/collections/{slug}/{id}/back-references`)
+  scanned every collection and global for referrers with **no access checks at
+  all**, so it could reveal the existence, collection, field, and ids of
+  documents the viewer has no permission to read — including drafts and trashed
+  rows. Referrers are now filtered per owner collection through the same view
+  scope that gates reads: a referrer is listed only if the viewer could read it
+  via some view (published via `read`, draft via `access.draft`, or trash via
+  `access.trash`), with any access row-constraints applied. Referrers the viewer
+  cannot access are dropped and surfaced only as a non-quantified flag
+  (`has_inaccessible`). The endpoint's response shape changed from a bare JSON
+  array to `{ "references": [...], "has_inaccessible": bool }`. The delete-block
+  decision is unchanged — it still uses the raw `_ref_count`, which stays
+  visibility-blind so the database can never be left with orphaned references.
+  Relatedly, the delete page and edit sidebar **no longer render the raw
+  reference count as a number** ("Referenced by N documents" → "Referenced by
+  other content"), since the raw count aggregates references the viewer cannot
+  see.
 
 - **Version history now requires edit-level access (breaking).** Listing a
   document's versions (`list_versions`) and reading a single version snapshot
