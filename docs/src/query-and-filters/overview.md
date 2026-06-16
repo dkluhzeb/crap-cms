@@ -25,6 +25,24 @@ Unified reference for querying documents across both the Lua API and gRPC API.
 >
 > **gRPC shorthand limitation:** In Lua, bare values like `{ count = 42 }` or `{ active = true }` are coerced to string equals. The gRPC `where` JSON only accepts string or operator object values — numeric/boolean shorthand is not supported.
 
+### Matching semantics
+
+These are consistent across both backends (SQLite and Postgres) and across the
+admin UI, Lua, and gRPC surfaces — so a filter behaves the same everywhere:
+
+- **`like` / `contains` are case-insensitive** (for ASCII). `{ like = "john%" }`
+  matches `"John Doe"`. (SQLite `LIKE` is ASCII-case-insensitive by default;
+  Postgres uses `ILIKE` to match.) In a `like` pattern, `%` matches any run of
+  characters and `_` matches one character. `contains` escapes any `%`/`_` in
+  your text, so they match literally.
+- **Ordering (`greater_than`/`less_than`) follows the field's type.** Filter
+  values are coerced to the column type from the field definition: a `number`
+  field compares **numerically** (`"100" > "50"` is true), a `text` field
+  compares **lexicographically** (`"100" < "50"`, because `'1' < '5'`), and a
+  `date` field compares lexicographically over its normalized ISO form (which
+  orders correctly). If you want numeric ordering, use a `number` field — don't
+  store numbers in a `text` field.
+
 ## Sorting
 
 Prefix a field name with `-` for descending order. When `order_by` is omitted, results are sorted by `created_at DESC` (newest first) for collections with timestamps, or `id ASC` otherwise. When sorting by a non-id field, an `id` tiebreaker is always appended for stable ordering.

@@ -40,15 +40,19 @@ pub fn filter_visible_ids(
     visibility: &[FilterClause],
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<HashSet<String>> {
-    // Self-enforcing contract: an empty `visibility` would degrade to `id IN(…)`
-    // alone — i.e. match every candidate. Callers must short-circuit the
-    // "everything visible" case (`Visibility::AllVisible`) before reaching here;
-    // an empty filter slice is a caller bug, not "show all referrers".
-    debug_assert!(
-        !visibility.is_empty(),
-        "filter_visible_ids requires a non-empty visibility filter; \
-         the all-visible case must be handled by the caller"
-    );
+    // Self-enforcing contract, fail-closed: an empty `visibility` would degrade
+    // to `id IN(…)` alone — i.e. match every candidate (a leak). Callers must
+    // short-circuit the "everything visible" case (`Visibility::AllVisible`)
+    // before reaching here; an empty filter slice is a caller bug. Catch it in
+    // tests via the assert, and in release hide everything rather than leak it.
+    if visibility.is_empty() {
+        debug_assert!(
+            false,
+            "filter_visible_ids requires a non-empty visibility filter; \
+             the all-visible case must be handled by the caller"
+        );
+        return Ok(HashSet::new());
+    }
 
     let mut visible = HashSet::with_capacity(candidate_ids.len());
 

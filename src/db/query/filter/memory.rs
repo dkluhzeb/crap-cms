@@ -9,16 +9,18 @@
 //!
 //! It evaluates the same `FilterClause` types that `Find` compiles to SQL WHERE
 //! clauses, and is **exact** for the shapes access rules should use — equality
-//! and membership (`Equals`/`NotEquals`/`In`/`NotIn`) and presence
-//! (`Exists`/`NotExists`) on ownership/tenant fields, plus `Like` (its
-//! wildcards/literals are translated faithfully). The one place it remains an
-//! **approximation** of the backend is *ordered* comparisons (`>`/`<`/`>=`/`<=`):
-//! it coerces numerically first, which can differ from SQL column-affinity
-//! ordering on text columns. Ordered comparisons on text are not a sensible
-//! access constraint anyway — keep access rules to equality/membership on your
-//! own fields (the documented guidance) and the two paths agree exactly. There
-//! is intentionally no operator-rejection here: enforcement is by convention +
-//! documentation, not by narrowing what a Lua hook may return.
+//! and membership (`Equals`/`NotEquals`/`In`/`NotIn`), presence
+//! (`Exists`/`NotExists`), and `Like` — whose wildcards/literals are translated
+//! faithfully and folded ASCII-case-insensitively to match `SQLite` `LIKE` /
+//! Postgres `ILIKE`. *Ordered* comparisons (`>`/`<`/`>=`/`<=`) choose numeric vs
+//! lexicographic by the field's JSON type — a numeric field compares
+//! numerically, a text field lexicographically — mirroring SQL column affinity
+//! for realistic data (only `SQLite`'s exotic mixed-type affinity edges, which
+//! aren't a sensible access constraint, are left unreplicated). Keep access
+//! rules to equality/membership/presence on your own fields (the documented
+//! guidance) and the two paths agree. There is intentionally no
+//! operator-rejection here: enforcement is by convention + documentation, not by
+//! narrowing what a Lua hook may return.
 
 use std::cmp::Ordering;
 
@@ -68,24 +70,12 @@ fn matches_filter(data: &DocumentFields, filter: &Filter) -> bool {
         FilterOp::NotEquals(expected) => value_str != *expected,
         FilterOp::Contains(needle) => value_str.contains(needle.as_str()),
         FilterOp::Like(pattern) => matches_like(&value_str, pattern),
-        FilterOp::GreaterThan(expected) => {
-            compare_values(&value_str, expected) == Some(Ordering::Greater)
-        }
-        FilterOp::LessThan(expected) => {
-            compare_values(&value_str, expected) == Some(Ordering::Less)
-        }
+        FilterOp::GreaterThan(expected) => order_is(value, expected, Ordering::Greater, false),
+        FilterOp::LessThan(expected) => order_is(value, expected, Ordering::Less, false),
         FilterOp::GreaterThanOrEqual(expected) => {
-            matches!(
-                compare_values(&value_str, expected),
-                Some(Ordering::Greater | Ordering::Equal)
-            )
+            order_is(value, expected, Ordering::Greater, true)
         }
-        FilterOp::LessThanOrEqual(expected) => {
-            matches!(
-                compare_values(&value_str, expected),
-                Some(Ordering::Less | Ordering::Equal)
-            )
-        }
+        FilterOp::LessThanOrEqual(expected) => order_is(value, expected, Ordering::Less, true),
         FilterOp::In(values) => values.contains(&value_str),
         FilterOp::NotIn(values) => !values.contains(&value_str),
         FilterOp::Exists => true,     // field exists (checked above)
@@ -112,24 +102,51 @@ fn value_to_string(v: &Value) -> String {
 }
 
 /// Compare two string values, trying numeric comparison first.
-fn compare_values(a: &str, b: &str) -> Option<Ordering> {
-    if let (Ok(na), Ok(nb)) = (a.parse::<f64>(), b.parse::<f64>()) {
-        na.partial_cmp(&nb)
-    } else {
-        Some(a.cmp(b))
+/// Whether the field compares to `expected` with the wanted ordering. `allow_eq`
+/// folds in equality (for `>=`/`<=`). Returns `false` (fail-closed) when the
+/// operands are not ordered-comparable.
+fn order_is(value: &Value, expected: &str, want: Ordering, allow_eq: bool) -> bool {
+    match compare_typed(value, expected) {
+        Some(ord) => ord == want || (allow_eq && ord == Ordering::Equal),
+        None => false,
+    }
+}
+
+/// Order a field value against a string comparand, choosing the comparison by
+/// the field's JSON type so the in-memory path mirrors SQL column affinity: a
+/// **numeric** field compares numerically (matching a numeric column), a
+/// **text** field lexicographically (matching a text column). This avoids the
+/// "text field holding `\"100\"` vs `\"50\"`" divergence a blanket numeric
+/// coercion would cause. Non-scalar / incomparable operands yield `None` (the
+/// caller fails closed). Exotic mixed-type SQL affinity edges are not replicated
+/// — ordered comparisons aren't a sensible access constraint on text anyway.
+fn compare_typed(value: &Value, expected: &str) -> Option<Ordering> {
+    match value {
+        Value::Number(n) => n.as_f64()?.partial_cmp(&expected.parse::<f64>().ok()?),
+        Value::String(s) => Some(s.as_str().cmp(expected)),
+        _ => None,
     }
 }
 
 /// Simple LIKE pattern matching (SQL-style: % = any chars, _ = single char).
 fn matches_like(value: &str, pattern: &str) -> bool {
-    // Escape regex metacharacters in the literal portion FIRST so a `.`/`(`/`[`
-    // in the pattern matches itself (as SQL `LIKE` would), then translate the SQL
-    // wildcards `%`/`_` (which `regex::escape` leaves untouched). Without the
-    // escape, in-memory `Like` over-matches relative to SQL — a fail-open on the
-    // access-gating path.
-    let regex_pattern = regex::escape(pattern).replace('%', ".*").replace('_', ".");
+    // Match the SQL backends exactly so the in-memory and SQL paths agree:
+    // - Escape regex metacharacters in the literal portion FIRST, so a `.`/`(`/`[`
+    //   in the pattern matches itself (as SQL `LIKE` does); without this the
+    //   in-memory path would over-match (fail-open).
+    // - Translate the SQL wildcards `%` → `.*`, `_` → `.` (one char), which
+    //   `regex::escape` leaves untouched.
+    // - Fold ASCII case on both sides: SQLite `LIKE` is ASCII-case-insensitive
+    //   by default and Postgres uses `ILIKE`, so case-insensitive is the expected
+    //   behavior. ASCII-only folding (not Unicode) tracks SQLite precisely and
+    //   stays at most stricter than Postgres `ILIKE` for non-ASCII (fail-closed).
+    let regex_pattern = regex::escape(pattern)
+        .replace('%', ".*")
+        .replace('_', ".")
+        .to_ascii_lowercase();
 
-    regex::Regex::new(&format!("^{regex_pattern}$")).is_ok_and(|re| re.is_match(value))
+    regex::Regex::new(&format!("^{regex_pattern}$"))
+        .is_ok_and(|re| re.is_match(&value.to_ascii_lowercase()))
 }
 
 #[cfg(test)]
@@ -163,6 +180,18 @@ mod tests {
         // Regex group/alternation metachars are literal too.
         assert!(matches_like("a(b)c", "a(b)c"));
         assert!(!matches_like("ab", "a|b"));
+    }
+
+    /// `Like` is ASCII-case-insensitive on both sides, matching `SQLite` `LIKE` /
+    /// Postgres `ILIKE`, so the in-memory and SQL paths agree.
+    #[test]
+    fn matches_like_is_ascii_case_insensitive() {
+        assert!(matches_like("Hello", "hello"));
+        assert!(matches_like("hello", "HELLO"));
+        assert!(matches_like("ALICE@X.COM", "alice@%"));
+        assert!(matches_like("Bob", "b_b"));
+        // Non-letters and structure still matter.
+        assert!(!matches_like("hellp", "hello"));
     }
 
     fn eq(field: &str, value: &str) -> FilterClause {
@@ -341,6 +370,40 @@ mod tests {
             &[FilterClause::Single(Filter {
                 field: "score".to_string(),
                 op: FilterOp::LessThanOrEqual("99".to_string()),
+            })]
+        ));
+    }
+
+    /// Ordered comparison picks numeric vs lexicographic by the field's JSON
+    /// type, mirroring SQL column affinity: a TEXT field holding numeric-looking
+    /// strings compares lexicographically (matching a SQL text column), NOT
+    /// numerically — which a blanket numeric coercion would get wrong.
+    #[test]
+    fn ordering_respects_field_type_like_sql_affinity() {
+        let text = data(&[("code", json!("100"))]);
+        // Lexicographic: "100" < "50" (`'1' < '5'`), so `> "50"` is false.
+        assert!(!matches_constraints(
+            &text,
+            &[FilterClause::Single(Filter {
+                field: "code".to_string(),
+                op: FilterOp::GreaterThan("50".to_string()),
+            })]
+        ));
+        // …but "100" > "0" lexicographically.
+        assert!(matches_constraints(
+            &text,
+            &[FilterClause::Single(Filter {
+                field: "code".to_string(),
+                op: FilterOp::GreaterThan("0".to_string()),
+            })]
+        ));
+        // A genuine numeric field still compares numerically (100 > 50).
+        let num = data(&[("n", json!(100))]);
+        assert!(matches_constraints(
+            &num,
+            &[FilterClause::Single(Filter {
+                field: "n".to_string(),
+                op: FilterOp::GreaterThan("50".to_string()),
             })]
         ));
     }
