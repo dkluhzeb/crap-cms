@@ -117,7 +117,12 @@ fn compare_values(a: &str, b: &str) -> Option<Ordering> {
 
 /// Simple LIKE pattern matching (SQL-style: % = any chars, _ = single char).
 fn matches_like(value: &str, pattern: &str) -> bool {
-    let regex_pattern = pattern.replace('%', ".*").replace('_', ".");
+    // Escape regex metacharacters in the literal portion FIRST so a `.`/`(`/`[`
+    // in the pattern matches itself (as SQL `LIKE` would), then translate the SQL
+    // wildcards `%`/`_` (which `regex::escape` leaves untouched). Without the
+    // escape, in-memory `Like` over-matches relative to SQL — a fail-open on the
+    // access-gating path.
+    let regex_pattern = regex::escape(pattern).replace('%', ".*").replace('_', ".");
 
     regex::Regex::new(&format!("^{regex_pattern}$")).is_ok_and(|re| re.is_match(value))
 }
@@ -135,6 +140,24 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.clone()))
             .collect()
+    }
+
+    /// `Like` must treat regex metacharacters in the pattern as literals (SQL
+    /// semantics), not as regex — otherwise in-memory matching over-matches
+    /// relative to SQL, a fail-open on the access-gating path.
+    #[test]
+    fn matches_like_treats_metacharacters_literally() {
+        // `.` is a literal dot, not "any char": "a.c" matches, "axc" must not.
+        assert!(matches_like("a.c", "a.c"));
+        assert!(!matches_like("axc", "a.c"));
+
+        // SQL wildcards still work: `%` = any run, `_` = any single char.
+        assert!(matches_like("axc", "a%c"));
+        assert!(matches_like("axc", "a_c"));
+
+        // Regex group/alternation metachars are literal too.
+        assert!(matches_like("a(b)c", "a(b)c"));
+        assert!(!matches_like("ab", "a|b"));
     }
 
     fn eq(field: &str, value: &str) -> FilterClause {

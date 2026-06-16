@@ -42,16 +42,26 @@ pub(super) fn check_versions_gate(
         ui_locale: None,
     })?;
 
+    versions_gate_decision(&access, ctx.slug)
+}
+
+/// Interpret an `access.versions` toggle result. Shared by the read-side gate
+/// ([`check_versions_gate`]) and the write-side restore gate so both agree:
+/// `Allowed` → proceed, `Denied` → access error, `Constrained` → config error
+/// (the toggle is boolean; row scoping belongs on `read`).
+pub(crate) fn versions_gate_decision(
+    access: &AccessResult,
+    slug: &str,
+) -> Result<(), ServiceError> {
     match access {
         AccessResult::Allowed => Ok(()),
         AccessResult::Denied => Err(ServiceError::AccessDenied(
             "Version history access denied".into(),
         )),
         AccessResult::Constrained(_) => Err(ServiceError::HookError(format!(
-            "Access hook 'access.versions' for '{}' returned a filter table; version access \
+            "Access hook 'access.versions' for '{slug}' returned a filter table; version access \
              is a toggle — return true/false based on ctx.user instead (row-level scoping is \
-             handled by the read access rule).",
-            ctx.slug
+             handled by the read access rule)."
         ))),
     }
 }

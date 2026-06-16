@@ -22,6 +22,10 @@ struct ByIdScope {
     /// visible, so a reader without draft access never sees draft content
     /// overlaid onto a published row.
     use_draft_overlay: bool,
+    /// Row constraints a returned draft snapshot must satisfy (the draft view's
+    /// filter for a live read, the trash view's for a trash read). Enforced in
+    /// memory since the snapshot bypasses the SQL `WHERE` path.
+    snapshot_constraints: Vec<FilterClause>,
 }
 
 /// Resolve the live (non-trash) lookup scope via the published/draft view union.
@@ -50,10 +54,15 @@ fn resolve_live_by_id(
     // Overlay the draft snapshot only when the draft view is actually visible —
     // a read-only caller opting into drafts is downgraded to the published row.
     let use_draft_overlay = input.use_draft && scope.draft_visible();
+    // The draft view's row filter bounds the snapshot (a `Constrained` draft rule
+    // must still hide other owners' drafts). Captured before `into_filters`
+    // consumes the scope.
+    let snapshot_constraints = scope.draft_filters().to_vec();
 
     Ok(ByIdScope {
         constraints: scope.into_filters(),
         use_draft_overlay,
+        snapshot_constraints,
     })
 }
 
@@ -79,6 +88,9 @@ fn resolve_trash_by_id(
     )?;
 
     Ok(ByIdScope {
+        // In trash mode the same row constraints bound both the SQL find and a
+        // returned draft snapshot of a trashed row.
+        snapshot_constraints: constraints.clone(),
         constraints,
         use_draft_overlay: input.use_draft,
     })
@@ -107,9 +119,11 @@ pub fn find_document_by_id(
         resolve_live_by_id(hooks, ctx, def, input)?
     };
 
-    // Merge any caller-supplied constraints (e.g. relationship-search scoping).
+    // Merge any caller-supplied constraints (e.g. relationship-search scoping)
+    // into both the SQL filter and the snapshot gate.
     if let Some(extra) = &input.access_constraints {
         scope.constraints.extend(extra.iter().cloned());
+        scope.snapshot_constraints.extend(extra.iter().cloned());
     }
 
     let constraints = (!scope.constraints.is_empty()).then_some(scope.constraints);
@@ -128,6 +142,7 @@ pub fn find_document_by_id(
         id: input.id,
         locale_ctx: input.locale_ctx,
         constraints,
+        snapshot_constraints: scope.snapshot_constraints,
         use_draft: scope.use_draft_overlay,
         include_deleted: input.include_deleted,
     })?
@@ -151,7 +166,7 @@ mod tests {
             CollectionDefinition, Document, FieldDefinition, FieldDenial, FieldType, HookRef,
             Hooks, collection::VersionsConfig,
         },
-        db::AccessResult,
+        db::{AccessResult, Filter, FilterClause, FilterOp},
         hooks::{AccessCheckInput, lifecycle::AfterReadCtx},
         service::{ServiceContext, hooks::ReadHooks},
     };
@@ -340,6 +355,105 @@ mod tests {
         assert!(
             still_published.is_some(),
             "published content stays visible under draft downgrade"
+        );
+    }
+
+    /// read → Allowed; draft (`draft_fn`) → Constrained to `author = "me"`
+    /// ("preview your own drafts").
+    struct OwnDraftsConstrained;
+
+    impl ReadHooks for OwnDraftsConstrained {
+        fn before_read(&self, _: &Hooks, _: &str, _: &str, _: Option<&str>) -> Result<()> {
+            Ok(())
+        }
+
+        fn after_read_one(&self, _: &AfterReadCtx, doc: Document) -> Document {
+            doc
+        }
+
+        fn check_access(&self, input: &AccessCheckInput<'_>) -> Result<AccessResult> {
+            match input.access.map(HookRef::reference) {
+                Some("draft_fn") => Ok(AccessResult::Constrained(vec![FilterClause::Single(
+                    Filter {
+                        field: "author".to_string(),
+                        op: FilterOp::Equals("me".to_string()),
+                    },
+                )])),
+                _ => Ok(AccessResult::Allowed),
+            }
+        }
+
+        fn field_read_denied(
+            &self,
+            _: &[FieldDefinition],
+            _: Option<&Document>,
+            _: Option<&str>,
+        ) -> Vec<FieldDenial> {
+            Vec::new()
+        }
+    }
+
+    /// THE constrained-draft leak (regression): when `access.draft` returns a row
+    /// FILTER (e.g. "preview your OWN drafts"), the draft snapshot returned by
+    /// `find_by_id(use_draft=true)` must still be bounded by that filter. The
+    /// snapshot early-return previously skipped the access constraints, so any
+    /// caller with a constrained draft rule could fetch ANY draft by id —
+    /// cross-owner unpublished disclosure on the public surface.
+    #[test]
+    fn constrained_draft_access_does_not_leak_other_owners_draft_snapshot() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY, title TEXT, author TEXT,
+                _status TEXT DEFAULT 'published', created_at TEXT, updated_at TEXT
+            );
+            CREATE TABLE _versions_posts (
+                id TEXT PRIMARY KEY, _parent TEXT, _version INTEGER,
+                _status TEXT, _latest INTEGER DEFAULT 0, snapshot TEXT
+            );
+            -- d1: another owner's never-published draft (content in the snapshot).
+            INSERT INTO posts (id, title, author, _status) VALUES ('d1', 'x', 'other', 'draft');
+            INSERT INTO _versions_posts (id, _parent, _version, _status, _latest, snapshot)
+                VALUES ('v1', 'd1', 1, 'draft', 1, '{\"title\":\"Others Secret\",\"author\":\"other\"}');
+            -- d2: the viewer's OWN draft.
+            INSERT INTO posts (id, title, author, _status) VALUES ('d2', 'x', 'me', 'draft');
+            INSERT INTO _versions_posts (id, _parent, _version, _status, _latest, snapshot)
+                VALUES ('v2', 'd2', 1, 'draft', 1, '{\"title\":\"My Secret\",\"author\":\"me\"}');",
+        )
+        .unwrap();
+
+        let mut def = CollectionDefinition::new("posts");
+        def.timestamps = true;
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text).build(),
+            FieldDefinition::builder("author", FieldType::Text).build(),
+        ];
+        def.versions = Some(VersionsConfig::new(true, 0));
+        def.access.read = Some(HookRef::new("read_fn"));
+        def.access.draft = Some(HookRef::new("draft_fn"));
+
+        let rh = OwnDraftsConstrained;
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .read_hooks(&rh)
+            .build();
+
+        // Another owner's draft must NOT leak, even with use_draft=true.
+        let leaked =
+            find_document_by_id(&ctx, &FindByIdInput::builder("d1").use_draft(true).build())
+                .unwrap();
+        assert!(
+            leaked.is_none(),
+            "constrained draft access must not surface another owner's draft snapshot"
+        );
+
+        // The viewer's OWN draft is still reachable — the constraint matches.
+        let own = find_document_by_id(&ctx, &FindByIdInput::builder("d2").use_draft(true).build())
+            .unwrap()
+            .expect("own draft must remain visible under a constrained draft rule");
+        assert_eq!(
+            own.fields.get("title").and_then(|v| v.as_str()),
+            Some("My Secret")
         );
     }
 }

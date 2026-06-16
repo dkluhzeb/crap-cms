@@ -468,18 +468,22 @@ pub fn parse_attributes(raw: &str) -> Result<Vec<Attr>> {
 /// (including their inner quoted strings). Returns the byte index of
 /// the closing quote, or `None` if unterminated.
 fn find_attr_value_quote(raw: &str, from: usize, q: u8) -> Option<usize> {
+    // Operate on raw bytes throughout: `i` advances by byte offsets that may land
+    // inside a multibyte UTF-8 char, so slicing `raw[i..]` (which requires a char
+    // boundary) would panic. Byte-slice prefix checks are valid at any index, and
+    // the `{{`/`}}`/quote markers we look for are all ASCII.
     let bytes = raw.as_bytes();
     let mut i = from;
     while i < bytes.len() {
-        if raw[i..].starts_with("{{") {
+        if bytes[i..].starts_with(b"{{") {
             // Skip a balanced handlebars region. Use brace-depth so a
             // bare `{{x}}` and a `{{#if x}}…{{/if}}` are both consumed.
             let mut depth = 0i32;
             while i < bytes.len() {
-                if raw[i..].starts_with("{{") {
+                if bytes[i..].starts_with(b"{{") {
                     depth += 1;
                     i += 2;
-                } else if raw[i..].starts_with("}}") {
+                } else if bytes[i..].starts_with(b"}}") {
                     depth -= 1;
                     i += 2;
                     if depth == 0 {
@@ -515,14 +519,16 @@ fn consume_hbs_block_attr(raw: &str, start: usize) -> Result<usize> {
                 "unterminated handlebars block in attribute list at byte {start}"
             ));
         }
-        if raw[i..].starts_with("{{#") || raw[i..].starts_with("{{^") {
+        // Byte-slice prefix checks: `i` advances by raw byte offsets (the `i += 1`
+        // below) that may land inside a multibyte char, so `raw[i..]` would panic.
+        if bytes[i..].starts_with(b"{{#") || bytes[i..].starts_with(b"{{^") {
             depth += 1;
             let close =
                 find_close(raw, i + 2, b"}}").ok_or_else(|| anyhow!("unterminated {{#...}}"))? + 2;
             i = close;
             continue;
         }
-        if raw[i..].starts_with("{{/") {
+        if bytes[i..].starts_with(b"{{/") {
             depth -= 1;
             let close =
                 find_close(raw, i + 2, b"}}").ok_or_else(|| anyhow!("unterminated {{/...}}"))? + 2;
@@ -532,7 +538,7 @@ fn consume_hbs_block_attr(raw: &str, start: usize) -> Result<usize> {
             }
             continue;
         }
-        if raw[i..].starts_with("{{") {
+        if bytes[i..].starts_with(b"{{") {
             let close =
                 find_close(raw, i + 2, b"}}").ok_or_else(|| anyhow!("unterminated {{...}}"))? + 2;
             i = close;
@@ -609,6 +615,20 @@ mod tests {
     fn triple_stash() {
         let toks = tokenize("{{{render}}}").unwrap();
         assert!(matches!(toks[0], Token::HbsExpr("{{{render}}}")));
+    }
+
+    /// Regression: attribute scanning advances by byte offsets, so multibyte
+    /// UTF-8 in an attribute value or a handlebars block attribute must not
+    /// panic on a non-char-boundary slice. (Found by the format proptest.)
+    #[test]
+    fn multibyte_attribute_content_does_not_panic() {
+        // Multibyte char inside a quoted attribute value (find_attr_value_quote).
+        let toks = tokenize("<a x=\"{᠃}\">b</a>").unwrap();
+        assert_eq!(names(&toks), ["Start", "Text", "End"]);
+
+        // Multibyte char inside a handlebars block attribute (consume_hbs_block_attr).
+        let toks = tokenize("<a {{#if ᠃}}x=\"1\"{{/if}}>b</a>").unwrap();
+        assert_eq!(names(&toks), ["Start", "Text", "End"]);
     }
 
     #[test]

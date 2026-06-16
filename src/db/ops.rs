@@ -9,6 +9,7 @@ use crate::core::{
 };
 use crate::db::{
     DbConnection, DbPool, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query,
+    query::filter::memory::matches_constraints,
 };
 
 /// Find documents (read-only, no transaction needed).
@@ -82,6 +83,11 @@ pub struct FindByIdFullParams<'a> {
     pub id: &'a str,
     pub locale_ctx: Option<&'a LocaleContext>,
     pub constraints: Option<Vec<FilterClause>>,
+    /// Row constraints that a returned draft *snapshot* must satisfy (the draft
+    /// view's filter for a live read, the trash view's filter for a trash read).
+    /// Matched in memory against the snapshot fields — the snapshot bypasses the
+    /// SQL `WHERE` path, so its access constraint must be enforced here.
+    pub snapshot_constraints: Vec<FilterClause>,
     pub use_draft: bool,
     pub include_deleted: bool,
 }
@@ -106,7 +112,15 @@ pub fn find_by_id_full(p: FindByIdFullParams<'_>) -> Result<Option<Document>> {
         && version.status == "draft"
         && let Some(doc) = document_from_snapshot(p.id, &version.snapshot)
     {
-        return Ok(Some(doc));
+        // SECURITY: the snapshot bypasses the SQL `WHERE` path, so the view's
+        // row constraint (e.g. a `draft = { author = me }` rule) must be enforced
+        // here against the snapshot fields. Without this, a caller with a
+        // *constrained* draft/trash rule could fetch ANY draft by id. A snapshot
+        // that fails the constraint falls through to the (constrained) main-row
+        // find below — which returns the published row or nothing.
+        if matches_constraints(&doc.fields, &p.snapshot_constraints) {
+            return Ok(Some(doc));
+        }
     }
 
     let mut doc = if let Some(constraint_filters) = p.constraints {

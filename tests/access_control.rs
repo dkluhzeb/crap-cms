@@ -3348,6 +3348,98 @@ return M
     assert!(!ok.docs.is_empty(), "admin sees version history");
 }
 
+/// Review finding: `restore` must respect the `access.versions` toggle — a user
+/// with `update` but denied version access cannot resurrect a historical
+/// snapshot's content into the live doc (the `versions` boundary covers
+/// historical content, not just its listing). Default-allow keeps restore
+/// working when `versions` is unset.
+#[test]
+fn restore_requires_version_access_not_just_update() {
+    let tmp = tempfile::tempdir().unwrap();
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("posts.lua"),
+        r#"
+crap.collections.define("posts", {
+    versions = { drafts = true },
+    fields = { { name = "title", type = "text" } },
+    access = {
+        read     = "hooks.gate.anyone",
+        update   = "hooks.gate.anyone",
+        versions = "hooks.gate.admins",
+    },
+})
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("gate.lua"),
+        r#"
+local M = {}
+function M.anyone(ctx) return true end
+function M.admins(ctx) return ctx.user ~= nil and ctx.user.role == "admin" end
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+
+    let def = registry.get_collection("posts").unwrap().clone();
+
+    // Seed a live doc and a (valid) version snapshot to restore.
+    let (doc_id, version_id) = {
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Live"));
+        let mut conn = db_pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
+        let version =
+            query::create_version(&tx, "posts", &doc.id, "draft", &json!({ "title": "Old" }))
+                .unwrap();
+        tx.commit().unwrap();
+        (doc.id.to_string(), version.id)
+    };
+
+    let lc = LocaleConfig::default();
+    let restore_as = |user: &Document| {
+        let ctx = ServiceContext::collection("posts", &def)
+            .pool(&db_pool)
+            .user(Some(user))
+            .runner(&runner)
+            .build();
+        restore_collection_version(&ctx, &doc_id, &version_id, &lc)
+    };
+
+    // Editor: update allowed, but versions denied → restore blocked.
+    let editor = make_user_doc("e1", "editor");
+    let err = restore_as(&editor).expect_err("versions-denied user must not restore");
+    assert!(
+        matches!(err, crap_cms::service::ServiceError::AccessDenied(_)),
+        "expected AccessDenied from the versions gate, got: {err:?}"
+    );
+
+    // Admin: passes the versions gate → restore succeeds.
+    let admin = make_user_doc("a1", "admin");
+    restore_as(&admin).expect("admin passes the versions gate and restores");
+}
+
 /// Follow-up: the dashboard's per-collection count and "last updated" must be
 /// access-scoped — they must never reveal drafts, trashed rows, or other-owner
 /// content the viewer cannot see. `collection_stats` drives both figures from

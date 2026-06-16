@@ -266,9 +266,10 @@ arrays/relationships to `[]`); there is no per-locale delete.
   history). A new **`access.versions`** rule gates whether history is visible at
   all — a toggle that, unlike `draft`/`trash`, does **not** fall back to
   `update`: unset means **allow**. It returns `true`/`false` (a filter table is a
-  configuration error). `restore` remains on `access.update`. **Action:** only if
-  you want history locked behind a stricter policy than reading the document —
-  set `access.versions`. The admin version sidebar degrades gracefully (no list
+  configuration error). `restore` requires **both** `access.update` and
+  `access.versions` (it resurrects historical content). **Action:** only if you
+  want history locked behind a stricter policy than reading the document — set
+  `access.versions`. The admin version sidebar degrades gracefully (no list
   rather than an error) for viewers who cannot see history.
 - **Reading drafts now requires edit-level access (`access.draft`).** Draft
   reads were gated by `access.read`, so any reader could pull unpublished

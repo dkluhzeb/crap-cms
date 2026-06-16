@@ -317,9 +317,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   history follows the read/draft composite by default. Set it to lock the
   timeline behind a stricter policy than reading the document. It returns
   `true`/`false`; a filter table is a configuration error (row-level scoping
-  belongs on `read`). Restoring a version remains a write gated by
-  `access.update`. The admin version sidebar degrades gracefully (a viewer who
-  cannot see history gets no version list rather than an error).
+  belongs on `read`). Restoring a version requires **both** `access.update` (it
+  writes the live document) and `access.versions` (it resurrects historical
+  content), so denying `versions` walls off historical content entirely. The
+  admin version sidebar degrades gracefully (a viewer who cannot see history
+  gets no version list rather than an error).
 
 - **Reading drafts now requires edit-level access (breaking).** Draft
   (unpublished) reads were gated by `access.read` — the same rule as published

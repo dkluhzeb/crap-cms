@@ -57,8 +57,10 @@ field-level `access` and global `access`.
 > composite of `read` (published snapshots) and `draft` (draft snapshots): a
 > reader without draft access sees only published snapshots. `versions` is a pure
 > toggle — return `true`/`false`; a filter table is a configuration error
-> (row-level scoping belongs on `read`). Restoring a version is a write, still
-> gated by `update`. Only relevant when `versions = true`.
+> (row-level scoping belongs on `read`). Restoring a version requires **both**
+> `update` (it writes the live document) **and** `versions` (it resurrects
+> historical content) — so denying `versions` walls off historical content
+> entirely, not just its listing. Only relevant when `versions = true`.
 
 ## Writing Access Functions
 

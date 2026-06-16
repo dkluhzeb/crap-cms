@@ -11,7 +11,10 @@ use crate::{
     core::{Document, DocumentFields, FieldDefinition, FieldType, event::EventOperation},
     db::{AccessResult, query, query::helpers::global_table},
     hooks::{AccessCheckInput, LuaCrudInfra, ValidationCtx},
-    service::{RunnerWriteHooks, ServiceContext, ServiceError, helpers},
+    service::{
+        RunnerWriteHooks, ServiceContext, ServiceError, helpers, hooks::WriteHooks,
+        versions::gate::versions_gate_decision,
+    },
 };
 
 /// Convert a snapshot JSON object into a `DocumentFields` suitable
@@ -203,6 +206,35 @@ fn restore_collection_version_conn(
     Ok(doc)
 }
 
+/// Enforce the `access.versions` toggle on restore. Resurrecting a historical
+/// snapshot into the live document is a read of version history, so a user
+/// denied version access cannot restore even a known `version_id` — the
+/// `versions` boundary covers historical *content*, not just its listing.
+/// Default-allow when the toggle is unset (no `update` fallback), so restore is
+/// unaffected unless `access.versions` is explicitly set.
+fn check_restore_versions_gate(
+    ctx: &ServiceContext,
+    write_hooks: &dyn WriteHooks,
+    id: Option<&str>,
+) -> Result<()> {
+    let Some(versions_ref) = ctx.versions_access_ref() else {
+        return Ok(());
+    };
+
+    let access = write_hooks.check_access(&AccessCheckInput {
+        access: Some(versions_ref),
+        user: ctx.user,
+        id,
+        data: None,
+        locale: None,
+        operation: "restore",
+        collection: ctx.slug,
+        ui_locale: None,
+    })?;
+
+    versions_gate_decision(&access, ctx.slug)
+}
+
 /// Core logic for collection version restore on an existing connection/transaction.
 pub(crate) fn restore_collection_version_core(
     ctx: &ServiceContext,
@@ -232,6 +264,9 @@ pub(crate) fn restore_collection_version_core(
 
     // Row-level enforcement for Constrained: target row must match the filters.
     helpers::enforce_access_constraints(ctx, document_id, &access, "Update", false)?;
+
+    // Restore also requires version-history access (default-allow).
+    check_restore_versions_gate(ctx, write_hooks, Some(document_id))?;
 
     let version = query::find_version_by_id(conn, ctx.slug, version_id)?
         .ok_or_else(|| ServiceError::NotFound(format!("Version '{version_id}' not found")))?;
@@ -351,6 +386,9 @@ pub(crate) fn restore_global_version_core(
             ctx.slug
         )));
     }
+
+    // Restore also requires version-history access (default-allow).
+    check_restore_versions_gate(ctx, write_hooks, None)?;
 
     let gtable = global_table(ctx.slug);
 

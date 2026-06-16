@@ -102,6 +102,15 @@ impl ViewScope {
         self.draft.is_some()
     }
 
+    /// The draft view's row constraints alone (without the `_status` guard) — the
+    /// filter a single draft row must satisfy to be visible. Empty when the draft
+    /// view is `Allowed` (unconstrained) or not visible. Used to bound a draft
+    /// *snapshot* returned by id, which is filtered in memory rather than by SQL.
+    #[must_use]
+    pub fn draft_filters(&self) -> &[FilterClause] {
+        self.draft.as_deref().unwrap_or(&[])
+    }
+
     /// Compile the scope into the filter clauses to AND into the query.
     ///
     /// - No visible view → a single match-nothing clause (`Or([])` → `1=0`).
