@@ -86,7 +86,8 @@ pub(in crate::admin::handlers::collections) fn render_form_with_error(
 
     let enrich_opts = EnrichOptions::builder(p.error_map)
         .filter_hidden(true)
-        .doc_id(p.doc_id);
+        .doc_id(p.doc_id)
+        .user(get_user_doc(p.auth_user));
 
     enrich_field_contexts(
         &mut fields,

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::{
     admin::AdminState,
-    core::Registry,
+    core::{Document, Registry},
     db::{DbConnection, query::LocaleContext},
 };
 
@@ -18,4 +18,6 @@ pub(in crate::admin::handlers::field_context) struct EnrichCtx<'a> {
     pub conn: &'a dyn DbConnection,
     pub reg: &'a Registry,
     pub rel_locale_ctx: Option<&'a LocaleContext>,
+    /// The viewer, so relationship/join/upload label reads are access-gated.
+    pub user: Option<&'a Document>,
 }

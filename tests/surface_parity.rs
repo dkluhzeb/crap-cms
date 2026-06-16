@@ -56,26 +56,16 @@ const FORBIDDEN_CALLS: &[&str] = &[
 /// Reviewed, intentional exceptions: `(path suffix, call form)`. Every entry is
 /// a read; a write must never be added here.
 const ALLOWLIST: &[(&str, &str)] = &[
-    // ── Relationship-population layer ───────────────────────────────────────
-    // Loads RELATED documents to render relationship-field picker labels and
-    // previews. This is population, not a primary document read: it is
-    // intentionally not per-collection access-gated (matches product
-    // behavior) and is strictly read-only.
+    // ── Field-context enrichment (relationship/join/upload display labels) ──
+    // The enrichment label reads are ACCESS-GATED here: `gated_find_by_id` /
+    // `gated_find` AND the target collection's published∪draft view filter
+    // (`resolve_view_scope`, downgraded to the viewer's access) into the query
+    // before reading — so a viewer never sees the label, id, or count of a
+    // target they cannot read. This is a deliberate lightweight gated read
+    // (labels only), kept out of the populating `service::find_documents` path.
     (
-        "admin/handlers/field_context/enrich/nested.rs",
-        "query::find_by_id(",
-    ),
-    (
-        "admin/handlers/field_context/enrich/types.rs",
-        "query::find_by_id(",
-    ),
-    (
-        "admin/handlers/field_context/enrich/types.rs",
+        "admin/handlers/field_context/enrich/gated.rs",
         "query::find(",
-    ),
-    (
-        "admin/handlers/field_context/enrich/enrichment.rs",
-        "query::find_by_id(",
     ),
     // Upload-field rendering resolves the referenced upload document directly.
     (
@@ -84,16 +74,6 @@ const ALLOWLIST: &[(&str, &str)] = &[
     ),
     // The `me` endpoint reads the authenticated user's own record.
     ("api/handlers/auth/me.rs", "query::find_by_id("),
-    // Versions-list page: raw read of the current document, used ONLY to
-    // derive the page-heading title (`title_field`). The version history
-    // itself is fetched through the service layer (`list_versions`). Traced:
-    // the bypass exposes only the title field (the display label) and shows
-    // the canonical/published title in the heading — not a read-stripping or
-    // draft leak. Kept as-is.
-    (
-        "admin/handlers/collections/item/versions/list.rs",
-        "ops::find_document_by_id(",
-    ),
 ];
 
 fn is_allowlisted(rel_path: &str, call: &str) -> bool {

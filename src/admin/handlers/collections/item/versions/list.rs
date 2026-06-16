@@ -20,8 +20,11 @@ use crate::{
         },
     },
     core::{AuthUser, Claims, CollectionDefinition, Document},
-    db::{ops, query::LocaleContext, query::PaginationResult},
-    service::{ListVersionsInput, RunnerReadHooks, ServiceContext, list_versions},
+    db::query::PaginationResult,
+    service::{
+        FindByIdInput, ListVersionsInput, RunnerReadHooks, ServiceContext, find_document_by_id,
+        list_versions,
+    },
 };
 
 /// Fetch the document title and paginated version list.
@@ -33,9 +36,20 @@ fn fetch_version_data(
     pg: &Pagination,
     user: Option<&Document>,
 ) -> Result<(String, Vec<Value>, PaginationResult), Box<Response>> {
-    let locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale).unwrap_or(None);
+    let Ok(conn) = state.pool.get() else {
+        return Err(Box::new(server_error(state, "Database error")));
+    };
 
-    let document = match ops::find_document_by_id(&state.pool, slug, def, id, locale_ctx.as_ref()) {
+    let hooks = RunnerReadHooks::new(&state.hook_runner, &conn, user, None);
+    let ctx = ServiceContext::collection(slug, def)
+        .conn(&conn)
+        .read_hooks(&hooks)
+        .user(user)
+        .build();
+
+    // Fetch the title through the ACCESS-GATED read — a viewer who cannot read
+    // the document must not learn its title/existence via the version page.
+    let document = match find_document_by_id(&ctx, &FindByIdInput::builder(id).build()) {
         Ok(Some(doc)) => doc,
         Ok(None) => {
             return Err(Box::new(not_found(
@@ -53,17 +67,6 @@ fn fetch_version_data(
         .title_field()
         .and_then(|f| document.get_str(f))
         .map_or_else(|| document.id.to_string(), std::string::ToString::to_string);
-
-    let Ok(conn) = state.pool.get() else {
-        return Err(Box::new(server_error(state, "Database error")));
-    };
-
-    let hooks = RunnerReadHooks::new(&state.hook_runner, &conn, user, None);
-    let ctx = ServiceContext::collection(slug, def)
-        .conn(&conn)
-        .read_hooks(&hooks)
-        .user(user)
-        .build();
 
     let input = ListVersionsInput::builder(id)
         .limit(Some(pg.per_page))

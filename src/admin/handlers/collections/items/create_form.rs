@@ -49,6 +49,7 @@ fn prepare_create_fields(
         &EnrichOptions::builder(&HashMap::new())
             .filter_hidden(true)
             .non_default_locale(non_default_locale)
+            .user(get_user_doc(auth_user))
             .build(),
     );
 

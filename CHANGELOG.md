@@ -235,6 +235,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **Access rules may only use equality and membership operators (breaking).**
+  A filter returned from an access function (`read`/`draft`/`trash`/`update`/…)
+  is now restricted to `equals`, `not_equals`, `in`, `not_in`, `exists`, and
+  `not_exists`. Pattern operators (`like`, `contains`) and ordered operators
+  (`greater_than`, `less_than`, `greater_than_or_equal`, `less_than_or_equal`)
+  are rejected with a hard error naming the operator. Every access constraint is
+  enforced on two paths — compiled to SQL for direct reads, and evaluated
+  in-memory for populated relationships/joins and live event streams — and
+  pattern/ordered matching can diverge between those paths (collation, `LIKE`
+  semantics, type affinity), with the unsafe default biasing toward showing the
+  row. Limiting access rules to equality and membership makes that divergence
+  unrepresentable; it costs no real expressiveness because access control is
+  identity/ownership/membership, which those operators express exactly (ranges,
+  prefixes, and substrings belong in *user* filters, which keep the full
+  algebra). An access rule that relied on `like`/ordered comparisons must be
+  re-modeled as an exact field match or a membership set — see
+  `docs/src/access-control/filter-constraints.md` for worked conversions. User
+  filters are unaffected.
+
 - **Relationship population now enforces the target collection's read
   access.** Populating a relationship/upload field at depth (`depth > 0`)
   fetched and embedded the target document while checking only the draft

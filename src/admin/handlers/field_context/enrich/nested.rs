@@ -17,14 +17,13 @@ use crate::{
         handlers::{
             field_context::{
                 MAX_FIELD_DEPTH, collect_node_attr_errors,
-                enrich::{SubFieldOpts, field_types},
+                enrich::{EnrichCtx, SubFieldOpts, field_types, gated_find_by_id},
                 safe_template_id,
             },
             shared::auto_label_from_name,
         },
     },
-    core::{FieldDefinition, FieldType, Registry, upload},
-    db::{DbConnection, LocaleContext, query},
+    core::{FieldDefinition, FieldType, upload},
 };
 
 /// Build the indexed form name for a sub-field within an array/blocks row.
@@ -253,58 +252,38 @@ pub fn build_enriched_sub_field_context(
 pub fn enrich_nested_fields(
     sub_fields: &mut [FieldContext],
     field_defs: &[FieldDefinition],
-    conn: &dyn DbConnection,
-    reg: &Registry,
-    rel_locale_ctx: Option<&LocaleContext>,
+    ctx: &EnrichCtx,
 ) {
     for (fc, field_def) in sub_fields.iter_mut().zip(field_defs.iter()) {
         match fc {
             FieldContext::Relationship(rf) => {
-                enrich_nested_relationship(rf, field_def, conn, reg, rel_locale_ctx);
+                enrich_nested_relationship(rf, field_def, ctx);
             }
             FieldContext::Upload(uf) => {
-                enrich_nested_upload(uf, field_def, conn, reg, rel_locale_ctx);
+                enrich_nested_upload(uf, field_def, ctx);
             }
             FieldContext::Row(rfld) => {
-                enrich_nested_fields(
-                    &mut rfld.sub_fields,
-                    &field_def.fields,
-                    conn,
-                    reg,
-                    rel_locale_ctx,
-                );
+                enrich_nested_fields(&mut rfld.sub_fields, &field_def.fields, ctx);
             }
             FieldContext::Collapsible(gf) | FieldContext::Group(gf) => {
-                enrich_nested_fields(
-                    &mut gf.sub_fields,
-                    &field_def.fields,
-                    conn,
-                    reg,
-                    rel_locale_ctx,
-                );
+                enrich_nested_fields(&mut gf.sub_fields, &field_def.fields, ctx);
             }
             FieldContext::Tabs(tf) => {
                 for (tab_panel, tab_def) in tf.tabs.iter_mut().zip(field_def.tabs.iter()) {
-                    enrich_nested_fields(
-                        &mut tab_panel.sub_fields,
-                        &tab_def.fields,
-                        conn,
-                        reg,
-                        rel_locale_ctx,
-                    );
+                    enrich_nested_fields(&mut tab_panel.sub_fields, &tab_def.fields, ctx);
                 }
             }
             FieldContext::Array(af) => {
-                enrich_nested_array(af, field_def, conn, reg, rel_locale_ctx);
+                enrich_nested_array(af, field_def, ctx);
             }
             FieldContext::Blocks(bf) => {
-                enrich_nested_blocks(bf, field_def, conn, reg, rel_locale_ctx);
+                enrich_nested_blocks(bf, field_def, ctx);
             }
             FieldContext::Richtext(rf) => {
                 // A richtext field inside a Group must get its custom-node
                 // enrichment too, exactly as one inside a Row/Tabs does —
                 // otherwise the group's editor is missing node definitions.
-                super::types::enrich_richtext(rf, reg);
+                super::types::enrich_richtext(rf, ctx.reg);
             }
             _ => {}
         }
@@ -314,9 +293,7 @@ pub fn enrich_nested_fields(
 fn enrich_nested_relationship(
     rf: &mut RelationshipField,
     field_def: &FieldDefinition,
-    conn: &dyn DbConnection,
-    reg: &Registry,
-    rel_locale_ctx: Option<&LocaleContext>,
+    ctx: &EnrichCtx,
 ) {
     let Some(ref rc) = field_def.relationship else {
         return;
@@ -327,7 +304,7 @@ fn enrich_nested_relationship(
         return;
     }
 
-    let Some(related_def) = reg.get_collection(&rc.collection) else {
+    let Some(related_def) = ctx.reg.get_collection(&rc.collection) else {
         return;
     };
     let title_field = related_def
@@ -340,17 +317,8 @@ fn enrich_nested_relationship(
         return;
     }
 
-    // Internal UI enrichment — direct query for display labels, not a user-facing read.
-    let item = query::find_by_id(
-        conn,
-        &rc.collection,
-        related_def,
-        current_value,
-        rel_locale_ctx,
-    )
-    .ok()
-    .flatten()
-    .map(|doc| {
+    // Access-gated: never label a nested relationship target the viewer can't read.
+    let item = gated_find_by_id(ctx, &rc.collection, related_def, current_value).map(|doc| {
         let label = title_field
             .as_ref()
             .and_then(|f| doc.get_str(f))
@@ -369,13 +337,7 @@ fn enrich_nested_relationship(
     });
 }
 
-fn enrich_nested_upload(
-    uf: &mut UploadField,
-    field_def: &FieldDefinition,
-    conn: &dyn DbConnection,
-    reg: &Registry,
-    rel_locale_ctx: Option<&LocaleContext>,
-) {
+fn enrich_nested_upload(uf: &mut UploadField, field_def: &FieldDefinition, ctx: &EnrichCtx) {
     let Some(ref rc) = field_def.relationship else {
         return;
     };
@@ -385,7 +347,7 @@ fn enrich_nested_upload(
         return;
     }
 
-    let Some(related_def) = reg.get_collection(&rc.collection) else {
+    let Some(related_def) = ctx.reg.get_collection(&rc.collection) else {
         return;
     };
 
@@ -404,16 +366,8 @@ fn enrich_nested_upload(
         return;
     }
 
-    // Internal UI enrichment — direct query for display labels, not a user-facing read.
-    let Some(mut doc) = query::find_by_id(
-        conn,
-        &rc.collection,
-        related_def,
-        current_value,
-        rel_locale_ctx,
-    )
-    .ok()
-    .flatten() else {
+    // Access-gated: never label a nested upload target the viewer cannot read.
+    let Some(mut doc) = gated_find_by_id(ctx, &rc.collection, related_def, current_value) else {
         uf.selected_items = Some(Vec::new());
         return;
     };
@@ -436,43 +390,19 @@ fn enrich_nested_upload(
     }
 }
 
-fn enrich_nested_array(
-    af: &mut ArrayField,
-    field_def: &FieldDefinition,
-    conn: &dyn DbConnection,
-    reg: &Registry,
-    rel_locale_ctx: Option<&LocaleContext>,
-) {
+fn enrich_nested_array(af: &mut ArrayField, field_def: &FieldDefinition, ctx: &EnrichCtx) {
     // Recurse into array rows' sub-fields
     if let Some(rows) = af.rows.as_mut() {
         for row in rows.iter_mut() {
-            enrich_nested_fields(
-                &mut row.sub_fields,
-                &field_def.fields,
-                conn,
-                reg,
-                rel_locale_ctx,
-            );
+            enrich_nested_fields(&mut row.sub_fields, &field_def.fields, ctx);
         }
     }
 
     // Enrich the <template> sub-fields so new rows added via JS have upload/relationship options
-    enrich_nested_fields(
-        &mut af.sub_fields,
-        &field_def.fields,
-        conn,
-        reg,
-        rel_locale_ctx,
-    );
+    enrich_nested_fields(&mut af.sub_fields, &field_def.fields, ctx);
 }
 
-fn enrich_nested_blocks(
-    bf: &mut BlocksField,
-    field_def: &FieldDefinition,
-    conn: &dyn DbConnection,
-    reg: &Registry,
-    rel_locale_ctx: Option<&LocaleContext>,
-) {
+fn enrich_nested_blocks(bf: &mut BlocksField, field_def: &FieldDefinition, ctx: &EnrichCtx) {
     // Recurse into block rows' sub-fields, matching each row's block type
     if let Some(rows) = bf.rows.as_mut() {
         for row in rows.iter_mut() {
@@ -481,26 +411,14 @@ fn enrich_nested_blocks(
                 .iter()
                 .find(|bd| bd.block_type == row.block_type)
             {
-                enrich_nested_fields(
-                    &mut row.sub_fields,
-                    &block_def.fields,
-                    conn,
-                    reg,
-                    rel_locale_ctx,
-                );
+                enrich_nested_fields(&mut row.sub_fields, &block_def.fields, ctx);
             }
         }
     }
 
     // Enrich block definition templates so new block rows have upload/relationship options
     for (def_ctx, block_def) in bf.block_definitions.iter_mut().zip(field_def.blocks.iter()) {
-        enrich_nested_fields(
-            &mut def_ctx.fields,
-            &block_def.fields,
-            conn,
-            reg,
-            rel_locale_ctx,
-        );
+        enrich_nested_fields(&mut def_ctx.fields, &block_def.fields, ctx);
     }
 }
 

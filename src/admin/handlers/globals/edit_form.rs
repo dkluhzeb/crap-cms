@@ -104,6 +104,7 @@ fn prepare_edit_fields(
         state,
         &EnrichOptions::builder(&HashMap::new())
             .non_default_locale(non_default_locale)
+            .user(get_user_doc(auth_user))
             .build(),
     );
 

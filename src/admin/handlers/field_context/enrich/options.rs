@@ -2,12 +2,17 @@
 
 use std::collections::HashMap;
 
+use crate::core::Document;
+
 /// Bundled parameters for `enrich_field_contexts` to avoid too many arguments.
 pub struct EnrichOptions<'a> {
     pub filter_hidden: bool,
     pub non_default_locale: bool,
     pub errors: &'a HashMap<String, String>,
     pub doc_id: Option<&'a str>,
+    /// The viewer, so relationship/join/upload label reads are access-gated
+    /// (a viewer must not learn the title/existence of targets they can't read).
+    pub user: Option<&'a Document>,
 }
 
 impl<'a> EnrichOptions<'a> {
@@ -22,6 +27,7 @@ pub struct EnrichOptionsBuilder<'a> {
     non_default_locale: bool,
     errors: &'a HashMap<String, String>,
     doc_id: Option<&'a str>,
+    user: Option<&'a Document>,
 }
 
 impl<'a> EnrichOptionsBuilder<'a> {
@@ -31,7 +37,14 @@ impl<'a> EnrichOptionsBuilder<'a> {
             non_default_locale: false,
             errors,
             doc_id: None,
+            user: None,
         }
+    }
+
+    /// The viewer, for access-gating label reads.
+    pub fn user(mut self, v: Option<&'a Document>) -> Self {
+        self.user = v;
+        self
     }
 
     pub fn filter_hidden(mut self, v: bool) -> Self {
@@ -57,6 +70,7 @@ impl<'a> EnrichOptionsBuilder<'a> {
             non_default_locale: self.non_default_locale,
             errors: self.errors,
             doc_id: self.doc_id,
+            user: self.user,
         }
     }
 }

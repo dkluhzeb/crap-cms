@@ -8,11 +8,13 @@ use crate::{
         context::field::{FieldContext, RelationshipSelectedItem, TabsField},
         handlers::field_context::{
             builder::visible_field_defs,
-            enrich::{EnrichCtx, EnrichOptions, nested::enrich_nested_fields, types},
+            enrich::{
+                EnrichCtx, EnrichOptions, gated_find_by_id, nested::enrich_nested_fields, types,
+            },
         },
     },
-    core::{DocumentFields, FieldDefinition, Registry, RelationshipConfig},
-    db::{DbConnection, LocaleContext, query},
+    core::{DocumentFields, FieldDefinition, RelationshipConfig},
+    db::{DbConnection, LocaleContext},
 };
 
 /// Parse a "collection/id" composite string into a (collection, id) pair.
@@ -52,19 +54,15 @@ fn extract_polymorphic_refs(
 fn resolve_polymorphic_ref(
     col: &str,
     id: &str,
-    reg: &Registry,
-    conn: &dyn DbConnection,
-    locale_ctx: Option<&LocaleContext>,
+    ctx: &EnrichCtx,
 ) -> Option<RelationshipSelectedItem> {
-    let related_def = reg.get_collection(col)?;
+    let related_def = ctx.reg.get_collection(col)?;
     let title_field = related_def
         .title_field()
         .map(std::string::ToString::to_string);
 
-    // Internal UI enrichment — direct query for display labels, not a user-facing read.
-    let doc = query::find_by_id(conn, col, related_def, id, locale_ctx)
-        .ok()
-        .flatten()?;
+    // Access-gated: never label a polymorphic target the viewer cannot read.
+    let doc = gated_find_by_id(ctx, col, related_def, id)?;
 
     let label = title_field
         .as_ref()
@@ -88,14 +86,12 @@ pub fn enrich_polymorphic_selected(
     rc: &RelationshipConfig,
     field_name: &str,
     doc_fields: &DocumentFields,
-    reg: &Registry,
-    conn: &dyn DbConnection,
-    locale_ctx: Option<&LocaleContext>,
+    ctx: &EnrichCtx,
 ) -> Vec<RelationshipSelectedItem> {
     let refs = extract_polymorphic_refs(doc_fields, field_name, rc.has_many);
 
     refs.iter()
-        .filter_map(|(col, id)| resolve_polymorphic_ref(col, id, reg, conn, locale_ctx))
+        .filter_map(|(col, id)| resolve_polymorphic_ref(col, id, ctx))
         .collect()
 }
 
@@ -107,16 +103,14 @@ fn enrich_single_field(
     opts: &EnrichOptions,
     enrich_ctx: &EnrichCtx,
 ) {
-    let conn = enrich_ctx.conn;
     let reg = enrich_ctx.reg;
-    let rel_locale_ctx = enrich_ctx.rel_locale_ctx;
 
     match fc {
         FieldContext::Relationship(rf) => {
-            types::enrich_relationship(rf, field_def, doc_fields, conn, reg, rel_locale_ctx);
+            types::enrich_relationship(rf, field_def, doc_fields, enrich_ctx);
         }
         FieldContext::Upload(uf) => {
-            types::enrich_upload(uf, field_def, doc_fields, conn, reg, rel_locale_ctx);
+            types::enrich_upload(uf, field_def, doc_fields, enrich_ctx);
         }
         FieldContext::Array(af) => {
             types::enrich_array(af, field_def, doc_fields, enrich_ctx);
@@ -143,19 +137,13 @@ fn enrich_single_field(
             );
         }
         FieldContext::Group(gf) => {
-            enrich_nested_fields(
-                &mut gf.sub_fields,
-                &field_def.fields,
-                conn,
-                reg,
-                rel_locale_ctx,
-            );
+            enrich_nested_fields(&mut gf.sub_fields, &field_def.fields, enrich_ctx);
         }
         FieldContext::Tabs(tf) => {
             enrich_tabs(tf, field_def, doc_fields, opts, enrich_ctx);
         }
         FieldContext::Join(jf) => {
-            types::enrich_join(jf, field_def, conn, reg, rel_locale_ctx, opts.doc_id);
+            types::enrich_join(jf, field_def, enrich_ctx, opts.doc_id);
         }
         FieldContext::Richtext(rf) => {
             types::enrich_richtext(rf, reg);
@@ -233,6 +221,7 @@ pub fn enrich_field_contexts(
         conn: &conn as &dyn DbConnection,
         reg,
         rel_locale_ctx: rel_locale_ctx.as_ref(),
+        user: opts.user,
     };
 
     // Filter the top-level defs through the SAME single source of truth as

@@ -105,7 +105,9 @@ fn render_validation_error(
         &def.fields,
         &doc_fields,
         state,
-        &EnrichOptions::builder(&error_map).build(),
+        &EnrichOptions::builder(&error_map)
+            .user(get_user_doc(auth_user))
+            .build(),
     );
 
     let form_data_json = json!(doc_fields);

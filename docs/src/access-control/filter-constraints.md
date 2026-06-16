@@ -26,11 +26,91 @@ return { category = "news" }
 -- Operator-based filter
 return { category = { not_equals = "archived" } }
 
+-- Membership in a set
+return { dept = { ["in"] = { "eng", "design" } } }
+
 -- Multiple constraints (AND)
 return {
     category = "news",
     department = ctx.user.department,
 }
+```
+
+## Allowed Operators — Equality and Membership Only
+
+Access constraints may only use **equality** and **membership** operators:
+
+| Operator | Meaning |
+| --- | --- |
+| `equals` (bare value) | field equals value |
+| `not_equals` | field differs from value |
+| `in` | field is one of a set |
+| `not_in` | field is none of a set |
+| `exists` | field is present (non-null) |
+| `not_exists` | field is absent (null) |
+
+Pattern operators (`like`, `contains`) and ordered operators (`greater_than`,
+`less_than`, `greater_than_or_equal`, `less_than_or_equal`) are **rejected** in
+an access rule — returning one is a configuration error that fails the request
+with a clear message naming the operator.
+
+**Why the restriction?** Every access constraint is enforced on two paths: it
+compiles to a SQL `WHERE` clause for direct reads, *and* it is evaluated
+in-memory for surfaces that can't hit the database (live event streams,
+relationship/join population — see *Where constraints are evaluated* below).
+Pattern and ordered matching can diverge between those paths (collation, `LIKE`
+semantics, numeric vs text affinity), and the safe default on divergence is to
+*show* the row — i.e. a leak. Restricting access rules to equality and
+membership makes that divergence impossible by construction.
+
+You lose nothing real. Access control is fundamentally about **identity,
+ownership, and membership** — "is this row *mine* / my *tenant's* / in my
+*set*?" — which equality and membership express exactly. Value-querying (ranges,
+prefixes, substrings) is a property of a *user query*, where the full operator
+set is still available; it just doesn't belong in the rule that decides *who may
+see what*.
+
+### Re-modeling the value-based patterns
+
+If you reach for `like` or an ordered comparison in an access rule, there is
+almost always a cleaner, exact model:
+
+```lua
+-- ❌ Time-window via ordered comparison — diverges, and recomputes `now()`
+function M.recent_only(ctx)
+    local cutoff = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time() - 30 * 24 * 3600)
+    return { created_at = { greater_than = cutoff } }  -- rejected
+end
+-- ✅ A time window is a *system* concern. Gate it with a published/draft
+--    view or a dedicated capability rather than an ad-hoc range in the rule.
+
+-- ❌ Clearance via ordered comparison
+function M.clearance(ctx)
+    return { level = { less_than_or_equal = ctx.user.clearance } }  -- rejected
+end
+-- ✅ Clearance levels are a small discrete set — that is membership:
+function M.clearance(ctx)
+    return { level = { ["in"] = levels_up_to(ctx.user.clearance) } }  -- {1,2,3}
+end
+
+-- ❌ Tenant-by-domain via suffix match (also a fragile string parse)
+function M.same_domain(ctx)
+    local domain = ctx.user.email:match("@(.+)$")
+    return { email = { like = "%@" .. domain } }  -- rejected
+end
+-- ✅ Store the domain as a field and match it exactly:
+function M.same_domain(ctx)
+    return { tenant_domain = ctx.user.tenant_domain }
+end
+
+-- ❌ Department-tree via path prefix
+function M.dept_tree(ctx)
+    return { path = { like = ctx.user.dept_prefix .. "%" } }  -- rejected
+end
+-- ✅ Model the hierarchy as an ancestor/department field and use membership:
+function M.dept_tree(ctx)
+    return { dept = { ["in"] = ctx.user.dept_and_children } }
+end
 ```
 
 > **Constrain by your own fields, never by status or lifecycle.** Filter
@@ -54,11 +134,12 @@ This means constraints can only **narrow** results, never expand them.
 > **Where constraints are evaluated.** On a direct `Find`/`count`, constraints
 > compile to SQL `WHERE` clauses. When the same collection is reached as a
 > *populated* relationship or join target — or gated on a live event stream —
-> its constraints are instead matched **in memory** against the row. The two
-> agree exactly for equality/membership/presence on your own fields
-> (`{ author = ctx.user.id }`, `{ tenant_id = ... }`); only *ordered* comparisons
-> (`>`/`<`) on text columns can differ. Keep access constraints to simple field
-> equality — the recommended shape anyway.
+> its constraints are instead matched **in memory** against the row. Because the
+> [allowed operators](#allowed-operators--equality-and-membership-only) are
+> limited to equality and membership, the two paths agree exactly — by
+> construction. That is the whole reason pattern and ordered operators are
+> rejected: they are the operators whose SQL and in-memory results could
+> diverge.
 
 ## Example: Multi-Tenant Access
 

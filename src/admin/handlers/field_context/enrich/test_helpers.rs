@@ -88,6 +88,9 @@ pub(super) fn enrich_field_contexts_values(
 }
 
 /// Test wrapper for [`super::enrich_nested_fields`] taking `&mut Vec<Value>`.
+/// Builds a minimal [`EnrichCtx`] (no viewer → the `test_default` state's
+/// `default_deny = false` means a collection with no access rule stays visible,
+/// preserving these label-presence assertions).
 pub(super) fn enrich_nested_fields_values(
     sub_fields: &mut Vec<Value>,
     field_defs: &[FieldDefinition],
@@ -99,7 +102,20 @@ pub(super) fn enrich_nested_fields_values(
         .iter()
         .map(|v| serde_json::from_value(v.clone()).expect("test sub-field must deserialize"))
         .collect();
-    super::enrich_nested_fields(&mut typed, field_defs, conn, reg, rel_locale_ctx);
+
+    let state = make_test_state();
+    let errors = HashMap::new();
+    let ctx = enrich::EnrichCtx {
+        state: &state,
+        non_default_locale: false,
+        errors: &errors,
+        conn,
+        reg,
+        rel_locale_ctx,
+        user: None,
+    };
+
+    super::enrich_nested_fields(&mut typed, field_defs, &ctx);
     *sub_fields = typed.into_iter().map(|fc| fc.to_value()).collect();
 }
 
@@ -112,13 +128,22 @@ pub(super) fn enrich_richtext_value(ctx: &mut Value, reg: &Registry) {
 }
 
 /// Build a minimal [`AdminState`] backed by an in-memory `SQLite` pool. Used by
-/// tests that exercise DB-touching enrichment paths.
+/// tests that exercise DB-touching enrichment paths. `default_deny = false`: a
+/// collection with no access rule stays readable, so enrichment label-presence
+/// tests (no access configured) behave as before.
 pub(super) fn make_test_state() -> AdminState {
+    make_test_state_with_deny(false)
+}
+
+/// Like [`make_test_state`] but with a configurable `access.default_deny`, so a
+/// test can exercise the access-gated label reads (deny → labels filtered out).
+pub(super) fn make_test_state_with_deny(default_deny: bool) -> AdminState {
     let tmp = tempfile::tempdir().unwrap();
     let manager = SqliteConnectionManager::memory();
     let pool = DbPool::from_pool(r2d2::Pool::builder().max_size(4).build(manager).unwrap());
     let registry: Arc<Registry> = Arc::new(Registry::default());
-    let config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
+    config.access.default_deny = default_deny;
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
         .registry(Arc::clone(&registry))

@@ -28,7 +28,7 @@
 //! the fresh per-call singleflight created by `populate_relationships_*`.
 
 use crate::{
-    db::{Filter, FilterClause},
+    db::{Filter, FilterClause, FilterOp},
     service::ServiceError,
 };
 
@@ -91,11 +91,30 @@ fn check_single_filter(filter: &Filter) -> Result<(), ServiceError> {
 ///   column name (e.g. `_password_hash` instead of `password_hash_status`)
 ///   would otherwise silently break the query or leak data.
 ///
+/// ## Operator allowlist — equality and membership only
+///
+/// Access rules may only use `equals` / `not_equals` / `in` / `not_in` /
+/// `exists` / `not_exists`. Pattern operators (`like`, `contains`) and ordered
+/// operators (`greater_than`, `less_than`, `greater_than_or_equal`,
+/// `less_than_or_equal`) are **rejected**.
+///
+/// The reason is the dual evaluation path: every access constraint is both
+/// compiled to a SQL `WHERE` clause *and* evaluated in-memory (live event
+/// streams, relationship/join population) — and pattern/ordered matching can
+/// diverge between SQL and in-memory (collation, `LIKE` semantics, type
+/// affinity), with the default bias toward leaking. Restricting access rules to
+/// equality + membership makes that divergence unrepresentable by construction.
+/// It loses no real expressiveness: access control is fundamentally identity /
+/// ownership / membership ("is this row *yours* / your *tenant's* / in your
+/// *set*"), which equality + membership express exactly. Value-querying (ranges,
+/// prefixes, substrings) belongs in *user* filters, which keep the full algebra.
+/// See `docs/src/access-control/filter-constraints.md` for worked examples.
+///
 /// # Errors
 ///
-/// Returns `HookError` for the first filter targeting a system column outside
-/// the allowed exceptions (`_deleted_at` in trash mode, `_status` when
-/// injecting status).
+/// Returns `HookError` for the first filter that either (a) targets a system
+/// column outside the allowed exceptions (`_deleted_at` in trash mode,
+/// `_status` when injecting status), or (b) uses a pattern/ordered operator.
 pub fn validate_access_constraints(
     filters: &[FilterClause],
     trash: bool,
@@ -123,13 +142,16 @@ fn walk_access_filter(
     }
 }
 
-/// Check a single access-hook filter against the constrained system-column rule.
+/// Check a single access-hook filter against the constrained system-column rule
+/// and the equality/membership operator allowlist.
 fn check_access_filter(
     filter: &Filter,
     trash: bool,
     injecting_status: bool,
     slug: &str,
 ) -> Result<(), ServiceError> {
+    check_access_operator(filter, slug)?;
+
     let field = &filter.field;
     let first = field.split('.').next().unwrap_or(field);
 
@@ -147,6 +169,33 @@ fn check_access_filter(
 
     Err(ServiceError::HookError(format!(
         "Access hook for '{slug}' returned a filter on system column '{field}' — this is almost always a typo; use a non-system column or remove the constraint."
+    )))
+}
+
+/// Reject pattern (`like` / `contains`) and ordered (`greater_than` etc.)
+/// operators in an access constraint. Access rules may only use equality and
+/// membership; see [`validate_access_constraints`] for the rationale (the dual
+/// SQL / in-memory evaluation path can diverge for these operators and bias
+/// toward leaking).
+fn check_access_operator(filter: &Filter, slug: &str) -> Result<(), ServiceError> {
+    let disallowed = match &filter.op {
+        FilterOp::Like(_) => "like",
+        FilterOp::Contains(_) => "contains",
+        FilterOp::GreaterThan(_) => "greater_than",
+        FilterOp::LessThan(_) => "less_than",
+        FilterOp::GreaterThanOrEqual(_) => "greater_than_or_equal",
+        FilterOp::LessThanOrEqual(_) => "less_than_or_equal",
+        FilterOp::Equals(_)
+        | FilterOp::NotEquals(_)
+        | FilterOp::In(_)
+        | FilterOp::NotIn(_)
+        | FilterOp::Exists
+        | FilterOp::NotExists => return Ok(()),
+    };
+
+    let field = &filter.field;
+    Err(ServiceError::HookError(format!(
+        "Access hook for '{slug}' used the '{disallowed}' operator on '{field}', but access rules may only use equality and membership operators (equals, not_equals, in, not_in, exists, not_exists). Pattern and ordered operators evaluate differently across SQL and in-memory enforcement and could leak — model the constraint as an exact field match or a membership set instead."
     )))
 }
 
@@ -278,6 +327,100 @@ mod tests {
         assert!(msg.contains("_ref_count"), "error: {msg}");
         assert!(msg.contains("system column"), "error: {msg}");
         assert!(msg.contains("typo"), "error: {msg}");
+    }
+
+    // ── operator allowlist (equality + membership only) ────────────────
+
+    fn single_op(field: &str, op: FilterOp) -> FilterClause {
+        FilterClause::Single(Filter {
+            field: field.to_string(),
+            op,
+        })
+    }
+
+    /// Equality and membership operators are the allowed set for access rules.
+    #[test]
+    fn validates_access_constraints_allows_equality_and_membership_ops() {
+        let ok = vec![
+            single_op("author_id", FilterOp::Equals("u1".into())),
+            single_op("author_id", FilterOp::NotEquals("u1".into())),
+            single_op("dept", FilterOp::In(vec!["a".into(), "b".into()])),
+            single_op("dept", FilterOp::NotIn(vec!["a".into()])),
+            single_op("deleted_marker", FilterOp::Exists),
+            single_op("deleted_marker", FilterOp::NotExists),
+        ];
+        for f in ok {
+            assert!(
+                validate_access_constraints(&[f], false, false, "posts").is_ok(),
+                "equality/membership operator must be allowed in an access rule"
+            );
+        }
+    }
+
+    /// Pattern and ordered operators are rejected: their SQL vs in-memory
+    /// evaluation can diverge and bias toward leaking. Regression for the
+    /// strict access-operator allowlist.
+    #[test]
+    fn validates_access_constraints_rejects_pattern_and_ordered_ops() {
+        let bad = [
+            ("like", single_op("path", FilterOp::Like("eng/%".into()))),
+            (
+                "contains",
+                single_op("tags", FilterOp::Contains("x".into())),
+            ),
+            (
+                "greater_than",
+                single_op("created_at", FilterOp::GreaterThan("0".into())),
+            ),
+            (
+                "less_than",
+                single_op("price", FilterOp::LessThan("9".into())),
+            ),
+            (
+                "greater_than_or_equal",
+                single_op("level", FilterOp::GreaterThanOrEqual("3".into())),
+            ),
+            (
+                "less_than_or_equal",
+                single_op("level", FilterOp::LessThanOrEqual("3".into())),
+            ),
+        ];
+        for (name, f) in bad {
+            let err = validate_access_constraints(&[f], false, false, "posts").unwrap_err();
+            let msg = err.to_string();
+            assert!(matches!(err, ServiceError::HookError(_)));
+            assert!(
+                msg.contains(name),
+                "error should name the '{name}' operator: {msg}"
+            );
+            assert!(msg.contains("posts"), "error should name the slug: {msg}");
+        }
+    }
+
+    /// The operator allowlist is enforced even on a system column whose name
+    /// would otherwise be allowed — the operator is checked first.
+    #[test]
+    fn validates_access_constraints_rejects_ordered_op_on_allowed_system_column() {
+        let filters = vec![single_op("_status", FilterOp::GreaterThan("draft".into()))];
+        let err = validate_access_constraints(&filters, false, true, "posts").unwrap_err();
+        assert!(err.to_string().contains("greater_than"));
+    }
+
+    /// The allowlist is walked into OR/AND groups, not just top-level leaves.
+    #[test]
+    fn validates_access_constraints_rejects_pattern_op_inside_or_group() {
+        let filters = vec![FilterClause::or_groups(vec![
+            vec![Filter {
+                field: "author_id".to_string(),
+                op: FilterOp::Equals("u1".to_string()),
+            }],
+            vec![Filter {
+                field: "path".to_string(),
+                op: FilterOp::Like("eng/%".to_string()),
+            }],
+        ])];
+        let err = validate_access_constraints(&filters, false, false, "posts").unwrap_err();
+        assert!(err.to_string().contains("like"));
     }
 
     /// OR groups are walked just like in `validate_user_filters`.

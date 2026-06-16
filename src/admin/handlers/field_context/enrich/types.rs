@@ -16,7 +16,8 @@ use crate::{
             field_context::{
                 enrich::{
                     EnrichCtx, SubFieldOpts, build_enriched_sub_field_context,
-                    enrich_nested_fields, enrich_polymorphic_selected,
+                    enrich_nested_fields, enrich_polymorphic_selected, gated_find,
+                    gated_find_by_id,
                 },
                 inject_lang_values_from_row, inject_timezone_values_from_row,
             },
@@ -27,7 +28,7 @@ use crate::{
         BlockDefinition, CollectionDefinition, Document, DocumentFields, FieldDefinition,
         FieldType, Registry, to_title_case, upload,
     },
-    db::{DbConnection, LocaleContext, query},
+    db::{Filter, FilterClause, FilterOp},
 };
 
 /// Extract selected IDs from a has-many field value.
@@ -85,14 +86,11 @@ fn resolve_has_many_items(
     collection: &str,
     related_def: &CollectionDefinition,
     title_field: Option<&String>,
-    conn: &dyn DbConnection,
-    rel_locale_ctx: Option<&LocaleContext>,
+    ctx: &EnrichCtx,
 ) -> Vec<RelationshipSelectedItem> {
     ids.iter()
         .filter_map(|id| {
-            query::find_by_id(conn, collection, related_def, id, rel_locale_ctx)
-                .ok()
-                .flatten()
+            gated_find_by_id(ctx, collection, related_def, id)
                 .map(|doc| doc_to_label_item(&doc, title_field))
         })
         .collect()
@@ -106,16 +104,13 @@ fn resolve_has_one_item(
     collection: &str,
     related_def: &CollectionDefinition,
     title_field: Option<&String>,
-    conn: &dyn DbConnection,
-    rel_locale_ctx: Option<&LocaleContext>,
+    ctx: &EnrichCtx,
 ) -> Vec<RelationshipSelectedItem> {
     if current_value.is_empty() {
         return Vec::new();
     }
 
-    query::find_by_id(conn, collection, related_def, current_value, rel_locale_ctx)
-        .ok()
-        .flatten()
+    gated_find_by_id(ctx, collection, related_def, current_value)
         .map(|doc| vec![doc_to_label_item(&doc, title_field)])
         .unwrap_or_default()
 }
@@ -125,9 +120,7 @@ pub(super) fn enrich_relationship(
     rf: &mut RelationshipField,
     field_def: &FieldDefinition,
     doc_fields: &DocumentFields,
-    conn: &dyn DbConnection,
-    reg: &Registry,
-    rel_locale_ctx: Option<&LocaleContext>,
+    ctx: &EnrichCtx,
 ) {
     let Some(ref rc) = field_def.relationship else {
         return;
@@ -138,14 +131,12 @@ pub(super) fn enrich_relationship(
             rc,
             &field_def.name,
             doc_fields,
-            reg,
-            conn,
-            rel_locale_ctx,
+            ctx,
         ));
         return;
     }
 
-    let Some(related_def) = reg.get_collection(&rc.collection) else {
+    let Some(related_def) = ctx.reg.get_collection(&rc.collection) else {
         return;
     };
 
@@ -155,14 +146,7 @@ pub(super) fn enrich_relationship(
 
     let items = if rc.has_many {
         let ids = extract_selected_ids(doc_fields, &field_def.name);
-        resolve_has_many_items(
-            &ids,
-            &rc.collection,
-            related_def,
-            title_field.as_ref(),
-            conn,
-            rel_locale_ctx,
-        )
+        resolve_has_many_items(&ids, &rc.collection, related_def, title_field.as_ref(), ctx)
     } else {
         // has_one expects a single string id. If the stored value is an
         // array (e.g. `has_many` flipped to `has_one` without a backfill),
@@ -180,8 +164,7 @@ pub(super) fn enrich_relationship(
             &rc.collection,
             related_def,
             title_field.as_ref(),
-            conn,
-            rel_locale_ctx,
+            ctx,
         )
     };
 
@@ -285,22 +268,10 @@ pub(super) fn enrich_array(
     // Recurse into row sub_fields and template sub_fields for nested enrichment.
     if let Some(rows) = af.rows.as_mut() {
         for row in rows.iter_mut() {
-            enrich_nested_fields(
-                &mut row.sub_fields,
-                &field_def.fields,
-                enrich.conn,
-                enrich.reg,
-                enrich.rel_locale_ctx,
-            );
+            enrich_nested_fields(&mut row.sub_fields, &field_def.fields, enrich);
         }
     }
-    enrich_nested_fields(
-        &mut af.sub_fields,
-        &field_def.fields,
-        enrich.conn,
-        enrich.reg,
-        enrich.rel_locale_ctx,
-    );
+    enrich_nested_fields(&mut af.sub_fields, &field_def.fields, enrich);
 }
 
 /// Assemble sizes and build a typed upload item for a document.
@@ -329,17 +300,13 @@ fn resolve_upload_has_many(
     related_def: &CollectionDefinition,
     title_field: Option<&String>,
     admin_thumbnail: Option<&String>,
-    conn: &dyn DbConnection,
-    rel_locale_ctx: Option<&LocaleContext>,
+    ctx: &EnrichCtx,
 ) -> Vec<RelationshipSelectedItem> {
     ids.iter()
         .filter_map(|id| {
-            query::find_by_id(conn, collection, related_def, id, rel_locale_ctx)
-                .ok()
-                .flatten()
-                .map(|doc| {
-                    prepare_upload_doc(doc, related_def, title_field, admin_thumbnail, false)
-                })
+            gated_find_by_id(ctx, collection, related_def, id).map(|doc| {
+                prepare_upload_doc(doc, related_def, title_field, admin_thumbnail, false)
+            })
         })
         .collect()
 }
@@ -353,8 +320,7 @@ fn resolve_upload_has_one(
     related_def: &CollectionDefinition,
     title_field: Option<&String>,
     admin_thumbnail: Option<&String>,
-    conn: &dyn DbConnection,
-    rel_locale_ctx: Option<&LocaleContext>,
+    ctx: &EnrichCtx,
 ) {
     let current_value = uf.base.value.as_str().unwrap_or("");
 
@@ -363,10 +329,7 @@ fn resolve_upload_has_one(
         return;
     }
 
-    let Some(doc) = query::find_by_id(conn, collection, related_def, current_value, rel_locale_ctx)
-        .ok()
-        .flatten()
-    else {
+    let Some(doc) = gated_find_by_id(ctx, collection, related_def, current_value) else {
         uf.selected_items = Some(Vec::new());
         return;
     };
@@ -388,14 +351,12 @@ pub(super) fn enrich_upload(
     uf: &mut UploadField,
     field_def: &FieldDefinition,
     doc_fields: &DocumentFields,
-    conn: &dyn DbConnection,
-    reg: &Registry,
-    rel_locale_ctx: Option<&LocaleContext>,
+    ctx: &EnrichCtx,
 ) {
     let Some(ref rc) = field_def.relationship else {
         return;
     };
-    let Some(related_def) = reg.get_collection(&rc.collection) else {
+    let Some(related_def) = ctx.reg.get_collection(&rc.collection) else {
         return;
     };
 
@@ -415,8 +376,7 @@ pub(super) fn enrich_upload(
             related_def,
             title_field.as_ref(),
             admin_thumbnail.as_ref(),
-            conn,
-            rel_locale_ctx,
+            ctx,
         );
         uf.selected_items = Some(items);
     } else {
@@ -426,8 +386,7 @@ pub(super) fn enrich_upload(
             related_def,
             title_field.as_ref(),
             admin_thumbnail.as_ref(),
-            conn,
-            rel_locale_ctx,
+            ctx,
         );
     }
 }
@@ -579,26 +538,14 @@ pub(super) fn enrich_blocks(
                 .iter()
                 .find(|bd| bd.block_type == row.block_type)
             {
-                enrich_nested_fields(
-                    &mut row.sub_fields,
-                    &block_def.fields,
-                    enrich.conn,
-                    enrich.reg,
-                    enrich.rel_locale_ctx,
-                );
+                enrich_nested_fields(&mut row.sub_fields, &block_def.fields, enrich);
             }
         }
     }
 
     // Enrich block definition templates so new block rows have upload/relationship options.
     for (def_ctx, block_def) in bf.block_definitions.iter_mut().zip(field_def.blocks.iter()) {
-        enrich_nested_fields(
-            &mut def_ctx.fields,
-            &block_def.fields,
-            enrich.conn,
-            enrich.reg,
-            enrich.rel_locale_ctx,
-        );
+        enrich_nested_fields(&mut def_ctx.fields, &block_def.fields, enrich);
     }
 }
 
@@ -606,46 +553,42 @@ pub(super) fn enrich_blocks(
 pub(super) fn enrich_join(
     jf: &mut JoinField,
     field_def: &FieldDefinition,
-    conn: &dyn DbConnection,
-    reg: &Registry,
-    rel_locale_ctx: Option<&LocaleContext>,
+    ctx: &EnrichCtx,
     doc_id: Option<&str>,
 ) {
-    // Internal UI enrichment — direct query for display labels, not a user-facing read.
+    // Reverse lookup of another collection — access-gated so the join never
+    // enumerates, labels, or counts rows the viewer cannot read.
     if let Some(ref jc) = field_def.join
         && let Some(doc_id_str) = doc_id
-        && let Some(target_def) = reg.get_collection(&jc.collection)
+        && let Some(target_def) = ctx.reg.get_collection(&jc.collection)
     {
         let title_field = target_def
             .title_field()
             .map(std::string::ToString::to_string);
 
-        let fq = query::FindQuery::builder()
-            .filters(vec![query::FilterClause::Single(query::Filter {
-                field: jc.on.clone(),
-                op: query::FilterOp::Equals(doc_id_str.to_string()),
-            })])
-            .build();
+        let base = vec![FilterClause::Single(Filter {
+            field: jc.on.clone(),
+            op: FilterOp::Equals(doc_id_str.to_string()),
+        })];
 
-        if let Ok(docs) = query::find(conn, &jc.collection, target_def, &fq, rel_locale_ctx) {
-            let items: Vec<JoinItem> = docs
-                .iter()
-                .map(|doc| {
-                    let label = title_field
-                        .as_ref()
-                        .and_then(|f| doc.get_str(f))
-                        .unwrap_or(&doc.id)
-                        .to_string();
-                    JoinItem {
-                        id: doc.id.to_string(),
-                        label,
-                    }
-                })
-                .collect();
+        let docs = gated_find(ctx, &jc.collection, target_def, base);
+        let items: Vec<JoinItem> = docs
+            .iter()
+            .map(|doc| {
+                let label = title_field
+                    .as_ref()
+                    .and_then(|f| doc.get_str(f))
+                    .unwrap_or(&doc.id)
+                    .to_string();
+                JoinItem {
+                    id: doc.id.to_string(),
+                    label,
+                }
+            })
+            .collect();
 
-            jf.join_count = Some(items.len());
-            jf.join_items = Some(items);
-        }
+        jf.join_count = Some(items.len());
+        jf.join_items = Some(items);
     }
 }
 

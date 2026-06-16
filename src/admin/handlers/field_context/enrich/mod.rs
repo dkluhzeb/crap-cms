@@ -4,6 +4,7 @@ mod children;
 mod ctx;
 mod enrichment;
 mod field_types;
+mod gated;
 mod nested;
 mod options;
 mod sub_field_opts;
@@ -15,6 +16,7 @@ pub use options::EnrichOptions;
 pub use sub_field_opts::SubFieldOpts;
 
 pub(super) use ctx::EnrichCtx;
+pub(in crate::admin::handlers::field_context) use gated::{gated_find, gated_find_by_id};
 
 #[cfg(all(test, feature = "sqlite"))]
 mod test_helpers;
