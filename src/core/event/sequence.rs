@@ -47,7 +47,9 @@ pub(crate) fn stamp_event(input: MutationEventInput, sequence: u64) -> MutationE
         document_id,
         data,
         edited_by,
-        view,
+        // Producers always carry view metadata; `Some` marks it as present so a
+        // consumer can distinguish it from an event that arrived without one.
+        view: Some(view),
     }
 }
 

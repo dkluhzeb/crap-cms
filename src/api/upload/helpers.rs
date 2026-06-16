@@ -14,6 +14,7 @@ use crate::{
     admin::{AdminState, server::load_auth_user},
     core::{
         AuthUser, CollectionDefinition, Document, DocumentFields, HookRef,
+        collection::LiveMode,
         event::{EventOperation, EventTarget, EventUser, EventViewMeta},
     },
     db::AccessResult,
@@ -208,7 +209,13 @@ pub fn publish_upload_event(
         .edited_by(edited_by)
         .view(view);
 
-    if let Some(d) = data {
+    // Attach the payload only in `full` live mode — same stripping discipline as
+    // the central publish path, so a `metadata`-mode collection never puts the
+    // full upload document on the transport wire. (The `view` above was derived
+    // from the full `data` first, which it must be.)
+    if let Some(d) = data
+        && def.live_mode == LiveMode::Full
+    {
         builder = builder.data(d);
     }
 

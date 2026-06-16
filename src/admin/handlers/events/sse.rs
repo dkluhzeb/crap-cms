@@ -235,12 +235,17 @@ fn build_event_payload(
         EventTarget::Global => access.global_views.get(slug_str),
     }?;
 
+    // Fail closed: an event without view metadata (e.g. from a pre-view node
+    // during a rolling upgrade) cannot be safely gated, so drop it rather than
+    // default to the published view.
+    let view = event.view.as_ref()?;
+
     // Gate by the content view this event belongs to (trash/draft/published).
     // `None` means the subscriber cannot see that view, so the event is dropped
     // — closing the draft/trash leak. The `view` metadata is carried
     // independent of `live_mode`, so this holds for empty-`data` events too
     // (metadata-only collections, all deletes).
-    let constraints = views.constraints_for(&event.view)?;
+    let constraints = views.constraints_for(view)?;
 
     // Row-level constraints match against the event payload; empty `data`
     // cannot satisfy a non-empty constraint (fail-closed) — unchanged behavior.
@@ -617,7 +622,7 @@ mod tests {
             document_id: DocumentId::new("doc-1"),
             data,
             edited_by: None,
-            view: EventViewMeta::default(),
+            view: Some(EventViewMeta::default()),
         }
     }
 
@@ -829,10 +834,10 @@ mod tests {
 
     fn event_with_view(status: Option<&str>, trashed: bool) -> MutationEvent {
         let mut event = make_event("posts", DocumentFields::new());
-        event.view = EventViewMeta {
+        event.view = Some(EventViewMeta {
             status: status.map(str::to_string),
             trashed,
-        };
+        });
         event
     }
 
@@ -852,6 +857,27 @@ mod tests {
         assert!(
             build_event_payload(&event, &access, &runner, &registry, None).is_none(),
             "draft event must be withheld from a published-only subscriber"
+        );
+    }
+
+    /// Fail-closed: an event whose view metadata is absent (e.g. emitted by a
+    /// pre-view node during a rolling upgrade) is dropped — never defaulted to
+    /// the published view — even for a fully-visible subscriber.
+    #[test]
+    fn view_less_event_is_dropped() {
+        let (runner, registry, _posts) = build_runner_and_registry();
+
+        let access = access_with_gate(EventViewGate {
+            published: Some(Vec::new()),
+            draft: Some(Vec::new()),
+            trash: Some(Vec::new()),
+        });
+        let mut event = event_with_view(Some("published"), false);
+        event.view = None; // arrived without view metadata
+
+        assert!(
+            build_event_payload(&event, &access, &runner, &registry, None).is_none(),
+            "an event without view metadata must be dropped (fail-closed)"
         );
     }
 

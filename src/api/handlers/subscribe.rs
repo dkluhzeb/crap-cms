@@ -237,12 +237,17 @@ fn process_event(event: &MutationEvent, ctx: &SubscriberCtx) -> Option<content::
         return None;
     }
 
+    // Fail closed: an event without view metadata (e.g. from a pre-view node
+    // during a rolling upgrade) cannot be safely gated, so drop it rather than
+    // default to the published view.
+    let view = event.view.as_ref()?;
+
     // Gate by the content view this event belongs to (trash/draft/published).
     // `None` means the subscriber cannot see that view, so the event is dropped
     // — closing the draft/trash leak. The event's `view` metadata is carried
     // independent of `live_mode`, so this holds even when `data` is empty
     // (metadata-only collections, all deletes).
-    let constraints = views.constraints_for(&event.view)?;
+    let constraints = views.constraints_for(view)?;
 
     // Row-level constraints match against the event payload. Empty `data`
     // (metadata mode / deletes) cannot satisfy a non-empty constraint, so a

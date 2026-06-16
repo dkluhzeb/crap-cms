@@ -8,12 +8,17 @@
 //!   document (see `populate::helpers::target_row_visible`).
 //!
 //! It evaluates the same `FilterClause` types that `Find` compiles to SQL WHERE
-//! clauses, but **in memory it is an approximation of the SQL semantics**: it is
-//! exact for the common access-constraint shapes (`Equals`, `In`, `Exists` on
-//! ownership/tenant fields), but `Like` pattern dialects and cross-type numeric
-//! coercion can differ from the backend's SQL evaluation at the edges. Access
-//! rules should constrain by plain equality on their own fields (the documented
-//! guidance), for which the two paths agree exactly.
+//! clauses, and is **exact** for the shapes access rules should use — equality
+//! and membership (`Equals`/`NotEquals`/`In`/`NotIn`) and presence
+//! (`Exists`/`NotExists`) on ownership/tenant fields, plus `Like` (its
+//! wildcards/literals are translated faithfully). The one place it remains an
+//! **approximation** of the backend is *ordered* comparisons (`>`/`<`/`>=`/`<=`):
+//! it coerces numerically first, which can differ from SQL column-affinity
+//! ordering on text columns. Ordered comparisons on text are not a sensible
+//! access constraint anyway — keep access rules to equality/membership on your
+//! own fields (the documented guidance) and the two paths agree exactly. There
+//! is intentionally no operator-rejection here: enforcement is by convention +
+//! documentation, not by narrowing what a Lua hook may return.
 
 use std::cmp::Ordering;
 

@@ -53,12 +53,12 @@ This means constraints can only **narrow** results, never expand them.
 
 > **Where constraints are evaluated.** On a direct `Find`/`count`, constraints
 > compile to SQL `WHERE` clauses. When the same collection is reached as a
-> *populated* relationship or join target, its constraints are instead matched
-> **in memory** against the embedded row. The two agree exactly for plain
-> equality/membership on your own fields (`{ author = ctx.user.id }`,
-> `{ tenant_id = ... }`); exotic operators like `like` pattern matching or
-> cross-type numeric comparisons can differ at the edges. Keep access
-> constraints to simple field equality — the recommended shape anyway.
+> *populated* relationship or join target — or gated on a live event stream —
+> its constraints are instead matched **in memory** against the row. The two
+> agree exactly for equality/membership/presence on your own fields
+> (`{ author = ctx.user.id }`, `{ tenant_id = ... }`); only *ordered* comparisons
+> (`>`/`<`) on text columns can differ. Keep access constraints to simple field
+> equality — the recommended shape anyway.
 
 ## Example: Multi-Tenant Access
 

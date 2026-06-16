@@ -119,6 +119,15 @@ Row-level constraints use in-memory evaluation of the same filters that `Find` u
 
 Access is snapshotted at subscribe time. Permission changes require reconnect.
 
+> **Multi-node rolling upgrades.** Content-view gating relies on view metadata
+> the publisher attaches to each event. An event that arrives **without** it —
+> e.g. published by a node running a version that predates per-view gating, over
+> a shared Redis transport during a rolling upgrade — cannot be safely gated, so
+> consumers **drop it** (fail-closed) rather than guess a view. Live updates are
+> best-effort (clients refetch on reconnect), so this only means a brief gap in
+> events originating from not-yet-upgraded nodes; gating is fully effective once
+> every node is upgraded.
+
 ## Event Structure
 
 | Field | Description | metadata | full |

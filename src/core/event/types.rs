@@ -109,9 +109,15 @@ pub struct MutationEvent {
     pub data: DocumentFields,
     /// The user who performed the action, if known.
     pub edited_by: Option<EventUser>,
-    /// Per-view access-gating metadata (see [`EventViewMeta`]).
+    /// Per-view access-gating metadata (see [`EventViewMeta`]). `None` only on an
+    /// event that arrived without it — e.g. emitted by a pre-view node during a
+    /// rolling upgrade across a shared transport. Such an event cannot be safely
+    /// view-gated, so consumers **drop** it (fail-closed) rather than guess a
+    /// view. Current producers always set `Some`, and `Some(meta)` serializes
+    /// identically to the old non-optional field, so the wire format is
+    /// unchanged for new events.
     #[serde(default)]
-    pub view: EventViewMeta,
+    pub view: Option<EventViewMeta>,
 }
 
 /// Inputs required to publish a mutation event. The transport fills in the
@@ -182,7 +188,7 @@ mod tests {
             document_id: DocumentId::new("abc"),
             data: DocumentFields::new(),
             edited_by: Some(EventUser::new("u1", "u@example.com")),
-            view: EventViewMeta::for_delete(false, Some("draft".into())),
+            view: Some(EventViewMeta::for_delete(false, Some("draft".into()))),
         };
         let json = serde_json::to_string(&event).unwrap();
         let decoded: MutationEvent = serde_json::from_str(&json).unwrap();
@@ -191,6 +197,27 @@ mod tests {
         assert_eq!(decoded.target, EventTarget::Collection);
         assert_eq!(decoded.document_id, "abc");
         assert_eq!(decoded.edited_by.unwrap().email, "u@example.com");
-        assert_eq!(decoded.view.status.as_deref(), Some("draft"));
+        assert_eq!(
+            decoded.view.as_ref().unwrap().status.as_deref(),
+            Some("draft")
+        );
+    }
+
+    /// An event that arrives without `view` metadata (e.g. from a pre-view node)
+    /// decodes to `None` so consumers can fail-closed, and a present view still
+    /// round-trips on the unchanged wire shape.
+    #[test]
+    fn mutation_event_missing_view_decodes_to_none() {
+        let no_view = r#"{
+            "sequence": 1, "timestamp": "2024-01-01T00:00:00Z",
+            "target": "collection", "operation": "update",
+            "collection": "posts", "document_id": "abc",
+            "data": {}, "edited_by": null
+        }"#;
+        let decoded: MutationEvent = serde_json::from_str(no_view).unwrap();
+        assert!(
+            decoded.view.is_none(),
+            "absent view must decode to None (fail-closed at the consumer)"
+        );
     }
 }
