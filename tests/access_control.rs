@@ -272,8 +272,14 @@ fn admin_only_allows_admin() {
     assert!(matches!(result, query::AccessResult::Allowed));
 }
 
+/// Anonymous read access for posts resolves to `Allowed` — published-only
+/// scoping is the `read` *view's* job (the system composes `_status =
+/// 'published'`), not something the access hook expresses. A read hook may never
+/// return a `_status` constraint: the chokepoint (`check_collection_access`)
+/// rejects it. This replaces the retired pattern where the hook hand-wrote
+/// `{ _status = "published" }`.
 #[test]
-fn published_or_author_constrains_anonymous() {
+fn published_or_author_allows_anonymous_to_read_published() {
     let (_tmp, pool, _registry, runner) = setup();
     let conn = pool.get().unwrap();
 
@@ -293,22 +299,7 @@ fn published_or_author_constrains_anonymous() {
         )
         .unwrap();
 
-    match result {
-        query::AccessResult::Constrained(clauses) => {
-            assert_eq!(clauses.len(), 1);
-            match &clauses[0] {
-                query::FilterClause::Single(f) => {
-                    assert_eq!(f.field, "_status");
-                    match &f.op {
-                        query::FilterOp::Equals(val) => assert_eq!(val, "published"),
-                        other => panic!("Expected Equals op, got {other:?}"),
-                    }
-                }
-                other => panic!("Expected Single clause, got {other:?}"),
-            }
-        }
-        other => panic!("Expected Constrained, got {other:?}"),
-    }
+    assert!(matches!(result, query::AccessResult::Allowed));
 }
 
 #[test]
@@ -397,8 +388,8 @@ fn constrained_find_filters_results() {
         tx.commit().unwrap();
     }
 
-    // Simulate a Constrained access result (like published_or_author returns
-    // for anonymous users), filtering to only published posts via _status.
+    // Query the published view directly (the `_status = 'published'` filter the
+    // `read` view composes), verifying it narrows results to published posts.
     let constraint_filters = vec![query::FilterClause::Single(query::Filter {
         field: "_status".to_string(),
         op: query::FilterOp::Equals("published".to_string()),
@@ -442,7 +433,8 @@ fn access_check_plus_db_query_end_to_end() {
         tx.commit().unwrap();
     }
 
-    // Verify published_or_author for anonymous returns constraint (not fully open)
+    // Anonymous read resolves to Allowed; the `read` view scopes results to
+    // published rows on its own (the hook never writes a `_status` constraint).
     let conn = pool.get().unwrap();
     let result = runner
         .check_access(
@@ -459,7 +451,7 @@ fn access_check_plus_db_query_end_to_end() {
             &conn,
         )
         .unwrap();
-    assert!(matches!(result, query::AccessResult::Constrained(_)));
+    assert!(matches!(result, query::AccessResult::Allowed));
 
     // Verify admin gets full access
     let admin = make_user_doc("admin-1", "admin");

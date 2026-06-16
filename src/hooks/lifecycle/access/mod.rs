@@ -8,7 +8,7 @@ mod field;
 #[cfg(test)]
 mod test_helpers;
 
-pub(crate) use collection::check_access_with_lua;
+pub(crate) use collection::{check_access_with_lua, check_collection_access};
 pub(crate) use field::{
     check_field_read_access_with_lua, check_field_write_access_with_lua, collect_denials_flat,
     has_any_field_access,

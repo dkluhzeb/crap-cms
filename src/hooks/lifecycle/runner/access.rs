@@ -14,7 +14,7 @@ use crate::{
         lifecycle::{
             AccessCheckInput, AuthStrategyContext, AuthStrategyInput,
             access::{
-                check_access_with_lua, check_field_read_access_with_lua,
+                check_collection_access, check_field_read_access_with_lua,
                 check_field_write_access_with_lua, collect_denials_flat, has_any_field_access,
             },
             execution::resolve_hook_function,
@@ -128,7 +128,7 @@ impl HookRunner {
         let lua = self.pool.acquire()?;
         let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
-        check_access_with_lua(&lua, input)
+        check_collection_access(&lua, input)
     }
 
     /// Check field-level read access. Returns a list of field names that should be

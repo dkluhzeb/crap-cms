@@ -252,7 +252,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   algebra). An access rule that relied on `like`/ordered comparisons must be
   re-modeled as an exact field match or a membership set — see
   `docs/src/access-control/filter-constraints.md` for worked conversions. User
-  filters are unaffected.
+  filters are unaffected. Enforcement lives at a single chokepoint
+  (`check_collection_access`) through which every access-hook evaluation passes,
+  so the rule now applies uniformly across direct reads, live event streams, and
+  relationship/join population — previously the row-constraint contract was
+  enforced only on the read filter-builder path, and a disallowed operator could
+  slip through on the in-memory (subscribe/populate) surfaces.
 
 - **Relationship population now enforces the target collection's read
   access.** Populating a relationship/upload field at depth (`depth > 0`)

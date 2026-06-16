@@ -79,6 +79,15 @@ impl std::error::Error for ServiceError {
 
 impl From<anyhow::Error> for ServiceError {
     fn from(e: anyhow::Error) -> Self {
+        // A `ServiceError` raised through a layer that speaks `anyhow` (e.g. the
+        // hooks layer's `check_access`) round-trips back to its typed self —
+        // so a `HookError` from access-constraint validation maps to
+        // `invalid_argument`, not `Internal` (which clients retry on).
+        let e = match e.downcast::<ServiceError>() {
+            Ok(se) => return se,
+            Err(e) => e,
+        };
+
         // Preserve structured validation errors rather than wrapping as Internal.
         if let Some(ve) = e.downcast_ref::<ValidationError>() {
             return Self::Validation(ve.clone());
@@ -312,6 +321,20 @@ mod tests {
         let e = anyhow!("generic error");
         let se: ServiceError = e.into();
         assert!(matches!(se, ServiceError::Internal(_)));
+    }
+
+    /// A `ServiceError` raised through the hooks layer (which speaks `anyhow`)
+    /// round-trips back to its typed self, so a `HookError` from access-constraint
+    /// validation maps to `invalid_argument`, not `Internal`. Regression for the
+    /// access-constraint chokepoint surfacing the right gRPC status.
+    #[test]
+    fn from_anyhow_recovers_typed_service_error() {
+        let e = anyhow::Error::new(ServiceError::HookError("bad access constraint".into()));
+        let se: ServiceError = e.into();
+        match se {
+            ServiceError::HookError(msg) => assert_eq!(msg, "bad access constraint"),
+            other => panic!("expected HookError, got {other:?}"),
+        }
     }
 
     // ── into_anyhow ─────────────────────────────────────────────────

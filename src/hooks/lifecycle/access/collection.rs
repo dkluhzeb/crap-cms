@@ -15,6 +15,7 @@ use crate::{
         },
         lua_api::crud::filter::FilterValue,
     },
+    service::validate_access_constraints,
 };
 
 pub(crate) fn check_access_with_lua(
@@ -83,6 +84,40 @@ pub(crate) fn check_access_with_lua(
             Ok(AccessResult::Denied)
         }
     }
+}
+
+/// [`check_access_with_lua`] plus enforcement of the access-constraint contract
+/// (equality/membership operators only; no system columns) on any `Constrained`
+/// result.
+///
+/// This is the **single chokepoint** where a collection access hook's row
+/// filters are validated before they leave the hooks layer — so every consumer
+/// gets the same guarantee, not just the read filter-builder path. The two
+/// in-memory enforcement surfaces (live event streams; relationship/join
+/// population) resolve access through the `check_access` impls that call this
+/// wrapper, so a hook that returns a `like`/ordered constraint can never reach
+/// the in-memory matcher where SQL and in-memory evaluation could diverge.
+/// [`check_access_with_lua`] itself stays a pure evaluator/parser.
+///
+/// # Errors
+///
+/// Propagates the validation error (a [`ServiceError::HookError`], surfaced as
+/// `invalid_argument`) when a `Constrained` result uses a disallowed operator or
+/// a system column.
+///
+/// [`ServiceError::HookError`]: crate::service::ServiceError::HookError
+pub(crate) fn check_collection_access(
+    lua: &Lua,
+    input: &AccessCheckInput<'_>,
+) -> Result<AccessResult> {
+    let result = check_access_with_lua(lua, input)?;
+
+    if let AccessResult::Constrained(filters) = &result {
+        validate_access_constraints(filters, false, false, input.collection)
+            .map_err(anyhow::Error::new)?;
+    }
+
+    Ok(result)
 }
 
 /// Parse an access constraint table into filter clauses. Shares the
@@ -568,6 +603,46 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(nil_locale, AccessResult::Denied));
+    }
+
+    // ── check_collection_access (operator allowlist chokepoint) ──────────
+
+    /// Regression: the single chokepoint rejects a `Constrained` result whose
+    /// row filter uses a disallowed (ordered) operator, so it can never reach
+    /// the in-memory matcher on the live-event or population surfaces. The bare
+    /// parser ([`check_access_with_lua`]) still produces the clause; the
+    /// wrapper is what enforces the contract.
+    #[test]
+    fn check_collection_access_rejects_disallowed_operator() {
+        let lua = setup_lua();
+        let err = check_collection_access(
+            &lua,
+            &acc(Some(&HookRef::new("test_access.constrained_ops")), None),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("greater_than"), "{err}");
+    }
+
+    /// An equality constraint passes the chokepoint unchanged — the allowed shape.
+    #[test]
+    fn check_collection_access_allows_equality_constraint() {
+        let lua = setup_lua();
+        let result = check_collection_access(
+            &lua,
+            &acc(Some(&HookRef::new("test_access.constrained_string")), None),
+        )
+        .unwrap();
+        assert!(matches!(result, AccessResult::Constrained(_)));
+    }
+
+    /// `Allowed` / `Denied` results carry no filters and pass through untouched.
+    #[test]
+    fn check_collection_access_passes_through_non_constrained() {
+        let lua = setup_lua();
+        let allowed =
+            check_collection_access(&lua, &acc(Some(&HookRef::new("test_access.allow")), None))
+                .unwrap();
+        assert!(matches!(allowed, AccessResult::Allowed));
     }
 
     // ── check_field_read_access_with_lua ────────────────────────────────

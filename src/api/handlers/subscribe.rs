@@ -143,7 +143,14 @@ fn resolve_view(
     ) {
         Ok(AccessResult::Allowed) => Some(Vec::new()),
         Ok(AccessResult::Constrained(filters)) => Some(filters),
-        _ => None,
+        Ok(AccessResult::Denied) => None,
+        // Fail-closed: an access hook that errors — including a row constraint
+        // rejected by the operator allowlist (`check_collection_access`) — hides
+        // the view rather than streaming events past an unvalidated constraint.
+        Err(e) => {
+            warn!("Subscribe access for '{slug}' denied: {e}");
+            None
+        }
     }
 }
 

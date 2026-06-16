@@ -10,7 +10,7 @@ use crate::{
         HookRunner,
         lifecycle::{
             AccessCheckInput, AfterReadCtx, HookContext, HookEvent,
-            access::{check_access_with_lua, check_field_read_access_with_lua},
+            access::{check_collection_access, check_field_read_access_with_lua},
             apply_after_read_inner, run_hooks_inner,
         },
     },
@@ -229,7 +229,7 @@ impl ReadHooks for LuaReadHooks<'_> {
         if self.override_access {
             return Ok(AccessResult::Allowed);
         }
-        check_access_with_lua(self.lua, input)
+        check_collection_access(self.lua, input)
     }
 
     fn before_read(
