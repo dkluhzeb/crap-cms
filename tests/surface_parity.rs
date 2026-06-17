@@ -16,6 +16,16 @@
 //!
 //! Writes (`query::create/update/delete/...`) are intentionally **not**
 //! allowlisted anywhere: a surface must never write outside the service layer.
+//!
+//! **Scope & limits of these guards.** The scans are textual (per-line
+//! substring / whole-file `contains`), not AST-based, so they catch the common
+//! case but not every evasion: a forbidden call split across lines, reached via
+//! an aliased import (`use ... as foo; foo(...)`), or constructed through a
+//! re-export under a different name will not match. They also only scan
+//! [`SURFACE_ROOTS`] — request-handling surfaces — so background workers (the
+//! scheduler, cron tasks) that legitimately call `query::*` directly are out of
+//! scope by design. Treat these as a high-signal tripwire for the obvious
+//! regression, not a proof of total coverage.
 
 use std::fs;
 use std::path::Path;
@@ -136,6 +146,67 @@ fn surfaces_do_not_bypass_the_service_layer() {
          bypass is genuinely intended — add it to ALLOWLIST in \
          tests/surface_parity.rs with a justification.\n\n{}",
         violations.join("\n")
+    );
+}
+
+/// Access-changing write ops: editing/restoring/deleting one of these can change
+/// a user's access, so the handler must let the service tear down that user's
+/// live-update streams. `create` is excluded (a new document has no pre-existing
+/// stream to invalidate).
+const INVALIDATION_WRITE_OPS: &[&str] = &[
+    "update_document(",
+    "update_many(",
+    "unpublish_document(",
+    "undelete_document(",
+    "restore_collection_version(",
+    "delete_document(",
+    "delete_many(",
+];
+
+/// Architectural guard: any surface handler that builds a `ServiceContext` and
+/// performs an access-changing write MUST attach `invalidation_transport`.
+/// Otherwise the service's post-commit `invalidate_user_streams_if_auth` is a
+/// silent no-op and a role/group change leaves the user's live streams running
+/// on stale access — exactly the bug that hid in the unpublish handlers on three
+/// surfaces. (The service orchestrators are intentionally NOT scanned: they build
+/// an inner context without the transport because the outer surface context owns
+/// the post-commit publish.)
+#[test]
+fn write_surfaces_attach_invalidation_transport() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut offenders: Vec<String> = Vec::new();
+
+    for surface in SURFACE_ROOTS {
+        let mut files = Vec::new();
+        rust_files(&root.join(surface), &mut files);
+
+        for file in files {
+            let contents = fs::read_to_string(&file).unwrap_or_default();
+
+            let builds_ctx = contents.contains("ServiceContext::collection");
+            let does_write = INVALIDATION_WRITE_OPS
+                .iter()
+                .any(|op| contents.contains(op));
+
+            if builds_ctx && does_write && !contents.contains("invalidation_transport") {
+                let rel = file
+                    .strip_prefix(root)
+                    .unwrap_or(&file)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                offenders.push(format!("  {rel}"));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "Write-path surface handler(s) build a ServiceContext for an \
+         access-changing write but never attach `.invalidation_transport(...)`, \
+         so live-stream teardown silently no-ops on a role change. Attach it \
+         (from the surface's invalidation transport) like the sibling \
+         update/undelete/restore handlers do.\n\n{}",
+        offenders.join("\n")
     );
 }
 
@@ -380,8 +451,6 @@ const ACCESS_TOUCHPOINTS: &[&str] = &[
     "api/handlers/subscribe.rs",
     // SSE event stream: same — no service CRUD op.
     "admin/handlers/events/sse.rs",
-    // Authenticated upload file serving: same — no service CRUD op.
-    "admin/handlers/uploads/serve.rs",
     // Admin's shared access helpers (the admin-side centralization point).
     "admin/handlers/shared/access.rs",
 ];

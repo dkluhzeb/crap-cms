@@ -31,7 +31,7 @@ hits the cache and the top-level `define` does **not** re-run.
   - `concurrency` (integer, default: 1) — Max concurrent runs
   - `skip_if_running` (boolean, default: true) — Skip cron if still running
   - `labels` (table, optional) — `{ singular = "Display Name" }`
-  - `access` (string, optional) — Lua function ref for trigger access control
+  - `access` (string, optional) — Lua function ref gating both trigger and run-reads. Receives `ctx.operation` (`"trigger"` or `"read"`); returns `true`/`false`.
 
 **Example:**
 

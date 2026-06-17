@@ -19,8 +19,8 @@ use crate::{
         lua_api::crud::{
             get_tx_conn,
             helpers::{
-                check_hook_depth, hook_locale_config, hook_lua_infra, hook_ui_locale, hook_user,
-                resolve_collection,
+                check_hook_depth, hook_invalidation_transport, hook_locale_config, hook_lua_infra,
+                hook_ui_locale, hook_user, resolve_collection,
             },
         },
     },
@@ -109,6 +109,7 @@ fn collections_unpublish(
         .override_access(opts.override_access)
         .locale_config(locale_config.as_ref())
         .lua_infra(lua_infra.as_ref())
+        .invalidation_transport(hook_invalidation_transport(lua))
         .build();
 
     let doc = unpublish_document(&ctx, &id)

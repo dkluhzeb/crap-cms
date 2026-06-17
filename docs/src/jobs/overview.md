@@ -61,7 +61,7 @@ return M
 | `priority` | integer | 0 | Default scheduling priority; higher = sooner. Per-enqueue value overrides this. |
 | `skip_if_running` | boolean | true | Skip cron trigger if previous run still active |
 | `labels` | table | nil | Display labels (`{ singular = "..." }`) |
-| `access` | string | nil | Lua function ref for trigger access control |
+| `access` | string | nil | Lua function ref gating both trigger and run-reads. Receives `ctx.operation` (`"trigger"` or `"read"`) so one function can serve both, or branch to allow read-only viewers. Returns `true`/`false` only — a filter table is rejected. |
 
 ## Queuing from Hooks
 
@@ -195,4 +195,11 @@ Four RPCs for job management:
 - `GetJobRun(id)` — get details of a specific run
 - `ListJobRuns(slug?, status?, limit?, offset?)` — list job runs with filters
 
-All require authentication. `TriggerJob` also checks the job's `access` function if defined.
+All require authentication. Every RPC also enforces the job's `access`
+function if defined (see below): `TriggerJob` calls it with
+`operation == "trigger"`; `GetJobRun`, `ListJobRuns`, and `ListJobs` call it
+with `operation == "read"`. Run reads are a permissive union — `ListJobRuns`
+and `ListJobs` silently omit jobs the caller may not read (never error), and
+`GetJobRun` returns `not_found` for a denied run (hiding its existence). A job
+with no `access` function is readable and triggerable by any authenticated
+caller.

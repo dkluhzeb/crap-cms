@@ -1,6 +1,9 @@
 //! `ListJobs` handler — list all defined jobs.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use tokio::task;
 use tonic::{Request, Response, Status};
@@ -11,17 +14,20 @@ use crate::{
     core::{Registry, SharedTokenProvider},
     db::DbPool,
     hooks::HookRunner,
+    service::{self, ServiceContext},
 };
 
-/// Pull a connection, resolve the auth user, and reject anonymous callers.
-fn list_jobs_auth_check_blocking(
+/// Resolve the auth user, reject anonymous callers, and return the set of job
+/// slugs whose definitions this caller may see (those whose runs they may
+/// read). Keeps `ListJobs` consistent with the run-read access gate.
+fn readable_job_slugs_blocking(
     pool: &DbPool,
     token_provider: &SharedTokenProvider,
     hook_runner: &HookRunner,
     registry: &Arc<Registry>,
     token: Option<&str>,
     headers: &HashMap<String, String>,
-) -> Result<(), Status> {
+) -> Result<HashSet<String>, Status> {
     let conn = pool
         .get()
         .inspect_err(|e| error!("ListJobs pool error: {}", e))
@@ -40,7 +46,15 @@ fn list_jobs_auth_check_blocking(
         return Err(Status::unauthenticated("Authentication required"));
     }
 
-    Ok(())
+    let ctx = ServiceContext::slug_only("")
+        .conn(&conn)
+        .runner(hook_runner)
+        .user(auth_user.as_ref().map(|u| &u.user_doc))
+        .build();
+
+    let allowed = service::jobs::readable_job_slugs(&ctx, &conn, registry).map_err(Status::from)?;
+
+    Ok(allowed.into_iter().collect())
 }
 
 #[cfg(not(tarpaulin_include))]
@@ -59,8 +73,8 @@ impl ContentService {
         let hook_runner = self.hook_runner.clone();
         let registry = Arc::clone(&self.registry);
 
-        task::spawn_blocking(move || {
-            list_jobs_auth_check_blocking(
+        let allowed = task::spawn_blocking(move || {
+            readable_job_slugs_blocking(
                 &pool,
                 &token_provider,
                 &hook_runner,
@@ -77,6 +91,7 @@ impl ContentService {
             .registry
             .jobs
             .iter()
+            .filter(|(slug, _)| allowed.contains(&***slug))
             .map(|(slug, def)| content::JobDefinitionInfo {
                 slug: slug.to_string(),
                 schedule: def.schedule.clone(),

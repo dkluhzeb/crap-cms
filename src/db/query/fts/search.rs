@@ -48,6 +48,11 @@ pub(crate) fn sanitize_fts_query(conn: &dyn DbConnection, input: &str) -> String
             .collect();
         tokens.join(" & ")
     } else {
+        // FTS5: wrap each token as a quoted phrase (doubling any embedded `"`)
+        // and append `*` for prefix matching. Quoting makes every FTS5-special
+        // character literal *inside* the phrase, so a pathological term cannot
+        // break out into the MATCH grammar — and the result is always bound as
+        // a parameter, never interpolated. See `search_neutralizes_fts5_metacharacters`.
         let tokens: Vec<String> = raw_tokens
             .into_iter()
             .map(|t| {
@@ -286,6 +291,34 @@ mod tests {
         let results = fts_search(&conn, "posts", "Rust", 10).unwrap();
         assert!(!results.is_empty());
         assert_eq!(results[0], "1");
+    }
+
+    /// Robustness: a term packed with FTS5 metacharacters and keywords must run
+    /// as a well-formed MATCH (no self-inflicted query error) and is always
+    /// bound as a parameter, never interpolated. Quoting each token makes every
+    /// special character literal inside the phrase.
+    #[test]
+    fn search_neutralizes_fts5_metacharacters() {
+        let (_dir, conn) = setup_db();
+        insert_post(&conn, "1", "Rust programming", "Learn Rust");
+        let def = simple_def(vec![text_field("title"), text_field("body")]);
+        sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
+
+        for term in [
+            "foo* AND bar",
+            "NEAR(a b)",
+            "\"unbalanced",
+            "(((",
+            "a OR NOT b -c +d",
+            "col:value ^boost",
+            "{}[]",
+            "* * *",
+        ] {
+            assert!(
+                fts_search(&conn, "posts", term, 10).is_ok(),
+                "pathological FTS term must not error: {term:?}"
+            );
+        }
     }
 
     // ── fts_where_clause ────────────────────────────────────────────────

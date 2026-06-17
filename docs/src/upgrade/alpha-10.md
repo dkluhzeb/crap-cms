@@ -37,6 +37,12 @@ clean.
   the last few lenient sub-tables all hard-error now (item 6).
 - **Hook authors: `ctx.locale` is the resolved content locale** on
   default-locale writes too, no longer `nil` (item 8).
+- **API clients: job-run reads now honor the job's `access` function.**
+  `GetJobRun` / `ListJobRuns` / `ListJobs` are no longer readable by *any*
+  authenticated caller — they enforce the job's `access` (with
+  `operation == "read"`). If your client read job runs for a job that has an
+  `access` function, make sure that function allows the reader (see Security
+  fixes).
 
 ## Required action items
 
@@ -236,6 +242,18 @@ arrays/relationships to `[]`); there is no per-locale delete.
 
 ## Security fixes
 
+- **Job-run reads now honor the job's `access` function.** `GetJobRun` and
+  `ListJobRuns` previously applied no authorization beyond authentication — any
+  authenticated caller could read any job's run payloads (`data_json`,
+  `result_json`, `error`), even for a job whose `access` restricted who could
+  *trigger* it. All three job-read RPCs (`GetJobRun`, `ListJobRuns`, `ListJobs`)
+  now enforce the job's `access`, invoked with `operation == "read"` (trigger
+  stays `operation == "trigger"`), so one function can gate both or branch.
+  Reads are a permissive union: `ListJobRuns`/`ListJobs` omit jobs the caller
+  may not read; `GetJobRun` returns `not_found` for a denied/unknown run. Jobs
+  with no `access` function stay readable by any authenticated caller. **Action:**
+  if a client reads runs for a job that has an `access` function, ensure that
+  function returns true for the reader (it now receives `ctx.operation`).
 - **Admin SSE events no longer carry the editor's identity.** The
   `/admin/events` payload used to send `edited_by` as a full
   `{ id, email }` object to every subscriber — anyone with read access

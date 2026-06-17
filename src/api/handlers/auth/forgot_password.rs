@@ -31,14 +31,16 @@ impl ContentService {
 
         let ok_response = Response::new(content::ForgotPasswordResponse {});
 
-        if self.forgot_password_limiter.is_blocked(&req.email)
-            || self.ip_forgot_password_limiter.is_blocked(&ip)
-        {
+        // Atomically record this attempt against both limiters and bail if
+        // either is now over threshold — one operation per limiter, closing the
+        // concurrent-bypass race the is_blocked + separate record split left
+        // open. Both are evaluated (not short-circuited) so each counter
+        // advances. The generic success response leaks nothing on a block.
+        let email_blocked = self.forgot_password_limiter.check_and_block(&req.email);
+        let ip_blocked = self.ip_forgot_password_limiter.check_and_block(&ip);
+        if email_blocked || ip_blocked {
             return ok_response;
         }
-
-        self.forgot_password_limiter.record_failure(&req.email);
-        self.ip_forgot_password_limiter.record_failure(&ip);
 
         let Ok(def) = self.get_collection_def(&req.collection) else {
             return ok_response;

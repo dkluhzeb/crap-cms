@@ -345,8 +345,16 @@ pub async fn login_action(
 ) -> Response {
     let ip = client_ip(&headers, &addr, &state.config.server);
 
-    // Check rate limits before doing any work (both email and IP)
-    if state.login_limiter.is_blocked(&form.email) || state.ip_login_limiter.is_blocked(&ip) {
+    // Atomically record this attempt against both the email and IP limiters
+    // and reject if either is now over threshold. Performing the check and the
+    // increment as one operation closes the burst race the old is_blocked +
+    // later record_failure split left open (concurrent attempts all passing an
+    // under-limit check before any recorded). Both are evaluated (not
+    // short-circuited) so each counter advances every attempt; a successful
+    // login clears both below.
+    let email_blocked = state.login_limiter.check_and_block(&form.email);
+    let ip_blocked = state.ip_login_limiter.check_and_block(&ip);
+    if email_blocked || ip_blocked {
         return login_error(&state, "error_too_many_attempts", &form.email);
     }
 
@@ -386,15 +394,10 @@ pub async fn login_action(
     let login = match result {
         Ok(Ok(Some(Ok(success)))) => success,
         Ok(Ok(Some(Err(msg)))) => {
-            state.login_limiter.record_failure(&form.email);
-            state.ip_login_limiter.record_failure(&ip);
-
+            // Attempt already recorded up front by check_and_block.
             return login_error(&state, &msg, &form.email);
         }
         Ok(Ok(None)) => {
-            state.login_limiter.record_failure(&form.email);
-            state.ip_login_limiter.record_failure(&ip);
-
             return login_error(&state, "error_invalid_credentials", &form.email);
         }
         Ok(Err(e)) => {

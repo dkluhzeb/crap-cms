@@ -13,7 +13,7 @@ use crate::{
         lifecycle::converters::document_to_lua_table,
         lua_api::crud::{
             get_tx_conn,
-            helpers::{hook_lua_infra, hook_user, resolve_collection},
+            helpers::{hook_invalidation_transport, hook_lua_infra, hook_user, resolve_collection},
         },
     },
     service::{LuaWriteHooks, ServiceContext, restore_collection_version},
@@ -88,6 +88,7 @@ fn collections_restore_version(
         .user(user.as_ref())
         .override_access(opts.override_access)
         .lua_infra(lua_infra.as_ref())
+        .invalidation_transport(hook_invalidation_transport(lua))
         .build();
 
     let doc = restore_collection_version(&ctx, &id, &version_id, lc)

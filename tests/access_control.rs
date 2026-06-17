@@ -28,7 +28,7 @@ use crap_cms::service::{
     GetGlobalInput, ListVersionsInput, ReadHooks, RunnerReadHooks, RunnerWriteHooks,
     SearchDocumentsInput, ServiceContext, WriteInput, collection_stats, create_document_in_conn,
     get_global_document,
-    jobs::{QueueJobInput, queue_job},
+    jobs::{ListJobRunsInput, QueueJobInput, get_job_run, list_job_runs, queue_job},
     list_versions, restore_collection_version, search_documents, update_document,
     update_global_in_conn,
 };
@@ -2961,6 +2961,179 @@ return M
     assert!(
         matches!(err, crap_cms::service::ServiceError::AccessDenied(_)),
         "expected AccessDenied, got: {err:?}"
+    );
+}
+
+/// Regression: job-run reads (`list_job_runs` / `get_job_run`) are gated by the
+/// job's access hook with operation `"read"`. Previously they applied **no**
+/// authorization — any authenticated caller could read a restricted job's run
+/// payloads (`data`/`result`/`error`). Also verifies operation-awareness
+/// (read vs trigger), the no-access-fn parity default, and the `slug = None`
+/// permissive union.
+#[test]
+fn job_run_reads_are_gated_by_job_access() {
+    let tmp = tempfile::tempdir().unwrap();
+    let jobs_dir = tmp.path().join("jobs");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&jobs_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    std::fs::write(
+        jobs_dir.join("gated.lua"),
+        r#"
+local M = {}
+
+function M.run(ctx) end
+
+crap.jobs.define("gated_job", {
+    handler = "jobs.gated.run",
+    access = "hooks.jobgate.read_or_admin",
+})
+
+crap.jobs.define("open_job", {
+    handler = "jobs.gated.run",
+})
+
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        hooks_dir.join("jobgate.lua"),
+        r#"
+local M = {}
+
+-- Read is allowed for editor and admin; trigger (any other operation) is
+-- admin-only. Proves the read path passes operation == "read".
+function M.read_or_admin(ctx)
+    if ctx.operation == "read" then
+        return ctx.user ~= nil and (ctx.user.role == "editor" or ctx.user.role == "admin")
+    end
+    return ctx.user ~= nil and ctx.user.role == "admin"
+end
+
+return M
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+
+    // Seed one run for each job directly, independent of trigger access.
+    let conn = db_pool.get().unwrap();
+    let gated_run =
+        query::jobs::insert_job(&conn, "gated_job", "{}", "test", 1, "default", 0).unwrap();
+    let _open_run =
+        query::jobs::insert_job(&conn, "open_job", "{}", "test", 1, "default", 0).unwrap();
+    drop(conn);
+
+    let admin = make_user_doc("admin1", "admin");
+    let editor = make_user_doc("editor1", "editor");
+    let viewer = make_user_doc("viewer1", "viewer");
+
+    let list = |user: &Document, slug: Option<&str>| {
+        let conn = db_pool.get().unwrap();
+        let ctx = ServiceContext::slug_only(slug.unwrap_or(""))
+            .conn(&conn)
+            .runner(&runner)
+            .user(Some(user))
+            .build();
+        let input = ListJobRunsInput {
+            registry: registry.as_ref(),
+            slug,
+            status: None,
+            limit: 50,
+            offset: 0,
+        };
+        list_job_runs(&ctx, &input).unwrap().docs
+    };
+
+    let get = |user: &Document, id: &str| {
+        let conn = db_pool.get().unwrap();
+        let ctx = ServiceContext::slug_only("")
+            .conn(&conn)
+            .runner(&runner)
+            .user(Some(user))
+            .build();
+        get_job_run(&ctx, registry.as_ref(), id).unwrap()
+    };
+
+    // LEAK REGRESSION: a viewer with neither read nor trigger access on
+    // gated_job must NOT see its runs (previously every authenticated caller did).
+    assert!(
+        list(&viewer, Some("gated_job")).is_empty(),
+        "viewer must not list a gated job's runs"
+    );
+    assert!(
+        get(&viewer, &gated_run.id).is_none(),
+        "viewer must not fetch a gated job's run (existence hidden)"
+    );
+
+    // OPERATION-AWARE: editor is allowed for operation == "read".
+    assert_eq!(
+        list(&editor, Some("gated_job")).len(),
+        1,
+        "editor may read gated job runs"
+    );
+    assert!(
+        get(&editor, &gated_run.id).is_some(),
+        "editor may fetch a gated job run"
+    );
+
+    // ...but editor still cannot TRIGGER (operation == "trigger" → admin only).
+    {
+        let conn = db_pool.get().unwrap();
+        let job_def = registry.get_job("gated_job").unwrap().clone();
+        let ctx = ServiceContext::slug_only("gated_job")
+            .conn(&conn)
+            .runner(&runner)
+            .user(Some(&editor))
+            .build();
+        let input = QueueJobInput {
+            job_def: &job_def,
+            data: None,
+            scheduled_by: "test",
+            priority: 0,
+            queue_retries: None,
+        };
+        assert!(
+            matches!(
+                queue_job(&ctx, &input),
+                Err(crap_cms::service::ServiceError::AccessDenied(_))
+            ),
+            "editor must not trigger the admin-only job"
+        );
+    }
+
+    // PARITY: open_job has no access fn → readable by any authenticated caller.
+    assert_eq!(
+        list(&viewer, Some("open_job")).len(),
+        1,
+        "a job without an access fn is readable"
+    );
+
+    // slug = None is a permissive union: viewer sees only the open run, admin both.
+    assert_eq!(
+        list(&viewer, None).len(),
+        1,
+        "viewer's unfiltered list excludes the gated job"
+    );
+    assert_eq!(
+        list(&admin, None).len(),
+        2,
+        "admin's unfiltered list includes both jobs"
     );
 }
 

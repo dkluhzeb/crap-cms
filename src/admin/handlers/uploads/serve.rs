@@ -24,12 +24,14 @@ use crate::{
         handlers::auth::SESSION_COOKIE,
         server::{extract_cookie, load_auth_user},
     },
+    config::LocaleConfig,
     core::{
-        AuthUser, Document, HookRef,
+        AuthUser, CollectionDefinition, Document,
         upload::{SharedStorage, StorageNotFound},
     },
-    db::{AccessResult, DbPool},
-    hooks::{AccessCheckInput, HookRunner},
+    db::{DbPool, Filter, FilterClause, FilterOp, FindQuery},
+    hooks::HookRunner,
+    service::{FindDocumentsInput, RunnerReadHooks, ServiceContext, find_documents},
 };
 
 /// Read a key off the async runtime. Local storage never reaches here (it
@@ -46,73 +48,147 @@ fn has_path_traversal(segment: &str) -> bool {
     segment.contains("..") || segment.contains('/') || segment.contains('\\')
 }
 
-/// Blocking body for [`check_upload_access`]'s `spawn_blocking` call. Pulls a
-/// pool connection and runs the configured collection-level read access hook.
-fn check_upload_access_blocking(
-    pool: &DbPool,
-    hook_runner: &HookRunner,
-    access: &HookRef,
-    user_doc: Option<&Document>,
-    collection: &str,
-) -> Result<AccessResult, anyhow::Error> {
-    let conn = pool.get()?;
-    hook_runner.check_access(
-        &AccessCheckInput {
-            access: Some(access),
-            user: user_doc,
-            id: None,
-            data: None,
-            locale: None,
-            operation: "read",
-            collection,
-            ui_locale: None,
-        },
-        &conn,
-    )
+/// Owned inputs for [`upload_doc_visible`]'s `spawn_blocking` call.
+struct UploadVisibilityInput {
+    pool: DbPool,
+    runner: HookRunner,
+    storage: SharedStorage,
+    def: CollectionDefinition,
+    slug: String,
+    filename: String,
+    user_doc: Option<Document>,
+    locale_config: LocaleConfig,
 }
 
-/// Check collection read access, returning the cache policy to use.
-/// Returns `None` if access is denied.
+/// `Cache-Control` for an immutable public upload: no access control, and the
+/// content at a nanoid-prefixed URL never changes, so cache hard and long.
+/// `31536000` = one year, the conventional ceiling for `immutable` assets.
+const CACHE_IMMUTABLE: &str = "public, max-age=31536000, immutable";
+
+/// `Cache-Control` for a public-but-access-gated upload served to an anonymous
+/// request: the bytes are shareable, but the owning document's visibility is
+/// mutable (publish/unpublish, trash), so cap shared-cache staleness rather
+/// than serving `immutable`. A moderate window trades a small staleness risk
+/// for CDN/browser caching of public media that merely lives in a
+/// drafts/soft-delete collection.
+const CACHE_PUBLIC_MUTABLE: &str = "public, max-age=300";
+
+/// `Cache-Control` for an authenticated read: the response may be user-specific
+/// (per-row read constraints), so it must never be shared-cached.
+const CACHE_PRIVATE: &str = "private, no-store";
+
+/// Whether the viewer may see the upload-collection **document** that owns this
+/// file, applying the full content-view model — published ∪ draft (downgraded to
+/// the viewer's access), with the read/draft hooks' row constraints matched
+/// against the row, trashed rows excluded.
+///
+/// Every served file is owned by exactly one upload-collection document; the doc
+/// carries the file's URL in `url` (original) or a `{size}[_fmt]_url` column
+/// (variant). We reproduce the stored URL string from the requested key via the
+/// backend's own `public_url` (correct for local / S3 / custom) and match it
+/// against those columns — so original and variant requests both resolve to the
+/// owning doc. Fail-closed: any error, an orphan (no owning doc), or a
+/// non-upload collection → not visible.
+fn upload_doc_visible(input: &UploadVisibilityInput) -> bool {
+    let Some(upload) = input.def.upload.as_ref() else {
+        return false;
+    };
+
+    // URL-bearing columns the upload schema injects: `url` + `{size}[_fmt]_url`.
+    let or_clauses: Vec<FilterClause> = {
+        let key = format!("{}/{}", input.slug, input.filename);
+        let requested_url = input.storage.public_url(&key);
+
+        upload
+            .system_field_names()
+            .into_iter()
+            .filter(|n| n == "url" || n.ends_with("_url"))
+            .map(|col| {
+                FilterClause::Single(Filter {
+                    field: col,
+                    op: FilterOp::Equals(requested_url.clone()),
+                })
+            })
+            .collect()
+    };
+
+    if or_clauses.is_empty() {
+        return false;
+    }
+
+    let Ok(conn) = input.pool.get() else {
+        return false;
+    };
+
+    let hooks = RunnerReadHooks::new(&input.runner, &conn, input.user_doc.as_ref(), None);
+    let ctx = ServiceContext::collection(&input.slug, &input.def)
+        .conn(&conn)
+        .read_hooks(&hooks)
+        .user(input.user_doc.as_ref())
+        .locale_config(Some(&input.locale_config))
+        .build();
+
+    let fq = FindQuery::builder()
+        .filters(vec![FilterClause::or(or_clauses)])
+        .limit(Some(1))
+        .build();
+
+    // `include_drafts` lets a draft upload serve to a viewer with draft access;
+    // the service downgrades to what each viewer may actually see.
+    let find_input = FindDocumentsInput::builder(&fq)
+        .include_drafts(true)
+        .build();
+
+    find_documents(&ctx, &find_input).is_ok_and(|r| !r.docs.is_empty())
+}
+
+/// Check that the viewer may read the upload document owning this file, returning
+/// the cache policy. Returns `None` (→ 404) when no document the viewer can see
+/// references the file — enforcing per-row constraints, draft, and trash on the
+/// served bytes (the same model every other upload surface uses).
 async fn check_upload_access(
     state: &AdminState,
     collection_slug: &str,
+    filename: &str,
     auth_user: Option<AuthUser>,
 ) -> Option<&'static str> {
-    let access_ref = state
-        .registry
-        .get_collection(collection_slug)
-        .and_then(|def| def.access.read.clone());
+    let def = state.registry.get_collection(collection_slug)?.clone();
 
-    let Some(func_ref) = access_ref else {
-        return Some("public, max-age=31536000, immutable");
+    // A collection with no read hook AND no draft/trash axis has no access
+    // control — every file is public, so serve it CDN-cacheable without a query.
+    if def.access.read.is_none() && !def.has_drafts() && !def.soft_delete {
+        return Some(CACHE_IMMUTABLE);
+    }
+
+    // Anonymous request → the response is not user-specific, so a visible file
+    // is shareable. Authenticated → per-row read constraints may apply, so the
+    // response is user-specific and must not be shared-cached.
+    let is_anonymous = auth_user.is_none();
+
+    let input = UploadVisibilityInput {
+        pool: state.pool.clone(),
+        runner: state.hook_runner.clone(),
+        storage: state.storage.clone(),
+        def,
+        slug: collection_slug.to_string(),
+        filename: filename.to_string(),
+        user_doc: auth_user.map(|u| u.user_doc),
+        locale_config: state.config.locale.clone(),
     };
 
-    let user_doc = auth_user.map(|u| u.user_doc);
-    let pool = state.pool.clone();
-    let hook_runner = state.hook_runner.clone();
-    let collection = collection_slug.to_string();
+    let visible = task::spawn_blocking(move || upload_doc_visible(&input))
+        .await
+        .unwrap_or(false);
 
-    let access = task::spawn_blocking(move || {
-        check_upload_access_blocking(
-            &pool,
-            &hook_runner,
-            &func_ref,
-            user_doc.as_ref(),
-            &collection,
-        )
-    })
-    .await;
-
-    let allowed = matches!(
-        access,
-        Ok(Ok(AccessResult::Allowed | AccessResult::Constrained(_)))
-    );
-
-    if allowed {
-        Some("private, no-store")
-    } else {
-        None
+    if !visible {
+        return None;
     }
+
+    Some(if is_anonymous {
+        CACHE_PUBLIC_MUTABLE
+    } else {
+        CACHE_PRIVATE
+    })
 }
 
 /// Serve an uploaded file, checking collection read access if configured.
@@ -138,7 +214,9 @@ pub async fn serve_upload(
 
     let auth_user = extract_auth_user(&request, &state);
 
-    let Some(cache_control) = check_upload_access(&state, &collection_slug, auth_user).await else {
+    let Some(cache_control) =
+        check_upload_access(&state, &collection_slug, &filename, auth_user).await
+    else {
         return StatusCode::NOT_FOUND.into_response();
     };
 

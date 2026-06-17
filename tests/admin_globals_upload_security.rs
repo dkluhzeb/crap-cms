@@ -34,8 +34,9 @@ use crap_cms::core::auth;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
+use crap_cms::core::upload::CollectionUpload;
 use crap_cms::core::{JwtSecret, Registry};
-use crap_cms::db::{migrate, pool, query};
+use crap_cms::db::{DbConnection, migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -105,7 +106,18 @@ fn setup_app_with_config(
     config: CrapConfig,
 ) -> TestApp {
     let tmp = tempfile::tempdir().expect("tempdir");
+    setup_app_in_dir(collections, globals, config, tmp)
+}
 
+/// Like [`setup_app_with_config`] but uses a caller-provided config dir, so a
+/// test can pre-populate it (e.g. write Lua access hooks) before the hook
+/// runner loads.
+fn setup_app_in_dir(
+    collections: Vec<CollectionDefinition>,
+    globals: Vec<GlobalDefinition>,
+    config: CrapConfig,
+    tmp: tempfile::TempDir,
+) -> TestApp {
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
     let shared = Registry::shared();
@@ -588,6 +600,230 @@ async fn serve_upload_path_traversal_blocked() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// Regression (F1): the serve route enforces the document VIEW model, not just
+/// collection read. An upload collection with soft-delete is past the public
+/// fast-path, so every file is gated by its owning document, resolved via the
+/// requested URL. A live doc's file serves; a TRASHED doc's file 404s (the view
+/// excludes trashed rows); and a file with NO owning document (orphan) 404s.
+/// Trash exclusion is hook-independent, so this exercises the gate without Lua.
+#[tokio::test]
+async fn serve_upload_gates_by_owning_document() {
+    let mut def = CollectionDefinition::new("media");
+    def.timestamps = true;
+    def.soft_delete = true;
+    def.upload = Some(CollectionUpload::new());
+    def.fields = vec![
+        FieldDefinition::builder("filename", FieldType::Text).build(),
+        FieldDefinition::builder("url", FieldType::Text).build(),
+    ];
+
+    let app = setup_app(vec![def], vec![]);
+
+    {
+        let conn = app.pool.get().unwrap();
+        conn.execute_batch(
+            "INSERT INTO media (id, filename, url, created_at, updated_at) \
+               VALUES ('d1', 'live.png', '/uploads/media/live.png', '2026-01-01', '2026-01-01');\
+             INSERT INTO media (id, filename, url, _deleted_at, created_at, updated_at) \
+               VALUES ('d2', 'trash.png', '/uploads/media/trash.png', \
+                       '2026-01-02', '2026-01-01', '2026-01-01');",
+        )
+        .unwrap();
+    }
+
+    let dir = app._tmp.path().join("uploads").join("media");
+    std::fs::create_dir_all(&dir).unwrap();
+    for f in ["live.png", "trash.png", "orphan.png"] {
+        std::fs::write(dir.join(f), b"x").unwrap();
+    }
+
+    let serve = |path: &str| {
+        app.router
+            .clone()
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+    };
+
+    // Live document's file → served.
+    assert_eq!(
+        serve("/uploads/media/live.png").await.unwrap().status(),
+        StatusCode::OK,
+        "live document's file should serve"
+    );
+    // Trashed document's file → 404 (the view excludes trashed rows).
+    assert_eq!(
+        serve("/uploads/media/trash.png").await.unwrap().status(),
+        StatusCode::NOT_FOUND,
+        "trashed document's file must not serve"
+    );
+    // File with no owning document (orphan) → 404.
+    assert_eq!(
+        serve("/uploads/media/orphan.png").await.unwrap().status(),
+        StatusCode::NOT_FOUND,
+        "orphan file with no owning document must not serve"
+    );
+}
+
+/// Regression (F1): a row-level read constraint (not just status/trash) flows
+/// through the serve gate. A file owned by user A serves to A but 404s for an
+/// anonymous request and for user B — the owner filter is combined into the
+/// owning-document lookup exactly as it is for a normal read.
+#[tokio::test]
+async fn serve_upload_gates_by_row_constraint() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let access_dir = tmp.path().join("access");
+    std::fs::create_dir_all(&access_dir).unwrap();
+    std::fs::write(
+        access_dir.join("owner_only.lua"),
+        r"
+-- Anonymous denied; authenticated users constrained to their own rows.
+return function(ctx)
+    if ctx.user == nil then return false end
+    return { owner_id = ctx.user.id }
+end
+",
+    )
+    .unwrap();
+
+    let mut def = CollectionDefinition::new("omedia");
+    def.timestamps = true;
+    def.upload = Some(CollectionUpload::new());
+    def.access.read = Some(crap_cms::core::HookRef::new("access.owner_only"));
+    def.fields = vec![
+        FieldDefinition::builder("filename", FieldType::Text).build(),
+        FieldDefinition::builder("url", FieldType::Text).build(),
+        FieldDefinition::builder("owner_id", FieldType::Text).build(),
+    ];
+
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.admin.require_auth = false;
+
+    let app = setup_app_in_dir(vec![def, make_users_def()], vec![], config, tmp);
+
+    let owner_id = create_test_user(&app, "owner@test.com", "secret123");
+    let other_id = create_test_user(&app, "other@test.com", "secret123");
+
+    {
+        let conn = app.pool.get().unwrap();
+        conn.execute(
+            "INSERT INTO omedia (id, filename, url, owner_id, created_at, updated_at) \
+               VALUES ('m1', 'mine.png', '/uploads/omedia/mine.png', ?1, '2026-01-01', '2026-01-01')",
+            &[crap_cms::db::DbValue::Text(owner_id.clone())],
+        )
+        .unwrap();
+    }
+
+    let dir = app._tmp.path().join("uploads").join("omedia");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("mine.png"), b"x").unwrap();
+
+    let serve = |cookie: Option<String>| {
+        let mut req = Request::get("/uploads/omedia/mine.png");
+        if let Some(c) = cookie {
+            req = req.header(axum::http::header::COOKIE, c);
+        }
+        app.router.clone().oneshot(req.body(Body::empty()).unwrap())
+    };
+
+    // Anonymous → read denied → 404.
+    assert_eq!(
+        serve(None).await.unwrap().status(),
+        StatusCode::NOT_FOUND,
+        "anonymous must not serve an owner-constrained file"
+    );
+
+    // The owner → 200.
+    let owner_cookie = make_auth_cookie(&app, &owner_id, "owner@test.com");
+    assert_eq!(
+        serve(Some(owner_cookie)).await.unwrap().status(),
+        StatusCode::OK,
+        "the owner should serve their own file"
+    );
+
+    // A different user → 404 (the constraint excludes their row).
+    let other_cookie = make_auth_cookie(&app, &other_id, "other@test.com");
+    assert_eq!(
+        serve(Some(other_cookie)).await.unwrap().status(),
+        StatusCode::NOT_FOUND,
+        "a non-owner must not serve the file"
+    );
+}
+
+/// Regression (F1): the serve gate honors the draft view, not just published.
+/// With drafts enabled and draft access denied to anonymous (via the `update`
+/// fallback), a published doc's file serves to an anonymous request but a draft
+/// doc's file 404s — `include_drafts` downgrades to what the viewer may see.
+#[tokio::test]
+async fn serve_upload_gates_drafts() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let access_dir = tmp.path().join("access");
+    std::fs::create_dir_all(&access_dir).unwrap();
+    std::fs::write(
+        access_dir.join("authed_only.lua"),
+        r"
+-- Only authenticated users may see drafts (draft view falls back to `update`).
+return function(ctx)
+    return ctx.user ~= nil
+end
+",
+    )
+    .unwrap();
+
+    let mut def = CollectionDefinition::new("dmedia");
+    def.timestamps = true;
+    def.versions = Some(VersionsConfig::new(true, 10));
+    def.upload = Some(CollectionUpload::new());
+    def.access.update = Some(crap_cms::core::HookRef::new("access.authed_only"));
+    def.fields = vec![
+        FieldDefinition::builder("filename", FieldType::Text).build(),
+        FieldDefinition::builder("url", FieldType::Text).build(),
+    ];
+
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.admin.require_auth = false;
+
+    let app = setup_app_in_dir(vec![def], vec![], config, tmp);
+
+    {
+        let conn = app.pool.get().unwrap();
+        conn.execute_batch(
+            "INSERT INTO dmedia (id, filename, url, _status, created_at, updated_at) \
+               VALUES ('p1', 'pub.png', '/uploads/dmedia/pub.png', 'published', '2026-01-01', '2026-01-01');\
+             INSERT INTO dmedia (id, filename, url, _status, created_at, updated_at) \
+               VALUES ('d1', 'draft.png', '/uploads/dmedia/draft.png', 'draft', '2026-01-01', '2026-01-01');",
+        )
+        .unwrap();
+    }
+
+    let dir = app._tmp.path().join("uploads").join("dmedia");
+    std::fs::create_dir_all(&dir).unwrap();
+    for f in ["pub.png", "draft.png"] {
+        std::fs::write(dir.join(f), b"x").unwrap();
+    }
+
+    let serve = |path: &str| {
+        app.router
+            .clone()
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+    };
+
+    // Published doc's file → served to anonymous (published read is open).
+    assert_eq!(
+        serve("/uploads/dmedia/pub.png").await.unwrap().status(),
+        StatusCode::OK,
+        "published file should serve to anonymous"
+    );
+    // Draft doc's file → 404 (anonymous lacks draft access via the update fallback).
+    assert_eq!(
+        serve("/uploads/dmedia/draft.png").await.unwrap().status(),
+        StatusCode::NOT_FOUND,
+        "draft file must not serve to anonymous"
+    );
 }
 
 #[tokio::test]

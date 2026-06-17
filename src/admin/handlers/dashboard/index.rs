@@ -89,10 +89,21 @@ fn build_global_cards(
         .map(|(slug, def)| {
             let table = global_table(slug);
 
+            // Scope the timestamp to the published row for drafts-enabled globals
+            // so a pending draft edit's `updated_at` never surfaces on the
+            // dashboard to a read-only viewer (parity with the view-scoped
+            // collection cards). Conservative: a draft-access viewer also sees
+            // only the published time here.
+            let where_clause = if def.has_drafts() {
+                " WHERE id = 'default' AND _status = 'published'"
+            } else {
+                " WHERE id = 'default'"
+            };
+
             GlobalCard {
                 slug: slug.to_string(),
                 display_name: def.display_name().to_string(),
-                last_updated: last_updated(conn, &table, " WHERE id = 'default'"),
+                last_updated: last_updated(conn, &table, where_clause),
                 has_versions: def.has_versions(),
             }
         })

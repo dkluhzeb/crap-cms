@@ -74,6 +74,38 @@ impl LoginRateLimiter {
         }
     }
 
+    /// Atomically record an attempt and report whether it is BLOCKED.
+    ///
+    /// Performs the limit check and the increment as a single backend
+    /// operation, closing the check-then-record race that `is_blocked` +
+    /// `record_failure` leaves open: under that split, a burst of concurrent
+    /// requests can all observe an under-limit count before any of them
+    /// records, letting more than `max_attempts` through per window. Call this
+    /// once at the start of an attempt instead.
+    ///
+    /// Returns `true` when the key is at/over the limit (the attempt should be
+    /// rejected); the at-limit call does not increment further, so the count
+    /// stays bounded. On a successful operation, call [`Self::clear`] to wipe
+    /// the recorded attempts.
+    ///
+    /// Fails CLOSED on backend error (treats the attempt as blocked), matching
+    /// [`Self::is_blocked`].
+    #[must_use]
+    pub fn check_and_block(&self, key: &str) -> bool {
+        let pkey = self.prefixed_key(key);
+
+        match self
+            .backend
+            .check_and_record(&pkey, self.max_attempts, self.window_secs)
+        {
+            Ok(allowed) => !allowed,
+            Err(e) => {
+                error!("Rate limit backend unavailable — failing closed: {e:#}");
+                true
+            }
+        }
+    }
+
     /// Record a failed attempt for the given key.
     pub fn record_failure(&self, key: &str) {
         let pkey = self.prefixed_key(key);
@@ -155,6 +187,59 @@ mod tests {
         login.record_failure("a@b.com");
         assert!(login.is_blocked("a@b.com"));
         assert!(!forgot.is_blocked("a@b.com"));
+    }
+
+    #[test]
+    fn check_and_block_records_and_blocks_at_limit() {
+        let limiter = LoginRateLimiter::with_backend(memory_backend(), "test", 3, 60);
+
+        // Each call records; under the limit it does not block.
+        assert!(!limiter.check_and_block("a@b.com"));
+        assert!(!limiter.check_and_block("a@b.com"));
+        assert!(!limiter.check_and_block("a@b.com"));
+
+        // At the limit: blocked, and the count stays bounded (no over-count).
+        assert!(limiter.check_and_block("a@b.com"));
+        assert!(limiter.check_and_block("a@b.com"));
+
+        // A success clears, re-opening the window.
+        limiter.clear("a@b.com");
+        assert!(!limiter.check_and_block("a@b.com"));
+    }
+
+    /// Security: a backend failure must fail CLOSED (blocked), not silently
+    /// disable brute-force protection for the duration of the outage.
+    #[test]
+    fn check_and_block_fails_closed_on_backend_error() {
+        struct FailingBackend;
+        impl super::super::RateLimitBackend for FailingBackend {
+            fn count(&self, _key: &str, _window_secs: u64) -> anyhow::Result<u32> {
+                anyhow::bail!("backend down")
+            }
+            fn record(&self, _key: &str, _window_secs: u64) -> anyhow::Result<()> {
+                anyhow::bail!("backend down")
+            }
+            fn clear(&self, _key: &str) -> anyhow::Result<()> {
+                anyhow::bail!("backend down")
+            }
+            fn check_and_record(
+                &self,
+                _key: &str,
+                _max_count: u32,
+                _window_secs: u64,
+            ) -> anyhow::Result<bool> {
+                anyhow::bail!("backend down")
+            }
+            fn kind(&self) -> &'static str {
+                "failing"
+            }
+        }
+
+        let limiter = LoginRateLimiter::with_backend(Arc::new(FailingBackend), "t", 5, 60);
+        assert!(
+            limiter.check_and_block("user@example.com"),
+            "backend failure must block (fail closed)"
+        );
     }
 
     /// Security: a backend failure must fail CLOSED (blocked), not silently

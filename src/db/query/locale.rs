@@ -358,7 +358,20 @@ pub(crate) fn locale_locked_field_names(
     }
 
     let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, inherited| {
-        if is_locale_locked_write(field, locale_ctx, inherited) {
+        // Classify the field the SAME way its live write path does, so the
+        // draft snapshot's drop-set matches exactly:
+        // - scalar column (`has_parent_column`): inheritance-aware, like
+        //   `collect_leaf_update` / `is_locale_locked_write`.
+        // - join-backed (array / blocks / has-many): own-flag-only, like
+        //   `save_join_data_inner` (`resolve_join_locale` ignores a localized
+        //   parent Group, so a shared join field is never per-locale).
+        let field_locked = if field.has_parent_column() {
+            is_locale_locked_write(field, locale_ctx, inherited)
+        } else {
+            !field.localized
+        };
+
+        if field_locked {
             locked.insert(prefixed_name(prefix, &field.name));
         }
         Ok(())

@@ -11,7 +11,7 @@ use crate::{
     core::{JobRun, Registry, SharedTokenProvider},
     db::DbPool,
     hooks::HookRunner,
-    service,
+    service::{self, ServiceContext},
 };
 
 use super::job_run_to_proto;
@@ -50,7 +50,16 @@ fn get_job_run_blocking(input: GetJobRunBlockingInput) -> Result<JobRun, Status>
         return Err(Status::unauthenticated("Authentication required"));
     }
 
-    service::jobs::get_job_run(&conn, &input.id)
+    // `slug` is unknown until the run is fetched; the access check uses the
+    // run's own slug, so the context slug is irrelevant here.
+    let ctx = ServiceContext::slug_only("")
+        .conn(&conn)
+        .runner(&input.hook_runner)
+        .user(auth_user.as_ref().map(|u| &u.user_doc))
+        .build();
+
+    // A denied or unknown run resolves to `None` → `not_found`, hiding existence.
+    service::jobs::get_job_run(&ctx, input.registry.as_ref(), &input.id)
         .map_err(Status::from)?
         .ok_or_else(|| Status::not_found(format!("Job run '{}' not found", input.id)))
 }

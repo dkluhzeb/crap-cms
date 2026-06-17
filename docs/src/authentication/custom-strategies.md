@@ -162,11 +162,14 @@ GET/POST /admin/auth/callback/{name}
 
 This dispatches to a Lua hook `auth_callback.{name}` which receives request headers and query parameters. The hook returns a user document to create a session.
 
-```lua
--- hooks/auth_callback/google.lua
-local M = {}
+The file lives at `{config_dir}/auth_callback/{name}.lua` (resolved by
+`require("auth_callback.{name}")`) and **returns the handler function
+directly** — the callback ref `auth_callback.{name}` is the module itself, not
+a `module.function` pair.
 
-function M.google(ctx)
+```lua
+-- auth_callback/google.lua
+return function(ctx)
     -- ctx.headers._query_code contains the OAuth authorization code
     local code = ctx.headers["_query_code"]
     if not code then return nil end
@@ -195,17 +198,21 @@ function M.google(ctx)
     local userinfo = crap.json.decode(info_res.body)
 
     -- Find or create user
-    local users = crap.find("users", { where = { email = userinfo.email } })
+    local users = crap.collections.find("users", { where = { email = userinfo.email } })
     if #users.documents > 0 then return users.documents[1] end
 
-    return crap.create("users", {
+    return crap.collections.create("users", {
         email = userinfo.email,
         name = userinfo.name,
     })
 end
-
-return M
 ```
+
+> **Verification & lock still apply.** The callback enforces the same account
+> guards as password login: a locked account, or an unverified account in a
+> collection that requires email verification, is refused a session (the user
+> is redirected to login). Return a user your provider has actually
+> authenticated.
 
 To initiate the OAuth flow, add a link on your login page pointing to the provider's authorize URL with your `redirect_uri` set to `/admin/auth/callback/google`.
 

@@ -30,6 +30,7 @@ pub(in crate::mcp::tools) fn exec_unpublish(
         .runner(ctx.runner)
         .override_access(true)
         .event_transport(ctx.event_transport.clone())
+        .invalidation_transport(ctx.invalidation_transport.clone())
         .cache(ctx.cache.clone())
         // Required so the raw read inside `unpublish_document_in_conn` builds
         // a default `LocaleContext` for collections with localized fields.

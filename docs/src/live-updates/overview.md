@@ -117,7 +117,20 @@ draft events but not published ones.
 
 Row-level constraints use in-memory evaluation of the same filters that `Find` uses as SQL WHERE conditions. For example, if a user's access returns `{ owner = ctx.user.id }`, only events where `owner` matches are delivered. (An event whose payload is empty — `metadata` mode, or any delete — cannot satisfy a non-empty row constraint, so a constrained subscriber is fail-closed for those events.)
 
-Access is snapshotted at subscribe time. Permission changes require reconnect.
+Access is snapshotted at subscribe time and re-resolved only on reconnect.
+
+> **Revoking live access requires a session-version bump.** The server tears
+> down a stream (forcing the re-resolve) only when the subscriber's session is
+> invalidated — lock, hard-delete, logout, or password reset, which all bump
+> `_session_version` (see SEC-E above). A permission change made *purely* by
+> editing data the access function reads — e.g. removing a role document or a
+> group membership without touching the subscriber's own session — does **not**
+> tear down an already-open stream, so the stale snapshot keeps delivering
+> events for the now-revoked view until the client reconnects. To revoke a
+> user's live access immediately, bump their session version (e.g. `lock` then
+> unlock, or any session-invalidating action). Same-process and multi-node
+> behave identically here: there is no "access changed" signal, only
+> "session invalidated."
 
 > **Multi-node rolling upgrades.** Content-view gating relies on view metadata
 > the publisher attaches to each event. An event that arrives **without** it —

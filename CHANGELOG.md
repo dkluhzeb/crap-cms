@@ -8,6 +8,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Job-run reads are access-controlled.** The `GetJobRun` and `ListJobRuns`
+  gRPC RPCs previously applied no authorization beyond authentication — any
+  authenticated caller could read any job's run payloads (`data_json`,
+  `result_json`, `error`), even for jobs whose `access` function restricted who
+  could trigger them. All three job-read RPCs (`GetJobRun`, `ListJobRuns`, and
+  `ListJobs`) now enforce the job's `access` function, invoked with
+  `operation == "read"` (trigger continues to use `operation == "trigger"`), so
+  a single function can gate both or branch between them. Reads are a permissive
+  union: `ListJobRuns`/`ListJobs` silently omit jobs the caller may not read,
+  and `GetJobRun` returns `not_found` for a denied or unknown run (hiding
+  existence). Jobs without an `access` function remain readable by any
+  authenticated caller (unchanged). Runs whose job definition no longer exists
+  in the registry are no longer returned by the API (fail-closed). A job
+  `access` function that returns a filter table for a read is rejected, the same
+  as for trigger — job access is allow/deny only.
+
 - **`[cors]` config is validated at load.** Invalid entries used to be
   silently dropped while building the CORS layer (`filter_map(.parse().ok())`),
   and entries that parsed but could never match a browser `Origin` header
@@ -283,6 +299,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   reads ran access hooks against a nil user. `RunnerReadHooks` now supports
   `with_override_access()`, which the MCP read tools set, matching writes and the
   documented "MCP operates with full access" contract.
+
+- **Served upload files are gated by their owning document, per viewer.** The
+  `/uploads/{collection}/{filename}` route used to check only the collection's
+  published `read` access with no document id — collapsing a row constraint to
+  "allowed", ignoring the draft/trash status of the owning document, so any
+  file whose collection was readable served regardless of the owning document's
+  per-row access or lifecycle state. The route now resolves the upload-collection
+  document that owns the requested URL and applies the full content-view model
+  (published ∪ draft, downgraded to the viewer; row constraints matched; trashed
+  rows excluded). A draft file serves only to a viewer with draft access; an
+  owner-constrained file serves only to the owner; a trashed or orphaned file
+  404s. As part of this, the authenticated user (cookie or bearer) is now
+  threaded into the collection-access evaluation, not just field-level stripping
+  — previously the row/collection access hook saw an anonymous user even for an
+  authenticated request, so per-user read rules were misevaluated on served
+  files. Collections with no read hook and no draft/trash axis keep the fast,
+  uncached-query public path. Cache headers follow the resolution: immutable for
+  public files, a short shared-cache window for anonymous-visible mutable files,
+  and `no-store` for authenticated (potentially per-row) reads.
 
 - **`locale_locked` fields are enforced server-side.** A non-localized (shared)
   field is rendered read-only in the admin UI when editing a non-default locale,

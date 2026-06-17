@@ -124,18 +124,18 @@ pub async fn forgot_password_action(
     let auth_collections = get_auth_collections(&state);
     let ip = client_ip(&headers, &addr, &state.config.server);
 
-    // Rate limit: prevent email/IP flooding
-    if state.forgot_password_limiter.is_blocked(&form.email)
-        || state.ip_forgot_password_limiter.is_blocked(&ip)
-    {
+    // Rate limit: prevent email/IP flooding. Atomically record this attempt
+    // against both limiters and bail if either is now over threshold — one
+    // operation per limiter, closing the concurrent-bypass race that the old
+    // is_blocked + separate record split left open. Both are evaluated (not
+    // short-circuited) so each counter advances every attempt. Returning the
+    // generic success on a block leaks nothing — the response is always
+    // "success" regardless of whether the email exists.
+    let email_blocked = state.forgot_password_limiter.check_and_block(&form.email);
+    let ip_blocked = state.ip_forgot_password_limiter.check_and_block(&ip);
+    if email_blocked || ip_blocked {
         return render_forgot_success(&state, &auth_collections);
     }
-
-    // Record rate limit immediately to prevent concurrent request bypass.
-    // Safe to record unconditionally — the response is always "success"
-    // regardless of whether the email exists, so no information is leaked.
-    state.forgot_password_limiter.record_failure(&form.email);
-    state.ip_forgot_password_limiter.record_failure(&ip);
 
     if let Some(def) = forgot_password_collection(&state, &form.collection) {
         let params = ResetEmailParams {

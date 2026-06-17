@@ -27,7 +27,7 @@ use crate::{
             shared::paths,
         },
     },
-    core::{Document, HookRef},
+    core::{Document, HookRef, collection::Auth},
     db::DbPool,
     hooks::{HookRunner, lifecycle::AuthStrategyInput},
     service::{self, ServiceContext},
@@ -99,10 +99,33 @@ async fn run_auth_callback_hook(
     }
 }
 
-/// Fetch the session version for a user, returning `None` on DB errors.
-fn fetch_session_version(state: &AdminState, slug: &str, user_id: &str) -> Option<u64> {
+/// Validate the user returned by an auth-callback hook the same way the login
+/// path does, and return the user's current session version.
+///
+/// Rejects locked accounts and — when the collection requires email
+/// verification — unverified accounts, returning `None` so the caller redirects
+/// to login without minting a session. This mirrors the per-strategy login
+/// guard (`is_locked` + `requires_verify_email && is_verified`); without it an
+/// external auth callback would bypass email verification, since the
+/// per-request session resolver re-checks lock and session version but **not**
+/// verification.
+fn validate_callback_user(state: &AdminState, slug: &str, user_id: &str) -> Option<u64> {
+    let requires_verify = state
+        .registry
+        .get_collection(slug)
+        .and_then(|def| def.auth.as_ref())
+        .is_some_and(Auth::requires_verify_email);
+
     let conn = state.pool.get().ok()?;
     let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
+
+    if service::auth::is_locked(&ctx, user_id).ok()? {
+        return None;
+    }
+
+    if requires_verify && !service::auth::is_verified(&ctx, user_id).ok()? {
+        return None;
+    }
 
     Some(service::auth::get_session_version(&ctx, user_id).unwrap_or(0))
 }
@@ -125,7 +148,10 @@ pub async fn auth_callback(
 ) -> Response {
     let ip = client_ip(&headers, &addr, &state.config.server);
 
-    if state.ip_login_limiter.is_blocked(&ip) {
+    // Atomically record this callback attempt against the IP limiter and bail
+    // if over threshold — one operation, closing the burst race the is_blocked
+    // + later record_failure split left open. A successful login clears it below.
+    if state.ip_login_limiter.check_and_block(&ip) {
         return Redirect::to(paths::LOGIN).into_response();
     }
 
@@ -136,13 +162,13 @@ pub async fn auth_callback(
     let user = match run_auth_callback_hook(&state, &name, &headers, &params, &collection).await {
         Ok(Some(doc)) => doc,
         Ok(None) => {
-            state.ip_login_limiter.record_failure(&ip);
+            // Attempt already recorded up front by check_and_block.
             return Redirect::to(paths::LOGIN).into_response();
         }
         Err(()) => return Redirect::to(paths::LOGIN).into_response(),
     };
 
-    let Some(session_version) = fetch_session_version(&state, &collection, &user.id) else {
+    let Some(session_version) = validate_callback_user(&state, &collection, &user.id) else {
         return Redirect::to(paths::LOGIN).into_response();
     };
 

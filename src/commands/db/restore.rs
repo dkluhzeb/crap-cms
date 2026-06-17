@@ -1,6 +1,6 @@
 //! `restore` subcommand: replace database and uploads from a backup.
 
-use std::{fs, path::Path, process};
+use std::{fs, io::ErrorKind, path::Path, process};
 
 use anyhow::{Context as _, Result, bail};
 
@@ -132,13 +132,20 @@ fn restore_database(
         .with_context(|| format!("Failed to stage database copy at {}", staged.display()))?;
 
     for sidecar in &sidecars {
-        if sidecar.exists() {
-            fs::remove_file(sidecar).with_context(|| {
-                format!(
-                    "Failed to remove {} — aborting before touching the database",
-                    sidecar.display()
-                )
-            })?;
+        // Remove unconditionally and tolerate a missing file: a `wal_checkpoint`
+        // (above) or the OS can drop a `-wal`/`-shm` sidecar between listing and
+        // removal, so an `exists()` guard would race. NotFound = already gone.
+        match fs::remove_file(sidecar) {
+            Ok(()) => {}
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    format!(
+                        "Failed to remove {} — aborting before touching the database",
+                        sidecar.display()
+                    )
+                });
+            }
         }
     }
 

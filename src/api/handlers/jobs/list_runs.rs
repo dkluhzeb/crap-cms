@@ -15,7 +15,7 @@ use crate::{
     core::{JobRun, Registry, SharedTokenProvider},
     db::DbPool,
     hooks::HookRunner,
-    service::{self, PaginatedResult},
+    service::{self, PaginatedResult, ServiceContext},
 };
 
 use super::job_run_to_proto;
@@ -60,9 +60,16 @@ fn list_job_runs_blocking(
         return Err(Status::unauthenticated("Authentication required"));
     }
 
+    let ctx = ServiceContext::slug_only(input.slug.as_deref().unwrap_or(""))
+        .conn(&conn)
+        .runner(&input.hook_runner)
+        .user(auth_user.as_ref().map(|u| &u.user_doc))
+        .build();
+
     service::jobs::list_job_runs(
-        &conn,
+        &ctx,
         &service::jobs::ListJobRunsInput {
+            registry: input.registry.as_ref(),
             slug: input.slug.as_deref(),
             status: input.status.as_deref(),
             limit: input.limit,

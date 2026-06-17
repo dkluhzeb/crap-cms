@@ -13,7 +13,7 @@ use crate::{
         lifecycle::{
             AccessCheckInput, FieldHookEvent, FieldHooksCall, LuaCrudInfra,
             access::{
-                check_access_with_lua, check_field_read_access_with_lua,
+                check_collection_access, check_field_read_access_with_lua,
                 check_field_write_access_with_lua,
             },
             run_field_hooks_inner, run_hooks_inner, validate_fields_inner,
@@ -506,7 +506,10 @@ impl WriteHooks for LuaWriteHooks<'_> {
         if self.override_access {
             return Ok(AccessResult::Allowed);
         }
-        check_access_with_lua(self.lua, input)
+        // Route through the chokepoint (not the bare evaluator) so a write
+        // hook's row constraints get the same operator / dotted / locale
+        // validation as every other surface.
+        check_collection_access(self.lua, input)
     }
 
     fn field_read_denied(

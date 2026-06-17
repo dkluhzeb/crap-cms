@@ -14,7 +14,8 @@ use crate::{
     },
     config::LocaleConfig,
     core::{
-        CollectionDefinition, Registry, SharedCache, SharedEventTransport, SharedTokenProvider,
+        CollectionDefinition, Registry, SharedCache, SharedEventTransport,
+        SharedInvalidationTransport, SharedTokenProvider,
     },
     db::DbPool,
     hooks::HookRunner,
@@ -30,6 +31,7 @@ struct UnpublishBlockingInput {
     registry: Arc<Registry>,
     db_kind: String,
     event_transport: Option<SharedEventTransport>,
+    invalidation_transport: SharedInvalidationTransport,
     cache: Option<SharedCache>,
     collection: String,
     id: String,
@@ -67,6 +69,7 @@ fn unpublish_blocking(input: UnpublishBlockingInput) -> Result<content::Document
         .runner(&input.runner)
         .user(user_doc.as_ref())
         .event_transport(input.event_transport)
+        .invalidation_transport(Some(input.invalidation_transport))
         .emit_events(input.events)
         .cache(input.cache)
         .locale_config(Some(&input.locale_config))
@@ -95,6 +98,7 @@ impl ContentService {
             registry: Arc::clone(&self.registry),
             db_kind: self.db_kind.clone(),
             event_transport: self.event_transport.clone(),
+            invalidation_transport: self.invalidation_transport.clone(),
             cache: Some(self.cache.clone()),
             collection: req.collection.clone(),
             id: req.id.clone(),

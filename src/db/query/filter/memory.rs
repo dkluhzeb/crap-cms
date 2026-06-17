@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::core::{DocumentFields, FieldDefinition, FieldType, prefixed_name, walk_leaf_fields};
+use crate::db::query::helpers::normalize_date_value;
 use crate::db::{Filter, FilterClause, FilterOp};
 
 /// Evaluate filter clauses against in-memory document data, coercing comparisons
@@ -148,6 +149,13 @@ fn typed_eq(stored: &Value, expected: &str, ft: Option<&FieldType>) -> bool {
             // Non-numeric on either side: SQL falls back to a text compare.
             _ => value_to_string(stored) == *expected,
         },
+        // SQL binds a Date comparand through `normalize_date_value` (and the
+        // stored column was normalized at write time), so normalize both sides
+        // here too — otherwise `2026-01-15` vs `2026-01-15T00:00:00.000Z` would
+        // diverge (fail-open for `NotEquals`/`NotIn`).
+        Some(FieldType::Date) => {
+            normalize_date_value(&value_to_string(stored)) == normalize_date_value(expected)
+        }
         _ => value_to_string(stored) == *expected,
     }
 }
@@ -738,6 +746,27 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Regression: Date constraints normalize both sides like SQL, so a stored
+    /// `…T09:00:00.000Z` equals a constraint `…T09:00:00Z`. The old raw string
+    /// compare made `NotEquals` fail OPEN here (the strings differ).
+    #[test]
+    fn date_constraint_normalizes_both_sides_like_sql() {
+        let fields = vec![FieldDefinition::builder("published_at", FieldType::Date).build()];
+        let d = data(&[("published_at", json!("2026-01-15T09:00:00.000Z"))]);
+
+        let eq = typed_single(
+            "published_at",
+            FilterOp::Equals("2026-01-15T09:00:00Z".into()),
+        );
+        assert!(matches_constraints_typed(&d, from_ref(&eq), &fields));
+
+        let neq = typed_single(
+            "published_at",
+            FilterOp::NotEquals("2026-01-15T09:00:00Z".into()),
+        );
+        assert!(!matches_constraints_typed(&d, from_ref(&neq), &fields));
     }
 
     /// Number constraints compare numerically (`3` == `3.0`), not as strings.

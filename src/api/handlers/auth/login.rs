@@ -128,7 +128,14 @@ impl ContentService {
         let headers = self.metadata_headers(request.metadata());
         let req = request.into_inner();
 
-        if self.login_limiter.is_blocked(&req.email) || self.ip_login_limiter.is_blocked(&ip) {
+        // Atomically record this attempt against both limiters and reject if
+        // either is now over threshold — one operation per limiter, closing the
+        // burst race the old is_blocked + later record_failure split left open.
+        // Both are evaluated (not short-circuited) so each counter advances;
+        // a successful login clears both below.
+        let email_blocked = self.login_limiter.check_and_block(&req.email);
+        let ip_blocked = self.ip_login_limiter.check_and_block(&ip);
+        if email_blocked || ip_blocked {
             return Err(Status::resource_exhausted(
                 "Too many login attempts. Please try again later.",
             ));
@@ -172,8 +179,7 @@ impl ContentService {
             .map_err(|_| Status::internal("Internal error"))??;
 
         let Some((user, session_version)) = login_result else {
-            self.login_limiter.record_failure(&req.email);
-            self.ip_login_limiter.record_failure(&ip);
+            // Attempt already recorded up front by check_and_block.
             return Err(Status::unauthenticated("Invalid email or password"));
         };
 

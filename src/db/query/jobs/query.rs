@@ -84,22 +84,59 @@ pub fn count_running_per_queue(conn: &dyn DbConnection) -> Result<HashMap<String
     Ok(map)
 }
 
-/// Count job runs with optional filters (same WHERE clause as [`list_job_runs`]).
-///
-/// # Errors
-///
-/// Returns a backend error if the COUNT query fails.
-pub fn count_job_runs(
-    conn: &dyn DbConnection,
-    slug: Option<&str>,
-    status: Option<&str>,
-) -> Result<i64> {
+/// Full job-run column list, shared by the list/count query builders.
+const RUN_COLUMNS: &str = "id, slug, status, queue, data, result, error, attempt, max_attempts, \
+     scheduled_by, created_at, started_at, completed_at, heartbeat_at, retry_after, \
+     priority, unique_key";
+
+/// Slug predicate for job-run reads. `In` carries an access allowlist —
+/// the set of slugs the caller is permitted to read.
+#[derive(Clone, Copy)]
+enum SlugPred<'a> {
+    Any,
+    One(&'a str),
+    In(&'a [String]),
+}
+
+impl SlugPred<'_> {
+    /// Append the slug `WHERE` fragment to `sql`/`params`. Returns `false`
+    /// when the predicate matches nothing (an empty `In` allowlist), so the
+    /// caller can short-circuit instead of emitting invalid `IN ()` SQL.
+    fn append(&self, sql: &mut String, params: &mut Vec<DbValue>, conn: &dyn DbConnection) -> bool {
+        match self {
+            SlugPred::Any => true,
+            SlugPred::One(s) => {
+                params.push(DbValue::Text((*s).to_string()));
+                let _ = write!(sql, " AND slug = {}", conn.placeholder(params.len()));
+                true
+            }
+            SlugPred::In(slugs) => {
+                if slugs.is_empty() {
+                    return false;
+                }
+
+                sql.push_str(" AND slug IN (");
+                for (i, s) in slugs.iter().enumerate() {
+                    params.push(DbValue::Text(s.clone()));
+                    if i > 0 {
+                        sql.push_str(", ");
+                    }
+                    let _ = write!(sql, "{}", conn.placeholder(params.len()));
+                }
+                sql.push(')');
+                true
+            }
+        }
+    }
+}
+
+/// Count job runs under the given slug predicate + optional status.
+fn count_runs(conn: &dyn DbConnection, slug: SlugPred, status: Option<&str>) -> Result<i64> {
     let mut sql = String::from("SELECT COUNT(*) FROM _crap_jobs WHERE 1=1");
     let mut params: Vec<DbValue> = Vec::new();
 
-    if let Some(s) = slug {
-        params.push(DbValue::Text(s.to_string()));
-        let _ = write!(sql, " AND slug = {}", conn.placeholder(params.len()));
+    if !slug.append(&mut sql, &mut params, conn) {
+        return Ok(0);
     }
 
     if let Some(st) = status {
@@ -112,30 +149,21 @@ pub fn count_job_runs(
     Ok(row.as_ref().and_then(|r| r.i64_at(0)).unwrap_or(0))
 }
 
-/// List job runs with optional filters.
-///
-/// # Errors
-///
-/// Returns a backend error if the SELECT query fails or any row fails to parse.
-pub fn list_job_runs(
+/// List job runs under the given slug predicate + optional status.
+fn query_runs(
     conn: &dyn DbConnection,
-    slug: Option<&str>,
+    slug: SlugPred,
     status: Option<&str>,
     limit: i64,
     offset: i64,
 ) -> Result<Vec<JobRun>> {
-    let mut sql = String::from(
-        "SELECT id, slug, status, queue, data, result, error, attempt, max_attempts,
-                scheduled_by, created_at, started_at, completed_at, heartbeat_at, retry_after,
-                priority, unique_key
-         FROM _crap_jobs WHERE 1=1",
-    );
+    let mut sql = format!("SELECT {RUN_COLUMNS} FROM _crap_jobs WHERE 1=1");
     let mut params: Vec<DbValue> = Vec::new();
 
-    if let Some(s) = slug {
-        params.push(DbValue::Text(s.to_string()));
-        let _ = write!(sql, " AND slug = {}", conn.placeholder(params.len()));
+    if !slug.append(&mut sql, &mut params, conn) {
+        return Ok(Vec::new());
     }
+
     if let Some(st) = status {
         params.push(DbValue::Text(st.to_string()));
         let _ = write!(sql, " AND status = {}", conn.placeholder(params.len()));
@@ -154,6 +182,70 @@ pub fn list_job_runs(
     let rows = conn.query_all(&sql, &params)?;
 
     Ok(rows.iter().map(row_to_job_run).collect())
+}
+
+/// Count job runs with optional filters (same WHERE clause as [`list_job_runs`]).
+///
+/// # Errors
+///
+/// Returns a backend error if the COUNT query fails.
+pub fn count_job_runs(
+    conn: &dyn DbConnection,
+    slug: Option<&str>,
+    status: Option<&str>,
+) -> Result<i64> {
+    count_runs(conn, slug.map_or(SlugPred::Any, SlugPred::One), status)
+}
+
+/// Count job runs restricted to an access allowlist of slugs. An empty
+/// allowlist yields `0`.
+///
+/// # Errors
+///
+/// Returns a backend error if the COUNT query fails.
+pub fn count_job_runs_in(
+    conn: &dyn DbConnection,
+    slugs: &[String],
+    status: Option<&str>,
+) -> Result<i64> {
+    count_runs(conn, SlugPred::In(slugs), status)
+}
+
+/// List job runs with optional filters.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT query fails or any row fails to parse.
+pub fn list_job_runs(
+    conn: &dyn DbConnection,
+    slug: Option<&str>,
+    status: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<JobRun>> {
+    query_runs(
+        conn,
+        slug.map_or(SlugPred::Any, SlugPred::One),
+        status,
+        limit,
+        offset,
+    )
+}
+
+/// List job runs restricted to an access allowlist of slugs. An empty
+/// allowlist yields no rows.
+///
+/// # Errors
+///
+/// Returns a backend error if the SELECT query fails or any row fails to parse.
+pub fn list_job_runs_in(
+    conn: &dyn DbConnection,
+    slugs: &[String],
+    status: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<JobRun>> {
+    query_runs(conn, SlugPred::In(slugs), status, limit, offset)
 }
 
 /// Get a single job run by ID.
