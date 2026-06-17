@@ -22,7 +22,6 @@ use crate::{
         },
         lua_api,
     },
-    service::validate_access_constraint_locales,
 };
 
 /// Convert a Lua table returned by an auth strategy into a Document.
@@ -129,32 +128,10 @@ impl HookRunner {
         let lua = self.pool.acquire()?;
         let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
-        let result = check_collection_access(&lua, input)?;
-
-        // A row constraint may not target a locale-scoped field: the SQL and
-        // in-memory enforcement paths resolve it to different value spaces
-        // (per-locale column vs flat/active-locale), so they could diverge. The
-        // registry is available here, so reject it for every runner-based
-        // surface (direct reads, live event streams, relationship/join
-        // population) at the single point they all pass through.
-        if let AccessResult::Constrained(filters) = &result {
-            let fields = self
-                .registry
-                .get_collection(input.collection)
-                .map(|d| &d.fields)
-                .or_else(|| {
-                    self.registry
-                        .get_global(input.collection)
-                        .map(|d| &d.fields)
-                });
-
-            if let Some(fields) = fields {
-                validate_access_constraint_locales(filters, fields, input.collection)
-                    .map_err(anyhow::Error::new)?;
-            }
-        }
-
-        Ok(result)
+        // All access-constraint validation (operators, system columns, dotted
+        // paths, locale-scoped fields) lives in `check_collection_access` — the
+        // single chokepoint every access-resolving surface passes through.
+        check_collection_access(&lua, input)
     }
 
     /// Check field-level read access. Returns a list of field names that should be

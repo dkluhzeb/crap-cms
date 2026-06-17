@@ -9,7 +9,7 @@ use crate::{
     hooks::LuaCrudInfra,
     service::{
         RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, WriteResult, flush_queue,
-        update_document_in_conn,
+        invalidate_user_streams_if_auth, update_document_in_conn,
     },
 };
 
@@ -78,6 +78,7 @@ fn update_document_pool(
     ctx.clear_cache();
 
     ctx.publish_mutation_event(EventOperation::Update, &result.0.id, &result.0.fields);
+    invalidate_user_streams_if_auth(ctx, &result.0.id);
     flush_queue(ctx, &queue);
 
     Ok(result)
@@ -94,6 +95,7 @@ fn update_document_conn(
     ctx.clear_cache();
 
     ctx.publish_mutation_event(EventOperation::Update, &result.0.id, &result.0.fields);
+    invalidate_user_streams_if_auth(ctx, &result.0.id);
 
     Ok(result)
 }

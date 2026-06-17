@@ -110,6 +110,7 @@ fn update_document_blocking(
         .runner(&args.runner)
         .user(args.user_doc.as_ref())
         .event_transport(args.event_transport)
+        .invalidation_transport(Some(args.invalidation_bus.clone()))
         .cache(args.cache)
         .locale_config(Some(&args.locale_config))
         .build();

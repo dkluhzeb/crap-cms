@@ -11,7 +11,7 @@ use crate::{
     hooks::{AccessCheckInput, HookContext, HookEvent, LuaCrudInfra},
     service::{
         AfterChangeInput, RunnerWriteHooks, ServiceContext, ServiceError, flush_queue, helpers,
-        persist_unpublish, run_after_change_hooks,
+        invalidate_user_streams_if_auth, persist_unpublish, run_after_change_hooks,
     },
 };
 
@@ -156,6 +156,7 @@ fn unpublish_document_pool(ctx: &ServiceContext, id: &str) -> Result<Document> {
     ctx.clear_cache();
 
     ctx.publish_mutation_event(EventOperation::Update, &doc.id, &doc.fields);
+    invalidate_user_streams_if_auth(ctx, &doc.id);
     flush_queue(ctx, &queue);
 
     Ok(doc)
@@ -167,6 +168,7 @@ fn unpublish_document_conn(ctx: &ServiceContext, id: &str) -> Result<Document> {
     ctx.clear_cache();
 
     ctx.publish_mutation_event(EventOperation::Update, &doc.id, &doc.fields);
+    invalidate_user_streams_if_auth(ctx, &doc.id);
 
     Ok(doc)
 }

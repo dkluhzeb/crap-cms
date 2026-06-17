@@ -326,13 +326,45 @@ pub(crate) fn is_locale_locked_write(
         return false;
     }
 
+    is_non_default_single_locale(locale_ctx)
+}
+
+/// Whether the write targets a single, **non-default** locale — the only mode in
+/// which a shared (locale-independent) field must not be written, because it
+/// would clobber the default-locale canonical value. `Default` / `All` (and an
+/// explicit `Single(default)`) write shared columns as normal; localization
+/// disabled is never locked.
+#[must_use]
+pub(crate) fn is_non_default_single_locale(locale_ctx: Option<&LocaleContext>) -> bool {
     let Some(ctx) = locale_ctx.filter(|c| c.config.is_enabled()) else {
         return false;
     };
 
-    // Locked only when targeting a single, non-default locale. `Default` / `All`
-    // (and an explicit `Single(default)`) write shared columns as normal.
     matches!(&ctx.mode, LocaleMode::Single(l) if *l != ctx.config.default_locale)
+}
+
+/// The set of flat field names (`seo__title`) that are locale-locked for a write
+/// under `locale_ctx` — shared (non-localized, non-inherited) leaf fields when
+/// the target is a non-default single locale. Empty otherwise. Used by write
+/// paths that operate on flat data maps rather than per-field (draft snapshots).
+#[must_use]
+pub(crate) fn locale_locked_field_names(
+    fields: &[FieldDefinition],
+    locale_ctx: Option<&LocaleContext>,
+) -> std::collections::HashSet<String> {
+    let mut locked = std::collections::HashSet::new();
+    if !is_non_default_single_locale(locale_ctx) {
+        return locked;
+    }
+
+    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, inherited| {
+        if is_locale_locked_write(field, locale_ctx, inherited) {
+            locked.insert(prefixed_name(prefix, &field.name));
+        }
+        Ok(())
+    });
+
+    locked
 }
 
 #[cfg(test)]
@@ -460,6 +492,34 @@ mod tests {
     fn locale_locked_write_not_locked_when_localization_disabled() {
         let field = make_field("title", FieldType::Text);
         assert!(!is_locale_locked_write(&field, None, false));
+    }
+
+    /// `locale_locked_field_names` collects shared leaf names under a non-default
+    /// locale, and is empty for the default locale. Drives the draft-snapshot and
+    /// join-write locale-locks (M2).
+    #[test]
+    fn locale_locked_field_names_collects_shared_fields() {
+        let title = make_field("title", FieldType::Text); // shared
+        let body = make_localized_field("body", FieldType::Text); // localized
+        let fields = vec![title, body];
+
+        let de = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: make_locale_config(),
+        };
+        let locked = locale_locked_field_names(&fields, Some(&de));
+        assert!(
+            locked.contains("title"),
+            "shared field is locked under 'de'"
+        );
+        assert!(!locked.contains("body"), "localized field is not locked");
+
+        // Default locale → nothing locked.
+        let en = LocaleContext {
+            mode: LocaleMode::Single("en".to_string()),
+            config: make_locale_config(),
+        };
+        assert!(locale_locked_field_names(&fields, Some(&en)).is_empty());
     }
 
     #[test]

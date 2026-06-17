@@ -3,11 +3,14 @@
 //! - `false`/`nil`/unexpected type → Denied
 //! - `table` → Constrained (read-only WHERE filters merged into the query)
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use mlua::{Lua, LuaSerdeExt, Value};
 use tracing::warn;
 
 use crate::{
+    core::Registry,
     db::{AccessResult, Filter, FilterClause, FilterOp},
     hooks::{
         lifecycle::{
@@ -15,7 +18,7 @@ use crate::{
         },
         lua_api::crud::filter::FilterValue,
     },
-    service::validate_access_constraints,
+    service::{validate_access_constraint_locales, validate_access_constraints},
 };
 
 pub(crate) fn check_access_with_lua(
@@ -113,8 +116,25 @@ pub(crate) fn check_collection_access(
     let result = check_access_with_lua(lua, input)?;
 
     if let AccessResult::Constrained(filters) = &result {
+        // Operator allowlist + system-column + dotted-path rules (context-free).
         validate_access_constraints(filters, false, false, input.collection)
             .map_err(anyhow::Error::new)?;
+
+        // Locale-scoped-field rule (needs the collection's field types). The
+        // registry snapshot is in the VM's app-data, so this fires uniformly for
+        // every surface that resolves access through this chokepoint — direct
+        // reads, Lua CRUD, relationship/join population, and live event streams.
+        if let Some(registry) = lua.app_data_ref::<Arc<Registry>>() {
+            let fields = registry
+                .get_collection(input.collection)
+                .map(|d| &d.fields)
+                .or_else(|| registry.get_global(input.collection).map(|d| &d.fields));
+
+            if let Some(fields) = fields {
+                validate_access_constraint_locales(filters, fields, input.collection)
+                    .map_err(anyhow::Error::new)?;
+            }
+        }
     }
 
     Ok(result)

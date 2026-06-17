@@ -13,7 +13,7 @@ use crate::db::{AccessResult, Filter, FilterClause, FilterOp, RequestedViews, Vi
 use crate::hooks::AccessCheckInput;
 use crate::service::ServiceError;
 use crate::service::hooks::ReadHooks;
-use crate::service::read::validate_access_constraints;
+use crate::service::read::{validate_access_constraint_locales, validate_access_constraints};
 
 /// Read context shared across a read's access checks — the subset of
 /// [`AccessCheckInput`] identical for every view of one read.
@@ -182,11 +182,13 @@ fn check_view(
         ui_locale: ctx.ui_locale,
     })?;
 
-    // A view's row constraints may never touch system columns: the system
-    // composes `_status` itself (each view scopes its own status), so an
-    // operator filtering `_status`/`_deleted_at` is always a mistake here.
+    // A view's row constraints may never touch system columns (the system
+    // composes `_status`) or a locale-scoped field (its SQL vs in-memory value
+    // spaces diverge). Validate here — the read-scope boundary every read
+    // surface (runner and Lua CRUD) funnels through — so the reject is uniform.
     if let AccessResult::Constrained(filters) = &result {
         validate_access_constraints(filters, false, false, ctx.slug)?;
+        validate_access_constraint_locales(filters, &ctx.def.fields, ctx.slug)?;
     }
 
     Ok(result)

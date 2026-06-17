@@ -14,7 +14,8 @@ use crate::{
     },
     config::LocaleConfig,
     core::{
-        CollectionDefinition, Registry, SharedCache, SharedEventTransport, SharedTokenProvider,
+        CollectionDefinition, Registry, SharedCache, SharedEventTransport,
+        SharedInvalidationTransport, SharedTokenProvider,
     },
     db::DbPool,
     hooks::HookRunner,
@@ -34,6 +35,7 @@ struct RestoreVersionBlockingInput {
     def: CollectionDefinition,
     locale_config: LocaleConfig,
     event_transport: Option<SharedEventTransport>,
+    invalidation_transport: SharedInvalidationTransport,
     cache: Option<SharedCache>,
     token: Option<String>,
 }
@@ -62,6 +64,7 @@ fn restore_version_blocking(
         .runner(&input.runner)
         .user(user_doc.as_ref())
         .event_transport(input.event_transport)
+        .invalidation_transport(Some(input.invalidation_transport))
         .cache(input.cache)
         .build();
 
@@ -107,6 +110,7 @@ impl ContentService {
             def,
             locale_config: self.locale_config.clone(),
             event_transport: self.event_transport.clone(),
+            invalidation_transport: self.invalidation_transport.clone(),
             cache: Some(self.cache.clone()),
             token,
             headers,

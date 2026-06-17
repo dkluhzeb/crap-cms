@@ -987,31 +987,45 @@ async fn list_items_with_search() {
     );
 }
 
+/// Creating a document under a NON-default locale is rejected: a new document
+/// establishes its default-locale (canonical) row first — translations come
+/// later via update. Creating under the default locale succeeds. (Was
+/// `create_action_with_locale`, which asserted the now-retired behavior that a
+/// non-default-locale create succeeds and silently wrote shared columns from the
+/// wrong locale.)
 #[tokio::test]
-async fn create_action_with_locale() {
+async fn create_under_non_default_locale_is_rejected() {
     let app = setup_localized_app();
     let user_id = create_test_user(&app, "locale_create@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "locale_create@test.com");
 
-    let resp = app
-        .router
-        .oneshot(
+    let create = |locale: &str| {
+        app.router.clone().oneshot(
             Request::post("/admin/collections/pages")
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("cookie", auth_and_csrf(&cookie))
                 .header("X-CSRF-Token", TEST_CSRF)
-                .body(Body::from(
-                    "title=Locale+Test+Page&body=Content+here&_locale=de",
-                ))
+                .body(Body::from(format!(
+                    "title=Locale+Test+Page&body=Content+here&_locale={locale}"
+                )))
                 .unwrap(),
         )
-        .await
-        .unwrap();
+    };
 
+    // Non-default locale → rejected.
+    let resp = create("de").await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "creating under a non-default locale must be rejected"
+    );
+
+    // Default locale → succeeds.
+    let resp = create("en").await.unwrap();
     let status = resp.status();
     assert!(
         status == StatusCode::SEE_OTHER || status == StatusCode::OK,
-        "Localized create with locale param should succeed, got {status}"
+        "default-locale create should succeed, got {status}"
     );
 }
 

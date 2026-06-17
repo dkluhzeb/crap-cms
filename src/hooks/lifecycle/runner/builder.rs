@@ -168,6 +168,12 @@ fn create_lua_vm(
 
     lua.set_app_data(VmLabel(format!("vm-{vm_index}")));
 
+    // The registry snapshot is stored in app-data so the access chokepoint
+    // (`check_collection_access`) can resolve a constrained collection's field
+    // types — e.g. to reject a row constraint on a locale-scoped field — for the
+    // inline Lua-CRUD path, which has no `HookRunner` handle.
+    lua.set_app_data(Arc::clone(registry));
+
     setup_package_paths(&lua, config_dir)?;
 
     register_apis(&lua, registry, config)?;

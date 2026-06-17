@@ -17,8 +17,8 @@ use crate::{
         lua_api::crud::{
             get_tx_conn,
             helpers::{
-                ExtractedData, check_hook_depth, extract_data, hook_lua_infra, hook_ui_locale,
-                hook_user, resolve_collection,
+                ExtractedData, check_hook_depth, extract_data, hook_invalidation_transport,
+                hook_lua_infra, hook_ui_locale, hook_user, resolve_collection,
             },
         },
     },
@@ -153,6 +153,7 @@ fn collections_update(
         .override_access(opts.override_access)
         .emit_events(opts.events)
         .lua_infra(lua_infra.as_ref())
+        .invalidation_transport(hook_invalidation_transport(lua))
         .build();
 
     let (doc, _) = update_document(&ctx, &id, write_input)

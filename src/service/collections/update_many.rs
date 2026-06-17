@@ -176,6 +176,16 @@ fn update_many_pool(
     for (id, fields) in &results {
         ctx.publish_mutation_event(EventOperation::Update, id, fields);
     }
+
+    // A bulk role/group change on auth documents must tear down each affected
+    // user's live-update streams, just like a single update. No-op for non-auth
+    // collections or without an invalidation transport.
+    if def.is_auth_collection() {
+        for id in &ids {
+            ctx.publish_user_invalidation(id);
+        }
+    }
+
     flush_queue(ctx, &queue);
 
     Ok(UpdateManyResult {
@@ -224,6 +234,12 @@ fn update_many_conn(
         ctx.publish_mutation_event(EventOperation::Update, doc_id, &updated_doc.fields);
         updated_ids.push(doc_id.clone());
         modified += 1;
+    }
+
+    if def.is_auth_collection() {
+        for id in &updated_ids {
+            ctx.publish_user_invalidation(id);
+        }
     }
 
     Ok(UpdateManyResult {

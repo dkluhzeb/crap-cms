@@ -32,6 +32,19 @@ pub fn create_document_in_conn(
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.collection_def()?;
 
+    // A document is created in its default (canonical) locale. A new row has no
+    // default-locale value to translate from, so creating under a non-default
+    // locale would write shared columns from the wrong locale AND leave the
+    // default-locale columns empty. Reject it (parity with the update path's
+    // locale-lock); create in the default locale, then translate via update.
+    if query::is_non_default_single_locale(input.locale_ctx) {
+        return Err(ServiceError::HookError(
+            "Cannot create a document in a non-default locale — create in the default locale \
+             first, then add translations with an update."
+                .into(),
+        ));
+    }
+
     // Collection-level access check. The incoming data is exposed to the
     // access function as `ctx.data` so it can gate on what is being written.
     let access = write_hooks.check_access(&AccessCheckInput {

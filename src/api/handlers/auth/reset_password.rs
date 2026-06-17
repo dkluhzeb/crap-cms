@@ -7,7 +7,7 @@ use tracing::error;
 use crate::core::collection::Auth;
 use crate::{
     api::{content, handlers::ContentService},
-    core::CollectionDefinition,
+    core::{CollectionDefinition, SharedInvalidationTransport},
     db::DbPool,
     service::{ServiceContext, ServiceError, auth::consume_reset_token},
 };
@@ -19,6 +19,7 @@ struct ResetPasswordBlockingInput {
     def: CollectionDefinition,
     token: String,
     password: String,
+    invalidation_transport: SharedInvalidationTransport,
 }
 
 /// The outer `Status` carries infrastructure failures (pool/tx/commit) that
@@ -44,6 +45,7 @@ fn reset_password_blocking(
 
     let ctx = ServiceContext::collection(&input.slug, &input.def)
         .conn(&tx)
+        .invalidation_transport(Some(input.invalidation_transport.clone()))
         .build();
 
     if let Err(e) = consume_reset_token(&ctx, &input.token, &input.password) {
@@ -100,6 +102,7 @@ impl ContentService {
             def,
             token: req.token.clone(),
             password: req.new_password.clone(),
+            invalidation_transport: self.invalidation_transport.clone(),
         };
 
         let result = task::spawn_blocking(move || reset_password_blocking(&input))

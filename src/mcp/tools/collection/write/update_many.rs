@@ -61,6 +61,7 @@ pub(in crate::mcp::tools) fn exec_update_many(
         .runner(ctx.runner)
         .override_access(true)
         .event_transport(ctx.event_transport.clone())
+        .invalidation_transport(ctx.invalidation_transport.clone())
         .emit_events(events)
         .cache(ctx.cache.clone())
         .build();

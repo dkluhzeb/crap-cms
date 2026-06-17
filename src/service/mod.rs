@@ -77,7 +77,7 @@ pub use types::{
     GetGlobalInput, ListVersionsInput, PaginatedResult, PersistOptions, SearchDocumentsInput,
     VerificationQueue, WriteInput, WriteResult, values_from_strings,
 };
-pub(crate) use types::{flush_queue, flush_verification_queue};
+pub(crate) use types::{flush_queue, flush_verification_queue, invalidate_user_streams_if_auth};
 
 pub use collections::{
     CreateManyItem, CreateManyOptions, CreateManyResult, DeleteManyOptions, DeleteManyResult,

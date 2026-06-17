@@ -9,7 +9,7 @@ use crate::core::{
 };
 use crate::db::{
     DbConnection, DbPool, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query,
-    query::filter::memory::matches_constraints,
+    query::filter::memory::matches_constraints_typed,
 };
 
 /// Find documents (read-only, no transaction needed).
@@ -118,7 +118,7 @@ pub fn find_by_id_full(p: FindByIdFullParams<'_>) -> Result<Option<Document>> {
         // *constrained* draft/trash rule could fetch ANY draft by id. A snapshot
         // that fails the constraint falls through to the (constrained) main-row
         // find below — which returns the published row or nothing.
-        if matches_constraints(&doc.fields, &p.snapshot_constraints) {
+        if matches_constraints_typed(&doc.fields, &p.snapshot_constraints, &p.def.fields) {
             return Ok(Some(doc));
         }
     }

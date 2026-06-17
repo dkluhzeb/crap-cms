@@ -18,7 +18,7 @@ use crate::{
     config::LocaleConfig,
     core::{
         CollectionDefinition, DocumentFields, Registry, SharedCache, SharedEventTransport,
-        SharedTokenProvider,
+        SharedInvalidationTransport, SharedTokenProvider,
     },
     db::{AccessResult, DbPool, LocaleContext},
     hooks::HookRunner,
@@ -38,6 +38,7 @@ struct UpdateManyBlockingInput {
     def: CollectionDefinition,
     locale_config: LocaleConfig,
     event_transport: Option<SharedEventTransport>,
+    invalidation_transport: SharedInvalidationTransport,
     cache: Option<SharedCache>,
     token: Option<String>,
     data: DocumentFields,
@@ -100,6 +101,7 @@ fn update_many_blocking(input: UpdateManyBlockingInput) -> Result<i64, Status> {
         .runner(&input.hook_runner)
         .user(user_doc)
         .event_transport(input.event_transport)
+        .invalidation_transport(Some(input.invalidation_transport))
         .emit_events(input.events)
         .cache(input.cache)
         .build();
@@ -168,6 +170,7 @@ impl ContentService {
             def,
             locale_config: self.locale_config.clone(),
             event_transport: self.event_transport.clone(),
+            invalidation_transport: self.invalidation_transport.clone(),
             cache: Some(self.cache.clone()),
             token,
             headers,

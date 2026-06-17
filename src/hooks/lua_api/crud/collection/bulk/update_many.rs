@@ -16,8 +16,8 @@ use crate::{
             filter::convert_where_clause,
             get_tx_conn,
             helpers::{
-                EnforceAccessParams, check_hook_depth, enforce_access, hook_lua_infra,
-                hook_ui_locale, hook_user, resolve_collection,
+                EnforceAccessParams, check_hook_depth, enforce_access, hook_invalidation_transport,
+                hook_lua_infra, hook_ui_locale, hook_user, resolve_collection,
             },
         },
     },
@@ -194,6 +194,7 @@ fn collections_update_many(
         .override_access(opts.override_access)
         .emit_events(opts.events)
         .lua_infra(lua_infra.as_ref())
+        .invalidation_transport(hook_invalidation_transport(lua))
         .build();
 
     let update_opts = UpdateManyOptions {

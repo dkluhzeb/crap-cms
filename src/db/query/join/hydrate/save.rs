@@ -14,7 +14,10 @@ use super::{
 };
 use crate::{
     core::{DocumentFields, FieldDefinition, FieldType},
-    db::{DbConnection, LocaleContext, query::helpers::prefixed_name},
+    db::{
+        DbConnection, LocaleContext,
+        query::{helpers::prefixed_name, is_non_default_single_locale},
+    },
 };
 
 /// Parse a JSON value into a list of string IDs.
@@ -106,9 +109,19 @@ fn save_join_data_inner(
         let locale = resolve_join_locale(field, locale_ctx);
         let locale_ref = locale.as_deref();
         let field_key = prefixed_name(prefix, &field.name);
+
+        // A shared (non-localized) join field maps to locale-independent junction
+        // rows; writing it under a non-default locale would replace the shared
+        // set from the wrong locale. Skip the write — parity with the scalar
+        // column locale-lock. Join localization is own-flag-only, so a localized
+        // parent group never makes a shared join field per-locale (hence
+        // `!field.localized`, not the inheritance-aware `is_locale_locked_write`).
+        let join_locked = !field.localized && is_non_default_single_locale(locale_ctx);
+
         match field.field_type {
             FieldType::Relationship | FieldType::Upload => {
-                if let Some(ref rc) = field.relationship
+                if !join_locked
+                    && let Some(ref rc) = field.relationship
                     && rc.has_many
                     && let Some(val) = data.get(&field_key)
                 {
@@ -124,7 +137,7 @@ fn save_join_data_inner(
                 }
             }
             FieldType::Array => {
-                if let Some(val) = data.get(&field_key) {
+                if !join_locked && let Some(val) = data.get(&field_key) {
                     let rows = coerce_array_rows(val);
                     set_array_rows(
                         conn,
@@ -138,7 +151,7 @@ fn save_join_data_inner(
                 }
             }
             FieldType::Blocks => {
-                if let Some(val) = data.get(&field_key) {
+                if !join_locked && let Some(val) = data.get(&field_key) {
                     let rows = match val {
                         Value::Array(arr) => arr.clone(),
                         _ => Vec::new(),

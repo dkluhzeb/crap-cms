@@ -244,15 +244,16 @@ fn persist_global_update(
 ) -> Result<Document> {
     if is_draft && def.has_versions() {
         let existing_doc = query::get_global(conn, ctx.slug, def, input.locale_ctx)?;
-        versions::save_draft_version(
+        versions::save_draft_version(&versions::SaveDraftArgs {
             conn,
-            gtable,
-            "default",
-            &def.fields,
-            def.versions.as_ref(),
-            &existing_doc,
-            &final_ctx.data,
-        )?;
+            table: gtable,
+            parent_id: "default",
+            fields: &def.fields,
+            versions: def.versions.as_ref(),
+            existing_doc: &existing_doc,
+            data: &final_ctx.data,
+            locale_ctx: input.locale_ctx,
+        })?;
         return Ok(existing_doc);
     }
     persist_global_published_update(conn, ctx, def, gtable, final_ctx, input)

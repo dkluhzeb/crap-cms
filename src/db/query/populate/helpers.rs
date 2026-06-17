@@ -4,9 +4,11 @@ use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::core::{CollectionDefinition, Document, DocumentFields, cache::CacheBackend};
+use crate::core::{
+    CollectionDefinition, Document, DocumentFields, FieldDefinition, cache::CacheBackend,
+};
 use crate::db::query::AccessResult;
-use crate::db::query::filter::memory::matches_constraints;
+use crate::db::query::filter::memory::matches_constraints_typed;
 use crate::db::query::populate::JoinAccessCheck;
 use crate::db::query::populate::PopulateCtx;
 use crate::db::query::populate::Singleflight;
@@ -111,23 +113,27 @@ pub(super) fn target_row_visible(
     def: &CollectionDefinition,
 ) -> bool {
     if !def.has_drafts() {
-        return view_allows(&views.read, raw);
+        return view_allows(&views.read, raw, &def.fields);
     }
 
     let is_draft = raw.fields.get("_status").and_then(|v| v.as_str()) != Some("published");
     if is_draft {
-        return !published_only && view_allows(&views.draft, raw);
+        return !published_only && view_allows(&views.draft, raw, &def.fields);
     }
 
-    view_allows(&views.read, raw)
+    view_allows(&views.read, raw, &def.fields)
 }
 
-/// Whether a raw target document passes one resolved view decision.
-fn view_allows(access: &AccessResult, raw: &Document) -> bool {
+/// Whether a raw target document passes one resolved view decision. `fields` is
+/// the target collection's schema, so a `Constrained` filter on a Checkbox /
+/// Number field is coerced the same way SQL binds it (not a blind string match).
+fn view_allows(access: &AccessResult, raw: &Document, fields: &[FieldDefinition]) -> bool {
     match access {
         AccessResult::Denied => false,
         AccessResult::Allowed => true,
-        AccessResult::Constrained(filters) => matches_constraints(&raw.fields, filters),
+        AccessResult::Constrained(filters) => {
+            matches_constraints_typed(&raw.fields, filters, fields)
+        }
     }
 }
 

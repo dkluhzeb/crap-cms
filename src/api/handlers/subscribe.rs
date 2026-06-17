@@ -28,7 +28,7 @@ use crate::{
     },
     db::{
         AccessResult, DbConnection, DbPool, EventViewGate, FilterClause,
-        query::filter::memory::matches_constraints,
+        query::filter::memory::matches_constraints_typed,
     },
     hooks::{AccessCheckInput, EventAfterReadInput, HookRunner},
 };
@@ -259,7 +259,21 @@ fn process_event(event: &MutationEvent, ctx: &SubscriberCtx) -> Option<content::
     // Row-level constraints match against the event payload. Empty `data`
     // (metadata mode / deletes) cannot satisfy a non-empty constraint, so a
     // constrained subscriber is fail-closed for those — unchanged behavior.
-    if !constraints.is_empty() && !matches_constraints(&event.data, constraints) {
+    // Field types (resolved from the schema) make Checkbox/Number constraints
+    // match SQL instead of a blind string compare.
+    let fields = match event.target {
+        EventTarget::Collection => ctx
+            .registry
+            .get_collection(slug_str)
+            .map(|d| d.fields.as_slice()),
+        EventTarget::Global => ctx
+            .registry
+            .get_global(slug_str)
+            .map(|d| d.fields.as_slice()),
+    }
+    .unwrap_or(&[]);
+
+    if !constraints.is_empty() && !matches_constraints_typed(&event.data, constraints, fields) {
         return None;
     }
 

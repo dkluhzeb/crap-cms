@@ -11,12 +11,14 @@ use crate::{
     },
     core::{CollectionDefinition, Document},
     db::{DbPool, query},
+    hooks::HookRunner,
     service::{self, ServiceContext, helpers::collect_api_hidden_field_names},
 };
 
 /// Owned bundle for the `Me` spawn-blocking body.
 struct MeBlockingInput {
     pool: DbPool,
+    runner: HookRunner,
     collection: String,
     id: String,
     def: CollectionDefinition,
@@ -39,11 +41,16 @@ fn me_blocking(input: &MeBlockingInput) -> Result<(Option<Document>, u64, bool),
             .inspect_err(|e| error!("Me hydrate_document error: {}", e))
             .map_err(|_| Status::internal("Internal error"))?;
 
-        // Strip `api_hidden` fields even for a self-read: a field marked
-        // never-over-the-API (e.g. a stored secret on an auth collection) must
-        // not leak just because this is the caller's own record. Every other
-        // read path strips these; `Me` queries raw, so do it here too.
-        d.strip_fields(&collect_api_hidden_field_names(&input.def.fields, ""));
+        // Apply the same field stripping every other read path does, even for a
+        // self-read: `api_hidden` fields (e.g. a stored secret) AND field-level
+        // read denials (a field an access hook hides even from its owner — e.g.
+        // an admin-only flag). `Me` queries raw, so do it here.
+        let mut read_denied =
+            input
+                .runner
+                .check_field_read_access(&input.def.fields, Some(&*d), None, &conn);
+        read_denied.extend(collect_api_hidden_field_names(&input.def.fields, ""));
+        d.strip_fields(&read_denied);
     }
 
     let ctx = ServiceContext::slug_only(&input.collection)
@@ -81,6 +88,7 @@ impl ContentService {
 
         let input = MeBlockingInput {
             pool: self.pool.clone(),
+            runner: self.hook_runner.clone(),
             collection: claims.collection.to_string(),
             id: claims.sub.to_string(),
             def,

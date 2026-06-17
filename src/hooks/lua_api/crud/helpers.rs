@@ -20,7 +20,7 @@ use crate::{
         access::check_access_with_lua,
         converters::{flatten_lua_groups, lua_table_to_hashmap, lua_table_to_json_map},
     },
-    service::validate_access_constraints,
+    service::{validate_access_constraint_locales, validate_access_constraints},
 };
 
 /// Extract the authenticated user document from Lua `app_data` (if present).
@@ -173,6 +173,23 @@ pub(crate) fn enforce_access(
         AccessResult::Constrained(extra) => {
             validate_access_constraints(&extra, false, params.injecting_status, params.slug)
                 .map_err(|e| RuntimeError(e.to_string()))?;
+
+            // Reject locale-scoped-field constraints here too (Lua bulk
+            // update_many/delete_many): consume them as SQL only, so no leak,
+            // but keep operator feedback uniform with every other surface. The
+            // registry snapshot is in the VM's app-data.
+            if let Some(registry) = lua.app_data_ref::<std::sync::Arc<crate::core::Registry>>() {
+                let fields = registry
+                    .get_collection(params.slug)
+                    .map(|d| &d.fields)
+                    .or_else(|| registry.get_global(params.slug).map(|d| &d.fields));
+
+                if let Some(fields) = fields {
+                    validate_access_constraint_locales(&extra, fields, params.slug)
+                        .map_err(|e| RuntimeError(e.to_string()))?;
+                }
+            }
+
             filters.extend(extra);
             Ok(())
         }

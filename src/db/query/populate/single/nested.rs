@@ -393,11 +393,22 @@ fn populate_poly_has_one_in_map(
 
     let views = resolve_target_views(pctx, &col, &item_def)?;
 
-    if let Some(target) =
-        resolve_single_target(pctx, &col, &item_def, &id, &views, effective_depth, visited)?
-    {
-        map.insert(name.to_string(), document_to_json(&target, &col));
-    }
+    // Resolve to the embedded target, or `null` when missing or access-hidden —
+    // parity with the non-poly nested has-one and the top-level poly path, which
+    // never leave a denied target's raw `collection/id` ref in place.
+    let value = match resolve_single_target(
+        pctx,
+        &col,
+        &item_def,
+        &id,
+        &views,
+        effective_depth,
+        visited,
+    )? {
+        Some(target) => document_to_json(&target, &col),
+        None => Value::Null,
+    };
+    map.insert(name.to_string(), value);
 
     Ok(())
 }
@@ -444,10 +455,14 @@ fn populate_poly_has_many_in_map(
         }
         let views = &views_by[&col];
 
-        match resolve_single_target(pctx, &col, &item_def, &id, views, effective_depth, visited)? {
-            Some(target) => populated.push(document_to_json(&target, &col)),
-            None => populated.push(Value::String(item.clone())),
+        if let Some(target) =
+            resolve_single_target(pctx, &col, &item_def, &id, views, effective_depth, visited)?
+        {
+            populated.push(document_to_json(&target, &col));
         }
+        // Missing or access-hidden: drop the entry — parity with the non-poly
+        // nested has-many and the top-level poly path; never leave a denied
+        // target's raw `collection/id` ref in place.
     }
     map.insert(name.to_string(), Value::Array(populated));
     Ok(())

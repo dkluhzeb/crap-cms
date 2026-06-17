@@ -29,15 +29,16 @@ pub fn persist_draft_version(
     let existing_doc = query::find_by_id_raw(conn, slug, def, id, locale_ctx, false)?
         .ok_or_else(|| anyhow!("Document {id} not found in {slug}"))?;
 
-    versions::save_draft_version(
+    versions::save_draft_version(&versions::SaveDraftArgs {
         conn,
-        slug,
-        id,
-        &def.fields,
-        def.versions.as_ref(),
-        &existing_doc,
-        hook_data,
-    )?;
+        table: slug,
+        parent_id: id,
+        fields: &def.fields,
+        versions: def.versions.as_ref(),
+        existing_doc: &existing_doc,
+        data: hook_data,
+        locale_ctx,
+    })?;
 
     Ok(existing_doc)
 }

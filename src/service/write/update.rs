@@ -131,16 +131,12 @@ pub(crate) fn update_document_in_conn(
         conn,
     )?;
 
-    // Editing an auth document can change a user's access (role, group, …).
-    // Live-update streams resolve access once at connect, so tear down this
-    // user's streams to force a reconnect with fresh access. Auth-specific
-    // writes (login timestamps, lock, password resets, session bumps) use
-    // dedicated query paths — not this one — so this fires only on genuine
-    // document edits, never on high-frequency login bookkeeping. No-op without
-    // an invalidation transport attached.
-    if def.is_auth_collection() {
-        ctx.publish_user_invalidation(id);
-    }
+    // NOTE: auth-document edits invalidate a user's live-update streams, but
+    // that is published POST-COMMIT by the orchestrators (`update_document_pool`
+    // / `update_many_pool` and their conn variants) on the outer context that
+    // carries the invalidation transport — mirroring `publish_mutation_event`.
+    // Doing it here (inner ctx, pre-commit) was both a no-op and unsafe on
+    // rollback.
 
     // Strip read-denied fields from the returned document, after the hooks have
     // seen the full doc.

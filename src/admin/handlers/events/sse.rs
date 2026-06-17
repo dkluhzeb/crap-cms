@@ -260,7 +260,18 @@ fn build_event_payload(
 
     // Row-level constraints match against the event payload; empty `data`
     // cannot satisfy a non-empty constraint (fail-closed) — unchanged behavior.
-    if !constraints.is_empty() && !memory::matches_constraints(&event.data, constraints) {
+    // Field types make Checkbox/Number constraints match SQL, not a string compare.
+    let fields = match event.target {
+        EventTarget::Collection => registry
+            .get_collection(slug_str)
+            .map(|d| d.fields.as_slice()),
+        EventTarget::Global => registry.get_global(slug_str).map(|d| d.fields.as_slice()),
+    }
+    .unwrap_or(&[]);
+
+    if !constraints.is_empty()
+        && !memory::matches_constraints_typed(&event.data, constraints, fields)
+    {
         return None;
     }
 

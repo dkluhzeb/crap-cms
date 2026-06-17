@@ -5,24 +5,48 @@ use serde_json::{Map, Value};
 
 use crate::{
     core::{Document, DocumentFields, FieldDefinition, FieldType, collection::VersionsConfig},
-    db::{DbConnection, query, query::helpers::prefixed_name},
+    db::{
+        DbConnection, LocaleContext, query,
+        query::{helpers::prefixed_name, locale_locked_field_names},
+    },
     hooks::lifecycle::flatten_group_fields,
 };
 
 use super::snapshot::prune_versions;
 
+/// Inputs for [`save_draft_version`]. All fields are required; constructed at
+/// each draft-save site (collection persist, global persist, test).
+pub(crate) struct SaveDraftArgs<'a> {
+    pub conn: &'a dyn DbConnection,
+    pub table: &'a str,
+    pub parent_id: &'a str,
+    pub fields: &'a [FieldDefinition],
+    pub versions: Option<&'a VersionsConfig>,
+    pub existing_doc: &'a Document,
+    pub data: &'a DocumentFields,
+    pub locale_ctx: Option<&'a LocaleContext>,
+}
+
 /// Save a draft-only version: merge incoming hook-processed data onto existing doc,
 /// create a version snapshot, and prune.
-pub(crate) fn save_draft_version(
-    conn: &dyn DbConnection,
-    table: &str,
-    parent_id: &str,
-    fields: &[FieldDefinition],
-    versions: Option<&VersionsConfig>,
-    existing_doc: &Document,
-    final_ctx_data: &DocumentFields,
-) -> Result<()> {
+pub(crate) fn save_draft_version(args: &SaveDraftArgs<'_>) -> Result<()> {
+    let SaveDraftArgs {
+        conn,
+        table,
+        parent_id,
+        fields,
+        versions,
+        existing_doc,
+        data: final_ctx_data,
+        locale_ctx,
+    } = *args;
+
     let mut snapshot_fields = existing_doc.fields.clone();
+
+    // Locale-locked shared fields must not enter the snapshot from a non-default
+    // locale edit — otherwise the canonical default-locale value would be
+    // overwritten on restore. Mirrors the published UPDATE path's locale-lock.
+    let locked = locale_locked_field_names(fields, locale_ctx);
 
     // The existing document carries flat group columns (`seo__title`), but the
     // incoming hook data can arrive with nested group objects (`seo: { title }`)
@@ -30,7 +54,12 @@ pub(crate) fn save_draft_version(
     // sub-field overwrites the matching flat key instead of leaving a duplicate
     // nested object behind — `build_snapshot`'s hydration would otherwise rebuild
     // the group from the stale flat column and silently drop the edit.
-    let flattened = flatten_group_fields(final_ctx_data, fields);
+    let mut flattened = flatten_group_fields(final_ctx_data, fields);
+
+    // Drop locale-locked fields (scalar columns AND join fields) so neither the
+    // scalar overlay below nor the join re-merge can bake a non-default-locale
+    // edit of a shared field into the snapshot.
+    flattened.retain(|k, _| !locked.contains(k));
 
     for (k, v) in &flattened {
         snapshot_fields.insert(k.clone(), v.clone());
@@ -250,15 +279,16 @@ mod tests {
         let mut incoming = DocumentFields::new();
         incoming.insert("seo".into(), json!({ "title": "new" }));
 
-        save_draft_version(
-            &conn,
-            "posts",
-            "p1",
-            &fields,
-            None,
-            &existing_doc,
-            &incoming,
-        )
+        save_draft_version(&SaveDraftArgs {
+            conn: &conn,
+            table: "posts",
+            parent_id: "p1",
+            fields: &fields,
+            versions: None,
+            existing_doc: &existing_doc,
+            data: &incoming,
+            locale_ctx: None,
+        })
         .unwrap();
 
         let versions = query::list_versions(&conn, "posts", "p1", false, None, None).unwrap();

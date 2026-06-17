@@ -97,6 +97,7 @@ pub(in crate::mcp::tools) fn exec_restore_version(
         .runner(ctx.runner)
         .override_access(true)
         .event_transport(ctx.event_transport.clone())
+        .invalidation_transport(ctx.invalidation_transport.clone())
         .cache(ctx.cache.clone())
         .build();
 

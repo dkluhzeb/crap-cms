@@ -13,7 +13,7 @@ use crate::{
     hooks::{AccessCheckInput, LuaCrudInfra, ValidationCtx},
     service::{
         RunnerWriteHooks, ServiceContext, ServiceError, helpers, hooks::WriteHooks,
-        versions::gate::versions_gate_decision,
+        invalidate_user_streams_if_auth, versions::gate::versions_gate_decision,
     },
 };
 
@@ -188,6 +188,7 @@ fn restore_collection_version_pool(
 
     ctx.clear_cache();
     ctx.publish_mutation_event(EventOperation::Update, document_id, &doc.fields);
+    invalidate_user_streams_if_auth(ctx, document_id);
 
     Ok(doc)
 }
@@ -202,6 +203,7 @@ fn restore_collection_version_conn(
 
     ctx.clear_cache();
     ctx.publish_mutation_event(EventOperation::Update, document_id, &doc.fields);
+    invalidate_user_streams_if_auth(ctx, document_id);
 
     Ok(doc)
 }

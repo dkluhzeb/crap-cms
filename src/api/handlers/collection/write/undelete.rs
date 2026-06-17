@@ -13,7 +13,8 @@ use crate::{
         handlers::{ContentService, proto::document_to_proto},
     },
     core::{
-        CollectionDefinition, Registry, SharedCache, SharedEventTransport, SharedTokenProvider,
+        CollectionDefinition, Registry, SharedCache, SharedEventTransport,
+        SharedInvalidationTransport, SharedTokenProvider,
     },
     db::DbPool,
     hooks::HookRunner,
@@ -30,6 +31,7 @@ struct UndeleteBlockingInput {
     db_kind: String,
     def: CollectionDefinition,
     event_transport: Option<SharedEventTransport>,
+    invalidation_transport: SharedInvalidationTransport,
     cache: Option<SharedCache>,
     collection: String,
     id: String,
@@ -59,6 +61,7 @@ fn undelete_blocking(input: UndeleteBlockingInput) -> Result<content::Document, 
         .runner(&input.runner)
         .user(user_doc.as_ref())
         .event_transport(input.event_transport)
+        .invalidation_transport(Some(input.invalidation_transport))
         .cache(input.cache)
         .build();
 
@@ -95,6 +98,7 @@ impl ContentService {
             db_kind: self.db_kind.clone(),
             def,
             event_transport: self.event_transport.clone(),
+            invalidation_transport: self.invalidation_transport.clone(),
             cache: Some(self.cache.clone()),
             collection: req.collection.clone(),
             id: req.id.clone(),

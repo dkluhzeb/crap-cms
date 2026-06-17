@@ -107,6 +107,12 @@ pub fn consume_reset_token(
     // password actually changed.
     query::update_password_clearing_reset_token(conn, ctx.slug, &user.id, new_password)?;
 
+    // A password reset is the canonical "lock out whoever had access" action: it
+    // bumps `_session_version` (killing old JWTs on their next request), but a
+    // live-update stream never makes another request, so also tear down this
+    // user's open streams. No-op without an invalidation transport attached.
+    ctx.publish_user_invalidation(&user.id);
+
     Ok(())
 }
 

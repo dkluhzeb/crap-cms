@@ -9,7 +9,7 @@ pub(crate) mod snapshot;
 mod unpublish;
 
 pub use find::find_version_by_id;
-pub(crate) use save_draft::save_draft_version;
+pub(crate) use save_draft::{SaveDraftArgs, save_draft_version};
 pub(crate) use snapshot::{VersionSnapshotCtx, create_version_snapshot};
 pub(crate) use unpublish::unpublish_with_snapshot;
 

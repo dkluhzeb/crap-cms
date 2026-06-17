@@ -12,7 +12,10 @@ use crate::{
         handlers::shared::{get_user_doc, htmx_redirect, paths, redirect_response},
     },
     config::LocaleConfig,
-    core::{CollectionDefinition, Document, SharedCache, SharedEventTransport, auth::AuthUser},
+    core::{
+        CollectionDefinition, Document, SharedCache, SharedEventTransport,
+        SharedInvalidationTransport, auth::AuthUser,
+    },
     db::DbPool,
     hooks::HookRunner,
     service::{ServiceContext, ServiceError, restore_collection_version},
@@ -26,6 +29,7 @@ struct RestoreVersionInput {
     def: CollectionDefinition,
     user_doc: Option<Document>,
     event_transport: Option<SharedEventTransport>,
+    invalidation_transport: SharedInvalidationTransport,
     cache: Option<SharedCache>,
     id: String,
     version_id: String,
@@ -43,6 +47,7 @@ fn restore_collection_version_blocking(
         .runner(&input.runner)
         .user(input.user_doc.as_ref())
         .event_transport(input.event_transport)
+        .invalidation_transport(Some(input.invalidation_transport))
         .cache(input.cache)
         .build();
 
@@ -71,6 +76,7 @@ pub async fn restore_version(
         def,
         user_doc: get_user_doc(auth_user.as_ref()).cloned(),
         event_transport: state.event_transport.clone(),
+        invalidation_transport: state.invalidation_transport.clone(),
         cache: state.cache.clone(),
         id,
         version_id,

@@ -14,7 +14,10 @@ use crate::{
         AdminState,
         handlers::shared::{forbidden, get_user_doc, htmx_redirect, paths},
     },
-    core::{CollectionDefinition, Document, SharedCache, SharedEventTransport, auth::AuthUser},
+    core::{
+        CollectionDefinition, Document, SharedCache, SharedEventTransport,
+        SharedInvalidationTransport, auth::AuthUser,
+    },
     db::DbPool,
     hooks::HookRunner,
     service::{self, ServiceContext, ServiceError},
@@ -28,6 +31,7 @@ struct UndeleteInput {
     def: CollectionDefinition,
     user_doc: Option<Document>,
     event_transport: Option<SharedEventTransport>,
+    invalidation_transport: SharedInvalidationTransport,
     cache: Option<SharedCache>,
     id: String,
 }
@@ -39,6 +43,7 @@ fn undelete_document_blocking(input: UndeleteInput) -> Result<Document, ServiceE
         .runner(&input.runner)
         .user(input.user_doc.as_ref())
         .event_transport(input.event_transport)
+        .invalidation_transport(Some(input.invalidation_transport))
         .cache(input.cache)
         .build();
 
@@ -66,6 +71,7 @@ pub async fn undelete_action(
         def,
         user_doc: get_user_doc(auth_user.as_ref()).cloned(),
         event_transport: state.event_transport.clone(),
+        invalidation_transport: state.invalidation_transport.clone(),
         cache: state.cache.clone(),
         id: id.clone(),
     };
