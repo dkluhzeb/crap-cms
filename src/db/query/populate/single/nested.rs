@@ -298,7 +298,7 @@ fn populate_has_one_in_map(
 
     let views = resolve_target_views(pctx, rel_collection, rel_def)?;
 
-    if let Some(target) = resolve_single_target(
+    let resolved = resolve_single_target(
         pctx,
         rel_collection,
         rel_def,
@@ -306,10 +306,16 @@ fn populate_has_one_in_map(
         &views,
         effective_depth,
         visited,
-    )? {
-        map.insert(name.to_string(), document_to_json(&target, rel_collection));
-    }
-    // Missing or hidden (draft/access): leave the raw id reference in place.
+    )?;
+
+    // Resolve to the embedded target, or `null` when missing or access-hidden —
+    // parity with the top-level has-one path, which never leaves a denied
+    // target's raw id in place.
+    let value = match resolved {
+        Some(target) => document_to_json(&target, rel_collection),
+        None => Value::Null,
+    };
+    map.insert(name.to_string(), value);
 
     Ok(())
 }
@@ -341,7 +347,7 @@ fn populate_has_many_in_map(
             continue;
         }
 
-        match resolve_single_target(
+        if let Some(target) = resolve_single_target(
             pctx,
             rel_collection,
             rel_def,
@@ -350,10 +356,10 @@ fn populate_has_many_in_map(
             effective_depth,
             visited,
         )? {
-            Some(target) => populated.push(document_to_json(&target, rel_collection)),
-            // Missing or hidden: keep the raw id reference (nested-array behavior).
-            None => populated.push(Value::String(id.clone())),
+            populated.push(document_to_json(&target, rel_collection));
         }
+        // Missing or access-hidden: drop the entry — parity with the top-level
+        // has-many path, which never leaves a denied target's raw id in place.
     }
     map.insert(name.to_string(), Value::Array(populated));
     Ok(())

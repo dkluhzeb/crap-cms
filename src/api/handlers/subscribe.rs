@@ -263,7 +263,12 @@ fn process_event(event: &MutationEvent, ctx: &SubscriberCtx) -> Option<content::
         return None;
     }
 
-    let mode = ctx.access.modes.get(slug_str).copied().unwrap_or_default();
+    let mode = match event.target {
+        EventTarget::Collection => ctx.access.collection_modes.get(slug_str),
+        EventTarget::Global => ctx.access.global_modes.get(slug_str),
+    }
+    .copied()
+    .unwrap_or_default();
 
     let fields: BTreeMap<String, prost_types::Value> = if mode == LiveMode::Full {
         let (hooks, field_defs) = match event.target {
@@ -297,7 +302,11 @@ fn process_event(event: &MutationEvent, ctx: &SubscriberCtx) -> Option<content::
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        if let Some(denied) = ctx.access.denied_fields.get(slug_str) {
+        let denied = match event.target {
+            EventTarget::Collection => ctx.access.collection_denied_fields.get(slug_str),
+            EventTarget::Global => ctx.access.global_denied_fields.get(slug_str),
+        };
+        if let Some(denied) = denied {
             for denial in denied {
                 denial.strip_from(&mut visible);
             }
@@ -329,9 +338,15 @@ struct SubscribeAccess {
     collection_views: HashMap<String, EventViewGate>,
     /// Per-global content-view access (globals only carry the published view).
     global_views: HashMap<String, EventViewGate>,
-    denied_fields: HashMap<String, Vec<FieldDenial>>,
-    /// Per-collection event delivery mode.
-    modes: HashMap<String, LiveMode>,
+    /// Field denials, split by target. A collection and a global may share a
+    /// slug (tables are namespaced), so these must NOT be merged into one
+    /// slug-keyed map — doing so would let one clobber the other and leak a
+    /// denied field (or full payload via `modes`).
+    collection_denied_fields: HashMap<String, Vec<FieldDenial>>,
+    global_denied_fields: HashMap<String, Vec<FieldDenial>>,
+    /// Event delivery mode, split by target for the same reason.
+    collection_modes: HashMap<String, LiveMode>,
+    global_modes: HashMap<String, LiveMode>,
     /// The subscriber's user document (for per-user `after_read` hooks).
     user_doc: Option<Document>,
 }
@@ -732,19 +747,16 @@ fn resolve_subscribe_access_blocking(
         warn!("tx commit failed: {e}");
     }
 
-    // Merge denied_fields and modes (keyed by slug; globals share the same maps).
-    // Per-view access stays split by target to avoid collection/global slug
-    // collisions during per-event lookup.
-    let mut denied_fields = col_state.denied_fields;
-    denied_fields.extend(global_state.denied_fields);
-    let mut modes = col_state.modes;
-    modes.extend(global_state.modes);
-
+    // Keep modes and denied_fields split by target (like views): a collection
+    // and a global may share a slug, so merging into one slug-keyed map would
+    // let one clobber the other's delivery mode / field denials.
     Ok(SubscribeAccess {
         collection_views: col_state.views,
         global_views: global_state.views,
-        denied_fields,
-        modes,
+        collection_denied_fields: col_state.denied_fields,
+        global_denied_fields: global_state.denied_fields,
+        collection_modes: col_state.modes,
+        global_modes: global_state.modes,
         user_doc: auth_user.map(|au| au.user_doc),
     })
 }

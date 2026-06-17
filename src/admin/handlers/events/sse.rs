@@ -100,8 +100,13 @@ fn try_acquire_sse_slot(counter: &AtomicUsize, max: usize) -> bool {
 struct SseAccess {
     collection_views: HashMap<String, EventViewGate>,
     global_views: HashMap<String, EventViewGate>,
-    denied_fields: HashMap<String, Vec<FieldDenial>>,
-    modes: HashMap<String, LiveMode>,
+    // Field denials and modes are split by target: a collection and a global
+    // may share a slug (tables are namespaced), so a single slug-keyed map would
+    // let one clobber the other and leak a denied field or full payload.
+    collection_denied_fields: HashMap<String, Vec<FieldDenial>>,
+    global_denied_fields: HashMap<String, Vec<FieldDenial>>,
+    collection_modes: HashMap<String, LiveMode>,
+    global_modes: HashMap<String, LiveMode>,
 }
 
 impl SseAccess {
@@ -109,8 +114,10 @@ impl SseAccess {
         Self {
             collection_views: HashMap::new(),
             global_views: HashMap::new(),
-            denied_fields: HashMap::new(),
-            modes: HashMap::new(),
+            collection_denied_fields: HashMap::new(),
+            global_denied_fields: HashMap::new(),
+            collection_modes: HashMap::new(),
+            global_modes: HashMap::new(),
         }
     }
 }
@@ -180,10 +187,14 @@ fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document>) -> SseAc
         let denied = runner.check_field_read_access(&def.fields, user_doc, None, &tx);
 
         if !denied.is_empty() {
-            access.denied_fields.insert(slug.to_string(), denied);
+            access
+                .collection_denied_fields
+                .insert(slug.to_string(), denied);
         }
 
-        access.modes.insert(slug.to_string(), def.live_mode);
+        access
+            .collection_modes
+            .insert(slug.to_string(), def.live_mode);
         access.collection_views.insert(slug.to_string(), gate);
     }
 
@@ -202,10 +213,10 @@ fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document>) -> SseAc
         let denied = runner.check_field_read_access(&def.fields, user_doc, None, &tx);
 
         if !denied.is_empty() {
-            access.denied_fields.insert(slug.to_string(), denied);
+            access.global_denied_fields.insert(slug.to_string(), denied);
         }
 
-        access.modes.insert(slug.to_string(), def.live_mode);
+        access.global_modes.insert(slug.to_string(), def.live_mode);
         access.global_views.insert(slug.to_string(), gate);
     }
 
@@ -264,8 +275,14 @@ fn build_event_payload(
         EventOperation::Delete => "delete",
     };
 
-    // Apply mode: full = after_read hooks + data, metadata = no data
-    let mode = access.modes.get(slug_str).copied().unwrap_or_default();
+    // Apply mode: full = after_read hooks + data, metadata = no data. Select by
+    // target — a collection and a global may share a slug.
+    let mode = match event.target {
+        EventTarget::Collection => access.collection_modes.get(slug_str),
+        EventTarget::Global => access.global_modes.get(slug_str),
+    }
+    .copied()
+    .unwrap_or_default();
 
     let data: Map<String, Value> = if mode == LiveMode::Full {
         let (hooks, field_defs) = match event.target {
@@ -294,7 +311,11 @@ fn build_event_payload(
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        if let Some(denied) = access.denied_fields.get(slug_str) {
+        let denied = match event.target {
+            EventTarget::Collection => access.collection_denied_fields.get(slug_str),
+            EventTarget::Global => access.global_denied_fields.get(slug_str),
+        };
+        if let Some(denied) = denied {
             for denial in denied {
                 denial.strip_from(&mut visible);
             }
@@ -672,8 +693,10 @@ mod tests {
         let access = SseAccess {
             collection_views: published_views("posts"),
             global_views: HashMap::new(),
-            denied_fields,
-            modes,
+            collection_denied_fields: denied_fields,
+            global_denied_fields: HashMap::new(),
+            collection_modes: modes,
+            global_modes: HashMap::new(),
         };
 
         let mut data = DocumentFields::new();
@@ -710,8 +733,10 @@ mod tests {
         let access = SseAccess {
             collection_views: published_views("posts"),
             global_views: HashMap::new(),
-            denied_fields: HashMap::new(),
-            modes,
+            collection_denied_fields: HashMap::new(),
+            global_denied_fields: HashMap::new(),
+            collection_modes: modes,
+            global_modes: HashMap::new(),
         };
 
         let mut data = DocumentFields::new();
@@ -744,8 +769,10 @@ mod tests {
         let access = SseAccess {
             collection_views: published_views("posts"),
             global_views: HashMap::new(),
-            denied_fields: HashMap::new(),
-            modes: HashMap::new(),
+            collection_denied_fields: HashMap::new(),
+            global_denied_fields: HashMap::new(),
+            collection_modes: HashMap::new(),
+            global_modes: HashMap::new(),
         };
 
         let mut event = make_event("posts", DocumentFields::new());
@@ -793,8 +820,10 @@ mod tests {
         let access = SseAccess {
             collection_views: published_views("posts"),
             global_views: HashMap::new(),
-            denied_fields: HashMap::new(),
-            modes,
+            collection_denied_fields: HashMap::new(),
+            global_denied_fields: HashMap::new(),
+            collection_modes: modes,
+            global_modes: HashMap::new(),
         };
 
         let mut data = DocumentFields::new();
@@ -819,6 +848,60 @@ mod tests {
         );
     }
 
+    /// Regression: a collection and a global may share a slug (tables are
+    /// namespaced, no cross-uniqueness check). Their delivery `modes` and field
+    /// denials must be looked up by event target, not merged into one
+    /// slug-keyed map — otherwise one clobbers the other and leaks the full
+    /// payload where metadata was configured (or vice-versa). Here the
+    /// collection `posts` is Full and the global `posts` is Metadata; each event
+    /// must honor its own target's mode.
+    #[test]
+    fn sse_collection_and_global_sharing_slug_do_not_collide() {
+        let (runner, registry, _posts) = build_runner_and_registry();
+
+        let mut collection_modes = HashMap::new();
+        collection_modes.insert("posts".to_string(), LiveMode::Full);
+        let mut global_modes = HashMap::new();
+        global_modes.insert("posts".to_string(), LiveMode::Metadata);
+
+        let access = SseAccess {
+            collection_views: published_views("posts"),
+            global_views: published_views("posts"),
+            collection_denied_fields: HashMap::new(),
+            global_denied_fields: HashMap::new(),
+            collection_modes,
+            global_modes,
+        };
+
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Hello"));
+
+        // Collection event → Full → data present.
+        let col_event = make_event("posts", data.clone());
+        let col_payload = build_event_payload(&col_event, &access, &runner, &registry, None)
+            .expect("collection payload");
+        assert_eq!(
+            col_payload.get("data").and_then(|d| d.get("title")),
+            Some(&json!("Hello")),
+            "collection 'posts' is Full mode — data must be present: {col_payload}"
+        );
+
+        // Global event (same slug) → Metadata → empty data. Pre-fix the merged
+        // map would have made the collection Metadata too (global clobbered it).
+        let mut global_event = make_event("posts", data);
+        global_event.target = EventTarget::Global;
+        let global_payload = build_event_payload(&global_event, &access, &runner, &registry, None)
+            .expect("global payload");
+        assert!(
+            global_payload
+                .get("data")
+                .and_then(|d| d.as_object())
+                .expect("data object")
+                .is_empty(),
+            "global 'posts' is Metadata mode — data must be empty: {global_payload}"
+        );
+    }
+
     /// Build an `SseAccess` exposing exactly `gate` for the "posts" collection.
     fn access_with_gate(gate: EventViewGate) -> SseAccess {
         let mut collection_views = HashMap::new();
@@ -827,8 +910,10 @@ mod tests {
         SseAccess {
             collection_views,
             global_views: HashMap::new(),
-            denied_fields: HashMap::new(),
-            modes: HashMap::new(),
+            collection_denied_fields: HashMap::new(),
+            global_denied_fields: HashMap::new(),
+            collection_modes: HashMap::new(),
+            global_modes: HashMap::new(),
         }
     }
 

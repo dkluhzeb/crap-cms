@@ -95,7 +95,7 @@ pub(in crate::mcp::tools) fn exec_find(
         .search(search.clone())
         .build();
 
-    let hooks = RunnerReadHooks::new(ctx.runner, &conn, None, None);
+    let hooks = RunnerReadHooks::new(ctx.runner, &conn, None, None).with_override_access();
     let svc_ctx = ServiceContext::collection(slug, def)
         .pool(ctx.pool)
         .conn(&conn)

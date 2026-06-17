@@ -59,8 +59,15 @@ fn matches_clause(data: &DocumentFields, clause: &FilterClause) -> bool {
 
 /// Evaluate a single filter against document data.
 fn matches_filter(data: &DocumentFields, filter: &Filter) -> bool {
-    let Some(value) = data.get(&filter.field) else {
-        return matches_missing_field(&filter.op);
+    // A JSON `null` is treated identically to an absent field: SQL three-valued
+    // logic excludes NULL rows from every comparison except `IS NULL`, so a
+    // present-but-null field must NOT satisfy `Equals`/`NotEquals`/`In`/`NotIn`/
+    // `Exists` (and must satisfy `NotExists`). Without this, `value_to_string`
+    // would coerce `null` to `""` and `NotEquals`/`NotIn` would match (fail-open)
+    // while SQL excludes the row — a leak on the populate/event/snapshot paths.
+    let value = match data.get(&filter.field) {
+        Some(v) if !v.is_null() => v,
+        _ => return matches_missing_field(&filter.op),
     };
 
     let value_str = value_to_string(value);
@@ -538,23 +545,64 @@ mod tests {
         assert!(!matches_constraints(&miss, from_ref(&clause)));
     }
 
-    // ── Null values ─────────────────────────────────────────────────
+    // ── Null values (SQL three-valued logic) ───────────────────────
 
-    /// Null JSON values compare as empty string. This mirrors `SQLite` behavior
-    /// where NULL text columns coerce to "" in comparisons, and matches how
-    /// event data arrives from the DB layer (`serde_json` maps SQL NULL → `Value::Null`,
-    /// and `value_to_string` normalizes it to ""). Without this, a filter like
-    /// `status != "deleted"` would fail-closed on documents where status is null,
-    /// incorrectly blocking access.
+    /// A JSON `null` is treated identically to an absent field, mirroring SQL:
+    /// every comparison against NULL yields NULL (not true), so the row is
+    /// excluded from `Equals`/`In` *and* from `NotEquals`/`NotIn`. The DB layer
+    /// maps a SQL NULL column to `Value::Null` (a present key with a null value),
+    /// so this must not coerce to `""` — doing so would make `NotEquals`/`NotIn`
+    /// match (fail-open) while SQL excludes the row.
+
     #[test]
-    fn null_value_equals_empty_string() {
+    fn null_value_equals_does_not_match() {
+        // SQL: `field = ''` is NULL for a NULL column → row excluded.
         let d = data(&[("field", Value::Null)]);
-        assert!(matches_constraints(&d, &[eq("field", "")]));
+        assert!(!matches_constraints(&d, &[eq("field", "")]));
+        assert!(!matches_constraints(&d, &[eq("field", "something")]));
     }
 
+    /// Regression for the fail-open NULL leak: `NotEquals` against a NULL field
+    /// must NOT match, because SQL `field != 'x'` is NULL (excluded) when the
+    /// column is NULL. Previously `value_to_string(null) == ""` made `"" != "x"`
+    /// true, leaking the row on the in-memory (populate/event/snapshot) paths.
     #[test]
-    fn null_value_not_equals_nonempty() {
+    fn null_value_not_equals_does_not_match() {
         let d = data(&[("field", Value::Null)]);
-        assert!(!matches_constraints(&d, &[eq("field", "something")]));
+        assert!(!matches_constraints(&d, &[neq("field", "admin")]));
+    }
+
+    /// `In` / `NotIn` against a NULL field both exclude the row (SQL: `field IN
+    /// (...)` and `field NOT IN (...)` are NULL for a NULL column).
+    #[test]
+    fn null_value_membership_does_not_match() {
+        let d = data(&[("field", Value::Null)]);
+        let in_clause = FilterClause::Single(Filter {
+            field: "field".to_string(),
+            op: FilterOp::In(vec!["a".to_string(), "b".to_string()]),
+        });
+        let not_in_clause = FilterClause::Single(Filter {
+            field: "field".to_string(),
+            op: FilterOp::NotIn(vec!["a".to_string(), "b".to_string()]),
+        });
+        assert!(!matches_constraints(&d, from_ref(&in_clause)));
+        assert!(!matches_constraints(&d, from_ref(&not_in_clause)));
+    }
+
+    /// `Exists` is `IS NOT NULL` in SQL, so a NULL field does NOT exist;
+    /// `NotExists` (`IS NULL`) does match it.
+    #[test]
+    fn null_value_exists_semantics_match_sql() {
+        let d = data(&[("field", Value::Null)]);
+        let exists = FilterClause::Single(Filter {
+            field: "field".to_string(),
+            op: FilterOp::Exists,
+        });
+        let not_exists = FilterClause::Single(Filter {
+            field: "field".to_string(),
+            op: FilterOp::NotExists,
+        });
+        assert!(!matches_constraints(&d, from_ref(&exists)));
+        assert!(matches_constraints(&d, from_ref(&not_exists)));
     }
 }

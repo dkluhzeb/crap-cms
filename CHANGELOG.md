@@ -259,6 +259,75 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   enforced only on the read filter-builder path, and a disallowed operator could
   slip through on the in-memory (subscribe/populate) surfaces.
 
+- **In-memory access constraints no longer leak on NULL fields.** The in-memory
+  filter matcher (live event streams, relationship/join population, draft
+  snapshots) coerced a JSON `null` to `""`, so an access constraint like
+  `{ owner = { not_equals = "admin" } }` (or `not_in`, `exists`) *matched* a row
+  whose `owner` was NULL — while the SQL path correctly excludes it under
+  three-valued logic. A row a viewer should not see could therefore be embedded
+  via population or streamed as an event. A present-but-null field is now treated
+  identically to an absent one, mirroring SQL exactly for every operator.
+
+- **Live event streams no longer confuse a collection and a global that share a
+  slug.** Per-view access was already split by target, but event delivery `mode`
+  (`live_mode`) and field-read denials were merged into one slug-keyed map, so a
+  collection and a global with the same slug (a legal config — tables are
+  namespaced) clobbered each other. A metadata-mode collection could stream its
+  full payload (or skip a denied field's stripping) because a same-named global
+  was full-mode. Mode and denial lookups are now split by target like the views.
+
+- **MCP reads now bypass access consistently with MCP writes.** The MCP surface
+  is a single-token full-access surface (it has no per-user identity), and its
+  writes already bypassed collection/field access — but its reads did not, so an
+  MCP client could `update` a row its own `find` then refused to return, and
+  reads ran access hooks against a nil user. `RunnerReadHooks` now supports
+  `with_override_access()`, which the MCP read tools set, matching writes and the
+  documented "MCP operates with full access" contract.
+
+- **`locale_locked` fields are enforced server-side.** A non-localized (shared)
+  field is rendered read-only in the admin UI when editing a non-default locale,
+  because writing it would clobber the canonical default-locale value — but that
+  was only a UI hint. A crafted form/API/Lua/MCP write (or even a normal submit,
+  since read-only inputs still post) could overwrite shared columns while editing
+  a non-default locale. The persist layer now skips a shared field when the write
+  targets a non-default locale, on every write surface. Localized fields and
+  fields under a localized Group are unaffected.
+
+- **Access constraints on localized fields are rejected.** A row constraint
+  returned from an access hook may not target a localized field. A localized
+  field is stored per-locale (`title__en` / `title__de`), so the SQL path
+  resolves the constraint to one locale's column while the in-memory path
+  (events, populated relationships) matches a flat/active-locale value — the two
+  could diverge. Such a constraint is now a hard error, enforced at the single
+  chokepoint every runner-based surface passes through. Constrain by a
+  non-localized identity/ownership field instead. **Dotted relationship/JSON
+  paths** (`{ ["author.id"] = … }`) in an access constraint are likewise now a
+  hard error — they resolve via a SQL subquery but the in-memory matcher only
+  sees flat fields, so they fail closed on populate/event surfaces. Denormalize
+  to a flat own column (`author_id`).
+
+- **Editing an auth document now tears down that user's live-update streams.**
+  Subscribers resolve access once at connect, so a role/group change on a user
+  document could leave an open gRPC `Subscribe` / admin SSE stream running on
+  stale access. An admin/API edit of an auth-collection document now publishes a
+  user-invalidation signal (the same mechanism as account lock / hard delete),
+  forcing a reconnect with freshly resolved access. Auth-specific writes (login
+  timestamps, lock, password resets, session bumps) use dedicated paths and do
+  not trigger this, so it fires only on genuine document edits.
+
+- **`Me` no longer returns `api_hidden` fields.** The gRPC `Me` endpoint queried
+  the caller's own record raw and serialized it without the field stripping
+  every other read path applies, so a field marked never-over-the-API (e.g. a
+  stored secret on an auth collection) could be returned to its owner. `Me` now
+  strips `api_hidden` fields like the rest of the read surface.
+
+- **Populated relationships hide denied targets consistently at any nesting
+  depth.** A relationship nested inside a group/array/blocks row that resolved to
+  an access-denied (or missing) target previously left the raw id string in
+  place, while the top-level path nulls a denied has-one and drops a denied
+  has-many entry. Nested population now matches: denied/missing has-one → `null`,
+  has-many entry → dropped.
+
 - **Relationship population now enforces the target collection's read
   access.** Populating a relationship/upload field at depth (`depth > 0`)
   fetched and embedded the target document while checking only the draft

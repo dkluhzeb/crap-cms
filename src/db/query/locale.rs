@@ -304,6 +304,37 @@ pub(crate) fn locale_write_column(
     locale_column(field_name, locale)
 }
 
+/// Whether a leaf field is "locale-locked" for a write: a shared
+/// (locale-independent) field being written while editing a **non-default**
+/// locale. Such a field maps to the bare column ([`locale_write_column`]), so
+/// writing it under a non-default locale would clobber the canonical value that
+/// belongs to the default locale.
+///
+/// The admin UI marks these fields read-only (`locale_locked`); this enforces
+/// the same rule server-side, for every write surface (form, Lua, gRPC, MCP).
+/// `inherited_localized` accounts for a localized parent Group, mirroring
+/// [`locale_write_column`].
+#[must_use]
+pub(crate) fn is_locale_locked_write(
+    field: &FieldDefinition,
+    locale_ctx: Option<&LocaleContext>,
+    inherited_localized: bool,
+) -> bool {
+    // A localized field (directly or via a localized Group) writes its own
+    // per-locale column — never locked.
+    if field.localized || inherited_localized {
+        return false;
+    }
+
+    let Some(ctx) = locale_ctx.filter(|c| c.config.is_enabled()) else {
+        return false;
+    };
+
+    // Locked only when targeting a single, non-default locale. `Default` / `All`
+    // (and an explicit `Single(default)`) write shared columns as normal.
+    matches!(&ctx.mode, LocaleMode::Single(l) if *l != ctx.config.default_locale)
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -376,6 +407,59 @@ mod tests {
             col, "title",
             "Non-localized field should pass through unchanged"
         );
+    }
+
+    #[test]
+    fn locale_locked_write_shared_field_non_default_locale() {
+        // A shared (non-localized) field edited under a non-default locale is
+        // locked — writing it would clobber the canonical default-locale value.
+        let field = make_field("title", FieldType::Text);
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: make_locale_config(),
+        };
+        assert!(is_locale_locked_write(&field, Some(&ctx), false));
+    }
+
+    #[test]
+    fn locale_locked_write_not_locked_for_default_or_all() {
+        let field = make_field("title", FieldType::Text);
+        // Explicit default locale writes shared columns.
+        let single_default = LocaleContext {
+            mode: LocaleMode::Single("en".to_string()),
+            config: make_locale_config(),
+        };
+        assert!(!is_locale_locked_write(
+            &field,
+            Some(&single_default),
+            false
+        ));
+        // Default / All modes too.
+        let default_mode = LocaleContext {
+            mode: LocaleMode::Default,
+            config: make_locale_config(),
+        };
+        assert!(!is_locale_locked_write(&field, Some(&default_mode), false));
+    }
+
+    #[test]
+    fn locale_locked_write_localized_field_never_locked() {
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: make_locale_config(),
+        };
+        // A localized field writes its own per-locale column.
+        let localized = make_localized_field("title", FieldType::Text);
+        assert!(!is_locale_locked_write(&localized, Some(&ctx), false));
+        // A shared field under a localized Group (inherited_localized) is kept.
+        let shared = make_field("title", FieldType::Text);
+        assert!(!is_locale_locked_write(&shared, Some(&ctx), true));
+    }
+
+    #[test]
+    fn locale_locked_write_not_locked_when_localization_disabled() {
+        let field = make_field("title", FieldType::Text);
+        assert!(!is_locale_locked_write(&field, None, false));
     }
 
     #[test]

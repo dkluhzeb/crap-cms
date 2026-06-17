@@ -173,3 +173,23 @@ end
 
 To expose published content to anonymous readers, return `true` (or a
 non-ownership constraint) from `read` — the read view is already published-only.
+
+## Field Restrictions
+
+A constraint must reference a **non-localized, top-level own field**. Two field
+kinds evaluate inconsistently across the SQL and in-memory enforcement paths and
+so are unsupported in access constraints:
+
+- **Localized fields are rejected.** A localized field is stored per-locale
+  (`title__en`, `title__de`), so the SQL path resolves the constraint to one
+  locale's column while the in-memory path (events, populated relationships)
+  matches a flat/active-locale value — they can disagree. Returning a constraint
+  on a localized field is a hard error. (This is rarely what you want anyway:
+  access is identity/ownership/membership, and `{ title = X }` is ambiguous
+  across locales.) Constrain by a non-localized identity field instead.
+
+- **Dotted relationship/JSON paths (`{ ["author.id"] = … }`) are rejected.**
+  The SQL path resolves these via subqueries, but the in-memory path matches the
+  flat field only and so fails closed (hides rows it should show) for populated
+  and live-event surfaces. Returning one is a hard error — denormalize to a flat
+  own column (store and constrain `author_id` directly) instead.

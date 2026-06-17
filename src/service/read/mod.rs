@@ -17,4 +17,6 @@ pub use find::find_documents;
 pub use find_by_id::find_document_by_id;
 pub use get_global::get_global_document;
 pub use search::search_documents;
-pub use validate_filters::{validate_access_constraints, validate_user_filters};
+pub use validate_filters::{
+    validate_access_constraint_locales, validate_access_constraints, validate_user_filters,
+};

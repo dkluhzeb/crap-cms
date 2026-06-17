@@ -75,6 +75,10 @@ pub struct RunnerReadHooks<'a> {
     pub user: Option<&'a Document>,
     /// The admin UI locale, exposed to `before_read` hooks as `ctx.ui_locale`.
     pub ui_locale: Option<&'a str>,
+    /// Bypass collection- and field-level read access entirely. The MCP
+    /// full-access surface sets this so its reads match its writes (which
+    /// already bypass via `RunnerWriteHooks`). Defaults to `false`.
+    pub override_access: bool,
 }
 
 impl<'a> RunnerReadHooks<'a> {
@@ -89,7 +93,17 @@ impl<'a> RunnerReadHooks<'a> {
             conn,
             user,
             ui_locale,
+            override_access: false,
         }
+    }
+
+    /// Opt into full-access reads (collection- and field-level access skipped).
+    /// Used by the MCP surface, which operates as a single privileged token —
+    /// mirrors [`RunnerWriteHooks::with_override_access`].
+    #[must_use]
+    pub fn with_override_access(mut self) -> Self {
+        self.override_access = true;
+        self
     }
 }
 
@@ -118,6 +132,9 @@ impl ReadHooks for RunnerReadHooks<'_> {
     }
 
     fn check_access(&self, input: &AccessCheckInput<'_>) -> Result<AccessResult> {
+        if self.override_access {
+            return Ok(AccessResult::Allowed);
+        }
         self.runner.check_access(input, self.conn)
     }
 
@@ -127,6 +144,9 @@ impl ReadHooks for RunnerReadHooks<'_> {
         user: Option<&Document>,
         locale: Option<&str>,
     ) -> Vec<FieldDenial> {
+        if self.override_access {
+            return Vec::new();
+        }
         self.runner
             .check_field_read_access(fields, user, locale, self.conn)
     }

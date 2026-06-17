@@ -27,7 +27,10 @@
 //! Override-access fetches are still deduplicated within their own call via
 //! the fresh per-call singleflight created by `populate_relationships_*`.
 
+use std::collections::HashSet;
+
 use crate::{
+    core::{FieldDefinition, prefixed_name, walk_leaf_fields},
     db::{Filter, FilterClause, FilterOp},
     service::ServiceError,
 };
@@ -142,8 +145,8 @@ fn walk_access_filter(
     }
 }
 
-/// Check a single access-hook filter against the constrained system-column rule
-/// and the equality/membership operator allowlist.
+/// Check a single access-hook filter against the constrained system-column rule,
+/// the equality/membership operator allowlist, and the flat-field rule.
 fn check_access_filter(
     filter: &Filter,
     trash: bool,
@@ -153,6 +156,18 @@ fn check_access_filter(
     check_access_operator(filter, slug)?;
 
     let field = &filter.field;
+
+    // A dotted relationship/JSON path (`author.id`, `meta.tags`) resolves via a
+    // SQL subquery, but the in-memory matcher (live events, populated targets)
+    // only sees flat fields and fails closed on it — a divergence. Reject it so
+    // the two paths can never disagree; denormalize to a flat own column
+    // (e.g. `author_id`) instead.
+    if field.contains('.') {
+        return Err(ServiceError::HookError(format!(
+            "Access hook for '{slug}' constrains the path '{field}' — access rules must reference a flat own column, not a dotted relationship/JSON path (it evaluates inconsistently across the SQL and in-memory enforcement paths). Denormalize to a flat field (e.g. 'author_id') instead."
+        )));
+    }
+
     let first = field.split('.').next().unwrap_or(field);
 
     if !first.starts_with('_') {
@@ -199,8 +214,71 @@ fn check_access_operator(filter: &Filter, slug: &str) -> Result<(), ServiceError
     )))
 }
 
+/// Reject an access constraint that targets a locale-scoped (localized) field.
+///
+/// A localized field is stored per-locale (`field__locale`). The SQL path
+/// resolves such a constraint to a *specific* locale column, while the in-memory
+/// path (live events, populated relationships) matches a flat / active-locale
+/// value keyed by the logical name — so the two can diverge. Access rules
+/// express identity / ownership / membership, never a localized *content* value
+/// (`{ title = X }` is ambiguous — which locale?), so a constraint on a
+/// locale-scoped field is rejected.
+///
+/// `fields` is the constrained collection's (or global's) field list, used to
+/// determine which flat field names are locale-scoped (including fields under a
+/// localized Group, via `is_locale_scoped`).
+///
+/// # Errors
+///
+/// Returns `HookError` for the first constraint whose field is locale-scoped.
+pub fn validate_access_constraint_locales(
+    filters: &[FilterClause],
+    fields: &[FieldDefinition],
+    slug: &str,
+) -> Result<(), ServiceError> {
+    let mut localized: HashSet<String> = HashSet::new();
+    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, inherited| {
+        if field.is_locale_scoped(inherited) {
+            localized.insert(prefixed_name(prefix, &field.name));
+        }
+        Ok(())
+    });
+
+    if localized.is_empty() {
+        return Ok(());
+    }
+
+    filters
+        .iter()
+        .try_for_each(|c| walk_locale_filter(c, &localized, slug))
+}
+
+/// Recursively reject any leaf filter whose field is locale-scoped.
+fn walk_locale_filter(
+    clause: &FilterClause,
+    localized: &HashSet<String>,
+    slug: &str,
+) -> Result<(), ServiceError> {
+    match clause {
+        FilterClause::Single(f) => {
+            let first = f.field.split('.').next().unwrap_or(&f.field);
+            if !localized.contains(first) {
+                return Ok(());
+            }
+            Err(ServiceError::HookError(format!(
+                "Access hook for '{slug}' constrains the localized field '{}' — access rules must reference non-localized (shared) fields. A localized field is stored per-locale and evaluates inconsistently across the SQL and in-memory enforcement paths; use a non-localized identity/ownership field instead.",
+                f.field
+            )))
+        }
+        FilterClause::And(subs) | FilterClause::Or(subs) => subs
+            .iter()
+            .try_for_each(|c| walk_locale_filter(c, localized, slug)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::core::FieldType;
     use crate::db::{Filter, FilterClause, FilterOp};
 
     use super::*;
@@ -397,6 +475,17 @@ mod tests {
         }
     }
 
+    /// A dotted relationship/JSON path is rejected in an access constraint — it
+    /// diverges between the SQL (subquery) and in-memory (flat) paths.
+    #[test]
+    fn validates_access_constraints_rejects_dotted_path() {
+        let filters = vec![single_op("author.id", FilterOp::Equals("u1".into()))];
+        let err = validate_access_constraints(&filters, false, false, "posts").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("author.id"), "{msg}");
+        assert!(msg.contains("flat"), "{msg}");
+    }
+
     /// The operator allowlist is enforced even on a system column whose name
     /// would otherwise be allowed — the operator is checked first.
     #[test]
@@ -421,6 +510,45 @@ mod tests {
         ])];
         let err = validate_access_constraints(&filters, false, false, "posts").unwrap_err();
         assert!(err.to_string().contains("like"));
+    }
+
+    // ── locale-scoped field rejection (M3) ─────────────────────────────
+
+    /// Regression: an access constraint on a localized field is rejected, since
+    /// it evaluates inconsistently across SQL (per-locale column) and in-memory
+    /// (flat/active-locale) enforcement. A non-localized field is allowed.
+    #[test]
+    fn validates_access_constraints_rejects_localized_field() {
+        let mut title = FieldDefinition::builder("title", FieldType::Text).build();
+        title.localized = true;
+        let owner = FieldDefinition::builder("owner", FieldType::Text).build();
+        let fields = vec![title, owner];
+
+        let bad = vec![single_op("title", FilterOp::Equals("x".into()))];
+        let err = validate_access_constraint_locales(&bad, &fields, "posts").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("localized"), "{msg}");
+        assert!(msg.contains("title"), "{msg}");
+
+        let ok = vec![single_op("owner", FilterOp::Equals("u1".into()))];
+        assert!(validate_access_constraint_locales(&ok, &fields, "posts").is_ok());
+    }
+
+    /// A shared field under a localized Group is itself locale-scoped (its column
+    /// is suffixed), so constraining it is rejected too.
+    #[test]
+    fn validates_access_constraints_rejects_field_in_localized_group() {
+        let mut inner = FieldDefinition::builder("color", FieldType::Text).build();
+        // not directly localized — inherits from the group
+        inner.localized = false;
+        let mut group = FieldDefinition::builder("meta", FieldType::Group).build();
+        group.localized = true;
+        group.fields = vec![inner];
+        let fields = vec![group];
+
+        let bad = vec![single_op("meta__color", FilterOp::Equals("red".into()))];
+        let err = validate_access_constraint_locales(&bad, &fields, "posts").unwrap_err();
+        assert!(err.to_string().contains("meta__color"));
     }
 
     /// OR groups are walked just like in `validate_user_filters`.

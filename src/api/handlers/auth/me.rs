@@ -11,7 +11,7 @@ use crate::{
     },
     core::{CollectionDefinition, Document},
     db::{DbPool, query},
-    service::{self, ServiceContext},
+    service::{self, ServiceContext, helpers::collect_api_hidden_field_names},
 };
 
 /// Owned bundle for the `Me` spawn-blocking body.
@@ -38,6 +38,12 @@ fn me_blocking(input: &MeBlockingInput) -> Result<(Option<Document>, u64, bool),
         query::hydrate_document(&conn, &input.collection, &input.def.fields, d, None, None)
             .inspect_err(|e| error!("Me hydrate_document error: {}", e))
             .map_err(|_| Status::internal("Internal error"))?;
+
+        // Strip `api_hidden` fields even for a self-read: a field marked
+        // never-over-the-API (e.g. a stored secret on an auth collection) must
+        // not leak just because this is the caller's own record. Every other
+        // read path strips these; `Me` queries raw, so do it here too.
+        d.strip_fields(&collect_api_hidden_field_names(&input.def.fields, ""));
     }
 
     let ctx = ServiceContext::slug_only(&input.collection)

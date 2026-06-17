@@ -131,6 +131,17 @@ pub(crate) fn update_document_in_conn(
         conn,
     )?;
 
+    // Editing an auth document can change a user's access (role, group, …).
+    // Live-update streams resolve access once at connect, so tear down this
+    // user's streams to force a reconnect with fresh access. Auth-specific
+    // writes (login timestamps, lock, password resets, session bumps) use
+    // dedicated query paths — not this one — so this fires only on genuine
+    // document edits, never on high-frequency login bookkeeping. No-op without
+    // an invalidation transport attached.
+    if def.is_auth_collection() {
+        ctx.publish_user_invalidation(id);
+    }
+
     // Strip read-denied fields from the returned document, after the hooks have
     // seen the full doc.
     let mut read_denied = write_hooks.field_read_denied(

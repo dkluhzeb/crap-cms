@@ -39,7 +39,7 @@ pub use validation::{
 pub use view_scope::{RequestedViews, ViewScope};
 
 pub(crate) use helpers::coerce_json_value;
-pub(crate) use locale::{group_locale_fields, locale_write_column};
+pub(crate) use locale::{group_locale_fields, is_locale_locked_write, locale_write_column};
 
 pub(super) use columns::collect_column_names;
 

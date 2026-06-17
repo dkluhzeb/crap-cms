@@ -25,8 +25,9 @@ use crap_cms::hooks;
 use crap_cms::hooks::AccessCheckInput;
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::service::{
-    GetGlobalInput, ListVersionsInput, RunnerReadHooks, RunnerWriteHooks, SearchDocumentsInput,
-    ServiceContext, WriteInput, collection_stats, create_document_in_conn, get_global_document,
+    GetGlobalInput, ListVersionsInput, ReadHooks, RunnerReadHooks, RunnerWriteHooks,
+    SearchDocumentsInput, ServiceContext, WriteInput, collection_stats, create_document_in_conn,
+    get_global_document,
     jobs::{QueueJobInput, queue_job},
     list_versions, restore_collection_version, search_documents, update_document,
     update_global_in_conn,
@@ -493,6 +494,41 @@ fn access_check_plus_db_query_end_to_end() {
         )
         .unwrap();
     assert!(matches!(result, query::AccessResult::Denied));
+}
+
+/// MCP-style full-access reads: `RunnerReadHooks::with_override_access` bypasses
+/// the collection access hook entirely (parity with `RunnerWriteHooks`), so the
+/// `admin_only` hook — which denies a nil user — returns `Allowed` under
+/// override. This closes the read/write override asymmetry: MCP could `update`
+/// a row its reads then refused to return.
+#[test]
+fn runner_read_hooks_override_bypasses_collection_access() {
+    let (_tmp, pool, _registry, runner) = setup();
+    let conn = pool.get().unwrap();
+
+    let input = AccessCheckInput {
+        access: Some(&HookRef::new("access.admin_only")),
+        user: None,
+        id: None,
+        data: None,
+        locale: None,
+        operation: "find",
+        collection: "test",
+        ui_locale: None,
+    };
+
+    // Without override, admin_only denies a nil user.
+    let denied = RunnerReadHooks::new(&runner, &conn, None, None)
+        .check_access(&input)
+        .unwrap();
+    assert!(matches!(denied, query::AccessResult::Denied));
+
+    // With override, access is bypassed entirely → Allowed.
+    let allowed = RunnerReadHooks::new(&runner, &conn, None, None)
+        .with_override_access()
+        .check_access(&input)
+        .unwrap();
+    assert!(matches!(allowed, query::AccessResult::Allowed));
 }
 
 // ── 5. Additional Access Control Tests ───────────────────────────────────────

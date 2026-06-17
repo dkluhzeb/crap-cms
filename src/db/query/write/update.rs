@@ -15,7 +15,7 @@ use crate::{
                 coerce_date_value_json, prefixed_name, tz_column, utc_now,
                 validate_no_null_byte_json, walk_leaf_fields,
             },
-            locale_write_column,
+            is_locale_locked_write, locale_write_column,
             read::find_by_id_raw,
         },
     },
@@ -187,6 +187,15 @@ fn collect_leaf_update(
     prefix: &str,
     inherited_localized: bool,
 ) -> Result<()> {
+    // A shared (locale-independent) field maps to the bare column. Writing it
+    // while editing a non-default locale would clobber the canonical
+    // (default-locale) value, so skip it — enforcing the UI's read-only
+    // `locale_locked` rule on every write surface. (Localized fields and fields
+    // under a localized Group write their own per-locale column and are kept.)
+    if is_locale_locked_write(field, locale_ctx, inherited_localized) {
+        return Ok(());
+    }
+
     let data_key = prefixed_name(prefix, &field.name);
     let col_name = locale_write_column(&data_key, field, locale_ctx, inherited_localized)?;
 

@@ -44,7 +44,7 @@ pub(in crate::mcp::tools) fn exec_list_versions(
 
     // MCP operates with full access — override access checks
     let conn = ctx.pool.get().context("DB connection")?;
-    let hooks = RunnerReadHooks::new(ctx.runner, &conn, None, None);
+    let hooks = RunnerReadHooks::new(ctx.runner, &conn, None, None).with_override_access();
     let svc_ctx = ServiceContext::collection(slug, def)
         .conn(&conn)
         .read_hooks(&hooks)
