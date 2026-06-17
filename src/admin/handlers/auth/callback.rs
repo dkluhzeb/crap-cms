@@ -28,7 +28,7 @@ use crate::{
         },
     },
     core::{Document, HookRef, collection::Auth},
-    db::DbPool,
+    db::{DbPool, query},
     hooks::{HookRunner, lifecycle::AuthStrategyInput},
     service::{self, ServiceContext},
 };
@@ -99,16 +99,45 @@ async fn run_auth_callback_hook(
     }
 }
 
+/// Resolve which auth collection the hook-returned user belongs to, by finding
+/// the one whose table actually contains `user_id`.
+///
+/// The OAuth callback name is not tied to a collection in config, so the binding
+/// is derived from the user the hook authenticated — the session is bound to the
+/// collection that actually owns the user, never an arbitrary first-match. This
+/// is what makes the callback correct across multiple auth collections. Returns
+/// `None` if no auth collection contains the user, or if more than one does (an
+/// id collision we refuse to guess through — fail closed).
+fn resolve_user_collection(state: &AdminState, user_id: &str) -> Option<String> {
+    let conn = state.pool.get().ok()?;
+
+    let mut resolved = None;
+    for (slug, def) in &state.registry.collections {
+        if !def.is_auth_collection() {
+            continue;
+        }
+        if query::auth::user_exists(&conn, slug, user_id).unwrap_or(false) {
+            if resolved.is_some() {
+                return None;
+            }
+            resolved = Some(slug.to_string());
+        }
+    }
+
+    resolved
+}
+
 /// Validate the user returned by an auth-callback hook the same way the login
 /// path does, and return the user's current session version.
 ///
-/// Rejects locked accounts and — when the collection requires email
-/// verification — unverified accounts, returning `None` so the caller redirects
-/// to login without minting a session. This mirrors the per-strategy login
-/// guard (`is_locked` + `requires_verify_email && is_verified`); without it an
-/// external auth callback would bypass email verification, since the
-/// per-request session resolver re-checks lock and session version but **not**
-/// verification.
+/// `slug` is the collection the user belongs to (resolved by
+/// [`resolve_user_collection`]). Rejects locked accounts and — when the
+/// collection requires email verification — unverified accounts, returning
+/// `None` so the caller redirects to login without minting a session. This
+/// mirrors the per-strategy login guard (`is_locked` + `requires_verify_email &&
+/// is_verified`); without it an external auth callback would bypass email
+/// verification, since the per-request session resolver re-checks lock and
+/// session version but **not** verification.
 fn validate_callback_user(state: &AdminState, slug: &str, user_id: &str) -> Option<u64> {
     let requires_verify = state
         .registry
@@ -155,17 +184,29 @@ pub async fn auth_callback(
         return Redirect::to(paths::LOGIN).into_response();
     }
 
-    let Some(collection) = find_auth_collection(&state.registry) else {
+    // The callback name is not tied to a collection, so pick a deterministic
+    // auth collection for the hook's `ctx.collection` (best-effort context for
+    // generic hooks; hooks that hardcode their own collection ignore it). The
+    // session binding is decided AFTER the hook runs, from the returned user.
+    let Some(hook_collection) = find_auth_collection(&state.registry) else {
         return Redirect::to(paths::LOGIN).into_response();
     };
 
-    let user = match run_auth_callback_hook(&state, &name, &headers, &params, &collection).await {
-        Ok(Some(doc)) => doc,
-        Ok(None) => {
-            // Attempt already recorded up front by check_and_block.
-            return Redirect::to(paths::LOGIN).into_response();
-        }
-        Err(()) => return Redirect::to(paths::LOGIN).into_response(),
+    let user =
+        match run_auth_callback_hook(&state, &name, &headers, &params, &hook_collection).await {
+            Ok(Some(doc)) => doc,
+            Ok(None) => {
+                // Attempt already recorded up front by check_and_block.
+                return Redirect::to(paths::LOGIN).into_response();
+            }
+            Err(()) => return Redirect::to(paths::LOGIN).into_response(),
+        };
+
+    // Bind the session to the collection that actually owns the returned user,
+    // not the arbitrary hook-context collection — correct across multiple auth
+    // collections, and rejects a fabricated/unknown user.
+    let Some(collection) = resolve_user_collection(&state, &user.id) else {
+        return Redirect::to(paths::LOGIN).into_response();
     };
 
     let Some(session_version) = validate_callback_user(&state, &collection, &user.id) else {

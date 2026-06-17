@@ -23,8 +23,8 @@ pub struct ListJobRunsInput<'a> {
 ///
 /// # Errors
 ///
-/// Returns `AccessDenied`/`HookError` propagated from a job access hook, or a
-/// backend error if the COUNT or SELECT fails.
+/// Returns `HookError` from a job access hook (a denial downgrades to an empty
+/// page, never an error), or a backend error if the COUNT or SELECT fails.
 pub fn list_job_runs(
     ctx: &ServiceContext,
     input: &ListJobRunsInput,

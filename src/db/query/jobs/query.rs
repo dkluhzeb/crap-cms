@@ -279,8 +279,7 @@ pub fn find_stale_jobs(conn: &dyn DbConnection, stale_threshold_secs: u64) -> Re
     let (offset_sql, offset_param) = conn.date_offset_expr(threshold, 1);
     let rows = conn.query_all(
         &format!(
-            "SELECT id, slug, status, queue, data, result, error, attempt, max_attempts,
-                    scheduled_by, created_at, started_at, completed_at, heartbeat_at, retry_after
+            "SELECT {RUN_COLUMNS}
              FROM _crap_jobs
              WHERE status = 'running'
                AND (heartbeat_at IS NULL OR heartbeat_at < {offset_sql})"
@@ -354,11 +353,13 @@ pub fn last_completed_run(conn: &dyn DbConnection, slug: &str) -> Result<Option<
     Ok(row.map(|r| row_to_job_run(&r)))
 }
 
-/// Build a `JobRun` from a wide DB row that includes all 15 columns.
+/// Build a `JobRun` from a wide DB row of the full [`RUN_COLUMNS`] set
+/// (17 columns; reads `priority` at index 15 and `unique_key` at 16).
 ///
 /// All column accessors fall back to sensible defaults (empty string,
 /// `JobStatus::Pending`, `0` for counters), so this never fails — a
 /// malformed row produces a logically-empty `JobRun` rather than an error.
+/// Callers must therefore `SELECT` the columns in [`RUN_COLUMNS`] order.
 fn row_to_job_run(row: &DbRow) -> JobRun {
     let text_or =
         |idx: usize, default: &str| -> String { row.text_at(idx).unwrap_or(default).to_string() };
@@ -460,6 +461,38 @@ mod tests {
 
         let filtered = list_job_runs(&conn, Some("job_a"), None, 100, 0).unwrap();
         assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn list_and_count_in_filter_to_allowlist() {
+        let (_dir, conn) = setup_db();
+        insert_job(&conn, "job_a", "{}", "cron", 1, "default", 0).unwrap();
+        insert_job(&conn, "job_b", "{}", "manual", 1, "default", 0).unwrap();
+        insert_job(&conn, "job_c", "{}", "manual", 1, "default", 0).unwrap();
+
+        let allowed = vec!["job_a".to_string(), "job_c".to_string()];
+        let runs = list_job_runs_in(&conn, &allowed, None, 100, 0).unwrap();
+        let slugs: Vec<&str> = runs.iter().map(|r| r.slug.as_str()).collect();
+        assert_eq!(runs.len(), 2);
+        assert!(slugs.contains(&"job_a") && slugs.contains(&"job_c"));
+        assert!(!slugs.contains(&"job_b"));
+        assert_eq!(count_job_runs_in(&conn, &allowed, None).unwrap(), 2);
+    }
+
+    #[test]
+    fn list_and_count_in_empty_allowlist_match_nothing() {
+        // The empty-allowlist short-circuit must yield no rows / zero — never an
+        // `IN ()` SQL error, and never (via a dropped WHERE) every row.
+        let (_dir, conn) = setup_db();
+        insert_job(&conn, "job_a", "{}", "cron", 1, "default", 0).unwrap();
+        insert_job(&conn, "job_b", "{}", "manual", 1, "default", 0).unwrap();
+
+        assert!(
+            list_job_runs_in(&conn, &[], None, 100, 0)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(count_job_runs_in(&conn, &[], None).unwrap(), 0);
     }
 
     #[test]

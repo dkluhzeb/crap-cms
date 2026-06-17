@@ -314,10 +314,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   threaded into the collection-access evaluation, not just field-level stripping
   — previously the row/collection access hook saw an anonymous user even for an
   authenticated request, so per-user read rules were misevaluated on served
-  files. Collections with no read hook and no draft/trash axis keep the fast,
-  uncached-query public path. Cache headers follow the resolution: immutable for
-  public files, a short shared-cache window for anonymous-visible mutable files,
-  and `no-store` for authenticated (potentially per-row) reads.
+  files. The fast public path (served `immutable`, no query) now applies only
+  when a collection is *provably* public: `[access] default_deny` off **and** no
+  read hook **and** no draft/trash axis — previously it ignored `default_deny`,
+  so under the secure-by-default a hook-less collection's files were served
+  publicly even though reads were denied. Every access-gated file is served
+  `no-store`: because read access need not be monotonic (an anonymous-visible
+  file may be denied to a logged-in user), a shared cache must never store one
+  viewer's resolution and replay it to another.
+
+- **Auth callbacks enforce account guards and bind to the right collection.**
+  The OAuth/external-strategy callback (`/admin/auth/callback/{name}`) used to
+  mint a session for the hook-returned user without re-checking lock or email
+  verification — letting an external strategy bypass a collection's
+  verify-email requirement, since the per-request resolver re-checks lock and
+  session version but not verification. The callback now applies the same
+  `is_locked` + `requires_verify_email && is_verified` guard as password login.
+  It also binds the session to the auth collection the returned user actually
+  belongs to (resolved from the user's id) instead of an arbitrary
+  first-by-`HashMap`-order collection — so the callback is correct with multiple
+  auth collections, and a user that exists in no auth collection (a fabricated
+  id) or in more than one is refused.
 
 - **`locale_locked` fields are enforced server-side.** A non-localized (shared)
   field is rendered read-only in the admin UI when editing a non-default locale,
@@ -532,6 +549,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   parameters now adapt to the statement's expected Postgres type (INT2/INT4/
   INT8) with range checks. SQLite is unaffected (INTEGER storage is already
   variable-width).
+
+- **gRPC `ForgotPassword` reset links no longer double the path slash.** The
+  gRPC handler hand-rolled the base URL instead of using `ServerConfig::base_url()`,
+  so a configured `public_url` with a trailing slash produced
+  `https://host//admin/reset-password?...`. It now uses the shared helper (which
+  trims the trailing slash), matching the admin surface.
+
+- **Stale-job recovery reads the full job row.** `find_stale_jobs` selected 15
+  columns while the row mapper reads 17, silently defaulting `priority` and
+  `unique_key` to `0`/`None` on recovered stale jobs. It now selects the full
+  column set. (No observable effect today — recovery callers only read id/slug —
+  but it removes a latent data-loss landmine.)
 
 - **Login rate limiting fails closed on backend errors.** With the Redis
   rate-limit backend, a Redis outage made `is_blocked` report "not blocked"

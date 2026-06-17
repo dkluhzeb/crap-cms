@@ -293,6 +293,25 @@ mod tests {
         assert_eq!(results[0], "1");
     }
 
+    /// Prefix matching: a query that is a strict prefix of a longer indexed
+    /// token must match (the `*` suffix). Every other search test matches the
+    /// term exactly, so a regression to exact-only matching would pass silently
+    /// without this.
+    #[test]
+    fn search_matches_by_prefix() {
+        let (_dir, conn) = setup_db();
+        insert_post(&conn, "1", "Rustacean", "");
+        let def = simple_def(vec![text_field("title")]);
+        sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
+
+        let results = fts_search(&conn, "posts", "Rust", 10).unwrap();
+        assert_eq!(
+            results,
+            vec!["1".to_string()],
+            "a prefix query should match the longer indexed token"
+        );
+    }
+
     /// Robustness: a term packed with FTS5 metacharacters and keywords must run
     /// as a well-formed MATCH (no self-inflicted query error) and is always
     /// bound as a parameter, never interpolated. Quoting each token makes every

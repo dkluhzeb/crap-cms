@@ -284,6 +284,19 @@ fn make_verify_users_def() -> CollectionDefinition {
     def
 }
 
+fn make_named_auth_def(slug: &str) -> CollectionDefinition {
+    let mut def = CollectionDefinition::new(slug);
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition::builder("email", FieldType::Email)
+            .required(true)
+            .unique(true)
+            .build(),
+    ];
+    def.auth = Some(Auth::enabled());
+    def
+}
+
 // ── Login / Logout Tests ──────────────────────────────────────────────────
 
 #[tokio::test]
@@ -770,6 +783,85 @@ end
     assert!(
         session_issued(&resp),
         "verified user should receive a session via the auth callback"
+    );
+}
+
+/// Regression: with multiple auth collections, the callback binds the session to
+/// the collection the returned user ACTUALLY belongs to — not an arbitrary
+/// first-match. `acol` sorts before `bcol`, so the old first-match logic would
+/// have bound to `acol`; the user lives in `bcol`, and the minted session's JWT
+/// must name `bcol`.
+#[tokio::test]
+async fn auth_callback_binds_to_users_actual_collection() {
+    use crap_cms::core::auth::TokenProvider;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cb_dir = tmp.path().join("auth_callback");
+    std::fs::create_dir_all(&cb_dir).unwrap();
+    std::fs::write(
+        cb_dir.join("test.lua"),
+        r#"
+return function(ctx)
+    local uid = ctx.headers["_query_uid"]
+    if not uid then return nil end
+    return { id = uid, email = "x@test.com" }
+end
+"#,
+    )
+    .unwrap();
+
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.admin.require_auth = false;
+
+    let app = setup_app_in_dir(
+        vec![make_named_auth_def("acol"), make_named_auth_def("bcol")],
+        vec![],
+        config,
+        tmp,
+    );
+
+    // The user exists only in `bcol`.
+    let user_id = {
+        let def = app.registry.get_collection("bcol").unwrap().clone();
+        let mut conn = app.pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let data: DocumentFields =
+            HashMap::from([("email".to_string(), json!("x@test.com"))]).into();
+        let doc = query::create(&tx, "bcol", &def, &data, None).unwrap();
+        tx.commit().unwrap();
+        doc.id.to_string()
+    };
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get(format!("/admin/auth/callback/test?uid={user_id}"))
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let token = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find_map(|c| c.strip_prefix("crap_session="))
+        .map(|c| c.split(';').next().unwrap_or("").to_string())
+        .expect("a session cookie should be set");
+
+    let provider = crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret");
+    let claims = provider
+        .validate_token(&token)
+        .expect("valid session token");
+    assert_eq!(
+        claims.collection, "bcol",
+        "the session must bind to the user's actual collection, not the first auth collection"
     );
 }
 

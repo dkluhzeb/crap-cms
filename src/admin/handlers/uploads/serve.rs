@@ -60,21 +60,18 @@ struct UploadVisibilityInput {
     locale_config: LocaleConfig,
 }
 
-/// `Cache-Control` for an immutable public upload: no access control, and the
-/// content at a nanoid-prefixed URL never changes, so cache hard and long.
-/// `31536000` = one year, the conventional ceiling for `immutable` assets.
+/// `Cache-Control` for a provably-public upload: no access control at all
+/// (`default_deny` off, no read hook, no draft/trash axis), and the content at
+/// a nanoid-prefixed URL never changes, so cache hard and long. `31536000` =
+/// one year, the conventional ceiling for `immutable` assets.
 const CACHE_IMMUTABLE: &str = "public, max-age=31536000, immutable";
 
-/// `Cache-Control` for a public-but-access-gated upload served to an anonymous
-/// request: the bytes are shareable, but the owning document's visibility is
-/// mutable (publish/unpublish, trash), so cap shared-cache staleness rather
-/// than serving `immutable`. A moderate window trades a small staleness risk
-/// for CDN/browser caching of public media that merely lives in a
-/// drafts/soft-delete collection.
-const CACHE_PUBLIC_MUTABLE: &str = "public, max-age=300";
-
-/// `Cache-Control` for an authenticated read: the response may be user-specific
-/// (per-row read constraints), so it must never be shared-cached.
+/// `Cache-Control` for any access-gated upload. Whether a file serves depends
+/// on the *viewer* (per-row read constraints, draft/trash access) and on
+/// mutable document state — and access is not required to be monotonic, so an
+/// anonymous-visible file is not provably visible to every caller. A shared
+/// cache must therefore never store one viewer's resolution and replay it to
+/// another, so these responses are never cached (`no-store`).
 const CACHE_PRIVATE: &str = "private, no-store";
 
 /// Whether the viewer may see the upload-collection **document** that owns this
@@ -154,16 +151,19 @@ async fn check_upload_access(
 ) -> Option<&'static str> {
     let def = state.registry.get_collection(collection_slug)?.clone();
 
-    // A collection with no read hook AND no draft/trash axis has no access
-    // control — every file is public, so serve it CDN-cacheable without a query.
-    if def.access.read.is_none() && !def.has_drafts() && !def.soft_delete {
+    // Fast public path: only when "no read hook" genuinely means ALLOW — i.e.
+    // `default_deny` is off — and there is no draft/trash axis (no status- or
+    // viewer-dependent visibility). Then every file is unconditionally public
+    // and can be served CDN-cacheable without a query. Under `default_deny`
+    // (the secure-by-default), a hook-less collection denies reads, so fall
+    // through to the access-resolving path, which 404s correctly.
+    if !state.config.access.default_deny
+        && def.access.read.is_none()
+        && !def.has_drafts()
+        && !def.soft_delete
+    {
         return Some(CACHE_IMMUTABLE);
     }
-
-    // Anonymous request → the response is not user-specific, so a visible file
-    // is shareable. Authenticated → per-row read constraints may apply, so the
-    // response is user-specific and must not be shared-cached.
-    let is_anonymous = auth_user.is_none();
 
     let input = UploadVisibilityInput {
         pool: state.pool.clone(),
@@ -180,15 +180,7 @@ async fn check_upload_access(
         .await
         .unwrap_or(false);
 
-    if !visible {
-        return None;
-    }
-
-    Some(if is_anonymous {
-        CACHE_PUBLIC_MUTABLE
-    } else {
-        CACHE_PRIVATE
-    })
+    visible.then_some(CACHE_PRIVATE)
 }
 
 /// Serve an uploaded file, checking collection read access if configured.

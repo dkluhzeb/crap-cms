@@ -602,6 +602,57 @@ async fn serve_upload_path_traversal_blocked() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
+/// Regression (F1): under `[access] default_deny = true` (the secure default),
+/// a collection with no read hook denies reads — so the upload serve route must
+/// NOT serve its files via the public fast path. An anonymous request 404s.
+#[tokio::test]
+async fn serve_upload_respects_default_deny() {
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.admin.require_auth = false;
+    config.access.default_deny = true;
+
+    let mut def = CollectionDefinition::new("ddmedia");
+    def.timestamps = true;
+    def.upload = Some(CollectionUpload::new());
+    def.fields = vec![
+        FieldDefinition::builder("filename", FieldType::Text).build(),
+        FieldDefinition::builder("url", FieldType::Text).build(),
+    ];
+
+    let app = setup_app_with_config(vec![def], vec![], config);
+
+    {
+        let conn = app.pool.get().unwrap();
+        conn.execute(
+            "INSERT INTO ddmedia (id, filename, url, created_at, updated_at) \
+               VALUES ('d1', 'secret.png', '/uploads/ddmedia/secret.png', '2026-01-01', '2026-01-01')",
+            &[],
+        )
+        .unwrap();
+    }
+    let dir = app._tmp.path().join("uploads").join("ddmedia");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("secret.png"), b"x").unwrap();
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/uploads/ddmedia/secret.png")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "under default_deny a hook-less collection must not serve files"
+    );
+}
+
 /// Regression (F1): the serve route enforces the document VIEW model, not just
 /// collection read. An upload collection with soft-delete is past the public
 /// fast-path, so every file is gated by its owning document, resolved via the

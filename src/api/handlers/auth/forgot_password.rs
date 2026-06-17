@@ -118,16 +118,9 @@ fn send_reset_email(ctx: &ResetEmailCtx) {
     };
     let token = &token_result.token;
 
-    let base_url = ctx.server_config.public_url.clone().unwrap_or_else(|| {
-        if ctx.server_config.host == "0.0.0.0" {
-            format!("http://localhost:{}", ctx.server_config.admin_port)
-        } else {
-            format!(
-                "http://{}:{}",
-                ctx.server_config.host, ctx.server_config.admin_port
-            )
-        }
-    });
+    // Use the shared `base_url()` so a configured `public_url` with a trailing
+    // slash is trimmed — the hand-rolled form produced `…com//admin/…`.
+    let base_url = ctx.server_config.base_url();
 
     let reset_url = format!("{base_url}/admin/reset-password?token={token}");
 
