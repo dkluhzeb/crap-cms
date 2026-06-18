@@ -217,12 +217,10 @@ pub(crate) fn delete_document_in_conn(
     let after_result =
         write_hooks.run_hooks_with_conn(&def.hooks, HookEvent::AfterDelete, after_ctx, conn)?;
 
-    // Hard-deleting an auth document revokes that user's sessions — tear
-    // down any active live-update streams. Soft delete preserves the row,
-    // so no tear-down. No-op when no invalidation transport is attached.
-    if !def.soft_delete && def.is_auth_collection() {
-        ctx.publish_user_invalidation(id);
-    }
+    // Hard-deleting an auth document revokes that user's sessions, so its live
+    // streams must be torn down — but the invalidation is published POST-COMMIT
+    // by the wrapper (`delete_document_pool`/`_conn`, `delete_many_*`), mirroring
+    // update/undelete so a rollback can't leave a phantom invalidation.
 
     Ok(DeleteResult {
         context: after_result.context,
@@ -363,7 +361,9 @@ mod tests {
             .invalidation_transport(Some(transport))
             .build();
 
-        let _ = delete_document_in_conn(&ctx, "u1", None).expect("delete");
+        // Invalidation is published by the wrapper (conn mode → delete_document_conn),
+        // post-commit, not inside delete_document_in_conn.
+        let _ = crate::service::delete_document(&ctx, "u1", None, None).expect("delete");
 
         let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
             .await
@@ -392,7 +392,7 @@ mod tests {
             .invalidation_transport(Some(transport))
             .build();
 
-        let _ = delete_document_in_conn(&ctx, "u1", None).expect("soft delete");
+        let _ = crate::service::delete_document(&ctx, "u1", None, None).expect("soft delete");
 
         // No publish must have happened — poll briefly and assert timeout.
         let recv_result =

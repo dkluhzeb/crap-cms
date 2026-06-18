@@ -54,10 +54,24 @@ pub(in crate::mcp::tools) fn exec_find_by_id(
         .override_access(true)
         .build();
 
+    // Mirror `find`: thread the draft/trash view selectors so a single-document
+    // lookup can reach the same views the list endpoint exposes. MCP runs with
+    // override_access, so these are view selectors, not a gate.
+    let use_draft = args
+        .get("draft")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let include_deleted = args
+        .get("trash")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
     let input = FindByIdInput::builder(id)
         .depth(depth)
         .locale_ctx(locale_ctx.as_ref())
         .registry(Some(ctx.registry.as_ref()))
+        .use_draft(use_draft)
+        .include_deleted(include_deleted)
         .build();
 
     let doc = find_document_by_id(&svc_ctx, &input).map_err(ServiceError::into_anyhow)?;

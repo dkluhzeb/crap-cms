@@ -2,7 +2,7 @@
 
 use crate::{
     core::{Registry, cache::CacheBackend},
-    db::{FilterClause, FindQuery, LocaleContext, query::SharedPopulateSingleflight},
+    db::{FindQuery, LocaleContext, query::SharedPopulateSingleflight},
     service::read::post_process::PostProcessOpts,
 };
 
@@ -34,7 +34,6 @@ pub struct FindDocumentsInput<'a> {
     /// generic-user-filter path; this typed param is the supported entry
     /// point.
     pub status_filter: Option<Vec<String>>,
-    pub access_constraints: Option<Vec<FilterClause>>,
     /// Whether cursor-based pagination is enabled (from config).
     /// When true, `PaginationResult` uses cursor mode; when false, page mode.
     pub cursor_enabled: bool,
@@ -68,7 +67,6 @@ pub struct FindDocumentsInputBuilder<'a> {
     cache: Option<&'a dyn CacheBackend>,
     include_drafts: bool,
     status_filter: Option<Vec<String>>,
-    access_constraints: Option<Vec<FilterClause>>,
     cursor_enabled: bool,
     trash: bool,
     singleflight: Option<SharedPopulateSingleflight>,
@@ -86,7 +84,6 @@ impl<'a> FindDocumentsInputBuilder<'a> {
             cache: None,
             include_drafts: false,
             status_filter: None,
-            access_constraints: None,
             cursor_enabled: false,
             trash: false,
             singleflight: None,
@@ -133,11 +130,6 @@ impl<'a> FindDocumentsInputBuilder<'a> {
         self
     }
 
-    pub fn access_constraints(mut self, access_constraints: Option<Vec<FilterClause>>) -> Self {
-        self.access_constraints = access_constraints;
-        self
-    }
-
     pub fn cursor_enabled(mut self, cursor_enabled: bool) -> Self {
         self.cursor_enabled = cursor_enabled;
         self
@@ -166,7 +158,6 @@ impl<'a> FindDocumentsInputBuilder<'a> {
             cache: self.cache,
             include_drafts: self.include_drafts,
             status_filter: self.status_filter,
-            access_constraints: self.access_constraints,
             cursor_enabled: self.cursor_enabled,
             trash: self.trash,
             singleflight: self.singleflight,

@@ -468,7 +468,9 @@ fn find_by_id_schema() -> Value {
         "properties": {
             "id": { "type": "string" },
             "depth": { "type": "integer", "description": "Relationship population depth" },
-            "locale": { "type": "string", "description": "Locale code (e.g. 'en', 'de') or 'all' for all locales" }
+            "locale": { "type": "string", "description": "Locale code (e.g. 'en', 'de') or 'all' for all locales" },
+            "draft": { "type": "boolean", "description": "When true, overlay the latest draft version (draft view)" },
+            "trash": { "type": "boolean", "description": "When true, look up among soft-deleted documents (trash view)" }
         },
         "required": ["id"]
     })
@@ -490,6 +492,7 @@ fn find_schema() -> Value {
             "depth": { "type": "integer", "description": "Relationship population depth" },
             "search": { "type": "string", "description": "Full-text search query" },
             "locale": { "type": "string", "description": "Locale code (e.g. 'en', 'de') or 'all' for all locales" },
+            "draft": { "type": "boolean", "description": "When true, include draft documents (published + draft union)" },
             "trash": { "type": "boolean", "description": "When true, return only soft-deleted documents (trash view)" }
         }
     })
@@ -503,7 +506,8 @@ fn count_schema() -> Value {
                 "type": "object",
                 "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"}, {\"greater_than\": 5})"
             },
-            "draft": { "type": "boolean", "description": "Include draft/deleted documents in the count" }
+            "draft": { "type": "boolean", "description": "When true, include draft documents in the count (published + draft union)" },
+            "trash": { "type": "boolean", "description": "When true, count only soft-deleted documents (trash view)" }
         }
     })
 }

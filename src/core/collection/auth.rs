@@ -196,12 +196,6 @@ impl Activation {
             header: name.into(),
         }
     }
-
-    /// True iff this activation is the `Always` variant.
-    #[must_use]
-    pub fn is_always(&self) -> bool {
-        matches!(self, Activation::Always { .. })
-    }
 }
 
 fn deserialize_true_only<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
@@ -336,12 +330,6 @@ impl AuthMethod {
         Self::Bearer {
             surfaces: SurfaceSet::all(),
         }
-    }
-
-    /// Constructor: bearer scoped to specific surfaces.
-    #[must_use]
-    pub fn bearer_on(surfaces: SurfaceSet) -> Self {
-        Self::Bearer { surfaces }
     }
 
     /// Constructor: session cookie scoped to admin (the only realistic case).

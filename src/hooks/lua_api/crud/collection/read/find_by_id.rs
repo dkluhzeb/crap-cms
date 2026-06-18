@@ -41,6 +41,10 @@ pub(crate) struct FindByIdOptions {
     /// main-table data.
     #[lua(optional)]
     pub(crate) draft: bool,
+    /// When `true` and the collection has `soft_delete`, looks up the
+    /// document among soft-deleted (trash) rows instead of live ones.
+    #[lua(optional)]
+    pub(crate) trash: bool,
     /// Skip access control checks (default: `false`). Set to `true` in
     /// trusted internal code to bypass collection-level and field-level
     /// access for the current user.
@@ -116,6 +120,7 @@ fn collections_find_by_id(
         .registry(Some(reg.as_ref()))
         .select(opts.select.as_deref())
         .use_draft(opts.draft)
+        .include_deleted(opts.trash)
         .singleflight(hook_populate_singleflight(lua))
         .build();
 

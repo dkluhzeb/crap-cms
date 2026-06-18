@@ -2,7 +2,7 @@
 
 use crate::{
     core::{Registry, cache::CacheBackend},
-    db::{FilterClause, LocaleContext, query::SharedPopulateSingleflight},
+    db::{LocaleContext, query::SharedPopulateSingleflight},
     service::read::post_process::PostProcessOpts,
 };
 
@@ -15,7 +15,6 @@ pub struct FindByIdInput<'a> {
     pub registry: Option<&'a Registry>,
     pub cache: Option<&'a dyn CacheBackend>,
     pub use_draft: bool,
-    pub access_constraints: Option<Vec<FilterClause>>,
     /// When true, include soft-deleted documents (trash view).
     pub include_deleted: bool,
     /// Optional process-wide singleflight for deduplicating concurrent
@@ -40,7 +39,6 @@ pub struct FindByIdInputBuilder<'a> {
     registry: Option<&'a Registry>,
     cache: Option<&'a dyn CacheBackend>,
     use_draft: bool,
-    access_constraints: Option<Vec<FilterClause>>,
     include_deleted: bool,
     singleflight: Option<SharedPopulateSingleflight>,
 }
@@ -55,7 +53,6 @@ impl<'a> FindByIdInputBuilder<'a> {
             registry: None,
             cache: None,
             use_draft: false,
-            access_constraints: None,
             include_deleted: false,
             singleflight: None,
         }
@@ -91,11 +88,6 @@ impl<'a> FindByIdInputBuilder<'a> {
         self
     }
 
-    pub fn access_constraints(mut self, access_constraints: Option<Vec<FilterClause>>) -> Self {
-        self.access_constraints = access_constraints;
-        self
-    }
-
     pub fn include_deleted(mut self, include_deleted: bool) -> Self {
         self.include_deleted = include_deleted;
         self
@@ -117,7 +109,6 @@ impl<'a> FindByIdInputBuilder<'a> {
             registry: self.registry,
             cache: self.cache,
             use_draft: self.use_draft,
-            access_constraints: self.access_constraints,
             include_deleted: self.include_deleted,
             singleflight: self.singleflight,
         }

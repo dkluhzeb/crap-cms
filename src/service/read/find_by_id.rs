@@ -117,21 +117,11 @@ pub fn find_document_by_id(
     let hooks = ctx.read_hooks()?;
     let def = ctx.collection_def()?;
 
-    let mut scope = if input.include_deleted {
+    let scope = if input.include_deleted {
         resolve_trash_by_id(hooks, ctx, input)?
     } else {
         resolve_live_by_id(hooks, ctx, def, input)?
     };
-
-    // Merge any caller-supplied constraints (e.g. relationship-search scoping)
-    // into both the SQL filter and the snapshot gate. These are system-generated
-    // equality/membership scoping filters (never operator hooks), so they need no
-    // `validate_access_constraints` pass — and matching them in the snapshot gate
-    // (in-memory) stays faithful to the SQL filter only while that holds.
-    if let Some(extra) = &input.access_constraints {
-        scope.constraints.extend(extra.iter().cloned());
-        scope.snapshot_constraints.extend(extra.iter().cloned());
-    }
 
     let constraints = (!scope.constraints.is_empty()).then_some(scope.constraints);
 

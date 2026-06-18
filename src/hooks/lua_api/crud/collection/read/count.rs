@@ -42,6 +42,9 @@ pub(crate) struct CountQueryInput {
     /// Include draft documents (default: `false`).
     #[lua(optional)]
     pub(crate) draft: Option<bool>,
+    /// Count only soft-deleted (trash) documents (default: `false`).
+    #[lua(optional)]
+    pub(crate) trash: Option<bool>,
     /// FTS5 full-text search query.
     #[lua(optional)]
     pub(crate) search: Option<String>,
@@ -139,6 +142,7 @@ fn count_inner(
         .map_err(|e| RuntimeError(e.to_string()))?;
     let override_access = query.override_access.unwrap_or(false);
     let draft = query.draft.unwrap_or(false);
+    let trash = query.trash.unwrap_or(false);
     let user = hook_user(lua);
     let def = resolve_collection(reg, collection)?;
 
@@ -164,6 +168,7 @@ fn count_inner(
         .locale_ctx(locale_ctx.as_ref())
         .search(search.as_deref())
         .include_drafts(draft)
+        .trash(trash)
         .build();
 
     count_documents(&ctx, &input).map_err(|e| RuntimeError(format!("{e}")))

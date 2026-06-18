@@ -945,6 +945,7 @@ function crap.collections.config.list() end
 --- @field locale? string Locale code for localized fields (e.g., `"en"`, `"de"`, `"all"`). Nil = default locale.
 --- @field select? string[] Fields to return. Nil or empty = all fields. `id` is always included.
 --- @field draft? boolean When `true` and the collection has `versions.drafts`, returns the latest draft version snapshot instead of the published main-table data.
+--- @field trash? boolean When `true` and the collection has `soft_delete`, looks up the document among soft-deleted (trash) rows instead of live ones.
 --- @field overrideAccess? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass collection-level and field-level access for the current user.
 
 --- Optional options for `crap.collections.create`.
@@ -1053,6 +1054,7 @@ function crap.collections.validate(collection, data, opts) end
 --- @field locale? string Locale code for localized fields.
 --- @field overrideAccess? boolean Skip access control checks (default: `false`).
 --- @field draft? boolean Include draft documents (default: `false`).
+--- @field trash? boolean Count only soft-deleted (trash) documents (default: `false`).
 --- @field search? string FTS5 full-text search query.
 
 --- Count documents matching a query.

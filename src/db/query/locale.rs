@@ -372,7 +372,18 @@ pub(crate) fn locale_locked_field_names(
         };
 
         if field_locked {
-            locked.insert(prefixed_name(prefix, &field.name));
+            let name = prefixed_name(prefix, &field.name);
+
+            // A timezone-enabled Date scalar stores a companion `{field}_tz`
+            // column. The live write skips the whole field (date + tz) under a
+            // non-default locale, so the snapshot drop-set must drop BOTH halves —
+            // otherwise a non-default-locale edit of the tz survives into the
+            // snapshot and clobbers the canonical tz on restore.
+            if field.has_parent_column() && field.field_type == FieldType::Date && field.timezone {
+                locked.insert(tz_column(&name));
+            }
+
+            locked.insert(name);
         }
         Ok(())
     });
@@ -533,6 +544,30 @@ mod tests {
             config: make_locale_config(),
         };
         assert!(locale_locked_field_names(&fields, Some(&en)).is_empty());
+    }
+
+    /// Regression: a shared timezone-enabled Date locks BOTH the `start_date`
+    /// column and its `start_date_tz` companion under a non-default locale — the
+    /// live write skips the whole field, so the draft drop-set must too, or a
+    /// non-default-locale edit of the tz survives the snapshot and clobbers the
+    /// canonical tz on restore.
+    #[test]
+    fn locale_locked_field_names_includes_date_tz_companion() {
+        let date = FieldDefinition::builder("start_date", FieldType::Date)
+            .timezone(true)
+            .build(); // shared (not localized)
+        let fields = vec![date];
+
+        let de = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: make_locale_config(),
+        };
+        let locked = locale_locked_field_names(&fields, Some(&de));
+        assert!(locked.contains("start_date"), "shared date is locked");
+        assert!(
+            locked.contains("start_date_tz"),
+            "the _tz companion must also be locked, got: {locked:?}"
+        );
     }
 
     #[test]

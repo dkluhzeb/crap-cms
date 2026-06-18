@@ -128,6 +128,7 @@ end
 | `depth` | integer | `0` | Population depth for relationship fields. |
 | `select` | string[] | `nil` | Fields to return. `nil` = all fields. Always includes `id`. When specified, `created_at`/`updated_at` are included only if explicitly listed. |
 | `draft` | boolean | `false` | Include draft documents (versioned collections with `drafts = true`). |
+| `trash` | boolean | `false` | Return only soft-deleted documents (collections with `soft_delete = true`). |
 | `locale` | string | `nil` | Locale code for localized fields. |
 | `overrideAccess` | boolean | `false` | Bypass collection-level and field-level access checks. |
 | `search` | string | `nil` | FTS5 full-text search query. |
@@ -149,7 +150,7 @@ local doc = crap.collections.posts.find_by_id("abc123", { depth = 2 })
 local doc = crap.collections.posts.find_by_id("abc123", { select = { "title", "status" } })
 ```
 
-**Options:** `depth`, `select`, `draft`, `locale`, `overrideAccess` — same semantics as `find`.
+**Options:** `depth`, `select`, `draft`, `trash`, `locale`, `overrideAccess` — same semantics as `find`. `trash = true` looks the document up among soft-deleted rows (collections with `soft_delete = true`).
 
 ### `crap.collections.<slug>.create(data, opts?)`
 
@@ -466,6 +467,7 @@ local published = crap.collections.posts.count({
 | `locale` | string | `nil` | Locale code for localized fields. |
 | `overrideAccess` | boolean | `false` | Bypass access control checks. |
 | `draft` | boolean | `false` | Include draft documents. |
+| `trash` | boolean | `false` | Count only soft-deleted documents (collections with `soft_delete = true`). |
 | `search` | string | `nil` | FTS5 full-text search query (same as `find`). |
 
 ## crap.collections.update_many(collection, query, data, opts?)

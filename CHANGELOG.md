@@ -613,6 +613,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Draft snapshot of a timezone-enabled shared Date field could corrupt the
+  canonical timezone on restore.** Under a non-default locale the live write
+  skips a shared (non-localized) field entirely, but the draft-snapshot drop-set
+  dropped only the `Date` column, not its `{field}_tz` companion. A draft saved
+  under a non-default locale (via a non-form surface that can submit the locked
+  `_tz`) baked the wrong-locale timezone into the snapshot, which then clobbered
+  the canonical timezone when the version was restored. The drop-set now drops
+  both halves, matching the live write.
+
+- **Hard-delete published its live-stream invalidation before the transaction
+  committed.** `delete`/`delete_many` published the auth-user stream invalidation
+  inside `delete_document_in_conn` (pre-commit), unlike `update`/`undelete`/
+  `unpublish`/`restore`, which publish post-commit. A rolled-back delete could
+  leave a phantom invalidation (a needless stream reconnect). Invalidation now
+  fires post-commit in the wrapper on every delete path, consistent with the
+  other write ops.
+
+- **Admin password-reset and email-verification used a deferred transaction for
+  their SELECT-then-UPDATE.** Both took a `DEFERRED` transaction to read the
+  token row and then write, risking `SQLITE_BUSY_SNAPSHOT` (a spurious failure /
+  lost update) under concurrent writers. They now take an immediate write lock
+  up front, matching the gRPC reset/verify paths.
+
 - **Bulk `update_many(draft = true)` saves a draft instead of publishing.** The
   bulk update path threaded the `draft` flag from the API but ignored it on the
   write side, writing the main row directly — so a bulk "save as draft" silently
@@ -1037,6 +1060,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   files, so trashed documents remain restorable.)
 
 ### Added
+
+- **`find_by_id`/`count` gained the `draft`/`trash` view selectors on the MCP and
+  Lua surfaces, for parity with `find`.** MCP `find_by_id` previously could not
+  reach the draft or trash view at all (its tool schema and handler ignored both),
+  and the MCP `find`/`count` schemas under-advertised the params they accepted.
+  Lua `find_by_id` and `count` had no `trash` option even though Lua `find` did.
+  All read surfaces now expose the same view selectors with the same
+  union/downgrade semantics. Additive only.
 
 - **`crap.http.request` accepts fractional `timeout` seconds.** The timeout
   option is now a number instead of an integer, so sub-second timeouts are

@@ -13,6 +13,7 @@ use crate::{
     hooks::LuaCrudInfra,
     service::{
         RunnerWriteHooks, ServiceContext, ServiceError, delete_document_in_conn, flush_queue,
+        invalidate_user_streams_if_auth,
     },
 };
 
@@ -72,7 +73,6 @@ fn delete_document_pool(
         .user(ctx.user)
         .override_access(ctx.override_access)
         .cache(ctx.cache.clone())
-        .invalidation_transport(ctx.invalidation_transport.clone())
         .event_transport(ctx.event_transport.clone())
         .event_queue(queue.clone())
         .build();
@@ -85,6 +85,11 @@ fn delete_document_pool(
     ctx.clear_cache();
 
     ctx.publish_delete_event(id, def.soft_delete, result.pre_status.clone());
+    // Hard delete revokes the user's sessions — tear down live streams
+    // post-commit (soft delete preserves the row, so no tear-down).
+    if !def.soft_delete {
+        invalidate_user_streams_if_auth(ctx, id);
+    }
     flush_queue(ctx, &queue);
 
     // Clean up upload files after successful commit (skip for soft-delete to allow restore)
@@ -110,6 +115,11 @@ fn delete_document_conn(
     ctx.clear_cache();
 
     ctx.publish_delete_event(id, def.soft_delete, result.pre_status.clone());
+    // Hard delete revokes the user's sessions (conn mode mirrors update_conn:
+    // fire on the caller's ctx; soft delete preserves the row, so no tear-down).
+    if !def.soft_delete {
+        invalidate_user_streams_if_auth(ctx, id);
+    }
 
     if !def.soft_delete
         && let (Some(s), Some(fields)) = (storage, result.upload_doc_fields)

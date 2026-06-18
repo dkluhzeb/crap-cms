@@ -193,21 +193,6 @@ impl ServiceError {
             other => anyhow!("{other}"),
         }
     }
-
-    /// Returns `true` if this is a validation error.
-    #[must_use]
-    pub fn is_validation(&self) -> bool {
-        matches!(self, Self::Validation(_))
-    }
-
-    /// Extract the `ValidationError` if this is a Validation variant.
-    #[must_use]
-    pub fn into_validation(self) -> Option<ValidationError> {
-        match self {
-            Self::Validation(ve) => Some(ve),
-            _ => None,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -313,7 +298,7 @@ mod tests {
         let ve = ValidationError::new(vec![FieldError::new("x", "bad")]);
         let e = anyhow::Error::new(ve);
         let se: ServiceError = e.into();
-        assert!(se.is_validation());
+        assert!(matches!(se, ServiceError::Validation(_)));
     }
 
     #[test]

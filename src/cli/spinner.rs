@@ -67,12 +67,6 @@ impl Spinner {
             msg
         ));
     }
-
-    /// Finish with an error message: `✗ msg` in red.
-    pub fn finish_error(&self, msg: &str) {
-        self.bar
-            .finish_with_message(format!("{} {}", style(glyphs::error()).red().bold(), msg));
-    }
 }
 
 #[cfg(test)]
@@ -90,11 +84,5 @@ mod tests {
     fn spinner_warning_finish() {
         let spin = Spinner::new("Checking...");
         spin.finish_warning("Partial success");
-    }
-
-    #[test]
-    fn spinner_error_finish() {
-        let spin = Spinner::new("Processing...");
-        spin.finish_error("Failed");
     }
 }

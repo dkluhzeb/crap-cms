@@ -11,6 +11,7 @@ use crate::{
     hooks::LuaCrudInfra,
     service::{
         RunnerWriteHooks, ServiceContext, ServiceError, delete_document_in_conn, flush_queue,
+        invalidate_user_streams_if_auth,
     },
 };
 
@@ -128,7 +129,6 @@ fn delete_many_pool(
         .write_hooks(&wh)
         .user(ctx.user)
         .override_access(ctx.override_access)
-        .invalidation_transport(ctx.invalidation_transport.clone())
         .event_transport(ctx.event_transport.clone())
         .cache(ctx.cache.clone())
         .event_queue(queue.clone())
@@ -176,11 +176,16 @@ fn delete_many_pool(
     ctx.clear_cache();
 
     // Per-doc events are gated by `ctx.emit_events` (bulk defaults to off).
-    // Nested-hook events queued during the op always flush; user/session
-    // invalidation is handled inside `delete_document_in_conn` and is
-    // unaffected.
+    // Nested-hook events queued during the op always flush.
     for (id, pre_status) in deleted_ids.iter().zip(&pre_statuses) {
         ctx.publish_delete_event(id, def.soft_delete, pre_status.clone());
+    }
+    // Hard delete revokes sessions — tear down each affected user's live streams
+    // POST-COMMIT (mirrors update_many; soft delete preserves rows, no tear-down).
+    if !def.soft_delete {
+        for id in &deleted_ids {
+            invalidate_user_streams_if_auth(ctx, id);
+        }
     }
     flush_queue(ctx, &queue);
 
@@ -245,6 +250,14 @@ fn delete_many_conn(
                 skipped_count += 1;
             }
             Err(e) => return Err(e),
+        }
+    }
+
+    // Hard delete revokes sessions (conn mode mirrors update_many_conn: fire on
+    // the caller's ctx; soft delete preserves rows, so no tear-down).
+    if !def.soft_delete {
+        for id in &deleted_ids {
+            invalidate_user_streams_if_auth(ctx, id);
         }
     }
 

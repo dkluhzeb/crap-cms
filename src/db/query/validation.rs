@@ -38,35 +38,6 @@ pub fn sanitize_locale(locale: &str) -> Result<String> {
     Ok(result)
 }
 
-/// Reject user-supplied filter fields whose first path segment starts with `_`.
-///
-/// System columns (e.g. `_status`, `_deleted_at`, `_password_hash`, `_ref_count`,
-/// `_locked`) are engine-internal. User-input filter parse boundaries (gRPC
-/// `where`, Lua `where`, admin URL `where[...]=`) must reject them so that the
-/// only way to reach system-scoped data is via typed request flags like
-/// `trash = true` or `draft = true`.
-///
-/// Internal code paths that inject system-column filters directly by
-/// constructing `FilterClause` literals (trash view injection, draft filter,
-/// soft-delete exclusion) bypass this check by design — they don't go through
-/// the user-input parsers.
-///
-/// # Errors
-///
-/// Returns an error if the first dotted segment of `field` starts with `_`.
-pub fn reject_system_field(field: &str) -> Result<()> {
-    let first = field.split('.').next().unwrap_or(field);
-
-    if first.starts_with('_') {
-        bail!(
-            "Cannot filter on system column '{field}' — system columns are engine-internal. \
-             Use typed flags (trash, draft, etc.) to access them."
-        );
-    }
-
-    Ok(())
-}
-
 /// Validate a slug: lowercase alphanumeric + underscores, not empty, no leading underscore.
 ///
 /// Used for slugs that map to SQL identifiers, Lua identifiers, or
@@ -362,46 +333,6 @@ mod tests {
         // Double underscores pass is_valid_identifier but are reserved for group naming
         assert!(is_valid_identifier("seo__title"));
         // The rejection happens at a higher level (field name validation in schema parsing)
-    }
-
-    #[test]
-    fn reject_system_field_blocks_underscore_prefix() {
-        // Direct system columns
-        assert!(reject_system_field("_deleted_at").is_err());
-        assert!(reject_system_field("_status").is_err());
-        assert!(reject_system_field("_ref_count").is_err());
-        assert!(reject_system_field("_locked").is_err());
-        assert!(reject_system_field("_password_hash").is_err());
-
-        // Nested path whose first segment starts with `_`
-        assert!(reject_system_field("_internal.anything").is_err());
-        assert!(reject_system_field("_deleted_at.sub").is_err());
-    }
-
-    #[test]
-    fn reject_system_field_allows_normal_columns() {
-        assert!(reject_system_field("title").is_ok());
-        assert!(reject_system_field("status").is_ok());
-        assert!(reject_system_field("id").is_ok());
-        assert!(reject_system_field("created_at").is_ok());
-        assert!(reject_system_field("updated_at").is_ok());
-    }
-
-    #[test]
-    fn reject_system_field_allows_nested_dot_paths() {
-        // First segment is a normal user field; underscore in sub-segment is fine
-        assert!(reject_system_field("seo.meta_title").is_ok());
-        assert!(reject_system_field("content._block_type").is_ok());
-        assert!(reject_system_field("tags.id").is_ok());
-        assert!(reject_system_field("variants.dimensions.width").is_ok());
-    }
-
-    #[test]
-    fn reject_system_field_error_message_names_column() {
-        let err = reject_system_field("_deleted_at").unwrap_err().to_string();
-        assert!(err.contains("_deleted_at"));
-        assert!(err.contains("system column"));
-        assert!(err.contains("trash"));
     }
 
     #[test]
