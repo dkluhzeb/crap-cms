@@ -294,8 +294,8 @@ pub(super) fn parse_indexes(config: &Table) -> LuaResult<Vec<IndexDefinition>> {
 ///
 /// # Errors
 ///
-/// Returns an error if any of `read`/`create`/`update`/`delete`/`trash` is
-/// present but not a valid hook ref.
+/// Returns an error if any of `read`/`create`/`update`/`delete`/`trash`/`draft`/
+/// `versions` is present but not a valid hook ref.
 pub(super) fn parse_access_config(config: &Table) -> Result<Access> {
     let Ok(access_tbl) = get_table(config, "access") else {
         return Ok(Access::default());

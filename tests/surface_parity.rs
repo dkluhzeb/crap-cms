@@ -152,7 +152,10 @@ fn surfaces_do_not_bypass_the_service_layer() {
 /// Access-changing write ops: editing/restoring/deleting one of these can change
 /// a user's access, so the handler must let the service tear down that user's
 /// live-update streams. `create` is excluded (a new document has no pre-existing
-/// stream to invalidate).
+/// stream to invalidate). Also includes the auth state-change ops that revoke a
+/// privilege and call `publish_user_invalidation` directly (`consume_reset_token`;
+/// `lock_user`/`mark_unverified` are passed as fn-pointers elsewhere so they don't
+/// textually match a `(` form, but their surfaces already attach the transport).
 const INVALIDATION_WRITE_OPS: &[&str] = &[
     "update_document(",
     "update_many(",
@@ -161,6 +164,7 @@ const INVALIDATION_WRITE_OPS: &[&str] = &[
     "restore_collection_version(",
     "delete_document(",
     "delete_many(",
+    "consume_reset_token(",
 ];
 
 /// Architectural guard: any surface handler that builds a `ServiceContext` and

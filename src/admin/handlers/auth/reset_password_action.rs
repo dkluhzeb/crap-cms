@@ -19,7 +19,7 @@ use crate::{
             shared::{paths, render_page},
         },
     },
-    core::{Registry, auth::ResetTokenError},
+    core::{Registry, SharedInvalidationTransport, auth::ResetTokenError},
     db::DbPool,
     service::{
         ServiceContext, ServiceError, auth::consume_reset_token as service_consume_reset_token,
@@ -44,11 +44,17 @@ fn render_reset_error(state: &AdminState, token: Option<&str>, error: &str) -> R
 ///
 /// Searches every auth collection (with local auth enabled) for the token.
 /// On success the password is updated and the token cleared inside a transaction.
+///
+/// The invalidation transport is attached so the service's post-commit
+/// `publish_user_invalidation` tears down the user's open live-update streams —
+/// a password reset is a privilege-revoking action and an already-connected
+/// stream never makes another request to pick up the bumped `_session_version`.
 fn consume_reset_token(
     pool: &DbPool,
     registry: &Registry,
     token: &str,
     password: &str,
+    invalidation_transport: &SharedInvalidationTransport,
 ) -> anyhow::Result<()> {
     let mut conn = pool.get()?;
     let tx = conn.transaction()?;
@@ -62,7 +68,10 @@ fn consume_reset_token(
             continue;
         }
 
-        let ctx = ServiceContext::collection(&def.slug, def).conn(&tx).build();
+        let ctx = ServiceContext::collection(&def.slug, def)
+            .conn(&tx)
+            .invalidation_transport(Some(invalidation_transport.clone()))
+            .build();
 
         match service_consume_reset_token(&ctx, token, password) {
             Ok(()) => {
@@ -111,10 +120,12 @@ pub async fn reset_password_action(
     let registry = Arc::clone(&state.registry);
     let token = form.token.clone();
     let password = form.password.clone();
+    let invalidation_transport = state.invalidation_transport.clone();
 
-    let result =
-        task::spawn_blocking(move || consume_reset_token(&pool, &registry, &token, &password))
-            .await;
+    let result = task::spawn_blocking(move || {
+        consume_reset_token(&pool, &registry, &token, &password, &invalidation_transport)
+    })
+    .await;
 
     match result {
         Ok(Ok(())) => {

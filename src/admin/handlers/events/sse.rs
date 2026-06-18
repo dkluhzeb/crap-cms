@@ -124,13 +124,16 @@ impl SseAccess {
 
 /// Run one content view's access hook and map the outcome to visibility:
 /// `Some(filters)` when allowed (empty for unconstrained), `None` when denied or
-/// the hook errors (fail-closed).
+/// the hook errors (fail-closed). With `reject_constrained` (globals), a returned
+/// filter table drops the view rather than applying a row filter globals don't
+/// honor — matching the synchronous global paths that reject it as a config error.
 fn resolve_view(
     hook_runner: &HookRunner,
     access_ref: Option<&HookRef>,
     user_doc: Option<&Document>,
     conn: &dyn DbConnection,
     slug: &str,
+    reject_constrained: bool,
 ) -> Option<Vec<FilterClause>> {
     match hook_runner.check_access(
         &AccessCheckInput {
@@ -145,9 +148,38 @@ fn resolve_view(
         },
         conn,
     ) {
-        Ok(AccessResult::Allowed) => Some(Vec::new()),
-        Ok(AccessResult::Constrained(filters)) => Some(filters),
-        _ => None,
+        Ok(result) => view_from_access(result, reject_constrained, slug),
+        // Fail-closed: an access hook that errors — including a row constraint
+        // rejected by the operator allowlist — hides the view rather than
+        // streaming events past an unvalidated constraint.
+        Err(e) => {
+            warn!("SSE access for '{slug}' denied: {e}");
+            None
+        }
+    }
+}
+
+/// Map an access-check outcome to view visibility. Globals (`reject_constrained`)
+/// drop a filter-table result (fail-closed) because they are allow/deny only and
+/// every synchronous global path rejects a constraint as a config error; the live
+/// stream can't hard-error, so it hides the view instead of applying a row filter
+/// globals don't honor. Collections honor the filter as a row constraint.
+fn view_from_access(
+    result: AccessResult,
+    reject_constrained: bool,
+    slug: &str,
+) -> Option<Vec<FilterClause>> {
+    match result {
+        AccessResult::Allowed => Some(Vec::new()),
+        AccessResult::Constrained(_) if reject_constrained => {
+            warn!(
+                "SSE access for global '{slug}' returned a filter table; \
+                 globals are allow/deny only — hiding the view"
+            );
+            None
+        }
+        AccessResult::Constrained(filters) => Some(filters),
+        AccessResult::Denied => None,
     }
 }
 
@@ -169,14 +201,32 @@ fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document>) -> SseAc
     for (slug, def) in &state.registry.collections {
         // Draft view only exists with a status axis; trash only with soft-delete.
         let gate = EventViewGate {
-            published: resolve_view(runner, def.access.read.as_ref(), user_doc, &tx, slug),
+            published: resolve_view(runner, def.access.read.as_ref(), user_doc, &tx, slug, false),
             draft: def
                 .has_drafts()
-                .then(|| resolve_view(runner, def.access.resolve_draft(), user_doc, &tx, slug))
+                .then(|| {
+                    resolve_view(
+                        runner,
+                        def.access.resolve_draft(),
+                        user_doc,
+                        &tx,
+                        slug,
+                        false,
+                    )
+                })
                 .flatten(),
             trash: def
                 .soft_delete
-                .then(|| resolve_view(runner, def.access.resolve_trash(), user_doc, &tx, slug))
+                .then(|| {
+                    resolve_view(
+                        runner,
+                        def.access.resolve_trash(),
+                        user_doc,
+                        &tx,
+                        slug,
+                        false,
+                    )
+                })
                 .flatten(),
         };
 
@@ -199,9 +249,10 @@ fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document>) -> SseAc
     }
 
     for (slug, def) in &state.registry.globals {
-        // Globals are a single published row — no status or trash axis.
+        // Globals are a single published row — no status or trash axis. They are
+        // allow/deny only, so a Constrained result drops the view (fail-closed).
         let gate = EventViewGate {
-            published: resolve_view(runner, def.access.read.as_ref(), user_doc, &tx, slug),
+            published: resolve_view(runner, def.access.read.as_ref(), user_doc, &tx, slug, true),
             draft: None,
             trash: None,
         };
@@ -1036,5 +1087,37 @@ mod tests {
             build_event_payload(&event, &allow_trash, &runner, &registry, None).is_some(),
             "a trash-visible subscriber receives soft-delete events"
         );
+    }
+
+    /// Regression: a global access hook that returns a filter table is a config
+    /// error every synchronous global path rejects. On the SSE stream it must
+    /// fail closed (drop the view), never apply a row filter globals don't honor.
+    /// Collections, by contrast, keep the constraint as a row filter.
+    #[test]
+    fn global_constrained_view_is_dropped_collection_is_kept() {
+        let filters = vec![FilterClause::and(Vec::new())];
+
+        // Global (reject_constrained = true): filter table → hidden.
+        assert!(
+            view_from_access(AccessResult::Constrained(filters.clone()), true, "settings")
+                .is_none(),
+            "a global returning a filter table must drop the view (fail-closed)"
+        );
+
+        // Collection (reject_constrained = false): filter table → honored.
+        let kept = view_from_access(AccessResult::Constrained(filters), false, "posts");
+        assert_eq!(
+            kept.as_ref().map(Vec::len),
+            Some(1),
+            "a collection returning a filter table keeps it as a row constraint"
+        );
+
+        // Allow/deny map the same way regardless of the flag.
+        assert_eq!(
+            view_from_access(AccessResult::Allowed, true, "settings").map(|f| f.len()),
+            Some(0),
+            "Allowed yields an unconstrained (empty-filter) view"
+        );
+        assert!(view_from_access(AccessResult::Denied, false, "posts").is_none());
     }
 }

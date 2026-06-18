@@ -18,6 +18,38 @@ To allow all operations on collections without access functions (e.g., during de
 2. **Collection-level** — controls who can read, create, update, or delete documents in a collection. See [Collection-Level](collection-level.md).
 3. **Field-level** — controls which fields are visible or writable per-user. See [Field-Level](field-level.md).
 
+## Content Views
+
+Reads are gated per **content view**, and each view has its own access key:
+
+| Key | View | Default when unset |
+|-----|------|--------------------|
+| `read` | published documents | falls back to the collection default (`default_deny`) |
+| `draft` | unpublished (draft) documents | `update` |
+| `trash` | soft-deleted documents | `update` |
+| `versions` | version history | allowed (boolean toggle) |
+
+A read returns the **union** of the views the caller requested *and* is allowed
+to see. Because the keys are independent, you can express policies the old
+single-`read`-rule model could not:
+
+- **Drafts-only reviewer** — grant `draft`, deny `read`: sees unpublished work, not the live site.
+- **Read live but not history** — grant `read`, deny `versions`.
+
+**Reads downgrade; writes deny.** If a caller asks for drafts but lacks `draft`
+access, they silently receive published content only — no error. A denied write
+(`create`/`update`/`delete`) returns a 403 instead. The reasoning: a read asking
+for "more" can safely fall back to "what you're allowed to see", whereas a write
+is a single privileged action with no safe fallback.
+
+You never write a `_status` filter yourself — each key scopes its own view. See
+[Collection-Level](collection-level.md) for the per-key configuration and
+[Filter Constraints](filter-constraints.md) for what a returned filter table may
+contain.
+
+> Upgrading from the pre-view model (where drafts were gated by `read`)? See the
+> [alpha-10 upgrade notes](../upgrade/alpha-10.md).
+
 ## Access Function Context
 
 All access functions receive a context table:

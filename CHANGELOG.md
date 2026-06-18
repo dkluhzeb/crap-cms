@@ -260,6 +260,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **Admin password reset now tears down the user's live-update streams.** A
+  password reset is a privilege-revoking action: it bumps `_session_version` so
+  existing JWTs are rejected on their next request. But an already-connected
+  SSE/live-update stream never makes another request, so it kept running on the
+  old session indefinitely. The admin reset handler (`POST /admin/reset-password`)
+  built its service context without an invalidation transport, so the service's
+  post-commit `publish_user_invalidation` silently no-op'd — unlike the gRPC
+  `ResetPassword` sibling, which attached it. The transport is now wired on the
+  admin path too, and the surface-parity meta-test that guards "every
+  access-changing write attaches an invalidation transport" was extended to cover
+  the auth state-change ops (`consume_reset_token`) so the gap can't recur.
+
+- **Live event streams for globals reject filter-table access results.** The
+  admin SSE access resolver applied a returned filter table from a global's
+  access function as a row constraint, diverging from every synchronous global
+  path (and the gRPC subscribe path), which reject a constraint on a global as a
+  config error because globals are allow/deny only. The SSE resolver now
+  fail-closes — dropping the global view and logging a warning — instead of
+  applying a row filter globals don't honor.
+
 - **Access rules may only use equality and membership operators (breaking).**
   A filter returned from an access function (`read`/`draft`/`trash`/`update`/…)
   is now restricted to `equals`, `not_equals`, `in`, `not_in`, `exists`, and

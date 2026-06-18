@@ -44,7 +44,7 @@ field-level `access` and global `access`.
 > **falls back to `update`** when unset — so by default only users who can edit
 > can preview drafts, and a public `read` rule never exposes unpublished content.
 > Set `draft` explicitly to gate previews behind a different policy than editing.
-> The same rule applies to globals. See [Drafts](../collections/drafts.md).
+> The same rule applies to globals. See [Versions & Drafts](../collections/versions.md).
 >
 > Operators never write `_status` themselves — each access key scopes its own
 > status, and a user-supplied `_status` filter is rejected as a system column.
