@@ -91,10 +91,10 @@ pub fn data_touches_refs(fields: &[FieldDefinition], data: &DocumentFields, pref
                 }
             }
 
-            FieldType::Row | FieldType::Collapsible
-                if data_touches_refs(&field.fields, data, prefix) =>
-            {
-                return true;
+            FieldType::Row | FieldType::Collapsible => {
+                if data_touches_refs(&field.fields, data, prefix) {
+                    return true;
+                }
             }
 
             FieldType::Tabs => {
@@ -137,7 +137,22 @@ pub fn data_touches_refs(fields: &[FieldDefinition], data: &DocumentFields, pref
                 }
             }
 
-            _ => {}
+            // Scalars and the virtual Join never carry a stored reference, so a
+            // write to one can't change ref-counts. Listed explicitly (not `_`)
+            // so a future ref-bearing or container field type is a compile error
+            // here rather than silently failing to arm ref-count recomputation.
+            FieldType::Text
+            | FieldType::Number
+            | FieldType::Textarea
+            | FieldType::Richtext
+            | FieldType::Select
+            | FieldType::Radio
+            | FieldType::Checkbox
+            | FieldType::Date
+            | FieldType::Email
+            | FieldType::Json
+            | FieldType::Code
+            | FieldType::Join => {}
         }
     }
 

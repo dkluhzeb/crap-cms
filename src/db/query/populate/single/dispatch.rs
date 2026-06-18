@@ -170,10 +170,14 @@ pub(crate) fn populate_relationships_cached_inner(
 
     populate_flat_relationships(ctx, doc, opts, cache, singleflight, visited)?;
 
+    // The doc's own id anchors any reverse-lookup join nested in its containers;
+    // clone it to a local so the context can hold it while `doc` is borrowed mut.
+    let root_id = doc.id.to_string();
     let nested_pctx = PopulateCtx {
         conn: ctx.conn,
         registry: ctx.registry,
         effective_depth: opts.depth,
+        root_id: &root_id,
         locale_ctx: opts.locale_ctx,
         published_only: opts.published_only,
         cache,
@@ -198,6 +202,10 @@ fn populate_flat_relationships(
     singleflight: &Singleflight<Option<Document>>,
     visited: &mut HashSet<(String, String)>,
 ) -> Result<()> {
+    // Anchors a reverse-join nested under a flattened array sub-field; unused by
+    // the flat relationship/upload paths themselves.
+    let root_id = doc.id.to_string();
+
     for field in flatten_array_sub_fields(&ctx.def.fields) {
         if field.field_type != FieldType::Relationship && field.field_type != FieldType::Upload {
             continue;
@@ -226,6 +234,7 @@ fn populate_flat_relationships(
             conn: ctx.conn,
             registry: ctx.registry,
             effective_depth,
+            root_id: &root_id,
             locale_ctx: opts.locale_ctx,
             published_only: opts.published_only,
             cache,

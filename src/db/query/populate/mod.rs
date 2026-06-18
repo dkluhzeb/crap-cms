@@ -127,6 +127,19 @@ pub(crate) mod test_helpers {
         )
     }
 
+    /// `authors` with the `posts` join field nested inside a `section` group,
+    /// to exercise nested-container join population.
+    pub(crate) fn make_authors_def_with_nested_join() -> CollectionDefinition {
+        let mut join_field = make_field("posts", FieldType::Join);
+        join_field.join = Some(JoinConfig {
+            collection: Slug::new("posts"),
+            on: "author".to_string(),
+        });
+        let mut group = make_field("section", FieldType::Group);
+        group.fields = vec![join_field];
+        make_collection_def("authors", vec![make_field("name", FieldType::Text), group])
+    }
+
     pub(crate) fn make_posts_def_for_join() -> CollectionDefinition {
         let mut author_field = make_field("author", FieldType::Relationship);
         author_field.relationship = Some(RelationshipConfig::new("authors", false));

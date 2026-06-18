@@ -102,7 +102,22 @@ fn scan_fields(
                 let table = join_table(parent_table, &prefixed(prefix, &field.name));
                 scan_blocks(scan, field, &table, results);
             }
-            _ => {}
+            // Scalars and the virtual Join carry no incoming reference to scan.
+            // Listed explicitly (not `_`) so a future ref-bearing or container
+            // field type is a compile error here rather than a silently-missed
+            // back-reference (delete-protection would under-report).
+            FieldType::Text
+            | FieldType::Number
+            | FieldType::Textarea
+            | FieldType::Richtext
+            | FieldType::Select
+            | FieldType::Radio
+            | FieldType::Checkbox
+            | FieldType::Date
+            | FieldType::Email
+            | FieldType::Json
+            | FieldType::Code
+            | FieldType::Join => {}
         }
     }
 

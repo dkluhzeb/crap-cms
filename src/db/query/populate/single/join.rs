@@ -11,9 +11,9 @@ use crate::core::cache::CacheBackend;
 use crate::db::query::populate::helpers::{resolve_views, target_row_visible};
 use crate::db::query::populate::{PopulateContext, PopulateOpts, document_to_json};
 use crate::{
-    core::{Document, FieldType, upload},
+    core::{CollectionDefinition, Document, FieldType, JoinConfig, Registry, upload},
     db::{
-        Filter, FilterClause, FilterOp, FindQuery,
+        DbConnection, Filter, FilterClause, FilterOp, FindQuery,
         query::{hydrate_document, read::find},
     },
 };
@@ -45,7 +45,18 @@ pub(super) fn populate_join_fields(
             continue;
         };
 
-        let populated = populate_join_docs(ctx, doc, jc, &target_def, visited, opts, cache)?;
+        let populated = populate_join_docs(
+            &JoinDocsCtx {
+                conn: ctx.conn,
+                registry: ctx.registry,
+                cache,
+            },
+            &doc.id,
+            jc,
+            &target_def,
+            visited,
+            opts,
+        )?;
         doc.fields
             .insert(field.name.clone(), Value::Array(populated));
     }
@@ -53,19 +64,36 @@ pub(super) fn populate_join_fields(
     Ok(())
 }
 
-/// Find, hydrate, and recursively populate matching documents for a join field.
-fn populate_join_docs(
-    ctx: &PopulateContext<'_>,
-    doc: &Document,
-    jc: &crate::core::JoinConfig,
-    target_def: &crate::core::CollectionDefinition,
+/// Infrastructure refs the join populate path needs, bundled so the call site
+/// stays under the parameter limit (the per-field args — `doc_id`, `jc`,
+/// `target_def`, `visited`, `opts` — stay explicit).
+pub(super) struct JoinDocsCtx<'a> {
+    pub conn: &'a dyn DbConnection,
+    pub registry: &'a Registry,
+    pub cache: &'a dyn CacheBackend,
+}
+
+/// Find, hydrate, and recursively populate the target documents a join field
+/// reverse-looks-up for the document `doc_id`. Reusable from the top-level join
+/// pass and the nested-container walker — both pass the id of the document the
+/// join's `on` column references (the join is anchored to that id regardless of
+/// how deeply the field is nested). Applies the target's read/draft view access
+/// and per-row visibility, so a nested join is gated exactly like a top-level one.
+pub(super) fn populate_join_docs(
+    jctx: &JoinDocsCtx<'_>,
+    doc_id: &str,
+    jc: &JoinConfig,
+    target_def: &CollectionDefinition,
     visited: &mut HashSet<(String, String)>,
     opts: &PopulateOpts<'_>,
-    cache: &dyn CacheBackend,
 ) -> Result<Vec<Value>> {
+    let conn = jctx.conn;
+    let registry = jctx.registry;
+    let cache = jctx.cache;
+
     let filters = vec![FilterClause::Single(Filter {
         field: jc.on.clone(),
-        op: FilterOp::Equals(doc.id.to_string()),
+        op: FilterOp::Equals(doc_id.to_string()),
     })];
 
     // Resolve the target collection's view access (read + draft). The matched
@@ -77,7 +105,7 @@ fn populate_join_docs(
 
     let fq = FindQuery::builder().filters(filters).build();
 
-    let matched_docs = match find(ctx.conn, &jc.collection, target_def, &fq, opts.locale_ctx) {
+    let matched_docs = match find(conn, &jc.collection, target_def, &fq, opts.locale_ctx) {
         Ok(docs) => docs,
         Err(e) => {
             warn!("join populate find error for {}: {e:#}", jc.collection);
@@ -96,7 +124,7 @@ fn populate_join_docs(
         }
 
         hydrate_document(
-            ctx.conn,
+            conn,
             &jc.collection,
             &target_def.fields,
             &mut matched_doc,
@@ -112,8 +140,8 @@ fn populate_join_docs(
 
         populate_relationships_cached(
             &PopulateContext {
-                conn: ctx.conn,
-                registry: ctx.registry,
+                conn,
+                registry,
                 collection_slug: &jc.collection,
                 def: target_def,
             },
@@ -235,6 +263,58 @@ mod tests {
         let arr = posts.as_array().expect("posts should be an array");
         assert_eq!(arr.len(), 2, "Alice has 2 posts");
 
+        let titles: Vec<&str> = arr
+            .iter()
+            .filter_map(|v| v.get("title").and_then(|t| t.as_str()))
+            .collect();
+        assert!(titles.contains(&"First Post"));
+        assert!(titles.contains(&"Second Post"));
+    }
+
+    /// A Join nested inside a Group is populated just like a top-level Join —
+    /// the reverse lookup anchors on the document id regardless of nesting.
+    #[test]
+    fn nested_join_in_group_populates() {
+        let conn = setup_join_db();
+        let authors_def = make_authors_def_with_nested_join();
+        let posts_def = make_posts_def_for_join();
+        let mut registry = Registry::new();
+        registry.register_collection(authors_def.clone());
+        registry.register_collection(posts_def);
+
+        let mut doc = Document::new("a1".to_string());
+        doc.fields.insert("name".to_string(), json!("Alice"));
+        // The group must be present as an object for the walker to descend.
+        doc.fields.insert("section".to_string(), json!({}));
+
+        let mut visited = HashSet::new();
+        populate_relationships_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "authors",
+                def: &authors_def,
+            },
+            &mut doc,
+            &mut visited,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+                published_only: false,
+                join_access: None,
+                user: None,
+            },
+            &NoneCache,
+        )
+        .unwrap();
+
+        let section = doc.fields.get("section").expect("section group present");
+        let arr = section
+            .get("posts")
+            .and_then(|v| v.as_array())
+            .expect("nested join field should be populated as an array");
+        assert_eq!(arr.len(), 2, "Alice has 2 posts via the nested join");
         let titles: Vec<&str> = arr
             .iter()
             .filter_map(|v| v.get("title").and_then(|t| t.as_str()))

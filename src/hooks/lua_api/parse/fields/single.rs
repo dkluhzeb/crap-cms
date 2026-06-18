@@ -341,10 +341,42 @@ pub(crate) fn parse_required_locales(tbl: &Table) -> Result<Option<RequiredLocal
 }
 
 /// Phase 2 — fold parsed parts into a [`FieldDefinition`] via the builder.
+/// A `Join` is a virtual, read-only reverse-relationship with no stored value,
+/// so `required` / `localized` / `required_locales` are meaningless on it.
+/// Reject them at load instead of silently ignoring them (the previous
+/// behavior, which also let a `localized + required` Join wedge non-draft writes
+/// — the validation walkers now skip Join as defense-in-depth, but the config is
+/// still nonsensical).
+fn reject_meaningless_join_flags(
+    field_tbl: &Table,
+    field_type: &FieldType,
+    name: &str,
+) -> Result<()> {
+    if *field_type != FieldType::Join {
+        return Ok(());
+    }
+
+    for key in ["required", "localized"] {
+        if get_bool(field_tbl, key, false)? {
+            bail!(
+                "join field '{name}': '{key}' is meaningless — a Join is a virtual, \
+                 read-only reverse-relationship with no stored value"
+            );
+        }
+    }
+    if parse_required_locales(field_tbl)?.is_some() {
+        bail!("join field '{name}': 'required_locales' is meaningless on a virtual Join field");
+    }
+
+    Ok(())
+}
+
 fn assemble_field_definition(
     field_tbl: &Table,
     parts: ParsedFieldParts,
 ) -> Result<FieldDefinition> {
+    reject_meaningless_join_flags(field_tbl, &parts.field_type, &parts.name)?;
+
     let mut fd_builder = FieldDefinition::builder(&parts.name, parts.field_type)
         .required(get_bool(field_tbl, "required", false)?)
         .unique(get_bool(field_tbl, "unique", false)?)
@@ -1505,6 +1537,48 @@ mod tests {
             f.set("on", "author").unwrap();
         })
         .expect("valid join must parse");
+    }
+
+    /// A Join is virtual/read-only, so `required` / `localized` /
+    /// `required_locales` are meaningless and rejected at load (a
+    /// `localized + required` Join previously wedged non-draft writes).
+    fn join_with_flag(set_flag: impl Fn(&Table)) -> String {
+        let lua = Lua::new();
+        field_with(&lua, |f| {
+            f.set("type", "join").unwrap();
+            f.set("collection", "posts").unwrap();
+            f.set("on", "author").unwrap();
+            set_flag(f);
+        })
+        .unwrap_err()
+        .to_string()
+    }
+
+    #[test]
+    fn test_join_required_flag_rejected() {
+        let err = join_with_flag(|f| f.set("required", true).unwrap());
+        assert!(
+            err.contains("required") && err.contains("meaningless"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_join_localized_flag_rejected() {
+        let err = join_with_flag(|f| f.set("localized", true).unwrap());
+        assert!(
+            err.contains("localized") && err.contains("meaningless"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_join_required_locales_rejected() {
+        let err = join_with_flag(|f| f.set("required_locales", "all").unwrap());
+        assert!(
+            err.contains("required_locales") && err.contains("meaningless"),
+            "{err}"
+        );
     }
 
     // ── date-bound strictness ───────────────────────────────────────────

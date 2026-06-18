@@ -151,6 +151,8 @@ fn populate_flat_relationships(
             conn: ctx.conn,
             registry: ctx.registry,
             effective_depth,
+            // Batch flat population spans many docs and never resolves a join.
+            root_id: "",
             locale_ctx: opts.locale_ctx,
             published_only: opts.published_only,
             cache,
@@ -207,10 +209,13 @@ fn populate_nested_containers(
 ) -> Result<()> {
     for doc in docs.iter_mut() {
         let mut doc_visited = visited.clone();
+        // This doc's id anchors any reverse-join nested in its containers.
+        let root_id = doc.id.to_string();
         let nested_pctx = PopulateCtx {
             conn: ctx.conn,
             registry: ctx.registry,
             effective_depth: opts.depth,
+            root_id: &root_id,
             locale_ctx: opts.locale_ctx,
             published_only: opts.published_only,
             cache,

@@ -6,10 +6,16 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     core::{
-        BlockDefinition, FieldDefinition, FieldType, Registry, RelationshipConfig,
-        field::{flatten_array_sub_fields, to_title_case},
+        BlockDefinition, FieldDefinition, FieldType, NestStep, Registry, RelationshipConfig,
+        field::to_title_case,
     },
-    db::{DbConnection, DbValue, query::helpers::prefixed_name},
+    db::{
+        DbConnection, DbValue,
+        query::{
+            helpers::prefixed_name,
+            ref_count::{walk_blocks_with, walk_nested_with},
+        },
+    },
 };
 
 use super::back_references::field_display_label;
@@ -273,7 +279,94 @@ fn push_if_missing(
     ));
 }
 
-/// Check array sub-fields for missing relations.
+/// The dotted field path: ancestor segment names plus the leaf field name.
+fn path_names(path: &[NestStep<'_>], leaf: &FieldDefinition) -> String {
+    let mut parts: Vec<&str> = path
+        .iter()
+        .map(|seg| match seg {
+            NestStep::Field(f) => f.name.as_str(),
+            NestStep::Block(b) => b.block_type.as_str(),
+        })
+        .collect();
+    parts.push(leaf.name.as_str());
+    parts.join(".")
+}
+
+/// The human label: container prefix, each ancestor segment's display label,
+/// then the leaf field's label — joined with ` > `.
+fn path_label(prefix: &str, path: &[NestStep<'_>], leaf: &FieldDefinition) -> String {
+    let mut parts: Vec<String> = vec![prefix.to_string()];
+    for seg in path {
+        parts.push(match seg {
+            NestStep::Field(f) => field_display_label(f),
+            NestStep::Block(b) => b.label.as_ref().map_or_else(
+                || to_title_case(&b.block_type),
+                |l| l.resolve_default().to_string(),
+            ),
+        });
+    }
+    parts.push(field_display_label(leaf));
+    parts.join(" > ")
+}
+
+/// One discovered field path's referenced `(collection, id)` pairs, with the
+/// leaf field's relationship config and display label.
+struct MissingEntry<'a> {
+    field_name: String,
+    label: String,
+    rc: &'a RelationshipConfig,
+    ids: Vec<(String, String)>,
+}
+
+/// Accumulates [`MissingEntry`] per field path so the existence check aggregates
+/// across all rows (one `MissingRelation` per path), keeping insertion order.
+struct MissingAcc<'a> {
+    entries: Vec<MissingEntry<'a>>,
+}
+
+impl<'a> MissingAcc<'a> {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    fn add(
+        &mut self,
+        field_name: String,
+        label: String,
+        rc: &'a RelationshipConfig,
+        coll: String,
+        id: String,
+    ) {
+        if let Some(e) = self.entries.iter_mut().find(|e| e.field_name == field_name) {
+            e.ids.push((coll, id));
+        } else {
+            self.entries.push(MissingEntry {
+                field_name,
+                label,
+                rc,
+                ids: vec![(coll, id)],
+            });
+        }
+    }
+
+    fn drain(
+        self,
+        conn: &dyn DbConnection,
+        registry: &Registry,
+        results: &mut Vec<MissingRelation>,
+    ) {
+        for e in self.entries {
+            push_if_missing(conn, registry, &e.ids, e.rc, e.field_name, e.label, results);
+        }
+    }
+}
+
+/// Check array rows for missing relations at ANY nesting depth (a relationship
+/// in a group inside the row, an inner array, etc.), via the shared
+/// [`walk_nested_with`] — the same walker ref-counting and back-references use,
+/// so the three agree on which references a row contains.
 fn collect_missing_in_array(
     conn: &dyn DbConnection,
     registry: &Registry,
@@ -282,38 +375,37 @@ fn collect_missing_in_array(
     array_name: &str,
     results: &mut Vec<MissingRelation>,
 ) {
-    for sub in flatten_array_sub_fields(fields) {
-        if !matches!(sub.field_type, FieldType::Relationship | FieldType::Upload) {
-            continue;
-        }
-        let Some(rc) = &sub.relationship else {
+    let mut acc = MissingAcc::new();
+    let prefix = to_title_case(array_name);
+
+    for row in rows {
+        let Some(obj) = row.as_object() else {
             continue;
         };
-
-        let all_ids: Vec<_> = rows
-            .iter()
-            .filter_map(|row| row.as_object())
-            .flat_map(|obj| extract_ref_ids(obj.get(&sub.name), rc.is_polymorphic()))
-            .collect();
-
-        let label = format!(
-            "{} > {}",
-            to_title_case(array_name),
-            field_display_label(sub)
-        );
-        push_if_missing(
-            conn,
-            registry,
-            &all_ids,
-            rc,
-            format!("{}.{}", array_name, sub.name),
-            label,
-            results,
+        let mut stack = Vec::new();
+        walk_nested_with(
+            obj,
+            fields,
+            &mut stack,
+            &mut |leaf, path, coll, id, _poly| {
+                if let Some(rc) = &leaf.relationship {
+                    acc.add(
+                        format!("{}.{}", array_name, path_names(path, leaf)),
+                        path_label(&prefix, path, leaf),
+                        rc,
+                        coll.to_string(),
+                        id.to_string(),
+                    );
+                }
+            },
         );
     }
+
+    acc.drain(conn, registry, results);
 }
 
-/// Check blocks sub-fields for missing relations.
+/// Check blocks rows for missing relations at any nesting depth, via the shared
+/// [`walk_blocks_with`].
 fn collect_missing_in_blocks(
     conn: &dyn DbConnection,
     registry: &Registry,
@@ -322,46 +414,28 @@ fn collect_missing_in_blocks(
     blocks_name: &str,
     results: &mut Vec<MissingRelation>,
 ) {
-    for block in blocks {
-        for sub in &flatten_array_sub_fields(&block.fields) {
-            if !matches!(sub.field_type, FieldType::Relationship | FieldType::Upload) {
-                continue;
+    let mut acc = MissingAcc::new();
+    let prefix = to_title_case(blocks_name);
+
+    let mut stack = Vec::new();
+    walk_blocks_with(
+        rows,
+        blocks,
+        &mut stack,
+        &mut |leaf, path, coll, id, _poly| {
+            if let Some(rc) = &leaf.relationship {
+                acc.add(
+                    format!("{}.{}", blocks_name, path_names(path, leaf)),
+                    path_label(&prefix, path, leaf),
+                    rc,
+                    coll.to_string(),
+                    id.to_string(),
+                );
             }
-            let Some(rc) = &sub.relationship else {
-                continue;
-            };
+        },
+    );
 
-            let all_ids: Vec<_> = rows
-                .iter()
-                .filter_map(|row| row.as_object())
-                .filter(|obj| {
-                    obj.get("_block_type")
-                        .and_then(|v| v.as_str())
-                        .is_some_and(|bt| bt == block.block_type)
-                })
-                .flat_map(|obj| extract_ref_ids(obj.get(&sub.name), rc.is_polymorphic()))
-                .collect();
-
-            let label = format!(
-                "{} > {} > {}",
-                to_title_case(blocks_name),
-                block.label.as_ref().map_or_else(
-                    || to_title_case(&block.block_type),
-                    |l| l.resolve_default().to_string()
-                ),
-                field_display_label(sub),
-            );
-            push_if_missing(
-                conn,
-                registry,
-                &all_ids,
-                rc,
-                format!("{}.{}.{}", blocks_name, block.block_type, sub.name),
-                label,
-                results,
-            );
-        }
-    }
+    acc.drain(conn, registry, results);
 }
 
 #[cfg(test)]
@@ -598,6 +672,51 @@ mod tests {
         let missing = find_missing_relations(&conn, &registry, &snapshot, &fields);
         assert_eq!(missing.len(), 1);
         assert_eq!(missing[0].field_name, "content.hero.bg_image");
+    }
+
+    /// Regression: a relationship in a Group *inside* an array row used to be
+    /// invisible to the missing-relations scan (the flat walk never descended
+    /// the group), so a dangling ref nested there wasn't flagged on the
+    /// restore-confirm page even though ref-counting/back-refs saw it. The
+    /// shared walker now descends it.
+    #[test]
+    fn missing_relation_in_group_inside_array_row() {
+        let media = CollectionDefinition::new("media");
+        let mut posts = CollectionDefinition::new("posts");
+        let fields = vec![
+            FieldDefinition::builder("slides", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("meta", FieldType::Group)
+                        .fields(vec![
+                            FieldDefinition::builder("image", FieldType::Upload)
+                                .relationship(RelationshipConfig::new("media", false))
+                                .build(),
+                        ])
+                        .build(),
+                ])
+                .build(),
+        ];
+        posts.fields = fields.clone();
+
+        let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
+        let conn = pool.get().unwrap();
+        insert_doc(&conn, "media", "m1");
+
+        let snapshot = json!({
+            "slides": [
+                { "meta": { "image": "m1" } },
+                { "meta": { "image": "m_deleted" } }
+            ]
+        });
+        let missing = find_missing_relations(&conn, &registry, &snapshot, &fields);
+        assert_eq!(
+            missing.len(),
+            1,
+            "a dangling ref in a group-in-array row must be detected"
+        );
+        assert_eq!(missing[0].field_name, "slides.meta.image");
+        assert_eq!(missing[0].missing_count, 1);
+        assert_eq!(missing[0].total_ids, 2);
     }
 
     #[test]

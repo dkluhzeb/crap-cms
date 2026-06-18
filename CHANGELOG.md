@@ -238,6 +238,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   rather than silently corrupting one of the two tables during
   migration.
 
+- **`required` / `localized` / `required_locales` on a `join` field are
+  rejected at definition time.** A join is a virtual, read-only
+  reverse-relationship with no stored value, so these flags were always
+  meaningless — and a `localized` + `required` join silently wedged the
+  collection out of every non-draft write (its presence was checked against
+  a join table that never exists). They now fail loudly at load. Remove the
+  flag from the join field (its targets' own presence is governed by the
+  related collection, not by the join).
+
 - **Malformed upload config is rejected at definition time.** Several
   upload-config inputs that were previously silently dropped or coerced
   now fail loudly when a collection is defined: an `image_sizes` entry

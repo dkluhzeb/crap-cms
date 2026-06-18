@@ -75,6 +75,12 @@ pub(crate) struct PopulateCtx<'a> {
     pub conn: &'a dyn DbConnection,
     pub registry: &'a Registry,
     pub effective_depth: i32,
+    /// The id of the document whose (possibly nested) fields are being
+    /// populated. A `Join` field reverse-looks-up the target collection on this
+    /// id regardless of how deeply it is nested, so the nested-container walker
+    /// needs it. Empty for the batch flat-relationship context, which populates
+    /// a field across many docs and never resolves a join.
+    pub root_id: &'a str,
     pub locale_ctx: Option<&'a LocaleContext>,
     /// When true, drafts were *not* requested (the reader did not opt into
     /// drafts), so draft target rows are hidden from population regardless of

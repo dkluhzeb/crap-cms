@@ -109,7 +109,22 @@ pub(super) fn compute_refs_from_data(
                 }
             }
 
-            _ => {}
+            // Scalars store no reference; Join is a virtual reverse-lookup with
+            // no stored id. Listed explicitly (not `_`) so a future ref-bearing
+            // or container field type is a compile error here rather than a
+            // silent ref-count miss (a delete-protection integrity bug).
+            FieldType::Text
+            | FieldType::Number
+            | FieldType::Textarea
+            | FieldType::Richtext
+            | FieldType::Select
+            | FieldType::Radio
+            | FieldType::Checkbox
+            | FieldType::Date
+            | FieldType::Email
+            | FieldType::Json
+            | FieldType::Code
+            | FieldType::Join => {}
         }
     }
 }

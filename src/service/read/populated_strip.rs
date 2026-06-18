@@ -432,6 +432,53 @@ mod tests {
         );
     }
 
+    /// Security: a Join nested inside a Group (now populated) must still have
+    /// its target's reader-denied fields stripped — the strip pass descends the
+    /// group and treats the Join leaf as an embedding type.
+    #[test]
+    fn strips_denied_field_from_join_nested_in_group() {
+        let posts = collection("posts", vec![text("title"), denied("secret")]);
+        let mut authors = collection("authors", vec![]);
+        let mut group = FieldDefinition::builder("section", FieldType::Group).build();
+        group.fields = vec![
+            FieldDefinition::builder("recent", FieldType::Join)
+                .join(JoinConfig::new("posts", "author"))
+                .build(),
+        ];
+        authors.fields.push(group);
+        let mut registry = Registry::new();
+        registry.register_collection(posts);
+        registry.register_collection(authors);
+
+        let mut doc = Document::new("au1".to_string());
+        doc.fields.insert(
+            "section".into(),
+            json!({
+                "recent": [
+                    { "id": "p1", "collection": "posts", "title": "A", "secret": "x" }
+                ]
+            }),
+        );
+
+        let hooks = DenyAccessReadHooks;
+        EmbeddedDocStripper::new(&registry, &hooks, None, None).strip(
+            &mut doc,
+            &registry.get_collection("authors").unwrap().fields.clone(),
+        );
+
+        let arr = doc
+            .fields
+            .get("section")
+            .and_then(|s| s.get("recent"))
+            .and_then(|v| v.as_array())
+            .expect("nested join array present");
+        assert_eq!(arr[0].get("title").and_then(|v| v.as_str()), Some("A"));
+        assert!(
+            arr[0].get("secret").is_none(),
+            "a denied field on a Join target nested in a group must be stripped"
+        );
+    }
+
     #[test]
     fn pass_is_skipped_when_no_collection_has_read_controls() {
         // No field carries access.read or hidden → gate disables the pass, so
