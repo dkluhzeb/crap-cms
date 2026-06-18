@@ -101,9 +101,15 @@ fn strip_embedded<R: JsonRoot + ?Sized>(
 
     let mut path: Vec<NestStep<'_>> = Vec::new();
     walk_nested_mut(root, fields, &mut path, &mut |field, value, _path| {
+        // The embedding leaf types — a populated value is an embedded doc (or
+        // array of them) whose own field-read denials must be stripped. Join is
+        // included: its populated value is an array of embedded target docs, so
+        // a `hidden`/`access.read`-denied field on the join target would
+        // otherwise leak (containers like group/array/blocks are descended into
+        // by `walk_nested_mut`, not matched here).
         if !matches!(
             field.field_type,
-            FieldType::Relationship | FieldType::Upload
+            FieldType::Relationship | FieldType::Upload | FieldType::Join
         ) {
             return VisitAction::Keep;
         }
@@ -223,7 +229,9 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::core::{CollectionDefinition, FieldType, HookRef, Hooks, RelationshipConfig};
+    use crate::core::{
+        CollectionDefinition, FieldType, HookRef, Hooks, JoinConfig, RelationshipConfig,
+    };
     use crate::db::AccessResult;
     use crate::hooks::{AccessCheckInput, lifecycle::AfterReadCtx};
 
@@ -378,6 +386,49 @@ mod tests {
         assert!(
             mentor.get("secret").is_none(),
             "depth-2 nested populated target's secret must also be stripped"
+        );
+    }
+
+    /// Regression: a JOIN-typed field's populated targets must also be stripped.
+    /// Join was missing from the strip set, so a reader-denied field on the join
+    /// target leaked while the identical field on a relationship target did not.
+    #[test]
+    fn strips_denied_field_from_populated_join_target() {
+        let posts = collection("posts", vec![text("title"), denied("secret")]);
+        let mut authors = collection("authors", vec![text("name")]);
+        authors.fields.push(
+            FieldDefinition::builder("recent_posts", FieldType::Join)
+                .join(JoinConfig::new("posts", "author"))
+                .build(),
+        );
+        let mut registry = Registry::new();
+        registry.register_collection(posts);
+        registry.register_collection(authors);
+
+        let mut doc = Document::new("au1".to_string());
+        doc.fields.insert(
+            "recent_posts".into(),
+            json!([
+                { "id": "p1", "collection": "posts", "title": "A", "secret": "x" },
+                { "id": "p2", "collection": "posts", "title": "B", "secret": "y" }
+            ]),
+        );
+
+        let hooks = DenyAccessReadHooks;
+        EmbeddedDocStripper::new(&registry, &hooks, None, None).strip(
+            &mut doc,
+            &registry.get_collection("authors").unwrap().fields.clone(),
+        );
+
+        let arr = doc.fields.get("recent_posts").unwrap().as_array().unwrap();
+        assert_eq!(arr[0].get("title").and_then(|v| v.as_str()), Some("A"));
+        assert!(
+            arr[0].get("secret").is_none(),
+            "reader-denied field on a JOIN target must not leak via populate"
+        );
+        assert!(
+            arr[1].get("secret").is_none(),
+            "every join target must be stripped"
         );
     }
 

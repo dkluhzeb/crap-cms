@@ -127,6 +127,7 @@ fn resolve_view(
     user_doc: Option<&Document>,
     hook_runner: &HookRunner,
     tx: &dyn DbConnection,
+    reject_constrained: bool,
 ) -> Option<Vec<FilterClause>> {
     match hook_runner.check_access(
         &AccessCheckInput {
@@ -142,6 +143,17 @@ fn resolve_view(
         tx,
     ) {
         Ok(AccessResult::Allowed) => Some(Vec::new()),
+        // Globals don't support filter access — every synchronous global path
+        // rejects a Constrained result as a config error. The live stream can't
+        // hard-error, so it drops the view (fail-closed), consistent with those
+        // paths, instead of applying a row filter globals don't honor.
+        Ok(AccessResult::Constrained(_)) if reject_constrained => {
+            warn!(
+                "Subscribe access for global '{slug}' returned a filter table; \
+                 globals are allow/deny only — hiding the view"
+            );
+            None
+        }
         Ok(AccessResult::Constrained(filters)) => Some(filters),
         Ok(AccessResult::Denied) => None,
         // Fail-closed: an access hook that errors — including a row constraint
@@ -162,6 +174,7 @@ fn resolve_single_slug(
     user_doc: Option<&Document>,
     hook_runner: &HookRunner,
     tx: &dyn DbConnection,
+    reject_constrained: bool,
     state: &mut AccessState,
 ) {
     // The draft/trash views only exist when their axis is present; an absent
@@ -173,6 +186,7 @@ fn resolve_single_slug(
             user_doc,
             hook_runner,
             tx,
+            reject_constrained,
         ),
         draft: slug_access
             .draft
@@ -184,6 +198,7 @@ fn resolve_single_slug(
                     user_doc,
                     hook_runner,
                     tx,
+                    reject_constrained,
                 )
             })
             .flatten(),
@@ -197,6 +212,7 @@ fn resolve_single_slug(
                     user_doc,
                     hook_runner,
                     tx,
+                    reject_constrained,
                 )
             })
             .flatten(),
@@ -647,6 +663,8 @@ fn resolve_collection_views(
             user_doc,
             hook_runner,
             tx,
+            // Collections support row-filter access constraints.
+            false,
             state,
         );
     }
@@ -685,6 +703,9 @@ fn resolve_global_views(
             user_doc,
             hook_runner,
             tx,
+            // Globals are allow/deny only — a returned filter table is a config
+            // error; reject it (drop the view) rather than apply a row filter.
+            true,
             state,
         );
     }

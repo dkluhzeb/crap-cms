@@ -121,6 +121,38 @@ fn get_global_column_names(def: &GlobalDefinition) -> Vec<String> {
     names
 }
 
+/// The `updated_at` of a global's `default` row, optionally scoped to the
+/// published version.
+///
+/// For drafts-enabled globals, `published_only = true` excludes a pending
+/// draft edit's timestamp so it never surfaces (e.g. on the dashboard) to a
+/// read-only viewer. Returns `None` when the row doesn't exist.
+///
+/// # Errors
+///
+/// Returns a backend error if the query fails.
+pub fn global_last_updated(
+    conn: &dyn DbConnection,
+    slug: &str,
+    published_only: bool,
+) -> Result<Option<String>> {
+    let table = global_table(slug);
+
+    let mut sql = format!("SELECT MAX(updated_at) FROM \"{table}\" WHERE id = 'default'");
+    if published_only {
+        sql.push_str(" AND _status = 'published'");
+    }
+
+    let row = conn
+        .query_one(&sql, &[])
+        .with_context(|| format!("Failed to read last_updated for global '{slug}'"))?;
+
+    Ok(row.as_ref().and_then(|r| match r.get_value(0) {
+        Some(DbValue::Text(s)) => Some(s.clone()),
+        _ => None,
+    }))
+}
+
 /// Build SELECT columns for globals with locale support.
 /// Uses the shared recursive logic from mod.rs.
 fn get_global_locale_columns(

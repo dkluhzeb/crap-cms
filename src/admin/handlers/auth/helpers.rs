@@ -201,10 +201,10 @@ pub(in crate::admin::handlers) fn headers_to_map(headers: &HeaderMap) -> HashMap
 ///
 /// `collections` is a `HashMap`, so pick the lexicographically smallest auth
 /// slug rather than an arbitrary (per-process-randomized) one — stable across
-/// restarts. The OAuth callback uses this only as the best-effort
-/// `ctx.collection` for the hook; the session is bound to the collection the
-/// returned user actually belongs to, so a hook serving a non-smallest auth
-/// collection still binds correctly.
+/// restarts. The OAuth callback runs under, and binds the session to, this
+/// single collection; the hook-returned user must exist in it (the callback
+/// never binds to a different auth collection by id). Multi-auth-collection
+/// OAuth needs a collection-scoped route — tracked follow-up.
 pub(in crate::admin::handlers) fn find_auth_collection(registry: &Registry) -> Option<String> {
     registry
         .collections

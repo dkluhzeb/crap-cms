@@ -67,12 +67,20 @@ pub fn mark_verified(ctx: &ServiceContext, id: &str) -> Result<(), ServiceError>
 
 /// Mark a user's email as unverified.
 ///
+/// Bumps the session version and publishes a user invalidation, exactly like
+/// [`lock_user`] / a password reset: un-verifying is a privilege-revoking
+/// action, and the per-request resolver only re-evaluates lock + session
+/// version (not verification). Without the bump an unverified user keeps a
+/// usable session — and could refresh it indefinitely — until expiry.
+///
 /// # Errors
 ///
 /// Returns a backend error if the DB connection or update fails.
 pub fn mark_unverified(ctx: &ServiceContext, id: &str) -> Result<(), ServiceError> {
     let conn = ctx.resolve_conn()?;
     query::mark_unverified(conn.as_ref(), ctx.slug, id)?;
+    let _ = query::bump_session_version(conn.as_ref(), ctx.slug, id)?;
+    ctx.publish_user_invalidation(id);
     Ok(())
 }
 
@@ -184,6 +192,29 @@ mod tests {
         assert!(
             after > before,
             "lock_user must increment _session_version (was {before}, now {after})"
+        );
+    }
+
+    /// Regression: `mark_unverified` must bump `_session_version` (like
+    /// `lock_user`). Un-verifying revokes access to a verify-gated collection,
+    /// but the per-request resolver re-checks lock + version, NOT verification —
+    /// so without the bump an unverified user keeps a usable session (and could
+    /// refresh it) until expiry.
+    #[test]
+    fn mark_unverified_bumps_session_version() {
+        let (conn, def, _) = setup();
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+
+        let before = get_session_version(&ctx, "u1").unwrap();
+
+        mark_unverified(&ctx, "u1").unwrap();
+
+        let after = get_session_version(&ctx, "u1").unwrap();
+        assert!(
+            after > before,
+            "mark_unverified must increment _session_version (was {before}, now {after})"
         );
     }
 

@@ -786,15 +786,14 @@ end
     );
 }
 
-/// Regression: with multiple auth collections, the callback binds the session to
-/// the collection the returned user ACTUALLY belongs to — not an arbitrary
-/// first-match. `acol` sorts before `bcol`, so the old first-match logic would
-/// have bound to `acol`; the user lives in `bcol`, and the minted session's JWT
-/// must name `bcol`.
+/// Security: the callback binds ONLY to the auth collection it runs under
+/// (the deterministic first one) and must NEVER mint a session for a user that
+/// lives in a *different* auth collection — binding cross-collection by a
+/// hook-returned id would be a privilege escalation. With `acol` and `bcol`,
+/// the callback runs under `acol`; a user that exists only in `bcol` is refused
+/// (no session cookie).
 #[tokio::test]
-async fn auth_callback_binds_to_users_actual_collection() {
-    use crap_cms::core::auth::TokenProvider;
-
+async fn auth_callback_does_not_bind_across_collections() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let cb_dir = tmp.path().join("auth_callback");
     std::fs::create_dir_all(&cb_dir).unwrap();
@@ -822,7 +821,7 @@ end
         tmp,
     );
 
-    // The user exists only in `bcol`.
+    // The user exists only in `bcol`, but the callback runs under `acol` (min).
     let user_id = {
         let def = app.registry.get_collection("bcol").unwrap().clone();
         let mut conn = app.pool.get().unwrap();
@@ -846,22 +845,15 @@ end
         .await
         .unwrap();
 
-    let token = resp
+    let has_session = resp
         .headers()
         .get_all("set-cookie")
         .iter()
         .filter_map(|v| v.to_str().ok())
-        .find_map(|c| c.strip_prefix("crap_session="))
-        .map(|c| c.split(';').next().unwrap_or("").to_string())
-        .expect("a session cookie should be set");
-
-    let provider = crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret");
-    let claims = provider
-        .validate_token(&token)
-        .expect("valid session token");
-    assert_eq!(
-        claims.collection, "bcol",
-        "the session must bind to the user's actual collection, not the first auth collection"
+        .any(|c| c.starts_with("crap_session="));
+    assert!(
+        !has_session,
+        "a user that exists only in another auth collection must not get a session"
     );
 }
 

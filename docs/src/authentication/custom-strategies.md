@@ -214,12 +214,13 @@ end
 > is redirected to login). Return a user your provider has actually
 > authenticated.
 >
-> **Collection binding.** The session is bound to the auth collection the
-> returned user actually belongs to — resolved from the user's `id` — so the
-> callback is correct with multiple auth collections, regardless of which one
-> the hook hardcodes (`crap.collections.find/create("users", …)` above). A user
-> the hook returns that exists in no auth collection (a fabricated id), or in
-> more than one, is refused.
+> **Collection binding.** The callback runs under, and binds the session to, a
+> single auth collection (the deterministic first one), and the hook-returned
+> user must exist in it. The session can never bind to a *different* auth
+> collection by a hook-returned id — that would be a privilege escalation across
+> collections. If you run OAuth against more than one auth collection today, the
+> callback only binds to the first; collection-scoped callback routes are a
+> planned follow-up.
 
 To initiate the OAuth flow, add a link on your login page pointing to the provider's authorize URL with your `redirect_uri` set to `/admin/auth/callback/google`.
 

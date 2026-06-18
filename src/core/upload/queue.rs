@@ -112,34 +112,21 @@ pub fn delete_image_jobs_for_document(
     collection: &str,
     document_id: &str,
 ) -> Result<()> {
-    use crate::db::DbValue;
-
     // Payload format mirrors `ImageConvertJobData` — match by
     // `"collection":"<slug>"` and `"document_id":"<id>"` JSON substrings.
     // Cheaper than parsing JSON in SQL on every delete; entries that
     // somehow survive will fail at process-time and `images purge`
     // collects them.
-    let collection_needle = format!("\"collection\":\"{collection}\"");
-    let document_needle = format!("\"document_id\":\"{document_id}\"");
+    let patterns = vec![
+        format!("%\"collection\":\"{collection}\"%"),
+        format!("%\"document_id\":\"{document_id}\"%"),
+    ];
 
-    conn.execute(
-        &format!(
-            "DELETE FROM _crap_jobs \
-             WHERE slug = {} \
-                AND status IN ('pending', 'failed') \
-                AND data LIKE {} \
-                AND data LIKE {}",
-            conn.placeholder(1),
-            conn.placeholder(2),
-            conn.placeholder(3),
-        ),
-        &[
-            DbValue::Text(SYSTEM_IMAGE_CONVERT_JOB.to_string()),
-            DbValue::Text(format!("%{collection_needle}%")),
-            DbValue::Text(format!("%{document_needle}%")),
-        ],
-    )?;
-    Ok(())
+    crate::db::query::jobs::delete_pending_failed_jobs_matching(
+        conn,
+        SYSTEM_IMAGE_CONVERT_JOB,
+        &patterns,
+    )
 }
 
 #[cfg(test)]

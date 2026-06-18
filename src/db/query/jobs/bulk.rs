@@ -1,5 +1,7 @@
 //! Bulk delete operations: cancel pending, purge old.
 
+use std::fmt::Write as _;
+
 use anyhow::{Context as _, Result};
 
 use crate::db::{DbConnection, DbValue};
@@ -46,6 +48,34 @@ pub fn purge_old_jobs(conn: &dyn DbConnection, older_than_secs: u64) -> Result<i
     .context("delete count exceeds i64::MAX")?;
 
     Ok(deleted)
+}
+
+/// Delete pending/failed jobs of `slug` whose `data` matches ALL of the given
+/// `LIKE` patterns. Used to drop superseded image-convert jobs when their
+/// owning document is deleted. Patterns are bound as parameters.
+///
+/// # Errors
+///
+/// Returns a backend error if the DELETE fails.
+pub fn delete_pending_failed_jobs_matching(
+    conn: &dyn DbConnection,
+    slug: &str,
+    data_patterns: &[String],
+) -> Result<()> {
+    let mut sql = format!(
+        "DELETE FROM _crap_jobs WHERE slug = {} AND status IN ('pending', 'failed')",
+        conn.placeholder(1)
+    );
+    let mut params: Vec<DbValue> = vec![DbValue::Text(slug.to_string())];
+
+    for pat in data_patterns {
+        params.push(DbValue::Text(pat.clone()));
+        let _ = write!(sql, " AND data LIKE {}", conn.placeholder(params.len()));
+    }
+
+    conn.execute(&sql, &params)
+        .with_context(|| format!("Failed to delete pending/failed jobs for slug '{slug}'"))?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -96,5 +126,67 @@ mod tests {
         // Cancel all remaining pending
         let deleted = cancel_pending_jobs(&conn, None).unwrap();
         assert_eq!(deleted, 1, "should cancel the remaining pending job");
+    }
+
+    #[test]
+    fn delete_pending_failed_jobs_matching_filters_by_slug_and_data() {
+        let (_dir, conn) = setup_db();
+
+        insert_job(
+            &conn,
+            "img",
+            r#"{"collection":"media","document_id":"d1"}"#,
+            "sys",
+            1,
+            "default",
+            0,
+        )
+        .unwrap();
+        insert_job(
+            &conn,
+            "img",
+            r#"{"collection":"media","document_id":"d2"}"#,
+            "sys",
+            1,
+            "default",
+            0,
+        )
+        .unwrap();
+        // Same payload but a different slug — must be left alone.
+        insert_job(
+            &conn,
+            "other",
+            r#"{"collection":"media","document_id":"d1"}"#,
+            "sys",
+            1,
+            "default",
+            0,
+        )
+        .unwrap();
+
+        let patterns = vec![
+            "%\"collection\":\"media\"%".to_string(),
+            "%\"document_id\":\"d1\"%".to_string(),
+        ];
+        delete_pending_failed_jobs_matching(&conn, "img", &patterns).unwrap();
+
+        let remaining = list_job_runs(&conn, None, None, 100, 0).unwrap();
+        assert_eq!(remaining.len(), 2, "only img+d1 should be deleted");
+        assert!(
+            !remaining
+                .iter()
+                .any(|r| r.slug == "img" && r.data.contains("\"d1\"")),
+            "the matching img/d1 job must be gone"
+        );
+        assert!(
+            remaining
+                .iter()
+                .any(|r| r.slug == "img" && r.data.contains("\"d2\"")),
+            "a non-matching data pattern (d2) must be kept"
+        );
+        assert!(
+            remaining.iter().any(|r| r.slug == "other"),
+            "a different slug must be kept even with matching data"
+        );
     }
 }

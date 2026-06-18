@@ -12,20 +12,10 @@ use crate::{
         handlers::shared::{extract_editor_locale, get_user_doc, has_read_access, render_page},
     },
     core::{AuthUser, Claims, Document},
-    db::{BoxedConnection, DbConnection, query::helpers::global_table},
+    db::{BoxedConnection, query::global_last_updated},
     hooks::HookRunner,
     service::{CollectionStats, RunnerReadHooks, ServiceContext, collection_stats},
 };
-
-/// Fetch the most recent `updated_at` value from a table.
-fn last_updated(conn: &BoxedConnection, table: &str, where_clause: &str) -> Option<String> {
-    let sql = format!("SELECT MAX(updated_at) AS last_updated FROM \"{table}\"{where_clause}");
-
-    conn.query_one(&sql, &[])
-        .ok()
-        .flatten()
-        .and_then(|r| r.get_opt_string("last_updated").ok().flatten())
-}
 
 /// Build dashboard cards for all readable collections.
 ///
@@ -87,23 +77,17 @@ fn build_global_cards(
         .iter()
         .filter(|(_, def)| has_read_access(state, def.access.read.as_ref(), user_doc, &def.slug))
         .map(|(slug, def)| {
-            let table = global_table(slug);
-
             // Scope the timestamp to the published row for drafts-enabled globals
             // so a pending draft edit's `updated_at` never surfaces on the
             // dashboard to a read-only viewer (parity with the view-scoped
             // collection cards). Conservative: a draft-access viewer also sees
             // only the published time here.
-            let where_clause = if def.has_drafts() {
-                " WHERE id = 'default' AND _status = 'published'"
-            } else {
-                " WHERE id = 'default'"
-            };
+            let last_updated = global_last_updated(conn, slug, def.has_drafts()).unwrap_or(None);
 
             GlobalCard {
                 slug: slug.to_string(),
                 display_name: def.display_name().to_string(),
-                last_updated: last_updated(conn, &table, where_clause),
+                last_updated,
                 has_versions: def.has_versions(),
             }
         })

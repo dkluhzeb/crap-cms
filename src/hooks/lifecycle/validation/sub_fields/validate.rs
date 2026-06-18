@@ -153,6 +153,12 @@ fn validate_children_recursive(
                     validate_nested_rows(ctx, &call, nested_rows, errors);
                 }
             }
+            // A Join is a virtual reverse-relationship with no row data; it
+            // carries nothing to validate. Skip it explicitly, mirroring the
+            // top-level dispatch (`recursive/dispatch.rs`) — otherwise the
+            // `_ =>` leaf arm would push a spurious "is required" error for a
+            // `required` Join nested in an array/blocks row.
+            FieldType::Join => {}
             _ => {
                 let data_key = format!("{}{}", group_prefix, sf.name);
                 let qualified = format!("{}[{}][{}]", ctx.parent_name, ctx.idx, data_key);

@@ -330,11 +330,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   verify-email requirement, since the per-request resolver re-checks lock and
   session version but not verification. The callback now applies the same
   `is_locked` + `requires_verify_email && is_verified` guard as password login.
-  It also binds the session to the auth collection the returned user actually
-  belongs to (resolved from the user's id) instead of an arbitrary
-  first-by-`HashMap`-order collection — so the callback is correct with multiple
-  auth collections, and a user that exists in no auth collection (a fabricated
-  id) or in more than one is refused.
+  It also binds the session strictly to the single (deterministic) auth
+  collection the callback runs under, and the hook-returned user must exist in
+  that collection — the session can never bind to a *different* auth collection
+  by a hook-returned id, which would be a privilege escalation across
+  collections. (The first-auth-collection pick is now stable rather than
+  `HashMap`-order-random; multi-auth-collection OAuth, binding to a non-first
+  collection, will need collection-scoped callback routes.)
 
 - **`locale_locked` fields are enforced server-side.** A non-localized (shared)
   field is rendered read-only in the admin UI when editing a non-default locale,

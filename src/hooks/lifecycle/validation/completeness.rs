@@ -15,7 +15,11 @@ use crate::{
     core::{DocumentFields, FieldDefinition, FieldType, RequiredLocales, validate::FieldError},
     db::{
         DbValue, LocaleContext,
-        query::helpers::{join_table, locale_column, prefixed_name, walk_leaf_fields},
+        query::{
+            fetch_row_columns,
+            helpers::{join_table, locale_column, prefixed_name, walk_leaf_fields},
+            localized_join_row_exists,
+        },
     },
     hooks::lifecycle::validation::custom::{ValidateCtxSource, run_required_condition_inner},
 };
@@ -147,22 +151,7 @@ fn join_row_exists(ctx: &ValidationCtx, data_key: &str, loc: &str) -> bool {
         return false; // create: no existing join rows
     };
     let table = join_table(ctx.table, data_key);
-    let sql = format!(
-        "SELECT 1 FROM \"{table}\" WHERE parent_id = {} AND _locale = {} LIMIT 1",
-        ctx.conn.placeholder(1),
-        ctx.conn.placeholder(2)
-    );
-    ctx.conn
-        .query_one(
-            &sql,
-            &[
-                DbValue::Text(id.to_string()),
-                DbValue::Text(loc.to_string()),
-            ],
-        )
-        .ok()
-        .flatten()
-        .is_some()
+    localized_join_row_exists(ctx.conn, &table, id, loc).unwrap_or(false)
 }
 
 /// Collect a [`Target`] for every localized required field. The flat-column
@@ -187,7 +176,14 @@ fn collect_required_localized(
             // Checkboxes always have a value (default off), so `required` is a
             // no-op for them — `check_required` skips them, and completeness
             // must agree, or an unchecked localized checkbox would block writes.
-            if field.field_type == FieldType::Checkbox {
+            //
+            // A Join is a virtual reverse-relationship with no stored data and
+            // no join table of its own; `required`/`localized` are meaningless
+            // on it. Skip it here (mirroring the submit-time dispatch's explicit
+            // `Join` no-op) — otherwise its presence is checked against a
+            // `{collection}_{field}` table that never exists, the query errors to
+            // "absent", and a spurious `required_locale` error blocks the write.
+            if matches!(field.field_type, FieldType::Checkbox | FieldType::Join) {
                 return Ok(());
             }
 
@@ -306,33 +302,9 @@ fn read_existing_columns(
             }
         }
     }
-    if cols.is_empty() {
-        return None;
-    }
-
-    let col_list = cols
-        .iter()
-        .map(|c| format!("\"{c}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let sql = format!(
-        "SELECT {col_list} FROM \"{}\" WHERE id = {}",
-        ctx.table,
-        ctx.conn.placeholder(1)
-    );
-    let row = ctx
-        .conn
-        .query_one(&sql, &[DbValue::Text(id.to_string())])
+    fetch_row_columns(ctx.conn, ctx.table, &cols, id)
         .ok()
-        .flatten()?;
-
-    let mut map = HashMap::new();
-    for c in &cols {
-        if let Some(v) = row.get_named(c) {
-            map.insert(c.clone(), v.clone());
-        }
-    }
-    Some(map)
+        .flatten()
 }
 
 /// Whether a DB column value counts as present for completeness (non-null,
@@ -351,7 +323,7 @@ mod tests {
     use serde_json::json;
 
     use crate::config::LocaleConfig;
-    use crate::core::{DocumentFields, FieldDefinition, FieldType};
+    use crate::core::{DocumentFields, FieldDefinition, FieldType, JoinConfig};
     use crate::db::{LocaleContext, LocaleMode};
 
     use super::{ValidationCtx, check_localized_completeness};
@@ -424,6 +396,37 @@ mod tests {
         assert!(
             errors2.is_empty(),
             "falsy required_when must not require the localized field, got: {errors2:?}"
+        );
+    }
+
+    /// Regression: a `localized` + `required` Join must NOT block writes. A Join
+    /// is a virtual reverse-relationship with no join table of its own, so the
+    /// old completeness walk checked presence against `{collection}_{field}`
+    /// (which never exists), swallowed the error to "absent", and pushed a
+    /// spurious `required_locale` error for every locale — locking the
+    /// collection out of every non-draft write.
+    #[test]
+    fn localized_required_join_does_not_block_write() {
+        let lua = Lua::new();
+        let fields = vec![
+            FieldDefinition::builder("posts", FieldType::Join)
+                .localized(true)
+                .required(true)
+                .join(JoinConfig::new("posts", "author"))
+                .build(),
+        ];
+        let lctx = en_de_ctx();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let ctx = ValidationCtx::builder(&conn, "authors")
+            .locale_ctx(Some(&lctx))
+            .build();
+
+        let data = DocumentFields::new();
+        let mut errors = Vec::new();
+        check_localized_completeness(&lua, &fields, &data, &ctx, &mut errors);
+        assert!(
+            errors.is_empty(),
+            "a virtual Join field must never produce a required_locale error, got: {errors:?}"
         );
     }
 

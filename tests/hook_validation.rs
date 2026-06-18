@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::DocumentFields;
-use crap_cms::core::field::{BlockDefinition, FieldDefinition, FieldTab, FieldType};
+use crap_cms::core::field::{BlockDefinition, FieldDefinition, FieldTab, FieldType, JoinConfig};
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::{HookRunner, ValidationCtx};
@@ -469,6 +469,45 @@ fn validate_array_required_subfield_fails_when_empty() {
     assert!(
         !err.errors.iter().any(|e| e.field == "items[0][label]"),
         "First row should not have error"
+    );
+}
+
+/// Regression: a `required` Join nested in an array row must NOT produce a
+/// spurious "is required" error — a Join is a virtual reverse-relationship with
+/// no row data. The top-level dispatch already skips Join; the nested sub-field
+/// walker must match it too (it previously fell into the leaf catch-all).
+#[test]
+fn validate_array_with_required_join_subfield_passes() {
+    let (_tmp, pool, _registry, runner) = setup();
+
+    let array_field = FieldDefinition::builder("items", FieldType::Array)
+        .fields(vec![
+            FieldDefinition::builder("label", FieldType::Text)
+                .required(true)
+                .build(),
+            FieldDefinition::builder("links", FieldType::Join)
+                .required(true)
+                .join(JoinConfig::new("items", "parent"))
+                .build(),
+        ])
+        .build();
+
+    let fields = vec![array_field];
+    let mut data = DocumentFields::new();
+    data.insert("items".to_string(), json!([{ "label": "ok" }]));
+
+    let conn = pool.get().expect("DB connection");
+    let result = runner.validate_fields(
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "articles").build(),
+    );
+    assert!(
+        result.is_ok(),
+        "a required virtual Join sub-field must not block the write, got: {:?}",
+        result
+            .err()
+            .map(|e| e.errors.iter().map(|x| x.field.clone()).collect::<Vec<_>>())
     );
 }
 

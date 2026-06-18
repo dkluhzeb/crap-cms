@@ -9,7 +9,7 @@ mod query;
 #[cfg(test)]
 mod test_helpers;
 
-pub use bulk::{cancel_pending_jobs, purge_old_jobs};
+pub use bulk::{cancel_pending_jobs, delete_pending_failed_jobs_matching, purge_old_jobs};
 pub use claim::claim_pending_jobs;
 pub use cron::try_claim_cron_window;
 pub use lifecycle::{
