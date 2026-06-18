@@ -71,15 +71,28 @@ pub(crate) fn resolve_trash_scope(
     hooks: &dyn ReadHooks,
     ctx: &ReadAccessCtx<'_>,
 ) -> Result<Vec<FilterClause>, ServiceError> {
-    let access = check_view(hooks, ctx, ctx.def.access.resolve_trash())?;
+    resolve_trash_constraints(hooks, ctx)?
+        .ok_or_else(|| ServiceError::AccessDenied("Trash access denied".into()))
+}
 
-    match access {
-        AccessResult::Denied => Err(ServiceError::AccessDenied("Trash access denied".into())),
-        AccessResult::Allowed => Ok(Vec::new()),
-        // `check_view` validated with the live rule (no system columns); trash
-        // constraints legitimately need none either — the system adds the
-        // `_deleted_at` guard itself.
-        AccessResult::Constrained(extra) => Ok(extra),
+/// Resolve the `access.trash` row constraints for the viewer (falling back to
+/// `update`). The single place the trash gate is consulted — both the trash
+/// *mode* read ([`resolve_trash_scope`]) and the cross-axis visibility union
+/// ([`trash_branch`]) route through it so they can never drift apart.
+///
+/// - `Ok(None)` — trash access is denied.
+/// - `Ok(Some(extra))` — allowed; `extra` are the row constraints to AND in (an
+///   empty vec means unconstrained). The `_deleted_at` lifecycle guard is the
+///   caller's job — this decides *whether* trashed rows are visible, not which
+///   lifecycle state they're in. `check_view` already validated the constraints.
+fn resolve_trash_constraints(
+    hooks: &dyn ReadHooks,
+    ctx: &ReadAccessCtx<'_>,
+) -> Result<Option<Vec<FilterClause>>, ServiceError> {
+    match check_view(hooks, ctx, ctx.def.access.resolve_trash())? {
+        AccessResult::Denied => Ok(None),
+        AccessResult::Allowed => Ok(Some(Vec::new())),
+        AccessResult::Constrained(extra) => Ok(Some(extra)),
     }
 }
 
@@ -143,10 +156,8 @@ fn trash_branch(
     hooks: &dyn ReadHooks,
     ctx: &ReadAccessCtx<'_>,
 ) -> Result<Option<FilterClause>, ServiceError> {
-    let constraints = match check_view(hooks, ctx, ctx.def.access.resolve_trash())? {
-        AccessResult::Denied => return Ok(None),
-        AccessResult::Allowed => Vec::new(),
-        AccessResult::Constrained(extra) => extra,
+    let Some(constraints) = resolve_trash_constraints(hooks, ctx)? else {
+        return Ok(None);
     };
 
     let mut parts = Vec::with_capacity(constraints.len() + 1);
@@ -186,8 +197,13 @@ fn check_view(
     // composes `_status`) or a locale-scoped field (its SQL vs in-memory value
     // spaces diverge). Validate here — the read-scope boundary every read
     // surface (runner and Lua CRUD) funnels through — so the reject is uniform.
+    // The read scope never lets a view rule touch a system column: `_status` is
+    // composed by the system (each key scopes its own status) and `_deleted_at`
+    // is added by the trash branch — so both flags are `false` here.
     if let AccessResult::Constrained(filters) = &result {
-        validate_access_constraints(filters, false, false, ctx.slug)?;
+        validate_access_constraints(
+            filters, /* trash */ false, /* injecting_status */ false, ctx.slug,
+        )?;
         validate_access_constraint_locales(filters, &ctx.def.fields, ctx.slug)?;
     }
 
@@ -203,6 +219,10 @@ pub(crate) fn requested_views(
     include_drafts: bool,
 ) -> RequestedViews {
     match status_filter {
+        // The model has exactly two status views: published and draft. Any value
+        // that isn't "published" requests the draft view (admin validates the
+        // status value upstream, so a bogus status never reaches here as a third
+        // view — and even if it did, the draft view is still gated by `draft`).
         Some(values) if !values.is_empty() => RequestedViews::new(
             values.iter().any(|v| v == "published"),
             values.iter().any(|v| v != "published"),

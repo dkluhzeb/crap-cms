@@ -144,11 +144,16 @@ fn typed_eq(stored: &Value, expected: &str, ft: Option<&FieldType>) -> bool {
             // Unrecognized boolean spelling: SQL falls back to a text compare.
             None => value_to_string(stored) == *expected,
         },
-        Some(FieldType::Number) => match (num_repr(stored), expected.parse::<f64>().ok()) {
-            (Some(a), Some(b)) => a == b,
-            // Non-numeric on either side: SQL falls back to a text compare.
-            _ => value_to_string(stored) == *expected,
-        },
+        Some(FieldType::Number) => {
+            // Mirror SQL `coerce_filter_value`: only a *finite* parse binds as a
+            // number; `inf`/`NaN` fall through to a text compare on both sides.
+            let parsed = expected.parse::<f64>().ok().filter(|f| f.is_finite());
+            match (num_repr(stored), parsed) {
+                (Some(a), Some(b)) => a == b,
+                // Non-numeric on either side: SQL falls back to a text compare.
+                _ => value_to_string(stored) == *expected,
+            }
+        }
         // SQL binds a Date comparand through `normalize_date_value` (and the
         // stored column was normalized at write time), so normalize both sides
         // here too — otherwise `2026-01-15` vs `2026-01-15T00:00:00.000Z` would
@@ -780,5 +785,30 @@ mod tests {
 
         let neq = typed_single("score", FilterOp::NotEquals("3".into()));
         assert!(!matches_constraints_typed(&d, from_ref(&neq), &fields));
+    }
+
+    /// SQL `coerce_filter_value` only binds a *finite* parse as a number; `inf`/
+    /// `NaN` fall through to a text compare. The in-memory matcher must do the
+    /// same so the two paths can't diverge (`NotEquals "inf"` must not fail-open).
+    #[test]
+    fn non_finite_number_constraint_matches_sql_text_fallback() {
+        let fields = vec![FieldDefinition::builder("score", FieldType::Number).build()];
+        let d = data(&[("score", json!(3.0))]);
+
+        // `inf`/`NaN` are not numeric comparands: a finite stored value never
+        // equals them, and (the divergence guard) NotEquals must hold true.
+        for spelling in ["inf", "Infinity", "NaN", "-inf"] {
+            let eq = typed_single("score", FilterOp::Equals(spelling.into()));
+            assert!(
+                !matches_constraints_typed(&d, from_ref(&eq), &fields),
+                "Equals {spelling} must not match a finite number"
+            );
+
+            let neq = typed_single("score", FilterOp::NotEquals(spelling.into()));
+            assert!(
+                matches_constraints_typed(&d, from_ref(&neq), &fields),
+                "NotEquals {spelling} must hold (text fallback, like SQL) — not fail-open"
+            );
+        }
     }
 }

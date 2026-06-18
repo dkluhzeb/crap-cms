@@ -292,7 +292,7 @@ All filter field names and `order_by` fields are validated against the collectio
 
 ## Draft Parameter (Versioned Collections)
 
-Collections with `versions = { drafts = true }` automatically filter by `_status = 'published'` on `Find` queries. Use the `draft` parameter to change this behavior.
+Collections with `versions = { drafts = true }` automatically filter by `_status = 'published'` on `Find` and `FindByID` queries. Use the `draft` parameter to change this behavior.
 
 **Lua:**
 

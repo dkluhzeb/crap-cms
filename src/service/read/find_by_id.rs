@@ -92,6 +92,10 @@ fn resolve_trash_by_id(
         // returned draft snapshot of a trashed row.
         snapshot_constraints: constraints.clone(),
         constraints,
+        // No draft downgrade here (unlike the live path): trash is a single gate
+        // (`access.trash`) that already authorized viewing this trashed row, and
+        // the trash constraints above bound any draft snapshot. The live path
+        // downgrades because it has two independent gates (read vs draft).
         use_draft_overlay: input.use_draft,
     })
 }
@@ -120,7 +124,10 @@ pub fn find_document_by_id(
     };
 
     // Merge any caller-supplied constraints (e.g. relationship-search scoping)
-    // into both the SQL filter and the snapshot gate.
+    // into both the SQL filter and the snapshot gate. These are system-generated
+    // equality/membership scoping filters (never operator hooks), so they need no
+    // `validate_access_constraints` pass — and matching them in the snapshot gate
+    // (in-memory) stays faithful to the SQL filter only while that holds.
     if let Some(extra) = &input.access_constraints {
         scope.constraints.extend(extra.iter().cloned());
         scope.snapshot_constraints.extend(extra.iter().cloned());

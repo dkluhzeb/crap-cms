@@ -34,6 +34,13 @@ pub type EventQueue = Rc<RefCell<Vec<PendingEvent>>>;
 /// must force a reconnect. No-op for non-auth collections or without an
 /// invalidation transport. Call POST-COMMIT (mirrors [`flush_queue`] /
 /// `publish_mutation_event`).
+///
+/// Scope limit: this only fires on a write to the subscriber's *own* auth
+/// document. Access derived from a separate source — a `memberships`/`teams`
+/// collection, or a global read inside the access hook — is not live-revoked by
+/// editing that source; the stream keeps its pinned access until reconnect. To
+/// force-revoke in that case, bump the user's `_session_version` (documented in
+/// `docs/src/live-updates/overview.md`).
 pub(crate) fn invalidate_user_streams_if_auth(ctx: &ServiceContext, id: &str) {
     if ctx
         .collection_def()

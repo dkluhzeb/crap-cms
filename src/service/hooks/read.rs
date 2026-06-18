@@ -225,6 +225,11 @@ impl<'a> ReadHooksJoinGuard<'a> {
 }
 
 impl JoinAccessCheck for ReadHooksJoinGuard<'_> {
+    /// A returned `Constrained` filter is not re-validated here: the underlying
+    /// `check_access` already validates at the `check_collection_access`
+    /// chokepoint (operators, system columns, locale-scoped fields), and populate
+    /// matches the constraint in-memory against the raw target row — a malformed
+    /// constraint can only over-restrict (drop a target), never over-expose.
     fn check(
         &self,
         access: Option<&HookRef>,
