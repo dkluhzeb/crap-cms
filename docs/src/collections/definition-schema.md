@@ -106,13 +106,19 @@ See [Uploads](../uploads/overview.md) for the full schema.
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `read` | string | Lua function ref for read access. |
+Each content view has its own key (all the same shape — a Lua function ref returning `true`, `false`, or a row-filter table). A read returns the **union** of the views the caller is allowed to see.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `read` | string | Read access to **published** documents. |
 | `create` | string | Lua function ref for create access. |
 | `update` | string | Lua function ref for update access. |
 | `delete` | string | Lua function ref for delete access. |
-| `trash` | string | Lua function ref for soft-delete (trash) and restore access. Falls back to `update` when omitted, so most collections don't set it explicitly. |
+| `draft` | string | Read access to **unpublished (draft)** documents. Falls back to `update` when omitted. Only relevant with `versions` drafts enabled. |
+| `trash` | string | Read access to **soft-deleted (trash)** documents, plus restore. Falls back to `update` when omitted, so most collections don't set it explicitly. |
+| `versions` | string | Toggles **version-history** visibility (a boolean rule, not a row filter). Defaults to **allowed** when omitted — independent of `default_deny`; snapshot contents are still bounded by `read`/`draft`. |
 
-When a property is omitted, the behavior depends on `[access] default_deny` in `crap.toml`: with the default `default_deny = true`, that operation is **denied** for everyone; with `default_deny = false`, it is **allowed** for everyone.
+When `read`/`create`/`update`/`delete` is omitted, the behavior depends on `[access] default_deny` in `crap.toml`: with the default `default_deny = true`, that operation is **denied** for everyone; with `default_deny = false`, it is **allowed** for everyone. `draft` and `trash` instead fall back to `update`; `versions` defaults to allowed (see the per-key notes above).
 
 See [Access Control](../access-control/overview.md) for full details.
 

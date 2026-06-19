@@ -2,7 +2,7 @@
 
 use crate::{
     core::{CollectionDefinition, Document},
-    db::{FilterClause, LocaleContext, ops},
+    db::{Filter, FilterClause, FilterOp, LocaleContext, ops},
     service::{
         FindByIdInput, ReadAccessCtx, ReadHooks, ServiceContext, ServiceError, requested_views,
         resolve_trash_scope, resolve_view_scope,
@@ -74,7 +74,7 @@ fn resolve_trash_by_id(
     input: &FindByIdInput,
 ) -> Result<ByIdScope> {
     let def = ctx.collection_def()?;
-    let constraints = resolve_trash_scope(
+    let access_constraints = resolve_trash_scope(
         hooks,
         &ReadAccessCtx {
             def,
@@ -87,10 +87,24 @@ fn resolve_trash_by_id(
         },
     )?;
 
+    // Trash mode must surface only soft-deleted rows. The by-id SQL path runs
+    // with `include_deleted = true` (which disables the default
+    // `_deleted_at IS NULL` filter) and otherwise emits no lifecycle predicate,
+    // so without this guard a LIVE row would be returned through the trash gate
+    // (`access.trash ?? update`) — bypassing the `read` policy. Mirrors the list
+    // path (`find.rs`) and `trash_branch` (`service::access`).
+    let mut constraints = Vec::with_capacity(access_constraints.len() + 1);
+    constraints.push(FilterClause::Single(Filter {
+        field: "_deleted_at".to_string(),
+        op: FilterOp::Exists,
+    }));
+    constraints.extend(access_constraints.iter().cloned());
+
     Ok(ByIdScope {
-        // In trash mode the same row constraints bound both the SQL find and a
-        // returned draft snapshot of a trashed row.
-        snapshot_constraints: constraints.clone(),
+        // A returned draft snapshot is matched against version JSON (which carries
+        // no `_deleted_at`), so it is bounded by the access row-filters only — not
+        // the lifecycle guard, which would never match a snapshot.
+        snapshot_constraints: access_constraints,
         constraints,
         // No draft downgrade here (unlike the live path): trash is a single gate
         // (`access.trash`) that already authorized viewing this trashed row, and
@@ -451,6 +465,75 @@ mod tests {
         assert_eq!(
             own.fields.get("title").and_then(|v| v.as_str()),
             Some("My Secret")
+        );
+    }
+
+    fn soft_delete_collection_with_rows() -> (Connection, CollectionDefinition) {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                _status TEXT DEFAULT 'published',
+                _deleted_at TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO posts (id, title, _deleted_at) VALUES ('live1', 'Live', NULL);
+            INSERT INTO posts (id, title, _deleted_at)
+                VALUES ('gone1', 'Trashed', '2026-01-01T00:00:00Z');",
+        )
+        .unwrap();
+
+        let mut def = CollectionDefinition::new("posts");
+        def.timestamps = true;
+        def.soft_delete = true;
+        def.fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
+
+        (conn, def)
+    }
+
+    /// Regression: a trash-mode by-id lookup (`include_deleted = true`) must
+    /// surface ONLY soft-deleted rows. The by-id SQL path runs with the default
+    /// `_deleted_at IS NULL` filter disabled, so without an explicit
+    /// `_deleted_at IS NOT NULL` guard a LIVE row leaks through the trash gate
+    /// (`access.trash ?? update`) — bypassing the published-`read` policy and
+    /// violating the lifecycle boundary (trash must show trashed rows only). The
+    /// list path (`find.rs`) already guards this; the by-id sibling did not.
+    #[test]
+    fn trash_by_id_does_not_return_a_live_row() {
+        let (conn, def) = soft_delete_collection_with_rows();
+        let rh = NoopReadHooks;
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .read_hooks(&rh)
+            .build();
+
+        // A live (non-deleted) row must NOT be returned through the trash view,
+        // even though trash access (here unconstrained) authorizes the gate.
+        let live = find_document_by_id(
+            &ctx,
+            &FindByIdInput::builder("live1")
+                .include_deleted(true)
+                .build(),
+        )
+        .unwrap();
+        assert!(
+            live.is_none(),
+            "trash-mode by-id must not return a live (non-deleted) row"
+        );
+
+        // The actually-trashed row is reachable through the trash view.
+        let trashed = find_document_by_id(
+            &ctx,
+            &FindByIdInput::builder("gone1")
+                .include_deleted(true)
+                .build(),
+        )
+        .unwrap();
+        assert!(
+            trashed.is_some(),
+            "trash-mode by-id must surface a soft-deleted row"
         );
     }
 }

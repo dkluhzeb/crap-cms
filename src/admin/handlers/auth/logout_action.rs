@@ -18,17 +18,26 @@ use crate::service::{self, ServiceContext};
 /// future use. Cookie clearing alone leaves the JWT exploitable
 /// by anyone who has captured it (XSS, MITM with cookie scraped,
 /// device-handoff scenarios). The bump closes that window.
+///
+/// The invalidation transport is attached so `bump_session_version`
+/// can also tear down the user's open live-update streams — the bump
+/// alone only blocks *new* requests, and an already-connected stream
+/// never re-reads `_session_version` (mirrors lock / password-reset).
 pub async fn logout_action(
     State(state): State<AdminState>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
     if let Some(Extension(user)) = auth_user {
         let pool = state.pool.clone();
+        let transport = state.invalidation_transport.clone();
         let collection = user.claims.collection.clone();
         let sub = user.claims.sub.clone();
         let _ = spawn_blocking(move || {
             let Ok(conn) = pool.get() else { return };
-            let ctx = ServiceContext::slug_only(&collection).conn(&conn).build();
+            let ctx = ServiceContext::slug_only(&collection)
+                .conn(&conn)
+                .invalidation_transport(Some(transport))
+                .build();
             if let Err(e) = service::auth::bump_session_version(&ctx, &sub) {
                 // Don't surface to the user — they still get logged
                 // out client-side. But operators need visibility:

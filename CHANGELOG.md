@@ -270,6 +270,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **A trash-mode lookup by ID now returns only soft-deleted rows.** Fetching a
+  single document with `trash = true` (gRPC `FindById`, the MCP tool, or the
+  admin trash view) ran the SQL lookup with the default `_deleted_at IS NULL`
+  filter disabled but never re-added the `_deleted_at IS NOT NULL` guard that the
+  list path applies — so a *live* (non-deleted) document was returned through the
+  trash gate (`access.trash`, falling back to `update`). Where trash/update
+  access is broader than `read`, this bypassed the published-`read` policy for a
+  by-ID fetch; it also violated the lifecycle boundary (the trash view must show
+  trashed rows only). The by-ID trash path now bounds results to soft-deleted
+  rows, matching the list path.
+
+- **Logout now tears down the user's open live-update streams.** Logging out
+  bumps the user's `_session_version` (invalidating the issued JWT for *new*
+  requests), but an already-connected SSE/subscribe stream never re-reads
+  `_session_version` — and logout, unlike lock / un-verify / password-reset,
+  never published the user-invalidation signal that actually closes those
+  streams. A captured token with an open stream therefore survived the
+  legitimate user's logout. `bump_session_version` now publishes the
+  invalidation signal (a no-op without a transport), and the admin logout
+  handler attaches the transport, so logout teardown matches the other
+  session-revoking actions and the behavior documented in the live-updates guide.
+
 - **The "publicly-readable lifecycle view" warning now covers globals.** Under
   `access.default_deny = false`, a global with `versions.drafts` enabled but no
   `access.draft` (or `access.update`) rule serves its unpublished draft to anyone
@@ -654,6 +676,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **The collection-definition schema reference now documents the `draft` and
+  `versions` access keys.** The `access` table in the definition-schema doc still
+  listed only the pre-refactor five keys (`read`/`create`/`update`/`delete`/
+  `trash`), so a reader treating it as the authoritative key list would never
+  discover that `draft` and `versions` are configurable. Added both rows and
+  corrected the `default_deny` fallback note (it governs only
+  `read`/`create`/`update`/`delete`; `draft`/`trash` fall back to `update`,
+  `versions` defaults to allowed).
+
+- **A misconfigured global `read` rule that returns a filter table now logs a
+  warning on the back-references path.** Globals are boolean-only; every other
+  global surface surfaces this misconfiguration loudly, but the back-references
+  visibility check silently folded a `Constrained` result into "hidden", leaving
+  an operator debugging vanished back-references with no breadcrumb. It now warns,
+  matching the other global paths (still fail-closed).
 
 - **Lua type definitions now advertise the correct access keys for globals.**
   `crap.GlobalConfig.access` was typed as the full collection `crap.Access`, so

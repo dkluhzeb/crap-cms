@@ -35,12 +35,22 @@ pub fn lock_user(ctx: &ServiceContext, id: &str) -> Result<(), ServiceError> {
 /// clearing alone leaves the token usable by a thief who has
 /// captured it).
 ///
+/// Also publishes a user-invalidation signal so the user's open
+/// live-update streams are torn down — exactly like [`lock_user`] /
+/// [`mark_unverified`] / a password reset. The version bump alone
+/// only rejects *new* requests; an already-connected SSE/subscribe
+/// stream never re-reads `_session_version`, so it would keep
+/// delivering on the revoked session until the client reconnects.
+/// (No-op when the context carries no invalidation transport.)
+///
 /// # Errors
 ///
 /// Returns a backend error if the DB connection or update fails.
 pub fn bump_session_version(ctx: &ServiceContext, id: &str) -> Result<u64, ServiceError> {
     let conn = ctx.resolve_conn()?;
-    Ok(query::bump_session_version(conn.as_ref(), ctx.slug, id)?)
+    let version = query::bump_session_version(conn.as_ref(), ctx.slug, id)?;
+    ctx.publish_user_invalidation(id);
+    Ok(version)
 }
 
 /// Unlock a user account.
@@ -216,6 +226,33 @@ mod tests {
             after > before,
             "mark_unverified must increment _session_version (was {before}, now {after})"
         );
+    }
+
+    /// Regression: `bump_session_version` (the logout primitive) must publish a
+    /// user-invalidation signal so the user's open live-update streams are torn
+    /// down — like `lock_user` / a password reset. The version bump alone only
+    /// rejects new requests; an already-connected SSE/subscribe stream never
+    /// re-reads `_session_version`, so without the publish a captured token with
+    /// an open stream survives the legitimate user's logout.
+    #[tokio::test]
+    async fn bump_session_version_publishes_invalidation_when_transport_set() {
+        let (conn, def, _) = setup();
+        let bus = Arc::new(InProcessInvalidationBus::new());
+        let transport: SharedInvalidationTransport = bus;
+        let mut rx = transport.subscribe();
+
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .invalidation_transport(Some(transport))
+            .build();
+
+        bump_session_version(&ctx, "u1").unwrap();
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+            .await
+            .expect("recv timed out")
+            .expect("expected invalidation signal");
+        assert_eq!(received, "u1");
     }
 
     /// `bump_session_version` is the standalone primitive backing

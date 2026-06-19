@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 use serde_json::Value;
+use tracing::warn;
 
 use crate::{
     config::LocaleConfig,
@@ -186,7 +187,20 @@ fn global_visibility(
 
     Ok(match result {
         AccessResult::Allowed => Visibility::AllVisible,
-        _ => Visibility::Hidden,
+        AccessResult::Constrained(_) => {
+            // Globals are single-row, so a row-filter is meaningless. Every other
+            // global path surfaces this misconfiguration loudly (get_global
+            // errors, subscribe warns + drops, versions rejects it). Don't fold
+            // it silently into "hidden" — an operator debugging why a global's
+            // back-references vanished gets no breadcrumb otherwise.
+            warn!(
+                global = %slug,
+                "global `read` access returned a row filter (constrained); globals \
+                 are boolean-only — treating as hidden. Return true/false instead."
+            );
+            Visibility::Hidden
+        }
+        AccessResult::Denied => Visibility::Hidden,
     })
 }
 
