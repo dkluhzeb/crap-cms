@@ -6,8 +6,11 @@ return crap.any.collection_hook(function(context)
     return context
   end
 
-  -- Only set if publishing and no published_at is set
-  if context.data._status == "published" and not context.data.published_at then
+  -- Only set when publishing (not a draft save) and no published_at yet.
+  -- The publish/draft intent rides `context.draft`, not the data — the engine
+  -- sets the `_status` column during persist, after this hook runs, so
+  -- `context.data._status` is nil here.
+  if not context.draft and not context.data.published_at then
     context.data.published_at = crap.util.date_now()
   end
 

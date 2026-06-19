@@ -20,9 +20,11 @@ To allow all operations on collections without access functions (e.g., during de
 > *every* ungated view public — including `draft` and `trash`. A collection with
 > `drafts` or `soft_delete` enabled but no `draft`/`trash`/`update` rule will
 > serve its unpublished and soft-deleted documents to *anyone*, including
-> unauthenticated callers. The server logs a warning at startup for each such
-> collection, and `crap-cms status --check` flags them. Keep `default_deny = true`
-> for any deployment that isn't a throwaway dev instance.
+> unauthenticated callers. The same applies to a global with `drafts` enabled but
+> no `draft`/`update` rule (globals have no `trash`). The server logs a warning at
+> startup for each such collection and global, and `crap-cms status --check` flags
+> them. Keep `default_deny = true` for any deployment that isn't a throwaway dev
+> instance.
 
 ## Three Levels
 

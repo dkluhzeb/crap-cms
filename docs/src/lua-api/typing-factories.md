@@ -37,7 +37,9 @@ the runtime always passes a generic context).
 ```lua
 -- hooks/set_published_at.lua — used by posts AND projects
 return crap.any.collection_hook(function(context)
-    if context.data._status == "published" and not context.data.published_at then
+    -- Publish intent rides `context.draft` (the engine sets the `_status`
+    -- column during persist, after this hook runs).
+    if not context.draft and not context.data.published_at then
         context.data.published_at = crap.util.date_now()
     end
     return context

@@ -558,6 +558,21 @@ mod tests {
         ));
     }
 
+    /// The leak-critical direction: a row whose value IS in the `NotIn` set must
+    /// be excluded. An always-true `NotIn` (the classic negation-operator bug)
+    /// would let a row-scoped subscriber see rows outside their scope.
+    #[test]
+    fn not_in_values_excludes_member() {
+        let d = data(&[("status", json!("archived"))]);
+        assert!(!matches_constraints(
+            &d,
+            &[FilterClause::Single(Filter {
+                field: "status".to_string(),
+                op: FilterOp::NotIn(vec!["deleted".to_string(), "archived".to_string()]),
+            })]
+        ));
+    }
+
     // ── Multiple filters (AND) ──────────────────────────────────────
 
     #[test]

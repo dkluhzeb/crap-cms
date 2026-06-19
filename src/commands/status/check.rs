@@ -444,6 +444,23 @@ fn check_access(cfg: &CrapConfig, reg: &Registry, findings: &mut Vec<Finding>) {
             ),
         );
     }
+
+    // Globals have no soft-delete, but the same footgun applies to their draft
+    // view: drafts enabled with no `draft`/`update` rule under default_deny=false.
+    for (slug, def) in &reg.globals {
+        if def.draft_view_publicly_exposed(cfg.access.default_deny) {
+            findings.push(
+                Finding::new(format!(
+                    "Global '{slug}': the draft view is publicly readable \
+                     (no access.draft or access.update rule)"
+                ))
+                .with_hint(
+                    "Unpublished documents are visible to everyone. Add the matching access \
+                     rule or set access.default_deny = true.",
+                ),
+            );
+        }
+    }
 }
 
 fn check_hooks(reg: &Registry, findings: &mut Vec<Finding>) {

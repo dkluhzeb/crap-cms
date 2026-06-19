@@ -270,6 +270,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **The "publicly-readable lifecycle view" warning now covers globals.** Under
+  `access.default_deny = false`, a global with `versions.drafts` enabled but no
+  `access.draft` (or `access.update`) rule serves its unpublished draft to anyone
+  who opts into drafts — the same footgun the startup warning and
+  `crap-cms status --check` already flag for collections. Both checks previously
+  iterated only collections, so a vulnerable global was silently unflagged. They
+  now also scan globals (globals have no soft-delete, so only the `draft` view
+  applies). Advisory only — no enforcement change; the config was always valid,
+  just dangerous, and `default_deny = true` (the default) was never affected.
+
 - **Version history no longer leaks other owners' draft snapshots under a
   filtered draft rule.** When `access.draft` returned a *filter table* (e.g.
   `{ author = ctx.user.id }`, "preview only your own drafts"), the version-history
@@ -644,6 +654,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **Lua type definitions now advertise the correct access keys for globals.**
+  `crap.GlobalConfig.access` was typed as the full collection `crap.Access`, so
+  editor autocomplete offered `create`, `delete`, and `trash` — keys a global
+  rejects at config load. It now uses a dedicated `crap.GlobalAccess` type
+  exposing only `read`, `draft`, `update`, and `versions`, so the LSP matches
+  what the engine actually accepts.
+
+- **`before_change` hook examples read `context.data._status`, which is always
+  nil there.** The publish/draft intent rides the `context.draft` flag; the
+  engine sets the `_status` column during persist, *after* `before_change` runs,
+  so a `before_change` hook never sees `_status` in its data. The bundled
+  `set_published_at` example hook and the typing-factories doc example both
+  gated on `context.data._status == "published"` and so never set
+  `published_at`. Both now test `not context.draft`.
 
 - **Draft snapshot of a timezone-enabled shared Date field could corrupt the
   canonical timezone on restore.** Under a non-default locale the live write

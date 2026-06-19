@@ -368,6 +368,7 @@ mod tests {
             FieldType, Slug,
             event::{EventUser, EventViewMeta},
         },
+        db::{Filter, FilterOp},
     };
 
     /// A `collection_views` map granting the unconstrained published view for one
@@ -533,6 +534,66 @@ mod tests {
         assert!(
             data_obj.is_empty(),
             "metadata mode must emit empty data object; got {data_obj:?}"
+        );
+    }
+
+    /// Security: a row-scoped (`Constrained`) view must DROP events whose payload
+    /// falls outside the row filter — the live-event half of access scoping. The
+    /// existing payload tests all use an unconstrained `Some(vec![])` view, so the
+    /// row-matching drop (the actual enforcement) was never exercised. A regression
+    /// that delivered all rows would leak other owners' events to a subscriber
+    /// scoped to their own.
+    #[test]
+    fn sse_constrained_view_drops_non_matching_and_empty_payloads() {
+        let (runner, registry, _posts) = build_runner_and_registry();
+
+        // Subscriber may see published posts only where `edited_by == "u1"`
+        // (a real field on the fixture collection, so the typed matcher applies).
+        let mut views = HashMap::new();
+        views.insert(
+            "posts".to_string(),
+            EventViewGate {
+                published: Some(vec![FilterClause::Single(Filter {
+                    field: "edited_by".to_string(),
+                    op: FilterOp::Equals("u1".to_string()),
+                })]),
+                draft: None,
+                trash: None,
+            },
+        );
+
+        let access = SseAccess {
+            collection_views: views,
+            global_views: HashMap::new(),
+            collection_denied_fields: HashMap::new(),
+            global_denied_fields: HashMap::new(),
+            collection_modes: HashMap::new(),
+            global_modes: HashMap::new(),
+        };
+
+        // Own row → delivered.
+        let mut mine = DocumentFields::new();
+        mine.insert("edited_by".to_string(), json!("u1"));
+        let ev_mine = make_event("posts", mine);
+        assert!(
+            build_event_payload(&ev_mine, &access, &runner, &registry, None).is_some(),
+            "event matching the row filter must be delivered"
+        );
+
+        // Another owner's row → dropped (no cross-owner leak).
+        let mut theirs = DocumentFields::new();
+        theirs.insert("edited_by".to_string(), json!("u2"));
+        let ev_theirs = make_event("posts", theirs);
+        assert!(
+            build_event_payload(&ev_theirs, &access, &runner, &registry, None).is_none(),
+            "event outside the row filter must be dropped"
+        );
+
+        // Fail-closed: an empty payload cannot satisfy a non-empty constraint.
+        let ev_empty = make_event("posts", DocumentFields::new());
+        assert!(
+            build_event_payload(&ev_empty, &access, &runner, &registry, None).is_none(),
+            "empty payload cannot satisfy a row constraint — fail closed"
         );
     }
 

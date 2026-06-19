@@ -681,12 +681,27 @@ function crap.fields.join(config) end
 --- @field unique? boolean Create a UNIQUE index (default: false).
 
 
+--- Typegen-only mirror of [`Access`] for globals. A global is a single row with
+--- only `get`/`update` operations, so it rejects `create`, `delete`, and `trash`
+--- at config load. This restricted shape gives the Lua LSP the correct key set
+--- (`read` / `draft` / `update` / `versions`) on `crap.GlobalConfig.access`
+--- instead of advertising collection-only keys that would fail at parse. The
+--- runtime field is still an [`Access`]; this struct is never constructed — only
+--- its derived `render_lua_annotation` is used, to emit the `crap.GlobalAccess`
+--- class into `types/crap.lua`. Keep its fields in sync with the matching
+--- [`Access`] fields.
+--- @class crap.GlobalAccess
+--- @field read? string | crap.HookRef Hook ref for read (published) access control.
+--- @field draft? string | crap.HookRef Hook ref for reading draft (unpublished) content. Falls back to `update` when unset, so previewing a draft requires edit-level access by default.
+--- @field update? string | crap.HookRef Hook ref for update access control.
+--- @field versions? string | crap.HookRef Hook ref restricting version-history visibility — a *toggle*, not a per-snapshot filter. Unset means **allow**; returning a filter table is rejected (snapshot scoping follows `read`/`draft`).
+
 --- Global definitions are simpler — single-document collections.
 --- @class crap.GlobalConfig
 --- @field labels? crap.Labels Display names.
 --- @field fields? crap.FieldDefinition[] Field definitions.
 --- @field hooks? crap.Hooks Hook references.
---- @field access? crap.Access Access control function refs.
+--- @field access? crap.GlobalAccess Access control function refs. Globals support only `read`, `draft`, `update`, and the `versions` toggle — `create`/`delete`/`trash` are rejected at config load (a global is a single row with `get`/`update` operations only).
 --- @field mcp? crap.McpCollectionConfig MCP tool description and options.
 --- @field live? boolean | string Live event broadcasting. Same as collection `live`.
 --- @field versions? boolean | crap.VersionsConfig Enable versioning. Same as collection `versions`.

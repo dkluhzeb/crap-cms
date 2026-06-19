@@ -20,8 +20,8 @@ use crate::core::{
     FieldHooks, FieldTab, FieldType, HookRef, Hooks, IndexDefinition, Labels, LocalizedString,
     McpFieldConfig, RelationshipConfig, SelectOption, VersionsConfig,
     collection::{
-        Access, Activation, AdminConfig, Auth, AuthMethod, CollectionDefinition, GlobalDefinition,
-        McpConfig, Surface,
+        Access, Activation, AdminConfig, Auth, AuthMethod, CollectionDefinition, GlobalAccess,
+        GlobalDefinition, McpConfig, Surface,
     },
     field::{FieldHookFn, FieldWidth, JoinConfig, PickerAppearance, ValidateFunction},
     job::JobLabels,
@@ -225,6 +225,7 @@ fn render_collection_types(out: &mut String) {
     out.push('\n');
 }
 fn render_global_types(out: &mut String) {
+    GlobalAccess::render_lua_annotation(out);
     GlobalDefinition::render_lua_annotation(out);
 }
 fn render_document_types(out: &mut String) {

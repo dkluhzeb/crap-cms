@@ -12,7 +12,7 @@ mod live;
 mod mcp_config;
 mod versions_config;
 
-pub use access::{Access, AccessBuilder};
+pub use access::{Access, AccessBuilder, GlobalAccess};
 pub use admin_config::{AdminConfig, AdminConfigBuilder};
 pub use auth::{
     Activation, Auth, AuthMethod, MfaMode, PasswordLoginBuilder, PasswordLoginCfg, StrategyCfg,

@@ -32,9 +32,12 @@ pub struct GlobalDefinition {
     #[serde(default)]
     #[lua(optional)]
     pub hooks: Hooks,
-    /// Access control function refs.
+    /// Access control function refs. Globals support only `read`, `draft`,
+    /// `update`, and the `versions` toggle — `create`/`delete`/`trash` are
+    /// rejected at config load (a global is a single row with `get`/`update`
+    /// operations only).
     #[serde(default)]
-    #[lua(optional)]
+    #[lua(ty = "crap.GlobalAccess", optional)]
     pub access: Access,
     /// MCP tool description and options.
     #[serde(default)]
@@ -97,12 +100,26 @@ impl GlobalDefinition {
     pub fn has_drafts(&self) -> bool {
         self.versions.as_ref().is_some_and(|v| v.drafts)
     }
+
+    /// Whether this global silently exposes its unpublished (draft) content to
+    /// *everyone* (including unauthenticated callers) when `default_deny` is
+    /// false: drafts are enabled but neither `access.draft` nor its `access.update`
+    /// fallback is set, so a hook-less draft view resolves to "allowed for all".
+    /// Globals have no soft-delete, so `draft` is the only lifecycle view that can
+    /// leak this way. `read` (published) is intentionally excluded — published
+    /// globals being world-readable is the expected default. Mirrors
+    /// [`CollectionDefinition::publicly_exposed_lifecycle_views`]; returns false
+    /// when `default_deny` is true.
+    #[must_use]
+    pub fn draft_view_publicly_exposed(&self, default_deny: bool) -> bool {
+        !default_deny && self.has_drafts() && self.access.resolve_draft().is_none()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::LocalizedString;
+    use crate::core::{HookRef, LocalizedString};
     use std::collections::HashMap;
 
     fn make_global(slug: &str, singular: Option<&str>) -> GlobalDefinition {
@@ -183,6 +200,37 @@ mod tests {
         let mut g = make_global("site_settings", None);
         g.versions = Some(VersionsConfig::new(false, 0));
         assert!(!g.has_drafts());
+    }
+
+    #[test]
+    fn draft_view_publicly_exposed_when_drafts_on_and_ungated() {
+        let mut g = make_global("site_settings", None);
+        g.versions = Some(VersionsConfig::new(true, 0));
+
+        // default_deny=false, drafts on, no draft/update key → draft world-readable.
+        assert!(g.draft_view_publicly_exposed(false));
+
+        // default_deny=true closes the view regardless of keys.
+        assert!(!g.draft_view_publicly_exposed(true));
+    }
+
+    #[test]
+    fn draft_view_not_exposed_when_gated_or_features_off() {
+        let mut g = make_global("site_settings", None);
+        g.versions = Some(VersionsConfig::new(true, 0));
+
+        // An `update` rule covers the draft view via the fallback → not public.
+        g.access.update = Some(HookRef::new("access.editors"));
+        assert!(!g.draft_view_publicly_exposed(false));
+
+        // An explicit `draft` key also gates it.
+        g.access.update = None;
+        g.access.draft = Some(HookRef::new("access.editors"));
+        assert!(!g.draft_view_publicly_exposed(false));
+
+        // Drafts disabled → no draft view exists to expose.
+        let g = make_global("site_settings", None);
+        assert!(!g.draft_view_publicly_exposed(false));
     }
 }
 

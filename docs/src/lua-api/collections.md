@@ -430,7 +430,7 @@ By default, all Lua CRUD functions **enforce access control** (`overrideAccess =
 
 When `overrideAccess` is `false` (the default), the function enforces the same access rules as the external API:
 
-- **Collection-level access** — the relevant access function (`read`, `create`, `update`, `delete`) is called with the authenticated user from the original request.
+- **Collection-level access** — the relevant access function is called with the authenticated user from the original request. Which key applies follows the [content-view model](../access-control/overview.md): `read` gates published documents, while `find`/`find_by_id`/`count` with `draft = true` or `trash = true` are gated by `draft` / `trash` (each falling back to `update` when unset); writes use `create`/`update`/`delete`.
 - **Field-level access** — for `find`/`find_by_id`, fields the user can't read are stripped from results. For `create`/`update`, fields the user can't write are silently removed from the input data.
 - **Constrained read access** — if a read access function returns a filter table instead of `true`, those filters are merged into the query (same as the gRPC/admin behavior).
 

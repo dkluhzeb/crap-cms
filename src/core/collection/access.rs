@@ -57,6 +57,35 @@ pub struct Access {
     pub versions: Option<HookRef>,
 }
 
+/// Typegen-only mirror of [`Access`] for globals. A global is a single row with
+/// only `get`/`update` operations, so it rejects `create`, `delete`, and `trash`
+/// at config load. This restricted shape gives the Lua LSP the correct key set
+/// (`read` / `draft` / `update` / `versions`) on `crap.GlobalConfig.access`
+/// instead of advertising collection-only keys that would fail at parse. The
+/// runtime field is still an [`Access`]; this struct is never constructed — only
+/// its derived `render_lua_annotation` is used, to emit the `crap.GlobalAccess`
+/// class into `types/crap.lua`. Keep its fields in sync with the matching
+/// [`Access`] fields.
+#[derive(LuaAnnotation)]
+#[lua(class = "crap.GlobalAccess")]
+pub struct GlobalAccess {
+    /// Hook ref for read (published) access control.
+    #[lua(ty = "string | crap.HookRef", optional)]
+    pub read: Option<HookRef>,
+    /// Hook ref for reading draft (unpublished) content. Falls back to `update`
+    /// when unset, so previewing a draft requires edit-level access by default.
+    #[lua(ty = "string | crap.HookRef", optional)]
+    pub draft: Option<HookRef>,
+    /// Hook ref for update access control.
+    #[lua(ty = "string | crap.HookRef", optional)]
+    pub update: Option<HookRef>,
+    /// Hook ref restricting version-history visibility — a *toggle*, not a
+    /// per-snapshot filter. Unset means **allow**; returning a filter table is
+    /// rejected (snapshot scoping follows `read`/`draft`).
+    #[lua(ty = "string | crap.HookRef", optional)]
+    pub versions: Option<HookRef>,
+}
+
 impl Access {
     /// Create a new default access control configuration.
     #[must_use]
