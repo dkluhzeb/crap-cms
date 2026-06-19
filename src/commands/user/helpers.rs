@@ -66,7 +66,10 @@ pub(super) fn resolve_user(
     let conn = pool.get().context("Failed to get database connection")?;
 
     if let Some(email) = email {
-        let doc = query::find_by_email(&conn, collection, &def, &email)?
+        // Admin tooling reaches soft-deleted users too (e.g. password recovery
+        // for a trashed account) — unlike the HTTP login/reset paths, which
+        // exclude them.
+        let doc = query::find_by_email(&conn, collection, &def, &email, true)?
             .ok_or_else(|| anyhow!("No user found with email '{email}' in '{collection}'"))?;
 
         return Ok((def, doc));

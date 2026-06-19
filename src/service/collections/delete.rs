@@ -85,11 +85,13 @@ fn delete_document_pool(
     ctx.clear_cache();
 
     ctx.publish_delete_event(id, def.soft_delete, result.pre_status.clone());
-    // Hard delete revokes the user's sessions — tear down live streams
-    // post-commit (soft delete preserves the row, so no tear-down).
-    if !def.soft_delete {
-        invalidate_user_streams_if_auth(ctx, id);
-    }
+    // Deleting an auth document revokes that user — tear down their live streams
+    // post-commit. This applies to BOTH hard and soft delete: the per-request
+    // evaluator resolves users via `find_by_id`, which excludes soft-deleted
+    // rows, so a trashed user is already rejected (`UserMissing`) on new
+    // requests; their open SSE/subscribe streams (which never re-resolve) must be
+    // torn down too. No-op for non-auth collections.
+    invalidate_user_streams_if_auth(ctx, id);
     flush_queue(ctx, &queue);
 
     // Clean up upload files after successful commit (skip for soft-delete to allow restore)
@@ -115,11 +117,11 @@ fn delete_document_conn(
     ctx.clear_cache();
 
     ctx.publish_delete_event(id, def.soft_delete, result.pre_status.clone());
-    // Hard delete revokes the user's sessions (conn mode mirrors update_conn:
-    // fire on the caller's ctx; soft delete preserves the row, so no tear-down).
-    if !def.soft_delete {
-        invalidate_user_streams_if_auth(ctx, id);
-    }
+    // Deleting an auth document revokes that user — tear down their live streams
+    // (conn mode fires immediate). Applies to both hard and soft delete: a
+    // soft-deleted user is rejected by the evaluator's `find_by_id` on new
+    // requests, so their open streams must be closed too. See the pool path.
+    invalidate_user_streams_if_auth(ctx, id);
 
     if !def.soft_delete
         && let (Some(s), Some(fields)) = (storage, result.upload_doc_fields)

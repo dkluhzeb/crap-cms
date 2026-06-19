@@ -910,12 +910,12 @@ fn user_find_by_email() {
     );
 
     let conn = pool.get().unwrap();
-    let found = query::find_by_email(&conn, "users", &def, "lookup@example.com")
+    let found = query::find_by_email(&conn, "users", &def, "lookup@example.com", false)
         .unwrap()
         .expect("should find by email");
     assert_eq!(found.get_str("email"), Some("lookup@example.com"));
 
-    let missing = query::find_by_email(&conn, "users", &def, "nobody@example.com").unwrap();
+    let missing = query::find_by_email(&conn, "users", &def, "nobody@example.com", false).unwrap();
     assert!(missing.is_none());
 }
 

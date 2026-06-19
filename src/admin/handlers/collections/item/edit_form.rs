@@ -48,8 +48,9 @@ struct ReadParams {
     id: String,
     def: CollectionDefinition,
     locale_ctx: Option<LocaleContext>,
-    /// Whether to load the draft version — true only when the user can view
-    /// drafts (edit-level access). A read-only viewer gets the published doc.
+    /// Whether to opt into the draft overlay. The admin edit form always
+    /// requests it; the service read downgrades (never rejects), so a viewer
+    /// without draft access transparently gets the published doc.
     use_draft: bool,
     user_doc: Option<Document>,
 }

@@ -9,6 +9,15 @@ use crate::{
 
 /// Find a document by email in an auth collection.
 ///
+/// When `include_deleted` is false and the collection uses soft-delete,
+/// trashed (soft-deleted) users are excluded — mirroring [`find_by_id`], which
+/// the per-request evaluator uses. The authentication and password-reset paths
+/// pass `false` so a soft-deleted account is treated as disabled (cannot log in
+/// or request a reset); administrative tooling passes `true` to reach trashed
+/// users for recovery.
+///
+/// [`find_by_id`]: crate::db::query::find_by_id
+///
 /// # Errors
 ///
 /// Returns a backend error if the SELECT fails or the row fails to parse.
@@ -17,6 +26,7 @@ pub fn find_by_email(
     slug: &str,
     def: &CollectionDefinition,
     email: &str,
+    include_deleted: bool,
 ) -> Result<Option<Document>> {
     // Email is matched case-insensitively: addresses are case-insensitive in
     // practice, and a user who registered as "Test@Example.com" must be able
@@ -25,12 +35,16 @@ pub fn find_by_email(
     // case-variant duplicate accounts is a separate write-path/unique-index
     // concern — see CHANGELOG.)
     let column_names = get_column_names(def);
-    let sql = format!(
+    let mut sql = format!(
         "SELECT {} FROM \"{}\" WHERE LOWER(email) = {}",
         column_names.join(", "),
         slug,
         conn.placeholder(1)
     );
+
+    if def.soft_delete && !include_deleted {
+        sql.push_str(" AND _deleted_at IS NULL");
+    }
 
     let Some(row) = conn.query_one(&sql, &[DbValue::Text(email.to_lowercase())])? else {
         return Ok(None);
@@ -190,7 +204,7 @@ mod tests {
     #[test]
     fn find_by_email_found() {
         let (_dir, conn) = setup();
-        let result = find_by_email(&conn, "users", &auth_def(), "test@example.com").unwrap();
+        let result = find_by_email(&conn, "users", &auth_def(), "test@example.com", false).unwrap();
         assert!(result.is_some());
         assert_eq!(result.unwrap().id, "user1");
     }
@@ -201,7 +215,7 @@ mod tests {
     fn find_by_email_is_case_insensitive() {
         let (_dir, conn) = setup();
         for variant in ["Test@Example.com", "TEST@EXAMPLE.COM", "test@example.COM"] {
-            let result = find_by_email(&conn, "users", &auth_def(), variant).unwrap();
+            let result = find_by_email(&conn, "users", &auth_def(), variant, false).unwrap();
             assert_eq!(
                 result.map(|d| d.id.to_string()),
                 Some("user1".to_string()),
@@ -213,8 +227,44 @@ mod tests {
     #[test]
     fn find_by_email_not_found() {
         let (_dir, conn) = setup();
-        let result = find_by_email(&conn, "users", &auth_def(), "nobody@example.com").unwrap();
+        let result =
+            find_by_email(&conn, "users", &auth_def(), "nobody@example.com", false).unwrap();
         assert!(result.is_none());
+    }
+
+    /// Regression: a soft-deleted (trashed) user must be excluded from
+    /// `find_by_email` when `include_deleted` is false on a soft-delete
+    /// collection — otherwise a disabled account could still authenticate or
+    /// request a password reset, even though the per-request evaluator
+    /// (`find_by_id`) already rejects its existing sessions as `UserMissing`.
+    #[test]
+    fn find_by_email_excludes_soft_deleted_unless_included() {
+        let (_dir, conn) = setup();
+        conn.execute_batch("ALTER TABLE users ADD COLUMN _deleted_at TEXT;")
+            .unwrap();
+        conn.execute(
+            "UPDATE users SET _deleted_at = '2026-01-01T00:00:00Z' WHERE id = 'user1'",
+            &[],
+        )
+        .unwrap();
+
+        let mut def = auth_def();
+        def.soft_delete = true;
+
+        // The auth paths (include_deleted = false) must not see the trashed user.
+        let hidden = find_by_email(&conn, "users", &def, "test@example.com", false).unwrap();
+        assert!(
+            hidden.is_none(),
+            "soft-deleted user must be excluded from login/reset lookups"
+        );
+
+        // Admin tooling (include_deleted = true) can still reach it for recovery.
+        let reachable = find_by_email(&conn, "users", &def, "test@example.com", true).unwrap();
+        assert_eq!(
+            reachable.map(|d| d.id.to_string()),
+            Some("user1".to_string()),
+            "include_deleted = true must still surface the trashed user"
+        );
     }
 
     #[test]

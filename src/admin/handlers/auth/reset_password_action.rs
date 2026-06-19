@@ -45,10 +45,11 @@ fn render_reset_error(state: &AdminState, token: Option<&str>, error: &str) -> R
 /// Searches every auth collection (with local auth enabled) for the token.
 /// On success the password is updated and the token cleared inside a transaction.
 ///
-/// The invalidation transport is attached so the service's post-commit
-/// `publish_user_invalidation` tears down the user's open live-update streams —
-/// a password reset is a privilege-revoking action and an already-connected
-/// stream never makes another request to pick up the bumped `_session_version`.
+/// On success the user's open live-update streams are torn down POST-COMMIT (a
+/// password reset is a privilege-revoking action and an already-connected stream
+/// never makes another request to pick up the bumped `_session_version`).
+/// Publishing after commit ensures a rolled-back reset never spuriously tears
+/// down a stream.
 fn consume_reset_token(
     pool: &DbPool,
     registry: &Registry,
@@ -71,14 +72,16 @@ fn consume_reset_token(
             continue;
         }
 
-        let ctx = ServiceContext::collection(&def.slug, def)
-            .conn(&tx)
-            .invalidation_transport(Some(invalidation_transport.clone()))
-            .build();
+        let ctx = ServiceContext::collection(&def.slug, def).conn(&tx).build();
 
         match service_consume_reset_token(&ctx, token, password) {
-            Ok(()) => {
+            Ok(user_id) => {
                 tx.commit()?;
+                // Tear down the user's open live-update streams POST-COMMIT.
+                ServiceContext::slug_only(&def.slug)
+                    .invalidation_transport(Some(invalidation_transport.clone()))
+                    .build()
+                    .publish_user_invalidation(&user_id);
                 return Ok(());
             }
             Err(ServiceError::InvalidToken {

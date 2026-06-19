@@ -45,16 +45,23 @@ fn reset_password_blocking(
 
     let ctx = ServiceContext::collection(&input.slug, &input.def)
         .conn(&tx)
-        .invalidation_transport(Some(input.invalidation_transport.clone()))
         .build();
 
-    if let Err(e) = consume_reset_token(&ctx, &input.token, &input.password) {
-        return Ok(Err(e));
-    }
+    let user_id = match consume_reset_token(&ctx, &input.token, &input.password) {
+        Ok(id) => id,
+        Err(e) => return Ok(Err(e)),
+    };
 
     tx.commit()
         .inspect_err(|e| error!("Reset password commit error: {}", e))
         .map_err(|_| Status::internal("Internal error"))?;
+
+    // Tear down the user's open live-update streams POST-COMMIT — a rolled-back
+    // reset must never tear down a stream for a change that didn't happen.
+    ServiceContext::slug_only(&input.slug)
+        .invalidation_transport(Some(input.invalidation_transport.clone()))
+        .build()
+        .publish_user_invalidation(&user_id);
 
     Ok(Ok(()))
 }

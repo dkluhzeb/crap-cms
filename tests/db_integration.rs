@@ -462,8 +462,8 @@ fn setup_auth_collection() -> (
 fn find_by_email_returns_user() {
     let (_tmp, pool, def) = setup_auth_collection();
     let conn = pool.get().expect("DB connection");
-    let result =
-        query::find_by_email(&conn, "users", &def, "alice@example.com").expect("Query failed");
+    let result = query::find_by_email(&conn, "users", &def, "alice@example.com", false)
+        .expect("Query failed");
     assert!(result.is_some());
     let doc = result.unwrap();
     assert_eq!(doc.get_str("email"), Some("alice@example.com"));
@@ -474,7 +474,7 @@ fn find_by_email_returns_user() {
 fn find_by_email_missing_returns_none() {
     let (_tmp, pool, def) = setup_auth_collection();
     let conn = pool.get().expect("DB connection");
-    let result = query::find_by_email(&conn, "users", &def, "nonexistent@example.com")
+    let result = query::find_by_email(&conn, "users", &def, "nonexistent@example.com", false)
         .expect("Query failed");
     assert!(result.is_none());
 }
@@ -484,7 +484,7 @@ fn update_password_and_get_hash() {
     let (_tmp, pool, def) = setup_auth_collection();
     let conn = pool.get().expect("DB connection");
 
-    let user = query::find_by_email(&conn, "users", &def, "alice@example.com")
+    let user = query::find_by_email(&conn, "users", &def, "alice@example.com", false)
         .expect("Query failed")
         .expect("User not found");
 
@@ -515,7 +515,7 @@ fn set_and_find_reset_token() {
     let (_tmp, pool, def) = setup_auth_collection();
     let conn = pool.get().expect("DB connection");
 
-    let user = query::find_by_email(&conn, "users", &def, "alice@example.com")
+    let user = query::find_by_email(&conn, "users", &def, "alice@example.com", false)
         .expect("Query failed")
         .expect("User not found");
 
@@ -545,7 +545,7 @@ fn clear_reset_token() {
     let (_tmp, pool, def) = setup_auth_collection();
     let conn = pool.get().expect("DB connection");
 
-    let user = query::find_by_email(&conn, "users", &def, "alice@example.com")
+    let user = query::find_by_email(&conn, "users", &def, "alice@example.com", false)
         .expect("Query failed")
         .expect("User not found");
 
@@ -564,7 +564,7 @@ fn set_and_find_verification_token() {
     let (_tmp, pool, def) = setup_auth_collection();
     let conn = pool.get().expect("DB connection");
 
-    let user = query::find_by_email(&conn, "users", &def, "alice@example.com")
+    let user = query::find_by_email(&conn, "users", &def, "alice@example.com", false)
         .expect("Query failed")
         .expect("User not found");
 
@@ -593,7 +593,7 @@ fn mark_verified_and_check() {
     let (_tmp, pool, def) = setup_auth_collection();
     let conn = pool.get().expect("DB connection");
 
-    let user = query::find_by_email(&conn, "users", &def, "alice@example.com")
+    let user = query::find_by_email(&conn, "users", &def, "alice@example.com", false)
         .expect("Query failed")
         .expect("User not found");
 
@@ -614,7 +614,7 @@ fn is_verified_default_false() {
     let (_tmp, pool, def) = setup_auth_collection();
     let conn = pool.get().expect("DB connection");
 
-    let user = query::find_by_email(&conn, "users", &def, "alice@example.com")
+    let user = query::find_by_email(&conn, "users", &def, "alice@example.com", false)
         .expect("Query failed")
         .expect("User not found");
 

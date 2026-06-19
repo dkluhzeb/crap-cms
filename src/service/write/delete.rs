@@ -372,8 +372,15 @@ mod tests {
         assert_eq!(received, "u1");
     }
 
+    /// Regression: soft-deleting an auth user MUST tear down their live streams.
+    /// A trashed user is disabled — the per-request evaluator resolves users via
+    /// `find_by_id`, which excludes soft-deleted rows, so the user's existing
+    /// sessions are already rejected (`UserMissing`); their open SSE/subscribe
+    /// streams (which never re-resolve) must be torn down too. Previously the
+    /// delete wrapper skipped teardown on soft-delete on the mistaken assumption
+    /// that "the row still exists, so the session still resolves."
     #[tokio::test]
-    async fn soft_delete_auth_does_not_publish() {
+    async fn soft_delete_auth_publishes_user_invalidation() {
         let (conn, mut def) = setup_auth_collection();
         // soft_delete requires the _deleted_at column.
         conn.execute_batch("ALTER TABLE users ADD COLUMN _deleted_at TEXT;")
@@ -394,13 +401,11 @@ mod tests {
 
         let _ = crate::service::delete_document(&ctx, "u1", None, None).expect("soft delete");
 
-        // No publish must have happened — poll briefly and assert timeout.
-        let recv_result =
-            tokio::time::timeout(std::time::Duration::from_millis(150), rx.recv()).await;
-        assert!(
-            recv_result.is_err(),
-            "soft-delete must not publish an invalidation signal"
-        );
+        let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+            .await
+            .expect("recv timed out")
+            .expect("soft-delete of an auth user must publish an invalidation signal");
+        assert_eq!(received, "u1");
     }
 
     #[tokio::test]

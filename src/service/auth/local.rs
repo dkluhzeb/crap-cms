@@ -41,7 +41,10 @@ pub fn authenticate_local(
     let conn = conn.as_ref();
     let def = ctx.collection_def()?;
 
-    let Some(user) = query::find_by_email(conn, ctx.slug, def, email)? else {
+    // A soft-deleted (trashed) account is disabled: exclude it so a trashed user
+    // cannot authenticate, consistent with the evaluator's `find_by_id` (which
+    // rejects an existing session for a trashed user as `UserMissing`).
+    let Some(user) = query::find_by_email(conn, ctx.slug, def, email, false)? else {
         password_provider.dummy_verify();
         return Err(ServiceError::InvalidCredentials);
     };

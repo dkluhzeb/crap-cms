@@ -40,7 +40,9 @@ pub fn generate_reset_token(
     let conn = conn.as_ref();
     let def = ctx.collection_def()?;
 
-    let Some(user) = query::find_by_email(conn, ctx.slug, def, email)? else {
+    // A soft-deleted account is disabled: don't issue a reset token for a trashed
+    // user (consistent with login and the per-request evaluator).
+    let Some(user) = query::find_by_email(conn, ctx.slug, def, email, false)? else {
         return Ok(None);
     };
 
@@ -65,6 +67,12 @@ pub fn generate_reset_token(
 /// Clears the token on success or if it's expired/locked. Caller
 /// manages the transaction.
 ///
+/// On success returns the affected user's id so the caller can tear down that
+/// user's live-update streams **after committing** (a reset is a
+/// session-revoking action; the version bump only blocks new requests, while an
+/// open stream must be invalidated to drop). Publishing is the caller's job —
+/// post-commit — so a rolled-back reset never spuriously tears down a stream.
+///
 /// # Errors
 ///
 /// Returns `InvalidToken` when the token is missing, expired, or
@@ -74,7 +82,7 @@ pub fn consume_reset_token(
     ctx: &ServiceContext,
     token: &str,
     new_password: &str,
-) -> Result<(), ServiceError> {
+) -> Result<String, ServiceError> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let def = ctx.collection_def()?;
@@ -107,13 +115,10 @@ pub fn consume_reset_token(
     // password actually changed.
     query::update_password_clearing_reset_token(conn, ctx.slug, &user.id, new_password)?;
 
-    // A password reset is the canonical "lock out whoever had access" action: it
-    // bumps `_session_version` (killing old JWTs on their next request), but a
-    // live-update stream never makes another request, so also tear down this
-    // user's open streams. No-op without an invalidation transport attached.
-    ctx.publish_user_invalidation(&user.id);
-
-    Ok(())
+    // A password reset bumps `_session_version` (killing old JWTs on their next
+    // request). Tearing down the user's open live-update streams (which never
+    // re-request) is the caller's job, POST-COMMIT — return the id for it.
+    Ok(user.id.to_string())
 }
 
 /// Validate a verification token and mark the user as verified.
@@ -210,8 +215,11 @@ mod tests {
         let ctx = ServiceContext::collection("users", &def)
             .conn(&conn)
             .build();
-        let result = consume_reset_token(&ctx, "tok123", "newpass123");
-        assert!(result.is_ok());
+        let user_id = consume_reset_token(&ctx, "tok123", "newpass123").expect("reset succeeds");
+        assert_eq!(
+            user_id, "u1",
+            "consume_reset_token returns the affected user id for post-commit teardown"
+        );
     }
 
     /// Regression: the token must be cleared in the SAME statement as the

@@ -270,6 +270,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **Soft-deleting (trashing) an auth user now fully disables the account.** The
+  per-request evaluator already resolves users via `find_by_id`, which excludes
+  soft-deleted rows — so a trashed user's existing sessions were rejected
+  (`UserMissing`) on their next request. But two paths didn't honor that: (1) the
+  password-login and forgot-password lookups (`find_by_email`) did **not** exclude
+  trashed users, so a disabled account could still authenticate and request reset
+  tokens; and (2) deleting an auth document only tore down the user's open
+  live-update (SSE/subscribe) streams on **hard** delete, not soft delete — so a
+  trashed user's already-connected stream kept delivering. Both are fixed: the
+  auth lookups now exclude soft-deleted users (administrative CLI tooling still
+  reaches them for recovery), and both soft and hard delete of an auth document
+  now publish the user-invalidation signal that closes open streams. Restoring
+  the user from trash re-enables the account.
+
 - **A trash-mode lookup by ID now returns only soft-deleted rows.** Fetching a
   single document with `trash = true` (gRPC `FindById`, the MCP tool, or the
   admin trash view) ran the SQL lookup with the default `_deleted_at IS NULL`
@@ -676,6 +690,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **Password-reset stream teardown now publishes after the transaction commits.**
+  `consume_reset_token` published the user-invalidation signal (which closes the
+  user's open live-update streams) while the reset transaction was still open, so
+  a reset whose commit then failed would have spuriously torn down streams for a
+  password change that never persisted. The service function now returns the
+  affected user id and the gRPC and admin reset handlers publish the signal
+  post-commit, matching the convention used by every other revoking write.
 
 - **The collection-definition schema reference now documents the `draft` and
   `versions` access keys.** The `access` table in the definition-schema doc still

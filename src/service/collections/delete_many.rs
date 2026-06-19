@@ -180,12 +180,12 @@ fn delete_many_pool(
     for (id, pre_status) in deleted_ids.iter().zip(&pre_statuses) {
         ctx.publish_delete_event(id, def.soft_delete, pre_status.clone());
     }
-    // Hard delete revokes sessions — tear down each affected user's live streams
-    // POST-COMMIT (mirrors update_many; soft delete preserves rows, no tear-down).
-    if !def.soft_delete {
-        for id in &deleted_ids {
-            invalidate_user_streams_if_auth(ctx, id);
-        }
+    // Deleting an auth document revokes that user — tear down each affected
+    // user's live streams POST-COMMIT, for BOTH hard and soft delete: the
+    // evaluator's `find_by_id` excludes soft-deleted rows, so a trashed user is
+    // rejected on new requests and their open streams must be closed too.
+    for id in &deleted_ids {
+        invalidate_user_streams_if_auth(ctx, id);
     }
     flush_queue(ctx, &queue);
 
@@ -253,12 +253,11 @@ fn delete_many_conn(
         }
     }
 
-    // Hard delete revokes sessions (conn mode mirrors update_many_conn: fire on
-    // the caller's ctx; soft delete preserves rows, so no tear-down).
-    if !def.soft_delete {
-        for id in &deleted_ids {
-            invalidate_user_streams_if_auth(ctx, id);
-        }
+    // Deleting an auth document revokes that user — tear down each affected
+    // user's live streams (conn mode fires immediate), for both hard and soft
+    // delete. See the pool path for the soft-delete rationale.
+    for id in &deleted_ids {
+        invalidate_user_streams_if_auth(ctx, id);
     }
 
     Ok(DeleteManyResult {

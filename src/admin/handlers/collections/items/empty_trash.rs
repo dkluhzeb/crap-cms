@@ -48,6 +48,12 @@ fn trash_filters() -> Vec<FilterClause> {
 
 /// Find all trashed documents and permanently delete them via the service layer.
 fn empty_trash(input: EmptyTrashInput<'_>) -> Result<usize, ServiceError> {
+    // Clone the def with `soft_delete = false` so the per-row delete hard-deletes
+    // (gated by `access.delete`) instead of re-trashing. Note this also makes the
+    // delete's `enforce_access_constraints` count the trashed rows: the read
+    // count only appends `_deleted_at IS NULL` when `def.soft_delete` is true, so
+    // with the flag cleared a `Constrained` delete rule still matches the (now
+    // physically-trashed) rows. Keep both behaviors tied to this single flag.
     let mut hard_def = input.def.clone();
     hard_def.soft_delete = false;
 
