@@ -245,6 +245,14 @@ crap.collections.posts.delete("abc123", { overrideAccess = true })
 
 ### `crap.collections.<slug>.undelete(id)` (and others)
 
+Restore a soft-deleted document from trash. Returns `true` on
+success. Only available on collections with `soft_delete = true`.
+Re-syncs the FTS index after undelete.
+
+```lua
+crap.collections.posts.undelete("abc123")
+```
+
 The accessor also covers `unpublish(id, opts?)`, `validate(data, opts?)`,
 `count(query?)`, `create_many(items, opts?)`, `update_many(query, data,
 opts?)`, `delete_many(query, opts?)`, `list_versions(id, opts?)`,
@@ -365,14 +373,6 @@ crap.collections.create(collection, data, opts)
 
 Same semantics, slug as the first arg. Reach for these only when
 you genuinely don't have a string literal — they don't narrow.
-
-Restore a soft-deleted document from trash. Returns `true` on
-success. Only available on collections with `soft_delete = true`.
-Re-syncs the FTS index after undelete.
-
-```lua
-crap.collections.posts.undelete("abc123")
-```
 
 ## Lifecycle Hooks in Lua CRUD
 

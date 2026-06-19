@@ -168,7 +168,7 @@ crap-cms trash empty posts --confirm
 
 When `soft_delete = true`, a `_deleted_at TEXT` column is added to the collection table. The value is `NULL` for active documents and an ISO 8601 timestamp for soft-deleted documents.
 
-All read queries automatically append `AND _deleted_at IS NULL` to exclude trashed documents. The `include_deleted` flag on `FindQuery` overrides this for the trash view.
+All read queries automatically append `AND _deleted_at IS NULL` to exclude trashed documents. Passing `trash = true` on a `Find` / `FindByID` request (gRPC, Lua, MCP, admin) overrides this to read the trash view instead.
 
 ## Notes
 

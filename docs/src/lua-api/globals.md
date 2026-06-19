@@ -82,7 +82,7 @@ Get a global's current value. Returns the typed document.
 | --- | --- | --- |
 | `locale` | string | Locale code (e.g. `"en"`, `"de"`). Fetches locale-specific field values; omit for default locale. |
 | `overrideAccess` | boolean | Bypass the global's `access.read` check (default `false`). |
-| `draft` | boolean | Read unpublished (draft) content (default `false`). When the global has drafts enabled and has been unpublished, a normal read serves the last published snapshot; set `true` to read the draft. |
+| `draft` | boolean | Read unpublished (draft) content (default `false`). Gated by `access.draft` (falling back to `access.update`); a reader without draft access silently gets the published snapshot, never an error. When the global has drafts enabled and has been unpublished, a normal read serves the last published snapshot; set `true` to read the draft. |
 
 ```lua
 local settings = crap.globals.site_settings.get()

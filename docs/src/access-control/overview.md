@@ -33,6 +33,14 @@ Reads are gated per **content view**, and each view has its own access key:
 | `trash` | soft-deleted documents | `update` |
 | `versions` | version history | allowed (boolean toggle) |
 
+`versions` is the one key whose unset default is *allow* rather than a
+fallback: history visibility just follows the per-snapshot `read`/`draft`
+result (a published snapshot needs `read`, a draft snapshot needs `draft`), so
+leaving `versions` unset never widens what a viewer can already see. Set it to
+`false` (or a boolean function) only when you want to hide history *even from*
+content-readers. `draft` and `trash`, by contrast, fall back to `update`, so
+they are effectively closed unless you grant `update` or set them explicitly.
+
 A read returns the **union** of the views the caller requested *and* is allowed
 to see. Because the keys are independent, you can express policies the old
 single-`read`-rule model could not:

@@ -34,6 +34,7 @@ use std::path::Path;
 const SURFACE_ROOTS: &[&str] = &[
     "src/admin/handlers",
     "src/api/handlers",
+    "src/api/upload",
     "src/mcp/tools",
     "src/hooks/lua_api/crud",
 ];
@@ -84,6 +85,11 @@ const ALLOWLIST: &[(&str, &str)] = &[
     ),
     // The `me` endpoint reads the authenticated user's own record.
     ("api/handlers/auth/me.rs", "query::find_by_id("),
+    // REST upload delete: a pre-flight existence probe (404-vs-proceed boolean,
+    // no content served). The request is already access-gated by
+    // `check_upload_access` above the call, and `find_by_id` excludes
+    // soft-deleted rows, so it cannot probe trashed docs.
+    ("api/upload/delete.rs", "query::find_by_id("),
 ];
 
 fn is_allowlisted(rel_path: &str, call: &str) -> bool {
@@ -507,6 +513,10 @@ const ACCESS_TOUCHPOINTS: &[&str] = &[
     "admin/handlers/events/sse_payload.rs",
     // Admin's shared access helpers (the admin-side centralization point).
     "admin/handlers/shared/access.rs",
+    // REST upload helpers: file upload/serve is not a document-CRUD service op,
+    // so the create/update/delete handlers gate via `check_upload_access` here,
+    // which delegates to `hook_runner.check_access`.
+    "api/upload/helpers.rs",
 ];
 
 #[test]
