@@ -90,7 +90,7 @@ If an `on_init` hook fails, the server aborts startup.
 
 ## Access Control Functions
 
-Access control functions (`access.read`, `access.create`, `access.update`, `access.delete` on collections/globals and `access.read`, `access.create`, `access.update` on fields) run with CRUD access inside their own transaction. Each access check gets a dedicated transaction that commits on success or rolls back on error.
+Collection, global, and field-level access control functions run with CRUD access inside their own transaction. Each access check gets a dedicated transaction that commits on success or rolls back on error. (Which keys each surface honors — e.g. collections expose `read`/`draft`/`trash`/`versions`/`create`/`update`/`delete` while globals expose only `read`/`draft`/`update`/`versions` — is covered in [Access Control](../access-control/overview.md); the transaction behavior here applies to all of them.)
 
 ## Auth Strategies
 

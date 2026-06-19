@@ -266,6 +266,36 @@ fn warn_on_always_cross_collection_collisions(
     }
 }
 
+/// Warn when `default_deny = false` leaves a collection's draft or trash view
+/// ungated. With `default_deny = false`, a view whose access resolves to `None`
+/// (no own key, and no `update` fallback) is allowed for *everyone* — so a
+/// collection with `drafts`/`soft_delete` enabled but no `draft`/`trash`/`update`
+/// rule exposes its unpublished and soft-deleted rows to unauthenticated
+/// callers. `read` (published) is intentionally not flagged: published content
+/// being public is the expected default; the footgun is drafts/trash silently
+/// joining it. Advisory only (the config is valid, just dangerous).
+pub fn warn_public_lifecycle_views(registry: &Registry, default_deny: bool) {
+    if default_deny {
+        return;
+    }
+
+    for (slug, def) in &registry.collections {
+        for view in def.publicly_exposed_lifecycle_views(default_deny) {
+            let documents = match view {
+                "trash" => "soft-deleted",
+                _ => view,
+            };
+
+            warn!(
+                "Collection '{slug}': access.default_deny is false and the '{view}' view has \
+                 no access.{view} (or access.update) rule — {documents} documents are visible \
+                 to EVERYONE, including unauthenticated callers. Add an access.{view} (or \
+                 access.update) rule, or set access.default_deny = true."
+            );
+        }
+    }
+}
+
 /// Reject field names that collide with the generated locale-suffixed column
 /// pattern `{field}__{locale}`. If a user defines a literal field named
 /// `title__en` while `en` is a configured locale, the generated localized

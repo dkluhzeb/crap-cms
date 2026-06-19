@@ -5,6 +5,7 @@ use axum::{
     response::Response,
 };
 use serde_json::Value;
+use tracing::error;
 
 use crate::{
     admin::{
@@ -30,7 +31,13 @@ fn fetch_version_data(ctx: &ServiceContext, pg: &Pagination) -> (Vec<Value>, Pag
         .offset(Some(pg.offset))
         .build();
 
-    let result = list_versions(ctx, &input).unwrap_or_default();
+    // Degrade to an empty list when history is not visible (access denial),
+    // but log first so a real failure — a backend error or a misconfigured
+    // `access.versions` toggle returning a filter table — isn't swallowed
+    // (mirrors the collection version page).
+    let result = list_versions(ctx, &input)
+        .inspect_err(|e| error!("Global version list for '{}' failed: {e}", ctx.slug))
+        .unwrap_or_default();
 
     let versions = result.docs.iter().map(version_to_json).collect();
 

@@ -418,6 +418,32 @@ fn check_access(cfg: &CrapConfig, reg: &Registry, findings: &mut Vec<Finding>) {
             .with_hint("Add access functions or enable default_deny."),
         );
     }
+
+    // With default_deny = false, a draft/trash view with no own key and no
+    // `update` fallback is world-readable even when `read` is set — so this
+    // catches collections the coarse "no access rules" check above misses.
+    for (slug, def) in &reg.collections {
+        let views = def.publicly_exposed_lifecycle_views(cfg.access.default_deny);
+        if views.is_empty() {
+            continue;
+        }
+
+        findings.push(
+            Finding::new(format!(
+                "Collection '{slug}': {} view(s) are publicly readable ({})",
+                views.join(" and "),
+                views
+                    .iter()
+                    .map(|v| format!("no access.{v} or access.update rule"))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ))
+            .with_hint(
+                "Unpublished/soft-deleted documents are visible to everyone. Add the matching \
+                 access rule or set access.default_deny = true.",
+            ),
+        );
+    }
 }
 
 fn check_hooks(reg: &Registry, findings: &mut Vec<Finding>) {

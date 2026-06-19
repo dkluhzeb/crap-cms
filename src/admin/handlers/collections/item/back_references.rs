@@ -12,7 +12,7 @@ use tracing::error;
 use crate::{
     admin::{AdminState, handlers::shared::check_access_or_forbid},
     config::LocaleConfig,
-    core::{Registry, auth::AuthUser},
+    core::{CollectionDefinition, Registry, auth::AuthUser},
     db::{DbPool, query::AccessResult},
     hooks::HookRunner,
     service::{
@@ -30,6 +30,8 @@ struct BackRefParams {
     slug: String,
     target_id: String,
     user_doc: Option<crate::core::Document>,
+    def: CollectionDefinition,
+    read_access: AccessResult,
 }
 
 /// Run the access-filtered back-reference scan on a blocking thread.
@@ -42,13 +44,22 @@ fn load_back_references_blocking(
     let conn = params.pool.get().map_err(ServiceError::Internal)?;
 
     let hooks = RunnerReadHooks::new(&params.runner, &conn, params.user_doc.as_ref(), None);
-    let ctx = ServiceContext::slug_only(&params.slug)
+
+    // A collection context (carries the target def) so the service can enforce
+    // a `Constrained` read rule against the target row itself.
+    let ctx = ServiceContext::collection(&params.slug, &params.def)
         .conn(&conn)
         .read_hooks(&hooks)
         .user(params.user_doc.as_ref())
         .build();
 
-    find_back_references(&ctx, &params.registry, &params.target_id, &params.locale)
+    find_back_references(
+        &ctx,
+        &params.registry,
+        &params.target_id,
+        &params.read_access,
+        &params.locale,
+    )
 }
 
 /// GET /admin/collections/{slug}/{id}/back-references — lazy-load the
@@ -62,7 +73,7 @@ pub async fn back_references(
         return Json(json!({ "error": "Collection not found" })).into_response();
     };
 
-    match check_access_or_forbid(
+    let read_access = match check_access_or_forbid(
         &state,
         def.access.read.as_ref(),
         auth_user.as_ref(),
@@ -74,8 +85,8 @@ pub async fn back_references(
         Ok(AccessResult::Denied) | Err(_) => {
             return Json(json!({ "error": "Access denied" })).into_response();
         }
-        _ => {}
-    }
+        Ok(access) => access,
+    };
 
     let params = BackRefParams {
         pool: state.pool.clone(),
@@ -85,10 +96,17 @@ pub async fn back_references(
         slug,
         target_id: id,
         user_doc: auth_user.map(|Extension(au)| au.user_doc.clone()),
+        def,
+        read_access,
     };
 
     match task::spawn_blocking(move || load_back_references_blocking(&params)).await {
         Ok(Ok(report)) => Json(json!(report)).into_response(),
+        Ok(Err(ServiceError::AccessDenied(_))) => {
+            // Row-scoped `read` rule didn't match the target — fail closed
+            // without logging (an expected denial, not a failure).
+            Json(json!({ "error": "Access denied" })).into_response()
+        }
         Ok(Err(e)) => {
             error!("Back-reference scan error: {e}");
             Json(json!({ "error": "Back-reference scan failed" })).into_response()

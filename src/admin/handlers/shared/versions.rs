@@ -33,7 +33,13 @@ pub fn fetch_version_sidebar_data(ctx: &ServiceContext, parent_id: &str) -> (Vec
             let vers = result.docs.iter().map(version_to_json).collect();
             (vers, result.total)
         }
-        Err(_) => (vec![], 0),
+        Err(e) => {
+            // Degrade to an empty sidebar, but log first — a misconfigured
+            // `access.versions` toggle or a backend error shouldn't present
+            // as a silently empty version count.
+            error!("Version sidebar for '{}' failed: {e}", ctx.slug);
+            (vec![], 0)
+        }
     }
 }
 

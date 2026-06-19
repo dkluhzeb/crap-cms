@@ -16,6 +16,14 @@ By default, collections and globals without explicit access functions **deny all
 
 To allow all operations on collections without access functions (e.g., during development), set `default_deny = false` in `[access]` in `crap.toml`.
 
+> ⚠️ **`default_deny = false` exposes more than published content.** It makes
+> *every* ungated view public — including `draft` and `trash`. A collection with
+> `drafts` or `soft_delete` enabled but no `draft`/`trash`/`update` rule will
+> serve its unpublished and soft-deleted documents to *anyone*, including
+> unauthenticated callers. The server logs a warning at startup for each such
+> collection, and `crap-cms status --check` flags them. Keep `default_deny = true`
+> for any deployment that isn't a throwaway dev instance.
+
 ## Three Levels
 
 1. **Admin panel-level** — `admin.access` in `crap.toml`. A Lua function that gates access to the entire admin UI, checked after login. See [Admin UI](../admin-ui/index.md#access).

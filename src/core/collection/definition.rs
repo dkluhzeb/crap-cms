@@ -207,6 +207,34 @@ impl CollectionDefinition {
     pub fn has_soft_delete(&self) -> bool {
         self.soft_delete
     }
+
+    /// Lifecycle views this collection exposes to *everyone* (including
+    /// unauthenticated callers) when `default_deny` is false: a feature is
+    /// enabled but neither the view's own access key nor the `update` fallback
+    /// is set, so a hook-less view resolves to "allowed for all". Returns the
+    /// view keys (`"draft"`/`"trash"`), matching `access.{key}`. Empty when
+    /// nothing is publicly exposed or `default_deny` is true.
+    ///
+    /// `read` (published) is intentionally excluded — published content being
+    /// world-readable is the expected default; the footgun is drafts/trash
+    /// silently joining that public set.
+    #[must_use]
+    pub fn publicly_exposed_lifecycle_views(&self, default_deny: bool) -> Vec<&'static str> {
+        if default_deny {
+            return Vec::new();
+        }
+
+        let mut views = Vec::new();
+
+        if self.has_drafts() && self.access.resolve_draft().is_none() {
+            views.push("draft");
+        }
+        if self.has_soft_delete() && self.access.resolve_trash().is_none() {
+            views.push("trash");
+        }
+
+        views
+    }
 }
 
 #[cfg(test)]
@@ -333,6 +361,47 @@ mod tests {
         let mut col = make_collection("posts", None, None, None);
         col.versions = Some(VersionsConfig::new(false, 10));
         assert!(!col.has_drafts());
+    }
+
+    #[test]
+    fn publicly_exposed_lifecycle_views_flags_ungated_draft_and_trash() {
+        let mut col = make_collection("posts", None, None, None);
+        col.versions = Some(VersionsConfig::new(true, 5));
+        col.soft_delete = true;
+
+        // default_deny=false, drafts + soft_delete on, no draft/trash/update key
+        // → both views are world-readable.
+        assert_eq!(
+            col.publicly_exposed_lifecycle_views(false),
+            vec!["draft", "trash"]
+        );
+
+        // default_deny=true closes everything regardless of keys.
+        assert!(col.publicly_exposed_lifecycle_views(true).is_empty());
+    }
+
+    #[test]
+    fn publicly_exposed_lifecycle_views_respects_keys_and_update_fallback() {
+        let mut col = make_collection("posts", None, None, None);
+        col.versions = Some(VersionsConfig::new(true, 5));
+        col.soft_delete = true;
+
+        // An `update` rule covers both views via the fallback → nothing public.
+        col.access.update = Some(HookRef::new("access.editors"));
+        assert!(col.publicly_exposed_lifecycle_views(false).is_empty());
+
+        // An explicit `draft` key gates drafts; trash still falls back to the
+        // (now present) update rule → still nothing public.
+        col.access.update = None;
+        col.access.draft = Some(HookRef::new("access.editors"));
+        assert_eq!(col.publicly_exposed_lifecycle_views(false), vec!["trash"]);
+    }
+
+    #[test]
+    fn publicly_exposed_lifecycle_views_empty_when_features_off() {
+        // Features off → no draft/trash view exists to expose.
+        let col = make_collection("posts", None, None, None);
+        assert!(col.publicly_exposed_lifecycle_views(false).is_empty());
     }
 
     fn make_localized_collection() -> CollectionDefinition {

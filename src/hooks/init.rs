@@ -103,6 +103,10 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
     super::startup_checks::validate_auth_methods(&snapshot)
         .context("Auth method configuration invalid")?;
 
+    // Advisory warning (not a hard error): with default_deny = false, a
+    // collection's draft/trash view with no gating rule is world-readable.
+    super::startup_checks::warn_public_lifecycle_views(&snapshot, config.access.default_deny);
+
     // The init VM and `registry` (SharedRegistry) drop here. The
     // closures inside the VM that captured SharedRegistry clones are
     // also dropped; no writeable handle survives this function.

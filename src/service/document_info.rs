@@ -16,7 +16,10 @@ use crate::{
         query::{self, BackReference, MissingRelation, filter_visible_ids},
     },
     hooks::AccessCheckInput,
-    service::{ReadAccessCtx, ReadHooks, ServiceContext, resolve_visibility_filter},
+    service::{
+        ReadAccessCtx, ReadHooks, ServiceContext, helpers::enforce_access_constraints,
+        resolve_visibility_filter,
+    },
 };
 
 use super::ServiceError;
@@ -62,23 +65,36 @@ enum Visibility {
 /// Find all documents that reference a given document, filtered to those the
 /// viewer may access.
 ///
-/// Access is resolved once per owner collection/global (not per field or per
-/// row): collections route through the shared cross-axis visibility filter,
-/// globals through a boolean `read` check. Referrers the viewer cannot see are
-/// dropped and recorded only via the non-quantified `has_inaccessible` flag.
+/// `target_read` is the caller's already-resolved `read` access result for the
+/// target collection (the caller's entry gate handles `Denied`/`Allowed` plus
+/// the `default_deny` default). When it is `Constrained`, the row filter is
+/// enforced against the target row first: a viewer whose `read` is row-scoped
+/// (e.g. `author = me`) must not learn whether referrers exist for a target
+/// they cannot actually read — the referrer list is access-filtered regardless,
+/// but this closes the existence side-channel on the target itself.
+///
+/// Owner access is then resolved once per owner collection/global (not per field
+/// or per row): collections route through the shared cross-axis visibility
+/// filter, globals through a boolean `read` check. Referrers the viewer cannot
+/// see are dropped and recorded only via the non-quantified `has_inaccessible`
+/// flag.
 ///
 /// # Errors
 ///
-/// Returns a [`ServiceError`] if the scan, an access hook, or a visibility
-/// query fails.
+/// Returns [`ServiceError::AccessDenied`] when a `Constrained` `target_read`
+/// does not match the target row, or another [`ServiceError`] if the scan, an
+/// access hook, or a visibility query fails.
 pub fn find_back_references(
     ctx: &ServiceContext,
     registry: &Registry,
     target_id: &str,
+    target_read: &AccessResult,
     locale_config: &LocaleConfig,
 ) -> Result<BackReferenceReport, ServiceError> {
     let conn = ctx.resolve_conn()?;
     let hooks = ctx.read_hooks()?;
+
+    enforce_access_constraints(ctx, target_id, target_read, "read", false)?;
 
     let raw =
         query::find_back_references(conn.as_ref(), registry, ctx.slug, target_id, locale_config)?;
@@ -362,11 +378,22 @@ mod tests {
         hooks: &dyn ReadHooks,
     ) -> BackReferenceReport {
         let conn = pool.get().unwrap();
-        let ctx = ServiceContext::slug_only("media")
+        let media_def = registry.get_collection("media").unwrap();
+        let ctx = ServiceContext::collection("media", media_def)
             .conn(&conn)
             .read_hooks(hooks)
             .build();
-        find_back_references(&ctx, registry, "m1", &LocaleConfig::default()).unwrap()
+
+        // Target read is unconstrained here — these tests exercise owner-side
+        // filtering, not the target gate.
+        find_back_references(
+            &ctx,
+            registry,
+            "m1",
+            &AccessResult::Allowed,
+            &LocaleConfig::default(),
+        )
+        .unwrap()
     }
 
     /// THE leak regression: an owner collection the viewer cannot read must not
@@ -411,5 +438,42 @@ mod tests {
             r.has_inaccessible,
             "the 'other'-owned post was filtered out"
         );
+    }
+
+    /// Regression: a row-scoped `read` rule on the TARGET must gate the target
+    /// itself — a viewer who can only read their own rows must not learn whether
+    /// referrers exist for a target they cannot read (existence side-channel).
+    #[test]
+    fn constrained_target_read_gates_the_target_itself() {
+        let (_tmp, pool, registry) = setup();
+        let conn = pool.get().unwrap();
+        let hooks = MockHooks::new(&[]); // owner access irrelevant — the gate fires first
+        let posts_def = registry.get_collection("posts").unwrap();
+        let ctx = ServiceContext::collection("posts", posts_def)
+            .conn(&conn)
+            .read_hooks(&hooks)
+            .build();
+
+        // p1 is owned by 'keep'. A viewer scoped to author='other' probing p1's
+        // back-refs is denied outright, not handed an empty list.
+        let other_only = AccessResult::Constrained(vec![FilterClause::Single(Filter {
+            field: "author".to_string(),
+            op: FilterOp::Equals("other".to_string()),
+        })]);
+        let err =
+            find_back_references(&ctx, &registry, "p1", &other_only, &LocaleConfig::default())
+                .expect_err("constrained read not matching the target must deny");
+        assert!(matches!(err, ServiceError::AccessDenied(_)));
+
+        // The owner ('keep') passes the target gate; the scan then runs (no
+        // referrers point at p1, so the report is simply empty).
+        let keep_only = AccessResult::Constrained(vec![FilterClause::Single(Filter {
+            field: "author".to_string(),
+            op: FilterOp::Equals("keep".to_string()),
+        })]);
+        let r = find_back_references(&ctx, &registry, "p1", &keep_only, &LocaleConfig::default())
+            .expect("owner passes the target gate");
+        assert!(r.references.is_empty());
+        assert!(!r.has_inaccessible);
     }
 }

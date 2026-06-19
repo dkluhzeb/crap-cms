@@ -62,6 +62,11 @@ const FORBIDDEN_CALLS: &[&str] = &[
     "query::soft_delete(",
     "query::undelete(",
     "query::create_version(",
+    // Raw snapshot / draft-overlay read primitives — these skip the
+    // view-scope/access path entirely and exist only inside `service::read`.
+    // A surface calling them would bypass draft/trash/versions gating.
+    "ops::find_by_id_full(",
+    "ops::document_from_snapshot(",
 ];
 
 /// Reviewed, intentional exceptions: `(path suffix, call form)`. Every entry is
@@ -78,7 +83,9 @@ const ALLOWLIST: &[(&str, &str)] = &[
         "admin/handlers/field_context/enrich/gated.rs",
         "query::find(",
     ),
-    // Upload-field rendering resolves the referenced upload document directly.
+    // Upload-field handling reads the *old* document's fields to plan file
+    // cleanup on update — an internal read on an already access-gated write
+    // path, not a user-facing content read.
     (
         "admin/handlers/collections/shared/upload.rs",
         "query::find_by_id(",
