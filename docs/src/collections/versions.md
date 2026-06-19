@@ -222,20 +222,29 @@ access = {
 }
 ```
 
-**Writing** is status-agnostic — `create`/`update` gate the write regardless of
-publish state. If you want finer-grained *publish* control (e.g. editors may
-save drafts, but only admins may publish), inspect the incoming `data._status`
-in your **write** rule — this is a write-side concern, separate from the
-read-side `access.draft` key above:
+**Writing** is status-agnostic — `access.create` / `access.update` gate the
+write the same way whether it saves a draft or publishes. Whether a write
+produces a draft or a published version is decided by the request's `draft`
+flag, which is **not** exposed to access functions, so the publish-vs-draft
+split can't be expressed in an `access.*` rule.
+
+For finer-grained *publish* control (e.g. anyone may save a draft, but only
+admins may publish), use a `before_change` hook — it receives the publish state
+as [`ctx.draft`](../hooks/hook-context.md) (`true` for a draft save, `false`
+when publishing):
 
 ```lua
-function hooks.access.publish_control(ctx)  -- used as access.update / access.create
-    if ctx.data and ctx.data._status == "draft" then
-        return ctx.user ~= nil          -- any authenticated user can save a draft
+-- registered as a `before_change` hook on the collection
+function M.before_change(ctx)
+    if not ctx.draft and not (ctx.user and ctx.user.role == "admin") then
+        error("only admins may publish")  -- a draft save (ctx.draft) is allowed
     end
-    return ctx.user and ctx.user.role == "admin"  -- only admins can publish
+    return ctx
 end
 ```
+
+This is a write-side concern, separate from the read-side `access.draft` key
+above (which controls who can *see* unpublished content).
 
 ## Versions Without Drafts
 

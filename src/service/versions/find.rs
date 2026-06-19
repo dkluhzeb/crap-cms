@@ -6,7 +6,10 @@ use crate::{
     core::{FieldDenial, document::VersionSnapshot},
     db::{AccessResult, query},
     hooks::AccessCheckInput,
-    service::{Def, ServiceContext, ServiceError, helpers, versions::gate::check_versions_gate},
+    service::{
+        Def, ServiceContext, ServiceError, helpers,
+        versions::gate::{check_versions_gate, draft_snapshots_visible, reject_global_filter},
+    },
 };
 
 /// Look up a single version snapshot by its ID.
@@ -55,7 +58,9 @@ pub fn find_version_by_id(
     };
 
     // Hide a draft snapshot from a reader who lacks edit-level access — they may
-    // see published version history, not work-in-progress.
+    // see published version history, not work-in-progress. A constrained draft
+    // rule is enforced against the parent document, so a non-match hides the
+    // snapshot ("preview your own drafts" can't reveal another owner's).
     if version.status == "draft" {
         let draft_access = hooks.check_access(&AccessCheckInput {
             access: ctx.draft_access_ref(),
@@ -68,19 +73,17 @@ pub fn find_version_by_id(
             ui_locale: None,
         })?;
 
-        if matches!(draft_access, AccessResult::Denied) {
+        let parent_id = version.parent.to_string();
+        if !draft_snapshots_visible(ctx, &draft_access, &parent_id)? {
             return Ok(None);
         }
     }
 
-    // Constrained: for collections enforce against the version's parent id;
+    // Constrained read: for collections enforce against the version's parent id;
     // for globals, the filter table is meaningless (single row) and is rejected.
     if matches!(access, AccessResult::Constrained(_)) {
         if let Def::Global(_) = &ctx.def {
-            return Err(ServiceError::HookError(format!(
-                "Access hook for global '{}' returned a filter table; globals don't support filter-based access — return true/false based on ctx.user fields instead.",
-                ctx.slug
-            )));
+            return Err(reject_global_filter(ctx.slug));
         }
         let parent_id = version.parent.to_string();
         helpers::enforce_access_constraints(ctx, &parent_id, &access, "Read", false)?;

@@ -1,13 +1,13 @@
 //! Parsing functions for global Lua definitions.
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use mlua::{Lua, Table};
 use tracing::warn;
 
 use crate::{
     core::{
         FieldDefinition,
-        collection::{GLOBAL_OPERATIONS, GlobalDefinition},
+        collection::{Access, GLOBAL_OPERATIONS, GlobalDefinition},
     },
     db::query,
 };
@@ -16,7 +16,7 @@ use super::helpers::deny_unknown_keys;
 use super::shared::{
     parse_access_config, parse_fields_section, parse_hooks_section, parse_labels,
     parse_live_setting, parse_mcp_section, parse_versions_config, validate_shared_nested_keys,
-    warn_deep_nesting,
+    warn_access_keys_without_features, warn_deep_nesting,
 };
 
 /// Every key accepted at the top level of `crap.globals.define(slug, {...})`.
@@ -41,6 +41,7 @@ pub fn parse_global_definition(lua: &Lua, slug: &str, config: &Table) -> Result<
     let fields = parse_fields_section(lua, config)?;
     let hooks = parse_hooks_section(config)?;
     let access = parse_access_config(config)?;
+    reject_global_only_access_keys(&access, slug)?;
     let live = parse_live_setting(config)?;
     let versions = parse_versions_config(config)?;
     let mcp = parse_mcp_section(config, GLOBAL_OPERATIONS)?;
@@ -59,7 +60,42 @@ pub fn parse_global_definition(lua: &Lua, slug: &str, config: &Table) -> Result<
     def.live_mode = live.mode;
     def.versions = versions;
 
+    warn_access_keys_without_features(
+        "Global",
+        slug,
+        &def.access,
+        def.has_drafts(),
+        false, // globals have no soft_delete / trash view
+        def.has_versions(),
+    );
+
     Ok(def)
+}
+
+/// Reject access keys that can never fire on a global. A global is a single row
+/// with only `get`/`update` operations, so `create`/`delete`/`trash` access
+/// functions would silently never run. Rejecting them at load (rather than
+/// ignoring) keeps globals consistent with the codebase's strict "no
+/// meaningless config" stance and surfaces the mistake to the author.
+///
+/// `read`, `draft`, `update`, and the `versions` toggle remain valid — globals
+/// support drafts/versions and a published/draft read split.
+fn reject_global_only_access_keys(access: &Access, slug: &str) -> Result<()> {
+    for (key, present) in [
+        ("create", access.create.is_some()),
+        ("delete", access.delete.is_some()),
+        ("trash", access.trash.is_some()),
+    ] {
+        if present {
+            bail!(
+                "Global '{slug}': access.{key} is not supported — a global has a \
+                 single row with only get/update operations. Use access.read, \
+                 access.draft, access.update, or the access.versions toggle."
+            );
+        }
+    }
+
+    Ok(())
 }
 
 /// Warn about index/unique on global fields (pointless on single-row tables).
@@ -111,6 +147,43 @@ mod tests {
             err.contains("timestamps"),
             "error should name the offending key: {err}"
         );
+    }
+
+    #[test]
+    fn test_global_rejects_create_delete_trash_access_keys() {
+        for key in ["create", "delete", "trash"] {
+            let lua = Lua::new();
+            let config = lua.create_table().unwrap();
+            let access = lua.create_table().unwrap();
+            access.set(key, "hooks.access.admins").unwrap();
+            config.set("access", access).unwrap();
+
+            let err = parse_global_definition(&lua, "site_settings", &config)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains(&format!("access.{key}")),
+                "global access.{key} must be rejected as unsupported: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_global_accepts_read_draft_update_versions_access_keys() {
+        let lua = Lua::new();
+        let config = lua.create_table().unwrap();
+        let access = lua.create_table().unwrap();
+        access.set("read", "hooks.access.public").unwrap();
+        access.set("draft", "hooks.access.editors").unwrap();
+        access.set("update", "hooks.access.editors").unwrap();
+        access.set("versions", "hooks.access.editors").unwrap();
+        config.set("access", access).unwrap();
+
+        let def = parse_global_definition(&lua, "site_settings", &config).unwrap();
+        assert!(def.access.read.is_some());
+        assert!(def.access.draft.is_some());
+        assert!(def.access.update.is_some());
+        assert!(def.access.versions.is_some());
     }
 
     #[test]

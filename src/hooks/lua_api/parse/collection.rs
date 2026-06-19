@@ -18,7 +18,7 @@ use super::{
     shared::{
         parse_access_config, parse_fields_section, parse_hooks_section, parse_indexes,
         parse_labels, parse_live_setting, parse_mcp_section, parse_versions_config,
-        validate_shared_nested_keys, warn_deep_nesting,
+        validate_shared_nested_keys, warn_access_keys_without_features, warn_deep_nesting,
     },
     upload::{inject_upload_fields, parse_collection_upload},
 };
@@ -224,6 +224,15 @@ pub fn parse_collection_definition(
     def.soft_delete = soft_delete;
     def.soft_delete_retention = soft_delete_retention;
     def.required_locales = parse_required_locales(config)?;
+
+    warn_access_keys_without_features(
+        "Collection",
+        slug,
+        &def.access,
+        def.has_drafts(),
+        def.soft_delete,
+        def.has_versions(),
+    );
 
     Ok(def)
 }

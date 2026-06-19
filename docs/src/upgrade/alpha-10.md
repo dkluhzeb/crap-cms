@@ -162,6 +162,14 @@ nothing. The full list:
   rule (e.g. `read = some_function` or `read = true`) was silently
   dropped, falling back to the default policy — a security footgun.
   String hook references and omitting the rule are unchanged.
+- **Globals reject `access.create` / `access.delete` / `access.trash`.**
+  A global has a single row with only `get`/`update` operations, so
+  these access keys never fired — they were silently ignored and now
+  error at load. Use `access.read`, `access.draft`, `access.update`, or
+  the `access.versions` toggle. (An access key whose enabling feature is
+  off — e.g. `access.draft` without `versions.drafts` — now logs a
+  startup warning instead of being silently dead, on collections and
+  globals alike.)
 - **Field `admin = { ... }` values are strictly typed.** A wrong-typed
   `label` / `width` / `rows` / `features` / etc. was silently dropped;
   now it errors. Numbers where strings are expected (e.g. `width = 50`)
@@ -242,6 +250,20 @@ arrays/relationships to `[]`); there is no per-locale delete.
 
 ## Security fixes
 
+- **Version history no longer leaks other owners' draft snapshots under a
+  filtered draft rule.** If `access.draft` returns a filter table (e.g.
+  `{ author = ctx.user.id }`), the version surfaces (`ListVersions` / `GetVersion`
+  and the admin version sidebar) now enforce that filter against the parent
+  document — a non-match shows published snapshots only. Previously a filtered
+  draft rule was treated as full draft access, exposing any readable document's
+  draft version snapshots. **Action:** none; boolean `draft` rules are
+  unaffected, and filtered rules now behave like the live `find_by_id` draft
+  gate.
+- **Un-verifying a user now tears down their live-update streams.**
+  `UnverifyAccount` bumps `_session_version` (revoking login when email
+  verification is required) but didn't signal stream invalidation, so an open
+  SSE/`Subscribe` stream kept running on the revoked session. It now publishes the
+  invalidation like the lock/password-reset flows. **Action:** none.
 - **Job-run reads now honor the job's `access` function.** `GetJobRun` and
   `ListJobRuns` previously applied no authorization beyond authentication — any
   authenticated caller could read any job's run payloads (`data_json`,

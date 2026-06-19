@@ -3,7 +3,7 @@
 use crate::{
     db::AccessResult,
     hooks::AccessCheckInput,
-    service::{ReadHooks, ServiceContext, ServiceError},
+    service::{Def, ReadHooks, ServiceContext, ServiceError, helpers::enforce_access_constraints},
 };
 
 /// Enforce the `access.versions` toggle before listing or fetching version
@@ -64,6 +64,49 @@ pub(crate) fn versions_gate_decision(
              handled by the read access rule)."
         ))),
     }
+}
+
+/// Resolve whether *draft* version snapshots are visible to the caller for a
+/// given parent document. `read` has already passed; this consults the
+/// edit-level `draft` access (`access.draft ?? access.update`).
+///
+/// `Denied` → not visible (published snapshots only). `Allowed` → visible. A
+/// `Constrained` rule (e.g. "preview only your own drafts") is enforced against
+/// the parent document: a non-match downgrades to *not visible* rather than
+/// leaking another owner's draft snapshots — mirroring the `find_by_id` draft
+/// gate. A filter table on a global is a configuration error.
+///
+/// # Errors
+///
+/// Returns [`ServiceError::HookError`] for a filter table on a global, or a
+/// backend error if the constraint count query fails.
+pub(super) fn draft_snapshots_visible(
+    ctx: &ServiceContext,
+    draft_access: &AccessResult,
+    parent_id: &str,
+) -> Result<bool, ServiceError> {
+    match draft_access {
+        AccessResult::Allowed => Ok(true),
+        AccessResult::Denied => Ok(false),
+        AccessResult::Constrained(_) => match &ctx.def {
+            Def::Global(_) => Err(reject_global_filter(ctx.slug)),
+            _ => match enforce_access_constraints(ctx, parent_id, draft_access, "Read", false) {
+                Ok(()) => Ok(true),
+                Err(ServiceError::AccessDenied(_)) => Ok(false),
+                Err(e) => Err(e),
+            },
+        },
+    }
+}
+
+/// The standard "globals don't support filter-based access" error, raised when
+/// a global's `read`/`draft` access hook returns a filter table on a version
+/// surface (a single-row global can't be row-scoped).
+pub(super) fn reject_global_filter(slug: &str) -> ServiceError {
+    ServiceError::HookError(format!(
+        "Access hook for global '{slug}' returned a filter table; globals don't support \
+         filter-based access — return true/false based on ctx.user fields instead."
+    ))
 }
 
 #[cfg(test)]

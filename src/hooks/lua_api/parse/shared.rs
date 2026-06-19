@@ -40,6 +40,41 @@ pub(super) const ACCESS_KEYS: &[&str] = &[
     "read", "create", "update", "delete", "trash", "draft", "versions",
 ];
 
+/// Warn when an access key is set but the feature that would make it fire is
+/// disabled — the rule parses and is stored, but the runtime gates on the
+/// feature flag first and never reaches the hook. Advisory only (the config is
+/// safe, just dead), surfacing a likely author mistake. `kind` is `"Collection"`
+/// or `"Global"`. `trash` is omitted here: collections cover it via
+/// `soft_delete`-aware messaging is not needed (a non-soft-delete collection
+/// simply has no trash view), and globals reject `access.trash` outright.
+pub(super) fn warn_access_keys_without_features(
+    kind: &str,
+    slug: &str,
+    access: &Access,
+    has_drafts: bool,
+    has_soft_delete: bool,
+    has_versions: bool,
+) {
+    if access.draft.is_some() && !has_drafts {
+        warn!(
+            "{kind} '{slug}': access.draft is set but drafts are not enabled \
+             (versions.drafts) — the rule will never apply."
+        );
+    }
+    if access.trash.is_some() && !has_soft_delete {
+        warn!(
+            "{kind} '{slug}': access.trash is set but soft_delete is not enabled \
+             — the rule will never apply."
+        );
+    }
+    if access.versions.is_some() && !has_versions {
+        warn!(
+            "{kind} '{slug}': access.versions is set but version history is not \
+             enabled — the toggle will never apply."
+        );
+    }
+}
+
 /// Reject unknown keys in the nested sub-tables shared by collections and
 /// globals (`labels`, `hooks`, `access`, `mcp`, `versions`, `live`, `indexes`). Each
 /// `get_table` quietly skips when the key is absent or not a table (e.g.

@@ -122,7 +122,8 @@ fn account_action_blocking(
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
     /// Build the spawn-blocking input bundle from the request, with optional
-    /// invalidation transport (used by the lock flow only).
+    /// invalidation transport (requested by the revoking flows — lock and
+    /// un-verify — so the service layer can tear down the user's live streams).
     fn account_action_input(
         &self,
         token: Option<String>,
@@ -219,7 +220,12 @@ impl ContentService {
         let headers = self.metadata_headers(&metadata);
         let req = request.into_inner();
 
-        let input = self.account_action_input(token, headers, &req, false, true);
+        // Un-verifying revokes login (when verify-email is required), so it must
+        // tear down the user's open live streams like lock/password-reset —
+        // `mark_unverified` publishes the invalidation only when a transport is
+        // attached, so request it here (the missing flag left streams running on
+        // a revoked session).
+        let input = self.account_action_input(token, headers, &req, true, true);
 
         task::spawn_blocking(move || {
             account_action_blocking(input, service::auth::mark_unverified)

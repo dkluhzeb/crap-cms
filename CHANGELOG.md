@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Globals reject the `access.create`, `access.delete`, and `access.trash`
+  keys.** A global is a single row with only `get`/`update` operations, so these
+  keys could never fire — they were silently ignored. They now fail config load
+  with a message naming the unsupported key, consistent with the codebase's
+  strict "no meaningless config" stance. Globals continue to honor `access.read`,
+  `access.draft`, `access.update`, and the `access.versions` toggle. (An access
+  key whose enabling feature is disabled — e.g. `access.draft` without
+  `versions.drafts` — now logs a startup warning rather than being silently
+  dead, on both collections and globals.)
+
 - **Job-run reads are access-controlled.** The `GetJobRun` and `ListJobRuns`
   gRPC RPCs previously applied no authorization beyond authentication — any
   authenticated caller could read any job's run payloads (`data_json`,
@@ -259,6 +269,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `max_file_size` still inherits the global default.
 
 ### Security
+
+- **Version history no longer leaks other owners' draft snapshots under a
+  filtered draft rule.** When `access.draft` returned a *filter table* (e.g.
+  `{ author = ctx.user.id }`, "preview only your own drafts"), the version-history
+  surfaces (`ListVersions` / `GetVersion`, and the admin version sidebar) treated
+  that filtered result as *full* draft access and listed/returned every draft
+  snapshot of any document the caller could read published — disclosing another
+  owner's work-in-progress. The draft filter is now enforced against the parent
+  document on both version surfaces (mirroring the live `find_by_id` draft gate):
+  a non-match downgrades to published snapshots only. A boolean `draft` rule
+  (`true`/`false`) is unaffected; only filter-table draft rules were exposed.
+
+- **Un-verifying a user (`UnverifyAccount`) now tears down their live-update
+  streams.** Marking a user unverified revokes login (when email verification is
+  required) and bumps `_session_version`, but the gRPC handler built its context
+  without an invalidation transport, so the service's post-commit
+  `publish_user_invalidation` silently no-op'd and an already-connected
+  SSE/`Subscribe` stream kept running on the revoked session. The transport is now
+  attached (matching the lock/password-reset handlers), and the surface-parity
+  meta-test gained a structural guard
+  (`auth_revoking_handlers_request_invalidation`) so a revoking auth handler that
+  forgets the transport fails the build.
 
 - **Admin password reset now tears down the user's live-update streams.** A
   password reset is a privilege-revoking action: it bumps `_session_version` so

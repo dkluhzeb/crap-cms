@@ -1,5 +1,6 @@
 //! Lightweight search for relationship fields.
 
+use super::validate_filters::validate_user_filters;
 use crate::{
     core::{Document, upload},
     db::{LocaleContext, query},
@@ -29,6 +30,11 @@ pub fn search_documents(
     let conn = resolved.as_ref();
     let hooks = ctx.read_hooks()?;
     let def = ctx.collection_def()?;
+
+    // Reject user filters on system columns (`_status`/`_deleted_at`/…) before
+    // the engine composes its own view filters — parity with `find_documents`
+    // so no search caller can slip a status/lifecycle filter past the chokepoint.
+    validate_user_filters(&input.query.filters)?;
 
     // Status visibility is the published/draft union, gated per view; a reader
     // who can see nothing gets an empty result (search downgrades, never errors).

@@ -6,7 +6,8 @@ use crate::{
     hooks::AccessCheckInput,
     service::{
         Def, ListVersionsInput, PaginatedResult, ServiceContext, ServiceError,
-        helpers::enforce_access_constraints, versions::gate::check_versions_gate,
+        helpers::enforce_access_constraints,
+        versions::gate::{check_versions_gate, draft_snapshots_visible, reject_global_filter},
     },
 };
 
@@ -52,7 +53,10 @@ pub fn list_versions(
     }
 
     // Draft versions need read AND edit-level access. A denied draft check
-    // restricts the listing to published snapshots.
+    // restricts the listing to published snapshots; a *constrained* draft rule
+    // ("preview only your own drafts") is enforced against the parent document,
+    // so a non-match downgrades to published-only instead of leaking another
+    // owner's draft snapshots.
     let draft_access = hooks.check_access(&AccessCheckInput {
         access: ctx.draft_access_ref(),
         user: ctx.user,
@@ -63,23 +67,15 @@ pub fn list_versions(
         collection: ctx.slug,
         ui_locale: None,
     })?;
-    let published_only = matches!(draft_access, AccessResult::Denied);
+    let published_only = !draft_snapshots_visible(ctx, &draft_access, input.parent_id)?;
 
-    // Constrained handling depends on the target: for collections we enforce
-    // the filters against the parent document id (reusing the count-based
-    // helper); for globals the filter table is meaningless (single row) and
-    // is rejected with a clear operator-facing error.
+    // Constrained read handling: for collections we enforce the filters against
+    // the parent document id (reusing the count-based helper); for globals the
+    // filter table is meaningless (single row) and is rejected.
     if matches!(access, AccessResult::Constrained(_)) {
         match &ctx.def {
-            Def::Global(_) => {
-                return Err(ServiceError::HookError(format!(
-                    "Access hook for global '{}' returned a filter table; globals don't support filter-based access — return true/false based on ctx.user fields instead.",
-                    ctx.slug
-                )));
-            }
-            _ => {
-                enforce_access_constraints(ctx, input.parent_id, &access, "Read", false)?;
-            }
+            Def::Global(_) => return Err(reject_global_filter(ctx.slug)),
+            _ => enforce_access_constraints(ctx, input.parent_id, &access, "Read", false)?,
         }
     }
 
@@ -415,6 +411,127 @@ mod tests {
             .build();
         let res2 = list_versions(&editor_ctx, &ListVersionsInput::builder("p1").build()).unwrap();
         assert_eq!(res2.total, 2, "editor sees draft versions too");
+    }
+
+    /// Read hooks where `read` is `Allowed` (published readable by anyone) but
+    /// `draft` returns `Constrained(author = "me")` — the canonical
+    /// "preview only your own drafts" rule.
+    struct DraftConstrainedToMe;
+
+    impl ReadHooks for DraftConstrainedToMe {
+        fn before_read(&self, _: &Hooks, _: &str, _: &str, _: Option<&str>) -> Result<()> {
+            Ok(())
+        }
+
+        fn after_read_one(&self, _: &AfterReadCtx, doc: Document) -> Document {
+            doc
+        }
+
+        fn check_access(&self, input: &AccessCheckInput<'_>) -> Result<AccessResult> {
+            if input.access.map(crate::core::HookRef::reference) == Some("read_fn") {
+                return Ok(AccessResult::Allowed);
+            }
+            Ok(AccessResult::Constrained(vec![
+                crate::db::FilterClause::Single(crate::db::Filter {
+                    field: "author".into(),
+                    op: crate::db::FilterOp::Equals("me".into()),
+                }),
+            ]))
+        }
+
+        fn field_read_denied(
+            &self,
+            _: &[FieldDefinition],
+            _: Option<&Document>,
+            _: Option<&str>,
+        ) -> Vec<FieldDenial> {
+            Vec::new()
+        }
+    }
+
+    /// Regression: a `Constrained` draft rule must be enforced against the
+    /// parent document on BOTH version surfaces. Treating `Constrained` as full
+    /// draft access (the old `matches!(.., Denied)` check) leaked another
+    /// owner's draft version snapshots to anyone who could read published
+    /// content — the version-surface sibling of the `find_by_id`
+    /// constrained-draft snapshot leak.
+    #[test]
+    fn constrained_draft_does_not_leak_other_owners_draft_versions() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                author TEXT,
+                _status TEXT DEFAULT 'published',
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE _versions_posts (
+                id TEXT PRIMARY KEY,
+                _parent TEXT,
+                _version INTEGER,
+                _status TEXT,
+                _latest INTEGER DEFAULT 0,
+                snapshot TEXT
+            );
+            INSERT INTO posts (id, title, author) VALUES ('p1', 'Theirs', 'other');
+            INSERT INTO posts (id, title, author) VALUES ('p2', 'Mine', 'me');
+            INSERT INTO _versions_posts (id, _parent, _version, _status, _latest, snapshot)
+            VALUES ('p1v1', 'p1', 1, 'published', 0, '{}'),
+                   ('p1v2', 'p1', 2, 'draft', 1, '{}'),
+                   ('p2v1', 'p2', 1, 'published', 0, '{}'),
+                   ('p2v2', 'p2', 2, 'draft', 1, '{}');",
+        )
+        .unwrap();
+
+        let mut def = CollectionDefinition::new("posts");
+        def.timestamps = true;
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text).build(),
+            FieldDefinition::builder("author", FieldType::Text).build(),
+        ];
+        def.versions = Some(VersionsConfig {
+            drafts: true,
+            max_versions: 0,
+        });
+        def.access.read = Some(crate::core::HookRef::new("read_fn"));
+        def.access.draft = Some(crate::core::HookRef::new("draft_fn"));
+
+        let hooks = DraftConstrainedToMe;
+
+        // p1 authored by "other": the draft constraint does NOT match → the
+        // viewer sees only the published version; the draft snapshot is withheld.
+        let ctx1 = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .read_hooks(&hooks)
+            .build();
+        let listed = list_versions(&ctx1, &ListVersionsInput::builder("p1").build()).unwrap();
+        assert_eq!(
+            listed.total, 1,
+            "another owner's draft version must not leak"
+        );
+        assert_eq!(listed.docs[0].status, "published");
+        assert!(
+            crate::service::versions::find::find_version_by_id(&ctx1, "p1v2")
+                .unwrap()
+                .is_none(),
+            "fetching another owner's draft version by id must be hidden"
+        );
+
+        // p2 authored by "me": the draft constraint matches → drafts visible.
+        let ctx2 = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .read_hooks(&hooks)
+            .build();
+        let mine = list_versions(&ctx2, &ListVersionsInput::builder("p2").build()).unwrap();
+        assert_eq!(mine.total, 2, "own draft version is still visible");
+        assert!(
+            crate::service::versions::find::find_version_by_id(&ctx2, "p2v2")
+                .unwrap()
+                .is_some(),
+            "fetching own draft version by id still works"
+        );
     }
 
     #[test]

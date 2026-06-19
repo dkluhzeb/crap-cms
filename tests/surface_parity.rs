@@ -153,9 +153,11 @@ fn surfaces_do_not_bypass_the_service_layer() {
 /// a user's access, so the handler must let the service tear down that user's
 /// live-update streams. `create` is excluded (a new document has no pre-existing
 /// stream to invalidate). Also includes the auth state-change ops that revoke a
-/// privilege and call `publish_user_invalidation` directly (`consume_reset_token`;
-/// `lock_user`/`mark_unverified` are passed as fn-pointers elsewhere so they don't
-/// textually match a `(` form, but their surfaces already attach the transport).
+/// privilege and call `publish_user_invalidation` directly (`consume_reset_token`).
+/// `lock_user`/`mark_unverified` are passed as fn-pointers (via
+/// `account_action_blocking`) so they don't textually match a `(` form here —
+/// they're guarded structurally by `auth_revoking_handlers_request_invalidation`
+/// below instead.
 const INVALIDATION_WRITE_OPS: &[&str] = &[
     "update_document(",
     "update_many(",
@@ -210,6 +212,53 @@ fn write_surfaces_attach_invalidation_transport() {
          so live-stream teardown silently no-ops on a role change. Attach it \
          (from the surface's invalidation transport) like the sibling \
          update/undelete/restore handlers do.\n\n{}",
+        offenders.join("\n")
+    );
+}
+
+/// Structural guard for the auth state-change handlers that the textual
+/// `INVALIDATION_WRITE_OPS` scan can't see: they build their `ServiceContext`
+/// inside the blocking body and pass the revoking service fn as a *fn-pointer*
+/// (`account_action_blocking(input, service::auth::mark_unverified)`), so neither
+/// the `ServiceContext::collection` nor the `op(` heuristic matches.
+///
+/// A *revoking* op (`lock_user`, `mark_unverified`) cuts off login, so its
+/// handler must request the invalidation transport (`account_action_input(..,
+/// /* with_invalidation */ true, ..)`) to tear down the user's open live streams.
+/// Regression: `unverify` shipped with the flag `false`, so an already-connected
+/// SSE/subscribe stream kept running on a revoked session.
+#[test]
+fn auth_revoking_handlers_request_invalidation() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let path = root.join("src/api/handlers/auth/account.rs");
+    let contents = fs::read_to_string(&path).expect("account.rs must exist");
+
+    let revoking_ops = ["mark_unverified", "lock_user"];
+    let mut offenders: Vec<String> = Vec::new();
+
+    // Split into per-handler chunks so each revoking fn-pointer is checked
+    // against the input built in the SAME handler.
+    for chunk in contents.split("async fn ").skip(1) {
+        let handler = chunk.split('(').next().unwrap_or("").trim();
+
+        for op in revoking_ops {
+            let used = chunk.contains(&format!("service::auth::{op}"));
+            // The input bundle is built one-liner: `account_action_input(token,
+            // headers, &req, <with_invalidation>, ..)`. The 4th arg must be `true`.
+            let requests_invalidation = chunk.contains("&req, true,");
+
+            if used && !requests_invalidation {
+                offenders.push(format!("  {handler} (uses {op})"));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "Auth handler(s) perform a session-revoking op but build their input \
+         with `with_invalidation = false`, so `publish_user_invalidation` is a \
+         silent no-op and the user's open live streams are NOT torn down. Pass \
+         `true` to `account_action_input` like the lock handler does.\n\n{}",
         offenders.join("\n")
     );
 }

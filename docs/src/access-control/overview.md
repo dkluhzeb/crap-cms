@@ -5,8 +5,10 @@ Crap CMS provides opt-in access control at both collection and field levels. Acc
 - `true` — allowed
 - `false` or `nil` — denied
 - A filter table — allowed with row constraints. On reads (`read`/`draft`/`trash`)
-  it scopes which rows are returned; on writes (`update`/`delete`) it is enforced
-  as a row-ownership guard. See [Collection-Level](collection-level.md#return-values).
+  it scopes which rows are returned; on writes (`update`/`delete`/`undelete`/`unpublish`,
+  and on `restore`) it is enforced as a row-ownership guard. (A filter table on
+  `create` is a configuration error — there is no existing row to scope.) See
+  [Collection-Level](collection-level.md#return-values).
 
 ## Opt-In
 
