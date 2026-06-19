@@ -453,8 +453,9 @@ const ACCESS_TOUCHPOINTS: &[&str] = &[
     "api/handlers/content_service.rs",
     // Subscribe stream: no service CRUD op exists, so it checks read access directly.
     "api/handlers/subscribe.rs",
-    // SSE event stream: same — no service CRUD op.
-    "admin/handlers/events/sse.rs",
+    // SSE event stream: same — no service CRUD op. The `check_access` call lives
+    // in the access/payload submodule split out of `sse.rs`.
+    "admin/handlers/events/sse_payload.rs",
     // Admin's shared access helpers (the admin-side centralization point).
     "admin/handlers/shared/access.rs",
 ];

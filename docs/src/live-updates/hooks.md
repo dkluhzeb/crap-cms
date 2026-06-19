@@ -24,7 +24,8 @@ crap.collections.define("posts", {
 })
 ```
 
-The hook function receives `{ collection, operation, data }` and returns:
+The hook function receives `{ collection, operation, data, document_id, edited_by }`
+(plus `ctx.options` when declared as a `{ ref, options }` table) and returns:
 
 - The context table (possibly with modified `data`) to continue broadcasting
 - `false` or `nil` to suppress the event entirely
@@ -90,4 +91,4 @@ function M.should_broadcast(ctx)
 end
 ```
 
-The function receives `{ collection, operation, data }` and returns `true`/`false`. This is a fast gate — `before_broadcast` hooks only run if the `live` check passes. See [Execution Order](#execution-order) above.
+The function receives `{ collection, operation, data, document_id, edited_by }` (the typed `crap.LiveFilterContext`) and returns `true`/`false`. This is a fast gate — `before_broadcast` hooks only run if the `live` check passes. See [Execution Order](#execution-order) above.

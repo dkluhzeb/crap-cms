@@ -4,7 +4,9 @@ Crap CMS provides opt-in access control at both collection and field levels. Acc
 
 - `true` — allowed
 - `false` or `nil` — denied
-- A filter table (read only) — allowed with query constraints
+- A filter table — allowed with row constraints. On reads (`read`/`draft`/`trash`)
+  it scopes which rows are returned; on writes (`update`/`delete`) it is enforced
+  as a row-ownership guard. See [Collection-Level](collection-level.md#return-values).
 
 ## Opt-In
 
@@ -116,3 +118,23 @@ Access functions run with transaction context — they can call `crap.collection
 >     return count < 100  -- allow if under limit
 > end
 > ```
+
+## Programmatic Access Checks
+
+Lua code can evaluate a collection's configured access rule directly with
+`crap.access.check(collection, operation)`. It runs the matching access function
+against the current user and returns `"allowed"`, `"denied"`, or a filter table
+(when the rule returns row constraints):
+
+```lua
+if crap.access.check("posts", "update") == "denied" then
+    error("not allowed")
+end
+```
+
+`operation` accepts only the CRUD-gate keys: `"read"`, `"create"`, `"update"`,
+`"delete"`, `"trash"` for collections, and `"read"`, `"update"` for globals. Any
+other value (including `"draft"`, `"versions"`, `"find"`, `"count"`) raises an
+error. These are distinct from the broader `ctx.operation` values the engine
+passes *into* an access function (see the table above) — `crap.access.check`
+re-evaluates a CRUD gate, it does not probe every internal operation.

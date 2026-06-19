@@ -6,6 +6,8 @@
 //! filter (downgraded to the viewer's access) in SQL — the same scope a normal
 //! read uses — instead of a raw, unscoped query.
 
+use tracing::warn;
+
 use crate::core::{CollectionDefinition, Document};
 use crate::db::{Filter, FilterClause, FilterOp, FindQuery, query};
 use crate::service::{ReadAccessCtx, RunnerReadHooks, requested_views, resolve_view_scope};
@@ -32,7 +34,9 @@ fn view_filters(
         ui_locale: None,
     };
 
-    let scope = resolve_view_scope(&hooks, &read_ctx, requested_views(None, true)).ok()?;
+    let scope = resolve_view_scope(&hooks, &read_ctx, requested_views(None, true))
+        .inspect_err(|e| warn!("enrichment view-scope resolution for '{slug}' failed: {e}"))
+        .ok()?;
     if !scope.is_anything_visible() {
         return None;
     }
@@ -56,6 +60,7 @@ pub(in crate::admin::handlers::field_context) fn gated_find_by_id(
 
     let fq = FindQuery::builder().filters(filters).build();
     query::find(ctx.conn, slug, def, &fq, ctx.rel_locale_ctx)
+        .inspect_err(|e| warn!("enrichment label read for '{slug}' failed: {e}"))
         .ok()?
         .into_iter()
         .next()
@@ -76,7 +81,9 @@ pub(in crate::admin::handlers::field_context) fn gated_find(
     filters.extend(base_filters);
 
     let fq = FindQuery::builder().filters(filters).build();
-    query::find(ctx.conn, slug, def, &fq, ctx.rel_locale_ctx).unwrap_or_default()
+    query::find(ctx.conn, slug, def, &fq, ctx.rel_locale_ctx)
+        .inspect_err(|e| warn!("enrichment label list read for '{slug}' failed: {e}"))
+        .unwrap_or_default()
 }
 
 #[cfg(all(test, feature = "sqlite"))]

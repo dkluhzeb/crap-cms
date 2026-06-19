@@ -10,6 +10,8 @@
 
 use std::collections::HashSet;
 
+use tracing::{debug, warn};
+
 use crate::core::{FieldDefinition, FieldType, NestStep, any_field, field::to_title_case};
 use crate::db::query::join::find_all_array_rows_with_parent;
 use crate::db::query::ref_count::{walk_blocks_with, walk_nested_with};
@@ -175,7 +177,7 @@ pub(super) fn scan_blocks(
     let db_rows = match scan.conn.query_all(&sql, &[]) {
         Ok(rows) => rows,
         Err(e) => {
-            tracing::debug!("Back-ref blocks scan skipping {}: {}", blocks_table, e);
+            debug!("Back-ref blocks scan skipping {}: {}", blocks_table, e);
             return;
         }
     };
@@ -195,6 +197,9 @@ pub(super) fn scan_blocks(
         let data = db_row.opt_text_at(2).unwrap_or_default();
 
         let mut obj = serde_json::from_str::<serde_json::Value>(&data)
+            .inspect_err(|e| {
+                warn!("Back-ref blocks scan: malformed data JSON in {blocks_table}: {e}");
+            })
             .ok()
             .and_then(|v| v.as_object().cloned())
             .unwrap_or_default();

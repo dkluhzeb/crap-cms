@@ -84,8 +84,13 @@ The version-only draft save is key: it lets authors iterate on changes without a
 |----------|-----------------|
 | `Find` | Returns only `_status = 'published'` documents |
 | `Find` with `draft = true` | Returns all documents (published + draft) |
-| `FindByID` | Returns the main table document (published version) |
+| `FindByID` | Returns the published main-table document |
 | `FindByID` with `draft = true` | Returns the **latest version snapshot** (may be a newer draft) |
+
+> A document created as a draft and **never published** has a `_status = 'draft'`
+> main row, so plain `FindByID` (without `draft = true`) returns nothing — drafts
+> are not exposed to a published-only read. Use `draft = true` (gated by the
+> `draft` access key) to fetch it.
 
 ### Validation
 

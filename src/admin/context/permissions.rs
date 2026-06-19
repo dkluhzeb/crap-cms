@@ -29,7 +29,8 @@ use crate::{
 ///   and per-row "Delete permanently" buttons).
 /// - `trash` — can the user soft-delete items. Only meaningful for
 ///   collections with `soft_delete = true`. When `def.access.trash` is
-///   unset, falls back to `delete` (the legacy combined semantics).
+///   unset, falls back to `update` (via `resolve_trash()`, matching the
+///   soft-delete enforcement path).
 #[derive(Debug, Serialize, JsonSchema, Default)]
 pub struct CollectionPermissions {
     pub read: bool,

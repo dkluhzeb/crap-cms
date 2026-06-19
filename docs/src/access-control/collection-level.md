@@ -24,7 +24,7 @@ field-level `access` and global `access`.
 
 | Property | Controls | Fallback |
 |----------|----------|----------|
-| `read` | `Find` / `FindByID` / `count` / `search` of **published** content | — |
+| `read` | `Find` / `FindByID` / `count` / `search` of **published** content | — (governed by `default_deny`) |
 | `create` | `Create` operation | — |
 | `update` | `Update` operation | — |
 | `trash` | Soft-delete (move to trash) and restore. Only relevant when `soft_delete = true`. | `update` |
@@ -101,9 +101,22 @@ return M
 |-------------|--------|
 | `true` | Operation is allowed |
 | `false` or `nil` | Operation is denied (403/permission error) |
-| table | Read operation is allowed with additional WHERE filters (see [Filter Constraints](filter-constraints.md)) |
+| table (filter) | Allowed, **scoped** by the filter — the exact meaning depends on the key (see below) |
 
-Filter table returns are only meaningful for `read` (and `draft`/`trash`, which scope their respective views). For `create`, `update`, and `delete`, a table return is treated as `Allowed`. For `versions` — a toggle — a table return is a configuration error.
+A returned filter table is interpreted differently per access key — it is never
+a no-op:
+
+- **`read` / `draft` / `trash`** — scopes *which rows the view returns*, e.g.
+  `return { created_by = ctx.user.id }` lists only the caller's own documents.
+  See [Filter Constraints](filter-constraints.md).
+- **`update` / `delete` / `undelete` / `unpublish`** — **enforced as a row
+  guard**: the write proceeds only if the target row matches the filter,
+  otherwise it is denied. This is how you express "users may only update/delete
+  rows where `created_by = me`" — a real ownership-scoping feature.
+- **`create`** — a filter table is a **configuration error**: there is no target
+  row yet, so gate creates with `true`/`false` based on `ctx.data`.
+- **`versions`** — a filter table is a **configuration error**: it is a boolean
+  toggle; per-row scoping of history belongs on `read`/`draft`.
 
 ## Enforcement Points
 
