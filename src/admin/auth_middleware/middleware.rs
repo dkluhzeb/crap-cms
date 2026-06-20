@@ -16,7 +16,10 @@ use tokio::task::spawn_blocking;
 
 use crate::admin::{
     AdminState,
-    auth_middleware::{gate::check_admin_gate, pages::auth_required_response},
+    auth_middleware::{
+        gate::{check_admin_gate, check_collection_admin_gate},
+        pages::auth_required_response,
+    },
     handlers::{
         auth::{SESSION_COOKIE, append_cookies, clear_session_cookies, session_same_site},
         shared::paths,
@@ -92,9 +95,33 @@ async fn apply_auth_to_request(
         return Some(response);
     }
 
+    // Per-collection `access.admin` gate for any admin route scoped to a
+    // collection — blocks direct-URL access to a collection's admin pages, not
+    // just its nav entry. No-op for non-collection paths or collections without
+    // an `access.admin` rule.
+    if let Some(slug) = collection_slug_from_path(request.uri().path())
+        && let Some(response) = check_collection_admin_gate(state, slug, &auth_user.user_doc).await
+    {
+        return Some(response);
+    }
+
     request.extensions_mut().insert(auth_user);
     request.extensions_mut().insert(claims);
     None
+}
+
+/// Extract the collection/global slug from an admin request path for the
+/// `access.admin` gate. Covers collection admin pages + their collection-scoped
+/// APIs and global admin pages; returns `None` for the collections index, the
+/// dashboard/custom-page routes, and anything else.
+fn collection_slug_from_path(path: &str) -> Option<&str> {
+    let rest = path
+        .strip_prefix("/admin/collections/")
+        .or_else(|| path.strip_prefix("/admin/globals/"))
+        .or_else(|| path.strip_prefix("/admin/api/search/"))
+        .or_else(|| path.strip_prefix("/admin/api/user-settings/"))?;
+    let slug = rest.split('/').next()?;
+    (!slug.is_empty()).then_some(slug)
 }
 
 /// Bundled result of the single spawn-blocking call that drives
@@ -269,5 +296,41 @@ mod tests {
         let m = headers_to_map(&h);
         assert!(!m.contains_key("x-bin")); // non-UTF8 value dropped
         assert_eq!(m.get("x-ok").map(String::as_str), Some("v"));
+    }
+
+    #[test]
+    fn extracts_collection_slug_for_admin_gate() {
+        // Collection admin pages + collection-scoped APIs → the slug.
+        assert_eq!(
+            collection_slug_from_path("/admin/collections/posts"),
+            Some("posts")
+        );
+        assert_eq!(
+            collection_slug_from_path("/admin/collections/posts/123/versions"),
+            Some("posts")
+        );
+        assert_eq!(
+            collection_slug_from_path("/admin/collections/posts/create"),
+            Some("posts")
+        );
+        assert_eq!(
+            collection_slug_from_path("/admin/api/search/posts"),
+            Some("posts")
+        );
+        assert_eq!(
+            collection_slug_from_path("/admin/api/user-settings/posts"),
+            Some("posts")
+        );
+
+        // Globals are gated too (they have admin pages).
+        assert_eq!(
+            collection_slug_from_path("/admin/globals/settings"),
+            Some("settings")
+        );
+
+        // Not scoped to a collection/global → no slug (gate is a no-op).
+        assert_eq!(collection_slug_from_path("/admin/collections"), None);
+        assert_eq!(collection_slug_from_path("/admin"), None);
+        assert_eq!(collection_slug_from_path("/admin/collections/"), None);
     }
 }

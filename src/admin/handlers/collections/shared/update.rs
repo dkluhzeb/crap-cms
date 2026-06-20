@@ -30,7 +30,7 @@ use crate::{
     hooks::HookRunner,
     service::{
         self, ServiceContext, ServiceError,
-        auth::{lock_user, unlock_user},
+        auth::{AccountAction, perform_account_action},
     },
 };
 
@@ -137,16 +137,24 @@ fn update_document_blocking(
         && let LockUpdate::Set(should_lock) = args.input.lock
     {
         let conn = args.pool.get().context("DB connection for lock update")?;
-        let ctx = ServiceContext::slug_only(&args.slug)
+        // Gate the lock toggle through `perform_account_action` so the admin
+        // surface honors `access.unlock` (`?? update`) against the target user —
+        // identical to the gRPC LockAccount/UnlockAccount path. Building a
+        // collection context (def + caller `user` + runner) is what lets the
+        // access hook run; a `slug_only` context would silently skip the check.
+        let ctx = ServiceContext::collection(&args.slug, &args.def)
             .conn(&conn)
+            .runner(&args.runner)
+            .user(args.user_doc.as_ref())
             .invalidation_transport(Some(args.invalidation_bus))
             .build();
 
-        if should_lock {
-            lock_user(&ctx, &args.id)?;
+        let action = if should_lock {
+            AccountAction::Lock
         } else {
-            unlock_user(&ctx, &args.id)?;
-        }
+            AccountAction::Unlock
+        };
+        perform_account_action(&ctx, &args.id, action)?;
     }
 
     result

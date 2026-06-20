@@ -37,7 +37,7 @@ pub(super) const COLLECTION_HOOK_KEYS: &[&str] = &[
 
 /// Access-control operation keys accepted on an `access` sub-table.
 pub(super) const ACCESS_KEYS: &[&str] = &[
-    "read", "create", "update", "delete", "trash", "draft", "versions", "unlock",
+    "read", "create", "update", "delete", "trash", "draft", "versions", "unlock", "admin", "mcp",
 ];
 
 /// Warn when an access key is set but the feature that would make it fire is
@@ -359,6 +359,8 @@ pub(super) fn parse_access_config(config: &Table) -> Result<Access> {
         .draft(get_optional_hook_ref(&access_tbl, "draft", "access")?)
         .versions(get_optional_hook_ref(&access_tbl, "versions", "access")?)
         .unlock(get_optional_hook_ref(&access_tbl, "unlock", "access")?)
+        .admin(get_optional_hook_ref(&access_tbl, "admin", "access")?)
+        .mcp(get_optional_hook_ref(&access_tbl, "mcp", "access")?)
         .build())
 }
 

@@ -604,7 +604,7 @@ fn collect_field_tables(
 
 /// Collect any unresolved refs in an `Access` struct.
 fn check_access(lua: &Lua, access: &Access, source: &str, out: &mut Vec<String>) {
-    let pairs: [(&str, Option<&str>); 8] = [
+    let pairs: [(&str, Option<&str>); 10] = [
         ("access.read", access.read.as_ref().map(HookRef::reference)),
         (
             "access.create",
@@ -634,6 +634,11 @@ fn check_access(lua: &Lua, access: &Access, source: &str, out: &mut Vec<String>)
             "access.unlock",
             access.unlock.as_ref().map(HookRef::reference),
         ),
+        (
+            "access.admin",
+            access.admin.as_ref().map(HookRef::reference),
+        ),
+        ("access.mcp", access.mcp.as_ref().map(HookRef::reference)),
     ];
 
     for (kind, maybe_ref) in pairs {

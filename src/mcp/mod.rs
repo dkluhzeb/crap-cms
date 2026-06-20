@@ -14,6 +14,7 @@
 //! Internal modules (`schema`, `resources`, `tools`) are `pub(crate)`
 //! and not part of the external API.
 
+pub(crate) mod access;
 pub(crate) mod protocol;
 pub(crate) mod resources;
 pub(crate) mod schema;

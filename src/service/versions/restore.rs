@@ -272,7 +272,8 @@ pub(crate) fn restore_collection_version_core(
     // Row-level enforcement for Constrained: target row must match the filters.
     helpers::enforce_access_constraints(ctx, document_id, &access, "Update", false)?;
 
-    // Restore also requires version-history access (default-allow).
+    // Restore also requires version-history access (explicit `versions` toggle;
+    // an unset toggle is already covered by the `update` check above).
     check_restore_versions_gate(ctx, write_hooks, Some(document_id))?;
 
     let version = query::find_version_by_id(conn, ctx.slug, version_id)?
@@ -394,7 +395,8 @@ pub(crate) fn restore_global_version_core(
         )));
     }
 
-    // Restore also requires version-history access (default-allow).
+    // Restore also requires version-history access (explicit `versions` toggle;
+    // an unset toggle is already covered by the `update` check above).
     check_restore_versions_gate(ctx, write_hooks, None)?;
 
     let gtable = global_table(ctx.slug);

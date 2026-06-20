@@ -219,21 +219,44 @@ fn filter_nav_in_place(
     user_doc: Option<&crate::core::Document>,
 ) {
     nav.collections.retain(|c| {
-        let access_ref = state
-            .registry
-            .collections
-            .get(c.slug.as_str())
-            .and_then(|d| d.access.read.as_ref());
-        has_read_access(state, access_ref, user_doc, &c.slug)
+        let def = state.registry.collections.get(c.slug.as_str());
+
+        if !has_read_access(
+            state,
+            def.and_then(|d| d.access.read.as_ref()),
+            user_doc,
+            &c.slug,
+        ) {
+            return false;
+        }
+
+        // `access.admin` further restricts admin-UI visibility (permissive when
+        // unset — only consulted if a rule is set). The route middleware is the
+        // real gate (op "admin"); this hides the nav entry to match.
+        match def.and_then(|d| d.access.admin.as_ref()) {
+            None => true,
+            Some(admin_ref) => has_read_access(state, Some(admin_ref), user_doc, &c.slug),
+        }
     });
 
     nav.globals.retain(|g| {
-        let access_ref = state
-            .registry
-            .globals
-            .get(g.slug.as_str())
-            .and_then(|d| d.access.read.as_ref());
-        has_read_access(state, access_ref, user_doc, &g.slug)
+        let def = state.registry.globals.get(g.slug.as_str());
+
+        if !has_read_access(
+            state,
+            def.and_then(|d| d.access.read.as_ref()),
+            user_doc,
+            &g.slug,
+        ) {
+            return false;
+        }
+
+        // `access.admin` further restricts admin-UI visibility (permissive when
+        // unset). The route middleware is the real gate (op "admin").
+        match def.and_then(|d| d.access.admin.as_ref()) {
+            None => true,
+            Some(admin_ref) => has_read_access(state, Some(admin_ref), user_doc, &g.slug),
+        }
     });
 
     nav.custom_pages

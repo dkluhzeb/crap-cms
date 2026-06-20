@@ -65,6 +65,14 @@ pub(super) fn access_to_lua(lua: &Lua, tbl: &Table, access: &Access) -> LuaResul
         access_tbl.set("unlock", hook_ref_to_lua(lua, s)?)?;
     }
 
+    if let Some(ref s) = access.admin {
+        access_tbl.set("admin", hook_ref_to_lua(lua, s)?)?;
+    }
+
+    if let Some(ref s) = access.mcp {
+        access_tbl.set("mcp", hook_ref_to_lua(lua, s)?)?;
+    }
+
     tbl.set("access", access_tbl)
 }
 

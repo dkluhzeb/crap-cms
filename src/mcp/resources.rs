@@ -7,6 +7,7 @@ use serde_json::{Value, to_string_pretty, to_value};
 use tracing::error;
 
 use crate::mcp::{
+    access::McpExposure,
     protocol::{ResourceContent, ResourceDefinition},
     schema::{CrudOp, collection_input_schema, global_input_schema},
     tools::should_include,
@@ -81,11 +82,12 @@ fn json_resource(uri: &str, text: String) -> ResourceContent {
 fn collections_schema(
     registry: &Registry,
     config: &CrapConfig,
+    exposure: &McpExposure,
 ) -> BTreeMap<String, CollectionSchemaEntry> {
     let mut schemas = BTreeMap::new();
 
     for (slug, def) in &registry.collections {
-        if !should_include(slug, &config.mcp) {
+        if !should_include(slug, &config.mcp) || !exposure.allows(slug) {
             continue;
         }
 
@@ -106,10 +108,16 @@ fn collections_schema(
 }
 
 /// Build the schema map for all globals.
-fn globals_schema(registry: &Registry) -> BTreeMap<String, GlobalSchemaEntry> {
+fn globals_schema(
+    registry: &Registry,
+    exposure: &McpExposure,
+) -> BTreeMap<String, GlobalSchemaEntry> {
     let mut schemas = BTreeMap::new();
 
     for (slug, def) in &registry.globals {
+        if !exposure.allows(slug) {
+            continue;
+        }
         schemas.insert(
             slug.to_string(),
             GlobalSchemaEntry {
@@ -134,17 +142,18 @@ pub(in crate::mcp) fn read_resource(
     uri: &str,
     registry: &Registry,
     config: &CrapConfig,
+    exposure: &McpExposure,
 ) -> Option<ResourceContent> {
     match uri {
         "crap://schema/collections" => {
-            let schemas = collections_schema(registry, config);
+            let schemas = collections_schema(registry, config, exposure);
             Some(json_resource(
                 uri,
                 serialize_pretty(&schemas, "collection schemas"),
             ))
         }
         "crap://schema/globals" => {
-            let schemas = globals_schema(registry);
+            let schemas = globals_schema(registry, exposure);
             Some(json_resource(
                 uri,
                 serialize_pretty(&schemas, "global schemas"),
@@ -178,7 +187,13 @@ mod tests {
         let mut reg = Registry::new();
         reg.register_collection(CollectionDefinition::new("posts"));
         let config = CrapConfig::default();
-        let content = read_resource("crap://schema/collections", &reg, &config).unwrap();
+        let content = read_resource(
+            "crap://schema/collections",
+            &reg,
+            &config,
+            &McpExposure::default(),
+        )
+        .unwrap();
         assert!(content.text.contains("posts"));
     }
 
@@ -187,7 +202,13 @@ mod tests {
         let mut reg = Registry::new();
         reg.register_global(GlobalDefinition::new("settings"));
         let config = CrapConfig::default();
-        let content = read_resource("crap://schema/globals", &reg, &config).unwrap();
+        let content = read_resource(
+            "crap://schema/globals",
+            &reg,
+            &config,
+            &McpExposure::default(),
+        )
+        .unwrap();
         assert!(content.text.contains("settings"));
     }
 
@@ -196,7 +217,8 @@ mod tests {
         let reg = Registry::new();
         let mut config = CrapConfig::default();
         config.auth.secret = JwtSecret::new("super-secret");
-        let content = read_resource("crap://config", &reg, &config).unwrap();
+        let content =
+            read_resource("crap://config", &reg, &config, &McpExposure::default()).unwrap();
         assert!(!content.text.contains("super-secret"));
         assert!(content.text.contains("[REDACTED]"));
     }
@@ -205,6 +227,6 @@ mod tests {
     fn read_unknown_resource() {
         let reg = Registry::new();
         let config = CrapConfig::default();
-        assert!(read_resource("crap://unknown", &reg, &config).is_none());
+        assert!(read_resource("crap://unknown", &reg, &config, &McpExposure::default()).is_none());
     }
 }

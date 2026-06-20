@@ -28,8 +28,9 @@ pub fn list_versions(
     let hooks = ctx.read_hooks()?;
     let table = ctx.version_table();
 
-    // The `access.versions` toggle gates history access at all (default allow);
-    // the read/draft composite below then scopes *which* snapshots are visible.
+    // The `access.versions` toggle gates history access at all (unset → follows
+    // `access.update`); the read/draft composite below then scopes *which*
+    // snapshots are visible.
     check_versions_gate(ctx, hooks, Some(input.parent_id), "find")?;
 
     // Listing a document's version history is gated by `access.read` — you can

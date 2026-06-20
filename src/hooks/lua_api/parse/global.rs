@@ -73,13 +73,14 @@ pub fn parse_global_definition(lua: &Lua, slug: &str, config: &Table) -> Result<
 }
 
 /// Reject access keys that can never fire on a global. A global is a single row
-/// with only `get`/`update` operations, so `create`/`delete`/`trash` access
-/// functions would silently never run. Rejecting them at load (rather than
-/// ignoring) keeps globals consistent with the codebase's strict "no
+/// with only `get`/`update` operations, so `create`/`delete`/`trash`/`unlock`
+/// access functions would silently never run. Rejecting them at load (rather
+/// than ignoring) keeps globals consistent with the codebase's strict "no
 /// meaningless config" stance and surfaces the mistake to the author.
 ///
-/// `read`, `draft`, `update`, and the `versions` toggle remain valid — globals
-/// support drafts/versions and a published/draft read split.
+/// `read`, `draft`, `update`, the `versions` toggle, and the `admin`/`mcp`
+/// surface gates remain valid — globals support drafts/versions, a
+/// published/draft read split, admin-UI pages, and MCP exposure.
 fn reject_global_only_access_keys(access: &Access, slug: &str) -> Result<()> {
     for (key, present) in [
         ("create", access.create.is_some()),
@@ -178,6 +179,8 @@ mod tests {
         access.set("draft", "hooks.access.editors").unwrap();
         access.set("update", "hooks.access.editors").unwrap();
         access.set("versions", "hooks.access.editors").unwrap();
+        access.set("admin", "hooks.access.editors").unwrap();
+        access.set("mcp", "hooks.access.editors").unwrap();
         config.set("access", access).unwrap();
 
         let def = parse_global_definition(&lua, "site_settings", &config).unwrap();
@@ -185,6 +188,8 @@ mod tests {
         assert!(def.access.draft.is_some());
         assert!(def.access.update.is_some());
         assert!(def.access.versions.is_some());
+        assert!(def.access.admin.is_some());
+        assert!(def.access.mcp.is_some());
     }
 
     #[test]

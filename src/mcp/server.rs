@@ -23,6 +23,7 @@ use super::protocol::{
     METHOD_NOT_FOUND, PROTOCOL_VERSION, ResourceReadParams, ToolCallParams,
 };
 use super::{
+    access::McpExposure,
     resources,
     tools::{self, ToolExecCtx},
 };
@@ -160,9 +161,25 @@ impl McpServer {
         )
     }
 
+    /// Resolve `access.mcp` exposure for the current registry. Best-effort: if a
+    /// connection can't be obtained, falls back to "expose all" — advertising
+    /// only; the execution path (`execute_tool`) re-checks `access.mcp` against
+    /// its own connection, so a hidden collection's data is never reachable even
+    /// if it briefly remains advertised.
+    fn mcp_exposure(&self) -> McpExposure {
+        match self.pool.get() {
+            Ok(conn) => McpExposure::resolve(&self.registry, &self.runner, &conn),
+            Err(e) => {
+                tracing::warn!("access.mcp exposure unresolved ({e}); advertising all collections");
+                McpExposure::default()
+            }
+        }
+    }
+
     /// List all available MCP tools.
     fn handle_tools_list(&self, id: Option<Value>) -> JsonRpcResponse {
-        let tool_defs = tools::generate_tools(&self.registry, &self.config.mcp);
+        let exposure = self.mcp_exposure();
+        let tool_defs = tools::generate_tools(&self.registry, &self.config.mcp, &exposure);
         let tools_json: Vec<Value> = tool_defs
             .iter()
             .map(|t| to_value(t).unwrap_or(Value::Null))
@@ -224,8 +241,9 @@ impl McpServer {
             Err(resp) => return *resp,
         };
 
+        let exposure = self.mcp_exposure();
         let Some(content) =
-            resources::read_resource(&read_params.uri, &self.registry, &self.config)
+            resources::read_resource(&read_params.uri, &self.registry, &self.config, &exposure)
         else {
             return JsonRpcResponse::error(
                 id,

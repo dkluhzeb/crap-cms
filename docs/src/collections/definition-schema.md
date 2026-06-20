@@ -118,8 +118,10 @@ Each content view has its own key (all the same shape — a Lua function ref ret
 | `trash` | string | Read access to **soft-deleted (trash)** documents, plus restore. Falls back to `update` when omitted, so most collections don't set it explicitly. |
 | `versions` | string | Toggles **version-history** visibility (a boolean rule, not a row filter). Falls back to `update` when omitted (history follows edit access); snapshot contents are still bounded by `read`/`draft`. |
 | `unlock` | string | Gates the account **lock/unlock** operations on an **auth** collection. Falls back to `update` when omitted. A row-filter table scopes which users the caller may (un)lock. Only meaningful on auth collections; rejected on globals. (Verify/unverify are gated by `update`.) |
+| `admin` | string | Gates **admin-UI** visibility/access of the collection/global (boolean rule; filter table is a config error). Visible when omitted (permissive); only further-restricts beyond `read`. Valid on collections and globals. |
+| `mcp` | string | Gates whether the collection/global is exposed to the **MCP** surface (boolean rule; filter table is a config error). Exposed when omitted (permissive). Valid on collections and globals. Distinct from the top-level `mcp` config table, which sets tool descriptions/operations. |
 
-When `read`/`create`/`update`/`delete` is omitted, the behavior depends on `[access] default_deny` in `crap.toml`: with the default `default_deny = true`, that operation is **denied** for everyone; with `default_deny = false`, it is **allowed** for everyone. `draft`, `trash`, `versions`, and `unlock` instead fall back to `update` (see the per-key notes above).
+When `read`/`create`/`update`/`delete` is omitted, the behavior depends on `[access] default_deny` in `crap.toml`: with the default `default_deny = true`, that operation is **denied** for everyone; with `default_deny = false`, it is **allowed** for everyone. `draft`, `trash`, `versions`, and `unlock` instead fall back to `update`. `admin` and `mcp` are **permissive by default** (allowed when omitted, independent of `default_deny`) — they only ever further-restrict a surface. (See the per-key notes above.)
 
 See [Access Control](../access-control/overview.md) for full details.
 

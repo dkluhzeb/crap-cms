@@ -30,8 +30,9 @@ pub fn find_version_by_id(
     let hooks = ctx.read_hooks()?;
     let table = ctx.version_table();
 
-    // The `access.versions` toggle gates history access at all (default allow);
-    // the read/draft composite below then scopes *which* snapshots are visible.
+    // The `access.versions` toggle gates history access at all (unset → follows
+    // `access.update`); the read/draft composite below then scopes *which*
+    // snapshots are visible.
     check_versions_gate(ctx, hooks, None, "find_by_id")?;
 
     // Reading a version snapshot is gated by `access.read`; a DRAFT snapshot

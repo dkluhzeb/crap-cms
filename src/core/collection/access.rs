@@ -67,6 +67,26 @@ pub struct Access {
     #[serde(default)]
     #[lua(ty = "string | crap.HookRef", optional)]
     pub unlock: Option<HookRef>,
+    /// Hook ref gating whether the collection is visible/usable in the **admin
+    /// UI** (nav entry + its admin routes). A boolean rule (`true`/`false` based
+    /// on `ctx.user`); a filter table is a configuration error (admin visibility
+    /// is all-or-nothing — row scoping is `read`'s job). **Permissive default:**
+    /// unset means visible, so it only ever *further* restricts admin-UI access
+    /// beyond `read` — e.g. hide a collection's admin pages from non-staff even
+    /// though an API client may read it. Independent of `default_deny`.
+    #[serde(default)]
+    #[lua(ty = "string | crap.HookRef", optional)]
+    pub admin: Option<HookRef>,
+    /// Hook ref gating whether the collection is exposed to the **MCP** surface
+    /// (tools + resources). A boolean rule; a filter table is a configuration
+    /// error (the MCP surface authenticates with a shared key, not a per-user
+    /// identity, so a `ctx.user`-keyed row filter is meaningless). **Permissive
+    /// default:** unset means exposed (when MCP is enabled globally), so it only
+    /// ever *removes* a collection from MCP — e.g. keep an internal collection
+    /// out of the LLM surface. Independent of `default_deny`.
+    #[serde(default)]
+    #[lua(ty = "string | crap.HookRef", optional)]
+    pub mcp: Option<HookRef>,
 }
 
 /// Typegen-only mirror of [`Access`] for globals. A global is a single row with
@@ -96,6 +116,16 @@ pub struct GlobalAccess {
     /// rejected (snapshot scoping follows `read`/`draft`).
     #[lua(ty = "string | crap.HookRef", optional)]
     pub versions: Option<HookRef>,
+    /// Hook ref gating whether the global is visible/usable in the **admin UI**.
+    /// A boolean rule; unset means visible (permissive default). Filter table is
+    /// a configuration error.
+    #[lua(ty = "string | crap.HookRef", optional)]
+    pub admin: Option<HookRef>,
+    /// Hook ref gating whether the global is exposed to the **MCP** surface.
+    /// A boolean rule; unset means exposed (permissive default). Filter table is
+    /// a configuration error.
+    #[lua(ty = "string | crap.HookRef", optional)]
+    pub mcp: Option<HookRef>,
 }
 
 impl Access {
@@ -165,6 +195,8 @@ pub struct AccessBuilder {
     draft: Option<HookRef>,
     versions: Option<HookRef>,
     unlock: Option<HookRef>,
+    admin: Option<HookRef>,
+    mcp: Option<HookRef>,
 }
 
 impl AccessBuilder {
@@ -229,6 +261,20 @@ impl AccessBuilder {
     }
 
     #[must_use]
+    pub fn admin(mut self, admin: Option<HookRef>) -> Self {
+        self.admin = admin;
+
+        self
+    }
+
+    #[must_use]
+    pub fn mcp(mut self, mcp: Option<HookRef>) -> Self {
+        self.mcp = mcp;
+
+        self
+    }
+
+    #[must_use]
     pub fn build(self) -> Access {
         Access {
             read: self.read,
@@ -239,6 +285,8 @@ impl AccessBuilder {
             draft: self.draft,
             versions: self.versions,
             unlock: self.unlock,
+            admin: self.admin,
+            mcp: self.mcp,
         }
     }
 }

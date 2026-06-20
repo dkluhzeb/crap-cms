@@ -1,10 +1,14 @@
 //! MCP tool generation from Registry and tool execution.
 //!
-//! **Security model:** MCP operates with full access — no collection-level or field-level
-//! access control is applied. This is intentional: MCP is a programmatic API surface
-//! (like Lua's `overrideAccess = true`) gated by transport-level auth (API key for HTTP,
-//! process-level access for stdio). Access control Lua functions are designed for per-user
-//! restrictions and don't apply to machine-to-machine access.
+//! **Security model:** within an exposed collection MCP operates with full
+//! access — per-row and field-level access control are not applied. This is
+//! intentional: MCP is a programmatic API surface (like Lua's
+//! `overrideAccess = true`) gated by transport-level auth (API key for HTTP,
+//! process-level access for stdio). Per-user access functions don't apply to
+//! machine-to-machine access. **Which** collections/globals MCP may touch is
+//! gated by the per-collection `access.mcp` key (see [`crate::mcp::access`]):
+//! a hidden collection is dropped from tool generation, introspection, and
+//! resources, and its tools are rejected at execution.
 
 use std::path::Path;
 
@@ -15,6 +19,7 @@ use crate::{
     config::McpConfig,
     core::{CollectionDefinition, GlobalDefinition, Registry},
     mcp::{
+        access::McpExposure,
         protocol::ToolDefinition,
         schema::{CrudOp, collection_input_schema, global_input_schema},
     },
@@ -93,21 +98,35 @@ pub(in crate::mcp) fn should_include(slug: &str, config: &McpConfig) -> bool {
     config.include_collections.contains(&slug.to_string())
 }
 
-/// Generate all MCP tool definitions from the registry.
+/// Build an [`McpExposure`] from a tool-execution context (resolves `access.mcp`
+/// for every collection/global that sets it; cheap when none do).
+fn mcp_exposure(ctx: &ToolExecCtx<'_>) -> Result<McpExposure> {
+    let conn = ctx
+        .pool
+        .get()
+        .context("DB connection for access.mcp check")?;
+    Ok(McpExposure::resolve(ctx.registry, ctx.runner, &conn))
+}
+
+/// Generate all MCP tool definitions from the registry, skipping collections
+/// excluded by config or hidden by `access.mcp` (`exposure`).
 pub(in crate::mcp) fn generate_tools(
     registry: &Registry,
     config: &McpConfig,
+    exposure: &McpExposure,
 ) -> Vec<ToolDefinition> {
     let mut tools = Vec::new();
 
     for (slug, def) in &registry.collections {
-        if should_include(slug, config) {
+        if should_include(slug, config) && exposure.allows(slug) {
             tools.extend(collection_tools(slug, def));
         }
     }
 
     for (slug, def) in &registry.globals {
-        tools.extend(global_tools(slug, def));
+        if exposure.allows(slug) {
+            tools.extend(global_tools(slug, def));
+        }
     }
 
     tools.extend(schema_introspection_tools());
@@ -483,9 +502,13 @@ pub(in crate::mcp) fn execute_tool(
 ) -> Result<String> {
     // Static tools first
     match name {
-        TOOL_LIST_COLLECTIONS => return exec_list_collections(ctx.registry, &ctx.config.mcp),
+        TOOL_LIST_COLLECTIONS => {
+            let exposure = mcp_exposure(ctx)?;
+            return exec_list_collections(ctx.registry, &ctx.config.mcp, &exposure);
+        }
         TOOL_DESCRIBE_COLLECTION => {
-            return exec_describe_collection(args, ctx.registry, &ctx.config.mcp);
+            let exposure = mcp_exposure(ctx)?;
+            return exec_describe_collection(args, ctx.registry, &ctx.config.mcp, &exposure);
         }
         TOOL_LIST_FIELD_TYPES => return exec_list_field_types(),
         TOOL_CLI_REFERENCE => {
@@ -536,6 +559,25 @@ pub(in crate::mcp) fn execute_tool(
         bail!("Tool not available: {name}");
     }
 
+    // Enforce `access.mcp` at execution — the MCP boundary's access gate (the
+    // service layer runs with override_access, so it can't gate MCP). Only
+    // fetches a connection when the collection actually sets `access.mcp`.
+    let access_mcp = ctx
+        .registry
+        .get_collection(&parsed.slug)
+        .map(|d| &d.access)
+        .or_else(|| ctx.registry.get_global(&parsed.slug).map(|d| &d.access))
+        .and_then(|a| a.mcp.as_ref());
+    if access_mcp.is_some() {
+        let conn = ctx
+            .pool
+            .get()
+            .context("DB connection for access.mcp check")?;
+        if !crate::mcp::access::slug_exposed(access_mcp, ctx.runner, &conn, &parsed.slug) {
+            bail!("Tool not available: {name}");
+        }
+    }
+
     let slug = parsed.slug.as_str();
     match parsed.op {
         ToolOp::Find => exec_find(args, slug, ctx),
@@ -581,7 +623,7 @@ mod tests {
     fn generate_tools_basic() {
         let reg = make_registry();
         let config = McpConfig::default();
-        let tools = generate_tools(&reg, &config);
+        let tools = generate_tools(&reg, &config, &McpExposure::default());
         // 2 collections * 10 base CRUD + 1 global * 3 + 4 introspection = 27
         assert!(tools.len() >= 27);
         // Collections and globals each expose a non-persisting validate tool.
@@ -596,9 +638,24 @@ mod tests {
             exclude_collections: vec!["users".to_string()],
             ..Default::default()
         };
-        let tools = generate_tools(&reg, &config);
+        let tools = generate_tools(&reg, &config, &McpExposure::default());
         assert!(!tools.iter().any(|t| t.name.contains("users")));
         assert!(tools.iter().any(|t| t.name.contains("posts")));
+    }
+
+    /// A collection hidden by `access.mcp` (via the resolved exposure set) gets
+    /// no tools generated — the MCP analogue of being absent from the admin nav.
+    #[test]
+    fn access_mcp_hidden_collection_generates_no_tools() {
+        let reg = make_registry();
+        let config = McpConfig::default();
+        let tools = generate_tools(&reg, &config, &McpExposure::with_hidden(&["posts"]));
+        assert!(
+            !tools.iter().any(|t| t.name.contains("posts")),
+            "an access.mcp-hidden collection must not be advertised"
+        );
+        // Other collections remain exposed.
+        assert!(tools.iter().any(|t| t.name.contains("users")));
     }
 
     #[test]
@@ -608,7 +665,7 @@ mod tests {
             include_collections: vec!["posts".to_string()],
             ..Default::default()
         };
-        let tools = generate_tools(&reg, &config);
+        let tools = generate_tools(&reg, &config, &McpExposure::default());
         assert!(!tools.iter().any(|t| t.name.contains("users")));
         assert!(tools.iter().any(|t| t.name.contains("posts")));
     }
@@ -621,7 +678,7 @@ mod tests {
             exclude_collections: vec!["users".to_string()],
             ..Default::default()
         };
-        let tools = generate_tools(&reg, &config);
+        let tools = generate_tools(&reg, &config, &McpExposure::default());
         assert!(!tools.iter().any(|t| t.name.contains("users")));
     }
 
@@ -632,7 +689,7 @@ mod tests {
             config_tools: true,
             ..Default::default()
         };
-        let tools = generate_tools(&reg, &config);
+        let tools = generate_tools(&reg, &config, &McpExposure::default());
         assert!(tools.iter().any(|t| t.name == "read_config_file"));
         assert!(tools.iter().any(|t| t.name == "write_config_file"));
         assert!(tools.iter().any(|t| t.name == "list_config_files"));
@@ -642,7 +699,7 @@ mod tests {
     fn config_tools_excluded_by_default() {
         let reg = make_registry();
         let config = McpConfig::default();
-        let tools = generate_tools(&reg, &config);
+        let tools = generate_tools(&reg, &config, &McpExposure::default());
         assert!(!tools.iter().any(|t| t.name == "read_config_file"));
     }
 
@@ -734,7 +791,7 @@ mod tests {
     fn global_tools_generated() {
         let reg = make_registry();
         let config = McpConfig::default();
-        let tools = generate_tools(&reg, &config);
+        let tools = generate_tools(&reg, &config, &McpExposure::default());
         assert!(tools.iter().any(|t| t.name == "global_read_settings"));
         assert!(tools.iter().any(|t| t.name == "global_update_settings"));
     }
@@ -743,7 +800,7 @@ mod tests {
     fn introspection_tools_always_present() {
         let reg = Registry::new();
         let config = McpConfig::default();
-        let tools = generate_tools(&reg, &config);
+        let tools = generate_tools(&reg, &config, &McpExposure::default());
         assert!(tools.iter().any(|t| t.name == "list_collections"));
         assert!(tools.iter().any(|t| t.name == "describe_collection"));
         assert!(tools.iter().any(|t| t.name == "list_field_types"));
@@ -859,6 +916,43 @@ mod tests {
         assert!(
             err.to_string().contains("Tool not available"),
             "Expected 'Tool not available' error, got: {err}"
+        );
+    }
+
+    /// A collection hidden by `access.mcp` rejects direct tool execution — the
+    /// security-critical gate (MCP runs `override_access`, so this is the only
+    /// boundary). Here the rule points at an unresolvable hook, which fails
+    /// closed (hidden), proving the gate blocks rather than falling open.
+    #[test]
+    fn execute_tool_access_mcp_denied_collection_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = CrapConfig::test_default();
+        config.database.path = "test.db".to_string();
+
+        let shared = Registry::shared();
+        {
+            let mut reg = shared.write().unwrap();
+            let mut def = CollectionDefinition::new("posts");
+            def.access.mcp = Some(crate::core::HookRef::new("hooks.access.never_exists"));
+            reg.register_collection(def);
+        }
+
+        let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+        migrate::sync_all(&db_pool, &shared.read().unwrap(), &config.locale).unwrap();
+        let registry = Registry::snapshot(&shared);
+        let runner = HookRunner::builder()
+            .config_dir(tmp.path())
+            .registry(Arc::clone(&registry))
+            .config(&config)
+            .build()
+            .unwrap();
+
+        let ctx = make_exec_ctx(&db_pool, &registry, &runner, &config);
+        let err =
+            execute_tool("find_posts", &json!({ "limit": 10 }), tmp.path(), &ctx).unwrap_err();
+        assert!(
+            err.to_string().contains("Tool not available"),
+            "an access.mcp-hidden collection must reject execution, got: {err}"
         );
     }
 

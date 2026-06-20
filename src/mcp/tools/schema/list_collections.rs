@@ -4,7 +4,9 @@ use anyhow::Result;
 use serde::Serialize;
 use serde_json::to_string_pretty;
 
-use crate::{config::McpConfig, core::Registry, mcp::tools::should_include};
+use crate::{
+    config::McpConfig, core::Registry, mcp::access::McpExposure, mcp::tools::should_include,
+};
 
 /// One entry in the `list_collections` MCP tool response.
 ///
@@ -34,10 +36,11 @@ enum ListEntry<'a> {
 pub(in crate::mcp::tools) fn exec_list_collections(
     registry: &Registry,
     mcp_config: &McpConfig,
+    exposure: &McpExposure,
 ) -> Result<String> {
     let mut result = Vec::new();
     for (slug, def) in &registry.collections {
-        if !should_include(slug, mcp_config) {
+        if !should_include(slug, mcp_config) || !exposure.allows(slug) {
             continue;
         }
         result.push(ListEntry::Collection {
@@ -50,6 +53,9 @@ pub(in crate::mcp::tools) fn exec_list_collections(
         });
     }
     for (slug, def) in &registry.globals {
+        if !exposure.allows(slug) {
+            continue;
+        }
         result.push(ListEntry::Global {
             slug,
             label: def.display_name().to_string(),
@@ -71,7 +77,7 @@ mod tests {
     fn exec_list_collections_returns_all() {
         let reg = make_registry();
         let config = McpConfig::default();
-        let result = exec_list_collections(&reg, &config).unwrap();
+        let result = exec_list_collections(&reg, &config, &McpExposure::default()).unwrap();
         let items: Vec<Value> = from_str(&result).unwrap();
         // posts, users (collections) + settings (global)
         assert!(items.len() >= 3);
@@ -90,7 +96,7 @@ mod tests {
             exclude_collections: vec!["users".to_string()],
             ..Default::default()
         };
-        let result = exec_list_collections(&reg, &config).unwrap();
+        let result = exec_list_collections(&reg, &config, &McpExposure::default()).unwrap();
         let items: Vec<Value> = from_str(&result).unwrap();
         let slugs: Vec<&str> = items
             .iter()
@@ -104,7 +110,7 @@ mod tests {
     fn exec_list_collections_empty_registry() {
         let reg = Registry::new();
         let config = McpConfig::default();
-        let result = exec_list_collections(&reg, &config).unwrap();
+        let result = exec_list_collections(&reg, &config, &McpExposure::default()).unwrap();
         let items: Vec<Value> = from_str(&result).unwrap();
         assert!(items.is_empty());
     }

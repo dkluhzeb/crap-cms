@@ -8,6 +8,7 @@ use crate::{
     config::McpConfig,
     core::Registry,
     mcp::{
+        access::McpExposure,
         schema::{CrudOp, collection_input_schema, global_input_schema},
         tools::should_include,
     },
@@ -39,11 +40,18 @@ pub(in crate::mcp::tools) fn exec_describe_collection(
     args: &Value,
     registry: &Registry,
     mcp_config: &McpConfig,
+    exposure: &McpExposure,
 ) -> Result<String> {
     let slug = args
         .get("slug")
         .and_then(|v| v.as_str())
         .context("Missing 'slug' argument")?;
+
+    // A collection/global hidden by `access.mcp` is reported as unknown — the
+    // same opaque error as exclude, so MCP can't even confirm it exists.
+    if !exposure.allows(slug) {
+        bail!("Unknown collection or global: {slug}");
+    }
 
     if let Some(def) = registry.collections.get(slug) {
         if !should_include(slug, mcp_config) {
@@ -87,7 +95,8 @@ mod tests {
         let reg = make_registry();
         let config = McpConfig::default();
         let args = json!({ "slug": "posts" });
-        let result = exec_describe_collection(&args, &reg, &config).unwrap();
+        let result =
+            exec_describe_collection(&args, &reg, &config, &McpExposure::default()).unwrap();
         let parsed: Value = from_str(&result).unwrap();
         assert_eq!(parsed["slug"], "posts");
         assert_eq!(parsed["type"], "collection");
@@ -99,7 +108,8 @@ mod tests {
         let reg = make_registry();
         let config = McpConfig::default();
         let args = json!({ "slug": "settings" });
-        let result = exec_describe_collection(&args, &reg, &config).unwrap();
+        let result =
+            exec_describe_collection(&args, &reg, &config, &McpExposure::default()).unwrap();
         let parsed: Value = from_str(&result).unwrap();
         assert_eq!(parsed["slug"], "settings");
         assert_eq!(parsed["type"], "global");
@@ -111,7 +121,8 @@ mod tests {
         let reg = make_registry();
         let config = McpConfig::default();
         let args = json!({ "slug": "nonexistent" });
-        let err = exec_describe_collection(&args, &reg, &config).unwrap_err();
+        let err =
+            exec_describe_collection(&args, &reg, &config, &McpExposure::default()).unwrap_err();
         assert!(err.to_string().contains("Unknown"));
     }
 
@@ -120,7 +131,8 @@ mod tests {
         let reg = make_registry();
         let config = McpConfig::default();
         let args = json!({});
-        let err = exec_describe_collection(&args, &reg, &config).unwrap_err();
+        let err =
+            exec_describe_collection(&args, &reg, &config, &McpExposure::default()).unwrap_err();
         assert!(err.to_string().contains("slug"));
     }
 
@@ -132,7 +144,8 @@ mod tests {
             ..Default::default()
         };
         let args = json!({ "slug": "posts" });
-        let err = exec_describe_collection(&args, &reg, &config).unwrap_err();
+        let err =
+            exec_describe_collection(&args, &reg, &config, &McpExposure::default()).unwrap_err();
         assert!(err.to_string().contains("Unknown"));
     }
 }

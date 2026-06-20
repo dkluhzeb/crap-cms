@@ -86,3 +86,60 @@ pub(crate) async fn check_admin_gate_for_doc(
         }
     }
 }
+
+/// Per-collection / per-global `access.admin` gate. Runs the `admin` rule of the
+/// collection or global named `slug` against the authenticated user for any
+/// admin route scoped to it, returning a 403 page on denial. **Permissive
+/// default:** a slug with no `access.admin` (or one that isn't a collection or
+/// global) is always allowed (`None`), so this only ever *further* restricts
+/// admin-UI access beyond `read`. Fails CLOSED if the rule errors or the gate
+/// can't run.
+#[cfg(not(tarpaulin_include))]
+pub(crate) async fn check_collection_admin_gate(
+    state: &AdminState,
+    slug: &str,
+    user_doc: &Document,
+) -> Option<Response> {
+    let access = state
+        .registry
+        .get_collection(slug)
+        .map(|d| &d.access)
+        .or_else(|| state.registry.get_global(slug).map(|d| &d.access))?
+        .admin
+        .clone()?;
+    let pool = state.pool.clone();
+    let hook_runner = state.hook_runner.clone();
+    let slug_owned = slug.to_string();
+    let user_doc = user_doc.clone();
+
+    let result = spawn_blocking(move || {
+        let conn = pool.get().ok()?;
+        Some(hook_runner.check_access(
+            &AccessCheckInput {
+                access: Some(&access),
+                user: Some(&user_doc),
+                id: None,
+                data: None,
+                locale: None,
+                operation: "admin",
+                collection: &slug_owned,
+                ui_locale: None,
+            },
+            &conn,
+        ))
+    })
+    .await;
+
+    match result {
+        Ok(Some(Ok(query::AccessResult::Allowed | query::AccessResult::Constrained(_)))) => None,
+        Ok(Some(Ok(query::AccessResult::Denied))) => Some(admin_denied_response(state)),
+        Ok(Some(Err(e))) => {
+            error!("collection access.admin check failed for '{slug}': {e}");
+            Some(admin_denied_response(state))
+        }
+        Ok(None) | Err(_) => {
+            error!("collection access.admin gate could not run for '{slug}'; denying");
+            Some(admin_denied_response(state))
+        }
+    }
+}

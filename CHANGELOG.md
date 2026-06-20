@@ -1228,6 +1228,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`access.admin` — a per-collection/global key gating admin-UI
+  visibility/access** (Payload parity with its `admin` access function). A
+  boolean rule: when set, it hides the collection/global from the admin nav *and*
+  blocks its admin routes (enforced by middleware, so direct URLs can't bypass
+  it) for users it denies. Permissive default — no `access.admin` stays visible —
+  so it only ever *further* restricts admin-UI access beyond `read` (e.g. show a
+  collection to API readers but hide its admin pages from non-staff). Valid on
+  collections and globals; a filter table is a configuration error.
+
+- **`access.mcp` — a per-collection/global key gating exposure to the MCP
+  surface.** The MCP surface runs with `override_access`, so the service access
+  model never gated it; `access.mcp` is enforced at the MCP boundary instead — a
+  hidden collection/global is dropped from tool generation, `list_collections`,
+  `describe_collection`, and the schema resources, and its CRUD tools are
+  rejected at execution (the security-critical gate). Evaluated
+  user-independently (the MCP surface uses a shared key, not a per-user
+  identity), so it's a boolean rule (filter table = config error). Permissive
+  default — exposed when unset — so it only ever *removes* a collection from the
+  LLM surface (e.g. keep an internal collection out of MCP). Valid on collections
+  and globals; distinct from the `mcp` config table (tool descriptions/operations).
+
 - **`access.unlock` — a dedicated access key for the account lock/unlock
   operations on auth collections.** Like Payload's `unlock` access function, it
   lets you grant a *narrower* privilege than full edit: a moderator who may block
