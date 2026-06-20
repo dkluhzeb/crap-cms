@@ -67,6 +67,24 @@ pub(super) fn setup_lua() -> Lua {
             return { active = true }
         end
 
+        function access.return_empty_table(ctx)
+
+            return {}
+        end
+
+        function access.nil_keyed_constraint(ctx)
+
+            -- The classic multi-tenant footgun: when ctx.user.tenant_id is nil
+            -- the key is dropped and this is `{}`, NOT a tenant filter.
+            return { tenant_id = ctx.user and ctx.user.tenant_id }
+        end
+
+        function access.empty_operator_table(ctx)
+
+            -- Non-empty outer table, but the value parses to zero operators.
+            return { score = {} }
+        end
+
         function access.check_user(ctx)
 
             if ctx.user and ctx.user.role == "admin" then

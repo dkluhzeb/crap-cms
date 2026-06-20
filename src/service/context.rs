@@ -257,10 +257,24 @@ impl<'a> ServiceContext<'a> {
         }
     }
 
-    /// Get the version-history access toggle (`access.versions`) from the
-    /// definition. Unlike draft/trash it has NO `update` fallback: `None` means
-    /// the toggle is unset (allow — history follows the per-snapshot read/draft
-    /// composite), `Some` restricts version access behind the given policy.
+    /// Get the raw `access.update` hook ref from the definition. Used as the
+    /// fallback gate for the version-history toggle (`versions ?? update`) — see
+    /// [`versions_access_ref`](Self::versions_access_ref).
+    #[must_use]
+    pub fn update_access_ref(&self) -> Option<&HookRef> {
+        match &self.def {
+            Def::Collection(d) => d.access.update.as_ref(),
+            Def::Global(d) => d.access.update.as_ref(),
+            Def::None => None,
+        }
+    }
+
+    /// Get the *explicit* version-history access toggle (`access.versions`) from
+    /// the definition. `None` means the toggle is unset — version access then
+    /// falls back to edit access (`access.update`), mirroring how `draft`/`trash`
+    /// fall back to `update`; the gate resolves that fallback (the toggle itself
+    /// is a pure boolean — a filter table on an explicit `versions` is a config
+    /// error). `Some` restricts version access behind the given policy.
     #[must_use]
     pub fn versions_access_ref(&self) -> Option<&HookRef> {
         match &self.def {

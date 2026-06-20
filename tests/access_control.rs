@@ -24,10 +24,11 @@ use crap_cms::db::{DbValue, migrate, ops, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::AccessCheckInput;
 use crap_cms::hooks::lifecycle::HookRunner;
+use crap_cms::service::auth::{AccountAction, is_locked, perform_account_action};
 use crap_cms::service::{
     GetGlobalInput, ListVersionsInput, ReadHooks, RunnerReadHooks, RunnerWriteHooks,
-    SearchDocumentsInput, ServiceContext, WriteInput, collection_stats, create_document_in_conn,
-    get_global_document,
+    SearchDocumentsInput, ServiceContext, ServiceError, WriteInput, collection_stats,
+    create_document_in_conn, get_global_document,
     jobs::{ListJobRunsInput, QueueJobInput, get_job_run, list_job_runs, queue_job},
     list_versions, restore_collection_version, search_documents, update_document,
     update_global_in_conn,
@@ -3749,5 +3750,73 @@ return M
         admin.last_updated.as_deref(),
         Some("2024-01-05"),
         "admin's last_updated includes the draft but not the trashed row"
+    );
+}
+
+// ── Account-action authorization (gRPC LockAccount/etc.) ─────────────────────
+
+/// CRITICAL regression: the account-action operations must authorize the caller
+/// against the TARGET user, not merely require authentication. The `users`
+/// collection gates `update` with `access.self_or_admin` and sets no `unlock`
+/// rule, so `resolve_unlock()` falls back to it: a non-admin caller may not lock
+/// a *different* user, while an admin may. Before the fix, any authenticated
+/// caller could lock/unlock/verify/unverify any account (privilege escalation).
+#[test]
+fn account_action_requires_access_to_the_target_user() {
+    let (_tmp, db_pool, registry, runner) = setup();
+    let def = registry.get_collection("users").unwrap().clone();
+
+    // Seed a target user (created as an admin — `users` create is admin_only).
+    let target_id = {
+        let mut conn = db_pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let wh = RunnerWriteHooks::new(&runner).with_conn(&tx);
+        let seed_admin = make_user_doc("seed_admin", "admin");
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&tx)
+            .write_hooks(&wh)
+            .user(Some(&seed_admin))
+            .build();
+        let mut data = DocumentFields::new();
+        data.insert("email".to_string(), json!("target@test.com"));
+        data.insert("role".to_string(), json!("author"));
+        data.insert("name".to_string(), json!("Target"));
+        let (doc, _) = create_document_in_conn(&ctx, WriteInput::builder(data).build()).unwrap();
+        tx.commit().unwrap();
+        doc.id.to_string()
+    };
+
+    let conn = db_pool.get().unwrap();
+
+    // A non-admin author (NOT the target) must be denied — a valid session is
+    // not enough to lock another account.
+    let author = make_user_doc("some_author", "author");
+    let denied_ctx = ServiceContext::collection("users", &def)
+        .conn(&conn)
+        .runner(&runner)
+        .user(Some(&author))
+        .build();
+    let denied = perform_account_action(&denied_ctx, &target_id, AccountAction::Lock);
+    assert!(
+        matches!(denied, Err(ServiceError::AccessDenied(_))),
+        "a non-admin caller must not lock another user (got {denied:?})"
+    );
+    assert!(
+        !is_locked(&denied_ctx, &target_id).unwrap(),
+        "target must remain unlocked after the denied attempt"
+    );
+
+    // An admin passes `self_or_admin` (the unlock fallback) → the lock proceeds.
+    let admin = make_user_doc("an_admin", "admin");
+    let admin_ctx = ServiceContext::collection("users", &def)
+        .conn(&conn)
+        .runner(&runner)
+        .user(Some(&admin))
+        .build();
+    perform_account_action(&admin_ctx, &target_id, AccountAction::Lock)
+        .expect("an admin may lock the target user");
+    assert!(
+        is_locked(&admin_ctx, &target_id).unwrap(),
+        "the admin's lock must take effect"
     );
 }

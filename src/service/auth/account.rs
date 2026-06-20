@@ -4,9 +4,103 @@
 //! to keep call-site code path-agnostic between admin and gRPC.
 
 use crate::{
-    db::query,
-    service::{ServiceContext, ServiceError},
+    db::{AccessResult, query},
+    hooks::AccessCheckInput,
+    service::{ServiceContext, ServiceError, helpers::enforce_access_constraints},
 };
+
+/// An administrative account-state action on another user's auth document.
+///
+/// Each variant is authorized by an access function before the underlying write
+/// runs (see [`perform_account_action`]): the lock-state pair by
+/// `access.unlock` (falling back to `update`), the verification pair by
+/// `access.update` — mirroring how the admin UI gates a lock toggle behind the
+/// document `update` access.
+#[derive(Debug, Clone, Copy)]
+pub enum AccountAction {
+    Lock,
+    Unlock,
+    Verify,
+    Unverify,
+}
+
+impl AccountAction {
+    /// The `ctx.operation` label the access function sees.
+    fn operation(self) -> &'static str {
+        match self {
+            Self::Lock => "lock",
+            Self::Unlock => "unlock",
+            Self::Verify => "verify",
+            Self::Unverify => "unverify",
+        }
+    }
+}
+
+/// Authorize and perform an administrative account-state action on the user
+/// `id` in `ctx`'s (auth) collection.
+///
+/// The caller (`ctx.user`) is authorized against the target document before the
+/// write: the lock-state actions resolve `access.unlock` (→ `update`), the
+/// verification actions resolve `access.update`. A `Denied` result rejects; a
+/// `Constrained` (row-filter) result must match the target user (e.g. an
+/// org-scoped moderator) — enforced via [`enforce_access_constraints`]. This is
+/// the single gate both the gRPC account RPCs and (future) other surfaces share,
+/// so an authenticated-but-unauthorized caller can never mutate another
+/// account's state.
+///
+/// `ctx` must be a collection context carrying the collection definition, the
+/// caller (`user`), a hook `runner`, and a `conn`.
+///
+/// # Errors
+///
+/// Returns [`ServiceError::AccessDenied`] when the caller may not perform the
+/// action on the target, or a hook/backend error.
+pub fn perform_account_action(
+    ctx: &ServiceContext,
+    id: &str,
+    action: AccountAction,
+) -> Result<(), ServiceError> {
+    let def = ctx.collection_def()?;
+    let access_ref = match action {
+        AccountAction::Lock | AccountAction::Unlock => def.access.resolve_unlock(),
+        AccountAction::Verify | AccountAction::Unverify => def.access.update.as_ref(),
+    };
+
+    let conn = ctx.resolve_conn()?;
+    let runner = ctx.runner()?;
+
+    let access = runner.check_access(
+        &AccessCheckInput {
+            access: access_ref,
+            user: ctx.user,
+            id: Some(id),
+            data: None,
+            locale: None,
+            operation: action.operation(),
+            collection: ctx.slug,
+            ui_locale: None,
+        },
+        conn.as_ref(),
+    )?;
+
+    if matches!(access, AccessResult::Denied) {
+        return Err(ServiceError::AccessDenied(format!(
+            "{} access denied",
+            action.operation()
+        )));
+    }
+
+    // A row-filter (Constrained) rule scopes which users the caller may act on
+    // (e.g. `{ org = ctx.user.org }`) — enforce it against the target.
+    enforce_access_constraints(ctx, id, &access, action.operation(), false)?;
+
+    match action {
+        AccountAction::Lock => lock_user(ctx, id),
+        AccountAction::Unlock => unlock_user(ctx, id),
+        AccountAction::Verify => mark_verified(ctx, id),
+        AccountAction::Unverify => mark_unverified(ctx, id),
+    }
+}
 
 /// Lock a user account, preventing login.
 ///

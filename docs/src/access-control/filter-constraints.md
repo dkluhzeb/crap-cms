@@ -146,10 +146,22 @@ This means constraints can only **narrow** results, never expand them.
 ```lua
 function M.tenant_read(ctx)
     if ctx.user == nil then return false end
+    -- Guard the constraint VALUE, not just ctx.user — see the warning below.
+    if ctx.user.tenant_id == nil then return false end
     -- Users can only see documents in their tenant
     return { tenant_id = ctx.user.tenant_id }
 end
 ```
+
+> ⚠️ **Always guard the constraint value against `nil`.** In Lua,
+> `{ tenant_id = ctx.user.tenant_id }` is an **empty table** `{}` when
+> `ctx.user.tenant_id` is `nil` (the table constructor drops nil-valued keys).
+> An empty constraint table is **denied** (fail-closed) — it is never treated as
+> "allow all" (that is what `return true` is for). So a tenantless user is
+> safely refused rather than shown every tenant's data. Guarding the value
+> explicitly (as above) makes the intent clear and avoids relying on the
+> fail-closed default. The same applies to any `{ field = ctx.user.<field> }`
+> where the user field is optional.
 
 ## Example: Owner-or-Admin
 

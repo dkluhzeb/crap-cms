@@ -208,12 +208,17 @@ fn restore_collection_version_conn(
     Ok(doc)
 }
 
-/// Enforce the `access.versions` toggle on restore. Resurrecting a historical
-/// snapshot into the live document is a read of version history, so a user
-/// denied version access cannot restore even a known `version_id` — the
-/// `versions` boundary covers historical *content*, not just its listing.
-/// Default-allow when the toggle is unset (no `update` fallback), so restore is
-/// unaffected unless `access.versions` is explicitly set.
+/// Enforce the explicit `access.versions` toggle on restore. Resurrecting a
+/// historical snapshot into the live document is a read of version history, so a
+/// user with an explicit `access.versions = false` cannot restore even a known
+/// `version_id` — the `versions` boundary covers historical *content*, not just
+/// its listing.
+///
+/// When the toggle is **unset**, this is a no-op: restore is already gated by
+/// `access.update` against the target document by the caller (see
+/// [`restore_collection_version_core`]), which is exactly what the
+/// `versions ?? update` fallback resolves to — so there is nothing extra to
+/// check here. The explicit toggle therefore only ever *further* restricts.
 fn check_restore_versions_gate(
     ctx: &ServiceContext,
     write_hooks: &dyn WriteHooks,

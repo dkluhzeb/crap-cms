@@ -178,6 +178,26 @@ fn parse_access_constraints(lua: &Lua, tbl: &mlua::Table) -> Result<AccessResult
         }
     }
 
+    // Fail CLOSED on an empty constraint set. A hook that returned a *table*
+    // intended to restrict which rows the caller sees, but it produced zero
+    // filters — almost always because a nil-valued key was silently dropped by
+    // Lua's table constructor: `{ tenant_id = ctx.user.tenant_id }` evaluates to
+    // `{}` when `ctx.user.tenant_id` is nil (a tenantless user, a renamed field,
+    // a partial signup). It can also happen via an empty operator table
+    // (`{ score = {} }`). Treating that as `Constrained(vec![])` would AND
+    // nothing into the query — i.e. match EVERY row — turning an
+    // intended-to-restrict rule into a cross-tenant / cross-user data leak.
+    // Allow-everything must be the explicit `return true`, never an empty table.
+    if clauses.is_empty() {
+        warn!(
+            "Access function returned a constraint table that produced no filters \
+             (likely a nil-valued key, e.g. `{{ field = ctx.user.<nil> }}`); \
+             denying. Return `true` to allow unconditionally, or guard the nil \
+             value explicitly."
+        );
+        return Ok(AccessResult::Denied);
+    }
+
     Ok(AccessResult::Constrained(clauses))
 }
 
@@ -440,6 +460,72 @@ mod tests {
             }
             _ => panic!("expected Constrained"),
         }
+    }
+
+    /// CRITICAL regression: an access function that returns an EMPTY table must
+    /// fail closed (`Denied`), never `Constrained(vec![])`. An empty constraint
+    /// AND's nothing into the query — i.e. matches every row — so treating it as
+    /// "allowed, unconstrained" turns an intended-to-restrict rule into a
+    /// cross-tenant/cross-user data leak. Allow-all must be `return true`.
+    #[test]
+    fn access_empty_constraint_table_denies() {
+        let lua = setup_lua();
+        let result = check_access_with_lua(
+            &lua,
+            &acc(Some(&HookRef::new("test_access.return_empty_table")), None),
+        )
+        .unwrap();
+        assert!(
+            matches!(result, AccessResult::Denied),
+            "empty constraint table must deny, got {result:?}"
+        );
+    }
+
+    /// CRITICAL regression: the canonical multi-tenant footgun. A hook returning
+    /// `{ tenant_id = ctx.user.tenant_id }` where `tenant_id` is nil is `{}` at
+    /// runtime (Lua drops nil-valued keys) — it must deny, not leak every tenant.
+    #[test]
+    fn access_nil_keyed_constraint_denies() {
+        let lua = setup_lua();
+        // user doc with NO tenant_id field → the constraint key evaporates.
+        let user = make_user_doc("member");
+        let result = check_access_with_lua(
+            &lua,
+            &AccessCheckInput {
+                access: Some(&HookRef::new("test_access.nil_keyed_constraint")),
+                user: Some(&user),
+                id: None,
+                data: None,
+                locale: None,
+                operation: "find",
+                collection: "test",
+                ui_locale: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            matches!(result, AccessResult::Denied),
+            "nil-keyed constraint must deny (fail closed), got {result:?}"
+        );
+    }
+
+    /// A non-empty table whose value parses to zero filter operators
+    /// (`{ score = {} }`) also yields no filters → must fail closed.
+    #[test]
+    fn access_empty_operator_table_denies() {
+        let lua = setup_lua();
+        let result = check_access_with_lua(
+            &lua,
+            &acc(
+                Some(&HookRef::new("test_access.empty_operator_table")),
+                None,
+            ),
+        )
+        .unwrap();
+        assert!(
+            matches!(result, AccessResult::Denied),
+            "constraint with no resulting operators must deny, got {result:?}"
+        );
     }
 
     #[test]

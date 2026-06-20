@@ -231,44 +231,44 @@ fn write_surfaces_attach_invalidation_transport() {
 
 /// Structural guard for the auth state-change handlers that the textual
 /// `INVALIDATION_WRITE_OPS` scan can't see: they build their `ServiceContext`
-/// inside the blocking body and pass the revoking service fn as a *fn-pointer*
-/// (`account_action_blocking(input, service::auth::mark_unverified)`), so neither
-/// the `ServiceContext::collection` nor the `op(` heuristic matches.
+/// inside the blocking body and pass the action as an `AccountAction` variant
+/// (`account_action_blocking(input, AccountAction::Lock)`), so neither the
+/// `ServiceContext::collection` nor the `op(` heuristic matches.
 ///
-/// A *revoking* op (`lock_user`, `mark_unverified`) cuts off login, so its
-/// handler must request the invalidation transport (`account_action_input(..,
-/// /* with_invalidation */ true, ..)`) to tear down the user's open live streams.
-/// Regression: `unverify` shipped with the flag `false`, so an already-connected
-/// SSE/subscribe stream kept running on a revoked session.
+/// A *revoking* action (`Lock`, `Unverify`) cuts off login, so its handler must
+/// request the invalidation transport (`account_action_input(.., /* with_invalidation */
+/// true, ..)`) to tear down the user's open live streams. Regression: `unverify`
+/// shipped with the flag `false`, so an already-connected SSE/subscribe stream
+/// kept running on a revoked session.
 #[test]
 fn auth_revoking_handlers_request_invalidation() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let path = root.join("src/api/handlers/auth/account.rs");
     let contents = fs::read_to_string(&path).expect("account.rs must exist");
 
-    let revoking_ops = ["mark_unverified", "lock_user"];
+    let revoking_actions = ["AccountAction::Lock", "AccountAction::Unverify"];
     let mut offenders: Vec<String> = Vec::new();
 
-    // Split into per-handler chunks so each revoking fn-pointer is checked
-    // against the input built in the SAME handler.
+    // Split into per-handler chunks so each revoking action is checked against
+    // the input built in the SAME handler.
     for chunk in contents.split("async fn ").skip(1) {
         let handler = chunk.split('(').next().unwrap_or("").trim();
 
-        for op in revoking_ops {
-            let used = chunk.contains(&format!("service::auth::{op}"));
+        for action in revoking_actions {
+            let used = chunk.contains(action);
             // The input bundle is built one-liner: `account_action_input(token,
             // headers, &req, <with_invalidation>, ..)`. The 4th arg must be `true`.
             let requests_invalidation = chunk.contains("&req, true,");
 
             if used && !requests_invalidation {
-                offenders.push(format!("  {handler} (uses {op})"));
+                offenders.push(format!("  {handler} (performs {action})"));
             }
         }
     }
 
     assert!(
         offenders.is_empty(),
-        "Auth handler(s) perform a session-revoking op but build their input \
+        "Auth handler(s) perform a session-revoking action but build their input \
          with `with_invalidation = false`, so `publish_user_invalidation` is a \
          silent no-op and the user's open live streams are NOT torn down. Pass \
          `true` to `account_action_input` like the lock handler does.\n\n{}",

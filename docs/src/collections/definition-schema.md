@@ -116,9 +116,10 @@ Each content view has its own key (all the same shape — a Lua function ref ret
 | `delete` | string | Lua function ref for delete access. |
 | `draft` | string | Read access to **unpublished (draft)** documents. Falls back to `update` when omitted. Only relevant with `versions` drafts enabled. |
 | `trash` | string | Read access to **soft-deleted (trash)** documents, plus restore. Falls back to `update` when omitted, so most collections don't set it explicitly. |
-| `versions` | string | Toggles **version-history** visibility (a boolean rule, not a row filter). Defaults to **allowed** when omitted — independent of `default_deny`; snapshot contents are still bounded by `read`/`draft`. |
+| `versions` | string | Toggles **version-history** visibility (a boolean rule, not a row filter). Falls back to `update` when omitted (history follows edit access); snapshot contents are still bounded by `read`/`draft`. |
+| `unlock` | string | Gates the account **lock/unlock** operations on an **auth** collection. Falls back to `update` when omitted. A row-filter table scopes which users the caller may (un)lock. Only meaningful on auth collections; rejected on globals. (Verify/unverify are gated by `update`.) |
 
-When `read`/`create`/`update`/`delete` is omitted, the behavior depends on `[access] default_deny` in `crap.toml`: with the default `default_deny = true`, that operation is **denied** for everyone; with `default_deny = false`, it is **allowed** for everyone. `draft` and `trash` instead fall back to `update`; `versions` defaults to allowed (see the per-key notes above).
+When `read`/`create`/`update`/`delete` is omitted, the behavior depends on `[access] default_deny` in `crap.toml`: with the default `default_deny = true`, that operation is **denied** for everyone; with `default_deny = false`, it is **allowed** for everyone. `draft`, `trash`, `versions`, and `unlock` instead fall back to `update` (see the per-key notes above).
 
 See [Access Control](../access-control/overview.md) for full details.
 

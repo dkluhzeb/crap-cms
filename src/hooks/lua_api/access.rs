@@ -187,6 +187,11 @@ fn resolve_access_ref(
                 .trash
                 .clone()
                 .or_else(|| def.access.update.clone()),
+            "unlock" => def
+                .access
+                .unlock
+                .clone()
+                .or_else(|| def.access.update.clone()),
             _ => return Err(RuntimeError(format!("Unknown operation '{operation}'"))),
         };
 

@@ -409,48 +409,58 @@ service ContentAPI {
   // LockAccount prevents a user from logging in.
   // Only valid for auth-enabled collections.
   //
-  // Auth: required. The caller must have a valid JWT.
+  // Auth: the caller must pass the target collection's `unlock` access
+  // (falling back to `update`) against the target user — a valid JWT alone is
+  // NOT sufficient. A row-filter `unlock` rule must match the target user.
   //
   // Errors:
   //   NOT_FOUND         — collection slug not registered, or user ID not found
   //   INVALID_ARGUMENT  — collection is not an auth collection
   //   UNAUTHENTICATED   — no valid Bearer token provided
+  //   PERMISSION_DENIED — caller lacks `unlock`/`update` access to the target
   //   UNAVAILABLE       — transient DB error; retry
   rpc LockAccount (AccountActionRequest) returns (AccountActionResponse);
 
   // UnlockAccount re-enables login for a locked account.
   // Only valid for auth-enabled collections.
   //
-  // Auth: required. The caller must have a valid JWT.
+  // Auth: the caller must pass the target collection's `unlock` access
+  // (falling back to `update`) against the target user — a valid JWT alone is
+  // NOT sufficient.
   //
   // Errors:
   //   NOT_FOUND         — collection slug not registered, or user ID not found
   //   INVALID_ARGUMENT  — collection is not an auth collection
   //   UNAUTHENTICATED   — no valid Bearer token provided
+  //   PERMISSION_DENIED — caller lacks `unlock`/`update` access to the target
   //   UNAVAILABLE       — transient DB error; retry
   rpc UnlockAccount (AccountActionRequest) returns (AccountActionResponse);
 
   // VerifyAccount marks a user's email as verified.
   // Only valid for auth-enabled collections.
   //
-  // Auth: required. The caller must have a valid JWT.
+  // Auth: the caller must pass the target collection's `update` access against
+  // the target user — a valid JWT alone is NOT sufficient.
   //
   // Errors:
   //   NOT_FOUND         — collection slug not registered, or user ID not found
   //   INVALID_ARGUMENT  — collection is not an auth collection
   //   UNAUTHENTICATED   — no valid Bearer token provided
+  //   PERMISSION_DENIED — caller lacks `update` access to the target
   //   UNAVAILABLE       — transient DB error; retry
   rpc VerifyAccount (AccountActionRequest) returns (AccountActionResponse);
 
   // UnverifyAccount marks a user's email as unverified.
   // Only valid for auth-enabled collections.
   //
-  // Auth: required. The caller must have a valid JWT.
+  // Auth: the caller must pass the target collection's `update` access against
+  // the target user — a valid JWT alone is NOT sufficient.
   //
   // Errors:
   //   NOT_FOUND         — collection slug not registered, or user ID not found
   //   INVALID_ARGUMENT  — collection is not an auth collection
   //   UNAUTHENTICATED   — no valid Bearer token provided
+  //   PERMISSION_DENIED — caller lacks `update` access to the target
   //   UNAVAILABLE       — transient DB error; retry
   rpc UnverifyAccount (AccountActionRequest) returns (AccountActionResponse);
 }

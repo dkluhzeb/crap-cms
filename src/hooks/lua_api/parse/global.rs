@@ -85,6 +85,7 @@ fn reject_global_only_access_keys(access: &Access, slug: &str) -> Result<()> {
         ("create", access.create.is_some()),
         ("delete", access.delete.is_some()),
         ("trash", access.trash.is_some()),
+        ("unlock", access.unlock.is_some()),
     ] {
         if present {
             bail!(
@@ -150,8 +151,8 @@ mod tests {
     }
 
     #[test]
-    fn test_global_rejects_create_delete_trash_access_keys() {
-        for key in ["create", "delete", "trash"] {
+    fn test_global_rejects_collection_only_access_keys() {
+        for key in ["create", "delete", "trash", "unlock"] {
             let lua = Lua::new();
             let config = lua.create_table().unwrap();
             let access = lua.create_table().unwrap();

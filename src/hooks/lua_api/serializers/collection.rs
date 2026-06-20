@@ -53,6 +53,18 @@ pub(super) fn access_to_lua(lua: &Lua, tbl: &Table, access: &Access) -> LuaResul
         access_tbl.set("trash", hook_ref_to_lua(lua, s)?)?;
     }
 
+    if let Some(ref s) = access.draft {
+        access_tbl.set("draft", hook_ref_to_lua(lua, s)?)?;
+    }
+
+    if let Some(ref s) = access.versions {
+        access_tbl.set("versions", hook_ref_to_lua(lua, s)?)?;
+    }
+
+    if let Some(ref s) = access.unlock {
+        access_tbl.set("unlock", hook_ref_to_lua(lua, s)?)?;
+    }
+
     tbl.set("access", access_tbl)
 }
 

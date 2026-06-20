@@ -37,7 +37,7 @@ pub(super) const COLLECTION_HOOK_KEYS: &[&str] = &[
 
 /// Access-control operation keys accepted on an `access` sub-table.
 pub(super) const ACCESS_KEYS: &[&str] = &[
-    "read", "create", "update", "delete", "trash", "draft", "versions",
+    "read", "create", "update", "delete", "trash", "draft", "versions", "unlock",
 ];
 
 /// Warn when an access key is set but the feature that would make it fire is
@@ -71,6 +71,21 @@ pub(super) fn warn_access_keys_without_features(
         warn!(
             "{kind} '{slug}': access.versions is set but version history is not \
              enabled — the toggle will never apply."
+        );
+    }
+}
+
+/// Warn when `access.unlock` is set on a non-auth collection — the account
+/// lock/unlock operations only exist on auth collections, so the rule is dead.
+/// Separate from [`warn_access_keys_without_features`] (globals reject `unlock`
+/// at parse, so only collections need this) — and keeping it out of that
+/// function avoids a 4th boolean parameter.
+pub(super) fn warn_unlock_without_auth(slug: &str, access: &Access, is_auth: bool) {
+    if access.unlock.is_some() && !is_auth {
+        warn!(
+            "Collection '{slug}': access.unlock is set but this is not an auth \
+             collection — the account lock/unlock operations only exist on auth \
+             collections, so the rule will never apply."
         );
     }
 }
@@ -343,6 +358,7 @@ pub(super) fn parse_access_config(config: &Table) -> Result<Access> {
         .trash(get_optional_hook_ref(&access_tbl, "trash", "access")?)
         .draft(get_optional_hook_ref(&access_tbl, "draft", "access")?)
         .versions(get_optional_hook_ref(&access_tbl, "versions", "access")?)
+        .unlock(get_optional_hook_ref(&access_tbl, "unlock", "access")?)
         .build())
 }
 
@@ -713,6 +729,25 @@ mod tests {
     fn test_access_keys_accept_draft_and_versions() {
         assert!(ACCESS_KEYS.contains(&"draft"));
         assert!(ACCESS_KEYS.contains(&"versions"));
+    }
+
+    /// `access.unlock` (the account lock/unlock gate) must parse and be an
+    /// accepted key — it's the authorization gate for the account-action RPCs.
+    #[test]
+    fn test_parse_access_config_unlock() {
+        assert!(ACCESS_KEYS.contains(&"unlock"));
+
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let access_tbl = lua.create_table().unwrap();
+        access_tbl.set("unlock", "hooks.access.moderators").unwrap();
+        tbl.set("access", access_tbl).unwrap();
+
+        let access = parse_access_config(&tbl).unwrap();
+        assert_eq!(
+            access.unlock.as_ref().map(HookRef::reference),
+            Some("hooks.access.moderators")
+        );
     }
 
     /// Regression: an access rule that is present but not a string must be a

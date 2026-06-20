@@ -210,15 +210,17 @@ Clicking Restore writes the snapshot data back to the main table and redirects t
 - `access.draft` — who may read **unpublished (draft)** content. Falls back to
   `access.update` when unset, so by default only editors preview drafts and a
   plain `read` rule exposes published content only.
-- `access.versions` — a toggle for who may read **version history**. Defaults to
-  **allow**; *which* snapshots are visible still follows `read` (published
-  snapshots) and `draft` (draft snapshots).
+- `access.versions` — a toggle for who may read **version history**. Falls back
+  to `access.update` when unset, so by default only editors browse history (a
+  plain reader cannot); *which* snapshots are visible still follows `read`
+  (published snapshots) and `draft` (draft snapshots).
 
 ```lua
 access = {
-    read  = "hooks.access.public_read",   -- published content
-    draft = "hooks.access.editors",       -- preview unpublished content
-    -- versions defaults to allow
+    read   = "hooks.access.public_read",  -- published content
+    draft  = "hooks.access.editors",      -- preview unpublished content
+    update = "hooks.access.editors",      -- edit (and, by default, view history)
+    -- versions unset -> follows `update`: editors see history out of the box
 }
 ```
 

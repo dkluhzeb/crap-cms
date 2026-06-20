@@ -55,6 +55,18 @@ pub struct Access {
     #[serde(default)]
     #[lua(ty = "string | crap.HookRef", optional)]
     pub versions: Option<HookRef>,
+    /// Hook ref gating the account lock-state operations (`LockAccount` /
+    /// `UnlockAccount`) on an auth collection. Falls back to `update` when unset
+    /// (like `trash`/`draft`), so by default locking another user requires the
+    /// same edit-level access the admin UI already enforces. Set it to carve out
+    /// a *narrower* privilege than full edit — e.g. a moderator who may block
+    /// logins but not change a user's email or role. Shaped like `update`: a
+    /// returned filter table scopes *which* users the caller may (un)lock (e.g.
+    /// `{ org = ctx.user.org }`), enforced against the target user. Only
+    /// meaningful on auth collections; rejected on globals.
+    #[serde(default)]
+    #[lua(ty = "string | crap.HookRef", optional)]
+    pub unlock: Option<HookRef>,
 }
 
 /// Typegen-only mirror of [`Access`] for globals. A global is a single row with
@@ -115,6 +127,31 @@ impl Access {
     pub fn resolve_draft(&self) -> Option<&HookRef> {
         self.draft.as_ref().or(self.update.as_ref())
     }
+
+    /// Resolve the access function for the account lock-state operations
+    /// (lock / unlock). Returns `access.unlock` when set, otherwise falls back
+    /// to `access.update` — so by default blocking another user's login requires
+    /// edit-level access (the policy the admin UI already enforces), and an
+    /// operator may set `access.unlock` to grant a narrower moderator privilege.
+    #[must_use]
+    pub fn resolve_unlock(&self) -> Option<&HookRef> {
+        self.unlock.as_ref().or(self.update.as_ref())
+    }
+
+    /// Resolve the access function for version-history visibility. Returns
+    /// `access.versions` when set, otherwise falls back to `access.update` — so
+    /// by default version history follows edit access (a published-only reader
+    /// sees no history; an editor does, with no separate access rule needed).
+    ///
+    /// Note: the version *gate* consults `versions` and `update` separately
+    /// rather than through this resolver, because the two differ in how they
+    /// treat a `Constrained` result (an explicit `versions` filter is a config
+    /// error; a `Constrained` `update` is a legitimate row scope). This resolver
+    /// is for the UI permission hint, which only needs allow/deny.
+    #[must_use]
+    pub fn resolve_versions(&self) -> Option<&HookRef> {
+        self.versions.as_ref().or(self.update.as_ref())
+    }
 }
 
 /// Builder for [`Access`]. Created via [`Access::builder`].
@@ -127,6 +164,7 @@ pub struct AccessBuilder {
     trash: Option<HookRef>,
     draft: Option<HookRef>,
     versions: Option<HookRef>,
+    unlock: Option<HookRef>,
 }
 
 impl AccessBuilder {
@@ -184,6 +222,13 @@ impl AccessBuilder {
     }
 
     #[must_use]
+    pub fn unlock(mut self, unlock: Option<HookRef>) -> Self {
+        self.unlock = unlock;
+
+        self
+    }
+
+    #[must_use]
     pub fn build(self) -> Access {
         Access {
             read: self.read,
@@ -193,6 +238,7 @@ impl AccessBuilder {
             trash: self.trash,
             draft: self.draft,
             versions: self.versions,
+            unlock: self.unlock,
         }
     }
 }
@@ -225,6 +271,32 @@ mod tests {
     fn resolve_trash_returns_none_when_both_unset() {
         let access = Access::default();
         assert!(access.resolve_trash().is_none());
+    }
+
+    #[test]
+    fn resolve_unlock_prefers_unlock_over_update() {
+        let access = Access {
+            unlock: Some(HookRef::new("unlock_fn")),
+            update: Some(HookRef::new("update_fn")),
+            ..Default::default()
+        };
+        assert_eq!(access.resolve_unlock(), Some(&HookRef::new("unlock_fn")));
+    }
+
+    #[test]
+    fn resolve_unlock_falls_back_to_update() {
+        let access = Access {
+            unlock: None,
+            update: Some(HookRef::new("update_fn")),
+            ..Default::default()
+        };
+        assert_eq!(access.resolve_unlock(), Some(&HookRef::new("update_fn")));
+    }
+
+    #[test]
+    fn resolve_unlock_returns_none_when_both_unset() {
+        let access = Access::default();
+        assert!(access.resolve_unlock().is_none());
     }
 
     #[test]

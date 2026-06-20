@@ -8,6 +8,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **`access.versions` now falls back to `access.update` when unset, instead of
+  defaulting to allow.** Version history is an edit-level view: like `draft` and
+  `trash`, an unset `versions` key now resolves to `update`, so by default only a
+  caller who can edit a document may browse its history — a published-only reader
+  cannot. A row-filtered `update` (e.g. `{ author = ctx.user.id }`) scopes
+  history to the documents the caller may edit. *Which* snapshots are returned is
+  still independently bounded by the `read`/`draft` composite. This makes the
+  lifecycle views uniform (`draft`/`trash`/`versions` all `?? update`) and means
+  enabling the `versions` feature works out of the box with an existing `update`
+  rule — no separate access rule needed. **Migration:** if you relied on version
+  history being visible to plain readers, set `access.versions` to an explicit
+  permissive rule (e.g. `access.anyone`). An explicitly-set `versions` is
+  unchanged — still a boolean toggle that can only further restrict (a filter
+  table there remains a configuration error). Restore is unaffected (it already
+  requires `update`).
+
 - **Globals reject the `access.create`, `access.delete`, and `access.trash`
   keys.** A global is a single row with only `get`/`update` operations, so these
   keys could never fire — they were silently ignored. They now fail config load
@@ -269,6 +285,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `max_file_size` still inherits the global default.
 
 ### Security
+
+- **The gRPC account-action RPCs now authorize the caller against the target
+  user.** `LockAccount`, `UnlockAccount`, `VerifyAccount`, and `UnverifyAccount`
+  previously required only that the caller present a *valid* JWT — they performed
+  no authorization check against the target. Any authenticated user (in any auth
+  collection) could therefore lock, unlock, verify, or unverify **any** account,
+  including locking out an administrator (privilege escalation / denial of
+  service). Each RPC now evaluates an access function against the target user
+  before mutating: `LockAccount`/`UnlockAccount` use the new `access.unlock`
+  (falling back to `access.update`), and `VerifyAccount`/`UnverifyAccount` use
+  `access.update`. A row-filter rule (e.g. `{ org = ctx.user.org }`) is enforced
+  against the target, so an org-scoped moderator can only act within their org. A
+  caller without access gets `PERMISSION_DENIED`. This matches how the admin UI
+  already gates the lock toggle (through the document `update` access). See the
+  new `access.unlock` key under Added.
+
+- **An access function that returns an empty constraint table now denies
+  (fail-closed) instead of matching every row.** A read-access function may
+  return a filter table (e.g. `{ tenant_id = ctx.user.tenant_id }`) to restrict
+  which rows the caller sees. In Lua, that table is the **empty table** `{}` when
+  the value is `nil` — the table constructor silently drops nil-valued keys — so
+  `{ tenant_id = ctx.user.tenant_id }` for a user whose `tenant_id` is unset (a
+  tenantless account, a renamed field, a partial signup) evaluated to a
+  constraint with zero filters. That zero-filter constraint AND'd **nothing**
+  into the query, so the intended-to-restrict rule matched **every** row —
+  a cross-tenant / cross-user data leak across reads, relationship population,
+  and live-event streams. An access function that returns a table now requires at
+  least one resulting filter; a table that produces none (an empty table, a
+  nil-valued key, or an empty operator table like `{ score = {} }`) is treated as
+  **Denied**. Allow-everything must be the explicit `return true`. This is a
+  breaking change for any access rule that relied on returning `{}` to mean
+  "allow all" — switch those to `return true`. Guard optional constraint values
+  explicitly (`if ctx.user.tenant_id == nil then return false end`); see the
+  multi-tenant example in the access-control docs.
 
 - **Soft-deleting (trashing) an auth user now fully disables the account.** The
   per-request evaluator already resolves users via `find_by_id`, which excludes
@@ -1177,6 +1227,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   files, so trashed documents remain restorable.)
 
 ### Added
+
+- **`access.unlock` — a dedicated access key for the account lock/unlock
+  operations on auth collections.** Like Payload's `unlock` access function, it
+  lets you grant a *narrower* privilege than full edit: a moderator who may block
+  logins (`LockAccount`/`UnlockAccount`) without being able to edit user fields.
+  It is shaped like `update`/`delete` (`true`/`false`/row-filter, the filter
+  enforced against the target user) and **falls back to `update` when unset**
+  (mirroring `trash`/`draft`), so the common case needs no new config and the
+  default gate matches the admin UI. Rejected on globals (which have no accounts);
+  a startup warning fires if set on a non-auth collection. The serializer that
+  round-trips a definition back to Lua also now emits the `draft`, `versions`, and
+  `unlock` access keys (previously `draft`/`versions` were silently dropped).
 
 - **`find_by_id`/`count` gained the `draft`/`trash` view selectors on the MCP and
   Lua surfaces, for parity with `find`.** MCP `find_by_id` previously could not

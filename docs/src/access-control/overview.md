@@ -41,15 +41,17 @@ Reads are gated per **content view**, and each view has its own access key:
 | `read` | published documents | falls back to the collection default (`default_deny`) |
 | `draft` | unpublished (draft) documents | `update` |
 | `trash` | soft-deleted documents | `update` |
-| `versions` | version history | allowed (boolean toggle) |
+| `versions` | version history | `update` |
 
-`versions` is the one key whose unset default is *allow* rather than a
-fallback: history visibility just follows the per-snapshot `read`/`draft`
-result (a published snapshot needs `read`, a draft snapshot needs `draft`), so
-leaving `versions` unset never widens what a viewer can already see. Set it to
-`false` (or a boolean function) only when you want to hide history *even from*
-content-readers. `draft` and `trash`, by contrast, fall back to `update`, so
-they are effectively closed unless you grant `update` or set them explicitly.
+`draft`, `trash`, and `versions` all fall back to `update` when unset — they
+are edit-level views, closed to a plain reader unless you grant `update` or set
+them explicitly. For `versions` this means version history follows edit access
+by default: a published-only reader cannot browse a document's history, an
+editor can, and enabling the `versions` feature works out of the box with your
+existing `update` rule. Set `versions` explicitly (a boolean function) only to
+restrict history *further* than editing. *Which* snapshots are returned is
+still the per-snapshot `read`/`draft` composite, so content stays bounded even
+where the timeline is visible.
 
 A read returns the **union** of the views the caller requested *and* is allowed
 to see. Because the keys are independent, you can express policies the old

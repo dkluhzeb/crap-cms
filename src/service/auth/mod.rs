@@ -25,8 +25,8 @@ pub mod tokens;
 mod test_support;
 
 pub use account::{
-    bump_session_version, get_session_version, is_locked, is_verified, lock_user, mark_unverified,
-    mark_verified, unlock_user, user_exists,
+    AccountAction, bump_session_version, get_session_version, is_locked, is_verified, lock_user,
+    mark_unverified, mark_verified, perform_account_action, unlock_user, user_exists,
 };
 pub use evaluator::{
     AuthFailure, AuthRequest, AuthenticatedResolution, EvaluateDeps, Resolution, ResolvedMethod,

@@ -30,7 +30,16 @@ field-level `access` and global `access`.
 | `trash` | Soft-delete (move to trash) and restore. Only relevant when `soft_delete = true`. | `update` |
 | `delete` | Permanent deletion, empty trash. For collections without `soft_delete`, this is the only delete permission. | — |
 | `draft` | Reading **unpublished (draft)** content — any read that opts into drafts (`draft = true` / `use_draft` / `include_drafts`). Only relevant when `drafts` is enabled. | `update` |
-| `versions` | Reading **version history** (`list_versions` / reading a version snapshot). A *toggle* — set it to deny history access entirely. Only relevant when `versions` is enabled. | **allow** |
+| `versions` | Reading **version history** (`list_versions` / reading a version snapshot). When set, a *toggle* — set it to restrict history access behind a stricter policy. Only relevant when `versions` is enabled. | `update` |
+| `unlock` | The account **lock / unlock** operations (`LockAccount` / `UnlockAccount`) on an **auth** collection. Set it to grant a *narrower* privilege than full edit — e.g. a moderator who may block logins but not edit user fields. A filter table scopes *which* users the caller may (un)lock. Only relevant on auth collections. | `update` |
+
+> **Account actions on auth collections.** `LockAccount` / `UnlockAccount` are
+> gated by `unlock` (falling back to `update`), so by default blocking a user's
+> login requires the same edit access the admin UI enforces — set `unlock`
+> explicitly to carve out a narrower moderator role. `VerifyAccount` /
+> `UnverifyAccount` (forcing a user's email-verified state) are gated by `update`,
+> since they set a property on the user document. None of these are reachable by a
+> merely-authenticated caller: every one requires access to the target user.
 
 > **Note:** When `soft_delete = true`, `trash` and `delete` are separate permissions.
 > `trash` controls the reversible action (low privilege), `delete` controls the
@@ -50,17 +59,20 @@ field-level `access` and global `access`.
 > status, and a user-supplied `_status` filter is rejected as a system column.
 > Opting into drafts is always the typed `draft` flag, never a raw filter.
 
-> **Version history is a separate toggle.** `versions` controls *whether* a user
-> may see version history at all. Unlike `trash`/`draft` it does **not** fall
-> back to `update` — unset means **allow**, so by default anyone who can read the
-> document can browse its history. *Which* snapshots they see is still the
-> composite of `read` (published snapshots) and `draft` (draft snapshots): a
-> reader without draft access sees only published snapshots. `versions` is a pure
-> toggle — return `true`/`false`; a filter table is a configuration error
-> (row-level scoping belongs on `read`). Restoring a version requires **both**
-> `update` (it writes the live document) **and** `versions` (it resurrects
-> historical content) — so denying `versions` walls off historical content
-> entirely, not just its listing. Only relevant when `versions = true`.
+> **Version history follows edit access by default.** Like `draft`/`trash`,
+> `versions` falls back to **`update`** when unset: by default, only someone who
+> can edit a document may browse its history — a published-only reader cannot. A
+> row-filtered `update` (e.g. `{ author = ctx.user.id }`) scopes history to the
+> documents the caller may edit. This means enabling the `versions` feature works
+> out of the box with your existing `update` rule — no separate access rule
+> needed. Set `versions` explicitly to restrict history *further* than editing
+> (e.g. only admins inspect history even though editors can edit); when set it is
+> a pure toggle — return `true`/`false`, a filter table is a configuration error
+> (row-level scoping belongs on `read`/`update`). *Which* snapshots are returned
+> is independently the composite of `read` (published snapshots) and `draft`
+> (draft snapshots), so content is bounded even where the timeline is visible.
+> Restoring a version requires **both** `update` (it writes the live document)
+> **and** the `versions` toggle. Only relevant when `versions = true`.
 
 ## Writing Access Functions
 
@@ -109,10 +121,11 @@ a no-op:
 - **`read` / `draft` / `trash`** — scopes *which rows the view returns*, e.g.
   `return { created_by = ctx.user.id }` lists only the caller's own documents.
   See [Filter Constraints](filter-constraints.md).
-- **`update` / `delete` / `undelete` / `unpublish`** — **enforced as a row
-  guard**: the write proceeds only if the target row matches the filter,
+- **`update` / `delete` / `undelete` / `unpublish` / `unlock`** — **enforced as a
+  row guard**: the operation proceeds only if the target row matches the filter,
   otherwise it is denied. This is how you express "users may only update/delete
-  rows where `created_by = me`" — a real ownership-scoping feature.
+  rows where `created_by = me`", or "a moderator may only unlock users in their
+  own org (`{ org = ctx.user.org }`)" — a real ownership-scoping feature.
 - **`create`** — a filter table is a **configuration error**: there is no target
   row yet, so gate creates with `true`/`false` based on `ctx.data`.
 - **`versions`** — a filter table is a **configuration error**: it is a boolean

@@ -19,6 +19,7 @@ use super::{
         parse_access_config, parse_fields_section, parse_hooks_section, parse_indexes,
         parse_labels, parse_live_setting, parse_mcp_section, parse_versions_config,
         validate_shared_nested_keys, warn_access_keys_without_features, warn_deep_nesting,
+        warn_unlock_without_auth,
     },
     upload::{inject_upload_fields, parse_collection_upload},
 };
@@ -233,6 +234,7 @@ pub fn parse_collection_definition(
         def.soft_delete,
         def.has_versions(),
     );
+    warn_unlock_without_auth(slug, &def.access, def.is_auth_collection());
 
     Ok(def)
 }

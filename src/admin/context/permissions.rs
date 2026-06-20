@@ -44,10 +44,11 @@ pub struct CollectionPermissions {
     /// tab): the read paths request every view unconditionally and the service
     /// downgrades per access, so this never gates the request itself.
     pub draft: bool,
-    /// Whether the user may view version history — gated on the `access.versions`
-    /// toggle (unset means **allow**, matching the service gate). Drives whether
-    /// the version-history sidebar panel is shown. Only meaningful when
-    /// `versions` is enabled. A UI hint only; the service enforces the real gate.
+    /// Whether the user may view version history — gated on `resolve_versions()`
+    /// (`access.versions`, or `access.update` as the fallback), matching the
+    /// service gate. Drives whether the version-history sidebar panel is shown.
+    /// Only meaningful when `versions` is enabled. A UI hint only; the service
+    /// enforces the real gate.
     pub versions: bool,
 }
 
@@ -135,23 +136,17 @@ impl CollectionPermissions {
             false
         };
 
-        // Mirror the service version gate: the `access.versions` toggle defaults
-        // to *allow* when unset (history then follows the read/draft composite),
-        // so only a set toggle is actually consulted.
-        let versions = if !def.has_versions() {
-            false
-        } else if def.access.versions.is_none() {
-            true
-        } else {
-            has_access_with_conn(
+        // Mirror the service version gate: `versions ?? update` — when the
+        // toggle is unset, history follows edit access.
+        let versions = def.has_versions()
+            && has_access_with_conn(
                 state,
-                def.access.versions.as_ref(),
+                def.access.resolve_versions(),
                 user_doc,
                 &tx,
                 "find",
                 &def.slug,
-            )
-        };
+            );
 
         let _ = tx.commit();
 
@@ -177,9 +172,9 @@ pub struct GlobalPermissions {
     /// gated on `resolve_draft()` (`access.draft`, or `access.update`). A UI
     /// hint only — the read path requests drafts unconditionally and downgrades.
     pub draft: bool,
-    /// Whether the user may view the global's version history — gated on the
-    /// `access.versions` toggle (unset means **allow**). Drives whether the
-    /// version-history panel is shown. A UI hint only.
+    /// Whether the user may view the global's version history — gated on
+    /// `resolve_versions()` (`access.versions`, or `access.update`). Drives
+    /// whether the version-history panel is shown. A UI hint only.
     pub versions: bool,
 }
 
@@ -232,21 +227,16 @@ impl GlobalPermissions {
             false
         };
 
-        // Mirror the service version gate: `access.versions` defaults to allow.
-        let versions = if !def.has_versions() {
-            false
-        } else if def.access.versions.is_none() {
-            true
-        } else {
-            has_access_with_conn(
+        // Mirror the service version gate: `versions ?? update`.
+        let versions = def.has_versions()
+            && has_access_with_conn(
                 state,
-                def.access.versions.as_ref(),
+                def.access.resolve_versions(),
                 user_doc,
                 &tx,
                 "get",
                 &def.slug,
-            )
-        };
+            );
 
         let _ = tx.commit();
 

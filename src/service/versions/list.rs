@@ -377,11 +377,12 @@ mod tests {
         assert_eq!(result.docs.len(), 2);
     }
 
-    /// Listing versions is gated by `read`; a draft version additionally needs
-    /// edit-level access. A reader with `read` but not edit access sees only
-    /// published versions, while an editor sees draft versions too.
+    /// Version history follows EDIT access by default (`versions ?? update`): a
+    /// reader with `read` but no edit (`update`) access is denied history
+    /// entirely — not just drafts — since `access.versions` is unset and falls
+    /// back to `update`. An editor (who passes `update`) sees all versions.
     #[test]
-    fn version_list_filters_drafts_for_readers_without_edit_access() {
+    fn version_list_denied_without_edit_access() {
         let (conn, mut def) = setup_versioned_collection();
         def.access.read = Some(crate::core::HookRef::new("read_fn"));
         def.access.update = Some(crate::core::HookRef::new("update_fn"));
@@ -392,25 +393,27 @@ mod tests {
         )
         .unwrap();
 
-        // Reader: `read_fn` allowed, edit-level (`update_fn`) denied → published only.
+        // Reader: `read_fn` allowed, edit-level (`update_fn`) denied → the
+        // versions gate (falling back to update) denies history outright.
         let reader = OnlyReadFnAllowed;
         let reader_ctx = ServiceContext::collection("posts", &def)
             .conn(&conn)
             .read_hooks(&reader)
             .build();
-        let res = list_versions(&reader_ctx, &ListVersionsInput::builder("p1").build()).unwrap();
-        assert_eq!(res.total, 1, "reader sees only published versions");
-        assert_eq!(res.docs.len(), 1);
-        assert_eq!(res.docs[0].status, "published");
+        let res = list_versions(&reader_ctx, &ListVersionsInput::builder("p1").build());
+        assert!(
+            matches!(res, Err(ServiceError::AccessDenied(_))),
+            "a reader without edit access must be denied version history"
+        );
 
-        // Editor (allow-all hooks pass the edit-level check too) → all versions.
+        // Editor (allow-all hooks pass the edit-level check) → all versions.
         let editor = NoopReadHooks;
         let editor_ctx = ServiceContext::collection("posts", &def)
             .conn(&conn)
             .read_hooks(&editor)
             .build();
         let res2 = list_versions(&editor_ctx, &ListVersionsInput::builder("p1").build()).unwrap();
-        assert_eq!(res2.total, 2, "editor sees draft versions too");
+        assert_eq!(res2.total, 2, "editor sees all versions");
     }
 
     /// Read hooks where `read` is `Allowed` (published readable by anyone) but
@@ -497,6 +500,10 @@ mod tests {
         });
         def.access.read = Some(crate::core::HookRef::new("read_fn"));
         def.access.draft = Some(crate::core::HookRef::new("draft_fn"));
+        // Explicit `versions` allow (`read_fn` → Allowed in the mock) so the
+        // history *gate* passes; this test isolates the per-snapshot DRAFT
+        // constraint, not the `versions ?? update` gate.
+        def.access.versions = Some(crate::core::HookRef::new("read_fn"));
 
         let hooks = DraftConstrainedToMe;
 

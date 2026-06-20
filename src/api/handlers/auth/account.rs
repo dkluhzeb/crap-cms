@@ -12,7 +12,7 @@ use crate::{
     core::{Registry, SharedInvalidationTransport, SharedTokenProvider},
     db::DbPool,
     hooks::HookRunner,
-    service::{self, ServiceContext, ServiceError},
+    service::{self, ServiceContext, ServiceError, auth::AccountAction},
 };
 
 /// Shared logic for all account action RPCs.
@@ -78,12 +78,15 @@ struct AccountActionBlockingInput {
     verify_email_required: bool,
 }
 
-/// Resolve auth, then call one of `lock_user`/`unlock_user`/`mark_verified`/
-/// `mark_unverified`. The action is taken as a fn pointer so the closure
-/// passed to `spawn_blocking` is a single fn call.
+/// Resolve auth, authorize the caller against the target user, then perform the
+/// account action. Authorization is the load-bearing step: a *valid* JWT is not
+/// enough — the caller must pass the target collection's `unlock` access
+/// (lock/unlock) or `update` access (verify/unverify) against the target user
+/// document, so an authenticated-but-unprivileged caller can't lock/verify
+/// another account. Enforcement lives in `service::auth::perform_account_action`.
 fn account_action_blocking(
     input: AccountActionBlockingInput,
-    action: fn(&ServiceContext, &str) -> Result<(), ServiceError>,
+    action: AccountAction,
 ) -> Result<(), Status> {
     let conn = input
         .pool
@@ -99,9 +102,9 @@ fn account_action_blocking(
         &conn,
     )?;
 
-    if auth_user.is_none() {
+    let Some(auth_user) = auth_user else {
         return Err(Status::unauthenticated("Authentication required"));
-    }
+    };
 
     // Collection-shape validation runs only after authentication so an
     // unauthenticated caller can't probe whether a collection exists, is an
@@ -111,12 +114,20 @@ fn account_action_blocking(
         validate_verify_email_enabled(&input.registry, &input.collection)?;
     }
 
-    let ctx = ServiceContext::slug_only(&input.collection)
+    let def = input
+        .registry
+        .get_collection(&input.collection)
+        .ok_or_else(|| Status::not_found(format!("Collection '{}' not found", input.collection)))?;
+
+    let ctx = ServiceContext::collection(&input.collection, def)
         .conn(&conn)
+        .runner(&input.hook_runner)
+        .user(Some(&auth_user.user_doc))
         .invalidation_transport(input.invalidation_transport)
         .build();
 
-    action(&ctx, &input.id).map_err(|e| Status::from(e.reclassify(&input.db_kind)))
+    service::auth::perform_account_action(&ctx, &input.id, action)
+        .map_err(|e| Status::from(e.reclassify(&input.db_kind)))
 }
 
 #[cfg(not(tarpaulin_include))]
@@ -162,7 +173,7 @@ impl ContentService {
         // validation happens after auth inside the blocking body.
         let input = self.account_action_input(token, headers, &req, true, false);
 
-        task::spawn_blocking(move || account_action_blocking(input, service::auth::lock_user))
+        task::spawn_blocking(move || account_action_blocking(input, AccountAction::Lock))
             .await
             .inspect_err(|e| error!("Task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;
@@ -182,7 +193,7 @@ impl ContentService {
 
         let input = self.account_action_input(token, headers, &req, false, false);
 
-        task::spawn_blocking(move || account_action_blocking(input, service::auth::unlock_user))
+        task::spawn_blocking(move || account_action_blocking(input, AccountAction::Unlock))
             .await
             .inspect_err(|e| error!("Task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;
@@ -202,7 +213,7 @@ impl ContentService {
 
         let input = self.account_action_input(token, headers, &req, false, true);
 
-        task::spawn_blocking(move || account_action_blocking(input, service::auth::mark_verified))
+        task::spawn_blocking(move || account_action_blocking(input, AccountAction::Verify))
             .await
             .inspect_err(|e| error!("Task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;
@@ -227,12 +238,10 @@ impl ContentService {
         // a revoked session).
         let input = self.account_action_input(token, headers, &req, true, true);
 
-        task::spawn_blocking(move || {
-            account_action_blocking(input, service::auth::mark_unverified)
-        })
-        .await
-        .inspect_err(|e| error!("Task error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))??;
+        task::spawn_blocking(move || account_action_blocking(input, AccountAction::Unverify))
+            .await
+            .inspect_err(|e| error!("Task error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))??;
 
         Ok(Response::new(content::AccountActionResponse {}))
     }
