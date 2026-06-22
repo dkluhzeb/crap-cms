@@ -786,12 +786,12 @@ end
     );
 }
 
-/// Security: the callback binds ONLY to the auth collection it runs under
-/// (the deterministic first one) and must NEVER mint a session for a user that
-/// lives in a *different* auth collection — binding cross-collection by a
-/// hook-returned id would be a privilege escalation. With `acol` and `bcol`,
-/// the callback runs under `acol`; a user that exists only in `bcol` is refused
-/// (no session cookie).
+/// Security: the un-scoped callback `/admin/auth/callback/{name}` fails closed
+/// when the target collection is ambiguous. With 2+ auth collections (`acol`,
+/// `bcol`) it can't know which to bind, so it never mints a session at all —
+/// operators must use the collection-scoped route. (Previously it bound to the
+/// lexicographically-first collection; the silent min-binding was a footgun.)
+/// Here a user that exists only in `bcol` gets no session via the un-scoped route.
 #[tokio::test]
 async fn auth_callback_does_not_bind_across_collections() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -854,6 +854,165 @@ end
     assert!(
         !has_session,
         "a user that exists only in another auth collection must not get a session"
+    );
+}
+
+/// Helper for the scoped-callback tests: write the shared `test` callback hook
+/// (echoes the `uid` query param as the user id) into the config dir.
+fn write_uid_callback_hook(tmp_path: &std::path::Path) {
+    let cb_dir = tmp_path.join("auth_callback");
+    std::fs::create_dir_all(&cb_dir).unwrap();
+    std::fs::write(
+        cb_dir.join("test.lua"),
+        r#"
+return function(ctx)
+    local uid = ctx.headers["_query_uid"]
+    if not uid then return nil end
+    return { id = uid, email = "x@test.com" }
+end
+"#,
+    )
+    .unwrap();
+}
+
+fn issued_session(resp: &axum::response::Response) -> bool {
+    resp.headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .any(|c| c.starts_with("crap_session="))
+}
+
+/// The collection-scoped route `/admin/auth/callback/{collection}/{name}` binds
+/// the session to the collection named in the URL — so OAuth works for a
+/// NON-first auth collection. With `acol` + `bcol`, a `bcol` user logging in via
+/// `/admin/auth/callback/bcol/test` gets a session (the un-scoped route can't).
+#[tokio::test]
+async fn auth_callback_scoped_binds_to_named_collection() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_uid_callback_hook(tmp.path());
+
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.admin.require_auth = false;
+
+    let app = setup_app_in_dir(
+        vec![make_named_auth_def("acol"), make_named_auth_def("bcol")],
+        vec![],
+        config,
+        tmp,
+    );
+
+    let user_id = {
+        let def = app.registry.get_collection("bcol").unwrap().clone();
+        let mut conn = app.pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let data: DocumentFields =
+            HashMap::from([("email".to_string(), json!("x@test.com"))]).into();
+        let doc = query::create(&tx, "bcol", &def, &data, None).unwrap();
+        tx.commit().unwrap();
+        doc.id.to_string()
+    };
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get(format!("/admin/auth/callback/bcol/test?uid={user_id}"))
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        issued_session(&resp),
+        "scoped callback to bcol must mint a session for a bcol user"
+    );
+}
+
+/// Security: the scoped route preserves the no-cross-collection-binding
+/// guarantee. A `bcol` user routed through `/admin/auth/callback/acol/test` is
+/// refused — `validate_callback_user` requires the user to exist in the named
+/// (`acol`) collection, so a hook-returned id from another collection can't mint
+/// a session there.
+#[tokio::test]
+async fn auth_callback_scoped_does_not_bind_across_collections() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_uid_callback_hook(tmp.path());
+
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.admin.require_auth = false;
+
+    let app = setup_app_in_dir(
+        vec![make_named_auth_def("acol"), make_named_auth_def("bcol")],
+        vec![],
+        config,
+        tmp,
+    );
+
+    let user_id = {
+        let def = app.registry.get_collection("bcol").unwrap().clone();
+        let mut conn = app.pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let data: DocumentFields =
+            HashMap::from([("email".to_string(), json!("x@test.com"))]).into();
+        let doc = query::create(&tx, "bcol", &def, &data, None).unwrap();
+        tx.commit().unwrap();
+        doc.id.to_string()
+    };
+
+    // Bind attempt against acol with a bcol-only user id.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get(format!("/admin/auth/callback/acol/test?uid={user_id}"))
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        !issued_session(&resp),
+        "scoped callback to acol must refuse a user that exists only in bcol"
+    );
+}
+
+/// The scoped route fails closed for an unknown / non-auth collection in the URL.
+#[tokio::test]
+async fn auth_callback_scoped_rejects_unknown_collection() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_uid_callback_hook(tmp.path());
+
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.admin.require_auth = false;
+
+    let app = setup_app_in_dir(vec![make_named_auth_def("acol")], vec![], config, tmp);
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/auth/callback/nope/test?uid=whatever")
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        !issued_session(&resp),
+        "scoped callback to an unknown collection must not mint a session"
     );
 }
 

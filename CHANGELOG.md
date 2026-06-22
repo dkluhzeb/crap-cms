@@ -8,6 +8,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **The un-scoped OAuth callback route `/admin/auth/callback/{name}` now fails
+  closed when there is more than one auth collection.** It previously bound the
+  session to the lexicographically-first auth collection — a silent default that
+  meant users in any other auth collection could never sign in via OAuth, with no
+  error to explain it. It now binds only when there is **exactly one** auth
+  collection; with two or more it redirects to login and logs a warning.
+  **Migration:** if you have multiple auth collections, point each provider's
+  redirect URI at the new collection-scoped route
+  `/admin/auth/callback/{collection}/{name}` (see *Added*). Deployments with a
+  single auth collection are unaffected.
+
 - **`access.versions` now falls back to `access.update` when unset, instead of
   defaulting to allow.** Version history is an edit-level view: like `draft` and
   `trash`, an unset `versions` key now resolves to `update`, so by default only a
@@ -1227,6 +1238,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   files, so trashed documents remain restorable.)
 
 ### Added
+
+- **Collection-scoped OAuth callback route `/admin/auth/callback/{collection}/{name}`.**
+  External auth (OAuth2/OIDC) now works with more than one auth collection: the
+  target collection is taken from the URL, so each provider redirect URI binds to
+  a specific auth collection (e.g. `/admin/auth/callback/customers/google`). The
+  cross-collection-binding guard is preserved — the hook-returned user must exist
+  in the named collection, so a session can never bind across collections by id.
+  The un-scoped `/admin/auth/callback/{name}` route remains for single-auth-collection
+  setups (see *Breaking*).
 
 - **`access.admin` — a per-collection/global key gating admin-UI
   visibility/access** (Payload parity with its `admin` access function). A

@@ -449,6 +449,10 @@ fn assemble_base_router(
             "/admin/auth/callback/{name}",
             get(auth_handlers::auth_callback).post(auth_handlers::auth_callback),
         )
+        .route(
+            "/admin/auth/callback/{collection}/{name}",
+            get(auth_handlers::auth_callback_scoped).post(auth_handlers::auth_callback_scoped),
+        )
         .merge(protected)
         .merge(mcp_router)
         .nest("/api", upload_api)

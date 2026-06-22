@@ -14,15 +14,15 @@ use axum::{
 };
 use chrono::Utc;
 use tokio::task;
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::{
     admin::{
         AdminState,
         handlers::{
             auth::{
-                client_ip, create_session_token, extract_user_email, find_auth_collection,
-                headers_to_map, session_redirect,
+                client_ip, create_session_token, extract_user_email, headers_to_map,
+                session_redirect, sole_auth_collection,
             },
             shared::paths,
         },
@@ -145,23 +145,24 @@ fn validate_callback_user(state: &AdminState, slug: &str, user_id: &str) -> Opti
     Some(service::auth::get_session_version(&ctx, user_id).unwrap_or(0))
 }
 
-/// GET/POST `/admin/auth/callback/{name}` — dispatch to Lua auth callback hook.
+/// Run the rate-limit → hook → validate → mint-session flow for a callback that
+/// has already resolved its target auth `collection`. Shared by the legacy
+/// un-scoped handler ([`auth_callback`]) and the collection-scoped handler
+/// ([`super::callback_scoped::auth_callback_scoped`]).
 ///
-/// The hook function `hooks.auth_callback.{name}` receives:
-/// - `query` — URL query parameters as key-value table
-/// - `headers` — HTTP request headers as key-value table
-/// - `method` — HTTP method string ("GET" or "POST")
-///
-/// Returns a user document table (with `id` field) to create a session,
-/// or `nil`/`false` to redirect to login.
-pub async fn auth_callback(
-    State(state): State<AdminState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    Path(name): Path<String>,
-    Query(params): Query<HashMap<String, String>>,
-    headers: HeaderMap,
+/// The session binds ONLY to `collection`: the hook-returned user must exist in
+/// it (enforced by [`validate_callback_user`]), so a returned id that lives only
+/// in another auth collection is refused — no cross-collection (privilege-
+/// escalating) binding regardless of which route reached here.
+pub(super) async fn complete_auth_callback(
+    state: &AdminState,
+    addr: SocketAddr,
+    collection: &str,
+    name: &str,
+    params: &HashMap<String, String>,
+    headers: &HeaderMap,
 ) -> Response {
-    let ip = client_ip(&headers, &addr, &state.config.server);
+    let ip = client_ip(headers, &addr, &state.config.server);
 
     // Atomically record this callback attempt against the IP limiter and bail
     // if over threshold — one operation, closing the burst race the is_blocked
@@ -170,17 +171,7 @@ pub async fn auth_callback(
         return Redirect::to(paths::LOGIN).into_response();
     }
 
-    // The callback is not collection-scoped, so it binds to the deterministic
-    // auth collection — and ONLY that collection. The session can never bind to
-    // a different auth collection by a hook-returned id (which would be a
-    // cross-collection privilege escalation). Multi-auth-collection OAuth (a
-    // callback for a non-first collection) needs a collection-scoped route —
-    // tracked follow-up.
-    let Some(collection) = find_auth_collection(&state.registry) else {
-        return Redirect::to(paths::LOGIN).into_response();
-    };
-
-    let user = match run_auth_callback_hook(&state, &name, &headers, &params, &collection).await {
+    let user = match run_auth_callback_hook(state, name, headers, params, collection).await {
         Ok(Some(doc)) => doc,
         Ok(None) => {
             // Attempt already recorded up front by check_and_block.
@@ -190,16 +181,16 @@ pub async fn auth_callback(
     };
 
     // The returned user must exist in `collection`; lock + verify-email enforced.
-    let Some(session_version) = validate_callback_user(&state, &collection, &user.id) else {
+    let Some(session_version) = validate_callback_user(state, collection, &user.id) else {
         return Redirect::to(paths::LOGIN).into_response();
     };
 
     let email = extract_user_email(&user);
 
     let session = match create_session_token(
-        &state,
+        state,
         user.id.to_string(),
-        &collection,
+        collection,
         email,
         session_version,
         Utc::now().timestamp().max(0).cast_unsigned(),
@@ -213,5 +204,37 @@ pub async fn auth_callback(
 
     state.ip_login_limiter.clear(&ip);
 
-    session_redirect(&state, &session)
+    session_redirect(state, &session)
+}
+
+/// GET/POST `/admin/auth/callback/{name}` — un-scoped auth callback dispatch.
+///
+/// The hook function `hooks.auth_callback.{name}` receives:
+/// - `query` — URL query parameters as key-value table
+/// - `headers` — HTTP request headers as key-value table
+/// - `method` — HTTP method string ("GET" or "POST")
+///
+/// Returns a user document table (with `id` field) to create a session,
+/// or `nil`/`false` to redirect to login.
+///
+/// This route binds to the SINGLE auth collection when there is exactly one.
+/// With 2+ auth collections the target is ambiguous, so it fails closed — use
+/// the collection-scoped route `/admin/auth/callback/{collection}/{name}`.
+pub async fn auth_callback(
+    State(state): State<AdminState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Path(name): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(collection) = sole_auth_collection(&state.registry) else {
+        warn!(
+            "un-scoped auth callback {name:?} has no unambiguous auth collection \
+             (need exactly one); use /admin/auth/callback/{{collection}}/{name} \
+             for multi-auth-collection setups"
+        );
+        return Redirect::to(paths::LOGIN).into_response();
+    };
+
+    complete_auth_callback(&state, addr, &collection, &name, &params, &headers).await
 }

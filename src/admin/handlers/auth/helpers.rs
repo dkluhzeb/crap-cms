@@ -197,21 +197,30 @@ pub(in crate::admin::handlers) fn headers_to_map(headers: &HeaderMap) -> HashMap
         .collect()
 }
 
-/// Find the slug of an auth collection in the registry, deterministically.
+/// The single auth collection's slug, or `None` when there are zero or 2+.
 ///
-/// `collections` is a `HashMap`, so pick the lexicographically smallest auth
-/// slug rather than an arbitrary (per-process-randomized) one — stable across
-/// restarts. The OAuth callback runs under, and binds the session to, this
-/// single collection; the hook-returned user must exist in it (the callback
-/// never binds to a different auth collection by id). Multi-auth-collection
-/// OAuth needs a collection-scoped route — tracked follow-up.
-pub(in crate::admin::handlers) fn find_auth_collection(registry: &Registry) -> Option<String> {
-    registry
+/// The legacy un-scoped OAuth callback (`/admin/auth/callback/{name}`) can only
+/// safely bind a session when the target collection is unambiguous. With 2+ auth
+/// collections the callback cannot know which one to bind, so it fails closed and
+/// the operator must use the collection-scoped route
+/// (`/admin/auth/callback/{collection}/{name}`) instead. Either way the
+/// hook-returned user must exist in the bound collection — the callback never
+/// binds to a different auth collection by id.
+pub(in crate::admin::handlers) fn sole_auth_collection(registry: &Registry) -> Option<String> {
+    let mut auth = registry
         .collections
         .iter()
         .filter(|(_, d)| d.is_auth_collection())
-        .map(|(slug, _)| slug.to_string())
-        .min()
+        .map(|(slug, _)| slug.to_string());
+
+    let only = auth.next()?;
+
+    // 2+ auth collections → ambiguous; force the collection-scoped route.
+    if auth.next().is_some() {
+        return None;
+    }
+
+    Some(only)
 }
 
 /// Extract the email field from a user document, defaulting to empty string.

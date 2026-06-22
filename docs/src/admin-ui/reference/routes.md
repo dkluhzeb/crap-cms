@@ -17,7 +17,8 @@ CSRF-protected. `/static/` and `/uploads/` are public.
 | `/admin/login` | GET, POST | Login page / login action (public) |
 | `/admin/logout` | POST | Logout |
 | `/admin/mfa` | GET, POST | MFA challenge page / code verification (public auth flow) |
-| `/admin/auth/callback/{name}` | GET, POST | External auth-method callback (public auth flow) |
+| `/admin/auth/callback/{name}` | GET, POST | External auth-method callback, single auth collection (public auth flow) |
+| `/admin/auth/callback/{collection}/{name}` | GET, POST | External auth-method callback bound to a named auth collection (public auth flow) |
 | `/admin/forgot-password` | GET, POST | Forgot password page / action (public) |
 | `/admin/reset-password` | GET, POST | Reset password page / action (public, requires token) |
 | `/admin/verify-email` | GET | Email verification (public, requires token) |

@@ -154,13 +154,14 @@ Omit `bearer` similarly to refuse JWT authentication (rarely useful — usually 
 
 ## Auth Callbacks (OAuth2 / OIDC)
 
-For redirect-based auth flows (OAuth2, OIDC, SAML), use the built-in callback route:
+For redirect-based auth flows (OAuth2, OIDC, SAML), use the built-in callback routes:
 
 ```
-GET/POST /admin/auth/callback/{name}
+GET/POST /admin/auth/callback/{name}                 # single auth collection
+GET/POST /admin/auth/callback/{collection}/{name}    # explicit auth collection
 ```
 
-This dispatches to a Lua hook `auth_callback.{name}` which receives request headers and query parameters. The hook returns a user document to create a session.
+Both dispatch to a Lua hook `auth_callback.{name}` which receives request headers and query parameters; the hook returns a user document to create a session. The two routes differ only in how the **target auth collection** is chosen (see *Collection binding* below).
 
 The file lives at `{config_dir}/auth_callback/{name}.lua` (resolved by
 `require("auth_callback.{name}")`) and **returns the handler function
@@ -214,15 +215,21 @@ end
 > is redirected to login). Return a user your provider has actually
 > authenticated.
 >
-> **Collection binding.** The callback runs under, and binds the session to, a
-> single auth collection (the deterministic first one), and the hook-returned
-> user must exist in it. The session can never bind to a *different* auth
-> collection by a hook-returned id — that would be a privilege escalation across
-> collections. If you run OAuth against more than one auth collection today, the
-> callback only binds to the first; collection-scoped callback routes are a
-> planned follow-up.
+> **Collection binding.** The callback binds the session to one auth collection,
+> and the hook-returned user must exist in it. The session can never bind to a
+> *different* auth collection by a hook-returned id — that would be a privilege
+> escalation across collections.
+>
+> - The un-scoped route `/admin/auth/callback/{name}` binds to the auth
+>   collection **only when there is exactly one**. With two or more auth
+>   collections the target is ambiguous, so it fails closed (redirect to login) —
+>   use the scoped route instead.
+> - The scoped route `/admin/auth/callback/{collection}/{name}` binds to the auth
+>   collection named in the URL. Use it when you have multiple auth collections
+>   (e.g. `admins` and `customers`): register a distinct provider redirect URI per
+>   collection.
 
-To initiate the OAuth flow, add a link on your login page pointing to the provider's authorize URL with your `redirect_uri` set to `/admin/auth/callback/google`.
+To initiate the OAuth flow, add a link on your login page pointing to the provider's authorize URL with your `redirect_uri` set to the matching callback route — `/admin/auth/callback/google` for a single auth collection, or `/admin/auth/callback/customers/google` to bind to the `customers` collection.
 
 ## Email MFA
 

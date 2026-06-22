@@ -2,6 +2,8 @@
 
 /// Auth callback handler for external auth (OAuth, SSO).
 pub mod callback;
+/// Collection-scoped auth callback handler for multi-auth-collection setups.
+pub mod callback_scoped;
 /// Handler for the forgot password form submission.
 pub mod forgot_password_action;
 /// Handler for the forgot password request page.
@@ -30,6 +32,7 @@ mod helpers;
 mod session;
 
 pub use callback::auth_callback;
+pub use callback_scoped::auth_callback_scoped;
 pub use forgot_password_action::forgot_password_action;
 pub use forgot_password_page::forgot_password_page;
 pub use login_action::login_action;
@@ -47,9 +50,9 @@ pub use forms::{
     ResetPasswordQuery, VerifyEmailQuery,
 };
 pub(super) use helpers::{
-    all_disable_local, client_ip, create_session_token, extract_user_email, find_auth_collection,
-    get_auth_collections, headers_to_map, login_error, render_forgot_success, session_redirect,
-    show_forgot_password,
+    all_disable_local, client_ip, create_session_token, extract_user_email, get_auth_collections,
+    headers_to_map, login_error, render_forgot_success, session_redirect, show_forgot_password,
+    sole_auth_collection,
 };
 pub(in crate::admin) use session::{
     CSRF_COOKIE, EDITOR_LOCALE_COOKIE, MFA_PENDING_COOKIE, SESSION_COOKIE, append_cookies,
