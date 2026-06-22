@@ -240,6 +240,7 @@ mod tests {
     use anyhow::Result;
 
     use super::*;
+    use crate::core::ReqContext;
     use crate::core::collection::Hooks;
     use crate::core::collection::{Access, VersionsConfig};
     use crate::db::{Filter, FilterClause, FilterOp};
@@ -265,8 +266,8 @@ mod tests {
     }
 
     impl ReadHooks for MockHooks {
-        fn before_read(&self, _: &Hooks, _: &str, _: &str, _: Option<&str>) -> Result<()> {
-            Ok(())
+        fn before_read(&self, _: &Hooks, _: &str, _: &str, _: Option<&str>) -> Result<ReqContext> {
+            Ok(ReqContext::new())
         }
 
         fn after_read_one(&self, _: &AfterReadCtx, doc: Document) -> Document {

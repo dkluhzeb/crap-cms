@@ -57,6 +57,7 @@ pub fn validate_document(
     write_hooks.strip_write_access_data(
         ctx.fields,
         &mut input.data,
+        ctx.slug,
         user,
         input.locale_ctx.map(LocaleContext::access_locale),
         ctx.operation,

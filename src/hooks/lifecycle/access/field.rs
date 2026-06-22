@@ -19,10 +19,19 @@ use crate::{
 pub(crate) fn check_field_read_access_with_lua(
     lua: &Lua,
     fields: &[FieldDefinition],
+    collection: &str,
     user: Option<&Document>,
     locale: Option<&str>,
 ) -> Vec<FieldDenial> {
-    collect_field_access_denied(lua, fields, user, locale, extract_read_access, "read")
+    collect_field_access_denied(
+        lua,
+        fields,
+        collection,
+        user,
+        locale,
+        extract_read_access,
+        "read",
+    )
 }
 
 /// Check field-level write access using an already-held `&Lua` reference.
@@ -31,6 +40,7 @@ pub(crate) fn check_field_read_access_with_lua(
 pub(crate) fn check_field_write_access_with_lua(
     lua: &Lua,
     fields: &[FieldDefinition],
+    collection: &str,
     user: Option<&Document>,
     locale: Option<&str>,
     operation: &str,
@@ -41,7 +51,7 @@ pub(crate) fn check_field_write_access_with_lua(
         _ => return Vec::new(),
     };
 
-    collect_field_access_denied(lua, fields, user, locale, extractor, operation)
+    collect_field_access_denied(lua, fields, collection, user, locale, extractor, operation)
 }
 
 fn extract_read_access(f: &FieldDefinition) -> Option<&HookRef> {
@@ -61,6 +71,7 @@ fn extract_update_access(f: &FieldDefinition) -> Option<&HookRef> {
 fn access_denied(
     lua: &Lua,
     hook: &HookRef,
+    collection: &str,
     user: Option<&Document>,
     locale: Option<&str>,
     operation: &str,
@@ -77,9 +88,7 @@ fn access_denied(
             document: None,
             locale,
             operation,
-            // Field-access functions are registered on a specific field of a
-            // specific collection, so they don't consult ctx.collection.
-            collection: "",
+            collection,
             ui_locale: None,
         },
     ) {
@@ -101,13 +110,15 @@ fn access_denied(
 fn collect_field_access_denied(
     lua: &Lua,
     fields: &[FieldDefinition],
+    collection: &str,
     user: Option<&Document>,
     locale: Option<&str>,
     extractor: fn(&FieldDefinition) -> Option<&HookRef>,
     operation: &str,
 ) -> Vec<FieldDenial> {
     let is_denied = |field: &FieldDefinition| {
-        extractor(field).is_some_and(|hook| access_denied(lua, hook, user, locale, operation))
+        extractor(field)
+            .is_some_and(|hook| access_denied(lua, hook, collection, user, locale, operation))
     };
 
     let mut denied = Vec::new();
@@ -394,6 +405,17 @@ pub(crate) fn strip_access_data_aware<E, F>(
 /// as the walk descends) — harmonized with `FieldHookContext`. Mirrors
 /// [`check_field_read_access_with_lua`] but data-aware and in place.
 ///
+/// Context for a data-aware field-**read** strip: the full document
+/// (`ctx.document`), its collection slug (`ctx.collection`), the requester, and
+/// the target locale. The read-path mirror of [`WriteStripInput`]; grouped so the
+/// strip entry points stay within a sane argument count.
+pub struct ReadStripInput<'a> {
+    pub document: &'a DocumentFields,
+    pub collection: &'a str,
+    pub user: Option<&'a Document>,
+    pub locale: Option<&'a str>,
+}
+
 /// Gated on [`has_any_field_access`]: when no field carries an `access.read`
 /// function the call returns immediately with zero per-document work, so the
 /// data-aware path costs nothing on schemas that don't use field read access.
@@ -401,9 +423,7 @@ pub(crate) fn strip_read_access_with_lua(
     lua: &Lua,
     fields: &[FieldDefinition],
     level: &mut Map<String, Value>,
-    document: &DocumentFields,
-    user: Option<&Document>,
-    locale: Option<&str>,
+    input: &ReadStripInput<'_>,
 ) {
     if !has_any_field_access(fields, extract_read_access) {
         return;
@@ -414,15 +434,13 @@ pub(crate) fn strip_read_access_with_lua(
             lua,
             &AccessCheckInput {
                 access: Some(hook),
-                user,
+                user: input.user,
                 id: None,
                 data: Some(data),
-                document: Some(document),
-                locale,
+                document: Some(input.document),
+                locale: input.locale,
                 operation: "read",
-                // Field-access functions are registered on a specific field of a
-                // specific collection, so they don't consult ctx.collection.
-                collection: "",
+                collection: input.collection,
                 ui_locale: None,
             },
         ) {
@@ -449,6 +467,9 @@ pub(crate) fn strip_read_access_with_lua(
 /// count and read/write callers thread one value.
 pub struct WriteStripInput<'a> {
     pub document: &'a DocumentFields,
+    /// The collection (or global) slug, exposed to field-access rules as
+    /// `ctx.collection`.
+    pub collection: &'a str,
     pub user: Option<&'a Document>,
     pub locale: Option<&'a str>,
     /// `"create"` or `"update"`; any other value makes the strip a no-op.
@@ -492,7 +513,7 @@ pub(crate) fn strip_write_access_with_lua(
                 document: Some(input.document),
                 locale: input.locale,
                 operation: input.operation,
-                collection: "",
+                collection: input.collection,
                 ui_locale: None,
             },
         ) {
@@ -526,6 +547,7 @@ pub(crate) fn collect_read_denied_with_lua(
     lua: &Lua,
     fields: &[FieldDefinition],
     document: &DocumentFields,
+    collection: &str,
     user: Option<&Document>,
     locale: Option<&str>,
 ) -> Vec<FieldDenial> {
@@ -541,7 +563,7 @@ pub(crate) fn collect_read_denied_with_lua(
                     document: Some(document),
                     locale,
                     operation: "read",
-                    collection: "",
+                    collection,
                     ui_locale: None,
                 },
             ) {
@@ -719,7 +741,17 @@ mod tests {
         .clone();
         let document: DocumentFields = doc.clone().into_iter().collect();
 
-        strip_read_access_with_lua(&lua, &fields, &mut doc, &document, None, None);
+        strip_read_access_with_lua(
+            &lua,
+            &fields,
+            &mut doc,
+            &ReadStripInput {
+                document: &document,
+                collection: "",
+                user: None,
+                locale: None,
+            },
+        );
 
         let rows = doc.get("items").unwrap().as_array().unwrap();
         assert_eq!(
@@ -748,7 +780,17 @@ mod tests {
             .unwrap()
             .clone();
         let pd: DocumentFields = published.clone().into_iter().collect();
-        strip_read_access_with_lua(&lua, &fields, &mut published, &pd, None, None);
+        strip_read_access_with_lua(
+            &lua,
+            &fields,
+            &mut published,
+            &ReadStripInput {
+                document: &pd,
+                collection: "",
+                user: None,
+                locale: None,
+            },
+        );
         assert!(published.contains_key("secret"), "published → secret kept");
 
         let mut draft = json!({ "status": "draft", "secret": "x" })
@@ -756,7 +798,17 @@ mod tests {
             .unwrap()
             .clone();
         let dd: DocumentFields = draft.clone().into_iter().collect();
-        strip_read_access_with_lua(&lua, &fields, &mut draft, &dd, None, None);
+        strip_read_access_with_lua(
+            &lua,
+            &fields,
+            &mut draft,
+            &ReadStripInput {
+                document: &dd,
+                collection: "",
+                user: None,
+                locale: None,
+            },
+        );
         assert!(!draft.contains_key("secret"), "draft → secret stripped");
     }
 
@@ -782,7 +834,17 @@ mod tests {
         .clone();
         let document: DocumentFields = doc.clone().into_iter().collect();
 
-        strip_read_access_with_lua(&lua, &fields, &mut doc, &document, None, None);
+        strip_read_access_with_lua(
+            &lua,
+            &fields,
+            &mut doc,
+            &ReadStripInput {
+                document: &document,
+                collection: "",
+                user: None,
+                locale: None,
+            },
+        );
 
         let rows = doc.get("items").unwrap().as_array().unwrap();
         assert!(
@@ -832,6 +894,7 @@ mod tests {
             &mut doc,
             &WriteStripInput {
                 document: &document,
+                collection: "",
                 user: None,
                 locale: None,
                 operation: "create",
@@ -871,6 +934,7 @@ mod tests {
             &mut doc,
             &WriteStripInput {
                 document: &document,
+                collection: "",
                 user: None,
                 locale: None,
                 operation: "delete",
@@ -919,6 +983,7 @@ mod tests {
             &mut doc,
             &WriteStripInput {
                 document: &document,
+                collection: "",
                 user: None,
                 locale: None,
                 operation: "create",
@@ -955,7 +1020,17 @@ mod tests {
             .clone();
         let document: DocumentFields = doc.clone().into_iter().collect();
 
-        strip_read_access_with_lua(&lua, &fields, &mut doc, &document, None, None);
+        strip_read_access_with_lua(
+            &lua,
+            &fields,
+            &mut doc,
+            &ReadStripInput {
+                document: &document,
+                collection: "",
+                user: None,
+                locale: None,
+            },
+        );
 
         let seo = doc.get("seo").unwrap().as_object().unwrap();
         assert!(seo.contains_key("title"));
@@ -983,7 +1058,17 @@ mod tests {
             .clone();
         let document: DocumentFields = doc.clone().into_iter().collect();
 
-        strip_read_access_with_lua(&lua, &fields, &mut doc, &document, None, None);
+        strip_read_access_with_lua(
+            &lua,
+            &fields,
+            &mut doc,
+            &ReadStripInput {
+                document: &document,
+                collection: "",
+                user: None,
+                locale: None,
+            },
+        );
 
         assert!(
             !doc.contains_key("seo"),
@@ -999,7 +1084,7 @@ mod tests {
             make_field("title", FieldAccess::default()),
             make_field("body", FieldAccess::default()),
         ];
-        let denied = check_field_read_access_with_lua(&lua, &fields, None, None);
+        let denied = check_field_read_access_with_lua(&lua, &fields, "", None, None);
         assert!(denied.is_empty());
     }
 
@@ -1013,7 +1098,7 @@ mod tests {
                 ..Default::default()
             },
         )];
-        let denied = check_field_read_access_with_lua(&lua, &fields, None, None);
+        let denied = check_field_read_access_with_lua(&lua, &fields, "", None, None);
         assert!(denied.is_empty());
     }
 
@@ -1030,7 +1115,7 @@ mod tests {
             ),
             make_field("title", FieldAccess::default()),
         ];
-        let denied = check_field_read_access_with_lua(&lua, &fields, None, None);
+        let denied = check_field_read_access_with_lua(&lua, &fields, "", None, None);
         assert_eq!(denied, vec![flat("secret")]);
     }
 
@@ -1044,7 +1129,7 @@ mod tests {
                 ..Default::default()
             },
         )];
-        let denied = check_field_read_access_with_lua(&lua, &fields, None, None);
+        let denied = check_field_read_access_with_lua(&lua, &fields, "", None, None);
         assert!(denied.is_empty());
     }
 
@@ -1058,7 +1143,7 @@ mod tests {
                 ..Default::default()
             },
         )];
-        let denied = check_field_read_access_with_lua(&lua, &fields, None, None);
+        let denied = check_field_read_access_with_lua(&lua, &fields, "", None, None);
         assert_eq!(denied, vec![flat("broken")]);
     }
 
@@ -1082,7 +1167,7 @@ mod tests {
             ),
             make_field("plain", FieldAccess::default()),
         ];
-        let denied = check_field_read_access_with_lua(&lua, &fields, None, None);
+        let denied = check_field_read_access_with_lua(&lua, &fields, "", None, None);
         assert_eq!(denied, vec![flat("secret")]);
     }
 
@@ -1098,11 +1183,11 @@ mod tests {
         )];
 
         let admin = make_user_doc("admin");
-        let denied = check_field_read_access_with_lua(&lua, &fields, Some(&admin), None);
+        let denied = check_field_read_access_with_lua(&lua, &fields, "", Some(&admin), None);
         assert!(denied.is_empty());
 
         let viewer = make_user_doc("viewer");
-        let denied = check_field_read_access_with_lua(&lua, &fields, Some(&viewer), None);
+        let denied = check_field_read_access_with_lua(&lua, &fields, "", Some(&viewer), None);
         assert_eq!(denied, vec![flat("admin_only")]);
     }
 
@@ -1112,9 +1197,9 @@ mod tests {
     fn field_write_no_access_config_allows_all() {
         let lua = setup_lua();
         let fields = vec![make_field("title", FieldAccess::default())];
-        let denied = check_field_write_access_with_lua(&lua, &fields, None, None, "create");
+        let denied = check_field_write_access_with_lua(&lua, &fields, "", None, None, "create");
         assert!(denied.is_empty());
-        let denied = check_field_write_access_with_lua(&lua, &fields, None, None, "update");
+        let denied = check_field_write_access_with_lua(&lua, &fields, "", None, None, "update");
         assert!(denied.is_empty());
     }
 
@@ -1128,7 +1213,7 @@ mod tests {
                 ..Default::default()
             },
         )];
-        let denied = check_field_write_access_with_lua(&lua, &fields, None, None, "create");
+        let denied = check_field_write_access_with_lua(&lua, &fields, "", None, None, "create");
         assert_eq!(denied, vec![flat("locked")]);
     }
 
@@ -1142,7 +1227,7 @@ mod tests {
                 ..Default::default()
             },
         )];
-        let denied = check_field_write_access_with_lua(&lua, &fields, None, None, "update");
+        let denied = check_field_write_access_with_lua(&lua, &fields, "", None, None, "update");
         assert_eq!(denied, vec![flat("immutable")]);
     }
 
@@ -1156,7 +1241,7 @@ mod tests {
                 ..Default::default()
             },
         )];
-        let denied = check_field_write_access_with_lua(&lua, &fields, None, None, "create");
+        let denied = check_field_write_access_with_lua(&lua, &fields, "", None, None, "create");
         assert!(denied.is_empty());
     }
 
@@ -1172,7 +1257,7 @@ mod tests {
             },
         )];
         // Unknown operation = no extractor = allowed (no restriction).
-        let denied = check_field_write_access_with_lua(&lua, &fields, None, None, "delete");
+        let denied = check_field_write_access_with_lua(&lua, &fields, "", None, None, "delete");
         assert!(denied.is_empty());
     }
 
@@ -1186,7 +1271,7 @@ mod tests {
                 ..Default::default()
             },
         )];
-        let denied = check_field_write_access_with_lua(&lua, &fields, None, None, "create");
+        let denied = check_field_write_access_with_lua(&lua, &fields, "", None, None, "create");
         assert_eq!(denied, vec![flat("broken")]);
     }
 
@@ -1201,10 +1286,10 @@ mod tests {
                 ..Default::default()
             },
         )];
-        let denied = check_field_write_access_with_lua(&lua, &fields, None, None, "create");
+        let denied = check_field_write_access_with_lua(&lua, &fields, "", None, None, "create");
         assert!(denied.is_empty());
 
-        let denied = check_field_write_access_with_lua(&lua, &fields, None, None, "update");
+        let denied = check_field_write_access_with_lua(&lua, &fields, "", None, None, "update");
         assert_eq!(denied, vec![flat("role")]);
     }
 
@@ -1218,7 +1303,7 @@ mod tests {
                 ..Default::default()
             },
         )];
-        let denied = check_field_write_access_with_lua(&lua, &fields, None, None, "create");
+        let denied = check_field_write_access_with_lua(&lua, &fields, "", None, None, "create");
         assert!(denied.is_empty());
     }
 
@@ -1233,12 +1318,13 @@ mod tests {
             },
         )];
         let admin = make_user_doc("admin");
-        let denied = check_field_write_access_with_lua(&lua, &fields, Some(&admin), None, "update");
+        let denied =
+            check_field_write_access_with_lua(&lua, &fields, "", Some(&admin), None, "update");
         assert!(denied.is_empty());
 
         let viewer = make_user_doc("viewer");
         let denied =
-            check_field_write_access_with_lua(&lua, &fields, Some(&viewer), None, "update");
+            check_field_write_access_with_lua(&lua, &fields, "", Some(&viewer), None, "update");
         assert_eq!(denied, vec![flat("admin_only")]);
     }
 
@@ -1258,7 +1344,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let denied = check_field_read_access_with_lua(&lua, &fields, None, None);
+        let denied = check_field_read_access_with_lua(&lua, &fields, "", None, None);
         assert_eq!(denied, vec![flat("seo__title")]);
     }
 
@@ -1276,7 +1362,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let denied = check_field_read_access_with_lua(&lua, &fields, None, None);
+        let denied = check_field_read_access_with_lua(&lua, &fields, "", None, None);
         assert_eq!(denied, vec![flat("secret")]);
     }
 
@@ -1294,7 +1380,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let denied = check_field_write_access_with_lua(&lua, &fields, None, None, "create");
+        let denied = check_field_write_access_with_lua(&lua, &fields, "", None, None, "create");
         assert_eq!(denied, vec![flat("config__debug")]);
     }
 
@@ -1315,7 +1401,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let denied = check_field_read_access_with_lua(&lua, &fields, None, None);
+        let denied = check_field_read_access_with_lua(&lua, &fields, "", None, None);
         assert_eq!(
             denied,
             vec![FieldDenial::Nested {
@@ -1345,7 +1431,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let denied = check_field_read_access_with_lua(&lua, &fields, None, None);
+        let denied = check_field_read_access_with_lua(&lua, &fields, "", None, None);
         assert_eq!(
             denied,
             vec![FieldDenial::Nested {
@@ -1375,7 +1461,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let denied = check_field_write_access_with_lua(&lua, &fields, None, None, "create");
+        let denied = check_field_write_access_with_lua(&lua, &fields, "", None, None, "create");
         assert_eq!(
             denied,
             vec![FieldDenial::Nested {
@@ -1500,7 +1586,7 @@ mod tests {
                 }])
                 .build(),
         ];
-        let denied = check_field_read_access_with_lua(&lua, &fields, None, None);
+        let denied = check_field_read_access_with_lua(&lua, &fields, "", None, None);
         assert_eq!(denied, vec![flat("secret")]);
     }
 
@@ -1522,7 +1608,7 @@ mod tests {
                 }])
                 .build(),
         ];
-        let denied = check_field_write_access_with_lua(&lua, &fields, None, None, "create");
+        let denied = check_field_write_access_with_lua(&lua, &fields, "", None, None, "create");
         assert_eq!(denied, vec![flat("locked")]);
     }
 

@@ -77,7 +77,7 @@ crap.collections.define("posts", {
 })
 ```
 
-The filter function receives a typed `crap.LiveFilterContext` (`{ collection, operation, data, document_id, edited_by, options }`) and returns `true` to broadcast or `false`/`nil` to suppress.
+The filter function receives a typed `crap.LiveFilterContext` (`{ collection, operation, data, id, edited_by, options }` — the affected document's id is `ctx.id`, matching the other hook contexts; the serialized event payload calls the same value `document_id`) and returns `true` to broadcast or `false`/`nil` to suppress.
 
 `filter` may be a bare ref string **or** a `{ ref, options }` table — the options reach the filter as `ctx.options`, so one gate function can be reused across collections with different config:
 

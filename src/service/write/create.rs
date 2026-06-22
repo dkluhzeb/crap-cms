@@ -89,6 +89,7 @@ pub fn create_document_in_conn(
     write_hooks.strip_write_access_data(
         &def.fields,
         &mut input.data,
+        ctx.slug,
         ctx.user,
         input.locale_ctx.map(LocaleContext::access_locale),
         "create",
@@ -158,7 +159,7 @@ pub fn create_document_in_conn(
     // Strip read-denied fields from the returned document, after the hooks have
     // seen the full doc (hydration can add join data for denied fields).
     let access_locale = input.locale_ctx.map(LocaleContext::access_locale);
-    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.user, access_locale);
+    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.slug, ctx.user, access_locale);
     doc.strip_fields(&collect_api_hidden_field_names(&def.fields, ""));
 
     Ok((doc, after_ctx))

@@ -30,9 +30,9 @@ function M.mutate_title_for_broadcast(ctx)
 end
 
 --- Filter that gates on the document id and the editing user — verifies that
---- `ctx.document_id` and `ctx.edited_by` reach the live filter.
+--- `ctx.id` and `ctx.edited_by` reach the live filter.
 function M.gate_on_id_and_editor(ctx)
-    if ctx.document_id ~= "broadcast-me" then return false end
+    if ctx.id ~= "broadcast-me" then return false end
     if ctx.edited_by == nil then return false end
     return ctx.edited_by.email == "editor@x.com"
 end

@@ -62,7 +62,7 @@ fn undelete_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document>
     let mut doc = query::find_by_id(conn, ctx.slug, def, id, None)?
         .ok_or_else(|| ServiceError::NotFound("Document not found after undelete".into()))?;
 
-    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.user, None);
+    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.slug, ctx.user, None);
     doc.strip_fields(&helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     Ok(doc)

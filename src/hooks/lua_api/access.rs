@@ -359,7 +359,7 @@ fn field_read_denied_impl(
     let user = current_user(lua);
 
     Ok(
-        check_field_read_access_with_lua(lua, &fields, user.as_ref(), None)
+        check_field_read_access_with_lua(lua, &fields, collection, user.as_ref(), None)
             .iter()
             .map(FieldDenial::display_path)
             .collect(),
@@ -386,7 +386,7 @@ fn field_write_denied_impl(
     let user = current_user(lua);
 
     Ok(
-        check_field_write_access_with_lua(lua, &fields, user.as_ref(), None, operation)
+        check_field_write_access_with_lua(lua, &fields, collection, user.as_ref(), None, operation)
             .iter()
             .map(FieldDenial::display_path)
             .collect(),

@@ -521,7 +521,7 @@ function crap.fields.join(config) end
 --- @field collection string Collection (or global) slug the mutation targets.
 --- @field operation string The mutation operation: `"create"`, `"update"`, or `"delete"`.
 --- @field data table<string, any> The document's field data for this event.
---- @field document_id string The affected document's id.
+--- @field id string The affected document's id, exposed to Lua as `ctx.id` (consistent with the other hook contexts; the serialized event payload uses `document_id`).
 --- @field edited_by? { id: string, email: string } The user who caused the mutation (`nil` for anonymous/system changes).
 --- @field options? table Per-config options from the filter's `{ ref, options }` table; `nil` when configured as a bare ref string.
 
@@ -823,7 +823,7 @@ function crap.fields.join(config) end
 --- @field context table<string, any> Request-scoped shared table that persists from `before_validate` through `after_change` within one request. Only JSON-compatible values survive (no functions / userdata).
 --- @field user? table Authenticated user document (nil if unauthenticated or no auth collection).
 --- @field ui_locale? string Admin UI locale code (e.g., `"en"`, `"de"`). Nil if not set or called from gRPC without locale context.
---- @field document_id? string The id of the document this event targets. Populated across the write lifecycle — `update`/`delete` before- and after-hooks, `after_change` on create (the freshly assigned id; `nil` in create's before-hooks, where no row exists yet), and `"default"` for globals. Also set on live-broadcast hooks (`before_broadcast`). The read lifecycle (`after_read`) leaves this `nil` and carries the id inside `data` instead.
+--- @field id? string The id of the document this event targets, exposed to Lua as `ctx.id` (matching the field-hook, validator, and access contexts). Populated across the write lifecycle — `update`/`delete` before- and after-hooks, `after_change` on create (the freshly assigned id; `nil` in create's before-hooks, where no row exists yet), `after_read`, and `"default"` for globals. Also set on live-broadcast hooks (`before_broadcast`). (The Rust field stays `document_id`; only the Lua-facing key is `id`.)
 --- @field edited_by? { id: string, email: string } The user who caused a live-broadcast mutation. Set on `before_broadcast`; `nil` elsewhere or for anonymous changes. (Distinct from `user`, the caller of a request — broadcast fires post-commit with no request user.)
 --- @field hook_depth integer  Current recursion depth. `0` = top-level API/admin call, `1+` = from Lua CRUD inside hooks. Hooks are skipped when this reaches `hooks.max_depth` (default: `3`).
 --- @field options? table  Per-config options from this hook ref's `{ ref, options }` table; `nil` when the hook was configured as a bare ref string.

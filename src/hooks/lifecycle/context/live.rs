@@ -21,7 +21,10 @@ pub struct LiveFilterContext<'a> {
     /// The document's field data for this event.
     #[lua(ty = "table<string, any>")]
     pub data: &'a DocumentFields,
-    /// The affected document's id.
+    /// The affected document's id, exposed to Lua as `ctx.id` (consistent with
+    /// the other hook contexts; the serialized event payload uses `document_id`).
+    #[serde(rename = "id")]
+    #[lua(rename = "id")]
     pub document_id: &'a str,
     /// The user who caused the mutation (`nil` for anonymous/system changes).
     #[serde(skip_serializing_if = "Option::is_none")]

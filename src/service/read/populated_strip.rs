@@ -166,8 +166,14 @@ impl<'a> EmbeddedDocStripper<'a> {
         // gate may have been tripped by a *different* collection).
         if has_any_field_access(&def.fields, |f| f.access.read.as_ref()) {
             let document: DocumentFields = obj.clone().into_iter().collect();
-            self.hooks
-                .strip_read_access_map(&def.fields, obj, &document, self.user, self.locale);
+            self.hooks.strip_read_access_map(
+                &def.fields,
+                obj,
+                &document,
+                &collection,
+                self.user,
+                self.locale,
+            );
         }
 
         for denial in self.api_hidden_for(&collection, &def.fields).iter() {
@@ -224,7 +230,7 @@ mod tests {
 
     use super::*;
     use crate::core::{
-        CollectionDefinition, FieldType, HookRef, Hooks, JoinConfig, RelationshipConfig,
+        CollectionDefinition, FieldType, HookRef, Hooks, JoinConfig, RelationshipConfig, ReqContext,
     };
     use crate::db::AccessResult;
     use crate::hooks::{AccessCheckInput, lifecycle::AfterReadCtx};
@@ -240,8 +246,8 @@ mod tests {
             _slug: &str,
             _op: &str,
             _locale: Option<&str>,
-        ) -> Result<()> {
-            Ok(())
+        ) -> Result<ReqContext> {
+            Ok(ReqContext::new())
         }
 
         fn after_read_one(&self, _ctx: &AfterReadCtx, doc: Document) -> Document {
@@ -259,6 +265,7 @@ mod tests {
             fields: &[FieldDefinition],
             level: &mut serde_json::Map<String, Value>,
             _document: &DocumentFields,
+            _collection: &str,
             _user: Option<&Document>,
             _locale: Option<&str>,
         ) {

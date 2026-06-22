@@ -336,6 +336,7 @@ fn process_event(event: &MutationEvent, ctx: &SubscriberCtx) -> Option<content::
             &field_defs,
             &mut visible,
             &processed,
+            slug_str,
             ctx.access.user_doc.as_ref(),
         );
 

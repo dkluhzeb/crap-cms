@@ -7,7 +7,7 @@ use tracing::warn;
 
 use crate::{
     core::{
-        Document, Registry,
+        Document, Registry, ReqContext,
         cache::{CacheBackend, NoneCache},
         upload,
     },
@@ -46,6 +46,7 @@ pub(crate) fn post_process_single(
     doc: &mut Document,
     opts: &impl PostProcessOpts,
     operation: &str,
+    req_context: ReqContext,
 ) {
     let Some(hooks) = ctx.read_hooks else {
         return;
@@ -131,7 +132,7 @@ pub(crate) fn post_process_single(
 
     // Data-aware field-read strip (per-row `ctx.data`, full-doc `ctx.document`),
     // then the document-independent API-hidden strip.
-    hooks.strip_read_access_doc(&def.fields, doc, user, access_locale);
+    hooks.strip_read_access_doc(&def.fields, doc, slug, user, access_locale);
     doc.strip_fields(&helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     // Strip field-read-denied fields from populated relationship targets — each
@@ -154,6 +155,7 @@ pub(crate) fn post_process_single(
         locale: opts.locale_ctx().map(LocaleContext::access_locale),
         user,
         ui_locale: opts.ui_locale(),
+        context: req_context,
     };
 
     // Swap in a placeholder, run hooks, swap back
@@ -170,6 +172,7 @@ fn strip_read_denied_from_docs(
     docs: &mut [Document],
     fields: &[crate::core::FieldDefinition],
     hooks: &dyn crate::service::hooks::ReadHooks,
+    collection: &str,
     user: Option<&Document>,
     locale: Option<&str>,
     registry: Option<&Registry>,
@@ -180,7 +183,7 @@ fn strip_read_denied_from_docs(
     // apply per doc).
     let api_hidden = helpers::collect_api_hidden_field_names(fields, "");
 
-    hooks.strip_read_access_docs(fields, docs, user, locale);
+    hooks.strip_read_access_docs(fields, docs, collection, user, locale);
 
     if !api_hidden.is_empty() {
         for doc in docs.iter_mut() {
@@ -203,6 +206,7 @@ pub(crate) fn post_process_docs(
     conn: &dyn DbConnection,
     docs: &mut Vec<Document>,
     opts: &impl PostProcessOpts,
+    req_context: ReqContext,
 ) {
     let Some(hooks) = ctx.read_hooks else {
         return;
@@ -303,6 +307,7 @@ pub(crate) fn post_process_docs(
         docs,
         &def.fields,
         hooks,
+        slug,
         user,
         opts.locale_ctx().map(LocaleContext::access_locale),
         opts.registry(),
@@ -316,6 +321,7 @@ pub(crate) fn post_process_docs(
         locale: opts.locale_ctx().map(LocaleContext::access_locale),
         user,
         ui_locale: opts.ui_locale(),
+        context: req_context,
     };
 
     let processed = hooks.after_read_many(&ar_ctx, mem::take(docs));

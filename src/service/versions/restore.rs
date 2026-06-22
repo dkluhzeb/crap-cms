@@ -309,7 +309,7 @@ pub(crate) fn restore_collection_version_core(
         locale_config,
     )?;
 
-    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.user, None);
+    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.slug, ctx.user, None);
     doc.strip_fields(&helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     Ok(doc)
@@ -424,7 +424,7 @@ pub(crate) fn restore_global_version_core(
         locale_config,
     )?;
 
-    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.user, None);
+    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.slug, ctx.user, None);
     doc.strip_fields(&helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     Ok(doc)

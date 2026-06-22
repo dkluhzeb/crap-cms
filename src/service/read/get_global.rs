@@ -135,7 +135,7 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
         return Err(ServiceError::AccessDenied("Read access denied".into()));
     }
 
-    hooks.before_read(
+    let req_context = hooks.before_read(
         &def.hooks,
         ctx.slug,
         "get",
@@ -149,7 +149,7 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
 
     let access_locale = input.locale_ctx.map(LocaleContext::access_locale);
 
-    hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.user, access_locale);
+    hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.slug, ctx.user, access_locale);
     doc.strip_fields(&helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     let ar_ctx = AfterReadCtx {
@@ -160,6 +160,7 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
         locale: input.locale_ctx.map(LocaleContext::access_locale),
         user: ctx.user,
         ui_locale: input.ui_locale,
+        context: req_context,
     };
 
     Ok(hooks.after_read_one(&ar_ctx, doc))
@@ -173,7 +174,7 @@ mod tests {
     use super::*;
     use crate::{
         core::{
-            Document, FieldDefinition, FieldType, GlobalDefinition, Hooks,
+            Document, FieldDefinition, FieldType, GlobalDefinition, Hooks, ReqContext,
             collection::VersionsConfig,
         },
         hooks::lifecycle::AfterReadCtx,
@@ -189,8 +190,8 @@ mod tests {
             _slug: &str,
             _op: &str,
             _locale: Option<&str>,
-        ) -> Result<()> {
-            Ok(())
+        ) -> Result<ReqContext> {
+            Ok(ReqContext::new())
         }
 
         fn after_read_one(&self, _ctx: &AfterReadCtx, doc: Document) -> Document {

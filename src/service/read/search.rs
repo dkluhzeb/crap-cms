@@ -116,7 +116,7 @@ pub fn search_documents(
     let access_locale = input.locale_ctx.map(LocaleContext::access_locale);
     let api_hidden = helpers::collect_api_hidden_field_names(&def.fields, "");
 
-    hooks.strip_read_access_docs(&def.fields, &mut docs, ctx.user, access_locale);
+    hooks.strip_read_access_docs(&def.fields, &mut docs, ctx.slug, ctx.user, access_locale);
 
     if !api_hidden.is_empty() {
         for doc in &mut docs {

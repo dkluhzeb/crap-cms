@@ -8,6 +8,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Lua hook contexts now expose the affected document's id as `ctx.id`, not
+  `ctx.document_id`.** The lifecycle hook context (`before_*`/`after_*`) and the
+  live-broadcast contexts (`live` filter, `before_broadcast`) previously used
+  `ctx.document_id` while the field-hook, validator, and access contexts used
+  `ctx.id` — the same concept under two names. They are unified on `ctx.id`.
+  `after_read` now also populates `ctx.id` (it previously left it unset, carrying
+  the id only inside `ctx.data`). The serialized event/wire payloads (gRPC proto,
+  admin-SSE JSON, the event record) are unchanged — those still use `document_id`,
+  since they are serialization formats, not hook contexts. **Migration:** in any
+  Lua hook, `live` filter, or `before_broadcast` function, replace
+  `ctx.document_id` with `ctx.id`. (`ctx.data.id` is still present in
+  `after_change`/`after_delete`/`after_read` as before.)
+
 - **The un-scoped OAuth callback route `/admin/auth/callback/{name}` now fails
   closed when there is more than one auth collection.** It previously bound the
   session to the lexicographically-first auth collection — a silent default that
@@ -752,6 +765,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Field-access functions now receive the real `ctx.collection`.** A field's
+  `access.read` / `access.create` / `access.update` function previously saw
+  `ctx.collection == ""` (the empty string), unlike every other hook context. It
+  now receives the collection (or global) slug the field belongs to, so a
+  field-access function shared across collections can branch on which one it is
+  running for. `ctx.operation` (`"read"`/`"create"`/`"update"`) is likewise
+  documented.
+
 - **Password-reset stream teardown now publishes after the transaction commits.**
   `consume_reset_token` published the user-invalidation signal (which closes the
   user's open live-update streams) while the reset transaction was still open, so
@@ -1238,6 +1259,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   files, so trashed documents remain restorable.)
 
 ### Added
+
+- **`before_read` hooks can now seed the shared `ctx.context` table for
+  `after_read`.** The read lifecycle (`before_read` → `after_read`) now threads a
+  per-read shared context, mirroring the write lifecycle's `before_*` → `after_*`
+  context. A `before_read` hook can compute a value once and stash it in
+  `ctx.context` for `after_read` to use when shaping each row. Previously a
+  `before_read` hook's context changes were discarded.
 
 - **Collection-scoped OAuth callback route `/admin/auth/callback/{collection}/{name}`.**
   External auth (OAuth2/OIDC) now works with more than one auth collection: the

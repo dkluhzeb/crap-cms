@@ -103,7 +103,7 @@ pub fn list_versions(
     let api_hidden = crate::service::helpers::collect_api_hidden_field_names(fields, "");
 
     for version in &mut versions {
-        hooks.strip_read_access_value(fields, &mut version.snapshot, ctx.user, None);
+        hooks.strip_read_access_value(fields, &mut version.snapshot, ctx.slug, ctx.user, None);
 
         if !api_hidden.is_empty() {
             super::find::strip_snapshot_fields(&mut version.snapshot, &api_hidden);
@@ -135,7 +135,7 @@ mod tests {
         config::LocaleConfig,
         core::{
             CollectionDefinition, Document, DocumentFields, FieldDefinition, FieldType, Hooks,
-            ValidationError, VersionsConfig,
+            ReqContext, ValidationError, VersionsConfig,
         },
         db::{AccessResult, DbConnection},
         hooks::{HookContext, HookEvent, ValidationCtx, lifecycle::AfterReadCtx},
@@ -156,8 +156,8 @@ mod tests {
             _slug: &str,
             _op: &str,
             _locale: Option<&str>,
-        ) -> Result<()> {
-            Ok(())
+        ) -> Result<ReqContext> {
+            Ok(ReqContext::new())
         }
 
         fn after_read_one(&self, _ctx: &AfterReadCtx, doc: Document) -> Document {
@@ -181,8 +181,8 @@ mod tests {
             _slug: &str,
             _op: &str,
             _locale: Option<&str>,
-        ) -> Result<()> {
-            Ok(())
+        ) -> Result<ReqContext> {
+            Ok(ReqContext::new())
         }
 
         fn after_read_one(&self, _ctx: &AfterReadCtx, doc: Document) -> Document {
@@ -393,8 +393,8 @@ mod tests {
     struct DraftConstrainedToMe;
 
     impl ReadHooks for DraftConstrainedToMe {
-        fn before_read(&self, _: &Hooks, _: &str, _: &str, _: Option<&str>) -> Result<()> {
-            Ok(())
+        fn before_read(&self, _: &Hooks, _: &str, _: &str, _: Option<&str>) -> Result<ReqContext> {
+            Ok(ReqContext::new())
         }
 
         fn after_read_one(&self, _: &AfterReadCtx, doc: Document) -> Document {

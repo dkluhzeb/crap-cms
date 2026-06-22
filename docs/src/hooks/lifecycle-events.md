@@ -9,7 +9,7 @@ Nine lifecycle events fire during CRUD operations and admin page rendering.
 | `before_validate` | create, update, update_many | Yes | Yes | Normalize inputs before validation |
 | `before_change` | create, update, update_many | Yes | Yes | Transform data after validation passes |
 | `after_change` | create, update, update_many | Yes | Yes | Runs inside the transaction. Audit logs, counters, side-effects. Errors roll back the entire operation. |
-| `before_read` | find, find_by_id | No | No* | Can abort the read by returning an error |
+| `before_read` | find, find_by_id | No | No* | Can abort the read by returning an error. Can seed `ctx.context` for `after_read` (shared per-read). |
 | `after_read` | find, find_by_id | Yes | No | Transform data before it reaches the client |
 | `before_delete` | delete, delete_many | No | Yes | Can abort the delete. CRUD access for cascading deletes. |
 | `after_delete` | delete, delete_many | No | Yes | Runs inside the transaction. Cleanup, cascading deletes. Errors roll back the entire operation. |
@@ -20,7 +20,7 @@ Nine lifecycle events fire during CRUD operations and admin page rendering.
 
 ## Document ID in Hook Context
 
-In `after_change` and `after_delete` hooks, `context.data.id` contains the document ID. This is useful for queuing jobs or looking up the document after it's been written. In `before_delete` hooks, `context.data.id` is also available.
+Every hook context exposes the affected document's id as the top-level `ctx.id` (consistent with the field-hook, validator, and access contexts) — `nil` only in create's before-hooks, where no row exists yet. In `after_change` and `after_delete` hooks the id is *also* present as `context.data.id`. This is useful for queuing jobs or looking up the document after it's been written. In `before_delete` hooks, `context.data.id` is likewise available.
 
 `before_delete` and `after_delete` additionally receive the deleted document's full field data in `context.data` (captured before the row is removed), so you don't need to re-fetch — and on a hard delete you couldn't, since the row is already gone by `after_delete`.
 
@@ -67,6 +67,15 @@ In `after_change` and `after_delete` hooks, `context.data.id` contains the docum
 5. collection after_read hooks
 6. global registered after_read hooks
 ```
+
+> **`after_read` errors fail *open*** — this is the one event that does **not**
+> abort on error. It is the read-path enrichment/transform layer, not the access
+> boundary (field-level read access is enforced separately and fails *closed*),
+> so a buggy `after_read` hook must not be able to break every read, list page,
+> and live event for a collection. On error the document is logged and returned
+> **unmodified** (in its original, already-access-stripped form). Put redaction in
+> field `access.read`, not in `after_read`; if you need strict transform
+> behavior, handle errors inside your hook. Every other event aborts on error.
 
 ## Delete Lifecycle
 

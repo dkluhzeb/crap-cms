@@ -5,7 +5,9 @@ use serde_json::Value;
 
 use super::run::{FieldHooksCall, FieldWriteCtx};
 use crate::{
-    core::{Document, DocumentFields, FieldDefinition, FieldError, Hooks, ValidationError},
+    core::{
+        Document, DocumentFields, FieldDefinition, FieldError, Hooks, ReqContext, ValidationError,
+    },
     db::{DbConnection, LocaleContext},
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
@@ -48,10 +50,11 @@ impl HookRunner {
     /// # Errors
     ///
     /// Returns an error if any `before_read` hook fails or aborts the read.
-    pub fn fire_before_read(&self, hooks: &Hooks, ctx: HookContext) -> Result<()> {
-        self.run_hooks(hooks, HookEvent::BeforeRead, ctx)?;
-
-        Ok(())
+    pub fn fire_before_read(&self, hooks: &Hooks, ctx: HookContext) -> Result<ReqContext> {
+        // Surface the (possibly hook-modified) shared context so the read path can
+        // hand it to `after_read` — the read-lifecycle analogue of how the write
+        // lifecycle threads `context` from `before_*` into `after_*`.
+        Ok(self.run_hooks(hooks, HookEvent::BeforeRead, ctx)?.context)
     }
 
     /// Fire `after_read` hooks on a single document. Returns transformed doc.
@@ -107,6 +110,8 @@ impl HookRunner {
             locale: None,
             user: input.user,
             ui_locale: None,
+            // Live-event after_read: no `before_read` ran, so no seeded context.
+            context: ReqContext::new(),
         };
 
         self.apply_after_read(&ctx, doc).fields

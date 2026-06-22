@@ -12,7 +12,7 @@ use crate::{
     },
     core::{CollectionDefinition, Document},
     db::{DbPool, query},
-    hooks::HookRunner,
+    hooks::{HookRunner, lifecycle::access::ReadStripInput},
     service::{self, ServiceContext, helpers::collect_api_hidden_field_names},
 };
 
@@ -57,9 +57,12 @@ fn me_blocking(input: &MeBlockingInput) -> Result<(Option<Document>, u64, bool),
         input.runner.strip_read_access(
             &input.def.fields,
             &mut level,
-            &user_snapshot.fields,
-            Some(&user_snapshot),
-            None,
+            &ReadStripInput {
+                document: &user_snapshot.fields,
+                collection: &input.collection,
+                user: Some(&user_snapshot),
+                locale: None,
+            },
             &conn,
         );
 

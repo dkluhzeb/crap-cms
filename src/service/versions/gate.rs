@@ -171,7 +171,7 @@ mod tests {
 
     use super::*;
     use crate::core::collection::Hooks;
-    use crate::core::{CollectionDefinition, Document, HookRef};
+    use crate::core::{CollectionDefinition, Document, HookRef, ReqContext};
     use crate::hooks::lifecycle::AfterReadCtx;
 
     /// Returns a canned access result and records whether `check_access` ran
@@ -195,8 +195,8 @@ mod tests {
     }
 
     impl ReadHooks for GateHooks {
-        fn before_read(&self, _: &Hooks, _: &str, _: &str, _: Option<&str>) -> Result<()> {
-            Ok(())
+        fn before_read(&self, _: &Hooks, _: &str, _: &str, _: Option<&str>) -> Result<ReqContext> {
+            Ok(ReqContext::new())
         }
 
         fn after_read_one(&self, _: &AfterReadCtx, doc: Document) -> Document {

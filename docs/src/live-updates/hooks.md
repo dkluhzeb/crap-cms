@@ -8,7 +8,7 @@ For every mutation event, the live-update pipeline runs in this strict order —
 2. **`before_broadcast` hooks** — collection-level first, then global registered hooks. Any hook returning `false`/`nil` suppresses the event and stops the chain.
 3. **EventBus dispatch** — the event is delivered to each matching subscriber, with per-subscriber access checks, `after_read` hooks (full mode only), and field stripping (full mode only).
 
-The `live` filter function and `before_broadcast` hooks both receive a context table with `{ collection, operation, data, document_id, edited_by }` and have similar shapes, but they sit at different stages: `live` is the cheap gate, `before_broadcast` is the transformation/suppression stage. `document_id` is the affected document's id, and `edited_by` is `{ id, email }` of the user who made the change (`nil` for anonymous changes) — useful for, e.g., suppressing an event for the user who triggered it. `edited_by` exists **only** in these server-side hook contexts; it is never sent to subscribers (the admin SSE payload carries a `self` boolean instead). The `live` filter's context is the typed `crap.LiveFilterContext`; both stages also carry `ctx.options` when the ref was declared as a `{ ref, options }` table (see [Per-Config Options](../hooks/hook-context.md#per-config-options-ctxoptions)).
+The `live` filter function and `before_broadcast` hooks both receive a context table with `{ collection, operation, data, id, edited_by }` and have similar shapes, but they sit at different stages: `live` is the cheap gate, `before_broadcast` is the transformation/suppression stage. `id` is the affected document's id (the serialized event payload sent to subscribers calls the same value `document_id`), and `edited_by` is `{ id, email }` of the user who made the change (`nil` for anonymous changes) — useful for, e.g., suppressing an event for the user who triggered it. `edited_by` exists **only** in these server-side hook contexts; it is never sent to subscribers (the admin SSE payload carries a `self` boolean instead). The `live` filter's context is the typed `crap.LiveFilterContext`; both stages also carry `ctx.options` when the ref was declared as a `{ ref, options }` table (see [Per-Config Options](../hooks/hook-context.md#per-config-options-ctxoptions)).
 
 ## `before_broadcast`
 
@@ -24,7 +24,7 @@ crap.collections.define("posts", {
 })
 ```
 
-The hook function receives `{ collection, operation, data, document_id, edited_by }`
+The hook function receives `{ collection, operation, data, id, edited_by }`
 (plus `ctx.options` when declared as a `{ ref, options }` table) and returns:
 
 - The context table (possibly with modified `data`) to continue broadcasting
@@ -91,4 +91,4 @@ function M.should_broadcast(ctx)
 end
 ```
 
-The function receives `{ collection, operation, data, document_id, edited_by }` (the typed `crap.LiveFilterContext`) and returns `true`/`false`. This is a fast gate — `before_broadcast` hooks only run if the `live` check passes. See [Execution Order](#execution-order) above.
+The function receives `{ collection, operation, data, id, edited_by }` (the typed `crap.LiveFilterContext`) and returns `true`/`false`. This is a fast gate — `before_broadcast` hooks only run if the `live` check passes. See [Execution Order](#execution-order) above.

@@ -347,7 +347,7 @@ fn field_write_no_field_access_allows_all() {
     let posts = registry.get_collection("posts").unwrap();
 
     let denied =
-        runner.check_field_write_access(&posts.fields, Some(&editor), None, "update", &conn);
+        runner.check_field_write_access(&posts.fields, "", Some(&editor), None, "update", &conn);
     // No field-level access controls in posts definition
     assert!(
         denied.is_empty(),
@@ -363,7 +363,7 @@ fn field_read_no_config_allows_all() {
     let posts = registry.get_collection("posts").unwrap();
 
     // No field has read access configured, so nothing should be denied
-    let denied = runner.check_field_read_access(&posts.fields, None, None, &conn);
+    let denied = runner.check_field_read_access(&posts.fields, "", None, None, &conn);
     assert!(
         denied.is_empty(),
         "Expected no denied fields for read, got: {denied:?}"
@@ -577,7 +577,7 @@ fn field_read_access_strips_denied_fields() {
     ];
 
     // Anonymous user (no user doc) — admin_only should deny
-    let denied = runner.check_field_read_access(&fields, None, None, &conn);
+    let denied = runner.check_field_read_access(&fields, "", None, None, &conn);
     assert_eq!(
         denied.len(),
         1,
@@ -591,10 +591,61 @@ fn field_read_access_strips_denied_fields() {
 
     // Admin user — admin_only should allow
     let admin = make_user_doc("admin-1", "admin");
-    let denied = runner.check_field_read_access(&fields, Some(&admin), None, &conn);
+    let denied = runner.check_field_read_access(&fields, "", Some(&admin), None, &conn);
     assert!(
         denied.is_empty(),
         "Admin user should have all fields allowed, but got denied: {denied:?}"
+    );
+}
+
+#[test]
+fn field_read_access_receives_collection() {
+    // Field-access functions now get the real `ctx.collection` (was `""`). The
+    // `secret` field is readable only in the `posts` collection, so the same
+    // field+rule strips or keeps based on the collection passed to the strip.
+    let (_tmp, pool, _registry, runner) = setup();
+    let conn = pool.get().unwrap();
+
+    let fields = vec![
+        crap_cms::core::FieldDefinition {
+            name: "title".to_string(),
+            field_type: crap_cms::core::field::FieldType::Text,
+            ..Default::default()
+        },
+        crap_cms::core::FieldDefinition {
+            name: "secret".to_string(),
+            field_type: crap_cms::core::field::FieldType::Textarea,
+            access: crap_cms::core::field::FieldAccess {
+                read: Some(HookRef::new("access.field_read_in_posts_only")),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    ];
+
+    let make_doc = || {
+        let mut d = Document::new("d1".to_string());
+        d.fields.insert("title".into(), json!("t"));
+        d.fields.insert("secret".into(), json!("s"));
+        d
+    };
+
+    // collection = "posts" → the rule allows, secret kept.
+    let mut posts = vec![make_doc()];
+    runner.strip_read_access_batch(&fields, &mut posts, "posts", None, None, &conn);
+    assert_eq!(
+        posts[0].fields.get("secret"),
+        Some(&json!("s")),
+        "secret must be kept when ctx.collection == \"posts\""
+    );
+
+    // collection = "other" → the rule denies, secret stripped.
+    let mut other = vec![make_doc()];
+    runner.strip_read_access_batch(&fields, &mut other, "other", None, None, &conn);
+    assert_eq!(
+        other[0].fields.get("secret"),
+        None,
+        "secret must be stripped when ctx.collection != \"posts\" (proves collection reaches field access)"
     );
 }
 
@@ -641,7 +692,7 @@ fn batched_field_read_strip_uses_per_document_context() {
     private_doc.fields.insert("secret".into(), json!("s2"));
 
     let mut docs = vec![public_doc, private_doc];
-    runner.strip_read_access_batch(&fields, &mut docs, None, None, &conn);
+    runner.strip_read_access_batch(&fields, &mut docs, "posts", None, None, &conn);
 
     assert_eq!(
         docs[0].fields.get("secret"),
@@ -698,7 +749,8 @@ fn field_write_access_strips_denied_fields() {
     ];
 
     // Anonymous user: on create, auto_slug should be denied (admin_only denies anonymous)
-    let denied_on_create = runner.check_field_write_access(&fields, None, None, "create", &conn);
+    let denied_on_create =
+        runner.check_field_write_access(&fields, "", None, None, "create", &conn);
     assert!(
         denied_on_create
             .iter()
@@ -713,7 +765,8 @@ fn field_write_access_strips_denied_fields() {
     );
 
     // Anonymous user: on update, immutable_field should be denied (admin_only denies anonymous)
-    let denied_on_update = runner.check_field_write_access(&fields, None, None, "update", &conn);
+    let denied_on_update =
+        runner.check_field_write_access(&fields, "", None, None, "update", &conn);
     assert!(
         denied_on_update
             .iter()
@@ -789,19 +842,21 @@ fn no_access_config_means_allowed() {
         ..Default::default()
     }];
 
-    let denied_read = runner.check_field_read_access(&fields, None, None, &conn);
+    let denied_read = runner.check_field_read_access(&fields, "", None, None, &conn);
     assert!(
         denied_read.is_empty(),
         "Fields with no access config should not be denied for read"
     );
 
-    let denied_write_create = runner.check_field_write_access(&fields, None, None, "create", &conn);
+    let denied_write_create =
+        runner.check_field_write_access(&fields, "", None, None, "create", &conn);
     assert!(
         denied_write_create.is_empty(),
         "Fields with no access config should not be denied for create"
     );
 
-    let denied_write_update = runner.check_field_write_access(&fields, None, None, "update", &conn);
+    let denied_write_update =
+        runner.check_field_write_access(&fields, "", None, None, "update", &conn);
     assert!(
         denied_write_update.is_empty(),
         "Fields with no access config should not be denied for update"
@@ -1249,10 +1304,10 @@ return M
     );
 }
 
-/// Regression: `before_change` on an update must expose `ctx.document_id` so a
+/// Regression: `before_change` on an update must expose `ctx.id` so a
 /// hook can fetch the *pre-write* document on demand via
-/// `crap.collections.find_by_id(ctx.collection, ctx.document_id)`. The update
-/// write path previously never set `document_id` (and the incoming `data` need
+/// `crap.collections.find_by_id(ctx.collection, ctx.id)`. The update
+/// write path previously never set the document id (and the incoming `data` need
 /// not carry `id`), so the canonical "price may only increase" guard — which
 /// must compare against the persisted old value — was impossible in a
 /// before-hook. This locks the on-demand-original contract for the freeze.
@@ -1290,10 +1345,10 @@ function M.price_increase_only(ctx)
     if ctx.operation ~= "update" then
         return ctx
     end
-    if ctx.document_id == nil then
-        error("document_id missing in before_change update")
+    if ctx.id == nil then
+        error("id missing in before_change update")
     end
-    local old = crap.collections.find_by_id(ctx.collection, ctx.document_id, { overrideAccess = true })
+    local old = crap.collections.find_by_id(ctx.collection, ctx.id, { overrideAccess = true })
     if old ~= nil and ctx.data.price ~= nil and ctx.data.price < old.price then
         error("price may only increase")
     end
@@ -1360,7 +1415,7 @@ return M
     );
 
     // Decrease → rejected. Only possible if the hook resolved the persisted old
-    // value through ctx.document_id; a missing document_id would have errored or
+    // value through ctx.id; a missing id would have errored or
     // returned nil and let the decrease through.
     let err = update(5).expect_err("price decrease must be rejected via on-demand original");
     assert!(
@@ -2309,6 +2364,71 @@ return M
     assert!(
         rh.before_read(&def.hooks, "posts", "find", None).is_err(),
         "before_read must error when ctx.locale is missing"
+    );
+}
+
+/// Regression (#3): `before_read` can seed `ctx.context` for `after_read` — the
+/// read-lifecycle analogue of the write lifecycle's shared context. The pool
+/// `before_read` now RETURNS the (hook-modified) `ReqContext`, which the read
+/// path threads into `after_read`. Proven by a hook seeding a key and the
+/// returned context carrying it.
+#[test]
+fn before_read_returns_context_seeded_by_hook() {
+    use crap_cms::service::ReadHooks;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+    std::fs::write(
+        collections_dir.join("posts.lua"),
+        r#"
+crap.collections.define("posts", {
+    fields = { { name = "title", type = "text" } },
+    hooks = { before_read = { "hooks.guard.seed_context" } },
+})
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        hooks_dir.join("guard.lua"),
+        r#"
+local M = {}
+
+function M.seed_context(ctx)
+    ctx.context.seeded = "yes"
+    return ctx
+end
+
+return M
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = hooks::init_lua(tmp.path(), &config).unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .unwrap();
+    let def = registry.get_collection("posts").unwrap().clone();
+    let conn = db_pool.get().unwrap();
+
+    let rh = RunnerReadHooks::new(&runner, &conn, None, None);
+    let returned = rh
+        .before_read(&def.hooks, "posts", "find", None)
+        .expect("before_read ok");
+
+    assert_eq!(
+        returned.get("seeded").and_then(|v| v.as_str()),
+        Some("yes"),
+        "before_read must surface ctx.context mutations so after_read can read them"
     );
 }
 

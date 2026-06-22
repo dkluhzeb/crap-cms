@@ -17,10 +17,10 @@ use crate::{
         lifecycle::{
             AccessCheckInput, AuthStrategyContext, AuthStrategyInput,
             access::{
-                WriteStripInput, check_collection_access, check_field_read_access_with_lua,
-                check_field_write_access_with_lua, collect_denials_flat,
-                collect_read_denied_with_lua, has_any_field_access, strip_access_data_aware,
-                strip_read_access_data_aware, strip_read_access_with_lua,
+                ReadStripInput, WriteStripInput, check_collection_access,
+                check_field_read_access_with_lua, check_field_write_access_with_lua,
+                collect_denials_flat, collect_read_denied_with_lua, has_any_field_access,
+                strip_access_data_aware, strip_read_access_data_aware, strip_read_access_with_lua,
                 strip_write_access_with_lua,
             },
             execution::resolve_hook_function,
@@ -148,6 +148,7 @@ impl HookRunner {
     pub fn check_field_read_access(
         &self,
         fields: &[FieldDefinition],
+        collection: &str,
         user: Option<&Document>,
         locale: Option<&str>,
         conn: &dyn DbConnection,
@@ -168,7 +169,7 @@ impl HookRunner {
 
         let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
-        check_field_read_access_with_lua(&lua, fields, user, locale)
+        check_field_read_access_with_lua(&lua, fields, collection, user, locale)
     }
 
     /// Check field-level write access for a given operation ("create" or "update").
@@ -179,6 +180,7 @@ impl HookRunner {
     pub fn check_field_write_access(
         &self,
         fields: &[FieldDefinition],
+        collection: &str,
         user: Option<&Document>,
         locale: Option<&str>,
         operation: &str,
@@ -206,7 +208,7 @@ impl HookRunner {
 
         let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
-        check_field_write_access_with_lua(&lua, fields, user, locale, operation)
+        check_field_write_access_with_lua(&lua, fields, collection, user, locale, operation)
     }
 
     /// Data-aware field-**read** strip for pool surfaces (admin, gRPC, MCP):
@@ -222,9 +224,7 @@ impl HookRunner {
         &self,
         fields: &[FieldDefinition],
         level: &mut Map<String, serde_json::Value>,
-        document: &DocumentFields,
-        user: Option<&Document>,
-        locale: Option<&str>,
+        input: &ReadStripInput<'_>,
         conn: &dyn DbConnection,
     ) {
         if !has_any_field_access(fields, |f| f.access.read.as_ref()) {
@@ -246,7 +246,7 @@ impl HookRunner {
 
         let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
-        strip_read_access_with_lua(&lua, fields, level, document, user, locale);
+        strip_read_access_with_lua(&lua, fields, level, input);
     }
 
     /// Batched [`strip_read_access`](Self::strip_read_access) for a list read:
@@ -264,6 +264,7 @@ impl HookRunner {
         &self,
         fields: &[FieldDefinition],
         docs: &mut [Document],
+        collection: &str,
         user: Option<&Document>,
         locale: Option<&str>,
         conn: &dyn DbConnection,
@@ -295,7 +296,13 @@ impl HookRunner {
 
             match lua {
                 Some(l) => {
-                    strip_read_access_with_lua(l, fields, &mut level, &document, user, locale);
+                    let input = ReadStripInput {
+                        document: &document,
+                        collection,
+                        user,
+                        locale,
+                    };
+                    strip_read_access_with_lua(l, fields, &mut level, &input);
                 }
                 None => strip_read_access_data_aware(fields, &mut level, &|_hook, _data| true),
             }
@@ -358,6 +365,7 @@ impl HookRunner {
         fields: &[FieldDefinition],
         level: &mut Map<String, serde_json::Value>,
         document: &DocumentFields,
+        collection: &str,
         user: Option<&Document>,
     ) {
         if !has_any_field_access(fields, |f| f.access.read.as_ref()) {
@@ -375,7 +383,13 @@ impl HookRunner {
             }
         };
 
-        strip_read_access_with_lua(&lua, fields, level, document, user, None);
+        let input = ReadStripInput {
+            document,
+            collection,
+            user,
+            locale: None,
+        };
+        strip_read_access_with_lua(&lua, fields, level, &input);
     }
 
     /// Data-aware collection of read-denied field **names** for a single
@@ -390,6 +404,7 @@ impl HookRunner {
         &self,
         fields: &[FieldDefinition],
         document: &DocumentFields,
+        collection: &str,
         user: Option<&Document>,
         locale: Option<&str>,
         conn: &dyn DbConnection,
@@ -409,7 +424,7 @@ impl HookRunner {
 
         let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
-        collect_read_denied_with_lua(&lua, fields, document, user, locale)
+        collect_read_denied_with_lua(&lua, fields, document, collection, user, locale)
     }
 }
 

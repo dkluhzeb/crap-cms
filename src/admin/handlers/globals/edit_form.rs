@@ -6,7 +6,7 @@ use axum::{
     http::HeaderMap,
     response::Response,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::task;
 
 use crate::{
@@ -136,6 +136,35 @@ fn prepare_edit_fields(
 }
 
 /// GET /admin/globals/{slug} — show edit form for a global
+/// Fetch the version-history sidebar data for a global, or `(vec![], 0)` when the
+/// global has no versions feature or a DB connection can't be acquired.
+fn fetch_global_version_sidebar(
+    state: &AdminState,
+    def: &GlobalDefinition,
+    slug: &str,
+    auth_user: Option<&Extension<AuthUser>>,
+) -> (Vec<Value>, i64) {
+    if !def.has_versions() {
+        return (vec![], 0);
+    }
+    let Ok(vc) = state.pool.get() else {
+        return (vec![], 0);
+    };
+
+    let vh = RunnerReadHooks::new(
+        &state.hook_runner,
+        &vc,
+        auth_user.map(|Extension(au)| &au.user_doc),
+        None,
+    );
+    let version_ctx = ServiceContext::global(slug, def)
+        .conn(&vc)
+        .read_hooks(&vh)
+        .build();
+
+    fetch_version_sidebar_data(&version_ctx, "default")
+}
+
 pub async fn edit_form(
     State(state): State<AdminState>,
     Path(slug): Path<String>,
@@ -182,12 +211,16 @@ pub async fn edit_form(
 
     // The service read already stripped read-denied *values*; resolve the denied
     // field *names* for this document so the form can drop their inputs.
-    let denied =
-        match compute_denied_read_fields(&state, auth_user.as_ref(), &def.fields, &document.fields)
-        {
-            Ok(d) => d,
-            Err(resp) => return *resp,
-        };
+    let denied = match compute_denied_read_fields(
+        &state,
+        auth_user.as_ref(),
+        &def.fields,
+        &slug,
+        &document.fields,
+    ) {
+        Ok(d) => d,
+        Err(resp) => return *resp,
+    };
 
     let (main_fields, sidebar_fields) = prepare_edit_fields(
         &state,
@@ -202,25 +235,8 @@ pub async fn edit_form(
     let has_drafts = def.has_drafts();
     let doc_status = extract_doc_status(&document, has_drafts);
 
-    let (versions, total_versions) = if has_versions {
-        if let Ok(vc) = state.pool.get() {
-            let vh = RunnerReadHooks::new(
-                &state.hook_runner,
-                &vc,
-                auth_user.as_ref().map(|Extension(au)| &au.user_doc),
-                None,
-            );
-            let version_ctx = ServiceContext::global(&slug, &def)
-                .conn(&vc)
-                .read_hooks(&vh)
-                .build();
-            fetch_version_sidebar_data(&version_ctx, "default")
-        } else {
-            (vec![], 0)
-        }
-    } else {
-        (vec![], 0)
-    };
+    let (versions, total_versions) =
+        fetch_global_version_sidebar(&state, &def, &slug, auth_user.as_ref());
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 

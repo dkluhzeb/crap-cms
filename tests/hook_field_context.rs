@@ -143,7 +143,7 @@ fn check_live_setting_function() {
     assert!(!result, "delete should be suppressed");
 }
 
-/// Regression: the `live` filter function must receive `ctx.document_id` and
+/// Regression: the `live` filter function must receive `ctx.id` and
 /// `ctx.edited_by` — both were dropped before the filter, so it could not
 /// identify the document or who made the change ("don't echo my own edits").
 #[test]
@@ -208,6 +208,7 @@ fn field_after_read_hook_transforms_value() {
         locale: None,
         user: None,
         ui_locale: None,
+        context: ReqContext::new(),
     };
     let transformed = runner.apply_after_read(&ar_ctx, doc);
     assert_eq!(
@@ -392,6 +393,7 @@ fn after_read_hooks_fire() {
         locale: None,
         user: None,
         ui_locale: None,
+        context: ReqContext::new(),
     };
     let transformed = runner.apply_after_read(&ar_ctx, doc.clone());
 
@@ -478,6 +480,7 @@ fn field_after_read_hooks_transform_values() {
         locale: None,
         user: None,
         ui_locale: None,
+        context: ReqContext::new(),
     };
     let transformed = runner.apply_after_read(&ar_ctx, doc);
 
@@ -517,6 +520,7 @@ fn field_after_read_hooks_with_apply_after_read_many() {
         locale: None,
         user: None,
         ui_locale: None,
+        context: ReqContext::new(),
     };
     let results = runner.apply_after_read_many(&ar_ctx, vec![doc1, doc2]);
 
@@ -901,6 +905,7 @@ fn apply_after_read_many_empty_hooks_passthrough() {
         locale: None,
         user: None,
         ui_locale: None,
+        context: ReqContext::new(),
     };
     let result = runner.apply_after_read_many(&ar_ctx, docs);
     assert_eq!(result.len(), 1);

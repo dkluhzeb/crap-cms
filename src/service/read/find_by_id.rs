@@ -139,7 +139,7 @@ pub fn find_document_by_id(
 
     let constraints = (!scope.constraints.is_empty()).then_some(scope.constraints);
 
-    hooks.before_read(
+    let req_context = hooks.before_read(
         &def.hooks,
         ctx.slug,
         "find_by_id",
@@ -161,7 +161,7 @@ pub fn find_document_by_id(
         return Ok(None);
     };
 
-    post_process_single(ctx, conn, &mut doc, input, "find_by_id");
+    post_process_single(ctx, conn, &mut doc, input, "find_by_id", req_context);
 
     Ok(Some(doc))
 }
@@ -174,7 +174,7 @@ mod tests {
     use super::*;
     use crate::{
         core::{
-            CollectionDefinition, Document, FieldDefinition, FieldType, HookRef, Hooks,
+            CollectionDefinition, Document, FieldDefinition, FieldType, HookRef, Hooks, ReqContext,
             collection::VersionsConfig,
         },
         db::{AccessResult, Filter, FilterClause, FilterOp},
@@ -195,8 +195,8 @@ mod tests {
             _slug: &str,
             _op: &str,
             _locale: Option<&str>,
-        ) -> Result<()> {
-            Ok(())
+        ) -> Result<ReqContext> {
+            Ok(ReqContext::new())
         }
 
         fn after_read_one(&self, _ctx: &AfterReadCtx, doc: Document) -> Document {
@@ -224,8 +224,8 @@ mod tests {
             _slug: &str,
             _op: &str,
             _locale: Option<&str>,
-        ) -> Result<()> {
-            Ok(())
+        ) -> Result<ReqContext> {
+            Ok(ReqContext::new())
         }
 
         fn after_read_one(&self, _ctx: &AfterReadCtx, doc: Document) -> Document {
@@ -356,8 +356,8 @@ mod tests {
     struct OwnDraftsConstrained;
 
     impl ReadHooks for OwnDraftsConstrained {
-        fn before_read(&self, _: &Hooks, _: &str, _: &str, _: Option<&str>) -> Result<()> {
-            Ok(())
+        fn before_read(&self, _: &Hooks, _: &str, _: &str, _: Option<&str>) -> Result<ReqContext> {
+            Ok(ReqContext::new())
         }
 
         fn after_read_one(&self, _: &AfterReadCtx, doc: Document) -> Document {

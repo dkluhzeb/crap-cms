@@ -622,7 +622,7 @@ fn check_field_read_access_no_access_config() {
         make_field("body", FieldType::Textarea),
     ];
 
-    let denied = runner.check_field_read_access(&fields, None, None, &conn);
+    let denied = runner.check_field_read_access(&fields, "", None, None, &conn);
     assert!(
         denied.is_empty(),
         "Fields without access config should not be in denied list, got: {denied:?}"
@@ -640,7 +640,7 @@ fn check_field_read_access_denies_field() {
         make_field("body", FieldType::Textarea),
     ];
 
-    let denied = runner.check_field_read_access(&fields, None, None, &conn);
+    let denied = runner.check_field_read_access(&fields, "", None, None, &conn);
     assert_eq!(denied.len(), 1, "Should deny exactly one field");
     assert_eq!(
         denied[0].display_path(),
@@ -659,7 +659,7 @@ fn check_field_read_access_allows_with_allow_all() {
         make_field_with_read_access("hidden", "hooks.access.deny_all"),
     ];
 
-    let denied = runner.check_field_read_access(&fields, None, None, &conn);
+    let denied = runner.check_field_read_access(&fields, "", None, None, &conn);
     assert_eq!(denied.len(), 1);
     assert_eq!(denied[0].display_path(), "hidden");
 }
@@ -674,7 +674,7 @@ fn check_field_write_access_no_access_config() {
         make_field("body", FieldType::Textarea),
     ];
 
-    let denied = runner.check_field_write_access(&fields, None, None, "create", &conn);
+    let denied = runner.check_field_write_access(&fields, "", None, None, "create", &conn);
     assert!(
         denied.is_empty(),
         "Fields without write access config should not be denied"
@@ -691,7 +691,7 @@ fn check_field_write_access_denies_field_on_create() {
         make_field_with_write_access("protected", Some("hooks.access.deny_all"), None),
     ];
 
-    let denied = runner.check_field_write_access(&fields, None, None, "create", &conn);
+    let denied = runner.check_field_write_access(&fields, "", None, None, "create", &conn);
     assert_eq!(denied.len(), 1);
     assert_eq!(denied[0].display_path(), "protected");
 }
@@ -707,12 +707,12 @@ fn check_field_write_access_denies_field_on_update() {
     ];
 
     // On update, the "locked" field should be denied
-    let denied = runner.check_field_write_access(&fields, None, None, "update", &conn);
+    let denied = runner.check_field_write_access(&fields, "", None, None, "update", &conn);
     assert_eq!(denied.len(), 1);
     assert_eq!(denied[0].display_path(), "locked");
 
     // On create, no restriction since create access is None
-    let denied = runner.check_field_write_access(&fields, None, None, "create", &conn);
+    let denied = runner.check_field_write_access(&fields, "", None, None, "create", &conn);
     assert!(
         denied.is_empty(),
         "No create restriction defined, should be empty"
@@ -742,6 +742,7 @@ fn apply_after_read_transforms_doc() {
         locale: None,
         user: None,
         ui_locale: None,
+        context: ReqContext::new(),
     };
     let transformed = runner.apply_after_read(&ar_ctx, doc.clone());
 
@@ -783,6 +784,7 @@ fn apply_after_read_many_transforms_all() {
         locale: None,
         user: None,
         ui_locale: None,
+        context: ReqContext::new(),
     };
     let transformed = runner.apply_after_read_many(&ar_ctx, docs);
 
@@ -820,6 +822,7 @@ fn apply_after_read_no_hooks_returns_same() {
         locale: None,
         user: None,
         ui_locale: None,
+        context: ReqContext::new(),
     };
     let result = runner.apply_after_read(&ar_ctx, doc);
 

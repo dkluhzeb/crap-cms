@@ -96,7 +96,7 @@ pub fn find_version_by_id(
     // data-aware (the snapshot is its own `ctx.document`); the API-hidden set is
     // document-independent and applied via the shared snapshot stripper.
     let fields = ctx.fields()?;
-    hooks.strip_read_access_value(fields, &mut version.snapshot, ctx.user, None);
+    hooks.strip_read_access_value(fields, &mut version.snapshot, ctx.slug, ctx.user, None);
 
     let api_hidden = helpers::collect_api_hidden_field_names(fields, "");
     if !api_hidden.is_empty() {

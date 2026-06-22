@@ -5,13 +5,16 @@ use anyhow::Result;
 use serde_json::{Map, Value};
 
 use crate::{
-    core::{Document, DocumentFields, FieldDefinition, HookRef, collection::Hooks},
+    core::{Document, DocumentFields, FieldDefinition, HookRef, ReqContext, collection::Hooks},
     db::{AccessResult, DbConnection, query::JoinAccessCheck},
     hooks::{
         HookRunner,
         lifecycle::{
             AccessCheckInput, AfterReadCtx, HookContext, HookEvent,
-            access::{check_collection_access, has_any_field_access, strip_read_access_with_lua},
+            access::{
+                ReadStripInput, check_collection_access, has_any_field_access,
+                strip_read_access_with_lua,
+            },
             apply_after_read_inner, run_hooks_inner,
         },
     },
@@ -28,13 +31,17 @@ pub trait ReadHooks {
     /// # Errors
     ///
     /// Returns an error if any `before_read` hook fails or aborts the read.
+    /// Returns the request-scoped shared context (possibly seeded by the hooks),
+    /// which the read path threads into `after_read` so a `before_read` hook can
+    /// stash data for `after_read` — mirroring the write lifecycle's shared
+    /// `context`. Returns an error to abort the read.
     fn before_read(
         &self,
         hooks: &Hooks,
         slug: &str,
         operation: &str,
         locale: Option<&str>,
-    ) -> Result<()>;
+    ) -> Result<ReqContext>;
 
     /// Apply `after_read` hooks to a single document.
     fn after_read_one(&self, ctx: &AfterReadCtx, doc: Document) -> Document;
@@ -71,10 +78,11 @@ pub trait ReadHooks {
         fields: &[FieldDefinition],
         level: &mut Map<String, Value>,
         document: &DocumentFields,
+        collection: &str,
         user: Option<&Document>,
         locale: Option<&str>,
     ) {
-        let _ = (fields, level, document, user, locale);
+        let _ = (fields, level, document, collection, user, locale);
     }
 
     /// Convenience over [`strip_read_access_map`](Self::strip_read_access_map):
@@ -84,6 +92,7 @@ pub trait ReadHooks {
         &self,
         fields: &[FieldDefinition],
         doc: &mut Document,
+        collection: &str,
         user: Option<&Document>,
         locale: Option<&str>,
     ) {
@@ -99,7 +108,7 @@ pub trait ReadHooks {
             .into_iter()
             .collect();
 
-        self.strip_read_access_map(fields, &mut level, &document, user, locale);
+        self.strip_read_access_map(fields, &mut level, &document, collection, user, locale);
 
         doc.fields = level.into_iter().collect();
     }
@@ -113,11 +122,12 @@ pub trait ReadHooks {
         &self,
         fields: &[FieldDefinition],
         docs: &mut [Document],
+        collection: &str,
         user: Option<&Document>,
         locale: Option<&str>,
     ) {
         for doc in docs.iter_mut() {
-            self.strip_read_access_doc(fields, doc, user, locale);
+            self.strip_read_access_doc(fields, doc, collection, user, locale);
         }
     }
 
@@ -128,6 +138,7 @@ pub trait ReadHooks {
         &self,
         fields: &[FieldDefinition],
         snapshot: &mut Value,
+        collection: &str,
         user: Option<&Document>,
         locale: Option<&str>,
     ) {
@@ -140,7 +151,7 @@ pub trait ReadHooks {
         };
         let document: DocumentFields = level.clone().into_iter().collect();
 
-        self.strip_read_access_map(fields, level, &document, user, locale);
+        self.strip_read_access_map(fields, level, &document, collection, user, locale);
     }
 }
 
@@ -192,7 +203,7 @@ impl ReadHooks for RunnerReadHooks<'_> {
         slug: &str,
         operation: &str,
         locale: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<ReqContext> {
         let ctx = HookContext::builder(slug, operation)
             .user(self.user)
             .locale(locale)
@@ -221,20 +232,28 @@ impl ReadHooks for RunnerReadHooks<'_> {
         fields: &[FieldDefinition],
         level: &mut Map<String, Value>,
         document: &DocumentFields,
+        collection: &str,
         user: Option<&Document>,
         locale: Option<&str>,
     ) {
         if self.override_access {
             return;
         }
+        let input = ReadStripInput {
+            document,
+            collection,
+            user,
+            locale,
+        };
         self.runner
-            .strip_read_access(fields, level, document, user, locale, self.conn);
+            .strip_read_access(fields, level, &input, self.conn);
     }
 
     fn strip_read_access_docs(
         &self,
         fields: &[FieldDefinition],
         docs: &mut [Document],
+        collection: &str,
         user: Option<&Document>,
         locale: Option<&str>,
     ) {
@@ -242,7 +261,7 @@ impl ReadHooks for RunnerReadHooks<'_> {
             return;
         }
         self.runner
-            .strip_read_access_batch(fields, docs, user, locale, self.conn);
+            .strip_read_access_batch(fields, docs, collection, user, locale, self.conn);
     }
 }
 
@@ -358,14 +377,13 @@ impl ReadHooks for LuaReadHooks<'_> {
         slug: &str,
         operation: &str,
         locale: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<ReqContext> {
         let ctx = HookContext::builder(slug, operation)
             .user(self.user)
             .locale(locale)
             .ui_locale(self.ui_locale)
             .build();
-        run_hooks_inner(self.lua, hooks, HookEvent::BeforeRead, ctx)?;
-        Ok(())
+        Ok(run_hooks_inner(self.lua, hooks, HookEvent::BeforeRead, ctx)?.context)
     }
 
     fn after_read_one(&self, ctx: &AfterReadCtx, doc: Document) -> Document {
@@ -377,12 +395,19 @@ impl ReadHooks for LuaReadHooks<'_> {
         fields: &[FieldDefinition],
         level: &mut Map<String, Value>,
         document: &DocumentFields,
+        collection: &str,
         user: Option<&Document>,
         locale: Option<&str>,
     ) {
         if self.override_access {
             return;
         }
-        strip_read_access_with_lua(self.lua, fields, level, document, user, locale);
+        let input = ReadStripInput {
+            document,
+            collection,
+            user,
+            locale,
+        };
+        strip_read_access_with_lua(self.lua, fields, level, &input);
     }
 }

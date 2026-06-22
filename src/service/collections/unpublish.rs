@@ -93,7 +93,7 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document
         conn,
     )?;
 
-    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.user, None);
+    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.slug, ctx.user, None);
     doc.strip_fields(&helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     Ok(doc)

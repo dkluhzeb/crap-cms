@@ -293,6 +293,7 @@ fn build_event_payload(
             &field_defs,
             &mut visible,
             &processed_data,
+            slug_str,
             user_doc,
         );
 

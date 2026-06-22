@@ -87,6 +87,7 @@ pub fn compute_denied_read_fields(
     state: &AdminState,
     auth_user: Option<&Extension<AuthUser>>,
     fields: &[FieldDefinition],
+    collection: &str,
     document: &DocumentFields,
 ) -> Result<Vec<FieldDenial>, Box<axum::response::Response>> {
     if !has_any_field_access(fields, |f| f.access.read.as_ref()) {
@@ -108,7 +109,7 @@ pub fn compute_denied_read_fields(
 
     let denied = state
         .hook_runner
-        .read_denied_names(fields, document, user_doc, None, &tx);
+        .read_denied_names(fields, document, collection, user_doc, None, &tx);
 
     if let Err(e) = tx.commit() {
         warn!("tx commit failed: {e}");

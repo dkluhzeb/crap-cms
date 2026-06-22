@@ -316,12 +316,16 @@ pub async fn edit_form(
     // The service read already stripped read-denied *values* (data-aware). Here
     // we resolve the denied field *names* for this document so the form can drop
     // their inputs (no empty input renders for a field the user can't read).
-    let denied =
-        match compute_denied_read_fields(&state, auth_user.as_ref(), &def.fields, &document.fields)
-        {
-            Ok(d) => d,
-            Err(resp) => return *resp,
-        };
+    let denied = match compute_denied_read_fields(
+        &state,
+        auth_user.as_ref(),
+        &def.fields,
+        &slug,
+        &document.fields,
+    ) {
+        Ok(d) => d,
+        Err(resp) => return *resp,
+    };
 
     let (main_fields, sidebar_fields) = prepare_edit_fields(
         &state,

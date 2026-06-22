@@ -12,7 +12,7 @@ use crate::{
         lifecycle::{
             AccessCheckInput, FieldHookEvent, FieldHooksCall, LuaCrudInfra,
             access::{
-                WriteStripInput, check_collection_access, has_any_field_access,
+                ReadStripInput, WriteStripInput, check_collection_access, has_any_field_access,
                 strip_read_access_with_lua, strip_write_access_with_lua,
             },
             run_field_hooks_inner, run_hooks_inner, validate_fields_inner,
@@ -92,10 +92,11 @@ pub trait WriteHooks {
         fields: &[FieldDefinition],
         level: &mut Map<String, Value>,
         document: &DocumentFields,
+        collection: &str,
         user: Option<&Document>,
         locale: Option<&str>,
     ) {
-        let _ = (fields, level, document, user, locale);
+        let _ = (fields, level, document, collection, user, locale);
     }
 
     /// Convenience: strip read-denied fields from a returned [`Document`] in
@@ -104,6 +105,7 @@ pub trait WriteHooks {
         &self,
         fields: &[FieldDefinition],
         doc: &mut Document,
+        collection: &str,
         user: Option<&Document>,
         locale: Option<&str>,
     ) {
@@ -113,7 +115,7 @@ pub trait WriteHooks {
             .into_iter()
             .collect();
 
-        self.strip_read_access_map(fields, &mut level, &document, user, locale);
+        self.strip_read_access_map(fields, &mut level, &document, collection, user, locale);
 
         doc.fields = level.into_iter().collect();
     }
@@ -151,6 +153,7 @@ pub trait WriteHooks {
         &self,
         fields: &[FieldDefinition],
         data: &mut DocumentFields,
+        collection: &str,
         user: Option<&Document>,
         locale: Option<&str>,
         operation: &str,
@@ -174,6 +177,7 @@ pub trait WriteHooks {
             &mut level,
             &WriteStripInput {
                 document: &document,
+                collection,
                 user,
                 locale,
                 operation,
@@ -326,6 +330,7 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         fields: &[FieldDefinition],
         level: &mut Map<String, Value>,
         document: &DocumentFields,
+        collection: &str,
         user: Option<&Document>,
         locale: Option<&str>,
     ) {
@@ -335,8 +340,13 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         let Some(conn) = self.conn else {
             return;
         };
-        self.runner
-            .strip_read_access(fields, level, document, user, locale, conn);
+        let input = ReadStripInput {
+            document,
+            collection,
+            user,
+            locale,
+        };
+        self.runner.strip_read_access(fields, level, &input, conn);
     }
 
     fn check_access(&self, input: &AccessCheckInput<'_>) -> Result<AccessResult> {
@@ -587,13 +597,20 @@ impl WriteHooks for LuaWriteHooks<'_> {
         fields: &[FieldDefinition],
         level: &mut Map<String, Value>,
         document: &DocumentFields,
+        collection: &str,
         user: Option<&Document>,
         locale: Option<&str>,
     ) {
         if self.override_access {
             return;
         }
-        strip_read_access_with_lua(self.lua, fields, level, document, user, locale);
+        let input = ReadStripInput {
+            document,
+            collection,
+            user,
+            locale,
+        };
+        strip_read_access_with_lua(self.lua, fields, level, &input);
     }
 
     fn strip_write_access_map(

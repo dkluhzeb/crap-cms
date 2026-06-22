@@ -6,7 +6,7 @@ use serde_json::Value as JsonValue;
 use tracing::error;
 
 use crate::{
-    core::{Document, FieldDefinition, collection::Hooks, document::DocumentBuilder},
+    core::{Document, FieldDefinition, ReqContext, collection::Hooks, document::DocumentBuilder},
     hooks::lifecycle::{FieldHookEvent, HookEvent, context::HookContext, runner::FieldHooksCall},
 };
 
@@ -22,11 +22,24 @@ pub struct AfterReadCtx<'a> {
     pub locale: Option<&'a str>,
     pub user: Option<&'a Document>,
     pub ui_locale: Option<&'a str>,
+    /// Request-scoped shared table seeded by `before_read`, exposed to
+    /// `after_read` hooks as `ctx.context` (the read-lifecycle analogue of the
+    /// write lifecycle's `before_*`→`after_*` shared context).
+    pub context: ReqContext,
 }
 
 /// Inner implementation of `apply_after_read` — operates on a locked `&Lua`.
 /// Runs field-level `after_read` hooks, then collection-level, then global registered.
-/// On error: logs warning, returns original doc unmodified.
+///
+/// **Fail-open by design (unlike every other hook event, which aborts).**
+/// `after_read` is the read-path *enrichment/transform* layer, not the access
+/// boundary — field-level read access (`access.read`) is enforced separately and
+/// fails *closed*. A buggy `after_read` hook therefore must not be able to 500
+/// every read / list page / live-event for a collection; on error we log and
+/// return the document **unmodified** (its original, already-access-stripped
+/// form). A hook that wants strict behavior can `error()` and accept the
+/// degraded-to-original outcome, or do its own `pcall`; redaction belongs in
+/// `access.read`, not here.
 pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Document) -> Document {
     let has_field_hooks = has_any_field_hook(ctx.fields, &FieldHookEvent::AfterRead);
 
@@ -73,6 +86,8 @@ pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Documen
 
     let hook_ctx = HookContext::builder(ctx.collection, ctx.operation)
         .data(data)
+        .document_id(doc_id.as_str())
+        .context(ctx.context.clone())
         .locale(ctx.locale)
         .user(ctx.user)
         .ui_locale(ctx.ui_locale)
@@ -147,6 +162,7 @@ mod tests {
             locale: None,
             user: None,
             ui_locale: None,
+            context: ReqContext::new(),
         };
         let result = apply_after_read_inner(&lua, &ctx, doc.clone());
         assert_eq!(result.id, "doc1");

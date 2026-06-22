@@ -288,7 +288,7 @@ mod tests {
     use crate::config::{CrapConfig, DatabaseConfig, LocaleConfig};
     use crate::core::collection::Hooks;
     use crate::core::{
-        CollectionDefinition, Document, FieldDefinition, FieldType, RelationshipConfig,
+        CollectionDefinition, Document, FieldDefinition, FieldType, RelationshipConfig, ReqContext,
     };
     use crate::db::{Filter, FilterOp, migrate, pool};
     use crate::hooks::lifecycle::AfterReadCtx;
@@ -312,8 +312,8 @@ mod tests {
     }
 
     impl ReadHooks for MockHooks {
-        fn before_read(&self, _: &Hooks, _: &str, _: &str, _: Option<&str>) -> Result<()> {
-            Ok(())
+        fn before_read(&self, _: &Hooks, _: &str, _: &str, _: Option<&str>) -> Result<ReqContext> {
+            Ok(ReqContext::new())
         }
 
         fn after_read_one(&self, _: &AfterReadCtx, doc: Document) -> Document {

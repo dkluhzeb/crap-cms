@@ -54,6 +54,8 @@ Field-access functions receive the **document data**, not just the user — the 
 | `ctx.data` | The field's **immediate level** — the row object for a field inside an array/blocks row, the group object for a field in a group, the whole document at the top level. Lets a rule gate on sibling values. |
 | `ctx.document` | The **full document** the field belongs to (the stored document on read/update, the incoming document on create). Stable as the check descends into rows, so a nested field can depend on a top-level value. |
 | `ctx.user` | The requesting user (or `nil` when anonymous). |
+| `ctx.collection` | The collection (or global) slug the field belongs to — lets a field-access function shared across collections branch on which one it is running for. |
+| `ctx.operation` | `"read"`, `"create"`, or `"update"`. |
 
 This makes rules like these possible:
 

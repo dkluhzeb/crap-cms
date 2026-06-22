@@ -8,7 +8,7 @@ Collection-level hooks receive a context table and must return a (potentially mo
 {
     collection = "posts",       -- Collection slug
     operation = "create",       -- "create", "update", "delete", "find", "find_by_id", "get", or "init"
-    document_id = "abc123",     -- Affected document id; nil only in create's before-hooks (no row yet)
+    id = "abc123",              -- Affected document id; nil only in create's before-hooks (no row yet)
     data = {                    -- Document data (mutable in before-write hooks)
         title = "Hello World",
         slug = "hello-world",
@@ -242,7 +242,7 @@ end
 
 In a **before-write hook** (`before_validate`, `before_change`) the document has
 not been written yet, so the *currently persisted* row is still the old state.
-Fetch it on demand with `crap.collections.find_by_id` using `ctx.document_id`
+Fetch it on demand with `crap.collections.find_by_id` using `ctx.id`
 (the affected document's id — present on update/delete, `nil` on create):
 
 ```lua
@@ -251,7 +251,7 @@ function M.price_increase_only(ctx)
     if ctx.operation ~= "update" then
         return ctx
     end
-    local old = crap.collections.find_by_id(ctx.collection, ctx.document_id, { overrideAccess = true })
+    local old = crap.collections.find_by_id(ctx.collection, ctx.id, { overrideAccess = true })
     if old and ctx.data.price < old.price then
         error("price may only increase")
     end
@@ -266,11 +266,13 @@ old document pay nothing. In an `after_change` hook the row already holds the
 
 ## Context (Per-Operation Shared Table)
 
-The `context` field is a table scoped to a **single write operation** — one
-`create` / `update` / `delete` lifecycle and its `before_*` → `after_*` hooks.
-It lets those hooks share data without relying on module-level state. It starts
-empty at the beginning of each operation and is the canonical way to carry a
-value from a before-hook into an after-hook.
+The `context` field is a table scoped to a **single operation** — one
+`create` / `update` / `delete` write lifecycle (its `before_*` → `after_*`
+hooks), or one read (`before_read` → `after_read`). It lets those hooks share
+data without relying on module-level state. It starts empty at the beginning of
+each operation and is the canonical way to carry a value from a before-hook into
+an after-hook — including from `before_read` into `after_read` (e.g. compute a
+value once in `before_read` and reuse it when shaping each row in `after_read`).
 
 > **Scope:** it is *not* request-scoped. A bulk operation that writes 100
 > documents runs 100 separate `before_*`→`after_*` cycles, each with its own
@@ -284,7 +286,7 @@ state:
 ```lua
 -- before_change: capture the persisted old value
 function M.capture_status(ctx)
-    local old = crap.collections.find_by_id(ctx.collection, ctx.document_id, { overrideAccess = true })
+    local old = crap.collections.find_by_id(ctx.collection, ctx.id, { overrideAccess = true })
     ctx.context.old_status = old and old.status
     return ctx
 end

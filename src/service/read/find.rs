@@ -89,7 +89,7 @@ pub fn find_documents(
         }));
     }
 
-    hooks.before_read(
+    let req_context = hooks.before_read(
         &def.hooks,
         ctx.slug,
         "find",
@@ -140,7 +140,7 @@ pub fn find_documents(
         None
     };
 
-    post_process_docs(ctx, conn, &mut docs, input);
+    post_process_docs(ctx, conn, &mut docs, input, req_context);
 
     let pagination = helpers::build_pagination(&helpers::PaginationInputs {
         docs: &docs,

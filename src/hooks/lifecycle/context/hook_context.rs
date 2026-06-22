@@ -69,13 +69,14 @@ pub struct HookContext {
     /// Admin UI locale code (e.g., `"en"`, `"de"`). Nil if not set or
     /// called from gRPC without locale context.
     pub ui_locale: Option<String>,
-    /// The id of the document this event targets. Populated across the write
-    /// lifecycle — `update`/`delete` before- and after-hooks, `after_change` on
-    /// create (the freshly assigned id; `nil` in create's before-hooks, where no
-    /// row exists yet), and `"default"` for globals. Also set on live-broadcast
-    /// hooks (`before_broadcast`). The read lifecycle (`after_read`) leaves this
-    /// `nil` and carries the id inside `data` instead.
-    #[lua(optional)]
+    /// The id of the document this event targets, exposed to Lua as `ctx.id`
+    /// (matching the field-hook, validator, and access contexts). Populated across
+    /// the write lifecycle — `update`/`delete` before- and after-hooks,
+    /// `after_change` on create (the freshly assigned id; `nil` in create's
+    /// before-hooks, where no row exists yet), `after_read`, and `"default"` for
+    /// globals. Also set on live-broadcast hooks (`before_broadcast`). (The Rust
+    /// field stays `document_id`; only the Lua-facing key is `id`.)
+    #[lua(rename = "id", optional)]
     pub document_id: Option<String>,
     /// The user who caused a live-broadcast mutation. Set on `before_broadcast`;
     /// `nil` elsewhere or for anonymous changes. (Distinct from `user`, the
@@ -118,7 +119,7 @@ impl HookContext {
             tbl.set("user", document_to_lua_table(lua, doc)?)?;
         }
         if let Some(ref id) = self.document_id {
-            tbl.set("document_id", id.as_str())?;
+            tbl.set("id", id.as_str())?;
         }
         if let Some(ref u) = self.edited_by {
             let eu = lua.create_table()?;
