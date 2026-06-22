@@ -46,6 +46,7 @@ pub(crate) fn check_access_with_lua(
         user: input.user,
         id: input.id,
         data: input.data,
+        document: input.document,
         locale: input.locale,
         operation: input.operation,
         collection: input.collection,
@@ -229,6 +230,7 @@ mod tests {
         data: Option<&'a DocumentFields>,
     ) -> AccessCheckInput<'a> {
         AccessCheckInput {
+            document: None,
             access,
             user: None,
             id: None,
@@ -492,6 +494,7 @@ mod tests {
         let result = check_access_with_lua(
             &lua,
             &AccessCheckInput {
+                document: None,
                 access: Some(&HookRef::new("test_access.nil_keyed_constraint")),
                 user: Some(&user),
                 id: None,
@@ -535,6 +538,7 @@ mod tests {
         let result = check_access_with_lua(
             &lua,
             &AccessCheckInput {
+                document: None,
                 access: Some(&HookRef::new("test_access.check_user")),
                 user: Some(&admin),
                 id: None,
@@ -552,6 +556,7 @@ mod tests {
         let result = check_access_with_lua(
             &lua,
             &AccessCheckInput {
+                document: None,
                 access: Some(&HookRef::new("test_access.check_user")),
                 user: Some(&viewer),
                 id: None,
@@ -583,6 +588,7 @@ mod tests {
         let result = check_access_with_lua(
             &lua,
             &AccessCheckInput {
+                document: None,
                 access: Some(&HookRef::new("test_access.check_id")),
                 user: None,
                 id: Some("doc-123"),
@@ -599,6 +605,7 @@ mod tests {
         let result = check_access_with_lua(
             &lua,
             &AccessCheckInput {
+                document: None,
                 access: Some(&HookRef::new("test_access.check_id")),
                 user: None,
                 id: Some("doc-other"),
@@ -673,6 +680,7 @@ mod tests {
         let allowed = check_access_with_lua(
             &lua,
             &AccessCheckInput {
+                document: None,
                 access: Some(&HookRef::new("test_access.check_locale")),
                 user: None,
                 id: None,
@@ -689,6 +697,7 @@ mod tests {
         let denied = check_access_with_lua(
             &lua,
             &AccessCheckInput {
+                document: None,
                 access: Some(&HookRef::new("test_access.check_locale")),
                 user: None,
                 id: None,

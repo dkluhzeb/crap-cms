@@ -32,9 +32,10 @@ pub struct FieldHookContext<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[lua(ty = "string", optional)]
     pub locale: Option<&'a str>,
-    /// The **nearest scope** (read-only snapshot): the full document for a
-    /// top-level field, or the current row for a hook on a field inside an
-    /// array/blocks row.
+    /// The **nearest scope** (read-only snapshot): the group object for a field
+    /// inside a group, the current row for a field inside an array/blocks row, or
+    /// the full document at the top level. Groups are nested objects, so a hook
+    /// on a `seo.title` sub-field reads its sibling via `ctx.data.<sibling>`.
     #[lua(ty = "table<string, any>")]
     pub data: &'a DocumentFields,
     /// The **full document** being written or read — a read-only snapshot taken

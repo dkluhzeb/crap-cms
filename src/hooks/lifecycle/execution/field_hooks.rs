@@ -1,9 +1,10 @@
 //! Field-level hook execution.
 //!
 //! Field hooks run per-field and receive `(value, context)`, returning the new
-//! value. The `FieldHookWalker` recurses through Group / Row / Collapsible /
-//! Tabs containers transparently, accumulating the `__`-separated prefix for
-//! Group fields so hook lookups land at the right `data_key`.
+//! value. The `FieldHookWalker` recurses over the canonical **nested** document
+//! shape: Group navigates into its nested object, Row/Collapsible/Tabs are
+//! transparent, and Array/Blocks recurse per row. A hook's `ctx.data` is its
+//! nearest scope (the group object / array row / document).
 
 use std::time::Instant;
 
@@ -14,7 +15,6 @@ use tracing::debug;
 
 use crate::{
     core::{DocumentFields, FieldDefinition, FieldType, HookRef, any_field, field::FieldHooks},
-    db::query::helpers::prefixed_name,
     hooks::{
         lifecycle::{
             FieldHookContext, FieldHookEvent, UiLocaleContext, UserContext, runner::FieldHooksCall,
@@ -53,7 +53,7 @@ pub(crate) fn run_field_hooks_inner(
         call,
         document: &document,
     }
-    .walk(data, call.fields, "")
+    .walk(data, call.fields)
 }
 
 /// Iterator state for the recursive field-hook walk. Bundles the per-walk
@@ -69,45 +69,65 @@ struct FieldHookWalker<'a> {
 }
 
 impl FieldHookWalker<'_> {
-    /// Recursive field-hook execution with prefix support for nested structures.
-    /// Group accumulates prefix (`group__`), Row/Collapsible/Tabs pass through transparently.
-    fn walk(
-        &self,
-        data: &mut DocumentFields,
-        fields: &[FieldDefinition],
-        prefix: &str,
-    ) -> Result<()> {
+    /// Recursive field-hook execution over the canonical **nested** document
+    /// shape — the same walk at the top level and inside array/blocks rows
+    /// (group data is a nested object at every level). Group navigates into its
+    /// object; Row/Collapsible/Tabs are transparent; Array/Blocks fire the
+    /// field's own hook then recurse per row.
+    fn walk(&self, data: &mut DocumentFields, fields: &[FieldDefinition]) -> Result<()> {
         for field in fields {
             match field.field_type {
                 FieldType::Group => {
-                    let new_prefix = prefixed_name(prefix, &field.name);
-                    self.walk(data, &field.fields, &new_prefix)?;
+                    // Descend into the nested group object. An absent group is
+                    // treated as empty so sub-field hooks still run (e.g. to
+                    // auto-generate a value); write back only when non-empty so
+                    // an untouched absent group isn't materialized.
+                    let mut group_data: DocumentFields = match data.get(&field.name) {
+                        Some(JsonValue::Object(obj)) => {
+                            obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+                        }
+                        _ => DocumentFields::new(),
+                    };
+
+                    self.walk(&mut group_data, &field.fields)?;
+
+                    if !group_data.is_empty() {
+                        data.insert(
+                            field.name.clone(),
+                            JsonValue::Object(
+                                group_data
+                                    .iter()
+                                    .map(|(k, v)| (k.clone(), v.clone()))
+                                    .collect(),
+                            ),
+                        );
+                    }
                 }
 
                 FieldType::Row | FieldType::Collapsible => {
-                    self.walk(data, &field.fields, prefix)?;
+                    self.walk(data, &field.fields)?;
                 }
 
                 FieldType::Tabs => {
                     for tab in &field.tabs {
-                        self.walk(data, &tab.fields, prefix)?;
+                        self.walk(data, &tab.fields)?;
                     }
                 }
 
                 FieldType::Array => {
                     // A hook on the array field itself fires on the whole value.
-                    self.run_single(data, field, prefix)?;
+                    self.run_single(data, field)?;
                     // Hooks on the array's sub-fields fire per row.
-                    self.walk_array_rows(data, field, prefix)?;
+                    self.walk_array_rows(data, field)?;
                 }
 
                 FieldType::Blocks => {
-                    self.run_single(data, field, prefix)?;
-                    self.walk_blocks_rows(data, field, prefix)?;
+                    self.run_single(data, field)?;
+                    self.walk_blocks_rows(data, field)?;
                 }
 
                 _ => {
-                    self.run_single(data, field, prefix)?;
+                    self.run_single(data, field)?;
                 }
             }
         }
@@ -118,18 +138,12 @@ impl FieldHookWalker<'_> {
     /// Run sub-field hooks on every row of an `Array` field, writing each
     /// mutated row back. No-op unless a sub-field actually has a hook for this
     /// event.
-    fn walk_array_rows(
-        &self,
-        data: &mut DocumentFields,
-        field: &FieldDefinition,
-        prefix: &str,
-    ) -> Result<()> {
+    fn walk_array_rows(&self, data: &mut DocumentFields, field: &FieldDefinition) -> Result<()> {
         if !has_any_field_hook(&field.fields, &self.call.event) {
             return Ok(());
         }
 
-        let data_key = prefixed_name(prefix, &field.name);
-        let Some(JsonValue::Array(rows)) = data.get(&data_key) else {
+        let Some(JsonValue::Array(rows)) = data.get(&field.name) else {
             return Ok(());
         };
         let mut rows = rows.clone();
@@ -141,7 +155,7 @@ impl FieldHookWalker<'_> {
             let mut row_data: DocumentFields =
                 obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
 
-            self.walk_row(&mut row_data, &field.fields)?;
+            self.walk(&mut row_data, &field.fields)?;
 
             *row = JsonValue::Object(
                 row_data
@@ -151,19 +165,14 @@ impl FieldHookWalker<'_> {
             );
         }
 
-        data.insert(data_key, JsonValue::Array(rows));
+        data.insert(field.name.clone(), JsonValue::Array(rows));
         Ok(())
     }
 
     /// Run sub-field hooks on every row of a `Blocks` field, resolving each
     /// row's `_block_type` to the matching block's sub-fields and preserving
     /// `_block_type` on write-back.
-    fn walk_blocks_rows(
-        &self,
-        data: &mut DocumentFields,
-        field: &FieldDefinition,
-        prefix: &str,
-    ) -> Result<()> {
+    fn walk_blocks_rows(&self, data: &mut DocumentFields, field: &FieldDefinition) -> Result<()> {
         if !field
             .blocks
             .iter()
@@ -172,8 +181,7 @@ impl FieldHookWalker<'_> {
             return Ok(());
         }
 
-        let data_key = prefixed_name(prefix, &field.name);
-        let Some(JsonValue::Array(rows)) = data.get(&data_key) else {
+        let Some(JsonValue::Array(rows)) = data.get(&field.name) else {
             return Ok(());
         };
         let mut rows = rows.clone();
@@ -195,7 +203,7 @@ impl FieldHookWalker<'_> {
             let mut row_data: DocumentFields =
                 obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
 
-            self.walk_row(&mut row_data, &block.fields)?;
+            self.walk(&mut row_data, &block.fields)?;
 
             *row = JsonValue::Object(
                 row_data
@@ -205,81 +213,21 @@ impl FieldHookWalker<'_> {
             );
         }
 
-        data.insert(data_key, JsonValue::Array(rows));
+        data.insert(field.name.clone(), JsonValue::Array(rows));
         Ok(())
     }
 
-    /// Recurse field hooks within a single array/blocks row. Unlike the
-    /// top-level [`walk`](Self::walk) (where Group data is flattened into
-    /// `group__field` columns), in-row Group data is a **nested object**, so
-    /// here Group navigates into that object. Row/Collapsible/Tabs are
-    /// transparent; nested Array/Blocks recurse again.
-    fn walk_row(&self, row: &mut DocumentFields, fields: &[FieldDefinition]) -> Result<()> {
-        for field in fields {
-            match field.field_type {
-                FieldType::Group => {
-                    let Some(JsonValue::Object(obj)) = row.get(&field.name).cloned() else {
-                        continue;
-                    };
-                    let mut group_data: DocumentFields =
-                        obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-
-                    self.walk_row(&mut group_data, &field.fields)?;
-
-                    row.insert(
-                        field.name.clone(),
-                        JsonValue::Object(
-                            group_data
-                                .iter()
-                                .map(|(k, v)| (k.clone(), v.clone()))
-                                .collect(),
-                        ),
-                    );
-                }
-
-                FieldType::Row | FieldType::Collapsible => {
-                    self.walk_row(row, &field.fields)?;
-                }
-
-                FieldType::Tabs => {
-                    for tab in &field.tabs {
-                        self.walk_row(row, &tab.fields)?;
-                    }
-                }
-
-                FieldType::Array => {
-                    self.run_single(row, field, "")?;
-                    self.walk_array_rows(row, field, "")?;
-                }
-
-                FieldType::Blocks => {
-                    self.run_single(row, field, "")?;
-                    self.walk_blocks_rows(row, field, "")?;
-                }
-
-                _ => {
-                    self.run_single(row, field, "")?;
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Run hooks for a single (non-container) field, using the prefixed data key.
-    fn run_single(
-        &self,
-        data: &mut DocumentFields,
-        field: &FieldDefinition,
-        prefix: &str,
-    ) -> Result<()> {
+    /// Run hooks for a single (non-container) field. The field is addressed by
+    /// bare name within the current (nested) level — its `ctx.data` is that
+    /// level, matching `FieldHookContext`'s "nearest scope" contract.
+    fn run_single(&self, data: &mut DocumentFields, field: &FieldDefinition) -> Result<()> {
         let hook_refs = get_field_hook_refs(&field.hooks, &self.call.event);
 
         if hook_refs.is_empty() {
             return Ok(());
         }
 
-        let data_key = prefixed_name(prefix, &field.name);
+        let data_key = field.name.clone();
 
         let was_present = data.contains_key(&data_key);
         let value = data.get(&data_key).cloned().unwrap_or(JsonValue::Null);
@@ -408,6 +356,66 @@ mod tests {
     use crate::core::FieldTab;
     use crate::core::{FieldHooks, FieldType};
     use serde_json::json;
+
+    /// Regression: a `before_change` hook on a **group sub-field** must fire when
+    /// the group arrives as a nested object (the canonical write shape). Before
+    /// the nested-walker unification, the top-level walk looked up the flat key
+    /// `seo__title` and silently skipped the hook for nested input.
+    #[test]
+    fn field_hook_runs_on_nested_group_subfield() {
+        let lua = mlua::Lua::new();
+        lua.load(
+            r#"
+            package.loaded["hooks.upper"] = function(value, ctx)
+
+                if type(value) == "string" then return value:upper() end
+
+                return value
+            end
+        "#,
+        )
+        .exec()
+        .unwrap();
+
+        let fields = vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("title", FieldType::Text)
+                        .hooks(FieldHooks {
+                            before_change: vec![HookRef::new("hooks.upper")],
+                            ..Default::default()
+                        })
+                        .build(),
+                ])
+                .build(),
+        ];
+
+        let mut data: DocumentFields = [("seo".to_string(), json!({ "title": "hi" }))]
+            .into_iter()
+            .collect();
+
+        run_field_hooks_inner(
+            &lua,
+            &mut data,
+            &FieldHooksCall {
+                fields: &fields,
+                event: FieldHookEvent::BeforeChange,
+                collection: "posts",
+                operation: "create",
+                id: None,
+                locale: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            data.get("seo")
+                .and_then(|s| s.get("title"))
+                .and_then(|v| v.as_str()),
+            Some("HI"),
+            "before_change hook must transform a nested group sub-field"
+        );
+    }
 
     #[test]
     fn field_hook_receives_value_and_context() {

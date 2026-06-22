@@ -110,16 +110,16 @@ pub fn search_documents(
         }
     }
 
-    let mut denied = hooks.field_read_denied(
-        &def.fields,
-        ctx.user,
-        input.locale_ctx.map(LocaleContext::access_locale),
-    );
-    denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
+    // Field-read access is data-aware (per-doc, per-row); the API-hidden set is
+    // document-independent and computed once.
+    let access_locale = input.locale_ctx.map(LocaleContext::access_locale);
+    let api_hidden = helpers::collect_api_hidden_field_names(&def.fields, "");
 
-    if !denied.is_empty() {
-        for doc in &mut docs {
-            doc.strip_fields(&denied);
+    for doc in &mut docs {
+        hooks.strip_read_access_doc(&def.fields, doc, ctx.user, access_locale);
+
+        if !api_hidden.is_empty() {
+            doc.strip_fields(&api_hidden);
         }
     }
 

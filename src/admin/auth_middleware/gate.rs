@@ -30,6 +30,7 @@ fn check_admin_access_blocking(
     let conn = pool.get().ok()?;
     Some(hook_runner.check_access(
         &AccessCheckInput {
+            document: None,
             access: Some(access),
             user: Some(user_doc),
             id: None,
@@ -116,6 +117,7 @@ pub(crate) async fn check_collection_admin_gate(
         let conn = pool.get().ok()?;
         Some(hook_runner.check_access(
             &AccessCheckInput {
+                document: None,
                 access: Some(&access),
                 user: Some(&user_doc),
                 id: None,

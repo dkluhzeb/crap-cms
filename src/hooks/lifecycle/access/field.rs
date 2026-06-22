@@ -4,10 +4,14 @@
 //! post-processing apply the resulting [`FieldDenial`]s to strip denied fields.
 
 use mlua::Lua;
+use serde_json::{Map, Value};
 use tracing::warn;
 
 use crate::{
-    core::{DenialSeg, Document, FieldDefinition, FieldDenial, FieldType, HookRef, any_field},
+    core::{
+        DenialSeg, Document, DocumentFields, FieldDefinition, FieldDenial, FieldType, HookRef,
+        any_field,
+    },
     db::{AccessResult, query::helpers::prefixed_name},
     hooks::lifecycle::{AccessCheckInput, access::collection::check_access_with_lua},
 };
@@ -68,6 +72,9 @@ fn access_denied(
             user,
             id: None,
             data: None,
+            // Threaded by the data-aware field-strip walker; `None` here on the
+            // legacy document-independent path.
+            document: None,
             locale,
             operation,
             // Field-access functions are registered on a specific field of a
@@ -272,6 +279,293 @@ pub(crate) fn collect_denials_nested<F: Fn(&FieldDefinition) -> bool>(
     }
 }
 
+/// Data-aware in-place field-**read** strip. Walks `level` (a document object)
+/// and, for every read-gated field, calls `is_denied(hook, level_snapshot)` —
+/// the snapshot being the field's own level (`ctx.data`); the caller's closure
+/// supplies `ctx.document`. A denied field/group/array/blocks field is removed
+/// in place; for arrays/blocks the rule is evaluated **per row** (each row is
+/// its own level), so a data-dependent rule can keep some rows' values and drop
+/// others'.
+///
+/// Container recursion mirrors [`super::super::execution`]'s `FieldHookWalker`
+/// (the canonical in-row traversal): Group navigates into the nested object,
+/// Row/Collapsible/Tabs are transparent (same level), Array/Blocks recurse per
+/// row. `level` is the universal nested-object form (`serde_json::Map`) shared
+/// by read documents, version snapshots, and populate targets, so a single
+/// walker covers every read-strip surface.
+///
+/// Parameterized by `is_denied` (like [`collect_denials_flat`]) so it is
+/// unit-testable without a live VM and so the Lua-evaluation logic lives in one
+/// place at the call site.
+pub(crate) fn strip_read_access_data_aware<F: Fn(&HookRef, &DocumentFields) -> bool>(
+    fields: &[FieldDefinition],
+    level: &mut Map<String, Value>,
+    is_denied: &F,
+) {
+    strip_access_data_aware(fields, level, &|f| f.access.read.as_ref(), is_denied);
+}
+
+/// Generic data-aware in-place field strip shared by the read- and write-access
+/// paths. `extract` selects which access function gates each field
+/// (`access.read` for reads, `access.create` / `access.update` for writes); the
+/// recursion and `ctx.data` (per-level) wiring is identical for both.
+///
+/// Operates on the canonical **nested** document shape (group data is a nested
+/// object at every level), structurally identical to the [`FieldHookWalker`]:
+/// Group navigates into its object, Row/Collapsible/Tabs are transparent,
+/// Array/Blocks recurse per row. The whole write/read pipeline canonicalizes to
+/// nested before access runs (ingress `nest_group_fields`, reads hydrate), so
+/// there is no flat `group__sub` form to handle here.
+///
+/// [`FieldHookWalker`]: crate::hooks::lifecycle::execution
+pub(crate) fn strip_access_data_aware<E, F>(
+    fields: &[FieldDefinition],
+    level: &mut Map<String, Value>,
+    extract: &E,
+    is_denied: &F,
+) where
+    E: Fn(&FieldDefinition) -> Option<&HookRef>,
+    F: Fn(&HookRef, &DocumentFields) -> bool,
+{
+    // Snapshot the current level for `ctx.data` (read-only sibling view); the
+    // real map is mutated (denied fields removed) as we go.
+    let level_snapshot: DocumentFields =
+        level.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+
+    for field in fields {
+        if let Some(hook) = extract(field)
+            && is_denied(hook, &level_snapshot)
+        {
+            level.remove(&field.name);
+            continue; // Parent denied → its sub-fields go with it.
+        }
+
+        match field.field_type {
+            FieldType::Group => {
+                if let Some(Value::Object(sub)) = level.get_mut(&field.name) {
+                    strip_access_data_aware(&field.fields, sub, extract, is_denied);
+                }
+            }
+            FieldType::Row | FieldType::Collapsible => {
+                strip_access_data_aware(&field.fields, level, extract, is_denied);
+            }
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    strip_access_data_aware(&tab.fields, level, extract, is_denied);
+                }
+            }
+            FieldType::Array => {
+                if let Some(Value::Array(rows)) = level.get_mut(&field.name) {
+                    for row in rows.iter_mut() {
+                        if let Value::Object(r) = row {
+                            strip_access_data_aware(&field.fields, r, extract, is_denied);
+                        }
+                    }
+                }
+            }
+            FieldType::Blocks => {
+                if let Some(Value::Array(rows)) = level.get_mut(&field.name) {
+                    for row in rows.iter_mut() {
+                        let Value::Object(r) = row else { continue };
+                        let block_type = r
+                            .get("_block_type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string();
+                        if let Some(block) =
+                            field.blocks.iter().find(|b| b.block_type == block_type)
+                        {
+                            strip_access_data_aware(&block.fields, r, extract, is_denied);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Data-aware field-**read** strip using an already-held `&Lua`. Walks `level`
+/// (the universal `serde_json::Map` form shared by read documents, version
+/// snapshots, populated targets, and live-event payloads) and removes every
+/// read-denied field in place. Each field's `access.read` function is evaluated
+/// with `ctx.data` = the field's own immediate level (the row, for a field
+/// inside an array/blocks row) and `ctx.document` = the full `document` (stable
+/// as the walk descends) — harmonized with `FieldHookContext`. Mirrors
+/// [`check_field_read_access_with_lua`] but data-aware and in place.
+///
+/// Gated on [`has_any_field_access`]: when no field carries an `access.read`
+/// function the call returns immediately with zero per-document work, so the
+/// data-aware path costs nothing on schemas that don't use field read access.
+pub(crate) fn strip_read_access_with_lua(
+    lua: &Lua,
+    fields: &[FieldDefinition],
+    level: &mut Map<String, Value>,
+    document: &DocumentFields,
+    user: Option<&Document>,
+    locale: Option<&str>,
+) {
+    if !has_any_field_access(fields, extract_read_access) {
+        return;
+    }
+
+    let is_denied = |hook: &HookRef, data: &DocumentFields| -> bool {
+        match check_access_with_lua(
+            lua,
+            &AccessCheckInput {
+                access: Some(hook),
+                user,
+                id: None,
+                data: Some(data),
+                document: Some(document),
+                locale,
+                operation: "read",
+                // Field-access functions are registered on a specific field of a
+                // specific collection, so they don't consult ctx.collection.
+                collection: "",
+                ui_locale: None,
+            },
+        ) {
+            Ok(AccessResult::Allowed | AccessResult::Constrained(_)) => false,
+            Ok(AccessResult::Denied) => true,
+            Err(e) => {
+                warn!(
+                    "Field read access function '{}' error (treating as denied): {}",
+                    hook.reference(),
+                    e
+                );
+
+                true
+            }
+        }
+    };
+
+    strip_read_access_data_aware(fields, level, &is_denied);
+}
+
+/// Context for a data-aware field-**write** strip: the full incoming document
+/// (`ctx.document`), the requester, the target locale, and the write operation.
+/// Grouped into a struct so the strip entry points stay within a sane argument
+/// count and read/write callers thread one value.
+pub struct WriteStripInput<'a> {
+    pub document: &'a DocumentFields,
+    pub user: Option<&'a Document>,
+    pub locale: Option<&'a str>,
+    /// `"create"` or `"update"`; any other value makes the strip a no-op.
+    pub operation: &'a str,
+}
+
+/// Data-aware field-**write** strip (create/update) using an already-held
+/// `&Lua`. Removes from `level` every field the user may not write for
+/// `input.operation`, evaluating each field's `access.create` / `access.update`
+/// rule with `ctx.data` = the field's own immediate level and `ctx.document` =
+/// the full incoming `input.document`. The write-path mirror of
+/// [`strip_read_access_with_lua`], so a field-access rule reading `ctx.data` /
+/// `ctx.document` behaves identically on read and write.
+///
+/// Gated on [`has_any_field_access`]: zero per-document work when no field
+/// configures the relevant write-access function.
+pub(crate) fn strip_write_access_with_lua(
+    lua: &Lua,
+    fields: &[FieldDefinition],
+    level: &mut Map<String, Value>,
+    input: &WriteStripInput<'_>,
+) {
+    let extract: fn(&FieldDefinition) -> Option<&HookRef> = match input.operation {
+        "create" => |f| f.access.create.as_ref(),
+        "update" => |f| f.access.update.as_ref(),
+        _ => return,
+    };
+
+    if !has_any_field_access(fields, extract) {
+        return;
+    }
+
+    let is_denied = |hook: &HookRef, data: &DocumentFields| -> bool {
+        match check_access_with_lua(
+            lua,
+            &AccessCheckInput {
+                access: Some(hook),
+                user: input.user,
+                id: None,
+                data: Some(data),
+                document: Some(input.document),
+                locale: input.locale,
+                operation: input.operation,
+                collection: "",
+                ui_locale: None,
+            },
+        ) {
+            Ok(AccessResult::Allowed | AccessResult::Constrained(_)) => false,
+            Ok(AccessResult::Denied) => true,
+            Err(e) => {
+                warn!(
+                    "Field {} access function '{}' error (treating as denied): {}",
+                    input.operation,
+                    hook.reference(),
+                    e
+                );
+
+                true
+            }
+        }
+    };
+
+    strip_access_data_aware(fields, level, &extract, &is_denied);
+}
+
+/// Data-aware collection of read-denied field **paths** for a single `document`,
+/// for surfaces that need denial NAMES (the admin form's input dropping, the
+/// `crap.access.field_read_denied` introspection API) rather than stripping
+/// values in place. Each `access.read` rule is evaluated with `ctx.data` =
+/// `ctx.document` = `document` (document-level context; per-row granularity is
+/// only meaningful for the in-place value strip, not for a flat name list).
+/// Shares the canonical [`collect_denials_flat`] recursion so the reported paths
+/// match what [`strip_read_access_with_lua`] removes.
+pub(crate) fn collect_read_denied_with_lua(
+    lua: &Lua,
+    fields: &[FieldDefinition],
+    document: &DocumentFields,
+    user: Option<&Document>,
+    locale: Option<&str>,
+) -> Vec<FieldDenial> {
+    let is_denied = |field: &FieldDefinition| {
+        field.access.read.as_ref().is_some_and(|hook| {
+            match check_access_with_lua(
+                lua,
+                &AccessCheckInput {
+                    access: Some(hook),
+                    user,
+                    id: None,
+                    data: Some(document),
+                    document: Some(document),
+                    locale,
+                    operation: "read",
+                    collection: "",
+                    ui_locale: None,
+                },
+            ) {
+                Ok(AccessResult::Allowed | AccessResult::Constrained(_)) => false,
+                Ok(AccessResult::Denied) => true,
+                Err(e) => {
+                    warn!(
+                        "Field read access function '{}' error (treating as denied): {}",
+                        hook.reference(),
+                        e
+                    );
+
+                    true
+                }
+            }
+        })
+    };
+
+    let mut denied = Vec::new();
+    collect_denials_flat(fields, &is_denied, "", &mut denied);
+
+    denied
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_helpers::*;
@@ -280,6 +574,422 @@ mod tests {
 
     fn flat(name: &str) -> FieldDenial {
         FieldDenial::Flat(name.to_string())
+    }
+
+    // ── Data-aware strip walker (VM-free; mock `is_denied`) ──────────────────
+
+    use crate::core::FieldDefinition;
+    use serde_json::json;
+
+    fn read_gated(name: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Text)
+            .access(FieldAccess {
+                read: Some("h".into()),
+                ..Default::default()
+            })
+            .build()
+    }
+
+    /// A doc-dependent rule (hide `secret` unless `status == "published"`)
+    /// strips at the document level based on `ctx.data`.
+    #[test]
+    fn data_aware_strip_top_level_uses_sibling_data() {
+        let fields = vec![
+            FieldDefinition::builder("status", FieldType::Text).build(),
+            read_gated("secret"),
+        ];
+        // deny `secret` when the level's `status` is not "published"
+        let is_denied =
+            |_hook: &HookRef, level: &DocumentFields| level.get_str("status") != Some("published");
+
+        let mut published = json!({ "status": "published", "secret": "x" })
+            .as_object()
+            .unwrap()
+            .clone();
+        strip_read_access_data_aware(&fields, &mut published, &is_denied);
+        assert!(published.contains_key("secret"), "published → secret kept");
+
+        let mut draft = json!({ "status": "draft", "secret": "x" })
+            .as_object()
+            .unwrap()
+            .clone();
+        strip_read_access_data_aware(&fields, &mut draft, &is_denied);
+        assert!(!draft.contains_key("secret"), "draft → secret stripped");
+    }
+
+    /// THE per-row proof: a rule keyed on the row's own data strips the field
+    /// from some rows and keeps it in others — `ctx.data` is each row's level.
+    #[test]
+    fn data_aware_strip_is_per_array_row() {
+        let fields = vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("kind", FieldType::Text).build(),
+                    read_gated("premium"),
+                ])
+                .build(),
+        ];
+        // deny `premium` only in rows whose `kind` is "free"
+        let is_denied =
+            |_hook: &HookRef, level: &DocumentFields| level.get_str("kind") == Some("free");
+
+        let mut doc = json!({
+            "items": [
+                { "kind": "free", "premium": "a" },
+                { "kind": "paid", "premium": "b" }
+            ]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        strip_read_access_data_aware(&fields, &mut doc, &is_denied);
+
+        let rows = doc.get("items").unwrap().as_array().unwrap();
+        assert!(
+            !rows[0].as_object().unwrap().contains_key("premium"),
+            "free row → premium stripped"
+        );
+        assert_eq!(
+            rows[1].as_object().unwrap().get("premium").unwrap(),
+            &json!("b"),
+            "paid row → premium kept"
+        );
+    }
+
+    /// A denied group is removed whole; nested group fields are reachable.
+    #[test]
+    fn data_aware_strip_descends_into_groups() {
+        let fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("public", FieldType::Text).build(),
+                    read_gated("token"),
+                ])
+                .build(),
+        ];
+        // always deny `token`
+        let is_denied = |_hook: &HookRef, _level: &DocumentFields| true;
+
+        let mut doc = json!({ "meta": { "public": "ok", "token": "secret" } })
+            .as_object()
+            .unwrap()
+            .clone();
+        strip_read_access_data_aware(&fields, &mut doc, &is_denied);
+
+        let meta = doc.get("meta").unwrap().as_object().unwrap();
+        assert!(meta.contains_key("public"), "non-gated group field kept");
+        assert!(!meta.contains_key("token"), "gated group field stripped");
+    }
+
+    // ── Data-aware strip via a real Lua VM (ctx.data / ctx.document) ─────────
+
+    fn read_by(name: &str, func: &str) -> FieldDefinition {
+        make_field(
+            name,
+            FieldAccess {
+                read: Some(func.into()),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// A real Lua rule keyed on the field's OWN array-row level (`ctx.data`)
+    /// keeps `premium` in `kind == "public"` rows and strips it from others.
+    #[test]
+    fn strip_read_access_with_lua_uses_per_row_sibling_data() {
+        let lua = setup_lua();
+        let fields = vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("kind", FieldType::Text).build(),
+                    read_by("premium", "test_access.allow_if_kind_public"),
+                ])
+                .build(),
+        ];
+
+        let mut doc = json!({
+            "items": [
+                { "kind": "public", "premium": "a" },
+                { "kind": "private", "premium": "b" }
+            ]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let document: DocumentFields = doc.clone().into_iter().collect();
+
+        strip_read_access_with_lua(&lua, &fields, &mut doc, &document, None, None);
+
+        let rows = doc.get("items").unwrap().as_array().unwrap();
+        assert_eq!(
+            rows[0].as_object().unwrap().get("premium").unwrap(),
+            &json!("a"),
+            "public row keeps premium"
+        );
+        assert!(
+            !rows[1].as_object().unwrap().contains_key("premium"),
+            "private row strips premium"
+        );
+    }
+
+    /// A real Lua rule keyed on the FULL document (`ctx.document`) keeps the
+    /// field when the document is published and strips it when it is a draft.
+    #[test]
+    fn strip_read_access_with_lua_uses_full_document() {
+        let lua = setup_lua();
+        let fields = vec![
+            FieldDefinition::builder("status", FieldType::Text).build(),
+            read_by("secret", "test_access.allow_if_doc_published"),
+        ];
+
+        let mut published = json!({ "status": "published", "secret": "x" })
+            .as_object()
+            .unwrap()
+            .clone();
+        let pd: DocumentFields = published.clone().into_iter().collect();
+        strip_read_access_with_lua(&lua, &fields, &mut published, &pd, None, None);
+        assert!(published.contains_key("secret"), "published → secret kept");
+
+        let mut draft = json!({ "status": "draft", "secret": "x" })
+            .as_object()
+            .unwrap()
+            .clone();
+        let dd: DocumentFields = draft.clone().into_iter().collect();
+        strip_read_access_with_lua(&lua, &fields, &mut draft, &dd, None, None);
+        assert!(!draft.contains_key("secret"), "draft → secret stripped");
+    }
+
+    /// `ctx.document` stays the full document as the walk descends into array
+    /// rows: a rule reading `ctx.document.status` strips a per-row field from
+    /// EVERY row of a draft document, even though the rows carry no `status`.
+    #[test]
+    fn strip_read_access_with_lua_document_is_stable_inside_rows() {
+        let lua = setup_lua();
+        let fields = vec![
+            FieldDefinition::builder("status", FieldType::Text).build(),
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![read_by("note", "test_access.allow_if_doc_published")])
+                .build(),
+        ];
+
+        let mut doc = json!({
+            "status": "draft",
+            "items": [ { "note": "a" }, { "note": "b" } ]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let document: DocumentFields = doc.clone().into_iter().collect();
+
+        strip_read_access_with_lua(&lua, &fields, &mut doc, &document, None, None);
+
+        let rows = doc.get("items").unwrap().as_array().unwrap();
+        assert!(
+            !rows[0].as_object().unwrap().contains_key("note"),
+            "draft document strips note from row 0 (ctx.document.status seen inside the row)"
+        );
+        assert!(
+            !rows[1].as_object().unwrap().contains_key("note"),
+            "draft document strips note from row 1"
+        );
+    }
+
+    /// Write-path mirror: a per-row `access.create` rule strips `premium` from
+    /// rows whose `kind` isn't "public", proving `ctx.data` is the write level.
+    #[test]
+    fn strip_write_access_with_lua_strips_create_denied_per_row() {
+        let lua = setup_lua();
+        let fields = vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("kind", FieldType::Text).build(),
+                    make_field(
+                        "premium",
+                        FieldAccess {
+                            create: Some("test_access.allow_if_kind_public".into()),
+                            ..Default::default()
+                        },
+                    ),
+                ])
+                .build(),
+        ];
+
+        let mut doc = json!({
+            "items": [
+                { "kind": "public", "premium": "a" },
+                { "kind": "private", "premium": "b" }
+            ]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let document: DocumentFields = doc.clone().into_iter().collect();
+
+        strip_write_access_with_lua(
+            &lua,
+            &fields,
+            &mut doc,
+            &WriteStripInput {
+                document: &document,
+                user: None,
+                locale: None,
+                operation: "create",
+            },
+        );
+
+        let rows = doc.get("items").unwrap().as_array().unwrap();
+        assert_eq!(
+            rows[0].as_object().unwrap().get("premium").unwrap(),
+            &json!("a"),
+            "public row keeps create-gated premium"
+        );
+        assert!(
+            !rows[1].as_object().unwrap().contains_key("premium"),
+            "private row strips create-gated premium"
+        );
+    }
+
+    /// An operation other than create/update strips nothing (no extractor).
+    #[test]
+    fn strip_write_access_with_lua_unknown_operation_is_noop() {
+        let lua = setup_lua();
+        let fields = vec![make_field(
+            "x",
+            FieldAccess {
+                update: Some("test_access.deny".into()),
+                ..Default::default()
+            },
+        )];
+
+        let mut doc = json!({ "x": 1 }).as_object().unwrap().clone();
+        let document: DocumentFields = doc.clone().into_iter().collect();
+
+        strip_write_access_with_lua(
+            &lua,
+            &fields,
+            &mut doc,
+            &WriteStripInput {
+                document: &document,
+                user: None,
+                locale: None,
+                operation: "delete",
+            },
+        );
+
+        assert!(doc.contains_key("x"), "unknown operation strips nothing");
+    }
+
+    // ── Nested group strip (canonical shape) ─────────────────────────────────
+
+    fn group_with(name: &str, sub: Vec<FieldDefinition>) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Group)
+            .fields(sub)
+            .build()
+    }
+
+    /// A create-denied sub-field inside a nested group object is stripped from
+    /// that object; the allowed sibling stays.
+    #[test]
+    fn strip_write_access_strips_nested_group_subfield() {
+        let lua = setup_lua();
+        let fields = vec![group_with(
+            "seo",
+            vec![
+                FieldDefinition::builder("title", FieldType::Text).build(),
+                make_field(
+                    "secret",
+                    FieldAccess {
+                        create: Some("test_access.deny".into()),
+                        ..Default::default()
+                    },
+                ),
+            ],
+        )];
+
+        let mut doc = json!({ "seo": { "title": "t", "secret": "x" } })
+            .as_object()
+            .unwrap()
+            .clone();
+        let document: DocumentFields = doc.clone().into_iter().collect();
+
+        strip_write_access_with_lua(
+            &lua,
+            &fields,
+            &mut doc,
+            &WriteStripInput {
+                document: &document,
+                user: None,
+                locale: None,
+                operation: "create",
+            },
+        );
+
+        let seo = doc.get("seo").unwrap().as_object().unwrap();
+        assert_eq!(
+            seo.get("title"),
+            Some(&json!("t")),
+            "allowed sub-field kept"
+        );
+        assert!(
+            !seo.contains_key("secret"),
+            "create-denied nested group sub-field must be stripped"
+        );
+    }
+
+    /// A read-denied sub-field inside a nested group object is stripped.
+    #[test]
+    fn strip_read_access_strips_nested_group_subfield() {
+        let lua = setup_lua();
+        let fields = vec![group_with(
+            "seo",
+            vec![
+                FieldDefinition::builder("title", FieldType::Text).build(),
+                read_by("secret", "test_access.deny"),
+            ],
+        )];
+
+        let mut doc = json!({ "seo": { "title": "t", "secret": "x" } })
+            .as_object()
+            .unwrap()
+            .clone();
+        let document: DocumentFields = doc.clone().into_iter().collect();
+
+        strip_read_access_with_lua(&lua, &fields, &mut doc, &document, None, None);
+
+        let seo = doc.get("seo").unwrap().as_object().unwrap();
+        assert!(seo.contains_key("title"));
+        assert!(
+            !seo.contains_key("secret"),
+            "read-denied nested group sub-field must be stripped"
+        );
+    }
+
+    /// A denied whole group (access on the group field itself) removes the whole
+    /// nested group object; sibling top-level fields are untouched.
+    #[test]
+    fn strip_read_access_removes_whole_group_when_denied() {
+        let lua = setup_lua();
+        let mut seo = group_with(
+            "seo",
+            vec![FieldDefinition::builder("title", FieldType::Text).build()],
+        );
+        seo.access.read = Some("test_access.deny".into());
+        let fields = vec![seo];
+
+        let mut doc = json!({ "seo": { "title": "t" }, "keep": "y" })
+            .as_object()
+            .unwrap()
+            .clone();
+        let document: DocumentFields = doc.clone().into_iter().collect();
+
+        strip_read_access_with_lua(&lua, &fields, &mut doc, &document, None, None);
+
+        assert!(
+            !doc.contains_key("seo"),
+            "whole denied group object must be stripped"
+        );
+        assert!(doc.contains_key("keep"), "sibling field untouched");
     }
 
     #[test]

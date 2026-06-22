@@ -5,14 +5,16 @@ use std::{cell::RefCell, rc::Rc};
 use anyhow::Context as _;
 
 use crate::{
-    core::{Document, DocumentFields, collection::GlobalDefinition, event::EventOperation},
+    core::{
+        Document, DocumentFields, collection::GlobalDefinition, event::EventOperation,
+        nest_group_fields,
+    },
     db::{AccessResult, DbConnection, LocaleContext, query, query::helpers::global_table},
     hooks::{AccessCheckInput, HookContext, LuaCrudInfra, ValidationCtx},
     service::{
         AfterChangeInput, RunnerWriteHooks, ServiceContext, ServiceError, WriteHooks, WriteInput,
         WriteResult, flush_queue, helpers as svc_helpers, run_after_change_hooks,
         versions::{self, VersionSnapshotCtx},
-        write::helpers::strip_denied_fields,
     },
 };
 
@@ -103,6 +105,9 @@ pub fn update_global_in_conn(
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.global_def()?;
 
+    // Canonicalize incoming data to nested groups up front (idempotent).
+    input.data = nest_group_fields(&input.data, &def.fields);
+
     check_global_update_access(
         ctx,
         write_hooks,
@@ -116,13 +121,15 @@ pub fn update_global_in_conn(
     let gtable = global_table(ctx.slug);
     let ui_locale = input.ui_locale.as_deref();
 
-    let denied = write_hooks.field_write_denied(
+    // Data-aware write strip (each `access.update` rule sees `ctx.data` = its
+    // level and `ctx.document` = the full incoming document).
+    write_hooks.strip_write_access_data(
         &def.fields,
+        &mut input.data,
         ctx.user,
         input.locale_ctx.map(LocaleContext::access_locale),
         "update",
     );
-    strip_denied_fields(&denied, &mut input.data);
 
     let final_ctx =
         run_global_before_write_hooks(write_hooks, ctx, def, &input, &gtable, is_draft, ui_locale)?;
@@ -152,13 +159,12 @@ pub fn update_global_in_conn(
         conn,
     )?;
 
-    let mut read_denied = write_hooks.field_read_denied(
+    let access_locale = input.locale_ctx.map(LocaleContext::access_locale);
+    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.user, access_locale);
+    doc.strip_fields(&svc_helpers::collect_api_hidden_field_names(
         &def.fields,
-        ctx.user,
-        input.locale_ctx.map(LocaleContext::access_locale),
-    );
-    read_denied.extend(svc_helpers::collect_api_hidden_field_names(&def.fields, ""));
-    doc.strip_fields(&read_denied);
+        "",
+    ));
 
     Ok((doc, after_ctx))
 }
@@ -175,6 +181,7 @@ fn check_global_update_access(
     ui_locale: Option<&str>,
 ) -> Result<()> {
     let access = write_hooks.check_access(&AccessCheckInput {
+        document: None,
         access: def.access.update.as_ref(),
         user: ctx.user,
         id: None,
@@ -283,7 +290,7 @@ fn persist_global_published_update(
         &locale_cfg,
     )?;
 
-    let final_data = final_ctx.to_value_map(&def.fields);
+    let final_data = final_ctx.to_value_map();
     let doc = query::update_global(conn, ctx.slug, def, &final_data, input.locale_ctx)?;
 
     query::save_join_table_data(

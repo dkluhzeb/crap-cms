@@ -35,6 +35,7 @@ pub(super) fn check_versions_gate(
     // An explicit toggle takes precedence and is boolean-only.
     if let Some(versions_ref) = ctx.versions_access_ref() {
         let access = hooks.check_access(&AccessCheckInput {
+            document: None,
             access: Some(versions_ref),
             user: ctx.user,
             id,
@@ -50,6 +51,7 @@ pub(super) fn check_versions_gate(
 
     // Unset → fall back to `access.update` (history follows edit access).
     let access = hooks.check_access(&AccessCheckInput {
+        document: None,
         access: ctx.update_access_ref(),
         user: ctx.user,
         id,
@@ -169,7 +171,7 @@ mod tests {
 
     use super::*;
     use crate::core::collection::Hooks;
-    use crate::core::{CollectionDefinition, Document, FieldDefinition, FieldDenial, HookRef};
+    use crate::core::{CollectionDefinition, Document, HookRef};
     use crate::hooks::lifecycle::AfterReadCtx;
 
     /// Returns a canned access result and records whether `check_access` ran
@@ -205,15 +207,6 @@ mod tests {
             self.called.set(true);
             *self.last_operation.borrow_mut() = Some(input.operation.to_string());
             Ok(self.result.clone())
-        }
-
-        fn field_read_denied(
-            &self,
-            _: &[FieldDefinition],
-            _: Option<&Document>,
-            _: Option<&str>,
-        ) -> Vec<FieldDenial> {
-            Vec::new()
         }
     }
 

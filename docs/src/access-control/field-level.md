@@ -45,6 +45,38 @@ Field-level read access is independent of the [content view](overview.md#content
 
 This also applies to **populated relationship and upload targets**: when a reference is expanded into the full related document, the target collection's own field-level read rules (and `admin.hidden` flags) are evaluated for the requesting user and denied fields are stripped from the embedded document — at any populate depth, including references nested inside groups, arrays, and blocks.
 
+## Data-Aware Field Access
+
+Field-access functions receive the **document data**, not just the user — the same `ctx.data` / `ctx.document` shape as a [field lifecycle hook](../hooks/field-hooks.md):
+
+| Field | What it is |
+|-------|------------|
+| `ctx.data` | The field's **immediate level** — the row object for a field inside an array/blocks row, the group object for a field in a group, the whole document at the top level. Lets a rule gate on sibling values. |
+| `ctx.document` | The **full document** the field belongs to (the stored document on read/update, the incoming document on create). Stable as the check descends into rows, so a nested field can depend on a top-level value. |
+| `ctx.user` | The requesting user (or `nil` when anonymous). |
+
+This makes rules like these possible:
+
+```lua
+-- Hide `salary` unless the document is published.
+function M.only_when_published(ctx)
+    return ctx.document ~= nil and ctx.document.status == "published"
+end
+
+-- In an array of line items, hide `cost_price` on rows whose `kind` is "public".
+function M.hide_cost_on_public_rows(ctx)
+    return not (ctx.data ~= nil and ctx.data.kind == "public")
+end
+```
+
+Because the rule is evaluated against each level, an array/blocks field rule runs **per row** — the field can be stripped from some rows and kept in others within the same document. Reads, writes (`create`/`update`), populated targets, version snapshots, and the live event stream all evaluate field access the same way, so a rule reading `ctx.data` / `ctx.document` behaves identically everywhere.
+
+> **Performance.** When *any* field in a collection configures `access.read` (or `create`/`update`), that collection's field-access functions are evaluated **per returned document** on list reads (and per row for array/blocks rules). The work is gated to **zero** when no field configures the relevant access function — the common case pays nothing. On the live event stream, field-read rules are evaluated **per event per subscriber**; a rule that performs a CRUD query there is treated as denied (the live path has no transaction), so keep live-streamed collections' field-read rules pure (`ctx.user` / `ctx.data` / `ctx.document` only).
+
+## Introspection
+
+`crap.access.field_read_denied(collection)` and `crap.access.field_write_denied(collection, operation)` return the names of fields the current user cannot read/write. These are evaluated **without document context** (`ctx.data` / `ctx.document` are `nil`), so they report a field's *categorical* (data-independent) denials — a data-dependent rule that allows when the document is absent is reported as allowed. Use them for UI gating, not as the enforcement path (enforcement is the per-document strip described above).
+
 ## Example
 
 ```lua

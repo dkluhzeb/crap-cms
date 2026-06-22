@@ -29,6 +29,7 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document
     let def = ctx.collection_def()?;
 
     let access = write_hooks.check_access(&AccessCheckInput {
+        document: None,
         access: def.access.update.as_ref(),
         user: ctx.user,
         id: Some(id),
@@ -92,10 +93,8 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document
         conn,
     )?;
 
-    let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user, None);
-    read_denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
-
-    doc.strip_fields(&read_denied);
+    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.user, None);
+    doc.strip_fields(&helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     Ok(doc)
 }

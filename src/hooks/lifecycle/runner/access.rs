@@ -4,18 +4,24 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use mlua::{LuaSerdeExt, Value};
+use serde_json::Map;
 use tracing::error;
 
 use crate::{
-    core::{Document, FieldDefinition, FieldDenial, HookRef, document::DocumentBuilder},
+    core::{
+        Document, DocumentFields, FieldDefinition, FieldDenial, HookRef, document::DocumentBuilder,
+    },
     db::{AccessResult, DbConnection},
     hooks::{
         HookRunner,
         lifecycle::{
             AccessCheckInput, AuthStrategyContext, AuthStrategyInput,
             access::{
-                check_collection_access, check_field_read_access_with_lua,
-                check_field_write_access_with_lua, collect_denials_flat, has_any_field_access,
+                WriteStripInput, check_collection_access, check_field_read_access_with_lua,
+                check_field_write_access_with_lua, collect_denials_flat,
+                collect_read_denied_with_lua, has_any_field_access, strip_access_data_aware,
+                strip_read_access_data_aware, strip_read_access_with_lua,
+                strip_write_access_with_lua,
             },
             execution::resolve_hook_function,
             types::TxContextGuard,
@@ -201,6 +207,154 @@ impl HookRunner {
         let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
         check_field_write_access_with_lua(&lua, fields, user, locale, operation)
+    }
+
+    /// Data-aware field-**read** strip for pool surfaces (admin, gRPC, MCP):
+    /// acquire a VM with `conn` threaded (so a data-dependent access fn may do
+    /// CRUD), then strip read-denied fields from `level` in place. `document` is
+    /// the full document exposed as `ctx.document`; each field's own immediate
+    /// level is `ctx.data`. Skips VM acquisition entirely when no field carries
+    /// an `access.read` function.
+    ///
+    /// Fail-closed: if the Lua VM pool is exhausted, every read-access-controlled
+    /// field (at any depth) is stripped rather than silently retained.
+    pub fn strip_read_access(
+        &self,
+        fields: &[FieldDefinition],
+        level: &mut Map<String, serde_json::Value>,
+        document: &DocumentFields,
+        user: Option<&Document>,
+        locale: Option<&str>,
+        conn: &dyn DbConnection,
+    ) {
+        if !has_any_field_access(fields, |f| f.access.read.as_ref()) {
+            return;
+        }
+
+        let lua = match self.pool.acquire() {
+            Ok(l) => l,
+            Err(e) => {
+                error!("Lua VM pool exhausted during field read access strip: {e}");
+
+                // Fail closed: deny every read-access-controlled field, at any
+                // depth, using the same data-aware walker with a constant-deny rule.
+                strip_read_access_data_aware(fields, level, &|_hook, _data| true);
+
+                return;
+            }
+        };
+
+        let _guard = TxContextGuard::set(&lua, conn, None, None, None);
+
+        strip_read_access_with_lua(&lua, fields, level, document, user, locale);
+    }
+
+    /// Data-aware field-**write** strip (create/update) for pool surfaces:
+    /// acquire a VM with `conn` threaded, then remove from `level` every field
+    /// the user may not write under `operation`. `document` is the full incoming
+    /// document (`ctx.document`); each field's own level is `ctx.data`. Skips VM
+    /// acquisition when no field configures the relevant write-access function.
+    ///
+    /// Fail-closed: VM-pool exhaustion strips every write-access-controlled field.
+    pub fn strip_write_access(
+        &self,
+        fields: &[FieldDefinition],
+        level: &mut Map<String, serde_json::Value>,
+        input: &WriteStripInput<'_>,
+        conn: &dyn DbConnection,
+    ) {
+        let extract: fn(&FieldDefinition) -> Option<&HookRef> = match input.operation {
+            "create" => |f| f.access.create.as_ref(),
+            "update" => |f| f.access.update.as_ref(),
+            _ => return,
+        };
+
+        if !has_any_field_access(fields, extract) {
+            return;
+        }
+
+        let lua = match self.pool.acquire() {
+            Ok(l) => l,
+            Err(e) => {
+                error!("Lua VM pool exhausted during field write access strip: {e}");
+
+                strip_access_data_aware(fields, level, &extract, &|_hook, _data| true);
+
+                return;
+            }
+        };
+
+        let _guard = TxContextGuard::set(&lua, conn, None, None, None);
+
+        strip_write_access_with_lua(&lua, fields, level, input);
+    }
+
+    /// Data-aware field-**read** strip for the **live event** path (gRPC
+    /// subscribe, admin SSE): like [`strip_read_access`](Self::strip_read_access)
+    /// but **connection-less** — the event pipeline has no DB transaction, so a
+    /// VM is acquired without a [`TxContextGuard`]. Pure `access.read` rules
+    /// (the overwhelming majority) work; a rule that performs CRUD raises and is
+    /// treated as denied, matching the connection-less event `after_read`
+    /// contract. `document` is the event's full document (`ctx.document`).
+    ///
+    /// Fail-closed: VM-pool exhaustion strips every read-access-controlled field.
+    pub fn strip_read_access_for_event(
+        &self,
+        fields: &[FieldDefinition],
+        level: &mut Map<String, serde_json::Value>,
+        document: &DocumentFields,
+        user: Option<&Document>,
+    ) {
+        if !has_any_field_access(fields, |f| f.access.read.as_ref()) {
+            return;
+        }
+
+        let lua = match self.pool.acquire() {
+            Ok(l) => l,
+            Err(e) => {
+                error!("Lua VM pool exhausted during live-event field read strip: {e}");
+
+                strip_read_access_data_aware(fields, level, &|_hook, _data| true);
+
+                return;
+            }
+        };
+
+        strip_read_access_with_lua(&lua, fields, level, document, user, None);
+    }
+
+    /// Data-aware collection of read-denied field **names** for a single
+    /// `document` — for surfaces that need denial paths rather than an in-place
+    /// value strip (the admin form's input dropping, the
+    /// `crap.access.field_read_denied` introspection API). Skips VM acquisition
+    /// when no field configures read access.
+    ///
+    /// Fail-closed: if the Lua VM pool is exhausted, every read-access-controlled
+    /// field (at any depth) is reported denied.
+    pub fn read_denied_names(
+        &self,
+        fields: &[FieldDefinition],
+        document: &DocumentFields,
+        user: Option<&Document>,
+        locale: Option<&str>,
+        conn: &dyn DbConnection,
+    ) -> Vec<FieldDenial> {
+        if !has_any_field_access(fields, |f| f.access.read.as_ref()) {
+            return Vec::new();
+        }
+
+        let lua = match self.pool.acquire() {
+            Ok(l) => l,
+            Err(e) => {
+                error!("Lua VM pool exhausted during field read denial computation: {e}");
+
+                return deny_all_access_controlled(fields, |f| f.access.read.as_ref());
+            }
+        };
+
+        let _guard = TxContextGuard::set(&lua, conn, None, None, None);
+
+        collect_read_denied_with_lua(&lua, fields, document, user, locale)
     }
 }
 

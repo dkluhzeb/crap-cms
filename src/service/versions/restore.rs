@@ -229,6 +229,7 @@ fn check_restore_versions_gate(
     };
 
     let access = write_hooks.check_access(&AccessCheckInput {
+        document: None,
         access: Some(versions_ref),
         user: ctx.user,
         id,
@@ -255,6 +256,7 @@ pub(crate) fn restore_collection_version_core(
     let def = ctx.collection_def()?;
 
     let access = write_hooks.check_access(&AccessCheckInput {
+        document: None,
         access: def.access.update.as_ref(),
         user: ctx.user,
         id: Some(document_id),
@@ -307,10 +309,8 @@ pub(crate) fn restore_collection_version_core(
         locale_config,
     )?;
 
-    let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user, None);
-    read_denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
-
-    doc.strip_fields(&read_denied);
+    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.user, None);
+    doc.strip_fields(&helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     Ok(doc)
 }
@@ -374,6 +374,7 @@ pub(crate) fn restore_global_version_core(
     let def = ctx.global_def()?;
 
     let access = write_hooks.check_access(&AccessCheckInput {
+        document: None,
         access: def.access.update.as_ref(),
         user: ctx.user,
         id: None,
@@ -423,10 +424,8 @@ pub(crate) fn restore_global_version_core(
         locale_config,
     )?;
 
-    let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user, None);
-    read_denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
-
-    doc.strip_fields(&read_denied);
+    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.user, None);
+    doc.strip_fields(&helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     Ok(doc)
 }

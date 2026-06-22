@@ -183,6 +183,7 @@ fn check_view(
     access: Option<&HookRef>,
 ) -> Result<AccessResult, ServiceError> {
     let result = hooks.check_access(&AccessCheckInput {
+        document: None,
         access,
         user: ctx.user,
         id: ctx.id,
@@ -239,8 +240,8 @@ mod tests {
     use anyhow::Result;
 
     use super::*;
+    use crate::core::collection::Hooks;
     use crate::core::collection::{Access, VersionsConfig};
-    use crate::core::{FieldDefinition, FieldDenial, collection::Hooks};
     use crate::db::{Filter, FilterClause, FilterOp};
     use crate::hooks::lifecycle::AfterReadCtx;
 
@@ -284,15 +285,6 @@ mod tests {
                 .get(&key)
                 .cloned()
                 .unwrap_or(AccessResult::Denied))
-        }
-
-        fn field_read_denied(
-            &self,
-            _: &[FieldDefinition],
-            _: Option<&Document>,
-            _: Option<&str>,
-        ) -> Vec<FieldDenial> {
-            Vec::new()
         }
     }
 

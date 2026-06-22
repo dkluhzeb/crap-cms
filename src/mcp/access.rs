@@ -38,6 +38,7 @@ pub(in crate::mcp) fn slug_exposed(
 
     let result = runner.check_access(
         &AccessCheckInput {
+            document: None,
             access: Some(hook),
             user: None,
             id: None,

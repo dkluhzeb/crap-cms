@@ -55,7 +55,10 @@ fn validate_global_blocking(
 
     let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
 
-    let write_hooks = RunnerWriteHooks::new(&input.runner);
+    // `.with_conn` so field-level write-access stripping actually runs during the
+    // dry-run (parity with the collection validate handler) — otherwise a
+    // write-denied field would be validated even though a real write would strip it.
+    let write_hooks = RunnerWriteHooks::new(&input.runner).with_conn(&conn);
 
     // Globals are keyed by the fixed `default` row in `_global_<slug>` —
     // validate as an update that excludes it from unique checks.

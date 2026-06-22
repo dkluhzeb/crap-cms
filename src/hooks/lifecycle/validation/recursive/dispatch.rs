@@ -10,9 +10,16 @@ use crate::{
 };
 
 /// Per-walk invariants for recursive validation. Methods take ≤ 4 args.
+///
+/// `data` is the **flat** column view the schema checks walk (validation is
+/// column-oriented: unique constraints, per-column required, locale columns).
+/// `document` is the canonical **nested** document handed to user-defined
+/// predicates (`required_when`, custom `validate`) so they see the same
+/// `ctx.data` / `ctx.document` shape as field hooks and field access.
 pub(in crate::hooks::lifecycle::validation) struct ValidationWalker<'a> {
     pub(in crate::hooks::lifecycle::validation::recursive) lua: &'a Lua,
     pub(in crate::hooks::lifecycle::validation::recursive) data: &'a DocumentFields,
+    pub(in crate::hooks::lifecycle::validation::recursive) document: &'a DocumentFields,
     pub(in crate::hooks::lifecycle::validation::recursive) ctx: &'a ValidationCtx<'a>,
 }
 
@@ -20,9 +27,15 @@ impl<'a> ValidationWalker<'a> {
     pub(in crate::hooks::lifecycle::validation) fn new(
         lua: &'a Lua,
         data: &'a DocumentFields,
+        document: &'a DocumentFields,
         ctx: &'a ValidationCtx<'a>,
     ) -> Self {
-        Self { lua, data, ctx }
+        Self {
+            lua,
+            data,
+            document,
+            ctx,
+        }
     }
 
     /// Recursive validation with prefix support for arbitrary nesting.

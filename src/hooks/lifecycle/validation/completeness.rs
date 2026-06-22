@@ -31,7 +31,10 @@ use super::{ValidationCtx, is_empty_value};
 /// validation + locale context.
 struct CompletenessCtx<'a> {
     lua: &'a Lua,
-    data: &'a DocumentFields,
+    /// Canonical nested document, handed to `required_when` predicates. (The
+    /// per-column presence checks use the flat `data` param of
+    /// [`check_localized_completeness`] directly.)
+    document: &'a DocumentFields,
     ctx: &'a ValidationCtx<'a>,
     lctx: &'a LocaleContext,
 }
@@ -58,6 +61,7 @@ pub(in crate::hooks::lifecycle::validation) fn check_localized_completeness(
     lua: &Lua,
     fields: &[FieldDefinition],
     data: &DocumentFields,
+    document: &DocumentFields,
     ctx: &ValidationCtx,
     errors: &mut Vec<FieldError>,
 ) {
@@ -71,7 +75,7 @@ pub(in crate::hooks::lifecycle::validation) fn check_localized_completeness(
 
     let cctx = CompletenessCtx {
         lua,
-        data,
+        document,
         ctx,
         lctx,
     };
@@ -241,8 +245,8 @@ fn required_when_truthy(
         cctx.lua,
         func_ref,
         &ValidateCtxSource {
-            data: cctx.data,
-            document: cctx.data,
+            data: cctx.document,
+            document: cctx.document,
             collection: cctx.ctx.table,
             field_name: &field.name,
             locale: Some(cctx.lctx.access_locale()),
@@ -380,7 +384,7 @@ mod tests {
         let mut data = DocumentFields::new();
         data.insert("kind".to_string(), json!("official"));
         let mut errors = Vec::new();
-        check_localized_completeness(&lua, &fields, &data, &ctx, &mut errors);
+        check_localized_completeness(&lua, &fields, &data, &data, &ctx, &mut errors);
         assert!(
             errors
                 .iter()
@@ -392,7 +396,7 @@ mod tests {
         let mut data2 = DocumentFields::new();
         data2.insert("kind".to_string(), json!("casual"));
         let mut errors2 = Vec::new();
-        check_localized_completeness(&lua, &fields, &data2, &ctx, &mut errors2);
+        check_localized_completeness(&lua, &fields, &data2, &data2, &ctx, &mut errors2);
         assert!(
             errors2.is_empty(),
             "falsy required_when must not require the localized field, got: {errors2:?}"
@@ -423,7 +427,7 @@ mod tests {
 
         let data = DocumentFields::new();
         let mut errors = Vec::new();
-        check_localized_completeness(&lua, &fields, &data, &ctx, &mut errors);
+        check_localized_completeness(&lua, &fields, &data, &data, &ctx, &mut errors);
         assert!(
             errors.is_empty(),
             "a virtual Join field must never produce a required_locale error, got: {errors:?}"
@@ -459,7 +463,7 @@ mod tests {
         // localized) — completeness must not produce a required_locale error.
         let data = DocumentFields::new();
         let mut errors = Vec::new();
-        check_localized_completeness(&lua, &fields, &data, &ctx, &mut errors);
+        check_localized_completeness(&lua, &fields, &data, &data, &ctx, &mut errors);
         assert!(
             errors.is_empty(),
             "non-localized child of a 'localized' wrapper must not be \

@@ -13,23 +13,23 @@ use tracing::warn;
 use crate::{
     admin::AdminState,
     core::{
-        Document, FieldDenial, HookRef, LiveMode, MutationEvent, Registry,
+        Document, HookRef, LiveMode, MutationEvent, Registry,
         event::{EventOperation, EventTarget},
     },
     db::{AccessResult, DbConnection, EventViewGate, FilterClause, query::filter::memory},
     hooks::{AccessCheckInput, EventAfterReadInput, HookRunner},
+    service::helpers::collect_api_hidden_field_names,
 };
 
 /// Resolved SSE access: per-view visibility (with row constraints) for
-/// collections and globals, field denials, and modes.
+/// collections and globals, and delivery modes.
 pub(super) struct SseAccess {
     collection_views: HashMap<String, EventViewGate>,
     global_views: HashMap<String, EventViewGate>,
-    // Field denials and modes are split by target: a collection and a global
-    // may share a slug (tables are namespaced), so a single slug-keyed map would
-    // let one clobber the other and leak a denied field or full payload.
-    collection_denied_fields: HashMap<String, Vec<FieldDenial>>,
-    global_denied_fields: HashMap<String, Vec<FieldDenial>>,
+    // Modes are split by target: a collection and a global may share a slug
+    // (tables are namespaced), so a single slug-keyed map would let one clobber
+    // the other and leak the full payload. Field denials are no longer cached
+    // here — they are data-aware and evaluated per event in `build_event_payload`.
     collection_modes: HashMap<String, LiveMode>,
     global_modes: HashMap<String, LiveMode>,
 }
@@ -39,8 +39,6 @@ impl SseAccess {
         Self {
             collection_views: HashMap::new(),
             global_views: HashMap::new(),
-            collection_denied_fields: HashMap::new(),
-            global_denied_fields: HashMap::new(),
             collection_modes: HashMap::new(),
             global_modes: HashMap::new(),
         }
@@ -62,6 +60,7 @@ fn resolve_view(
 ) -> Option<Vec<FilterClause>> {
     match hook_runner.check_access(
         &AccessCheckInput {
+            document: None,
             access: access_ref,
             user: user_doc,
             id: None,
@@ -109,7 +108,8 @@ fn view_from_access(
 }
 
 /// Build per-view access for every collection/global the user can see, caching
-/// field-level read denials and live mode per slug for stream filtering.
+/// the live mode per slug for stream filtering. Field-level read denials are
+/// data-aware and resolved per event in [`build_event_payload`], not cached here.
 pub(super) fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document>) -> SseAccess {
     let mut access = SseAccess::empty();
 
@@ -159,14 +159,8 @@ pub(super) fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document
             continue;
         }
 
-        let denied = runner.check_field_read_access(&def.fields, user_doc, None, &tx);
-
-        if !denied.is_empty() {
-            access
-                .collection_denied_fields
-                .insert(slug.to_string(), denied);
-        }
-
+        // Field denials are data-aware (evaluated per event in
+        // `build_event_payload`), so only the view gate + mode are fixed here.
         access
             .collection_modes
             .insert(slug.to_string(), def.live_mode);
@@ -184,12 +178,6 @@ pub(super) fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document
 
         if !gate.any_visible() {
             continue;
-        }
-
-        let denied = runner.check_field_read_access(&def.fields, user_doc, None, &tx);
-
-        if !denied.is_empty() {
-            access.global_denied_fields.insert(slug.to_string(), denied);
         }
 
         access.global_modes.insert(slug.to_string(), def.live_mode);
@@ -298,14 +286,18 @@ fn build_event_payload(
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        let denied = match event.target {
-            EventTarget::Collection => access.collection_denied_fields.get(slug_str),
-            EventTarget::Global => access.global_denied_fields.get(slug_str),
-        };
-        if let Some(denied) = denied {
-            for denial in denied {
-                denial.strip_from(&mut visible);
-            }
+        // Data-aware field-read strip (each `access.read` rule sees the event's
+        // document as `ctx.data` / `ctx.document`), evaluated connection-less on
+        // a pool VM; then the document-independent API-hidden strip.
+        hook_runner.strip_read_access_for_event(
+            &field_defs,
+            &mut visible,
+            &processed_data,
+            user_doc,
+        );
+
+        for denial in collect_api_hidden_field_names(&field_defs, "") {
+            denial.strip_from(&mut visible);
         }
 
         visible
@@ -460,21 +452,15 @@ mod tests {
         let (runner, registry, _posts) = build_runner_and_registry();
 
         // Build SseAccess that mirrors what `build_allowed_slugs` would compute
-        // for an anonymous user against this posts collection.
-        let mut denied_fields: HashMap<String, Vec<FieldDenial>> = HashMap::new();
-        denied_fields.insert(
-            "posts".to_string(),
-            vec![FieldDenial::Flat("secret".into())],
-        );
-
+        // for an anonymous user against this posts collection. The `secret`
+        // field's `hooks.access.field_read_deny` rule is evaluated data-aware
+        // per event by `build_event_payload` — no precomputed denial map.
         let mut modes: HashMap<String, LiveMode> = HashMap::new();
         modes.insert("posts".to_string(), LiveMode::Full);
 
         let access = SseAccess {
             collection_views: published_views("posts"),
             global_views: HashMap::new(),
-            collection_denied_fields: denied_fields,
-            global_denied_fields: HashMap::new(),
             collection_modes: modes,
             global_modes: HashMap::new(),
         };
@@ -513,8 +499,7 @@ mod tests {
         let access = SseAccess {
             collection_views: published_views("posts"),
             global_views: HashMap::new(),
-            collection_denied_fields: HashMap::new(),
-            global_denied_fields: HashMap::new(),
+
             collection_modes: modes,
             global_modes: HashMap::new(),
         };
@@ -565,8 +550,7 @@ mod tests {
         let access = SseAccess {
             collection_views: views,
             global_views: HashMap::new(),
-            collection_denied_fields: HashMap::new(),
-            global_denied_fields: HashMap::new(),
+
             collection_modes: HashMap::new(),
             global_modes: HashMap::new(),
         };
@@ -609,8 +593,7 @@ mod tests {
         let access = SseAccess {
             collection_views: published_views("posts"),
             global_views: HashMap::new(),
-            collection_denied_fields: HashMap::new(),
-            global_denied_fields: HashMap::new(),
+
             collection_modes: HashMap::new(),
             global_modes: HashMap::new(),
         };
@@ -660,8 +643,7 @@ mod tests {
         let access = SseAccess {
             collection_views: published_views("posts"),
             global_views: HashMap::new(),
-            collection_denied_fields: HashMap::new(),
-            global_denied_fields: HashMap::new(),
+
             collection_modes: modes,
             global_modes: HashMap::new(),
         };
@@ -707,8 +689,7 @@ mod tests {
         let access = SseAccess {
             collection_views: published_views("posts"),
             global_views: published_views("posts"),
-            collection_denied_fields: HashMap::new(),
-            global_denied_fields: HashMap::new(),
+
             collection_modes,
             global_modes,
         };
@@ -750,8 +731,7 @@ mod tests {
         SseAccess {
             collection_views,
             global_views: HashMap::new(),
-            collection_denied_fields: HashMap::new(),
-            global_denied_fields: HashMap::new(),
+
             collection_modes: HashMap::new(),
             global_modes: HashMap::new(),
         }

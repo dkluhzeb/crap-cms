@@ -2,19 +2,18 @@
 //! across different API surfaces (pool-based vs inline Lua VM).
 
 use anyhow::Result;
+use serde_json::{Map, Value};
 
 use crate::{
-    core::{
-        Document, DocumentFields, FieldDefinition, FieldDenial, Hooks, Registry, ValidationError,
-    },
+    core::{Document, DocumentFields, FieldDefinition, Hooks, Registry, ValidationError},
     db::{AccessResult, DbConnection, LocaleContext},
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
         lifecycle::{
             AccessCheckInput, FieldHookEvent, FieldHooksCall, LuaCrudInfra,
             access::{
-                check_collection_access, check_field_read_access_with_lua,
-                check_field_write_access_with_lua,
+                WriteStripInput, check_collection_access, has_any_field_access,
+                strip_read_access_with_lua, strip_write_access_with_lua,
             },
             run_field_hooks_inner, run_hooks_inner, validate_fields_inner,
         },
@@ -85,13 +84,39 @@ pub trait WriteHooks {
         !hooks.before_delete.is_empty() || !hooks.after_delete.is_empty()
     }
 
-    /// Field-level read access: returns denied field names to strip from returned documents.
-    fn field_read_denied(
+    /// Data-aware field-**read** strip applied to a write op's returned document.
+    /// See [`crate::service::hooks::ReadHooks::strip_read_access_map`]. Default
+    /// no-op so lightweight test/override impls keep their behavior.
+    fn strip_read_access_map(
         &self,
         fields: &[FieldDefinition],
+        level: &mut Map<String, Value>,
+        document: &DocumentFields,
         user: Option<&Document>,
         locale: Option<&str>,
-    ) -> Vec<FieldDenial>;
+    ) {
+        let _ = (fields, level, document, user, locale);
+    }
+
+    /// Convenience: strip read-denied fields from a returned [`Document`] in
+    /// place, capturing the full pre-strip document as `ctx.document`.
+    fn strip_read_access_doc(
+        &self,
+        fields: &[FieldDefinition],
+        doc: &mut Document,
+        user: Option<&Document>,
+        locale: Option<&str>,
+    ) {
+        let document = doc.fields.clone();
+        let mut level: Map<String, Value> = std::mem::take(&mut doc.fields)
+            .into_inner()
+            .into_iter()
+            .collect();
+
+        self.strip_read_access_map(fields, &mut level, &document, user, locale);
+
+        doc.fields = level.into_iter().collect();
+    }
 
     /// Collection-level access check. Returns the access result (Allowed/Denied/Constrained).
     ///
@@ -104,14 +129,59 @@ pub trait WriteHooks {
     /// Returns an error if the access hook itself raises (e.g. a Lua runtime error).
     fn check_access(&self, input: &AccessCheckInput<'_>) -> Result<AccessResult>;
 
-    /// Field-level write access: returns denied field names to strip before persistence.
-    fn field_write_denied(
+    /// Data-aware field-**write** strip: remove from `level` every field the user
+    /// may not write under `operation` (`"create"` | `"update"`), evaluating each
+    /// `access.create` / `access.update` rule with `ctx.data` = the field's own
+    /// immediate level and `ctx.document` = `document` (the full incoming
+    /// document). The write-path mirror of `strip_read_access_map`. Default no-op
+    /// so lightweight test/override impls keep their behavior.
+    fn strip_write_access_map(
         &self,
         fields: &[FieldDefinition],
+        level: &mut Map<String, Value>,
+        input: &WriteStripInput<'_>,
+    ) {
+        let _ = (fields, level, input);
+    }
+
+    /// Convenience over [`strip_write_access_map`](Self::strip_write_access_map):
+    /// strip write-denied fields from incoming [`DocumentFields`] in place before
+    /// persistence, capturing the full pre-strip data as `ctx.document`.
+    fn strip_write_access_data(
+        &self,
+        fields: &[FieldDefinition],
+        data: &mut DocumentFields,
         user: Option<&Document>,
         locale: Option<&str>,
         operation: &str,
-    ) -> Vec<FieldDenial>;
+    ) {
+        // Skip the clone + map round-trip when no field configures the relevant
+        // write-access function (or the operation isn't create/update).
+        let has_access = match operation {
+            "create" => has_any_field_access(fields, |f| f.access.create.as_ref()),
+            "update" => has_any_field_access(fields, |f| f.access.update.as_ref()),
+            _ => return,
+        };
+        if !has_access {
+            return;
+        }
+
+        let document = data.clone();
+        let mut level: Map<String, Value> = std::mem::take(data).into_inner().into_iter().collect();
+
+        self.strip_write_access_map(
+            fields,
+            &mut level,
+            &WriteStripInput {
+                document: &document,
+                user,
+                locale,
+                operation,
+            },
+        );
+
+        *data = level.into_iter().collect();
+    }
 
     /// Run schema-level field validation (required, unique, regex, type checks,
     /// richtext node attrs, …) without firing any user-defined hooks. Used by
@@ -251,20 +321,22 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         }
     }
 
-    fn field_read_denied(
+    fn strip_read_access_map(
         &self,
         fields: &[FieldDefinition],
+        level: &mut Map<String, Value>,
+        document: &DocumentFields,
         user: Option<&Document>,
         locale: Option<&str>,
-    ) -> Vec<FieldDenial> {
+    ) {
         if self.override_access {
-            return Vec::new();
+            return;
         }
         let Some(conn) = self.conn else {
-            return Vec::new();
+            return;
         };
         self.runner
-            .check_field_read_access(fields, user, locale, conn)
+            .strip_read_access(fields, level, document, user, locale, conn);
     }
 
     fn check_access(&self, input: &AccessCheckInput<'_>) -> Result<AccessResult> {
@@ -277,21 +349,19 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         self.runner.check_access(input, conn)
     }
 
-    fn field_write_denied(
+    fn strip_write_access_map(
         &self,
         fields: &[FieldDefinition],
-        user: Option<&Document>,
-        locale: Option<&str>,
-        operation: &str,
-    ) -> Vec<FieldDenial> {
+        level: &mut Map<String, Value>,
+        input: &WriteStripInput<'_>,
+    ) {
         if self.override_access {
-            return Vec::new();
+            return;
         }
         let Some(conn) = self.conn else {
-            return Vec::new();
+            return;
         };
-        self.runner
-            .check_field_write_access(fields, user, locale, operation, conn)
+        self.runner.strip_write_access(fields, level, input, conn);
     }
 
     fn validate_fields(
@@ -512,29 +582,30 @@ impl WriteHooks for LuaWriteHooks<'_> {
         check_collection_access(self.lua, input)
     }
 
-    fn field_read_denied(
+    fn strip_read_access_map(
         &self,
         fields: &[FieldDefinition],
+        level: &mut Map<String, Value>,
+        document: &DocumentFields,
         user: Option<&Document>,
         locale: Option<&str>,
-    ) -> Vec<FieldDenial> {
+    ) {
         if self.override_access {
-            return Vec::new();
+            return;
         }
-        check_field_read_access_with_lua(self.lua, fields, user, locale)
+        strip_read_access_with_lua(self.lua, fields, level, document, user, locale);
     }
 
-    fn field_write_denied(
+    fn strip_write_access_map(
         &self,
         fields: &[FieldDefinition],
-        user: Option<&Document>,
-        locale: Option<&str>,
-        operation: &str,
-    ) -> Vec<FieldDenial> {
+        level: &mut Map<String, Value>,
+        input: &WriteStripInput<'_>,
+    ) {
         if self.override_access {
-            return Vec::new();
+            return;
         }
-        check_field_write_access_with_lua(self.lua, fields, user, locale, operation)
+        strip_write_access_with_lua(self.lua, fields, level, input);
     }
 
     fn validate_fields(

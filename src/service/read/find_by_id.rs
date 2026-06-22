@@ -174,8 +174,8 @@ mod tests {
     use super::*;
     use crate::{
         core::{
-            CollectionDefinition, Document, FieldDefinition, FieldDenial, FieldType, HookRef,
-            Hooks, collection::VersionsConfig,
+            CollectionDefinition, Document, FieldDefinition, FieldType, HookRef, Hooks,
+            collection::VersionsConfig,
         },
         db::{AccessResult, Filter, FilterClause, FilterOp},
         hooks::{AccessCheckInput, lifecycle::AfterReadCtx},
@@ -211,15 +211,6 @@ mod tests {
                 AccessResult::Denied
             })
         }
-
-        fn field_read_denied(
-            &self,
-            _fields: &[FieldDefinition],
-            _user: Option<&Document>,
-            _locale: Option<&str>,
-        ) -> Vec<FieldDenial> {
-            Vec::new()
-        }
     }
 
     /// Always-allow read hooks so the test exercises the draft-visibility
@@ -243,15 +234,6 @@ mod tests {
 
         fn check_access(&self, _input: &AccessCheckInput<'_>) -> Result<AccessResult> {
             Ok(AccessResult::Allowed)
-        }
-
-        fn field_read_denied(
-            &self,
-            _fields: &[FieldDefinition],
-            _user: Option<&Document>,
-            _locale: Option<&str>,
-        ) -> Vec<FieldDenial> {
-            Vec::new()
         }
     }
 
@@ -392,15 +374,6 @@ mod tests {
                 )])),
                 _ => Ok(AccessResult::Allowed),
             }
-        }
-
-        fn field_read_denied(
-            &self,
-            _: &[FieldDefinition],
-            _: Option<&Document>,
-            _: Option<&str>,
-        ) -> Vec<FieldDenial> {
-            Vec::new()
         }
     }
 

@@ -1,11 +1,11 @@
 //! Hook context types and Rust↔Lua marshalling.
 
 use mlua::{Lua, Result as LuaResult, Table, Value};
-use serde_json::{Map as JsonMap, Value as JsonValue};
+use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
 use crate::{
-    core::{Document, DocumentFields, FieldDefinition, FieldType, ReqContext, event::EventUser},
+    core::{Document, DocumentFields, ReqContext, event::EventUser},
     hooks::{
         lifecycle::{HookDepth, converters::document_to_lua_table},
         lua_api,
@@ -130,16 +130,15 @@ impl HookContext {
         Ok(tbl)
     }
 
-    /// Convert data to a typed-value map for `query::create`/`query::update`.
+    /// The (canonical **nested**) document data to hand to the persist layer.
     ///
-    /// Only includes fields that have parent table columns (skips array/has-many).
-    /// Group fields are flattened from `{ "seo": { "meta_title": "X" } }` to
-    /// `{ "seo__meta_title": "X" }` so `query::create/update` can find them.
-    /// Typed values (Number, Bool, etc.) flow through unchanged so the DB
-    /// coercion path can preserve precision via `coerce_json_value`.
+    /// Nested group objects are the canonical in-memory shape; the `db/query`
+    /// write edge owns the nested→flat `group__sub` column conversion (the mirror
+    /// of read-side hydration). Typed values flow through unchanged so the DB
+    /// coercion path can preserve precision.
     #[must_use]
-    pub fn to_value_map(&self, fields: &[FieldDefinition]) -> DocumentFields {
-        flatten_group_fields(&self.data, fields)
+    pub fn to_value_map(&self) -> DocumentFields {
+        self.data.clone()
     }
 
     /// Read the `context` table from a returned Lua hook table, replacing `self.context`.
@@ -165,90 +164,6 @@ fn hashmap_to_lua(lua: &Lua, map: &HashMap<String, JsonValue>) -> LuaResult<Tabl
     }
 
     Ok(tbl)
-}
-
-/// Normalize a document data map so group fields are **flat** (`seo__meta_title`)
-/// rather than nested (`{ seo: { meta_title } }`).
-///
-/// The Lua surface already flattens before reaching the service (so this is a
-/// no-op there); the typed JSON surfaces (gRPC, MCP) and admin forms can arrive
-/// nested. Applying this both before validation and at persist time keeps the
-/// validator and the DB-write seeing the same shape.
-///
-/// A key is flattened only when it names a `Group` field whose value is an
-/// object; otherwise it passes through untouched (so already-flat data is
-/// unchanged, and non-group object values — e.g. a top-level `Json` field — are
-/// preserved).
-#[must_use]
-pub(crate) fn flatten_group_fields(
-    data: &DocumentFields,
-    fields: &[FieldDefinition],
-) -> DocumentFields {
-    let mut map = DocumentFields::new();
-
-    for (k, v) in data.as_map() {
-        if let Some(field) = lookup_field(fields, k)
-            && field.field_type == FieldType::Group
-            && let Some(obj) = v.as_object()
-        {
-            flatten_group_obj(k, obj, &field.fields, &mut map);
-
-            continue;
-        }
-
-        map.insert(k.clone(), v.clone());
-    }
-
-    map
-}
-
-/// Find the field a data key resolves to at the flattened top level — a direct
-/// top-level field, or one reached through only transparent layout wrappers
-/// (Row/Collapsible/Tabs), which contribute no data key of their own. First
-/// match wins. Returns `None` if no field has that name.
-fn lookup_field<'a>(fields: &'a [FieldDefinition], key: &str) -> Option<&'a FieldDefinition> {
-    for f in fields {
-        if f.name == key {
-            return Some(f);
-        }
-
-        let nested = match f.field_type {
-            FieldType::Row | FieldType::Collapsible => lookup_field(&f.fields, key),
-            FieldType::Tabs => f.tabs.iter().find_map(|t| lookup_field(&t.fields, key)),
-            _ => None,
-        };
-        if nested.is_some() {
-            return nested;
-        }
-    }
-
-    None
-}
-
-/// Flatten a group object into `prefix__key` pairs, recursing ONLY into nested
-/// `Group` sub-fields. A non-group object value (a `Json` field, or an array)
-/// is kept as a single value for its own column — recursing into it would
-/// flatten it onto a non-existent `prefix__sub__key` column and drop it on
-/// persist.
-fn flatten_group_obj(
-    prefix: &str,
-    obj: &JsonMap<String, JsonValue>,
-    fields: &[FieldDefinition],
-    map: &mut DocumentFields,
-) {
-    for (sub_key, sub_val) in obj {
-        let flat_key = format!("{prefix}__{sub_key}");
-
-        let sub_field = lookup_field(fields, sub_key);
-        if let Some(f) = sub_field
-            && f.field_type == FieldType::Group
-            && let JsonValue::Object(nested) = sub_val
-        {
-            flatten_group_obj(&flat_key, nested, &f.fields, map);
-        } else {
-            map.insert(flat_key, sub_val.clone());
-        }
-    }
 }
 
 #[cfg(test)]
@@ -326,195 +241,21 @@ mod tests {
     }
 
     #[test]
-    fn string_map_simple() {
+    fn to_value_map_passes_data_through_unchanged() {
+        // `to_value_map` returns the canonical (nested) data as-is; the
+        // nested→flat column conversion lives at the `db/query` write edge.
+        // Group flattening itself is tested in `core::group_repr`.
         let mut data = HashMap::new();
         data.insert("title".to_string(), json!("Hello World"));
         data.insert("count".to_string(), json!(42));
-        data.insert("active".to_string(), json!(true));
-
-        let ctx = HookContext::builder("posts", "create").data(data).build();
-
-        let fields = vec![
-            FieldDefinition::builder("title", FieldType::Text).build(),
-            FieldDefinition::builder("count", FieldType::Number).build(),
-            FieldDefinition::builder("active", FieldType::Checkbox).build(),
-        ];
-
-        let map = ctx.to_value_map(&fields);
-        // Typed values flow through unchanged so coerce_json_value can
-        // preserve precision per field_type.
-        assert_eq!(map.get("title"), Some(&json!("Hello World")));
-        assert_eq!(map.get("count"), Some(&json!(42)));
-        assert_eq!(map.get("active"), Some(&json!(true)));
-    }
-
-    #[test]
-    fn string_map_group_flattening() {
-        let mut data = HashMap::new();
-        data.insert(
-            "seo".to_string(),
-            json!({
-                "meta_title": "My Title",
-                "meta_description": "My Description"
-            }),
-        );
-        data.insert("title".to_string(), json!("Hello"));
-
-        let ctx = HookContext::builder("posts", "create").data(data).build();
-
-        let fields = vec![
-            FieldDefinition::builder("seo", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("meta_title", FieldType::Text).build(),
-                    FieldDefinition::builder("meta_description", FieldType::Text).build(),
-                ])
-                .build(),
-            FieldDefinition::builder("title", FieldType::Text).build(),
-        ];
-
-        let map = ctx.to_value_map(&fields);
-        assert_eq!(map.get("seo__meta_title"), Some(&json!("My Title")));
-        assert_eq!(
-            map.get("seo__meta_description"),
-            Some(&json!("My Description"))
-        );
-        assert_eq!(map.get("title"), Some(&json!("Hello")));
-        assert!(!map.contains_key("seo"));
-    }
-
-    #[test]
-    fn string_map_flattens_group_under_top_level_row() {
-        // Regression: a Group nested under a transparent top-level Row arrives
-        // nested (gRPC/MCP/admin input) and must still be flattened — otherwise
-        // the validator looks it up by flat `seo__meta_title` and misses it.
-        let mut data = HashMap::new();
         data.insert("seo".to_string(), json!({ "meta_title": "T" }));
 
         let ctx = HookContext::builder("posts", "create").data(data).build();
 
-        let fields = vec![
-            FieldDefinition::builder("layout", FieldType::Row)
-                .fields(vec![
-                    FieldDefinition::builder("seo", FieldType::Group)
-                        .fields(vec![
-                            FieldDefinition::builder("meta_title", FieldType::Text).build(),
-                        ])
-                        .build(),
-                ])
-                .build(),
-        ];
-
-        let map = ctx.to_value_map(&fields);
-        assert_eq!(map.get("seo__meta_title"), Some(&json!("T")));
-        assert!(!map.contains_key("seo"));
-    }
-
-    #[test]
-    fn string_map_group_non_object_value() {
-        let mut data = HashMap::new();
-        data.insert("seo".to_string(), json!("plain-string"));
-
-        let ctx = HookContext::builder("posts", "create").data(data).build();
-
-        let fields = vec![FieldDefinition::builder("seo", FieldType::Group).build()];
-
-        let map = ctx.to_value_map(&fields);
-        assert_eq!(map.get("seo"), Some(&json!("plain-string")));
-    }
-
-    #[test]
-    fn json_subfield_in_group_kept_whole_not_flattened() {
-        // Regression (data loss): a Json (object-valued) sub-field inside a
-        // group must stay as the single `group__json` column value, NOT get
-        // recursively flattened into `group__json__key` (which lands on a
-        // non-existent column and is dropped on persist).
-        let mut data = HashMap::new();
-        data.insert(
-            "seo".to_string(),
-            json!({ "config": { "a": 1, "b": 2 }, "title": "T" }),
-        );
-
-        let ctx = HookContext::builder("posts", "create").data(data).build();
-
-        let fields = vec![
-            FieldDefinition::builder("seo", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("config", FieldType::Json).build(),
-                    FieldDefinition::builder("title", FieldType::Text).build(),
-                ])
-                .build(),
-        ];
-
-        let map = ctx.to_value_map(&fields);
-        assert_eq!(map.get("seo__config"), Some(&json!({ "a": 1, "b": 2 })));
-        assert_eq!(map.get("seo__title"), Some(&json!("T")));
-        assert!(
-            !map.contains_key("seo__config__a"),
-            "Json sub-field must not be flattened into columns"
-        );
-    }
-
-    #[test]
-    fn string_map_nested_group_flattening() {
-        let mut data = HashMap::new();
-        data.insert(
-            "address".to_string(),
-            json!({
-                "geo": {
-                    "lat": "40.7128",
-                    "lng": "-74.0060"
-                }
-            }),
-        );
-
-        let ctx = HookContext::builder("companies", "create")
-            .data(data)
-            .build();
-
-        let fields = vec![
-            FieldDefinition::builder("address", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("geo", FieldType::Group)
-                        .fields(vec![
-                            FieldDefinition::builder("lat", FieldType::Text).build(),
-                            FieldDefinition::builder("lng", FieldType::Text).build(),
-                        ])
-                        .build(),
-                ])
-                .build(),
-        ];
-
-        let map = ctx.to_value_map(&fields);
-        assert_eq!(map.get("address__geo__lat"), Some(&json!("40.7128")));
-        assert_eq!(map.get("address__geo__lng"), Some(&json!("-74.0060")));
-        assert!(!map.contains_key("address"));
-        assert!(!map.contains_key("address__geo"));
-    }
-
-    #[test]
-    fn string_map_group_with_numeric_subfields() {
-        let mut data = HashMap::new();
-        data.insert(
-            "metrics".to_string(),
-            json!({
-                "views": 100,
-                "likes": 42
-            }),
-        );
-
-        let ctx = HookContext::builder("posts", "create").data(data).build();
-
-        let fields = vec![
-            FieldDefinition::builder("metrics", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("views", FieldType::Number).build(),
-                    FieldDefinition::builder("likes", FieldType::Number).build(),
-                ])
-                .build(),
-        ];
-
-        let map = ctx.to_value_map(&fields);
-        assert_eq!(map.get("metrics__views"), Some(&json!(100)));
-        assert_eq!(map.get("metrics__likes"), Some(&json!(42)));
+        let map = ctx.to_value_map();
+        assert_eq!(map.get("title"), Some(&json!("Hello World")));
+        assert_eq!(map.get("count"), Some(&json!(42)));
+        // Nested group object is preserved, not flattened.
+        assert_eq!(map.get("seo"), Some(&json!({ "meta_title": "T" })));
     }
 }

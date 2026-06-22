@@ -15,7 +15,6 @@ pub use builder::HookContextBuilder;
 pub use condition::ConditionContext;
 pub use field_hook::FieldHookContext;
 pub use hook_context::HookContext;
-pub(crate) use hook_context::flatten_group_fields;
 pub use job::{JobHandlerContext, JobInfo};
 pub use live::LiveFilterContext;
 pub use strategy::{AuthStrategyContext, AuthStrategyInput};

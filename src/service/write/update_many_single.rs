@@ -12,7 +12,8 @@ use crate::{
     },
 };
 
-use super::{ServiceError, helpers::strip_denied_fields};
+use super::ServiceError;
+use crate::core::nest_group_fields;
 use crate::service::helpers::{collect_api_hidden_field_names, enforce_access_constraints};
 
 type Result<T> = std::result::Result<T, ServiceError>;
@@ -33,7 +34,11 @@ pub(crate) fn update_many_single_in_conn(
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.collection_def()?;
 
+    // Canonicalize incoming data to nested groups up front (idempotent).
+    input.data = nest_group_fields(&input.data, &def.fields);
+
     let access = write_hooks.check_access(&AccessCheckInput {
+        document: None,
         access: def.access.update.as_ref(),
         user: ctx.user,
         id: Some(id),
@@ -53,13 +58,14 @@ pub(crate) fn update_many_single_in_conn(
 
     let is_draft = input.draft && def.has_drafts();
 
-    let denied = write_hooks.field_write_denied(
+    // Data-aware write strip (per-row `ctx.data`, full-doc `ctx.document`).
+    write_hooks.strip_write_access_data(
         &def.fields,
+        &mut input.data,
         ctx.user,
         input.locale_ctx.map(LocaleContext::access_locale),
         "update",
     );
-    strip_denied_fields(&denied, &mut input.data);
 
     let hook_data = input.data.clone();
     let hook_ctx = HookContext::builder(ctx.slug, "update")
@@ -89,7 +95,7 @@ pub(crate) fn update_many_single_in_conn(
     let mut doc = if is_draft && def.has_versions() {
         persist_draft_version(ctx, id, &final_ctx.data, input.locale_ctx)?
     } else {
-        let final_data = final_ctx.to_value_map(&def.fields);
+        let final_data = final_ctx.to_value_map();
         persist_bulk_update(ctx, id, &final_data, input.locale_ctx, locale_config)?
     };
 
@@ -123,14 +129,9 @@ pub(crate) fn update_many_single_in_conn(
         conn,
     )?;
 
-    let mut read_denied = write_hooks.field_read_denied(
-        &def.fields,
-        ctx.user,
-        input.locale_ctx.map(LocaleContext::access_locale),
-    );
-    read_denied.extend(collect_api_hidden_field_names(&def.fields, ""));
-
-    doc.strip_fields(&read_denied);
+    let access_locale = input.locale_ctx.map(LocaleContext::access_locale);
+    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.user, access_locale);
+    doc.strip_fields(&collect_api_hidden_field_names(&def.fields, ""));
 
     Ok((doc, after_ctx))
 }
@@ -144,8 +145,8 @@ mod tests {
     use super::*;
     use crate::{
         core::{
-            CollectionDefinition, Document, DocumentFields, FieldDefinition, FieldDenial,
-            FieldType, Hooks, ValidationError, collection::VersionsConfig,
+            CollectionDefinition, DocumentFields, FieldDefinition, FieldType, Hooks,
+            ValidationError, collection::VersionsConfig,
         },
         db::{AccessResult, DbConnection},
         hooks::{HookContext, HookEvent, ValidationCtx},
@@ -186,27 +187,8 @@ mod tests {
             Ok(ctx)
         }
 
-        fn field_read_denied(
-            &self,
-            _fields: &[FieldDefinition],
-            _user: Option<&Document>,
-            _locale: Option<&str>,
-        ) -> Vec<FieldDenial> {
-            Vec::new()
-        }
-
         fn check_access(&self, _input: &AccessCheckInput<'_>) -> Result<AccessResult> {
             Ok(AccessResult::Allowed)
-        }
-
-        fn field_write_denied(
-            &self,
-            _fields: &[FieldDefinition],
-            _user: Option<&Document>,
-            _locale: Option<&str>,
-            _operation: &str,
-        ) -> Vec<FieldDenial> {
-            Vec::new()
         }
 
         fn validate_fields(

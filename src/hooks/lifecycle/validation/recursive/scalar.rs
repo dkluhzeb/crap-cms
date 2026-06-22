@@ -61,8 +61,8 @@ impl ValidationWalker<'_> {
                         self.lua,
                         required_when.reference(),
                         &ValidateCtxSource {
-                            data: self.data,
-                            document: self.data,
+                            data: self.document,
+                            document: self.document,
                             collection: self.ctx.table,
                             field_name: &field.name,
                             locale: self.ctx.locale_ctx.map(LocaleContext::access_locale),
@@ -119,7 +119,7 @@ impl ValidationWalker<'_> {
             &data_key,
             value,
             &checks::CustomValidateCtx {
-                data: self.data,
+                data: self.document,
                 table: self.ctx.table,
                 locale: self.ctx.locale_ctx.map(LocaleContext::access_locale),
                 operation,
@@ -181,7 +181,7 @@ impl ValidationWalker<'_> {
                     "create"
                 },
                 id: self.ctx.exclude_id,
-                document: self.data,
+                document: self.document,
             };
             validate_sub_fields_inner(&params, sub_fields, row_obj, errors);
         }

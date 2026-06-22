@@ -151,6 +151,7 @@ pub fn check_upload_access(
 
     let result = state.hook_runner.check_access(
         &AccessCheckInput {
+            document: None,
             access,
             user: user_doc,
             id,

@@ -26,15 +26,31 @@ pub struct AccessContext<'a> {
     /// Document ID (for `update` / `delete` / `find_by_id`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<&'a str>,
-    /// The **incoming** data for `create` / `update` (what is being written),
-    /// `nil` for reads/deletes. This is the submitted change, *not* the existing
-    /// stored row. To gate on existing persisted values (e.g. "users may only
-    /// edit their own rows"), return a **filter table** instead of a boolean —
-    /// e.g. `return { author_id = ctx.user.id }` — and the system enforces that
-    /// the target row matches it.
+    /// The data for this check.
+    ///
+    /// - **Collection access:** the **incoming** data for `create` / `update`
+    ///   (the submitted change, *not* the stored row), `nil` for reads/deletes.
+    ///   To gate on existing persisted values, return a **filter table** instead
+    ///   of a boolean (e.g. `return { author_id = ctx.user.id }`).
+    /// - **Field access:** the field's **immediate level** — the row object for a
+    ///   field inside an array/blocks row, the group object for a field in a
+    ///   group, the whole document at top level. Same meaning as `ctx.data` in a
+    ///   field lifecycle hook, so a field rule can gate on adjacent (sibling)
+    ///   values — e.g. lock a field unless `ctx.data.kind == "advanced"`. Present
+    ///   on reads too (the level being read).
     #[serde(skip_serializing_if = "Option::is_none")]
     #[lua(ty = "table<string, any>", optional)]
     pub data: Option<&'a DocumentFields>,
+    /// **Field access only.** The full document the field belongs to (the stored
+    /// document on a read/`update`; the full incoming document on `create`),
+    /// stable as the check descends into array/blocks rows — mirrors
+    /// `ctx.document` in a field lifecycle hook. Lets a field rule depend on
+    /// values outside its own level, e.g. make a field read-only unless
+    /// `ctx.document.status == "published"`. `nil` for collection-level checks
+    /// (use a filter table there instead).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[lua(ty = "table<string, any>", optional)]
+    pub document: Option<&'a DocumentFields>,
     /// The locale this operation targets, when localization is enabled —
     /// the requested locale, or the default locale when none was specified.
     /// `nil` when localization is disabled. Lets access functions enforce
@@ -81,7 +97,11 @@ pub struct AccessCheckInput<'a> {
     pub access: Option<&'a HookRef>,
     pub user: Option<&'a Document>,
     pub id: Option<&'a str>,
+    /// Collection access: incoming write data (or `None`). Field access: the
+    /// field's immediate level. See [`AccessContext::data`].
     pub data: Option<&'a DocumentFields>,
+    /// Field-access only: the full document. See [`AccessContext::document`].
+    pub document: Option<&'a DocumentFields>,
     pub locale: Option<&'a str>,
     pub operation: &'a str,
     pub collection: &'a str,

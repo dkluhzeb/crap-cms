@@ -40,6 +40,7 @@ pub fn find_version_by_id(
     // so a published-only reader can't fetch a draft snapshot by id. Mirrors the
     // version-list and document draft-visibility gates.
     let access = hooks.check_access(&AccessCheckInput {
+        document: None,
         access: ctx.read_access_ref(),
         user: ctx.user,
         id: None,
@@ -64,6 +65,7 @@ pub fn find_version_by_id(
     // snapshot ("preview your own drafts" can't reveal another owner's).
     if version.status == "draft" {
         let draft_access = hooks.check_access(&AccessCheckInput {
+            document: None,
             access: ctx.draft_access_ref(),
             user: ctx.user,
             id: None,
@@ -90,19 +92,24 @@ pub fn find_version_by_id(
         helpers::enforce_access_constraints(ctx, &parent_id, &access, "Read", false)?;
     }
 
-    // Strip read-denied fields from the snapshot JSON
-    let mut denied = hooks.field_read_denied(ctx.fields()?, ctx.user, None);
-    denied.extend(helpers::collect_api_hidden_field_names(ctx.fields()?, ""));
+    // Strip read-denied fields from the snapshot JSON. Field-read access is
+    // data-aware (the snapshot is its own `ctx.document`); the API-hidden set is
+    // document-independent and applied via the shared snapshot stripper.
+    let fields = ctx.fields()?;
+    hooks.strip_read_access_value(fields, &mut version.snapshot, ctx.user, None);
 
-    if !denied.is_empty() {
-        strip_snapshot_fields(&mut version.snapshot, &denied);
+    let api_hidden = helpers::collect_api_hidden_field_names(fields, "");
+    if !api_hidden.is_empty() {
+        strip_snapshot_fields(&mut version.snapshot, &api_hidden);
     }
 
     Ok(Some(version))
 }
 
-/// Strip denied fields from a snapshot `Value::Object` (flat, group `__`, and
-/// fields nested inside array/blocks rows). Shared with `list_versions`.
+/// Apply a static [`FieldDenial`] list to a snapshot `Value::Object` (flat,
+/// group `__`, and fields nested inside array/blocks rows). Used for the
+/// document-independent API-hidden set; the data-aware `access.read` strip is
+/// applied separately via `strip_read_access_value`. Shared with `list_versions`.
 pub(super) fn strip_snapshot_fields(snapshot: &mut Value, denied: &[FieldDenial]) {
     let Some(map) = snapshot.as_object_mut() else {
         return;

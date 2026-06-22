@@ -4,12 +4,14 @@ use anyhow::Result;
 use serde_json::{Map, Value};
 
 use crate::{
-    core::{Document, DocumentFields, FieldDefinition, FieldType, collection::VersionsConfig},
+    core::{
+        Document, DocumentFields, FieldDefinition, FieldType, collection::VersionsConfig,
+        flatten_group_fields,
+    },
     db::{
         DbConnection, LocaleContext, query,
         query::{helpers::prefixed_name, locale_locked_field_names},
     },
-    hooks::lifecycle::flatten_group_fields,
 };
 
 use super::snapshot::prune_versions;

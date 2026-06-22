@@ -84,6 +84,7 @@ fn global_view_visible(
     input: &GetGlobalInput,
 ) -> Result<bool> {
     let access = hooks.check_access(&AccessCheckInput {
+        document: None,
         access: access_ref,
         user: ctx.user,
         id: None,
@@ -146,14 +147,10 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
     // is the downgraded opt-in: a denied draft view falls back to published.
     let mut doc = resolve_global_doc(conn, ctx.slug, def, draft_visible, input.locale_ctx)?;
 
-    let mut denied = hooks.field_read_denied(
-        &def.fields,
-        ctx.user,
-        input.locale_ctx.map(LocaleContext::access_locale),
-    );
-    denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
+    let access_locale = input.locale_ctx.map(LocaleContext::access_locale);
 
-    doc.strip_fields(&denied);
+    hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.user, access_locale);
+    doc.strip_fields(&helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     let ar_ctx = AfterReadCtx {
         hooks: &def.hooks,
@@ -176,7 +173,7 @@ mod tests {
     use super::*;
     use crate::{
         core::{
-            Document, FieldDefinition, FieldDenial, FieldType, GlobalDefinition, Hooks,
+            Document, FieldDefinition, FieldType, GlobalDefinition, Hooks,
             collection::VersionsConfig,
         },
         hooks::lifecycle::AfterReadCtx,
@@ -202,15 +199,6 @@ mod tests {
 
         fn check_access(&self, _input: &AccessCheckInput<'_>) -> Result<AccessResult> {
             Ok(AccessResult::Allowed)
-        }
-
-        fn field_read_denied(
-            &self,
-            _fields: &[FieldDefinition],
-            _user: Option<&Document>,
-            _locale: Option<&str>,
-        ) -> Vec<FieldDenial> {
-            Vec::new()
         }
     }
 

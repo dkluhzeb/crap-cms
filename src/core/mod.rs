@@ -47,6 +47,7 @@ pub mod email;
 pub mod event;
 pub mod field;
 pub mod field_denial;
+pub mod group_repr;
 pub mod hook_ref;
 pub mod job;
 pub mod lua_lease;
@@ -77,6 +78,7 @@ pub use field::{
     SelectOption, ValidateFunction, to_title_case, validate_template_name,
 };
 pub use field_denial::{DenialSeg, FieldDenial, JsonRoot};
+pub(crate) use group_repr::{flatten_group_fields, nest_group_fields};
 pub use hook_ref::HookRef;
 pub use job::{JobDefinition, JobLabels, JobRun, JobStatus};
 pub use lua_lease::{LocalLease, LuaVmLease};

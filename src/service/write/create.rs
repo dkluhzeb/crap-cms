@@ -9,7 +9,8 @@ use crate::{
     },
 };
 
-use super::{ServiceError, helpers::strip_denied_fields};
+use super::ServiceError;
+use crate::core::nest_group_fields;
 use crate::service::helpers::collect_api_hidden_field_names;
 
 type Result<T> = std::result::Result<T, ServiceError>;
@@ -32,6 +33,12 @@ pub fn create_document_in_conn(
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.collection_def()?;
 
+    // Canonicalize the incoming data to the nested group shape up front, so every
+    // surface (admin forms, Lua, gRPC, MCP) and the whole write pipeline (access,
+    // hooks, validation) sees one shape. Idempotent — already-nested input passes
+    // through; the DB write edge flattens back to columns.
+    input.data = nest_group_fields(&input.data, &def.fields);
+
     // A document is created in its default (canonical) locale. A new row has no
     // default-locale value to translate from, so creating under a non-default
     // locale would write shared columns from the wrong locale AND leave the
@@ -48,6 +55,7 @@ pub fn create_document_in_conn(
     // Collection-level access check. The incoming data is exposed to the
     // access function as `ctx.data` so it can gate on what is being written.
     let access = write_hooks.check_access(&AccessCheckInput {
+        document: None,
         access: def.access.create.as_ref(),
         user: ctx.user,
         id: None,
@@ -75,14 +83,16 @@ pub fn create_document_in_conn(
     let is_draft = input.draft && def.has_drafts();
     let ui_locale = input.ui_locale.as_deref();
 
-    // Strip write-denied fields before hook processing
-    let denied = write_hooks.field_write_denied(
+    // Strip write-denied fields before hook processing (data-aware: each
+    // `access.create` rule sees `ctx.data` = its level and `ctx.document` = the
+    // full incoming document).
+    write_hooks.strip_write_access_data(
         &def.fields,
+        &mut input.data,
         ctx.user,
         input.locale_ctx.map(LocaleContext::access_locale),
         "create",
     );
-    strip_denied_fields(&denied, &mut input.data);
 
     let hook_data = input.data.clone();
     let hook_ctx = HookContext::builder(ctx.slug, "create")
@@ -103,7 +113,7 @@ pub fn create_document_in_conn(
         .build();
 
     let final_ctx = write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?;
-    let final_data = final_ctx.to_value_map(&def.fields);
+    let final_data = final_ctx.to_value_map();
 
     let opts = PersistOptions::builder()
         .password(input.password)
@@ -147,14 +157,9 @@ pub fn create_document_in_conn(
 
     // Strip read-denied fields from the returned document, after the hooks have
     // seen the full doc (hydration can add join data for denied fields).
-    let mut read_denied = write_hooks.field_read_denied(
-        &def.fields,
-        ctx.user,
-        input.locale_ctx.map(LocaleContext::access_locale),
-    );
-    read_denied.extend(collect_api_hidden_field_names(&def.fields, ""));
-
-    doc.strip_fields(&read_denied);
+    let access_locale = input.locale_ctx.map(LocaleContext::access_locale);
+    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.user, access_locale);
+    doc.strip_fields(&collect_api_hidden_field_names(&def.fields, ""));
 
     Ok((doc, after_ctx))
 }

@@ -130,12 +130,10 @@ fn prepare_edit_fields(
     denied_read_fields: &[FieldDenial],
     auth_user: Option<&Extension<AuthUser>>,
 ) -> (Vec<FieldContext>, Vec<FieldContext>) {
-    // Read-denied fields must not reach the form — strip them (including values
-    // nested inside array/blocks rows) before building any view of the data.
-    let mut visible_fields = document.fields.clone();
-    for denial in denied_read_fields {
-        denial.strip_from(&mut visible_fields);
-    }
+    // The service read already stripped read-denied *values* (data-aware), so
+    // this view of the data carries only readable values; `denied_read_fields`
+    // is used below only to drop the denied fields' input contexts.
+    let visible_fields = document.fields.clone();
 
     let values = flatten_document_values(&visible_fields, &def.fields);
     let non_default_locale = is_non_default_locale(state, editor_locale);
@@ -315,10 +313,15 @@ pub async fn edit_form(
             Err(resp) => return resp,
         };
 
-    let denied = match compute_denied_read_fields(&state, auth_user.as_ref(), &def.fields) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
+    // The service read already stripped read-denied *values* (data-aware). Here
+    // we resolve the denied field *names* for this document so the form can drop
+    // their inputs (no empty input renders for a field the user can't read).
+    let denied =
+        match compute_denied_read_fields(&state, auth_user.as_ref(), &def.fields, &document.fields)
+        {
+            Ok(d) => d,
+            Err(resp) => return *resp,
+        };
 
     let (main_fields, sidebar_fields) = prepare_edit_fields(
         &state,

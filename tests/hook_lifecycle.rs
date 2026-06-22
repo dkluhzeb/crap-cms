@@ -414,6 +414,7 @@ fn check_access_none_ref_is_allowed() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: None,
                 user: None,
                 id: None,
@@ -440,6 +441,7 @@ fn check_access_returns_allowed() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: Some(&HookRef::new("hooks.access.allow_all")),
                 user: None,
                 id: None,
@@ -466,6 +468,7 @@ fn check_access_returns_denied() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: Some(&HookRef::new("hooks.access.deny_all")),
                 user: None,
                 id: None,
@@ -492,6 +495,7 @@ fn check_access_returns_constrained() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: Some(&HookRef::new("hooks.access.constrained")),
                 user: None,
                 id: None,
@@ -533,6 +537,7 @@ fn check_access_with_user_context() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: Some(&HookRef::new("hooks.access.check_role")),
                 user: Some(&admin_user),
                 id: None,
@@ -563,6 +568,7 @@ fn check_access_with_user_context() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: Some(&HookRef::new("hooks.access.check_role")),
                 user: Some(&regular_user),
                 id: None,
@@ -584,6 +590,7 @@ fn check_access_with_user_context() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: Some(&HookRef::new("hooks.access.check_role")),
                 user: None,
                 id: None,

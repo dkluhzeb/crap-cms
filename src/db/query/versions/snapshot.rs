@@ -44,9 +44,14 @@ fn is_scalar_snapshot_value(val: &Value) -> bool {
     !matches!(val, Value::Array(_) | Value::Object(_))
 }
 
-/// Extract flat field data from a snapshot for the UPDATE statement.
-/// Group fields are always expanded to `field__subfield` sub-columns.
-/// Handles both flat (`seo__meta_title`) and nested (`seo: { meta_title: ... }`) snapshot formats.
+/// Extract flat field data from a snapshot for the UPDATE statement (version
+/// restore). Group fields are expanded to `field__subfield` sub-columns — the
+/// same nested→flat mapping as [`crate::core::flatten_group_fields`], but kept
+/// bespoke here because it ALSO accepts the **flat** snapshot form: current
+/// snapshots are nested (`build_snapshot` hydrates), but legacy snapshots stored
+/// before group hydration may be flat, so restore must read either. Restore
+/// feeds the result straight to `update()` (which flattens again, idempotently),
+/// so this stays shape-agnostic rather than routing through the canonical pair.
 pub(super) fn extract_snapshot_data(
     obj: &Map<String, Value>,
     fields: &[FieldDefinition],

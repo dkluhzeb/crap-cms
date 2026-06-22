@@ -13,7 +13,7 @@ use super::{
     locale::resolve_join_locale,
 };
 use crate::{
-    core::{DocumentFields, FieldDefinition, FieldType},
+    core::{DocumentFields, FieldDefinition, FieldType, flatten_group_fields},
     db::{
         DbConnection, LocaleContext,
         query::{helpers::prefixed_name, is_non_default_single_locale},
@@ -93,7 +93,12 @@ pub fn save_join_table_data(
     data: &DocumentFields,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<()> {
-    save_join_data_inner(conn, slug, fields, parent_id, data, locale_ctx, "")
+    // A group-nested array/blocks/relationship lives under a flat `group__field`
+    // join key; flatten the canonical nested write data at this DB-layer edge so
+    // the inner walk finds it (idempotent — array row contents stay nested JSON).
+    let data = flatten_group_fields(data, fields);
+
+    save_join_data_inner(conn, slug, fields, parent_id, &data, locale_ctx, "")
 }
 
 fn save_join_data_inner(

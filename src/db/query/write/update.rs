@@ -6,7 +6,10 @@ use anyhow::{Context as _, Result, anyhow};
 use serde_json::Value;
 
 use crate::{
-    core::{CollectionDefinition, Document, DocumentFields, FieldDefinition, FieldType},
+    core::{
+        CollectionDefinition, Document, DocumentFields, FieldDefinition, FieldType,
+        flatten_group_fields,
+    },
     db::{
         DbConnection, DbValue, LocaleContext,
         query::{
@@ -250,6 +253,11 @@ pub(in crate::db::query) fn collect_update_params(
     collector: &mut UpdateCollector,
     conn: &dyn DbConnection,
 ) -> Result<()> {
+    // Persistence edge: flatten nested groups to `group__sub` columns
+    // (idempotent). Covers collection update, partial update, and global update.
+    // See `collect_insert_params`.
+    let data = flatten_group_fields(data, fields);
+
     walk_leaf_fields(
         fields,
         "",
@@ -258,7 +266,7 @@ pub(in crate::db::query) fn collect_update_params(
             if field.has_parent_column() {
                 collect_leaf_update(
                     field,
-                    data,
+                    &data,
                     locale_ctx,
                     collector,
                     conn,

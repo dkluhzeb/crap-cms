@@ -1061,8 +1061,9 @@ fn field_after_change_modifications_flow_on_update() {
 // ── 6N. Nested field hooks (group/row sub-fields) ────────────────────────────
 
 /// Regression: field hooks on sub-fields inside Group/Row must execute.
-/// The Group "seo" contains "title" with a `trim_value` `before_change` hook,
-/// and the data key is "`seo__title`".
+/// The Group "seo" contains "title" with a `trim_value` `before_change` hook.
+/// Groups are the canonical **nested** shape (`seo: { title }`); the walker
+/// descends into the nested object.
 #[test]
 fn nested_group_field_hooks_execute() {
     let (_tmp, pool, registry, runner) = setup();
@@ -1071,9 +1072,9 @@ fn nested_group_field_hooks_execute() {
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
 
-    // before_change hook on seo.title should trim whitespace from seo__title
+    // before_change hook on seo.title should trim whitespace.
     let mut data = DocumentFields::new();
-    data.insert("seo__title".to_string(), json!("  padded title  "));
+    data.insert("seo".to_string(), json!({ "title": "  padded title  " }));
 
     runner
         .run_field_hooks_with_conn(
@@ -1091,7 +1092,9 @@ fn nested_group_field_hooks_execute() {
         .expect("field hooks failed");
 
     assert_eq!(
-        data.get("seo__title").and_then(|v| v.as_str()),
+        data.get("seo")
+            .and_then(|s| s.get("title"))
+            .and_then(|v| v.as_str()),
         Some("padded title"),
         "Group sub-field before_change hook should trim whitespace"
     );
@@ -1140,7 +1143,7 @@ fn nested_group_after_read_hooks_execute() {
     let def = registry.get_collection("nested_hooks").unwrap().clone();
 
     let mut data = DocumentFields::new();
-    data.insert("seo__title".to_string(), json!("hello world"));
+    data.insert("seo".to_string(), json!({ "title": "hello world" }));
 
     runner
         .run_field_hooks(
@@ -1157,7 +1160,9 @@ fn nested_group_after_read_hooks_execute() {
         .expect("field hooks failed");
 
     assert_eq!(
-        data.get("seo__title").and_then(|v| v.as_str()),
+        data.get("seo")
+            .and_then(|s| s.get("title"))
+            .and_then(|v| v.as_str()),
         Some("HELLO WORLD"),
         "Group sub-field after_read hook should uppercase value"
     );

@@ -71,6 +71,7 @@ pub fn perform_account_action(
 
     let access = runner.check_access(
         &AccessCheckInput {
+            document: None,
             access: access_ref,
             user: ctx.user,
             id: Some(id),

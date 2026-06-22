@@ -32,9 +32,10 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 
 use crate::core::{
-    Document, FieldDefinition, FieldDenial, FieldType, JsonRoot, NestStep, Registry, VisitAction,
-    any_field, walk_nested_mut,
+    Document, DocumentFields, FieldDefinition, FieldDenial, FieldType, JsonRoot, NestStep,
+    Registry, VisitAction, any_field, walk_nested_mut,
 };
+use crate::hooks::lifecycle::access::has_any_field_access;
 use crate::service::{helpers::collect_api_hidden_field_names, hooks::ReadHooks};
 
 /// Bound on cross-collection recursion. Populate breaks cycles (leaving ids), so
@@ -42,11 +43,17 @@ use crate::service::{helpers::collect_api_hidden_field_names, hooks::ReadHooks};
 const MAX_EMBED_DEPTH: usize = 32;
 
 /// Strips field-read-denied fields from populated relationship targets in read
-/// output. Construct once per read (single or batch) and reuse across documents
-/// so per-collection denials are computed at most once.
+/// output. Construct once per read (single or batch) and reuse across documents:
+/// the document-independent API-hidden denials are memoized per collection,
+/// while the data-aware `access.read` strip is evaluated per embedded target
+/// (its denials depend on that target's own data, so they cannot be memoized).
 pub(crate) struct EmbeddedDocStripper<'a> {
     registry: &'a Registry,
-    memo: DenialMemo<'a>,
+    hooks: &'a dyn ReadHooks,
+    user: Option<&'a Document>,
+    locale: Option<&'a str>,
+    /// Per-collection API-hidden denials (document-independent — safe to memoize).
+    api_hidden: RefCell<HashMap<String, Arc<Vec<FieldDenial>>>>,
     enabled: bool,
 }
 
@@ -62,7 +69,10 @@ impl<'a> EmbeddedDocStripper<'a> {
     ) -> Self {
         Self {
             registry,
-            memo: DenialMemo::new(hooks, user, locale),
+            hooks,
+            user,
+            locale,
+            api_hidden: RefCell::new(HashMap::new()),
             enabled: registry_has_read_field_controls(registry),
         }
     }
@@ -74,96 +84,117 @@ impl<'a> EmbeddedDocStripper<'a> {
             return;
         }
 
-        strip_embedded(
-            &mut doc.fields,
-            fields,
-            self.registry,
-            &self.memo,
-            MAX_EMBED_DEPTH,
-        );
-    }
-}
-
-/// Walk one document's fields against `fields`, stripping the embedded targets
-/// of any relationship/upload leaf. The container recursion (group/array/blocks
-/// at any depth) is the canonical [`walk_nested_mut`]'s; this only acts on
-/// relationship leaves.
-fn strip_embedded<R: JsonRoot + ?Sized>(
-    root: &mut R,
-    fields: &[FieldDefinition],
-    registry: &Registry,
-    memo: &DenialMemo<'_>,
-    depth: usize,
-) {
-    if depth == 0 {
-        return;
+        self.strip_embedded(&mut doc.fields, fields, MAX_EMBED_DEPTH);
     }
 
-    let mut path: Vec<NestStep<'_>> = Vec::new();
-    walk_nested_mut(root, fields, &mut path, &mut |field, value, _path| {
-        // The embedding leaf types — a populated value is an embedded doc (or
-        // array of them) whose own field-read denials must be stripped. Join is
-        // included: its populated value is an array of embedded target docs, so
-        // a `hidden`/`access.read`-denied field on the join target would
-        // otherwise leak (containers like group/array/blocks are descended into
-        // by `walk_nested_mut`, not matched here).
-        if !matches!(
-            field.field_type,
-            FieldType::Relationship | FieldType::Upload | FieldType::Join
-        ) {
-            return VisitAction::Keep;
+    /// Walk one document's fields against `fields`, stripping the embedded targets
+    /// of any relationship/upload/join leaf. The container recursion
+    /// (group/array/blocks at any depth) is the canonical [`walk_nested_mut`]'s;
+    /// this only acts on relationship leaves.
+    fn strip_embedded<R: JsonRoot + ?Sized>(
+        &self,
+        root: &mut R,
+        fields: &[FieldDefinition],
+        depth: usize,
+    ) {
+        if depth == 0 {
+            return;
         }
 
-        let Some(value) = value else {
-            return VisitAction::Keep;
+        let mut path: Vec<NestStep<'_>> = Vec::new();
+        walk_nested_mut(root, fields, &mut path, &mut |field, value, _path| {
+            // The embedding leaf types — a populated value is an embedded doc (or
+            // array of them) whose own field-read denials must be stripped. Join
+            // is included: its populated value is an array of embedded target
+            // docs, so a `hidden`/`access.read`-denied field on the join target
+            // would otherwise leak (containers like group/array/blocks are
+            // descended into by `walk_nested_mut`, not matched here).
+            if !matches!(
+                field.field_type,
+                FieldType::Relationship | FieldType::Upload | FieldType::Join
+            ) {
+                return VisitAction::Keep;
+            }
+
+            let Some(value) = value else {
+                return VisitAction::Keep;
+            };
+
+            match value {
+                // Populated has-one: a single embedded object.
+                Value::Object(obj) if is_embedded_ref(obj) => {
+                    let mut obj = obj.clone();
+                    self.strip_ref(&mut obj, depth);
+                    VisitAction::Replace(Value::Object(obj))
+                }
+                // Populated has-many: an array of embedded objects (unpopulated
+                // ids stay strings and are left untouched).
+                Value::Array(items) if items.iter().any(value_is_embedded_ref) => {
+                    let mut items = items.clone();
+                    for item in &mut items {
+                        if let Value::Object(obj) = item
+                            && is_embedded_ref(obj)
+                        {
+                            self.strip_ref(obj, depth);
+                        }
+                    }
+                    VisitAction::Replace(Value::Array(items))
+                }
+                // Unpopulated (bare id string) or anything else — nothing to strip.
+                _ => VisitAction::Keep,
+            }
+        });
+    }
+
+    /// Strip one embedded target against its own collection's denials — data-aware
+    /// `access.read` (the target doc is its own `ctx.document`) plus the static
+    /// API-hidden set — then recurse into *its* populated relationships.
+    fn strip_ref(&self, obj: &mut Map<String, Value>, depth: usize) {
+        let Some(collection) = obj
+            .get("collection")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        else {
+            return;
+        };
+        let Some(def) = self.registry.get_collection(&collection) else {
+            return;
         };
 
-        match value {
-            // Populated has-one: a single embedded object.
-            Value::Object(obj) if is_embedded_ref(obj) => {
-                let mut obj = obj.clone();
-                strip_ref(&mut obj, registry, memo, depth);
-                VisitAction::Replace(Value::Object(obj))
-            }
-            // Populated has-many: an array of embedded objects (unpopulated ids
-            // stay strings and are left untouched).
-            Value::Array(items) if items.iter().any(value_is_embedded_ref) => {
-                let mut items = items.clone();
-                for item in &mut items {
-                    if let Value::Object(obj) = item
-                        && is_embedded_ref(obj)
-                    {
-                        strip_ref(obj, registry, memo, depth);
-                    }
-                }
-                VisitAction::Replace(Value::Array(items))
-            }
-            // Unpopulated (bare id string) or anything else — nothing to strip.
-            _ => VisitAction::Keep,
+        // Data-aware field-read strip: skip the per-target document clone unless
+        // the collection actually configures `access.read` (the registry-wide
+        // gate may have been tripped by a *different* collection).
+        if has_any_field_access(&def.fields, |f| f.access.read.as_ref()) {
+            let document: DocumentFields = obj.clone().into_iter().collect();
+            self.hooks
+                .strip_read_access_map(&def.fields, obj, &document, self.user, self.locale);
         }
-    });
-}
 
-/// Strip one embedded target object against its own collection's denials, then
-/// recurse into *its* populated relationships (depth-bounded).
-fn strip_ref(
-    obj: &mut Map<String, Value>,
-    registry: &Registry,
-    memo: &DenialMemo<'_>,
-    depth: usize,
-) {
-    let Some(collection) = obj.get("collection").and_then(Value::as_str) else {
-        return;
-    };
-    let Some(def) = registry.get_collection(collection) else {
-        return;
-    };
+        for denial in self.api_hidden_for(&collection, &def.fields).iter() {
+            denial.strip_from(obj);
+        }
 
-    for denial in memo.denials_for(collection, &def.fields).iter() {
-        denial.strip_from(obj);
+        self.strip_embedded(obj, &def.fields, depth - 1);
     }
 
-    strip_embedded(obj, &def.fields, registry, memo, depth - 1);
+    /// Memoized per-collection API-hidden denials (document-independent), so the
+    /// `hidden`-field name walk runs at most once per collection per read.
+    fn api_hidden_for(
+        &self,
+        collection: &str,
+        fields: &[FieldDefinition],
+    ) -> Arc<Vec<FieldDenial>> {
+        if let Some(denials) = self.api_hidden.borrow().get(collection) {
+            return Arc::clone(denials);
+        }
+
+        let denials = Arc::new(collect_api_hidden_field_names(fields, ""));
+        self.api_hidden
+            .borrow_mut()
+            .insert(collection.to_string(), Arc::clone(&denials));
+
+        denials
+    }
 }
 
 /// A populated relationship target carries both `collection` and `id` markers
@@ -184,43 +215,6 @@ pub(crate) fn registry_has_read_field_controls(registry: &Registry) -> bool {
         .collections
         .values()
         .any(|def| any_field(&def.fields, &|f| f.hidden || f.access.read.is_some()))
-}
-
-/// Memoizes per-collection read denials (field access + api-hidden) for one
-/// request's user, so the (Lua-evaluated) `field_read_denied` hook runs at most
-/// once per collection.
-struct DenialMemo<'a> {
-    hooks: &'a dyn ReadHooks,
-    user: Option<&'a Document>,
-    locale: Option<&'a str>,
-    cache: RefCell<HashMap<String, Arc<Vec<FieldDenial>>>>,
-}
-
-impl<'a> DenialMemo<'a> {
-    fn new(hooks: &'a dyn ReadHooks, user: Option<&'a Document>, locale: Option<&'a str>) -> Self {
-        Self {
-            hooks,
-            user,
-            locale,
-            cache: RefCell::new(HashMap::new()),
-        }
-    }
-
-    fn denials_for(&self, collection: &str, fields: &[FieldDefinition]) -> Arc<Vec<FieldDenial>> {
-        if let Some(denials) = self.cache.borrow().get(collection) {
-            return Arc::clone(denials);
-        }
-
-        let mut denied = self.hooks.field_read_denied(fields, self.user, self.locale);
-        denied.extend(collect_api_hidden_field_names(fields, ""));
-
-        let denials = Arc::new(denied);
-        self.cache
-            .borrow_mut()
-            .insert(collection.to_string(), Arc::clone(&denials));
-
-        denials
-    }
 }
 
 #[cfg(test)]
@@ -258,17 +252,21 @@ mod tests {
             Ok(AccessResult::Allowed)
         }
 
-        fn field_read_denied(
+        /// Data-aware strip mock: deny every field carrying an `access.read`
+        /// hook, at any depth (mirrors the real walker with a constant-deny rule).
+        fn strip_read_access_map(
             &self,
             fields: &[FieldDefinition],
+            level: &mut serde_json::Map<String, Value>,
+            _document: &DocumentFields,
             _user: Option<&Document>,
             _locale: Option<&str>,
-        ) -> Vec<FieldDenial> {
-            fields
-                .iter()
-                .filter(|f| f.access.read.is_some())
-                .map(|f| FieldDenial::Flat(f.name.clone()))
-                .collect()
+        ) {
+            crate::hooks::lifecycle::access::strip_read_access_data_aware(
+                fields,
+                level,
+                &|_hook, _data| true,
+            );
         }
     }
 

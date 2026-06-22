@@ -46,6 +46,7 @@ pub fn unpublish_global_document(ctx: &ServiceContext) -> Result<Document> {
 
     // Access check
     let access = wh.check_access(&AccessCheckInput {
+        document: None,
         access: def.access.update.as_ref(),
         user: ctx.user,
         id: None,
@@ -119,10 +120,8 @@ pub fn unpublish_global_document(ctx: &ServiceContext) -> Result<Document> {
         &tx,
     )?;
 
-    let mut read_denied = wh.field_read_denied(&def.fields, ctx.user, None);
-    read_denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
-
-    doc.strip_fields(&read_denied);
+    wh.strip_read_access_doc(&def.fields, &mut doc, ctx.user, None);
+    doc.strip_fields(&helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     tx.commit().context("Commit transaction")?;
 

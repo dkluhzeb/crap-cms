@@ -127,14 +127,12 @@ pub(crate) fn post_process_single(
         query::apply_select_to_document(doc, sel);
     }
 
-    let mut denied = hooks.field_read_denied(
-        &def.fields,
-        user,
-        opts.locale_ctx().map(LocaleContext::access_locale),
-    );
-    denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
+    let access_locale = opts.locale_ctx().map(LocaleContext::access_locale);
 
-    doc.strip_fields(&denied);
+    // Data-aware field-read strip (per-row `ctx.data`, full-doc `ctx.document`),
+    // then the document-independent API-hidden strip.
+    hooks.strip_read_access_doc(&def.fields, doc, user, access_locale);
+    doc.strip_fields(&helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     // Strip field-read-denied fields from populated relationship targets — each
     // embedded doc belongs to another collection with its own field access.
@@ -176,12 +174,16 @@ fn strip_read_denied_from_docs(
     locale: Option<&str>,
     registry: Option<&Registry>,
 ) {
-    let mut denied = hooks.field_read_denied(fields, user, locale);
-    denied.extend(helpers::collect_api_hidden_field_names(fields, ""));
+    // Field-read access is data-aware (per-doc, per-row), so evaluate it on each
+    // document rather than precomputing one denial list. The API-hidden set is
+    // document-independent — compute it once and apply per doc.
+    let api_hidden = helpers::collect_api_hidden_field_names(fields, "");
 
-    if !denied.is_empty() {
-        for doc in docs.iter_mut() {
-            doc.strip_fields(&denied);
+    for doc in docs.iter_mut() {
+        hooks.strip_read_access_doc(fields, doc, user, locale);
+
+        if !api_hidden.is_empty() {
+            doc.strip_fields(&api_hidden);
         }
     }
 

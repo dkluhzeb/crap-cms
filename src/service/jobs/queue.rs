@@ -50,6 +50,7 @@ pub fn queue_job(ctx: &ServiceContext, input: &QueueJobInput) -> Result<JobRun, 
         let result = runner
             .check_access(
                 &AccessCheckInput {
+                    document: None,
                     access: input.job_def.access.as_ref(),
                     user: ctx.user,
                     id: None,

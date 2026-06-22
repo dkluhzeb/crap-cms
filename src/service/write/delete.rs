@@ -111,6 +111,7 @@ pub(crate) fn delete_document_in_conn(
 
     // Delete is locale-agnostic — the whole row is removed across all locales.
     let access = write_hooks.check_access(&AccessCheckInput {
+        document: None,
         access: access_ref,
         user: ctx.user,
         id: Some(id),
@@ -238,9 +239,8 @@ mod tests {
 
     use crate::{
         core::{
-            CollectionDefinition, Document, FieldDefinition, FieldDenial, FieldType, Hooks,
-            SharedInvalidationTransport, ValidationError, collection::Auth,
-            event::InProcessInvalidationBus,
+            CollectionDefinition, FieldDefinition, FieldType, Hooks, SharedInvalidationTransport,
+            ValidationError, collection::Auth, event::InProcessInvalidationBus,
         },
         db::DbConnection,
         hooks::ValidationCtx,
@@ -284,27 +284,8 @@ mod tests {
             Ok(ctx)
         }
 
-        fn field_read_denied(
-            &self,
-            _fields: &[FieldDefinition],
-            _user: Option<&Document>,
-            _locale: Option<&str>,
-        ) -> Vec<FieldDenial> {
-            Vec::new()
-        }
-
         fn check_access(&self, _input: &AccessCheckInput<'_>) -> anyhow::Result<AccessResult> {
             Ok(AccessResult::Allowed)
-        }
-
-        fn field_write_denied(
-            &self,
-            _fields: &[FieldDefinition],
-            _user: Option<&Document>,
-            _locale: Option<&str>,
-            _operation: &str,
-        ) -> Vec<FieldDenial> {
-            Vec::new()
         }
 
         fn validate_fields(
@@ -500,27 +481,8 @@ mod tests {
             Ok(ctx)
         }
 
-        fn field_read_denied(
-            &self,
-            _fields: &[FieldDefinition],
-            _user: Option<&Document>,
-            _locale: Option<&str>,
-        ) -> Vec<FieldDenial> {
-            Vec::new()
-        }
-
         fn check_access(&self, _input: &AccessCheckInput<'_>) -> anyhow::Result<AccessResult> {
             Ok(AccessResult::Allowed)
-        }
-
-        fn field_write_denied(
-            &self,
-            _fields: &[FieldDefinition],
-            _user: Option<&Document>,
-            _locale: Option<&str>,
-            _operation: &str,
-        ) -> Vec<FieldDenial> {
-            Vec::new()
         }
 
         fn validate_fields(

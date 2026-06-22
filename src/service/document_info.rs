@@ -175,6 +175,7 @@ fn global_visibility(
     };
 
     let result = hooks.check_access(&AccessCheckInput {
+        document: None,
         access: def.access.read.as_ref(),
         user: ctx.user,
         id: None,
@@ -287,7 +288,7 @@ mod tests {
     use crate::config::{CrapConfig, DatabaseConfig, LocaleConfig};
     use crate::core::collection::Hooks;
     use crate::core::{
-        CollectionDefinition, Document, FieldDefinition, FieldDenial, FieldType, RelationshipConfig,
+        CollectionDefinition, Document, FieldDefinition, FieldType, RelationshipConfig,
     };
     use crate::db::{Filter, FilterOp, migrate, pool};
     use crate::hooks::lifecycle::AfterReadCtx;
@@ -325,15 +326,6 @@ mod tests {
                 .get(input.collection)
                 .cloned()
                 .unwrap_or(AccessResult::Denied))
-        }
-
-        fn field_read_denied(
-            &self,
-            _: &[FieldDefinition],
-            _: Option<&Document>,
-            _: Option<&str>,
-        ) -> Vec<FieldDenial> {
-            Vec::new()
         }
     }
 

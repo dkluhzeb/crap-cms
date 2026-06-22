@@ -9,7 +9,6 @@ mod types;
 mod validation;
 
 // Re-exports (preserves all existing external import paths)
-pub(crate) use context::flatten_group_fields;
 pub use context::{
     AccessCheckInput, AccessContext, AuthStrategyContext, AuthStrategyInput, ConditionContext,
     FieldHookContext, HookContext, HookContextBuilder, JobHandlerContext, JobInfo,

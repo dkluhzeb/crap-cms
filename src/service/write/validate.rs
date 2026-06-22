@@ -1,13 +1,13 @@
 //! Document validation without persistence.
 
 use crate::{
-    core::{Document, FieldDefinition, RequiredLocales, collection::Hooks},
+    core::{Document, FieldDefinition, RequiredLocales, collection::Hooks, nest_group_fields},
     db::{DbConnection, LocaleContext},
     hooks::{HookContext, ValidationCtx},
     service::{WriteInput, hooks::WriteHooks},
 };
 
-use super::{ServiceError, helpers::strip_denied_fields};
+use super::ServiceError;
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -46,16 +46,21 @@ pub fn validate_document(
     // Note: collection-level access check is intentionally skipped here.
     // Validation endpoints already check access before calling this function.
 
+    // Canonicalize incoming data to nested groups up front (idempotent) so the
+    // dry-run pipeline matches the real write path.
+    input.data = nest_group_fields(&input.data, ctx.fields);
+
     let is_draft = input.draft;
 
-    // Strip write-denied fields
-    let denied = write_hooks.field_write_denied(
+    // Strip write-denied fields (data-aware: each `access.create`/`access.update`
+    // rule sees `ctx.data` = its level and `ctx.document` = the incoming document).
+    write_hooks.strip_write_access_data(
         ctx.fields,
+        &mut input.data,
         user,
         input.locale_ctx.map(LocaleContext::access_locale),
         ctx.operation,
     );
-    strip_denied_fields(&denied, &mut input.data);
 
     let hook_data = input.data.clone();
 

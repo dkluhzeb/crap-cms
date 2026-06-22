@@ -13,7 +13,7 @@
 use anyhow::Result;
 
 use crate::config::LocaleConfig;
-use crate::core::{DocumentFields, FieldDefinition, FieldType};
+use crate::core::{DocumentFields, FieldDefinition, FieldType, flatten_group_fields};
 use crate::db::query::helpers::prefixed_name;
 use crate::db::{DbConnection, DbValue};
 
@@ -82,24 +82,36 @@ fn get_ref_count_inner(
 /// 10+ queries on the hot path.
 #[must_use]
 pub fn data_touches_refs(fields: &[FieldDefinition], data: &DocumentFields, prefix: &str) -> bool {
+    // DB-layer edge: the walk reads flat `group__sub` columns, so flatten the
+    // canonical nested write data first (idempotent).
+    let data = flatten_group_fields(data, fields);
+
+    data_touches_refs_inner(fields, &data, prefix)
+}
+
+fn data_touches_refs_inner(
+    fields: &[FieldDefinition],
+    data: &DocumentFields,
+    prefix: &str,
+) -> bool {
     for field in fields {
         match field.field_type {
             FieldType::Group => {
                 let new_prefix = prefixed_name(prefix, &field.name);
-                if data_touches_refs(&field.fields, data, &new_prefix) {
+                if data_touches_refs_inner(&field.fields, data, &new_prefix) {
                     return true;
                 }
             }
 
             FieldType::Row | FieldType::Collapsible => {
-                if data_touches_refs(&field.fields, data, prefix) {
+                if data_touches_refs_inner(&field.fields, data, prefix) {
                     return true;
                 }
             }
 
             FieldType::Tabs => {
                 for tab in &field.tabs {
-                    if data_touches_refs(&tab.fields, data, prefix) {
+                    if data_touches_refs_inner(&tab.fields, data, prefix) {
                         return true;
                     }
                 }
@@ -247,7 +259,10 @@ pub fn after_create_from_data(
 ) -> Result<()> {
     let mut new_refs = Vec::new();
 
-    compute_refs_from_data(fields, data, locale_config, "", &mut new_refs);
+    // DB-layer edge: flatten the canonical nested write data (idempotent) so the
+    // in-memory ref walk reads the flat `group__sub` columns it expects.
+    let data = flatten_group_fields(data, fields);
+    compute_refs_from_data(fields, &data, locale_config, "", &mut new_refs);
 
     let deltas = to_delta_map(&[], &new_refs);
 

@@ -5,7 +5,10 @@ use nanoid::nanoid;
 use serde_json::Value;
 
 use crate::{
-    core::{CollectionDefinition, Document, DocumentFields, FieldDefinition, FieldType},
+    core::{
+        CollectionDefinition, Document, DocumentFields, FieldDefinition, FieldType,
+        flatten_group_fields,
+    },
     db::{
         DbConnection, DbValue, LocaleContext,
         query::{
@@ -147,6 +150,11 @@ pub(super) fn collect_insert_params(
     collector: &mut InsertCollector,
     conn: &dyn DbConnection,
 ) -> Result<()> {
+    // The persistence edge owns the flat `group__sub` column encoding (nested is
+    // the canonical in-memory shape everywhere above `db/query`). Flatten here —
+    // idempotent, the mirror of read-side group hydration.
+    let data = flatten_group_fields(data, fields);
+
     walk_leaf_fields(
         fields,
         "",
@@ -155,7 +163,7 @@ pub(super) fn collect_insert_params(
             if field.has_parent_column() {
                 collect_leaf_param(
                     field,
-                    data,
+                    &data,
                     locale_ctx,
                     collector,
                     conn,

@@ -26,7 +26,7 @@ end
 | `collection` | string | Collection slug |
 | `operation` | string | `"create"`, `"update"`, `"find"`, `"find_by_id"` |
 | `id` | string/nil | Document id on `update` / read; nil on `create` |
-| `data` | table | The **nearest scope** (read-only snapshot): the full document for a top-level field, or the current row for a hook on a field inside an array/blocks row |
+| `data` | table | The **nearest scope** (read-only snapshot): the group object for a field inside a group, the current row for a field inside an array/blocks row, or the full document at the top level. Groups are nested objects (`ctx.data.title` for a `seo.title` sub-field) |
 | `document` | table | The **full document** being written or read — a read-only snapshot taken before any field hook in this pass ran (it does not reflect earlier field hooks' changes). Matches `data` at the top level; for a sub-field hook inside an array/blocks row it's the parent document, so the hook can cross-reference fields outside its row |
 | `user` | table/nil | Authenticated user document (nil if unauthenticated) |
 | `ui_locale` | string/nil | Admin UI locale code (e.g., `"en"`, `"de"`) |

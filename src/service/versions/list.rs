@@ -39,6 +39,7 @@ pub fn list_versions(
     // (`access.draft ?? access.update`): a reader without that access sees only
     // published versions, mirroring document draft visibility.
     let access = hooks.check_access(&AccessCheckInput {
+        document: None,
         access: ctx.read_access_ref(),
         user: ctx.user,
         id: Some(input.parent_id),
@@ -59,6 +60,7 @@ pub fn list_versions(
     // so a non-match downgrades to published-only instead of leaking another
     // owner's draft snapshots.
     let draft_access = hooks.check_access(&AccessCheckInput {
+        document: None,
         access: ctx.draft_access_ref(),
         user: ctx.user,
         id: Some(input.parent_id),
@@ -92,14 +94,16 @@ pub fn list_versions(
 
     // Strip read-denied + API-hidden fields from every snapshot — parity with
     // `find_version_by_id`; otherwise denied fields leak through the list.
-    let mut denied = hooks.field_read_denied(ctx.fields()?, ctx.user, None);
-    denied.extend(crate::service::helpers::collect_api_hidden_field_names(
-        ctx.fields()?,
-        "",
-    ));
-    if !denied.is_empty() {
-        for version in &mut versions {
-            super::find::strip_snapshot_fields(&mut version.snapshot, &denied);
+    // Field-read access is data-aware (per-snapshot), so evaluate it per row; the
+    // API-hidden set is document-independent and computed once.
+    let fields = ctx.fields()?;
+    let api_hidden = crate::service::helpers::collect_api_hidden_field_names(fields, "");
+
+    for version in &mut versions {
+        hooks.strip_read_access_value(fields, &mut version.snapshot, ctx.user, None);
+
+        if !api_hidden.is_empty() {
+            super::find::strip_snapshot_fields(&mut version.snapshot, &api_hidden);
         }
     }
 
@@ -127,8 +131,8 @@ mod tests {
     use crate::{
         config::LocaleConfig,
         core::{
-            CollectionDefinition, Document, DocumentFields, FieldDefinition, FieldDenial,
-            FieldType, Hooks, ValidationError, VersionsConfig,
+            CollectionDefinition, Document, DocumentFields, FieldDefinition, FieldType, Hooks,
+            ValidationError, VersionsConfig,
         },
         db::{AccessResult, DbConnection},
         hooks::{HookContext, HookEvent, ValidationCtx, lifecycle::AfterReadCtx},
@@ -160,15 +164,6 @@ mod tests {
         fn check_access(&self, _input: &AccessCheckInput<'_>) -> Result<AccessResult> {
             Ok(AccessResult::Allowed)
         }
-
-        fn field_read_denied(
-            &self,
-            _fields: &[FieldDefinition],
-            _user: Option<&Document>,
-            _locale: Option<&str>,
-        ) -> Vec<FieldDenial> {
-            Vec::new()
-        }
     }
 
     /// Read hooks that allow access only when the access ref is the `read`
@@ -198,15 +193,6 @@ mod tests {
             } else {
                 AccessResult::Denied
             })
-        }
-
-        fn field_read_denied(
-            &self,
-            _fields: &[FieldDefinition],
-            _user: Option<&Document>,
-            _locale: Option<&str>,
-        ) -> Vec<FieldDenial> {
-            Vec::new()
         }
     }
 
@@ -245,27 +231,8 @@ mod tests {
             Ok(ctx)
         }
 
-        fn field_read_denied(
-            &self,
-            _fields: &[FieldDefinition],
-            _user: Option<&Document>,
-            _locale: Option<&str>,
-        ) -> Vec<FieldDenial> {
-            Vec::new()
-        }
-
         fn check_access(&self, _input: &AccessCheckInput<'_>) -> Result<AccessResult> {
             Ok(AccessResult::Allowed)
-        }
-
-        fn field_write_denied(
-            &self,
-            _fields: &[FieldDefinition],
-            _user: Option<&Document>,
-            _locale: Option<&str>,
-            _operation: &str,
-        ) -> Vec<FieldDenial> {
-            Vec::new()
         }
 
         fn validate_fields(
@@ -441,15 +408,6 @@ mod tests {
                     op: crate::db::FilterOp::Equals("me".into()),
                 }),
             ]))
-        }
-
-        fn field_read_denied(
-            &self,
-            _: &[FieldDefinition],
-            _: Option<&Document>,
-            _: Option<&str>,
-        ) -> Vec<FieldDenial> {
-            Vec::new()
         }
     }
 

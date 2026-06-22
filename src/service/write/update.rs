@@ -9,7 +9,8 @@ use crate::{
     },
 };
 
-use super::{ServiceError, helpers::strip_denied_fields};
+use super::ServiceError;
+use crate::core::nest_group_fields;
 use crate::service::helpers::{collect_api_hidden_field_names, enforce_access_constraints};
 
 type Result<T> = std::result::Result<T, ServiceError>;
@@ -29,9 +30,14 @@ pub(crate) fn update_document_in_conn(
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.collection_def()?;
 
+    // Canonicalize incoming data to nested groups up front (idempotent); the
+    // whole pipeline sees one shape, the DB edge flattens to columns.
+    input.data = nest_group_fields(&input.data, &def.fields);
+
     // Collection-level access check. The incoming data is exposed to the
     // access function as `ctx.data` so it can gate on what is being written.
     let access = write_hooks.check_access(&AccessCheckInput {
+        document: None,
         access: def.access.update.as_ref(),
         user: ctx.user,
         id: Some(id),
@@ -53,14 +59,16 @@ pub(crate) fn update_document_in_conn(
     let is_draft = input.draft && def.has_drafts();
     let ui_locale = input.ui_locale.as_deref();
 
-    // Strip write-denied fields before hook processing
-    let denied = write_hooks.field_write_denied(
+    // Strip write-denied fields before hook processing (data-aware: each
+    // `access.update` rule sees `ctx.data` = its level and `ctx.document` = the
+    // full incoming document).
+    write_hooks.strip_write_access_data(
         &def.fields,
+        &mut input.data,
         ctx.user,
         input.locale_ctx.map(LocaleContext::access_locale),
         "update",
     );
-    strip_denied_fields(&denied, &mut input.data);
 
     let hook_data = input.data.clone();
 
@@ -84,7 +92,6 @@ pub(crate) fn update_document_in_conn(
         .build();
 
     let final_ctx = write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?;
-    let final_data = final_ctx.to_value_map(&def.fields);
 
     let doc = if is_draft && def.has_versions() {
         persist_draft_version(ctx, id, &final_ctx.data, input.locale_ctx)?
@@ -95,7 +102,7 @@ pub(crate) fn update_document_in_conn(
             .locale_config(input.locale_ctx.map(|c| &c.config))
             .build();
 
-        persist_update(ctx, id, &final_data, &opts)?
+        persist_update(ctx, id, &final_ctx.to_value_map(), &opts)?
     };
 
     // Hydrate join fields (arrays, blocks, has-many) BEFORE after-change hooks so
@@ -140,14 +147,9 @@ pub(crate) fn update_document_in_conn(
 
     // Strip read-denied fields from the returned document, after the hooks have
     // seen the full doc.
-    let mut read_denied = write_hooks.field_read_denied(
-        &def.fields,
-        ctx.user,
-        input.locale_ctx.map(LocaleContext::access_locale),
-    );
-    read_denied.extend(collect_api_hidden_field_names(&def.fields, ""));
-
-    doc.strip_fields(&read_denied);
+    let access_locale = input.locale_ctx.map(LocaleContext::access_locale);
+    write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.user, access_locale);
+    doc.strip_fields(&collect_api_hidden_field_names(&def.fields, ""));
 
     Ok((doc, after_ctx))
 }

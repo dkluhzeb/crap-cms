@@ -118,6 +118,7 @@ fn queue_job_inner(
         let result = check_access_with_lua(
             lua,
             &AccessCheckInput {
+                document: None,
                 access: job_def.access.as_ref(),
                 user: user_doc.as_ref(),
                 id: None,

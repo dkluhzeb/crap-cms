@@ -35,6 +35,7 @@ pub(super) fn can_read_job_runs(
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: Some(access),
                 user: ctx.user,
                 id: None,

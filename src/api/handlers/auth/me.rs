@@ -1,5 +1,6 @@
 //! Me handler — return the currently authenticated user.
 
+use serde_json::{Map, Value};
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
@@ -42,15 +43,28 @@ fn me_blocking(input: &MeBlockingInput) -> Result<(Option<Document>, u64, bool),
             .map_err(|_| Status::internal("Internal error"))?;
 
         // Apply the same field stripping every other read path does, even for a
-        // self-read: `api_hidden` fields (e.g. a stored secret) AND field-level
-        // read denials (a field an access hook hides even from its owner — e.g.
-        // an admin-only flag). `Me` queries raw, so do it here.
-        let mut read_denied =
-            input
-                .runner
-                .check_field_read_access(&input.def.fields, Some(&*d), None, &conn);
-        read_denied.extend(collect_api_hidden_field_names(&input.def.fields, ""));
-        d.strip_fields(&read_denied);
+        // self-read: data-aware field-level read denials (a field an access hook
+        // hides even from its owner — e.g. an admin-only flag) AND `api_hidden`
+        // fields (e.g. a stored secret). `Me` queries raw, so do it here. The
+        // user reading is the document itself, so snapshot it for `ctx.user` /
+        // `ctx.document` before mutating the live copy.
+        let user_snapshot = d.clone();
+        let mut level: Map<String, Value> = std::mem::take(&mut d.fields)
+            .into_inner()
+            .into_iter()
+            .collect();
+
+        input.runner.strip_read_access(
+            &input.def.fields,
+            &mut level,
+            &user_snapshot.fields,
+            Some(&user_snapshot),
+            None,
+            &conn,
+        );
+
+        d.fields = level.into_iter().collect();
+        d.strip_fields(&collect_api_hidden_field_names(&input.def.fields, ""));
     }
 
     let ctx = ServiceContext::slug_only(&input.collection)

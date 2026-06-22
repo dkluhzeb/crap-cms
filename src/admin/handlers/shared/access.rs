@@ -56,6 +56,7 @@ pub fn check_access_or_forbid(
         .hook_runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access,
                 user: user_doc,
                 id,
@@ -76,12 +77,17 @@ pub fn check_access_or_forbid(
     Ok(result)
 }
 
-/// Returns field names denied for the current user's read access, or a server error response.
-/// Skips the check entirely (returns empty vec) if no field has read access configured.
+/// Returns the read-denied field paths for `document` (data-aware: each
+/// `access.read` rule sees the document as `ctx.data` / `ctx.document`), or a
+/// server-error response. Used by the edit forms to drop denied field inputs
+/// from rendering. The service read already stripped denied *values*; this
+/// yields the *names* the form must not render. Skips the check entirely
+/// (returns empty vec) when no field configures read access.
 pub fn compute_denied_read_fields(
     state: &AdminState,
     auth_user: Option<&Extension<AuthUser>>,
     fields: &[FieldDefinition],
+    document: &DocumentFields,
 ) -> Result<Vec<FieldDenial>, Box<axum::response::Response>> {
     if !has_any_field_access(fields, |f| f.access.read.as_ref()) {
         return Ok(Vec::new());
@@ -102,7 +108,7 @@ pub fn compute_denied_read_fields(
 
     let denied = state
         .hook_runner
-        .check_field_read_access(fields, user_doc, None, &tx);
+        .read_denied_names(fields, document, user_doc, None, &tx);
 
     if let Err(e) = tx.commit() {
         warn!("tx commit failed: {e}");
@@ -225,6 +231,7 @@ pub fn has_access_with_conn(
 
     let result = state.hook_runner.check_access(
         &AccessCheckInput {
+            document: None,
             access,
             user: user_doc,
             id: None,

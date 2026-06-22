@@ -234,6 +234,7 @@ fn check_impl(
     let result = check_access_with_lua(
         lua,
         &AccessCheckInput {
+            document: None,
             access: access.as_ref(),
             user: user.as_ref(),
             id: None,

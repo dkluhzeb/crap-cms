@@ -18,7 +18,7 @@ use crate::{
         AccessCheckInput, HookDepth, HookDepthGuard, LuaCrudInfra, LuaInvalidationTransport,
         LuaLocaleConfig, LuaPopulateSingleflight, MaxHookDepth, UiLocaleContext, UserContext,
         access::check_access_with_lua,
-        converters::{flatten_lua_groups, lua_table_to_hashmap, lua_table_to_json_map},
+        converters::{lua_table_to_hashmap, lua_table_to_json_map},
     },
     service::{validate_access_constraint_locales, validate_access_constraints},
 };
@@ -156,6 +156,7 @@ pub(crate) fn enforce_access(
     let result = check_access_with_lua(
         lua,
         &AccessCheckInput {
+            document: None,
             access: params.access_fn,
             user: user_doc.as_ref(),
             id: params.id,
@@ -211,18 +212,19 @@ pub(crate) struct ExtractedData {
 
 /// Extract a merged typed data map and password from a Lua data table.
 ///
-/// Shared by `create`, `update`, and `validate`: flattens group fields and
-/// separates the password for auth collections. The Lua table yields two
-/// views — `lua_table_to_hashmap` stringifies every leaf, while
-/// `lua_table_to_json_map` preserves typed shapes — so the merged map starts
-/// with the stringified view (wrapped via `values_from_strings`) and then
-/// overrides composite leaves with their typed counterparts.
+/// Shared by `create`, `update`, and `validate`: builds the document data map
+/// and separates the password for auth collections. The Lua table yields two
+/// views — `lua_table_to_hashmap` stringifies scalar leaves, while
+/// `lua_table_to_json_map` preserves typed/nested shapes (arrays, blocks, and
+/// **group objects**) — so the merged map starts with the stringified scalars
+/// (wrapped via `values_from_strings`) and then overrides composite leaves with
+/// their typed counterparts. Group objects stay nested (the canonical shape);
+/// the service write entry re-normalizes and the DB edge flattens to columns.
 pub(crate) fn extract_data(
     data_table: &Table,
     def: &CollectionDefinition,
 ) -> LuaResult<ExtractedData> {
     let mut flat = lua_table_to_hashmap(data_table)?;
-    flatten_lua_groups(data_table, &def.fields, &mut flat)?;
 
     let password = if def.is_auth_collection() {
         flat.remove("password")

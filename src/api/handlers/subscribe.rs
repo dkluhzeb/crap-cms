@@ -22,8 +22,7 @@ use crate::{
         handlers::{ContentService, enum_mapping, proto::json_to_prost_value},
     },
     core::{
-        Document, EventReceiver, FieldDefinition, FieldDenial, HookRef, LiveMode, MutationEvent,
-        Registry, SharedTokenProvider,
+        Document, EventReceiver, HookRef, LiveMode, MutationEvent, Registry, SharedTokenProvider,
         event::{EventOperation, EventTarget, InvalidationReceiver, RecvError},
     },
     db::{
@@ -31,6 +30,7 @@ use crate::{
         query::filter::memory::matches_constraints_typed,
     },
     hooks::{AccessCheckInput, EventAfterReadInput, HookRunner},
+    service::helpers::collect_api_hidden_field_names,
 };
 
 /// Outbound channel capacity per subscriber. Small — we rely on `send_timeout`
@@ -97,14 +97,12 @@ struct SlugAccess {
     read_ref: Option<HookRef>,
     draft: ViewAxis,
     trash: ViewAxis,
-    fields: Vec<FieldDefinition>,
     live_mode: LiveMode,
 }
 
 /// Accumulated access state built during slug resolution.
 struct AccessState {
     views: HashMap<String, EventViewGate>,
-    denied_fields: HashMap<String, Vec<FieldDenial>>,
     modes: HashMap<String, LiveMode>,
 }
 
@@ -112,7 +110,6 @@ impl AccessState {
     fn new() -> Self {
         Self {
             views: HashMap::new(),
-            denied_fields: HashMap::new(),
             modes: HashMap::new(),
         }
     }
@@ -131,6 +128,7 @@ fn resolve_view(
 ) -> Option<Vec<FilterClause>> {
     match hook_runner.check_access(
         &AccessCheckInput {
+            document: None,
             access: access_ref,
             user: user_doc,
             id: None,
@@ -222,12 +220,10 @@ fn resolve_single_slug(
         return;
     }
 
-    let denied = hook_runner.check_field_read_access(&slug_access.fields, user_doc, None, tx);
-
-    if !denied.is_empty() {
-        state.denied_fields.insert(slug.to_string(), denied);
-    }
-
+    // Field-level read denials are NOT precomputed here: they are data-aware
+    // (each `access.read` rule sees the event's document), so they are evaluated
+    // per event in `process_event`. Only the view gate + delivery mode are fixed
+    // at connection time.
     state.modes.insert(slug.to_string(), slug_access.live_mode);
     state.views.insert(slug.to_string(), views);
 }
@@ -332,14 +328,19 @@ fn process_event(event: &MutationEvent, ctx: &SubscriberCtx) -> Option<content::
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        let denied = match event.target {
-            EventTarget::Collection => ctx.access.collection_denied_fields.get(slug_str),
-            EventTarget::Global => ctx.access.global_denied_fields.get(slug_str),
-        };
-        if let Some(denied) = denied {
-            for denial in denied {
-                denial.strip_from(&mut visible);
-            }
+        // Data-aware field-read strip (each `access.read` rule sees the event's
+        // document as `ctx.data` / `ctx.document`), evaluated connection-less on a
+        // pool VM — a rule doing CRUD fails closed, matching the event
+        // `after_read` contract. Then the document-independent API-hidden strip.
+        ctx.hook_runner.strip_read_access_for_event(
+            &field_defs,
+            &mut visible,
+            &processed,
+            ctx.access.user_doc.as_ref(),
+        );
+
+        for denial in collect_api_hidden_field_names(&field_defs, "") {
+            denial.strip_from(&mut visible);
         }
 
         visible
@@ -368,13 +369,11 @@ struct SubscribeAccess {
     collection_views: HashMap<String, EventViewGate>,
     /// Per-global content-view access (globals only carry the published view).
     global_views: HashMap<String, EventViewGate>,
-    /// Field denials, split by target. A collection and a global may share a
-    /// slug (tables are namespaced), so these must NOT be merged into one
-    /// slug-keyed map — doing so would let one clobber the other and leak a
-    /// denied field (or full payload via `modes`).
-    collection_denied_fields: HashMap<String, Vec<FieldDenial>>,
-    global_denied_fields: HashMap<String, Vec<FieldDenial>>,
-    /// Event delivery mode, split by target for the same reason.
+    /// Event delivery mode, split by target. A collection and a global may share
+    /// a slug (tables are namespaced), so this must NOT be merged into one
+    /// slug-keyed map — doing so would let one clobber the other and leak the
+    /// full payload via `modes`. (Field denials are no longer cached here: they
+    /// are data-aware and evaluated per event in `process_event`.)
     collection_modes: HashMap<String, LiveMode>,
     global_modes: HashMap<String, LiveMode>,
     /// The subscriber's user document (for per-user `after_read` hooks).
@@ -657,7 +656,6 @@ fn resolve_collection_views(
                     present: def.soft_delete,
                     access: def.access.resolve_trash().cloned(),
                 },
-                fields: def.fields.clone(),
                 live_mode: def.live_mode,
             },
             user_doc,
@@ -697,7 +695,6 @@ fn resolve_global_views(
                     present: false,
                     access: None,
                 },
-                fields: def.fields.clone(),
                 live_mode: def.live_mode,
             },
             user_doc,
@@ -782,14 +779,12 @@ fn resolve_subscribe_access_blocking(
         warn!("tx commit failed: {e}");
     }
 
-    // Keep modes and denied_fields split by target (like views): a collection
-    // and a global may share a slug, so merging into one slug-keyed map would
-    // let one clobber the other's delivery mode / field denials.
+    // Keep modes split by target (like views): a collection and a global may
+    // share a slug, so merging into one slug-keyed map would let one clobber the
+    // other's delivery mode.
     Ok(SubscribeAccess {
         collection_views: col_state.views,
         global_views: global_state.views,
-        collection_denied_fields: col_state.denied_fields,
-        global_denied_fields: global_state.denied_fields,
         collection_modes: col_state.modes,
         global_modes: global_state.modes,
         user_doc: auth_user.map(|au| au.user_doc),

@@ -119,6 +119,19 @@ pub(super) fn setup_lua() -> Lua {
             error("access check failed!")
         end
 
+        -- Data-aware field access: allow only when this field's OWN level
+        -- (ctx.data, the array/blocks row at top level the document) has
+        -- kind == "public". Proves per-row `ctx.data` wiring.
+        function access.allow_if_kind_public(ctx)
+            return ctx.data ~= nil and ctx.data.kind == "public"
+        end
+
+        -- Data-aware field access: allow only when the FULL document
+        -- (ctx.document) is published — stable as the walk descends into rows.
+        function access.allow_if_doc_published(ctx)
+            return ctx.document ~= nil and ctx.document.status == "published"
+        end
+
         function access.check_locale(ctx)
             if ctx.locale == "en" then
                 return true

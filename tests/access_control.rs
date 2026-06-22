@@ -141,6 +141,7 @@ fn no_access_ref_allows() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: None,
                 user: None,
                 id: None,
@@ -164,6 +165,7 @@ fn anyone_allows_anonymous() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: Some(&HookRef::new("access.anyone")),
                 user: None,
                 id: None,
@@ -187,6 +189,7 @@ fn authenticated_denies_anonymous() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: Some(&HookRef::new("access.authenticated")),
                 user: None,
                 id: None,
@@ -211,6 +214,7 @@ fn authenticated_allows_user() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: Some(&HookRef::new("access.authenticated")),
                 user: Some(&editor),
                 id: None,
@@ -235,6 +239,7 @@ fn admin_only_denies_editor() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: Some(&HookRef::new("access.admin_only")),
                 user: Some(&editor),
                 id: None,
@@ -259,6 +264,7 @@ fn admin_only_allows_admin() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: Some(&HookRef::new("access.admin_only")),
                 user: Some(&admin),
                 id: None,
@@ -288,6 +294,7 @@ fn published_or_author_allows_anonymous_to_read_published() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: Some(&HookRef::new("access.published_or_author")),
                 user: None,
                 id: None,
@@ -313,6 +320,7 @@ fn published_or_author_allows_admin() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: Some(&HookRef::new("access.published_or_author")),
                 user: Some(&admin),
                 id: None,
@@ -441,6 +449,7 @@ fn access_check_plus_db_query_end_to_end() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: posts.access.read.as_ref(),
                 user: None,
                 id: None,
@@ -460,6 +469,7 @@ fn access_check_plus_db_query_end_to_end() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: posts.access.read.as_ref(),
                 user: Some(&admin),
                 id: None,
@@ -482,6 +492,7 @@ fn access_check_plus_db_query_end_to_end() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: posts.access.delete.as_ref(),
                 user: None,
                 id: None,
@@ -508,6 +519,7 @@ fn runner_read_hooks_override_bypasses_collection_access() {
     let conn = pool.get().unwrap();
 
     let input = AccessCheckInput {
+        document: None,
         access: Some(&HookRef::new("access.admin_only")),
         user: None,
         id: None,
@@ -667,6 +679,7 @@ fn no_access_config_means_allowed() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: None,
                 user: None,
                 id: None,
@@ -689,6 +702,7 @@ fn no_access_config_means_allowed() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: None,
                 user: Some(&editor),
                 id: None,
@@ -984,6 +998,7 @@ fn default_deny_true_no_access_ref_returns_denied() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: None,
                 user: None,
                 id: None,
@@ -1006,6 +1021,7 @@ fn default_deny_true_no_access_ref_returns_denied() {
     let result = runner
         .check_access(
             &AccessCheckInput {
+                document: None,
                 access: None,
                 user: Some(&user),
                 id: None,
