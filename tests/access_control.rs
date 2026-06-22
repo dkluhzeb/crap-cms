@@ -599,6 +599,67 @@ fn field_read_access_strips_denied_fields() {
 }
 
 #[test]
+fn batched_field_read_strip_uses_per_document_context() {
+    // The list-read batch (`strip_read_access_batch`) acquires ONE Lua VM for the
+    // whole list, but each document must still be stripped against its OWN
+    // `ctx.document`. The `secret` field is readable only when `document.public`
+    // is true, so the public doc keeps it and the private doc loses it — proving
+    // per-document context survives the shared VM lease.
+    let (_tmp, pool, _registry, runner) = setup();
+    let conn = pool.get().unwrap();
+
+    let fields = vec![
+        crap_cms::core::FieldDefinition {
+            name: "public".to_string(),
+            field_type: crap_cms::core::field::FieldType::Checkbox,
+            ..Default::default()
+        },
+        crap_cms::core::FieldDefinition {
+            name: "title".to_string(),
+            field_type: crap_cms::core::field::FieldType::Text,
+            ..Default::default()
+        },
+        crap_cms::core::FieldDefinition {
+            name: "secret".to_string(),
+            field_type: crap_cms::core::field::FieldType::Textarea,
+            access: crap_cms::core::field::FieldAccess {
+                read: Some(HookRef::new("access.field_read_if_public")),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    ];
+
+    let mut public_doc = Document::new("d1".to_string());
+    public_doc.fields.insert("public".into(), json!(true));
+    public_doc.fields.insert("title".into(), json!("t1"));
+    public_doc.fields.insert("secret".into(), json!("s1"));
+
+    let mut private_doc = Document::new("d2".to_string());
+    private_doc.fields.insert("public".into(), json!(false));
+    private_doc.fields.insert("title".into(), json!("t2"));
+    private_doc.fields.insert("secret".into(), json!("s2"));
+
+    let mut docs = vec![public_doc, private_doc];
+    runner.strip_read_access_batch(&fields, &mut docs, None, None, &conn);
+
+    assert_eq!(
+        docs[0].fields.get("secret"),
+        Some(&json!("s1")),
+        "public doc must keep its secret (document.public == true)"
+    );
+    assert_eq!(
+        docs[1].fields.get("secret"),
+        None,
+        "private doc must have its secret stripped (document.public == false)"
+    );
+    assert!(
+        docs[0].fields.get("title").is_some() && docs[1].fields.get("title").is_some(),
+        "non-access-controlled fields are retained on every doc"
+    );
+}
+
+#[test]
 fn field_write_access_strips_denied_fields() {
     // Test check_field_write_access() for create vs update operations.
     // A field with a create-deny should be denied on create but not on update,

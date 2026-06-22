@@ -3,13 +3,13 @@
 use anyhow::Result;
 use serde_json::{Map, Value};
 
-use crate::core::{Document, DocumentFields, FieldDefinition, FieldType};
+use crate::core::{
+    Document, DocumentFields, FieldDefinition, FieldType, flatten_group_fields, prefixed_name,
+    walk_leaf_fields,
+};
 use crate::db::{
     DbConnection,
-    query::{
-        helpers::{prefixed_name, tz_column},
-        join::hydrate_document,
-    },
+    query::{helpers::tz_column, join::hydrate_document},
 };
 
 /// Build a JSON snapshot of a document's current state (fields + join data).
@@ -45,114 +45,61 @@ fn is_scalar_snapshot_value(val: &Value) -> bool {
 }
 
 /// Extract flat field data from a snapshot for the UPDATE statement (version
-/// restore). Group fields are expanded to `field__subfield` sub-columns — the
-/// same nested→flat mapping as [`crate::core::flatten_group_fields`], but kept
-/// bespoke here because it ALSO accepts the **flat** snapshot form: current
-/// snapshots are nested (`build_snapshot` hydrates), but legacy snapshots stored
-/// before group hydration may be flat, so restore must read either. Restore
-/// feeds the result straight to `update()` (which flattens again, idempotently),
-/// so this stays shape-agnostic rather than routing through the canonical pair.
+/// restore). Group fields are expanded to `field__subfield` sub-columns.
+///
+/// Snapshots are stored nested (`build_snapshot` hydrates groups), but legacy
+/// snapshots written before group hydration may be flat. [`flatten_group_fields`]
+/// accepts either shape and yields the canonical flat `group__sub` columns
+/// (idempotent), so extraction is a single flat-column pass over the schema via
+/// [`walk_leaf_fields`] — no bespoke nested/flat merge. Only scalar, non-localized
+/// columns that live on the parent row are taken; localized columns (separate
+/// locale columns), join-table data (arrays/blocks/has-many), and
+/// `created_at`/`updated_at` are handled elsewhere. Date `__tz` companions ride
+/// along with their owning column.
 pub(super) fn extract_snapshot_data(
     obj: &Map<String, Value>,
     fields: &[FieldDefinition],
     locales_enabled: bool,
 ) -> DocumentFields {
-    extract_snapshot_recursive(obj, fields, locales_enabled, "", false)
-}
+    let as_fields: DocumentFields = obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let flat = flatten_group_fields(&as_fields, fields);
 
-/// Inner recursive extraction with prefix support.
-/// `prefix` uses the standard `prefixed_name` convention (no trailing `__`).
-fn extract_snapshot_recursive(
-    obj: &Map<String, Value>,
-    fields: &[FieldDefinition],
-    locales_enabled: bool,
-    prefix: &str,
-    inherited_localized: bool,
-) -> DocumentFields {
     let mut data = DocumentFields::new();
 
-    for field in fields {
-        match field.field_type {
-            FieldType::Group => {
-                let new_prefix = prefixed_name(prefix, &field.name);
-
-                data.extend(extract_snapshot_recursive(
-                    obj,
-                    &field.fields,
-                    locales_enabled,
-                    &new_prefix,
-                    inherited_localized || field.localized,
-                ));
-
-                // Also try nested object format (e.g., `seo: { title: ... }`)
-                if let Some(nested_obj) = obj.get(&field.name).and_then(|v| v.as_object()) {
-                    for (k, v) in extract_snapshot_recursive(
-                        nested_obj,
-                        &field.fields,
-                        locales_enabled,
-                        &new_prefix,
-                        inherited_localized || field.localized,
-                    ) {
-                        data.entry(k).or_insert(v);
-                    }
-                }
+    let _ = walk_leaf_fields(
+        fields,
+        "",
+        false,
+        &mut |field, prefix, inherited_localized| {
+            if !field.has_parent_column() {
+                return Ok(());
             }
 
-            FieldType::Row | FieldType::Collapsible => {
-                data.extend(extract_snapshot_recursive(
-                    obj,
-                    &field.fields,
-                    locales_enabled,
-                    prefix,
-                    inherited_localized,
-                ));
+            if (inherited_localized || field.localized) && locales_enabled {
+                return Ok(());
             }
 
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    data.extend(extract_snapshot_recursive(
-                        obj,
-                        &tab.fields,
-                        locales_enabled,
-                        prefix,
-                        inherited_localized,
-                    ));
-                }
+            let key = prefixed_name(prefix, &field.name);
+
+            if let Some(val) = flat.get(&key)
+                && is_scalar_snapshot_value(val)
+            {
+                data.insert(key.clone(), val.clone());
             }
 
-            _ => {
-                if !field.has_parent_column() {
-                    continue;
-                }
+            if field.field_type == FieldType::Date && field.timezone {
+                let tz_key = tz_column(&key);
 
-                let is_localized = (inherited_localized || field.localized) && locales_enabled;
-
-                if is_localized {
-                    continue;
-                }
-
-                let key = prefixed_name(prefix, &field.name);
-
-                if let Some(val) = obj.get(&key).or_else(|| obj.get(&field.name))
-                    && is_scalar_snapshot_value(val)
+                if let Some(tz_val) = flat.get(&tz_key)
+                    && is_scalar_snapshot_value(tz_val)
                 {
-                    data.insert(key.clone(), val.clone());
-                }
-
-                if field.field_type == FieldType::Date && field.timezone {
-                    let tz_key = tz_column(&key);
-
-                    if let Some(tz_val) = obj
-                        .get(&tz_key)
-                        .or_else(|| obj.get(&tz_column(&field.name)))
-                        && is_scalar_snapshot_value(tz_val)
-                    {
-                        data.insert(tz_key, tz_val.clone());
-                    }
+                    data.insert(tz_key, tz_val.clone());
                 }
             }
-        }
-    }
+
+            Ok(())
+        },
+    );
 
     data
 }

@@ -110,15 +110,16 @@ pub fn search_documents(
         }
     }
 
-    // Field-read access is data-aware (per-doc, per-row); the API-hidden set is
+    // Field-read access is data-aware (per-doc, per-row), stripped in ONE batch
+    // so the Lua VM is acquired once for the whole list. The API-hidden set is
     // document-independent and computed once.
     let access_locale = input.locale_ctx.map(LocaleContext::access_locale);
     let api_hidden = helpers::collect_api_hidden_field_names(&def.fields, "");
 
-    for doc in &mut docs {
-        hooks.strip_read_access_doc(&def.fields, doc, ctx.user, access_locale);
+    hooks.strip_read_access_docs(&def.fields, &mut docs, ctx.user, access_locale);
 
-        if !api_hidden.is_empty() {
+    if !api_hidden.is_empty() {
+        for doc in &mut docs {
             doc.strip_fields(&api_hidden);
         }
     }

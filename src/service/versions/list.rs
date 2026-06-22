@@ -95,7 +95,10 @@ pub fn list_versions(
     // Strip read-denied + API-hidden fields from every snapshot — parity with
     // `find_version_by_id`; otherwise denied fields leak through the list.
     // Field-read access is data-aware (per-snapshot), so evaluate it per row; the
-    // API-hidden set is document-independent and computed once.
+    // API-hidden set is document-independent and computed once. Unlike the
+    // collection list read, this isn't VM-batched: a single document's version
+    // history is bounded (by `max_versions`) and the `Vec<Version>` layout has no
+    // contiguous `&mut [Value]` of snapshots to hand a batch.
     let fields = ctx.fields()?;
     let api_hidden = crate::service::helpers::collect_api_hidden_field_names(fields, "");
 

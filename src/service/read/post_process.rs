@@ -175,14 +175,15 @@ fn strip_read_denied_from_docs(
     registry: Option<&Registry>,
 ) {
     // Field-read access is data-aware (per-doc, per-row), so evaluate it on each
-    // document rather than precomputing one denial list. The API-hidden set is
-    // document-independent — compute it once and apply per doc.
+    // document — but in ONE batch so the Lua VM is acquired once for the whole
+    // list, not per doc. The API-hidden set is document-independent (compute once,
+    // apply per doc).
     let api_hidden = helpers::collect_api_hidden_field_names(fields, "");
 
-    for doc in docs.iter_mut() {
-        hooks.strip_read_access_doc(fields, doc, user, locale);
+    hooks.strip_read_access_docs(fields, docs, user, locale);
 
-        if !api_hidden.is_empty() {
+    if !api_hidden.is_empty() {
+        for doc in docs.iter_mut() {
             doc.strip_fields(&api_hidden);
         }
     }

@@ -249,6 +249,61 @@ impl HookRunner {
         strip_read_access_with_lua(&lua, fields, level, document, user, locale);
     }
 
+    /// Batched [`strip_read_access`](Self::strip_read_access) for a list read:
+    /// acquire the Lua VM and set the `TxContext` **once** for the whole batch,
+    /// then strip each document under that single lease. This is the documented
+    /// per-query perf model (one VM held across all docs); only the in-VM Lua
+    /// eval is per-doc — the per-document pool-mutex + `TxContext` churn is gone.
+    /// Each document still gets its own `ctx.document` (the full pre-strip doc)
+    /// and per-row `ctx.data`. Skips VM acquisition when no field carries an
+    /// `access.read` function.
+    ///
+    /// Fail-closed: if the Lua VM pool is exhausted, every read-access-controlled
+    /// field (at any depth) is stripped from every document in the batch.
+    pub fn strip_read_access_batch(
+        &self,
+        fields: &[FieldDefinition],
+        docs: &mut [Document],
+        user: Option<&Document>,
+        locale: Option<&str>,
+        conn: &dyn DbConnection,
+    ) {
+        if docs.is_empty() || !has_any_field_access(fields, |f| f.access.read.as_ref()) {
+            return;
+        }
+
+        let lua = match self.pool.acquire() {
+            Ok(l) => Some(l),
+            Err(e) => {
+                error!("Lua VM pool exhausted during batched field read access strip: {e}");
+
+                None
+            }
+        };
+
+        // Hold the VM + TxContext for the entire batch (set once). When the pool
+        // is exhausted `lua` is None and every doc fails closed below.
+        let lua = lua.as_ref();
+        let _guard = lua.map(|l| TxContextGuard::set(l, conn, None, None, None));
+
+        for doc in docs.iter_mut() {
+            let document = doc.fields.clone();
+            let mut level: Map<String, serde_json::Value> = std::mem::take(&mut doc.fields)
+                .into_inner()
+                .into_iter()
+                .collect();
+
+            match lua {
+                Some(l) => {
+                    strip_read_access_with_lua(l, fields, &mut level, &document, user, locale);
+                }
+                None => strip_read_access_data_aware(fields, &mut level, &|_hook, _data| true),
+            }
+
+            doc.fields = level.into_iter().collect();
+        }
+    }
+
     /// Data-aware field-**write** strip (create/update) for pool surfaces:
     /// acquire a VM with `conn` threaded, then remove from `level` every field
     /// the user may not write under `operation`. `document` is the full incoming

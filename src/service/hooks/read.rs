@@ -104,6 +104,23 @@ pub trait ReadHooks {
         doc.fields = level.into_iter().collect();
     }
 
+    /// Batched form of [`strip_read_access_doc`](Self::strip_read_access_doc)
+    /// for a list read. The default loops per document; [`RunnerReadHooks`]
+    /// overrides it to acquire the Lua VM **once** for the whole batch (the
+    /// per-query perf model) instead of once per document. Each document is
+    /// still stripped against its own `ctx.document` / per-row `ctx.data`.
+    fn strip_read_access_docs(
+        &self,
+        fields: &[FieldDefinition],
+        docs: &mut [Document],
+        user: Option<&Document>,
+        locale: Option<&str>,
+    ) {
+        for doc in docs.iter_mut() {
+            self.strip_read_access_doc(fields, doc, user, locale);
+        }
+    }
+
     /// Convenience over [`strip_read_access_map`](Self::strip_read_access_map):
     /// strip read-denied fields from a version-snapshot `Value::Object` in place
     /// (no-op for a non-object snapshot). The snapshot is its own `ctx.document`.
@@ -212,6 +229,20 @@ impl ReadHooks for RunnerReadHooks<'_> {
         }
         self.runner
             .strip_read_access(fields, level, document, user, locale, self.conn);
+    }
+
+    fn strip_read_access_docs(
+        &self,
+        fields: &[FieldDefinition],
+        docs: &mut [Document],
+        user: Option<&Document>,
+        locale: Option<&str>,
+    ) {
+        if self.override_access {
+            return;
+        }
+        self.runner
+            .strip_read_access_batch(fields, docs, user, locale, self.conn);
     }
 }
 
