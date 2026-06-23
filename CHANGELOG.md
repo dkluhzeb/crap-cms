@@ -1060,22 +1060,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   carry the authenticated user and admin UI locale, and the per-operation
   content locale is threaded to `before_read` on both paths.
 
-- **`before_broadcast` hooks and `live` filter functions now receive
-  `document_id` and `edited_by`.** They previously got only
+- **`before_broadcast` hooks and `live` filter functions now receive the
+  affected document's id and editing user.** They previously got only
   `{ collection, operation, data }`, so a broadcast filter could not identify
   which document changed or who changed it — making the canonical "don't echo a
   user's own edits back to them" filter impossible. Both are now on the context
-  as `ctx.document_id` (string) and `ctx.edited_by` (`{ id, email }`, nil for
-  anonymous changes).
+  as `ctx.id` (string) and `ctx.edited_by` (`{ id, email }`, nil for anonymous
+  changes). (The serialized event payload sent to subscribers calls the same id
+  `document_id`.)
 
-- **Collection write hooks now receive `ctx.document_id`.** `before_change`,
-  `after_change`, `before_delete`, and `after_delete` previously never had the
-  affected document's id set on the context (it was populated only on
+- **Collection write hooks now receive the affected document's id (`ctx.id`).**
+  `before_change`, `after_change`, `before_delete`, and `after_delete` previously
+  never had the affected document's id set on the context (it was populated only on
   broadcast/event hooks), and the incoming `data` need not carry `id` — so a
   `before_change` hook had no reliable way to identify which document it was
   editing. This made the canonical old-vs-new guard (fetch the persisted
-  document via `crap.collections.find_by_id(ctx.collection, ctx.document_id)` and
-  compare) impossible in before-hooks. `document_id` is now set on every
+  document via `crap.collections.find_by_id(ctx.collection, ctx.id)` and
+  compare) impossible in before-hooks. The id is now set on every
   collection write-hook context (the new document's id on `create`'s
   `after_change`; `nil` on `create`'s before-hooks, where no document exists yet)
   and on globals (`"default"`).
