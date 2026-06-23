@@ -152,26 +152,6 @@ impl CollectionDefinition {
         resolve_label(self.labels.singular.as_ref(), &self.slug, None)
     }
 
-    /// Get the display label resolved for a specific locale.
-    #[must_use]
-    pub fn display_name_for(&self, locale: &str, default_locale: &str) -> &str {
-        resolve_label(
-            self.labels.plural.as_ref(),
-            &self.slug,
-            Some((locale, default_locale)),
-        )
-    }
-
-    /// Get the singular label resolved for a specific locale.
-    #[must_use]
-    pub fn singular_name_for(&self, locale: &str, default_locale: &str) -> &str {
-        resolve_label(
-            self.labels.singular.as_ref(),
-            &self.slug,
-            Some((locale, default_locale)),
-        )
-    }
-
     /// Get the field name to use as item title in admin lists.
     #[must_use]
     pub fn title_field(&self) -> Option<&str> {
@@ -241,7 +221,6 @@ impl CollectionDefinition {
 mod tests {
     use super::*;
     use crate::core::{HookRef, LocalizedString, upload::CollectionUpload};
-    use std::collections::HashMap;
 
     fn make_collection(
         slug: &str,
@@ -404,59 +383,6 @@ mod tests {
         assert!(col.publicly_exposed_lifecycle_views(false).is_empty());
     }
 
-    fn make_localized_collection() -> CollectionDefinition {
-        let mut labels = HashMap::new();
-        labels.insert("en".to_string(), "Posts".to_string());
-        labels.insert("de".to_string(), "Beiträge".to_string());
-
-        let mut singular_labels = HashMap::new();
-        singular_labels.insert("en".to_string(), "Post".to_string());
-        singular_labels.insert("de".to_string(), "Beitrag".to_string());
-
-        let mut def = CollectionDefinition::new("posts");
-        def.labels = Labels {
-            singular: Some(LocalizedString::Localized(singular_labels)),
-            plural: Some(LocalizedString::Localized(labels)),
-        };
-        def
-    }
-
-    #[test]
-    fn display_name_for_returns_locale() {
-        let col = make_localized_collection();
-        assert_eq!(col.display_name_for("de", "en"), "Beiträge");
-    }
-
-    #[test]
-    fn display_name_for_falls_back_to_default_locale() {
-        let col = make_localized_collection();
-        assert_eq!(col.display_name_for("fr", "en"), "Posts");
-    }
-
-    #[test]
-    fn display_name_for_falls_back_to_slug() {
-        let col = make_collection("posts", None, None, None);
-        assert_eq!(col.display_name_for("de", "en"), "posts");
-    }
-
-    #[test]
-    fn singular_name_for_returns_locale() {
-        let col = make_localized_collection();
-        assert_eq!(col.singular_name_for("de", "en"), "Beitrag");
-    }
-
-    #[test]
-    fn singular_name_for_falls_back_to_default_locale() {
-        let col = make_localized_collection();
-        assert_eq!(col.singular_name_for("fr", "en"), "Post");
-    }
-
-    #[test]
-    fn singular_name_for_falls_back_to_slug() {
-        let col = make_collection("posts", None, None, None);
-        assert_eq!(col.singular_name_for("de", "en"), "posts");
-    }
-
     #[test]
     fn display_name_empty_string_falls_back_to_slug() {
         let col = make_collection("posts", None, Some(""), None);
@@ -467,17 +393,6 @@ mod tests {
     fn singular_name_empty_string_falls_back_to_slug() {
         let col = make_collection("posts", Some(""), None, None);
         assert_eq!(col.singular_name(), "posts");
-    }
-
-    #[test]
-    fn display_name_for_empty_localized_falls_back_to_slug() {
-        let labels = HashMap::new();
-        let mut col = CollectionDefinition::new("posts");
-        col.labels = Labels {
-            singular: None,
-            plural: Some(LocalizedString::Localized(labels)),
-        };
-        assert_eq!(col.display_name_for("en", "en"), "posts");
     }
 
     #[test]

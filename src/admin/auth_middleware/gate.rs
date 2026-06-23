@@ -114,21 +114,7 @@ pub(crate) async fn check_collection_admin_gate(
     let user_doc = user_doc.clone();
 
     let result = spawn_blocking(move || {
-        let conn = pool.get().ok()?;
-        Some(hook_runner.check_access(
-            &AccessCheckInput {
-                document: None,
-                access: Some(&access),
-                user: Some(&user_doc),
-                id: None,
-                data: None,
-                locale: None,
-                operation: "admin",
-                collection: &slug_owned,
-                ui_locale: None,
-            },
-            &conn,
-        ))
+        check_collection_admin_access_blocking(&pool, &hook_runner, &access, &slug_owned, &user_doc)
     })
     .await;
 
@@ -144,4 +130,34 @@ pub(crate) async fn check_collection_admin_gate(
             Some(admin_denied_response(state))
         }
     }
+}
+
+/// `spawn_blocking` body for [`check_collection_admin_gate`]: run the
+/// per-collection / per-global `access.admin` Lua hook against `user_doc`. Mirror
+/// of [`check_admin_access_blocking`] but keyed to `slug` (the operation runs
+/// with `collection = slug`). Returns `None` on pool exhaustion so the caller
+/// fails **closed**.
+#[cfg(not(tarpaulin_include))]
+fn check_collection_admin_access_blocking(
+    pool: &DbPool,
+    hook_runner: &HookRunner,
+    access: &HookRef,
+    slug: &str,
+    user_doc: &Document,
+) -> Option<Result<query::AccessResult, anyhow::Error>> {
+    let conn = pool.get().ok()?;
+    Some(hook_runner.check_access(
+        &AccessCheckInput {
+            document: None,
+            access: Some(access),
+            user: Some(user_doc),
+            id: None,
+            data: None,
+            locale: None,
+            operation: "admin",
+            collection: slug,
+            ui_locale: None,
+        },
+        &conn,
+    ))
 }

@@ -19,6 +19,7 @@ use tracing::{error, warn};
 use crate::{
     admin::{
         AdminState,
+        auth_middleware::check_admin_gate_for_doc,
         handlers::{
             auth::{
                 client_ip, create_session_token, extract_user_email, headers_to_map,
@@ -185,6 +186,19 @@ pub(super) async fn complete_auth_callback(
         return Redirect::to(paths::LOGIN).into_response();
     };
 
+    // Authentication succeeded — clear the IP limiter (mirror the password login
+    // path, which clears before the gate check so a denied user doesn't count
+    // toward the threshold).
+    state.ip_login_limiter.clear(&ip);
+
+    // Enforce the `admin.access` gate BEFORE minting a session — parity with the
+    // password login path. Without this a denied user still gets a valid session
+    // cookie and is only stopped by the middleware on first page load (a useless
+    // cookie + 403 instead of a clean denial).
+    if let Some(response) = check_admin_gate_for_doc(state, &user).await {
+        return response;
+    }
+
     let email = extract_user_email(&user);
 
     let session = match create_session_token(
@@ -201,8 +215,6 @@ pub(super) async fn complete_auth_callback(
             return Redirect::to(paths::LOGIN).into_response();
         }
     };
-
-    state.ip_login_limiter.clear(&ip);
 
     session_redirect(state, &session)
 }

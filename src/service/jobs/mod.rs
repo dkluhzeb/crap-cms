@@ -1,8 +1,12 @@
 //! Job service layer — access-controlled wrappers around job query functions.
 //!
-//! Every job read/write path enforces the job's single access hook
+//! The network-reachable paths enforce the job's single access hook
 //! (`JobDefinition.access`): `queue_job` with operation `"trigger"`,
 //! `list_job_runs`/`get_job_run` with operation `"read"`. See [`access`].
+//!
+//! [`cancel_pending_jobs`] is the exception — an unguarded admin/CLI primitive
+//! (used by `crap-cms jobs cancel`) that takes a raw connection and runs **no**
+//! access check. Do not wire it into an untrusted surface without adding a gate.
 
 mod access;
 mod cancel;

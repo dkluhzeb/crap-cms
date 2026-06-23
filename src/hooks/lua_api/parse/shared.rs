@@ -44,9 +44,10 @@ pub(super) const ACCESS_KEYS: &[&str] = &[
 /// disabled — the rule parses and is stored, but the runtime gates on the
 /// feature flag first and never reaches the hook. Advisory only (the config is
 /// safe, just dead), surfacing a likely author mistake. `kind` is `"Collection"`
-/// or `"Global"`. `trash` is omitted here: collections cover it via
-/// `soft_delete`-aware messaging is not needed (a non-soft-delete collection
-/// simply has no trash view), and globals reject `access.trash` outright.
+/// or `"Global"`. Checks `draft` (needs `versions.drafts`), `trash` (needs
+/// `soft_delete`), and `versions` (needs `versions`); the always-applicable keys
+/// (`read`/`create`/`update`/`delete`/`unlock`/`admin`/`mcp`) have no feature
+/// prerequisite and so are not warned about here.
 pub(super) fn warn_access_keys_without_features(
     kind: &str,
     slug: &str,
@@ -345,7 +346,7 @@ pub(super) fn parse_indexes(config: &Table) -> LuaResult<Vec<IndexDefinition>> {
 /// # Errors
 ///
 /// Returns an error if any of `read`/`create`/`update`/`delete`/`trash`/`draft`/
-/// `versions` is present but not a valid hook ref.
+/// `versions`/`unlock`/`admin`/`mcp` is present but not a valid hook ref.
 pub(super) fn parse_access_config(config: &Table) -> Result<Access> {
     let Ok(access_tbl) = get_table(config, "access") else {
         return Ok(Access::default());

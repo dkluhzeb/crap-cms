@@ -628,6 +628,33 @@ mod tests {
         def
     }
 
+    /// Test helper: an `Always`-active strategy on the admin surface.
+    fn strategy_always(name: &str, authenticate: &str) -> AuthMethod {
+        AuthMethod::Strategy {
+            name: name.to_string(),
+            authenticate: HookRef::new(authenticate),
+            activates_on: Activation::always(),
+            surfaces: SurfaceSet::admin_only(),
+        }
+    }
+
+    /// Test helper: a header-discriminated strategy on the given surfaces.
+    fn strategy_on_header(
+        name: &str,
+        authenticate: &str,
+        header: &str,
+        surfaces: SurfaceSet,
+    ) -> AuthMethod {
+        AuthMethod::Strategy {
+            name: name.to_string(),
+            authenticate: HookRef::new(authenticate),
+            activates_on: Activation::Header {
+                header: header.to_string(),
+            },
+            surfaces,
+        }
+    }
+
     #[test]
     fn check_auth_methods_clean_default_methods_emits_nothing() {
         let reg = registry_with(vec![auth_def_with("users", Auth::default_methods())]);
@@ -702,7 +729,7 @@ mod tests {
 
     #[test]
     fn check_auth_methods_header_activated_strategy_does_not_warn() {
-        let api_key = AuthMethod::strategy_on_header(
+        let api_key = strategy_on_header(
             "api-key",
             "hooks.auth.api_key",
             "x-api-key",
@@ -724,7 +751,7 @@ mod tests {
         // first depends on HashMap iteration order — almost always
         // a config mistake.
         let mk_strategy = |name: &str| {
-            AuthMethod::strategy_on_header(
+            strategy_on_header(
                 name,
                 "hooks.auth.api_key",
                 "x-api-key",
@@ -771,7 +798,7 @@ mod tests {
                 vec![
                     AuthMethod::password_login(),
                     AuthMethod::bearer(),
-                    AuthMethod::strategy_on_header(
+                    strategy_on_header(
                         "lower",
                         "hooks.auth.lower",
                         "x-api-key",
@@ -784,7 +811,7 @@ mod tests {
                 vec![
                     AuthMethod::password_login(),
                     AuthMethod::bearer(),
-                    AuthMethod::strategy_on_header(
+                    strategy_on_header(
                         "upper",
                         "hooks.auth.upper",
                         "X-API-KEY",
@@ -812,13 +839,13 @@ mod tests {
             vec![
                 AuthMethod::password_login(),
                 AuthMethod::bearer(),
-                AuthMethod::strategy_on_header(
+                strategy_on_header(
                     "api-key",
                     "hooks.auth.api_key",
                     "x-api-key",
                     SurfaceSet::grpc_only(),
                 ),
-                AuthMethod::strategy_on_header(
+                strategy_on_header(
                     "sso",
                     "hooks.auth.sso",
                     "x-sso-assertion",
@@ -846,7 +873,7 @@ mod tests {
                 vec![
                     AuthMethod::password_login(),
                     AuthMethod::bearer(),
-                    AuthMethod::strategy_on_header(
+                    strategy_on_header(
                         "admin-key",
                         "hooks.auth.admin",
                         "x-api-key",
@@ -859,7 +886,7 @@ mod tests {
                 vec![
                     AuthMethod::password_login(),
                     AuthMethod::bearer(),
-                    AuthMethod::strategy_on_header(
+                    strategy_on_header(
                         "grpc-key",
                         "hooks.auth.grpc",
                         "x-api-key",
@@ -886,7 +913,7 @@ mod tests {
             "users",
             vec![
                 AuthMethod::bearer(),
-                AuthMethod::strategy_always("mtls", "hooks.auth.mtls"),
+                strategy_always("mtls", "hooks.auth.mtls"),
             ],
         )]);
         let mut findings = Vec::new();

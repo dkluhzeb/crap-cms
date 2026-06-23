@@ -79,16 +79,6 @@ impl GlobalDefinition {
         resolve_label(self.labels.singular.as_ref(), &self.slug, None)
     }
 
-    /// Get the display label resolved for a specific locale.
-    #[must_use]
-    pub fn display_name_for(&self, locale: &str, default_locale: &str) -> &str {
-        resolve_label(
-            self.labels.singular.as_ref(),
-            &self.slug,
-            Some((locale, default_locale)),
-        )
-    }
-
     /// Check if this global has versioning enabled.
     #[must_use]
     pub fn has_versions(&self) -> bool {
@@ -120,7 +110,6 @@ impl GlobalDefinition {
 mod tests {
     use super::*;
     use crate::core::{HookRef, LocalizedString};
-    use std::collections::HashMap;
 
     fn make_global(slug: &str, singular: Option<&str>) -> GlobalDefinition {
         let mut def = GlobalDefinition::new(slug);
@@ -147,26 +136,6 @@ mod tests {
     fn global_display_name_empty_falls_back_to_slug() {
         let g = make_global("site_settings", Some(""));
         assert_eq!(g.display_name(), "site_settings");
-    }
-
-    #[test]
-    fn global_display_name_for_locale() {
-        let mut labels = HashMap::new();
-        labels.insert("en".to_string(), "Site Settings".to_string());
-        labels.insert("de".to_string(), "Seiteneinstellungen".to_string());
-        let mut g = GlobalDefinition::new("site_settings");
-        g.labels = Labels {
-            singular: Some(LocalizedString::Localized(labels)),
-            plural: None,
-        };
-        assert_eq!(g.display_name_for("de", "en"), "Seiteneinstellungen");
-        assert_eq!(g.display_name_for("fr", "en"), "Site Settings");
-    }
-
-    #[test]
-    fn global_display_name_for_falls_back_to_slug() {
-        let g = make_global("site_settings", None);
-        assert_eq!(g.display_name_for("de", "en"), "site_settings");
     }
 
     #[test]

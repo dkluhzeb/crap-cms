@@ -498,7 +498,7 @@ function crap.fields.join(config) end
 --- @field delete? string | crap.HookRef Hook ref for delete access control.
 --- @field trash? string | crap.HookRef Hook ref for soft-delete (trash) access control. Falls back to `update` when unset, so most collections don't set this explicitly. Set to lock trashing behind a different policy than update — e.g. only editors can trash, but authors can still update their own drafts.
 --- @field draft? string | crap.HookRef Hook ref for reading draft (unpublished) content — a read that opts into drafts (`draft = true` / `use_draft` / `include_drafts`). Falls back to `update` when unset, so previewing a draft requires edit-level access by default (drafts are not exposed to plain readers). Set to gate draft previews behind a different policy than editing.
---- @field versions? string | crap.HookRef Hook ref restricting access to version history — a *toggle*, not a per-snapshot filter. Unlike `trash`/`draft` it has NO `update` fallback: unset means **allow**, so history visibility follows the regular per-snapshot composite (`read` for published snapshots, `draft` for draft snapshots). Set it to lock the version timeline behind a stricter policy than reading the document — e.g. only editors may inspect history even though anyone may read the published doc. The function returns `true`/`false` (`ctx`-based); returning a filter table is rejected (row-level scoping is `read`'s job).
+--- @field versions? string | crap.HookRef Hook ref restricting access to version history — a *toggle*, not a per-snapshot filter. Like `trash`/`draft` it **falls back to `update`** when unset, so by default version history follows edit access: a published-only reader sees no history, while an editor does (no separate rule needed). Which *snapshots* are then visible still follows the per-snapshot composite (`read` for published snapshots, `draft` for draft snapshots). Set it to gate the version timeline behind a policy distinct from editing — e.g. let any reader inspect history, or restrict it to a subset of editors. The function returns `true`/`false` (`ctx`-based); returning a filter table is rejected (row-level scoping is `read`'s job).
 --- @field unlock? string | crap.HookRef Hook ref gating the account lock-state operations (`LockAccount` / `UnlockAccount`) on an auth collection. Falls back to `update` when unset (like `trash`/`draft`), so by default locking another user requires the same edit-level access the admin UI already enforces. Set it to carve out a *narrower* privilege than full edit — e.g. a moderator who may block logins but not change a user's email or role. Shaped like `update`: a returned filter table scopes *which* users the caller may (un)lock (e.g. `{ org = ctx.user.org }`), enforced against the target user. Only meaningful on auth collections; rejected on globals.
 --- @field admin? string | crap.HookRef Hook ref gating whether the collection is visible/usable in the **admin UI** (nav entry + its admin routes). A boolean rule (`true`/`false` based on `ctx.user`); a filter table is a configuration error (admin visibility is all-or-nothing — row scoping is `read`'s job). **Permissive default:** unset means visible, so it only ever *further* restricts admin-UI access beyond `read` — e.g. hide a collection's admin pages from non-staff even though an API client may read it. Independent of `default_deny`.
 --- @field mcp? string | crap.HookRef Hook ref gating whether the collection is exposed to the **MCP** surface (tools + resources). A boolean rule; a filter table is a configuration error (the MCP surface authenticates with a shared key, not a per-user identity, so a `ctx.user`-keyed row filter is meaningless). **Permissive default:** unset means exposed (when MCP is enabled globally), so it only ever *removes* a collection from MCP — e.g. keep an internal collection out of the LLM surface. Independent of `default_deny`.
@@ -697,7 +697,7 @@ function crap.fields.join(config) end
 --- @field read? string | crap.HookRef Hook ref for read (published) access control.
 --- @field draft? string | crap.HookRef Hook ref for reading draft (unpublished) content. Falls back to `update` when unset, so previewing a draft requires edit-level access by default.
 --- @field update? string | crap.HookRef Hook ref for update access control.
---- @field versions? string | crap.HookRef Hook ref restricting version-history visibility — a *toggle*, not a per-snapshot filter. Unset means **allow**; returning a filter table is rejected (snapshot scoping follows `read`/`draft`).
+--- @field versions? string | crap.HookRef Hook ref restricting version-history visibility — a *toggle*, not a per-snapshot filter. Falls back to `update` when unset (a published-only reader sees no history by default); returning a filter table is rejected (snapshot scoping follows `read`/`draft`).
 --- @field admin? string | crap.HookRef Hook ref gating whether the global is visible/usable in the **admin UI**. A boolean rule; unset means visible (permissive default). Filter table is a configuration error.
 --- @field mcp? string | crap.HookRef Hook ref gating whether the global is exposed to the **MCP** surface. A boolean rule; unset means exposed (permissive default). Filter table is a configuration error.
 
@@ -1621,18 +1621,26 @@ crap.access = {}
 function crap.access.check(collection, operation) end
 
 --- Return the names of fields the current user cannot read for this
---- collection/global.
+--- collection/global. Pass `document` for a data-aware check (matches the
+--- enforcement strip for that row — use it for an edit form); omit it for a
+--- categorical, role-only check (`ctx.data` / `ctx.document` nil — use it for a
+--- create form). For UI gating only — enforcement is the per-document strip.
 --- @param collection string  Collection or global slug.
+--- @param document table?  Optional document to evaluate data-dependent rules against (sets `ctx.data` / `ctx.document`). Omit for a categorical, role-only check.
 --- @return string[] # Names of fields the current user cannot read.
-function crap.access.field_read_denied(collection) end
+function crap.access.field_read_denied(collection, document) end
 
 --- Return the names of fields the current user cannot write for this
---- collection/global under the given operation (`"create"` or
---- `"update"`).
+--- collection/global under the given operation (`"create"` or `"update"`). Pass
+--- `document` for a data-aware check (matches the enforcement strip — use it for
+--- an edit form, where the row is known); omit it for a categorical, role-only
+--- check (use it for a create form). For UI gating only — enforcement is the
+--- per-document strip.
 --- @param collection string  Collection or global slug.
 --- @param operation string  Operation: `"create"` or `"update"`.
+--- @param document table?  Optional document to evaluate data-dependent rules against (sets `ctx.data` / `ctx.document`). Omit for a categorical, role-only check.
 --- @return string[] # Names of fields the current user cannot write.
-function crap.access.field_write_denied(collection, operation) end
+function crap.access.field_write_denied(collection, operation, document) end
 
 
 -- ── crap.env ─────────────────────────────────────────────────

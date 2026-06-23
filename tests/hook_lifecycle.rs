@@ -393,17 +393,6 @@ fn make_field_with_read_access(name: &str, read_ref: &str) -> FieldDefinition {
     f
 }
 
-fn make_field_with_write_access(
-    name: &str,
-    create_ref: Option<&str>,
-    update_ref: Option<&str>,
-) -> FieldDefinition {
-    let mut f = make_field(name, FieldType::Text);
-    f.access.create = create_ref.map(HookRef::new);
-    f.access.update = update_ref.map(HookRef::new);
-    f
-}
-
 // ── 3A. Access Control Tests ─────────────────────────────────────────────────
 
 #[test]
@@ -622,7 +611,8 @@ fn check_field_read_access_no_access_config() {
         make_field("body", FieldType::Textarea),
     ];
 
-    let denied = runner.check_field_read_access(&fields, "", None, None, &conn);
+    let denied =
+        runner.read_denied_names(&fields, &DocumentFields::default(), "", None, None, &conn);
     assert!(
         denied.is_empty(),
         "Fields without access config should not be in denied list, got: {denied:?}"
@@ -640,7 +630,8 @@ fn check_field_read_access_denies_field() {
         make_field("body", FieldType::Textarea),
     ];
 
-    let denied = runner.check_field_read_access(&fields, "", None, None, &conn);
+    let denied =
+        runner.read_denied_names(&fields, &DocumentFields::default(), "", None, None, &conn);
     assert_eq!(denied.len(), 1, "Should deny exactly one field");
     assert_eq!(
         denied[0].display_path(),
@@ -659,65 +650,19 @@ fn check_field_read_access_allows_with_allow_all() {
         make_field_with_read_access("hidden", "hooks.access.deny_all"),
     ];
 
-    let denied = runner.check_field_read_access(&fields, "", None, None, &conn);
+    let denied =
+        runner.read_denied_names(&fields, &DocumentFields::default(), "", None, None, &conn);
     assert_eq!(denied.len(), 1);
     assert_eq!(denied[0].display_path(), "hidden");
 }
 
-#[test]
-fn check_field_write_access_no_access_config() {
-    let (_tmp, pool, _registry, runner) = setup();
-    let conn = pool.get().expect("DB connection");
-
-    let fields = vec![
-        make_field("title", FieldType::Text),
-        make_field("body", FieldType::Textarea),
-    ];
-
-    let denied = runner.check_field_write_access(&fields, "", None, None, "create", &conn);
-    assert!(
-        denied.is_empty(),
-        "Fields without write access config should not be denied"
-    );
-}
-
-#[test]
-fn check_field_write_access_denies_field_on_create() {
-    let (_tmp, pool, _registry, runner) = setup();
-    let conn = pool.get().expect("DB connection");
-
-    let fields = vec![
-        make_field("title", FieldType::Text),
-        make_field_with_write_access("protected", Some("hooks.access.deny_all"), None),
-    ];
-
-    let denied = runner.check_field_write_access(&fields, "", None, None, "create", &conn);
-    assert_eq!(denied.len(), 1);
-    assert_eq!(denied[0].display_path(), "protected");
-}
-
-#[test]
-fn check_field_write_access_denies_field_on_update() {
-    let (_tmp, pool, _registry, runner) = setup();
-    let conn = pool.get().expect("DB connection");
-
-    let fields = vec![
-        make_field("title", FieldType::Text),
-        make_field_with_write_access("locked", None, Some("hooks.access.deny_all")),
-    ];
-
-    // On update, the "locked" field should be denied
-    let denied = runner.check_field_write_access(&fields, "", None, None, "update", &conn);
-    assert_eq!(denied.len(), 1);
-    assert_eq!(denied[0].display_path(), "locked");
-
-    // On create, no restriction since create access is None
-    let denied = runner.check_field_write_access(&fields, "", None, None, "create", &conn);
-    assert!(
-        denied.is_empty(),
-        "No create restriction defined, should be empty"
-    );
-}
+// Field-level *write* access (create-vs-update denial, no-config-allows-all) is
+// unit-tested directly against the strip logic in
+// `crap_cms::hooks::lifecycle::access::field` (`field_write_create_denied`,
+// `field_write_update_denied`, `field_write_create_vs_update_different_access`,
+// `field_write_no_access_config_allows_all`). It is not duplicated here because
+// the only production write-strip API (`strip_write_access` / `WriteStripInput`)
+// is crate-private and cannot be driven from this integration-test crate.
 
 // ── 3C. After-Read Hook Tests ────────────────────────────────────────────────
 

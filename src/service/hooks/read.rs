@@ -5,7 +5,10 @@ use anyhow::Result;
 use serde_json::{Map, Value};
 
 use crate::{
-    core::{Document, DocumentFields, FieldDefinition, HookRef, ReqContext, collection::Hooks},
+    core::{
+        Document, DocumentFields, FieldDefinition, HookRef, ReqContext, collection::Hooks,
+        nest_group_fields,
+    },
     db::{AccessResult, DbConnection, query::JoinAccessCheck},
     hooks::{
         HookRunner,
@@ -146,12 +149,24 @@ pub trait ReadHooks {
             return;
         }
 
-        let Some(level) = snapshot.as_object_mut() else {
+        let Some(obj) = snapshot.as_object() else {
             return;
         };
-        let document: DocumentFields = level.clone().into_iter().collect();
 
-        self.strip_read_access_map(fields, level, &document, collection, user, locale);
+        // Legacy snapshots may be stored in the flat `group__sub` column form,
+        // but the data-aware strip walks the canonical nested shape (group data
+        // is a nested object at every level). Normalize first so a read-denied
+        // group sub-field is stripped regardless of how the snapshot was stored;
+        // `nest_group_fields` is idempotent for the nested snapshots current code
+        // writes. Without this, an `access.read`-denied group sub-field leaked out
+        // of legacy flat snapshots.
+        let nested = nest_group_fields(&obj.clone().into_iter().collect(), fields);
+        let mut level: Map<String, Value> = nested.into_inner().into_iter().collect();
+
+        let document: DocumentFields = level.clone().into_iter().collect();
+        self.strip_read_access_map(fields, &mut level, &document, collection, user, locale);
+
+        *snapshot = Value::Object(level);
     }
 }
 
@@ -409,5 +424,108 @@ impl ReadHooks for LuaReadHooks<'_> {
             locale,
         };
         strip_read_access_with_lua(self.lua, fields, level, &input);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::{
+        core::{FieldType, collection::Hooks},
+        hooks::lifecycle::access::strip_read_access_data_aware,
+    };
+
+    /// Read hooks that strip any field whose `access.read` ref is `"deny"`,
+    /// data-aware and without a Lua VM. Mirrors what `RunnerReadHooks` does via
+    /// the pool, but with a static predicate so the snapshot strip is unit
+    /// testable. Only `strip_read_access_map` is meaningful here; the other trait
+    /// methods are inert stubs.
+    struct DenyMarkedFields;
+
+    impl ReadHooks for DenyMarkedFields {
+        fn before_read(&self, _: &Hooks, _: &str, _: &str, _: Option<&str>) -> Result<ReqContext> {
+            Ok(ReqContext::new())
+        }
+
+        fn after_read_one(&self, _: &AfterReadCtx, doc: Document) -> Document {
+            doc
+        }
+
+        fn check_access(&self, _: &AccessCheckInput<'_>) -> Result<AccessResult> {
+            Ok(AccessResult::Allowed)
+        }
+
+        fn strip_read_access_map(
+            &self,
+            fields: &[FieldDefinition],
+            level: &mut Map<String, Value>,
+            _document: &DocumentFields,
+            _collection: &str,
+            _user: Option<&Document>,
+            _locale: Option<&str>,
+        ) {
+            strip_read_access_data_aware(fields, level, &|hook, _data| hook.reference() == "deny");
+        }
+    }
+
+    fn group_schema() -> Vec<FieldDefinition> {
+        let mut token = FieldDefinition::builder("token", FieldType::Text).build();
+        token.access.read = Some(HookRef::new("deny"));
+
+        let seo = FieldDefinition::builder("seo", FieldType::Group)
+            .fields(vec![
+                token,
+                FieldDefinition::builder("public", FieldType::Text).build(),
+            ])
+            .build();
+
+        vec![
+            FieldDefinition::builder("title", FieldType::Text).build(),
+            seo,
+        ]
+    }
+
+    /// Regression: a read-denied group sub-field must be stripped from a LEGACY
+    /// FLAT (`group__sub`) snapshot, not just a nested one. The data-aware strip
+    /// walks the canonical nested shape, so `strip_read_access_value` normalizes
+    /// the snapshot first. Before the fix, `seo__token` survived (the walker
+    /// looked for a nested `seo` object that flat storage doesn't have), leaking
+    /// the denied field out of old snapshots.
+    #[test]
+    fn strip_read_access_value_strips_denied_subfield_from_flat_snapshot() {
+        let fields = group_schema();
+        let mut flat = json!({
+            "title": "Hello",
+            "seo__token": "secret",
+            "seo__public": "ok"
+        });
+
+        DenyMarkedFields.strip_read_access_value(&fields, &mut flat, "posts", None, None);
+
+        // Normalized to nested, denied sub-field gone, siblings preserved.
+        assert_eq!(
+            flat,
+            json!({ "title": "Hello", "seo": { "public": "ok" } }),
+            "denied group sub-field must be stripped from a flat snapshot"
+        );
+    }
+
+    /// The same strip is idempotent on the nested snapshots current code writes.
+    #[test]
+    fn strip_read_access_value_strips_denied_subfield_from_nested_snapshot() {
+        let fields = group_schema();
+        let mut nested = json!({
+            "title": "Hello",
+            "seo": { "token": "secret", "public": "ok" }
+        });
+
+        DenyMarkedFields.strip_read_access_value(&fields, &mut nested, "posts", None, None);
+
+        assert_eq!(
+            nested,
+            json!({ "title": "Hello", "seo": { "public": "ok" } })
+        );
     }
 }

@@ -44,14 +44,15 @@ pub struct Access {
     #[lua(ty = "string | crap.HookRef", optional)]
     pub draft: Option<HookRef>,
     /// Hook ref restricting access to version history — a *toggle*, not a
-    /// per-snapshot filter. Unlike `trash`/`draft` it has NO `update` fallback:
-    /// unset means **allow**, so history visibility follows the regular
+    /// per-snapshot filter. Like `trash`/`draft` it **falls back to `update`**
+    /// when unset, so by default version history follows edit access: a
+    /// published-only reader sees no history, while an editor does (no separate
+    /// rule needed). Which *snapshots* are then visible still follows the
     /// per-snapshot composite (`read` for published snapshots, `draft` for draft
-    /// snapshots). Set it to lock the version timeline behind a stricter policy
-    /// than reading the document — e.g. only editors may inspect history even
-    /// though anyone may read the published doc. The function returns
-    /// `true`/`false` (`ctx`-based); returning a filter table is rejected
-    /// (row-level scoping is `read`'s job).
+    /// snapshots). Set it to gate the version timeline behind a policy distinct
+    /// from editing — e.g. let any reader inspect history, or restrict it to a
+    /// subset of editors. The function returns `true`/`false` (`ctx`-based);
+    /// returning a filter table is rejected (row-level scoping is `read`'s job).
     #[serde(default)]
     #[lua(ty = "string | crap.HookRef", optional)]
     pub versions: Option<HookRef>,
@@ -112,8 +113,9 @@ pub struct GlobalAccess {
     #[lua(ty = "string | crap.HookRef", optional)]
     pub update: Option<HookRef>,
     /// Hook ref restricting version-history visibility — a *toggle*, not a
-    /// per-snapshot filter. Unset means **allow**; returning a filter table is
-    /// rejected (snapshot scoping follows `read`/`draft`).
+    /// per-snapshot filter. Falls back to `update` when unset (a published-only
+    /// reader sees no history by default); returning a filter table is rejected
+    /// (snapshot scoping follows `read`/`draft`).
     #[lua(ty = "string | crap.HookRef", optional)]
     pub versions: Option<HookRef>,
     /// Hook ref gating whether the global is visible/usable in the **admin UI**.

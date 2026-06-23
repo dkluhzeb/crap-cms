@@ -102,7 +102,14 @@ fn users_def_with_strategy(name: &str, authenticate: &str) -> CollectionDefiniti
             .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth::enabled().with_strategy(name, authenticate));
+    let mut auth = Auth::enabled();
+    auth.methods.push(AuthMethod::Strategy {
+        name: name.to_string(),
+        authenticate: authenticate.into(),
+        activates_on: Activation::always(),
+        surfaces: SurfaceSet::admin_only(),
+    });
+    def.auth = Some(auth);
     def
 }
 

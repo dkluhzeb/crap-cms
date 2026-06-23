@@ -339,37 +339,6 @@ impl AuthMethod {
             surfaces: SurfaceSet::admin_only(),
         }
     }
-
-    /// Constructor: `Always`-active strategy on admin surface
-    /// (matches the legacy `auth.strategies = […]` behavior for
-    /// pre-`methods` configs).
-    #[must_use]
-    pub fn strategy_always(name: impl Into<String>, authenticate: impl Into<HookRef>) -> Self {
-        Self::Strategy {
-            name: name.into(),
-            authenticate: authenticate.into(),
-            activates_on: Activation::always(),
-            surfaces: SurfaceSet::admin_only(),
-        }
-    }
-
-    /// Constructor: header-discriminated strategy.
-    #[must_use]
-    pub fn strategy_on_header(
-        name: impl Into<String>,
-        authenticate: impl Into<HookRef>,
-        header: impl Into<String>,
-        surfaces: SurfaceSet,
-    ) -> Self {
-        Self::Strategy {
-            name: name.into(),
-            authenticate: authenticate.into(),
-            activates_on: Activation::Header {
-                header: header.into(),
-            },
-            surfaces,
-        }
-    }
 }
 
 /// Fluent builder for a `password_login` [`AuthMethod`]. Only the
@@ -599,18 +568,6 @@ impl Auth {
             };
             self.methods[idx] = f(seed).build();
         }
-        self
-    }
-
-    /// Append a strategy method built via [`AuthMethod::strategy_always`].
-    #[must_use]
-    pub fn with_strategy(
-        mut self,
-        name: impl Into<String>,
-        authenticate: impl Into<HookRef>,
-    ) -> Self {
-        self.methods
-            .push(AuthMethod::strategy_always(name, authenticate));
         self
     }
 

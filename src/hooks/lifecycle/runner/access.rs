@@ -17,10 +17,9 @@ use crate::{
         lifecycle::{
             AccessCheckInput, AuthStrategyContext, AuthStrategyInput,
             access::{
-                ReadStripInput, WriteStripInput, check_collection_access,
-                check_field_read_access_with_lua, check_field_write_access_with_lua,
-                collect_denials_flat, collect_read_denied_with_lua, has_any_field_access,
-                strip_access_data_aware, strip_read_access_data_aware, strip_read_access_with_lua,
+                ReadStripInput, WriteStripInput, check_collection_access, collect_denials_flat,
+                collect_read_denied_with_lua, has_any_field_access, strip_access_data_aware,
+                strip_read_access_data_aware, strip_read_access_with_lua,
                 strip_write_access_with_lua,
             },
             execution::resolve_hook_function,
@@ -138,77 +137,6 @@ impl HookRunner {
         // paths, locale-scoped fields) lives in `check_collection_access` — the
         // single chokepoint every access-resolving surface passes through.
         check_collection_access(&lua, input)
-    }
-
-    /// Check field-level read access. Returns a list of field names that should be
-    /// stripped from the response (denied fields).
-    ///
-    /// Fail-closed: if the Lua VM pool is exhausted, all access-controlled fields
-    /// are denied rather than silently allowed.
-    pub fn check_field_read_access(
-        &self,
-        fields: &[FieldDefinition],
-        collection: &str,
-        user: Option<&Document>,
-        locale: Option<&str>,
-        conn: &dyn DbConnection,
-    ) -> Vec<FieldDenial> {
-        // Skip VM acquisition if no fields have read access functions (recursive check)
-        if !has_any_field_access(fields, |f| f.access.read.as_ref()) {
-            return Vec::new();
-        }
-
-        let lua = match self.pool.acquire() {
-            Ok(l) => l,
-            Err(e) => {
-                error!("Lua VM pool exhausted during field read access check: {e}");
-
-                return deny_all_access_controlled(fields, |f| f.access.read.as_ref());
-            }
-        };
-
-        let _guard = TxContextGuard::set(&lua, conn, None, None, None);
-
-        check_field_read_access_with_lua(&lua, fields, collection, user, locale)
-    }
-
-    /// Check field-level write access for a given operation ("create" or "update").
-    /// Returns a list of field names that should be stripped from the input.
-    ///
-    /// Fail-closed: if the Lua VM pool is exhausted, all access-controlled fields
-    /// are denied rather than silently allowed.
-    pub fn check_field_write_access(
-        &self,
-        fields: &[FieldDefinition],
-        collection: &str,
-        user: Option<&Document>,
-        locale: Option<&str>,
-        operation: &str,
-        conn: &dyn DbConnection,
-    ) -> Vec<FieldDenial> {
-        // Skip VM acquisition if no fields have write access functions (recursive check)
-        let extractor: fn(&FieldDefinition) -> Option<&HookRef> = match operation {
-            "create" => |f| f.access.create.as_ref(),
-            "update" => |f| f.access.update.as_ref(),
-            _ => return Vec::new(),
-        };
-
-        if !has_any_field_access(fields, extractor) {
-            return Vec::new();
-        }
-
-        let lua = match self.pool.acquire() {
-            Ok(l) => l,
-            Err(e) => {
-                error!("Lua VM pool exhausted during field write access check: {e}");
-
-                return deny_all_access_controlled(fields, extractor);
-            }
-        };
-
-        let _guard = TxContextGuard::set(&lua, conn, None, None, None);
-
-        check_field_write_access_with_lua(&lua, fields, collection, user, locale, operation)
     }
 
     /// Data-aware field-**read** strip for pool surfaces (admin, gRPC, MCP):

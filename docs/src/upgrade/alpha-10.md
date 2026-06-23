@@ -304,13 +304,15 @@ arrays/relationships to `[]`); there is no per-locale delete.
   composite as document reads: published snapshots need `read`, draft snapshots
   additionally need `access.draft` (a published-only reader sees only published
   history). A new **`access.versions`** rule gates whether history is visible at
-  all — a toggle that, unlike `draft`/`trash`, does **not** fall back to
-  `update`: unset means **allow**. It returns `true`/`false` (a filter table is a
-  configuration error). `restore` requires **both** `access.update` and
-  `access.versions` (it resurrects historical content). **Action:** only if you
-  want history locked behind a stricter policy than reading the document — set
-  `access.versions`. The admin version sidebar degrades gracefully (no list
-  rather than an error) for viewers who cannot see history.
+  all — a toggle that, like `draft`/`trash`, falls back to `update` when unset
+  (so a published-only reader sees no history by default; an editor does). It
+  returns `true`/`false` (a filter table is a configuration error). `restore`
+  requires **both** `access.update` and `access.versions` (it resurrects
+  historical content). **Action:** if you relied on version history being visible
+  to plain readers, set `access.versions` to an explicit permissive rule (e.g.
+  `access.anyone`); to lock history behind a stricter policy than editing, set it
+  to that rule. The admin version sidebar degrades gracefully (no list rather
+  than an error) for viewers who cannot see history.
 - **Reading drafts now requires edit-level access (`access.draft`).** Draft
   reads were gated by `access.read`, so any reader could pull unpublished
   content by opting in (`draft = true` / `use_draft` / `include_drafts`, or a

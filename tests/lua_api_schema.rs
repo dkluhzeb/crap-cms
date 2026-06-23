@@ -15,7 +15,7 @@
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::Registry;
+use crap_cms::core::{Registry, field::LocalizedString};
 use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
@@ -511,11 +511,11 @@ crap.collections.define("polls", {
     assert_eq!(answer_field.options[0].value, "yes");
     // The label should be a LocalizedString::Localized
     match &answer_field.options[0].label {
-        crap_cms::core::field::LocalizedString::Localized(map) => {
+        LocalizedString::Localized(map) => {
             assert_eq!(map.get("en"), Some(&"Yes".to_string()));
             assert_eq!(map.get("de"), Some(&"Ja".to_string()));
         }
-        crap_cms::core::field::LocalizedString::Plain(s) => {
+        LocalizedString::Plain(s) => {
             // Some implementations may flatten it — that's also acceptable
             assert!(!s.is_empty(), "Should have a non-empty label");
         }
@@ -551,10 +551,24 @@ crap.collections.define("articles", {
         .get_collection("articles")
         .expect("articles should be registered");
 
-    // Test resolving for different locales
-    assert_eq!(def.singular_name_for("en", "en"), "Article");
-    assert_eq!(def.singular_name_for("de", "en"), "Artikel");
-    assert_eq!(def.display_name_for("en", "en"), "Articles");
+    // Localized labels parse into a per-locale map.
+    match def.labels.singular.as_ref().expect("singular label") {
+        LocalizedString::Localized(map) => {
+            assert_eq!(map.get("en"), Some(&"Article".to_string()));
+            assert_eq!(map.get("de"), Some(&"Artikel".to_string()));
+        }
+        LocalizedString::Plain(_) => {
+            panic!("expected a localized singular label");
+        }
+    }
+    match def.labels.plural.as_ref().expect("plural label") {
+        LocalizedString::Localized(map) => {
+            assert_eq!(map.get("en"), Some(&"Articles".to_string()));
+        }
+        LocalizedString::Plain(_) => {
+            panic!("expected a localized plural label");
+        }
+    }
 }
 
 // ── 5A. Versions Config Parsing ─────────────────────────────────────────────

@@ -130,7 +130,6 @@ pub(crate) struct PaginationInputs<'a> {
     /// `status_val` encoding for the composite ordering surfaced by
     /// `apply_order_by`.
     pub has_drafts: bool,
-    pub had_cursor: bool,
     pub cursor_has_more: Option<bool>,
 }
 
@@ -148,7 +147,8 @@ pub(crate) fn build_pagination(inputs: &PaginationInputs<'_>) -> query::Paginati
                 has_timestamps: inputs.has_timestamps,
                 has_drafts: inputs.has_drafts,
                 had_before_cursor: inputs.fq.before_cursor.is_some(),
-                had_any_cursor: inputs.had_cursor,
+                had_any_cursor: inputs.fq.after_cursor.is_some()
+                    || inputs.fq.before_cursor.is_some(),
                 cursor_has_more: inputs.cursor_has_more,
             },
         )
@@ -157,6 +157,57 @@ pub(crate) fn build_pagination(inputs: &PaginationInputs<'_>) -> query::Paginati
         let page = if limit > 0 { offset / limit + 1 } else { 1 };
         query::PaginationResult::builder(inputs.docs, inputs.total, limit).page(page, offset)
     }
+}
+
+/// Bump the query limit by one when keyset (cursor) pagination must peek at the
+/// next row to decide `has_more`. Returns whether overfetch is active — the
+/// caller passes that flag back to [`finish_cursor_overfetch`] after fetching.
+/// Shared by `find_documents` and `search_documents`.
+pub(crate) fn begin_cursor_overfetch(fq: &mut FindQuery, cursor_enabled: bool) -> bool {
+    let had_cursor = fq.after_cursor.is_some() || fq.before_cursor.is_some();
+    let overfetch = cursor_enabled && had_cursor;
+
+    if overfetch {
+        fq.limit = fq.limit.map(|l| l + 1);
+    }
+
+    overfetch
+}
+
+/// Undo [`begin_cursor_overfetch`]'s limit bump and trim the peeked extra row
+/// (the first row when paging backward, else the last). Returns `Some(has_more)`
+/// when cursor pagination is active, else `None`. Shared by `find_documents` and
+/// `search_documents`.
+pub(crate) fn finish_cursor_overfetch(
+    fq: &mut FindQuery,
+    docs: &mut Vec<Document>,
+    overfetch: bool,
+    total: i64,
+) -> Option<bool> {
+    // Restore the original limit for pagination math.
+    if overfetch {
+        fq.limit = fq.limit.map(|l| l - 1);
+    }
+
+    if !overfetch {
+        return None;
+    }
+
+    let limit = fq.limit.unwrap_or(total);
+
+    // Saturate the doc count for the unreachable case so the `>` check holds.
+    let docs_count = i64::try_from(docs.len()).unwrap_or(i64::MAX);
+    if docs_count <= limit {
+        return Some(false);
+    }
+
+    if fq.before_cursor.is_some() {
+        docs.remove(0);
+    } else {
+        docs.pop();
+    }
+
+    Some(true)
 }
 
 #[cfg(test)]

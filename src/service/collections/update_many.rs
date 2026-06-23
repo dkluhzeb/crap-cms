@@ -11,7 +11,7 @@ use crate::{
     hooks::LuaCrudInfra,
     service::{
         RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, flush_queue,
-        update_many_single_in_conn,
+        invalidate_user_streams_if_auth, update_many_single_in_conn,
     },
     typegen::lua::LuaAnnotation,
 };
@@ -178,12 +178,10 @@ fn update_many_pool(
     }
 
     // A bulk role/group change on auth documents must tear down each affected
-    // user's live-update streams, just like a single update. No-op for non-auth
-    // collections or without an invalidation transport.
-    if def.is_auth_collection() {
-        for id in &ids {
-            ctx.publish_user_invalidation(id);
-        }
+    // user's live-update streams, just like a single update (shared helper —
+    // no-op for non-auth collections or without an invalidation transport).
+    for id in &ids {
+        invalidate_user_streams_if_auth(ctx, id);
     }
 
     flush_queue(ctx, &queue);
@@ -236,10 +234,8 @@ fn update_many_conn(
         modified += 1;
     }
 
-    if def.is_auth_collection() {
-        for id in &updated_ids {
-            ctx.publish_user_invalidation(id);
-        }
+    for id in &updated_ids {
+        invalidate_user_streams_if_auth(ctx, id);
     }
 
     Ok(UpdateManyResult {

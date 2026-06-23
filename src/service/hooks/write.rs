@@ -109,6 +109,12 @@ pub trait WriteHooks {
         user: Option<&Document>,
         locale: Option<&str>,
     ) {
+        // Skip the per-document clone + map round-trip entirely when no field
+        // configures read access (the common case) — matches the read path.
+        if !has_any_field_access(fields, |f| f.access.read.as_ref()) {
+            return;
+        }
+
         let document = doc.fields.clone();
         let mut level: Map<String, Value> = std::mem::take(&mut doc.fields)
             .into_inner()

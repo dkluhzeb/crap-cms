@@ -77,7 +77,20 @@ Because the rule is evaluated against each level, an array/blocks field rule run
 
 ## Introspection
 
-`crap.access.field_read_denied(collection)` and `crap.access.field_write_denied(collection, operation)` return the names of fields the current user cannot read/write. These are evaluated **without document context** (`ctx.data` / `ctx.document` are `nil`), so they report a field's *categorical* (data-independent) denials — a data-dependent rule that allows when the document is absent is reported as allowed. Use them for UI gating, not as the enforcement path (enforcement is the per-document strip described above).
+`crap.access.field_read_denied(collection [, document])` and `crap.access.field_write_denied(collection, operation [, document])` return the names of fields the current user cannot read/write. They are for **UI gating**, not enforcement (enforcement is the per-document strip described above).
+
+The optional `document` controls how data-dependent rules are evaluated:
+
+- **Omit `document`** → a **categorical** check: `ctx.data` / `ctx.document` are `nil`, so the result reflects only role/`ctx.user`-based rules. A data-dependent rule that allows when the document is absent is reported as allowed. This is the right choice for a **create** form (no row exists yet) or a static field-visibility list.
+- **Pass `document`** → a **data-aware** check: each rule is evaluated with `ctx.data` / `ctx.document` set to the supplied table, so the result matches what the enforcement strip would actually do for that row. This is the right choice for an **edit** form, where the row being edited is known. The helper answers for the document you pass, so for an edit form pass the record being edited.
+
+```lua
+-- Edit form: which fields can THIS user not edit on THIS record?
+local locked = crap.access.field_write_denied("posts", "update", current_post)
+
+-- Create form: categorical (no row yet)
+local hidden = crap.access.field_write_denied("posts", "create")
+```
 
 ## Example
 

@@ -199,12 +199,14 @@ fn users_def_no_password_login() -> CollectionDefinition {
 fn users_def_with_api_key_strategy() -> CollectionDefinition {
     let mut def = base_users_def();
     let mut auth = Auth::enabled();
-    auth.methods.push(AuthMethod::strategy_on_header(
-        "api-key",
-        "hooks.api_key.authenticate",
-        "x-api-key",
-        SurfaceSet::grpc_only(),
-    ));
+    auth.methods.push(AuthMethod::Strategy {
+        name: "api-key".to_string(),
+        authenticate: HookRef::new("hooks.api_key.authenticate"),
+        activates_on: Activation::Header {
+            header: "x-api-key".to_string(),
+        },
+        surfaces: SurfaceSet::grpc_only(),
+    });
     def.auth = Some(auth);
     def
 }

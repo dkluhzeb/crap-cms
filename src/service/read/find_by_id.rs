@@ -101,16 +101,19 @@ fn resolve_trash_by_id(
     constraints.extend(access_constraints.iter().cloned());
 
     Ok(ByIdScope {
-        // A returned draft snapshot is matched against version JSON (which carries
-        // no `_deleted_at`), so it is bounded by the access row-filters only — not
-        // the lifecycle guard, which would never match a snapshot.
+        // Trash never overlays a draft snapshot. The draft overlay is a
+        // "pending unpublished edit" view of a *live* document; a draft snapshot
+        // carries no `_deleted_at`, so honoring the overlay here would let the
+        // snapshot early-return in `find_by_id_full` bypass the `_deleted_at`
+        // lifecycle guard above and return a LIVE document's draft content
+        // through the trash gate (`access.trash ?? update`) — distinct from, and
+        // potentially broader than, the draft gate (`access.draft ?? update`).
+        // A trash read returns the soft-deleted main-table row verbatim.
+        use_draft_overlay: false,
+        // Unused while `use_draft_overlay` is false (the snapshot path is never
+        // taken), but kept consistent with the live path for clarity.
         snapshot_constraints: access_constraints,
         constraints,
-        // No draft downgrade here (unlike the live path): trash is a single gate
-        // (`access.trash`) that already authorized viewing this trashed row, and
-        // the trash constraints above bound any draft snapshot. The live path
-        // downgrades because it has two independent gates (read vs draft).
-        use_draft_overlay: input.use_draft,
     })
 }
 
@@ -507,6 +510,75 @@ mod tests {
         assert!(
             trashed.is_some(),
             "trash-mode by-id must surface a soft-deleted row"
+        );
+    }
+
+    /// Regression: a collection with BOTH `soft_delete` and `versions.drafts` must
+    /// not let a trash read overlay a *live* document's draft snapshot. The draft
+    /// snapshot bypasses the SQL `WHERE` path (so it never sees the trash view's
+    /// `_deleted_at IS NOT NULL` guard); honoring `use_draft` in trash mode let
+    /// `find_by_id_full`'s snapshot early-return return a LIVE doc's draft content
+    /// through the trash gate (`access.trash ?? update`) — bypassing the lifecycle
+    /// boundary AND the separate draft gate (`access.draft ?? update`). Trash now
+    /// pins `use_draft_overlay = false`; the draft remains reachable only via the
+    /// live draft view.
+    #[test]
+    fn trash_with_drafts_does_not_overlay_a_live_drafts_snapshot() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY, title TEXT,
+                _status TEXT DEFAULT 'published', _deleted_at TEXT,
+                created_at TEXT, updated_at TEXT
+            );
+            CREATE TABLE _versions_posts (
+                id TEXT PRIMARY KEY, _parent TEXT, _version INTEGER,
+                _status TEXT, _latest INTEGER DEFAULT 0, snapshot TEXT
+            );
+            -- A LIVE (non-deleted) document carrying a pending draft snapshot.
+            INSERT INTO posts (id, title, _deleted_at) VALUES ('live1', 'Live', NULL);
+            INSERT INTO _versions_posts (id, _parent, _version, _status, _latest, snapshot)
+                VALUES ('v1', 'live1', 1, 'draft', 1, '{\"title\":\"Pending Draft Edit\"}');",
+        )
+        .unwrap();
+
+        let mut def = CollectionDefinition::new("posts");
+        def.timestamps = true;
+        def.soft_delete = true;
+        def.fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
+        def.versions = Some(VersionsConfig::new(true, 0));
+
+        let rh = NoopReadHooks;
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .read_hooks(&rh)
+            .build();
+
+        // Trash + draft on a LIVE doc must NOT surface the draft snapshot through
+        // the trash gate — the doc is not soft-deleted, so trash sees nothing.
+        let via_trash = find_document_by_id(
+            &ctx,
+            &FindByIdInput::builder("live1")
+                .include_deleted(true)
+                .use_draft(true)
+                .build(),
+        )
+        .unwrap();
+        assert!(
+            via_trash.is_none(),
+            "trash read must not overlay a live document's draft snapshot"
+        );
+
+        // The draft content is still reachable through the live draft view.
+        let via_draft = find_document_by_id(
+            &ctx,
+            &FindByIdInput::builder("live1").use_draft(true).build(),
+        )
+        .unwrap()
+        .expect("live draft view must still surface the pending draft");
+        assert_eq!(
+            via_draft.fields.get("title").and_then(|v| v.as_str()),
+            Some("Pending Draft Edit")
         );
     }
 }

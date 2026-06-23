@@ -96,12 +96,7 @@ pub fn find_documents(
         input.locale_ctx.map(LocaleContext::access_locale),
     )?;
 
-    let had_cursor = fq.after_cursor.is_some() || fq.before_cursor.is_some();
-    let overfetch = input.cursor_enabled && had_cursor;
-
-    if overfetch {
-        fq.limit = fq.limit.map(|l| l + 1);
-    }
+    let overfetch = helpers::begin_cursor_overfetch(&mut fq, input.cursor_enabled);
 
     let mut docs = query::find(conn, ctx.slug, def, &fq, input.locale_ctx)?;
 
@@ -115,30 +110,7 @@ pub fn find_documents(
         fq.include_deleted,
     )?;
 
-    // Restore original limit for pagination calculation.
-    if overfetch {
-        fq.limit = fq.limit.map(|l| l - 1);
-    }
-
-    let limit = fq.limit.unwrap_or(total);
-
-    // Detect whether more pages exist via overfetch, then trim the extra doc.
-    // Saturate doc count for the unreachable case so the > check still works.
-    let docs_count = i64::try_from(docs.len()).unwrap_or(i64::MAX);
-    let cursor_has_more = if overfetch {
-        if docs_count > limit {
-            if fq.before_cursor.is_some() {
-                docs.remove(0);
-            } else {
-                docs.pop();
-            }
-            Some(true)
-        } else {
-            Some(false)
-        }
-    } else {
-        None
-    };
+    let cursor_has_more = helpers::finish_cursor_overfetch(&mut fq, &mut docs, overfetch, total);
 
     post_process_docs(ctx, conn, &mut docs, input, req_context);
 
@@ -149,7 +121,6 @@ pub fn find_documents(
         cursor_enabled: input.cursor_enabled,
         has_timestamps: def.timestamps,
         has_drafts: def.has_drafts(),
-        had_cursor,
         cursor_has_more,
     });
 

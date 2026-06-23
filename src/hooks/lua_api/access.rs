@@ -6,15 +6,18 @@ use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
 use crate::core::{
-    Document, FieldDefinition, FieldDenial, HookRef, Registry, RegistryRead, SharedRegistry,
+    Document, DocumentFields, FieldDefinition, FieldDenial, HookRef, Registry, RegistryRead,
+    SharedRegistry, nest_group_fields,
 };
 use crate::db::{AccessResult, FilterClause, FilterOp};
 use crate::hooks::lifecycle::{
     AccessCheckInput, UserContext,
     access::{
         check_access_with_lua, check_field_read_access_with_lua, check_field_write_access_with_lua,
+        collect_read_denied_with_lua, collect_write_denied_with_lua,
     },
 };
+use crate::hooks::lua_api::lua_to_json;
 use crate::typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 
 // ── User-facing fns ──────────────────────────────────────────────────
@@ -63,7 +66,10 @@ fn access_check_pool(
 }
 
 /// Return the names of fields the current user cannot read for this
-/// collection/global.
+/// collection/global. Pass `document` for a data-aware check (matches the
+/// enforcement strip for that row — use it for an edit form); omit it for a
+/// categorical, role-only check (`ctx.data` / `ctx.document` nil — use it for a
+/// create form). For UI gating only — enforcement is the per-document strip.
 #[lua_fn(
     path = "crap.access.field_read_denied",
     returns = "string[]",
@@ -73,9 +79,14 @@ fn access_field_read_denied_init(
     state: &SharedRegistry,
     lua: &Lua,
     #[lua(doc = "Collection or global slug.")] collection: String,
+    #[lua(
+        doc = "Optional document to evaluate data-dependent rules against (sets `ctx.data` / `ctx.document`). Omit for a categorical, role-only check."
+    )]
+    document: Option<Table>,
 ) -> LuaResult<Vec<String>> {
+    let document = parse_optional_document(document)?;
     state
-        .with(|r| field_read_denied_impl(lua, r, &collection))
+        .with(|r| field_read_denied_impl(lua, r, &collection, document.as_ref()))
         .map_err(|e| RuntimeError(e.to_string()))?
 }
 
@@ -84,15 +95,20 @@ fn access_field_read_denied_pool(
     state: &Arc<Registry>,
     lua: &Lua,
     collection: String,
+    document: Option<Table>,
 ) -> LuaResult<Vec<String>> {
+    let document = parse_optional_document(document)?;
     state
-        .with(|r| field_read_denied_impl(lua, r, &collection))
+        .with(|r| field_read_denied_impl(lua, r, &collection, document.as_ref()))
         .map_err(|e| RuntimeError(e.to_string()))?
 }
 
 /// Return the names of fields the current user cannot write for this
-/// collection/global under the given operation (`"create"` or
-/// `"update"`).
+/// collection/global under the given operation (`"create"` or `"update"`). Pass
+/// `document` for a data-aware check (matches the enforcement strip — use it for
+/// an edit form, where the row is known); omit it for a categorical, role-only
+/// check (use it for a create form). For UI gating only — enforcement is the
+/// per-document strip.
 #[lua_fn(
     path = "crap.access.field_write_denied",
     returns = "string[]",
@@ -103,9 +119,14 @@ fn access_field_write_denied_init(
     lua: &Lua,
     #[lua(doc = "Collection or global slug.")] collection: String,
     #[lua(doc = "Operation: `\"create\"` or `\"update\"`.")] operation: String,
+    #[lua(
+        doc = "Optional document to evaluate data-dependent rules against (sets `ctx.data` / `ctx.document`). Omit for a categorical, role-only check."
+    )]
+    document: Option<Table>,
 ) -> LuaResult<Vec<String>> {
+    let document = parse_optional_document(document)?;
     state
-        .with(|r| field_write_denied_impl(lua, r, &collection, &operation))
+        .with(|r| field_write_denied_impl(lua, r, &collection, &operation, document.as_ref()))
         .map_err(|e| RuntimeError(e.to_string()))?
 }
 
@@ -115,9 +136,11 @@ fn access_field_write_denied_pool(
     lua: &Lua,
     collection: String,
     operation: String,
+    document: Option<Table>,
 ) -> LuaResult<Vec<String>> {
+    let document = parse_optional_document(document)?;
     state
-        .with(|r| field_write_denied_impl(lua, r, &collection, &operation))
+        .with(|r| field_write_denied_impl(lua, r, &collection, &operation, document.as_ref()))
         .map_err(|e| RuntimeError(e.to_string()))?
 }
 
@@ -347,34 +370,53 @@ fn filter_op_name_value(op: &FilterOp) -> (&'static str, OpValue) {
     }
 }
 
-/// `crap.access.field_read_denied(collection)` -> `{string}`
+/// `crap.access.field_read_denied(collection [, document])` -> `{string}`
 ///
 /// Returns an array of field names the current user cannot read.
+///
+/// With a `document` the check is **data-aware**: each `access.read` rule is
+/// evaluated with `ctx.data` / `ctx.document` set, so the result matches what the
+/// enforcement strip would remove for that row (the right choice for an edit
+/// form). Without a `document` it is **categorical** (`ctx.data` / `ctx.document`
+/// are nil) — the right choice for a create form or static role-based gating. In
+/// neither form is this the enforcement path; enforcement is the per-document
+/// strip applied on read.
 fn field_read_denied_impl(
     lua: &Lua,
     registry: &Registry,
     collection: &str,
+    document: Option<&DocumentFields>,
 ) -> LuaResult<Vec<String>> {
     let fields = resolve_fields(registry, collection)?;
     let user = current_user(lua);
 
-    Ok(
-        check_field_read_access_with_lua(lua, &fields, collection, user.as_ref(), None)
-            .iter()
-            .map(FieldDenial::display_path)
-            .collect(),
-    )
+    let denied = match document {
+        Some(doc) => {
+            let nested = nest_group_fields(doc, &fields);
+            collect_read_denied_with_lua(lua, &fields, &nested, collection, user.as_ref(), None)
+        }
+        None => check_field_read_access_with_lua(lua, &fields, collection, user.as_ref(), None),
+    };
+
+    Ok(denied.iter().map(FieldDenial::display_path).collect())
 }
 
-/// `crap.access.field_write_denied(collection, operation)` -> `{string}`
+/// `crap.access.field_write_denied(collection, operation [, document])` -> `{string}`
 ///
 /// Returns an array of field names the current user cannot write.
 /// `operation` must be `"create"` or `"update"`.
+///
+/// With a `document` the check is **data-aware** (`ctx.data` / `ctx.document`
+/// set), matching what the enforcement strip removes for that payload — the right
+/// choice for gating an edit form, where the row being edited is known. Without a
+/// `document` it is **categorical** (the right choice for a create form). Not the
+/// enforcement path; enforcement is the per-document strip applied on write.
 fn field_write_denied_impl(
     lua: &Lua,
     registry: &Registry,
     collection: &str,
     operation: &str,
+    document: Option<&DocumentFields>,
 ) -> LuaResult<Vec<String>> {
     if operation != "create" && operation != "update" {
         return Err(RuntimeError(format!(
@@ -385,12 +427,45 @@ fn field_write_denied_impl(
     let fields = resolve_fields(registry, collection)?;
     let user = current_user(lua);
 
-    Ok(
-        check_field_write_access_with_lua(lua, &fields, collection, user.as_ref(), None, operation)
-            .iter()
-            .map(FieldDenial::display_path)
-            .collect(),
-    )
+    let denied = match document {
+        Some(doc) => {
+            let nested = nest_group_fields(doc, &fields);
+            collect_write_denied_with_lua(
+                lua,
+                &fields,
+                &nested,
+                collection,
+                user.as_ref(),
+                None,
+                operation,
+            )
+        }
+        None => check_field_write_access_with_lua(
+            lua,
+            &fields,
+            collection,
+            user.as_ref(),
+            None,
+            operation,
+        ),
+    };
+
+    Ok(denied.iter().map(FieldDenial::display_path).collect())
+}
+
+/// Convert an optional Lua document table (as passed to the `field_*_denied`
+/// introspection helpers) into [`DocumentFields`]. A malformed table is a hard
+/// error — the caller explicitly asked for a data-aware check.
+fn parse_optional_document(document: Option<Table>) -> LuaResult<Option<DocumentFields>> {
+    let Some(table) = document else {
+        return Ok(None);
+    };
+
+    let json = lua_to_json(&Value::Table(table))?;
+    let fields: DocumentFields = serde_json::from_value(json)
+        .map_err(|e| RuntimeError(format!("field access document must be a table: {e}")))?;
+
+    Ok(Some(fields))
 }
 
 /// Look up the field definitions for a collection or global.
@@ -463,7 +538,7 @@ mod tests {
         let lua = Lua::new();
         let registry = make_registry_with_collection("posts", Access::default());
 
-        let denied = field_read_denied_impl(&lua, &registry, "posts").unwrap();
+        let denied = field_read_denied_impl(&lua, &registry, "posts", None).unwrap();
         assert!(denied.is_empty());
     }
 
@@ -472,8 +547,31 @@ mod tests {
         let lua = Lua::new();
         let registry = make_registry_with_collection("posts", Access::default());
 
-        let result = field_write_denied_impl(&lua, &registry, "posts", "delete");
+        let result = field_write_denied_impl(&lua, &registry, "posts", "delete", None);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_optional_document_none_is_none() {
+        assert!(parse_optional_document(None).unwrap().is_none());
+    }
+
+    #[test]
+    fn parse_optional_document_converts_table_to_fields() {
+        let lua = Lua::new();
+        let table = lua.create_table().unwrap();
+        table.set("title", "Hello").unwrap();
+        table.set("count", 3).unwrap();
+
+        let fields = parse_optional_document(Some(table)).unwrap().unwrap();
+        assert_eq!(
+            fields.get("title").and_then(serde_json::Value::as_str),
+            Some("Hello")
+        );
+        assert_eq!(
+            fields.get("count").and_then(serde_json::Value::as_i64),
+            Some(3)
+        );
     }
 
     // Avoid the unused-import warning when only some of these are

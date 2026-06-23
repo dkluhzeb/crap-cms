@@ -266,6 +266,20 @@ To restrict which collections are accessible, use `include_collections` /
 `exclude_collections`. These filters are enforced both in tool listing (`tools/list`)
 and at execution time, so knowing a collection slug is not enough to bypass the filter.
 
+A second, per-collection control is the **`access.mcp`** rule (set on the
+collection or global definition). Unlike per-user access (which MCP bypasses),
+`access.mcp` is a user-independent boolean gate evaluated at startup: it decides
+whether the collection is exposed to the MCP surface *at all* — its tools,
+resources, and schema introspection. The default is permissive (a collection is
+exposed when MCP is enabled globally), so `access.mcp` only ever *removes* a
+collection — e.g. keep an internal collection out of the LLM surface while still
+serving it over the admin/gRPC APIs. It must return `true`/`false`; a filter
+table is a configuration error (the shared-key surface has no per-user identity
+to scope against), and a deny — or any evaluation error — fails closed (the
+collection is hidden, and execution re-checks the gate independently of listing).
+`access.mcp` and the `include_collections` / `exclude_collections` filters
+compose: a collection is reachable only if it passes both.
+
 All MCP write operations (create, update, delete) are logged at `info` level for
 audit purposes. Hooks still fire on all MCP writes (same lifecycle as admin/gRPC).
 

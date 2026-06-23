@@ -339,31 +339,25 @@ fn published_or_author_allows_admin() {
 // ── 3. Field-Level Access ───────────────────────────────────────────────────
 
 #[test]
-fn field_write_no_field_access_allows_all() {
-    let (_tmp, pool, registry, runner) = setup();
-    let conn = pool.get().unwrap();
-    let editor = make_user_doc("editor-1", "editor");
-
-    let posts = registry.get_collection("posts").unwrap();
-
-    let denied =
-        runner.check_field_write_access(&posts.fields, "", Some(&editor), None, "update", &conn);
-    // No field-level access controls in posts definition
-    assert!(
-        denied.is_empty(),
-        "Expected no denied fields, got: {denied:?}"
-    );
-}
-
-#[test]
 fn field_read_no_config_allows_all() {
     let (_tmp, pool, registry, runner) = setup();
     let conn = pool.get().unwrap();
 
     let posts = registry.get_collection("posts").unwrap();
 
-    // No field has read access configured, so nothing should be denied
-    let denied = runner.check_field_read_access(&posts.fields, "", None, None, &conn);
+    // No field has read access configured, so nothing should be denied. Exercises
+    // the production pool path (`read_denied_names`); the empty document makes it
+    // a categorical check. (Field-level *write* denial logic is unit-tested in
+    // `hooks::lifecycle::access::field` — its `WriteStripInput` is crate-private,
+    // so it can't be driven from this integration-test crate.)
+    let denied = runner.read_denied_names(
+        &posts.fields,
+        &DocumentFields::default(),
+        "",
+        None,
+        None,
+        &conn,
+    );
     assert!(
         denied.is_empty(),
         "Expected no denied fields for read, got: {denied:?}"
@@ -548,8 +542,9 @@ fn runner_read_hooks_override_bypasses_collection_access() {
 
 #[test]
 fn field_read_access_strips_denied_fields() {
-    // Test check_field_read_access() with a field that has a deny_all read access
-    // function. The denied field name should appear in the returned list.
+    // A field with an `admin_only` read-access function: the denied field name
+    // appears in the production `read_denied_names` output for a non-admin and is
+    // absent for an admin.
     let (_tmp, pool, _registry, runner) = setup();
     let conn = pool.get().unwrap();
 
@@ -577,7 +572,8 @@ fn field_read_access_strips_denied_fields() {
     ];
 
     // Anonymous user (no user doc) — admin_only should deny
-    let denied = runner.check_field_read_access(&fields, "", None, None, &conn);
+    let doc = DocumentFields::default();
+    let denied = runner.read_denied_names(&fields, &doc, "", None, None, &conn);
     assert_eq!(
         denied.len(),
         1,
@@ -591,7 +587,7 @@ fn field_read_access_strips_denied_fields() {
 
     // Admin user — admin_only should allow
     let admin = make_user_doc("admin-1", "admin");
-    let denied = runner.check_field_read_access(&fields, "", Some(&admin), None, &conn);
+    let denied = runner.read_denied_names(&fields, &doc, "", Some(&admin), None, &conn);
     assert!(
         denied.is_empty(),
         "Admin user should have all fields allowed, but got denied: {denied:?}"
@@ -710,76 +706,13 @@ fn batched_field_read_strip_uses_per_document_context() {
     );
 }
 
-#[test]
-fn field_write_access_strips_denied_fields() {
-    // Test check_field_write_access() for create vs update operations.
-    // A field with a create-deny should be denied on create but not on update,
-    // and vice versa.
-    let (_tmp, pool, _registry, runner) = setup();
-    let conn = pool.get().unwrap();
-
-    let fields = vec![
-        crap_cms::core::FieldDefinition {
-            name: "title".to_string(),
-            field_type: crap_cms::core::field::FieldType::Text,
-            ..Default::default()
-        },
-        // This field denies create but allows update
-        crap_cms::core::FieldDefinition {
-            name: "auto_slug".to_string(),
-            field_type: crap_cms::core::field::FieldType::Text,
-            access: crap_cms::core::field::FieldAccess {
-                create: Some(HookRef::new("access.admin_only")),
-                update: None,
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        // This field allows create but denies update
-        crap_cms::core::FieldDefinition {
-            name: "immutable_field".to_string(),
-            field_type: crap_cms::core::field::FieldType::Text,
-            access: crap_cms::core::field::FieldAccess {
-                create: None,
-                update: Some(HookRef::new("access.admin_only")),
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-    ];
-
-    // Anonymous user: on create, auto_slug should be denied (admin_only denies anonymous)
-    let denied_on_create =
-        runner.check_field_write_access(&fields, "", None, None, "create", &conn);
-    assert!(
-        denied_on_create
-            .iter()
-            .any(|d| d.display_path() == "auto_slug"),
-        "auto_slug should be denied on create for anonymous, got: {denied_on_create:?}"
-    );
-    assert!(
-        !denied_on_create
-            .iter()
-            .any(|d| d.display_path() == "immutable_field"),
-        "immutable_field should be allowed on create (no create access config), got: {denied_on_create:?}"
-    );
-
-    // Anonymous user: on update, immutable_field should be denied (admin_only denies anonymous)
-    let denied_on_update =
-        runner.check_field_write_access(&fields, "", None, None, "update", &conn);
-    assert!(
-        denied_on_update
-            .iter()
-            .any(|d| d.display_path() == "immutable_field"),
-        "immutable_field should be denied on update for anonymous, got: {denied_on_update:?}"
-    );
-    assert!(
-        !denied_on_update
-            .iter()
-            .any(|d| d.display_path() == "auto_slug"),
-        "auto_slug should be allowed on update (no update access config), got: {denied_on_update:?}"
-    );
-}
+// Field-level *write* access (create-vs-update denial, no-config-allows-all) is
+// unit-tested directly against the strip logic in
+// `crap_cms::hooks::lifecycle::access::field` (`field_write_create_denied`,
+// `field_write_update_denied`, `field_write_create_vs_update_different_access`,
+// `field_write_no_access_config_allows_all`). It is not duplicated here because
+// the only production write-strip API (`strip_write_access` / `WriteStripInput`)
+// is crate-private and cannot be driven from this integration-test crate.
 
 #[test]
 fn no_access_config_means_allowed() {
@@ -835,31 +768,18 @@ fn no_access_config_means_allowed() {
     );
 
     // Field-level: fields without any access config should not be denied
-    // access.read, access.create, access.update all None by default
+    // (access.read None by default → nothing stripped).
     let fields = vec![crap_cms::core::FieldDefinition {
         name: "open_field".to_string(),
         field_type: crap_cms::core::field::FieldType::Text,
         ..Default::default()
     }];
 
-    let denied_read = runner.check_field_read_access(&fields, "", None, None, &conn);
+    let denied_read =
+        runner.read_denied_names(&fields, &DocumentFields::default(), "", None, None, &conn);
     assert!(
         denied_read.is_empty(),
         "Fields with no access config should not be denied for read"
-    );
-
-    let denied_write_create =
-        runner.check_field_write_access(&fields, "", None, None, "create", &conn);
-    assert!(
-        denied_write_create.is_empty(),
-        "Fields with no access config should not be denied for create"
-    );
-
-    let denied_write_update =
-        runner.check_field_write_access(&fields, "", None, None, "update", &conn);
-    assert!(
-        denied_write_update.is_empty(),
-        "Fields with no access config should not be denied for update"
     );
 }
 

@@ -59,6 +59,16 @@ pub fn find_version_by_id(
         return Ok(None);
     };
 
+    let parent_id = version.parent.to_string();
+
+    // Symmetry with `list_versions`: when version access falls back to a
+    // `Constrained` update rule, the timeline is scoped to documents the caller
+    // may edit. The pre-load gate above ran with no id (so a missing version id
+    // can't be told apart from a denied one); now that the parent is known, re-run
+    // the gate against it so a non-owner can't pull a single historical snapshot
+    // by id that `list_versions` would withhold.
+    check_versions_gate(ctx, hooks, Some(&parent_id), "find_by_id")?;
+
     // Hide a draft snapshot from a reader who lacks edit-level access — they may
     // see published version history, not work-in-progress. A constrained draft
     // rule is enforced against the parent document, so a non-match hides the
@@ -76,7 +86,6 @@ pub fn find_version_by_id(
             ui_locale: None,
         })?;
 
-        let parent_id = version.parent.to_string();
         if !draft_snapshots_visible(ctx, &draft_access, &parent_id)? {
             return Ok(None);
         }
@@ -88,7 +97,6 @@ pub fn find_version_by_id(
         if let Def::Global(_) = &ctx.def {
             return Err(reject_global_filter(ctx.slug));
         }
-        let parent_id = version.parent.to_string();
         helpers::enforce_access_constraints(ctx, &parent_id, &access, "Read", false)?;
     }
 
@@ -122,9 +130,121 @@ pub(super) fn strip_snapshot_fields(snapshot: &mut Value, denied: &[FieldDenial]
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result as AnyResult;
+    use rusqlite::Connection;
     use serde_json::json;
 
     use super::*;
+    use crate::{
+        core::{
+            CollectionDefinition, Document, FieldDefinition, FieldType, HookRef, Hooks, ReqContext,
+            collection::VersionsConfig,
+        },
+        db::{Filter, FilterClause, FilterOp},
+        hooks::lifecycle::AfterReadCtx,
+        service::hooks::ReadHooks,
+    };
+
+    /// `read` → Allowed (public read); `update` → Constrained to `author = "me"`
+    /// (edit your own). `versions` is unset, so version access falls back to
+    /// `update`.
+    struct OwnDocsConstrainedUpdate;
+
+    impl ReadHooks for OwnDocsConstrainedUpdate {
+        fn before_read(
+            &self,
+            _: &Hooks,
+            _: &str,
+            _: &str,
+            _: Option<&str>,
+        ) -> AnyResult<ReqContext> {
+            Ok(ReqContext::new())
+        }
+
+        fn after_read_one(&self, _: &AfterReadCtx, doc: Document) -> Document {
+            doc
+        }
+
+        fn check_access(&self, input: &AccessCheckInput<'_>) -> AnyResult<AccessResult> {
+            match input.access.map(HookRef::reference) {
+                Some("update_fn") => Ok(AccessResult::Constrained(vec![FilterClause::Single(
+                    Filter {
+                        field: "author".to_string(),
+                        op: FilterOp::Equals("me".to_string()),
+                    },
+                )])),
+                _ => Ok(AccessResult::Allowed),
+            }
+        }
+    }
+
+    fn versioned_collection() -> (Connection, CollectionDefinition) {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY, title TEXT, author TEXT,
+                _status TEXT DEFAULT 'published', created_at TEXT, updated_at TEXT
+            );
+            CREATE TABLE _versions_posts (
+                id TEXT PRIMARY KEY, _parent TEXT, _version INTEGER,
+                _status TEXT, _latest INTEGER DEFAULT 0, snapshot TEXT
+            );
+            -- Another owner's published doc + a published version snapshot.
+            INSERT INTO posts (id, title, author, _status) VALUES ('d1', 'x', 'other', 'published');
+            INSERT INTO _versions_posts (id, _parent, _version, _status, _latest, snapshot)
+                VALUES ('v1', 'd1', 1, 'published', 1, '{\"title\":\"Old Public Title\"}');
+            -- The viewer's OWN published doc + snapshot.
+            INSERT INTO posts (id, title, author, _status) VALUES ('d2', 'x', 'me', 'published');
+            INSERT INTO _versions_posts (id, _parent, _version, _status, _latest, snapshot)
+                VALUES ('v2', 'd2', 1, 'published', 1, '{\"title\":\"My Old Title\"}');",
+        )
+        .unwrap();
+
+        let mut def = CollectionDefinition::new("posts");
+        def.timestamps = true;
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text).build(),
+            FieldDefinition::builder("author", FieldType::Text).build(),
+        ];
+        def.versions = Some(VersionsConfig::new(true, 0));
+        def.access.read = Some(HookRef::new("read_fn"));
+        def.access.update = Some(HookRef::new("update_fn"));
+
+        (conn, def)
+    }
+
+    /// Regression: `find_version_by_id` must enforce the `versions ?? update`
+    /// constraint against the snapshot's parent, exactly like `list_versions`.
+    /// With `versions` unset and `update` constrained to your own docs, a public
+    /// `read` previously let a non-owner pull another owner's *published*
+    /// historical snapshot by id — content `list_versions` would withhold. The
+    /// pre-load gate runs with no id, so the scope is enforced after the parent
+    /// is known.
+    #[test]
+    fn find_version_by_id_enforces_constrained_update_scope() {
+        let (conn, def) = versioned_collection();
+        let rh = OwnDocsConstrainedUpdate;
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .read_hooks(&rh)
+            .build();
+
+        // Another owner's snapshot: denied (parent not editable by the caller).
+        let other = find_version_by_id(&ctx, "v1");
+        assert!(
+            matches!(other, Err(ServiceError::AccessDenied(_))),
+            "fetching another owner's version by id must be denied, got {other:?}"
+        );
+
+        // The caller's own snapshot: visible.
+        let own = find_version_by_id(&ctx, "v2")
+            .unwrap()
+            .expect("own version snapshot must be reachable");
+        assert_eq!(
+            own.snapshot.get("title").and_then(|v| v.as_str()),
+            Some("My Old Title")
+        );
+    }
 
     #[test]
     fn strips_top_level_denied_fields() {

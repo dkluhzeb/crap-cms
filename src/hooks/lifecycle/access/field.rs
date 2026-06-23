@@ -588,6 +588,65 @@ pub(crate) fn collect_read_denied_with_lua(
     denied
 }
 
+/// Data-aware collection of write-denied field **paths** for a single `document`
+/// under `operation` (`"create"` / `"update"`) — the write-side mirror of
+/// [`collect_read_denied_with_lua`], for the `crap.access.field_write_denied`
+/// introspection API. Each `access.create` / `access.update` rule is evaluated
+/// with `ctx.data` = `ctx.document` = `document` (document-level context), so the
+/// reported names match what [`strip_write_access_with_lua`] would remove for
+/// that document. An unknown `operation` yields no denials.
+pub(crate) fn collect_write_denied_with_lua(
+    lua: &Lua,
+    fields: &[FieldDefinition],
+    document: &DocumentFields,
+    collection: &str,
+    user: Option<&Document>,
+    locale: Option<&str>,
+    operation: &str,
+) -> Vec<FieldDenial> {
+    let extract: fn(&FieldDefinition) -> Option<&HookRef> = match operation {
+        "create" => extract_create_access,
+        "update" => extract_update_access,
+        _ => return Vec::new(),
+    };
+
+    let is_denied = |field: &FieldDefinition| {
+        extract(field).is_some_and(|hook| {
+            match check_access_with_lua(
+                lua,
+                &AccessCheckInput {
+                    access: Some(hook),
+                    user,
+                    id: None,
+                    data: Some(document),
+                    document: Some(document),
+                    locale,
+                    operation,
+                    collection,
+                    ui_locale: None,
+                },
+            ) {
+                Ok(AccessResult::Allowed | AccessResult::Constrained(_)) => false,
+                Ok(AccessResult::Denied) => true,
+                Err(e) => {
+                    warn!(
+                        "Field {operation} access function '{}' error (treating as denied): {}",
+                        hook.reference(),
+                        e
+                    );
+
+                    true
+                }
+            }
+        })
+    };
+
+    let mut denied = Vec::new();
+    collect_denials_flat(fields, &is_denied, "", &mut denied);
+
+    denied
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_helpers::*;
@@ -1643,5 +1702,126 @@ mod tests {
         )];
         assert!(!has_any_field_access(&fields, |f| f.access.update.as_ref()));
         assert!(has_any_field_access(&fields, |f| f.access.create.as_ref()));
+    }
+
+    // ── Data-aware denial-NAME collectors (the `field_*_denied` introspection
+    //    helpers' doc-aware branch) ───────────────────────────────────────────
+
+    fn doc(value: serde_json::Value) -> DocumentFields {
+        serde_json::from_value(value).expect("valid document")
+    }
+
+    #[test]
+    fn collect_write_denied_routes_by_operation() {
+        let lua = setup_lua();
+        let fields = vec![
+            make_field(
+                "auto_slug",
+                FieldAccess {
+                    create: Some("test_access.deny".into()),
+                    ..Default::default()
+                },
+            ),
+            make_field(
+                "locked",
+                FieldAccess {
+                    update: Some("test_access.deny".into()),
+                    ..Default::default()
+                },
+            ),
+        ];
+        let d = doc(json!({}));
+
+        // create-denied field shows up under "create", not "update".
+        let on_create = collect_write_denied_with_lua(&lua, &fields, &d, "", None, None, "create");
+        assert_eq!(on_create, vec![flat("auto_slug")]);
+
+        let on_update = collect_write_denied_with_lua(&lua, &fields, &d, "", None, None, "update");
+        assert_eq!(on_update, vec![flat("locked")]);
+    }
+
+    #[test]
+    fn collect_write_denied_unknown_operation_is_empty() {
+        let lua = setup_lua();
+        let fields = vec![make_field(
+            "x",
+            FieldAccess {
+                create: Some("test_access.deny".into()),
+                ..Default::default()
+            },
+        )];
+        let denied =
+            collect_write_denied_with_lua(&lua, &fields, &doc(json!({})), "", None, None, "delete");
+        assert!(denied.is_empty());
+    }
+
+    #[test]
+    fn collect_write_denied_is_data_aware() {
+        // `check_data` allows the write only when ctx.data.title == "test".
+        let lua = setup_lua();
+        let fields = vec![make_field(
+            "title",
+            FieldAccess {
+                create: Some("test_access.check_data".into()),
+                ..Default::default()
+            },
+        )];
+
+        let allowed = collect_write_denied_with_lua(
+            &lua,
+            &fields,
+            &doc(json!({ "title": "test" })),
+            "",
+            None,
+            None,
+            "create",
+        );
+        assert!(
+            allowed.is_empty(),
+            "data-aware rule should allow when ctx.data matches"
+        );
+
+        let denied = collect_write_denied_with_lua(
+            &lua,
+            &fields,
+            &doc(json!({ "title": "other" })),
+            "",
+            None,
+            None,
+            "create",
+        );
+        assert_eq!(denied, vec![flat("title")]);
+    }
+
+    #[test]
+    fn collect_read_denied_is_data_aware() {
+        let lua = setup_lua();
+        let fields = vec![make_field(
+            "title",
+            FieldAccess {
+                read: Some("test_access.check_data".into()),
+                ..Default::default()
+            },
+        )];
+
+        let allowed = collect_read_denied_with_lua(
+            &lua,
+            &fields,
+            &doc(json!({ "title": "test" })),
+            "",
+            None,
+            None,
+        );
+        assert!(allowed.is_empty());
+
+        let denied = collect_read_denied_with_lua(
+            &lua,
+            &fields,
+            &doc(json!({ "title": "x" })),
+            "",
+            None,
+            None,
+        );
+        assert_eq!(denied, vec![flat("title")]);
     }
 }

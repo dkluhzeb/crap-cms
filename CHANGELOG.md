@@ -640,11 +640,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   same composite that gates document reads: published snapshots need `read`,
   draft snapshots additionally need `access.draft` (so a published-only reader
   sees only published history). On top of that, a new **`access.versions`**
-  rule gates whether a user may see history *at all* — a toggle that, unlike
-  `draft`/`trash`, does **not** fall back to `update`: unset means **allow**, so
-  history follows the read/draft composite by default. Set it to lock the
-  timeline behind a stricter policy than reading the document. It returns
-  `true`/`false`; a filter table is a configuration error (row-level scoping
+  rule gates whether a user may see history *at all* — a toggle that, like
+  `draft`/`trash`, falls back to `update` when unset, so by default only a caller
+  who can edit a document may browse its history (a published-only reader sees
+  none). Set it to gate the timeline behind a policy distinct from editing. It
+  returns `true`/`false`; a filter table is a configuration error (row-level scoping
   belongs on `read`). Restoring a version requires **both** `access.update` (it
   writes the live document) and `access.versions` (it resurrects historical
   content), so denying `versions` walls off historical content entirely. The
@@ -1260,6 +1260,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   files, so trashed documents remain restorable.)
 
 ### Added
+
+- **`crap.access.field_read_denied` / `field_write_denied` accept an optional
+  `document` for data-aware introspection.** `field_read_denied(collection [,
+  document])` and `field_write_denied(collection, operation [, document])` now
+  take an optional document table. When provided, each field rule is evaluated
+  with `ctx.data` / `ctx.document` set, so the returned denied-field list matches
+  exactly what the enforcement strip would do for that row — the right behavior
+  for gating an **edit** form, where the record being edited is known. Omitting
+  the document keeps the previous **categorical** (role-only, `ctx.data` /
+  `ctx.document` nil) check, correct for a **create** form. Backward-compatible:
+  existing one/two-argument calls are unchanged.
 
 - **`before_read` hooks can now seed the shared `ctx.context` table for
   `after_read`.** The read lifecycle (`before_read` → `after_read`) now threads a
