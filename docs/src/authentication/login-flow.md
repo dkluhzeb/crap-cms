@@ -38,6 +38,15 @@ Login and forgot-password endpoints enforce dual rate limiting — per-email and
 
 Forgot-password requests are similarly limited per-email (`max_forgot_password_attempts`) and per-IP (`max_ip_login_attempts` with `forgot_password_window_seconds`).
 
+The **email-verification** (`/admin/verify-email`) and **password-reset**
+(`/admin/reset-password`) endpoints are rate-limited **per-IP only** (sharing the
+forgot-password IP limiter), because the account isn't known until the token
+resolves. Each token-consumption attempt counts toward the limit. On the reset
+endpoint, the local checks (password-confirmation mismatch, password-policy
+violation) run *before* the limiter, so a user's typo never consumes budget —
+only genuine token attempts do. All limiters record atomically (a single
+check-and-record), so concurrent attempts can't slip past the threshold.
+
 ```toml
 [auth]
 max_login_attempts = 5          # per-email threshold
@@ -47,7 +56,10 @@ max_forgot_password_attempts = 3
 forgot_password_window_seconds = "15m"
 ```
 
-Rate limiting applies to the admin UI login, admin forgot-password, and the gRPC `Login` and `ForgotPassword` RPCs. Behind a reverse proxy, the admin UI reads the client IP from `X-Forwarded-For`.
+Rate limiting applies to the admin UI login, admin forgot-password, admin
+email-verification and password-reset, and the gRPC `Login` and `ForgotPassword`
+RPCs. Behind a reverse proxy, the admin UI reads the client IP from
+`X-Forwarded-For`.
 
 ### CSRF Protection
 

@@ -2626,6 +2626,99 @@ fn restore_collection_version_rejects_snapshot_violating_required_field() {
     );
 }
 
+/// Regression: a version restore must not be a side channel around field-level
+/// **write** access. A non-admin owner has collection `update` on their own
+/// `versioned_articles` row, but the `notes` field is write-locked to admins.
+/// Restoring an old snapshot whose `notes` differs from the live value must
+/// leave the live `notes` untouched (the writable `title` still restores).
+/// Previously `restore_*_version` wrote the snapshot wholesale, skipping the
+/// field-level write strip, so a restore could overwrite a write-locked field.
+#[test]
+fn restore_collection_version_respects_field_level_write_access() {
+    let (_tmp, pool, registry, runner) = row_setup();
+
+    let def = registry
+        .get_collection("versioned_articles")
+        .unwrap()
+        .clone();
+    let lc = LocaleConfig::default();
+
+    // Seed a live row authored by user_b with admin-set notes.
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Live Title"));
+    data.insert("author_id".to_string(), json!("user_b"));
+    data.insert("notes".to_string(), json!("admin-set-live"));
+    let mut conn = pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let doc = query::create(&tx, "versioned_articles", &def, &data, None).unwrap();
+
+    // An older snapshot with a different title AND different (forbidden) notes.
+    let snapshot = json!({
+        "title": "Snap Title",
+        "author_id": "user_b",
+        "notes": "snap-notes",
+    });
+    let version =
+        query::create_version(&tx, "versioned_articles", &doc.id, "draft", &snapshot).unwrap();
+    tx.commit().unwrap();
+
+    // user_b is an editor who owns the row (passes collection `update`) but is
+    // write-denied on `notes`.
+    let user_b = make_user_doc("user_b", "editor");
+    let ctx = ServiceContext::collection("versioned_articles", &def)
+        .pool(&pool)
+        .user(Some(&user_b))
+        .runner(&runner)
+        .build();
+    restore_collection_version(&ctx, &doc.id, &version.id, &lc)
+        .expect("owner should restore their own version");
+
+    let live = query::find_by_id(
+        &pool.get().unwrap(),
+        "versioned_articles",
+        &def,
+        &doc.id,
+        None,
+    )
+    .unwrap()
+    .expect("live row present");
+    assert_eq!(
+        live.fields.get("title").and_then(Value::as_str),
+        Some("Snap Title"),
+        "writable field must be restored from the snapshot"
+    );
+    assert_eq!(
+        live.fields.get("notes").and_then(Value::as_str),
+        Some("admin-set-live"),
+        "write-locked field must NOT be overwritten by a non-admin restore"
+    );
+
+    // Control: an admin IS allowed to write `notes`, so their restore applies it.
+    let admin = make_user_doc("admin_u", "admin");
+    let ctx_admin = ServiceContext::collection("versioned_articles", &def)
+        .pool(&pool)
+        .user(Some(&admin))
+        .runner(&runner)
+        .build();
+    restore_collection_version(&ctx_admin, &doc.id, &version.id, &lc)
+        .expect("admin should restore their version");
+
+    let live = query::find_by_id(
+        &pool.get().unwrap(),
+        "versioned_articles",
+        &def,
+        &doc.id,
+        None,
+    )
+    .unwrap()
+    .expect("live row present");
+    assert_eq!(
+        live.fields.get("notes").and_then(Value::as_str),
+        Some("snap-notes"),
+        "admin restore must apply the write-locked field"
+    );
+}
+
 #[test]
 fn access_hook_filter_table_on_job_trigger_is_rejected() {
     let (_tmp, pool, registry, runner) = row_setup();

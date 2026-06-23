@@ -185,6 +185,8 @@ crap.fields.array({
 - **`min_rows`**: Minimum number of items. Validated on create/update (skipped for draft saves).
 - **`max_rows`**: Maximum number of items. Validated on create/update. The admin UI disables the "Add" button when the limit is reached.
 
+Row limits are enforced at every nesting depth — an array nested inside another array, inside blocks, or inside a group is validated the same as a top-level one.
+
 Validation runs in `validate_fields()`, shared by admin handlers, gRPC, and Lua `crap.collections.create()`/`update()`.
 
 ## Default Collapsed State (`collapsed`)

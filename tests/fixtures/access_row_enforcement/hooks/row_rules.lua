@@ -20,4 +20,11 @@ function M.create_returns_filter(ctx)
     return { author_id = "whoever" }
 end
 
+--- Field-level write access: only admins may write the field. Used to prove a
+--- version restore cannot overwrite a write-locked field for a non-admin who
+--- otherwise has collection `update` access.
+function M.admin_only_field(ctx)
+    return ctx.user ~= nil and ctx.user.role == "admin"
+end
+
 return M

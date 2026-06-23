@@ -83,6 +83,9 @@ struct TestApp {
     pool: crap_cms::db::DbPool,
     registry: Arc<crap_cms::core::Registry>,
     jwt_secret: JwtSecret,
+    /// The IP forgot-password limiter the router was built with — exposed so
+    /// rate-limit tests can inspect/seed the same `Arc` the handlers use.
+    ip_forgot_password_limiter: Arc<LoginRateLimiter>,
 }
 
 fn setup_app(collections: Vec<CollectionDefinition>, globals: Vec<GlobalDefinition>) -> TestApp {
@@ -145,6 +148,8 @@ fn setup_app_in_dir(
         .values()
         .any(crap_cms::core::CollectionDefinition::is_auth_collection);
 
+    let ip_forgot_password_limiter = Arc::new(LoginRateLimiter::new(20, 900));
+
     let state = AdminState {
         config,
         config_dir: tmp.path().to_path_buf(),
@@ -164,9 +169,7 @@ fn setup_app_in_dir(
         forgot_password_limiter: std::sync::Arc::new(
             crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
         ),
-        ip_forgot_password_limiter: std::sync::Arc::new(
-            crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
-        ),
+        ip_forgot_password_limiter: Arc::clone(&ip_forgot_password_limiter),
         has_auth,
         translations,
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -203,6 +206,7 @@ fn setup_app_in_dir(
         pool: db_pool,
         registry,
         jwt_secret: "test-jwt-secret".into(),
+        ip_forgot_password_limiter,
     }
 }
 
@@ -1468,6 +1472,126 @@ async fn reset_password_mismatch() {
     );
 }
 
+/// Regression: the verify-email handler counts every attempt against the IP
+/// limiter via the atomic `check_and_block`. Seeding the shared limiter to one
+/// below the threshold and making a single verify request must tip it over —
+/// proving the gate is wired and increments. If the gate were removed (or
+/// reverted to a no-op on internal paths), the limiter would stay un-blocked.
+/// Blocked and invalid-token both redirect to login, so the limiter state — not
+/// the HTTP response — is the observable proof.
+#[tokio::test]
+async fn verify_email_attempt_counts_against_ip_limiter() {
+    let app = setup_app(vec![make_verify_users_def()], vec![]);
+    let ip = "127.0.0.1"; // ConnectInfo below + trust_proxy=off → this key
+
+    // Harness IP limiter is 20/window; seed to 19 so one more trips it.
+    for _ in 0..19 {
+        let _ = app.ip_forgot_password_limiter.check_and_block(ip);
+    }
+    assert!(
+        !app.ip_forgot_password_limiter.is_blocked(ip),
+        "precondition: not yet blocked at 19/20"
+    );
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/verify-email?token=wrong-token")
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(resp.status(), StatusCode::SEE_OTHER | StatusCode::FOUND),
+        "verify-email redirects regardless of outcome, got {}",
+        resp.status()
+    );
+    assert!(
+        app.ip_forgot_password_limiter.is_blocked(ip),
+        "the verify attempt must have advanced the IP limiter to its threshold"
+    );
+}
+
+/// Regression: a password-confirmation mismatch is a user typo, not a token
+/// guess. The gate sits AFTER the local mismatch/policy checks, so a mismatch
+/// must not consume rate-limit budget — even seeded to one-below-threshold, a
+/// mismatch leaves the limiter un-blocked.
+#[tokio::test]
+async fn reset_password_mismatch_does_not_count_against_ip_limiter() {
+    let app = setup_app(vec![make_users_def()], vec![]);
+    let ip = "127.0.0.1";
+
+    for _ in 0..19 {
+        let _ = app.ip_forgot_password_limiter.check_and_block(ip);
+    }
+    assert!(!app.ip_forgot_password_limiter.is_blocked(ip));
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/admin/reset-password")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("Cookie", csrf_cookie())
+                .header("X-CSRF-Token", TEST_CSRF)
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::from(
+                    "token=sometoken&password=newpass123&password_confirm=different456",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "mismatch re-renders the form (no redirect, no block)"
+    );
+    assert!(
+        !app.ip_forgot_password_limiter.is_blocked(ip),
+        "a password-mismatch typo must NOT advance the rate limiter"
+    );
+}
+
+/// Regression: a genuine reset attempt (matching passwords, valid policy) with a
+/// wrong token IS a token guess and counts against the IP limiter atomically.
+/// Seeded to one-below-threshold, one such attempt must trip it.
+#[tokio::test]
+async fn reset_password_wrong_token_counts_against_ip_limiter() {
+    let app = setup_app(vec![make_users_def()], vec![]);
+    let ip = "127.0.0.1";
+
+    for _ in 0..19 {
+        let _ = app.ip_forgot_password_limiter.check_and_block(ip);
+    }
+    assert!(!app.ip_forgot_password_limiter.is_blocked(ip));
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/admin/reset-password")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("Cookie", csrf_cookie())
+                .header("X-CSRF-Token", TEST_CSRF)
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::from(
+                    "token=wrong-token&password=newpass123&password_confirm=newpass123",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let _ = resp; // outcome (invalid-token error vs block) is indistinguishable
+    assert!(
+        app.ip_forgot_password_limiter.is_blocked(ip),
+        "a wrong-token reset attempt must advance the IP limiter to its threshold"
+    );
+}
+
 #[tokio::test]
 async fn reset_password_mismatched_passwords() {
     let app = setup_app(vec![make_users_def()], vec![]);
@@ -1663,6 +1787,8 @@ end"#,
         .values()
         .any(crap_cms::core::CollectionDefinition::is_auth_collection);
 
+    let ip_forgot_password_limiter = Arc::new(LoginRateLimiter::new(20, 900));
+
     let state = AdminState {
         config,
         config_dir: tmp.path().to_path_buf(),
@@ -1680,7 +1806,7 @@ end"#,
         login_limiter: Arc::new(LoginRateLimiter::new(5, 300)),
         ip_login_limiter: Arc::new(LoginRateLimiter::new(20, 300)),
         forgot_password_limiter: Arc::new(LoginRateLimiter::new(3, 900)),
-        ip_forgot_password_limiter: Arc::new(LoginRateLimiter::new(20, 900)),
+        ip_forgot_password_limiter: Arc::clone(&ip_forgot_password_limiter),
         has_auth,
         translations,
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -1717,6 +1843,7 @@ end"#,
         pool: db_pool,
         registry,
         jwt_secret: "test-jwt-secret".into(),
+        ip_forgot_password_limiter,
     }
 }
 

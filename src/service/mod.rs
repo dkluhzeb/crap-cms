@@ -53,6 +53,7 @@ mod context;
 pub(crate) mod document_info;
 mod email;
 mod error;
+pub(crate) mod events;
 mod globals;
 pub(crate) mod helpers;
 pub(crate) mod hooks;
@@ -85,6 +86,7 @@ pub use collections::{
     delete_many, undelete_document, unpublish_document, update_document, update_many,
 };
 pub(crate) use email::{VerificationEmailInput, send_verification_email};
+pub(crate) use events::{EventGate, event_op_str};
 pub use globals::{unpublish_global_document, update_global_document, update_global_in_conn};
 pub(crate) use helpers::run_after_change_hooks;
 pub use hooks::{

@@ -28,6 +28,13 @@ pub(crate) fn lua_table_to_json_map(tbl: &Table) -> LuaResult<HashMap<String, Js
 }
 
 /// Convert a Lua data table to a `HashMap`<String, String> for create/update.
+///
+/// **Lossy — prefer [`lua_table_to_json_map`] for new code.** This flattens every
+/// value to a `String`: floats go through Rust's default `Display` (so precision
+/// can drift), nested tables (blocks/arrays/has-many) are silently dropped, and
+/// the result loses type information. It exists for the legacy string-map call
+/// sites; anything that must round-trip values faithfully should use the
+/// precision-preserving JSON-map variant above.
 pub(crate) fn lua_table_to_hashmap(tbl: &Table) -> LuaResult<HashMap<String, String>> {
     let mut map = HashMap::new();
 

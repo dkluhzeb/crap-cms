@@ -281,7 +281,16 @@ pub(crate) fn restore_collection_version_core(
     let version = query::find_version_by_id(conn, ctx.slug, version_id)?
         .ok_or_else(|| ServiceError::NotFound(format!("Version '{version_id}' not found")))?;
 
-    warn_on_snapshot_drift(&version.snapshot, &def.fields, ctx.slug, version_id);
+    let mut snapshot = version.snapshot;
+
+    warn_on_snapshot_drift(&snapshot, &def.fields, ctx.slug, version_id);
+
+    // Field-level write access also gates restore: a user who may `update` the
+    // document but is write-denied on a specific field cannot use a restore to
+    // overwrite that field's live value. Drop write-denied fields from the
+    // snapshot before validation and persistence (same input-stripping model
+    // `update` uses), so the partial restore leaves their stored values intact.
+    write_hooks.strip_write_access_value(&def.fields, &mut snapshot, ctx.slug, ctx.user, None);
 
     // Re-run schema validation against the restored data, so a snapshot
     // saved before a schema tightening (e.g. a field gained `required = true`
@@ -289,7 +298,7 @@ pub(crate) fn restore_collection_version_core(
     // valid live data with invalid contents. User-defined hooks are not
     // re-run — restore is meant to be transparent — but type / required /
     // unique / regex constraints from the current schema bite.
-    let validation_data = snapshot_to_validation_data(&version.snapshot);
+    let validation_data = snapshot_to_validation_data(&snapshot);
     let val_ctx = ValidationCtx::builder(conn, ctx.slug)
         .exclude_id(Some(document_id))
         .soft_delete(def.soft_delete)
@@ -304,7 +313,7 @@ pub(crate) fn restore_collection_version_core(
         ctx.slug,
         def,
         document_id,
-        &version.snapshot,
+        &snapshot,
         "published",
         locale_config,
     )?;
@@ -405,24 +414,25 @@ pub(crate) fn restore_global_version_core(
     let version = query::find_version_by_id(conn, &gtable, version_id)?
         .ok_or_else(|| ServiceError::NotFound(format!("Version '{version_id}' not found")))?;
 
-    warn_on_snapshot_drift(&version.snapshot, &def.fields, ctx.slug, version_id);
+    let mut snapshot = version.snapshot;
+
+    warn_on_snapshot_drift(&snapshot, &def.fields, ctx.slug, version_id);
+
+    // Field-level write access also gates restore — see the collection variant
+    // above. Drop write-denied fields from the snapshot before validation and
+    // persistence so a restore can't overwrite a write-locked field's value.
+    write_hooks.strip_write_access_value(&def.fields, &mut snapshot, ctx.slug, ctx.user, None);
 
     // Re-run schema validation against the restored data — see the
     // collection variant above for the full rationale.
-    let validation_data = snapshot_to_validation_data(&version.snapshot);
+    let validation_data = snapshot_to_validation_data(&snapshot);
     let val_ctx = ValidationCtx::builder(conn, &gtable).user(ctx.user).build();
     write_hooks
         .validate_fields(&def.fields, &validation_data, &val_ctx)
         .map_err(ServiceError::Validation)?;
 
-    let mut doc = query::restore_global_version(
-        conn,
-        ctx.slug,
-        def,
-        &version.snapshot,
-        "published",
-        locale_config,
-    )?;
+    let mut doc =
+        query::restore_global_version(conn, ctx.slug, def, &snapshot, "published", locale_config)?;
 
     write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.slug, ctx.user, None);
     doc.strip_fields(&helpers::collect_api_hidden_field_names(&def.fields, ""));

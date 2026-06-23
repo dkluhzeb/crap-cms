@@ -154,6 +154,15 @@ grpcurl -plaintext -d '{
 
 This overwrites the main table with the snapshot data, sets `_status` to `"published"`, and creates a new version entry for the restore.
 
+Restore is gated by `access.update` (and the `access.versions` toggle) for the
+collection, and it also honors **field-level write access**: a field the caller
+is denied `access.update` on is not overwritten by the restore — it keeps its
+current live value, exactly as a normal partial update would leave it. The
+schema is re-validated against the snapshot before the write, so a snapshot that
+violates current constraints (e.g. a field that has since become `required`) is
+rejected rather than restored. User-defined write hooks are **not** re-run —
+restore is meant to be transparent.
+
 ## Lua API
 
 The `draft` option is available on `create` and `update`:

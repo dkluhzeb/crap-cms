@@ -26,6 +26,14 @@ crap.collections.define("versioned_articles", {
     fields = {
         { name = "title", type = "text", required = true },
         { name = "author_id", type = "text" },
+        -- Field-level write lock: only admins may change `notes`. A non-admin
+        -- owner has collection `update` but must not be able to overwrite this
+        -- field via a version restore.
+        {
+            name = "notes",
+            type = "text",
+            access = { update = "hooks.row_rules.admin_only_field" },
+        },
     },
     access = {
         read = "hooks.row_rules.own_rows",

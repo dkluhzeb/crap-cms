@@ -71,10 +71,16 @@ pub async fn verify_email(
 ) -> impl IntoResponse {
     let ip = client_ip(&headers, &addr, &state.config.server);
 
-    // Rate limit by IP to prevent brute-forcing verification tokens.
-    // Uses the dedicated forgot-password IP limiter (not login limiter) to avoid
-    // verification failures blocking legitimate login attempts from the same IP.
-    if state.ip_forgot_password_limiter.is_blocked(&ip) {
+    // Rate limit by IP to prevent brute-forcing verification tokens. Atomically
+    // record this attempt and bail if it puts the IP over the threshold — one
+    // backend op, closing the check-then-record race the old `is_blocked` +
+    // `record_failure` split left open. Every attempt counts (the same idiom as
+    // login and forgot-password), so a transient internal error counts too;
+    // that is acceptable for a high-entropy token endpoint and strictly safer
+    // than refunding (no induce-error-to-refund vector). Uses the dedicated
+    // forgot-password IP limiter (not the login limiter) so verification
+    // failures don't block legitimate logins from the same IP.
+    if state.ip_forgot_password_limiter.check_and_block(&ip) {
         return Redirect::to(paths::LOGIN);
     }
 
@@ -87,21 +93,13 @@ pub async fn verify_email(
 
     match result {
         Ok(Ok(true)) => Redirect::to(&paths::login_with_success("success_email_verified")),
-        Ok(Ok(false)) => {
-            // Invalid or expired token — record rate-limit failure
-            state.ip_forgot_password_limiter.record_failure(&ip);
-            Redirect::to(paths::LOGIN)
-        }
+        Ok(Ok(false)) => Redirect::to(paths::LOGIN),
         Ok(Err(e)) => {
-            // Internal error — log but don't penalize IP
             error!("Email verification error: {}", e);
-
             Redirect::to(paths::LOGIN)
         }
         Err(e) => {
-            // Task join error — log but don't penalize IP
             error!("Email verification task error: {}", e);
-
             Redirect::to(paths::LOGIN)
         }
     }

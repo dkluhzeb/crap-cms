@@ -310,6 +310,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **The email-verification and password-reset endpoints now rate-limit
+  atomically.** Both used a non-atomic `is_blocked` + `record_failure` split, so
+  a burst of concurrent token guesses could all observe an under-limit count
+  before any of them recorded, letting more than the configured number through
+  per window. They now use the same atomic `check_and_block` as the login and
+  forgot-password endpoints — one backend operation per attempt, closing the
+  race. The reset endpoint records the attempt **after** the local
+  password-confirmation and policy checks, so a user's typo still never consumes
+  rate-limit budget; only genuine token-consumption attempts count. A transient
+  internal error now counts toward the limit (the price of atomicity), which is
+  immaterial for these high-entropy tokens and strictly safer than refunding.
+
+- **Version restore now honors field-level write access.** Restoring an older
+  version snapshot wrote the snapshot's values wholesale, bypassing each field's
+  `access.update` rule. A user who could `update` a document but was write-denied
+  on a specific field (e.g. an admin-only `notes` column) could therefore use a
+  restore to overwrite that locked field's live value. Restore now strips
+  write-denied fields from the snapshot before persisting — the same
+  input-stripping model a normal `update` uses — so a locked field keeps its
+  stored value while the writable fields are restored. Restoring a document you
+  fully control is unchanged.
+
+- **The field-access strip walker now fails closed on an unresolvable Blocks
+  row type.** When a `blocks` row carried a `_block_type` that matched no block
+  definition (a forged or malformed payload), the read/write access strip left
+  the row's data untouched instead of stripping it, because it couldn't map the
+  row's keys to any field's access rule. Such a row now has its non-system keys
+  dropped. Stored rows always carry a valid type and forged rows are rejected by
+  validation regardless, so this only hardens the malformed-input write path.
+
 - **The gRPC account-action RPCs now authorize the caller against the target
   user.** `LockAccount`, `UnlockAccount`, `VerifyAccount`, and `UnverifyAccount`
   previously required only that the caller present a *valid* JWT — they performed
@@ -764,6 +794,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **`min_rows` / `max_rows` are now enforced on nested array and blocks
+  fields.** The row-count bounds were only checked for top-level array/blocks
+  fields; an array or blocks field nested inside another array, blocks, or group
+  row (e.g. array-in-array, blocks-in-group) skipped the check entirely, so its
+  `min_rows`/`max_rows` were silently ignored. The nested sub-field validator now
+  runs the same row-bounds check the top level does (still skipped on draft
+  saves, matching top-level behavior).
 
 - **Field-access functions now receive the real `ctx.collection`.** A field's
   `access.read` / `access.create` / `access.update` function previously saw

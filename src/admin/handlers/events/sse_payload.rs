@@ -7,18 +7,15 @@
 use std::collections::HashMap;
 
 use axum::response::sse::Event;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use tracing::warn;
 
 use crate::{
     admin::AdminState,
-    core::{
-        Document, HookRef, LiveMode, MutationEvent, Registry,
-        event::{EventOperation, EventTarget},
-    },
-    db::{AccessResult, DbConnection, EventViewGate, FilterClause, query::filter::memory},
-    hooks::{AccessCheckInput, EventAfterReadInput, HookRunner},
-    service::helpers::collect_api_hidden_field_names,
+    core::{Document, HookRef, LiveMode, MutationEvent, Registry, event::EventTarget},
+    db::{AccessResult, DbConnection, EventViewGate, FilterClause},
+    hooks::{AccessCheckInput, HookRunner},
+    service::{EventGate, event_op_str},
 };
 
 /// Resolved SSE access: per-view visibility (with row constraints) for
@@ -203,108 +200,25 @@ fn build_event_payload(
     registry: &Registry,
     user_doc: Option<&Document>,
 ) -> Option<Value> {
-    let slug_str: &str = event.collection.as_ref();
-
-    let views = match event.target {
-        EventTarget::Collection => access.collection_views.get(slug_str),
-        EventTarget::Global => access.global_views.get(slug_str),
-    }?;
-
-    // Fail closed: an event without view metadata (e.g. from a pre-view node
-    // during a rolling upgrade) cannot be safely gated, so drop it rather than
-    // default to the published view.
-    let view = event.view.as_ref()?;
-
-    // Gate by the content view this event belongs to (trash/draft/published).
-    // `None` means the subscriber cannot see that view, so the event is dropped
-    // — closing the draft/trash leak. The `view` metadata is carried
-    // independent of `live_mode`, so this holds for empty-`data` events too
-    // (metadata-only collections, all deletes).
-    let constraints = views.constraints_for(view)?;
-
-    // Row-level constraints match against the event payload; empty `data`
-    // cannot satisfy a non-empty constraint (fail-closed) — unchanged behavior.
-    // Field types make Checkbox/Number constraints match SQL, not a string compare.
-    let fields = match event.target {
-        EventTarget::Collection => registry
-            .get_collection(slug_str)
-            .map(|d| d.fields.as_slice()),
-        EventTarget::Global => registry.get_global(slug_str).map(|d| d.fields.as_slice()),
+    // The view gate + field strip is shared with the gRPC `Subscribe` stream so
+    // the two surfaces can't drift on the security-critical pipeline.
+    let data = EventGate {
+        collection_views: &access.collection_views,
+        global_views: &access.global_views,
+        collection_modes: &access.collection_modes,
+        global_modes: &access.global_modes,
+        registry,
+        hook_runner,
+        user_doc,
     }
-    .unwrap_or(&[]);
-
-    if !constraints.is_empty()
-        && !memory::matches_constraints_typed(&event.data, constraints, fields)
-    {
-        return None;
-    }
+    .evaluate(event)?;
 
     let target_str = match event.target {
         EventTarget::Collection => "collection",
         EventTarget::Global => "global",
     };
 
-    let op_str = match event.operation {
-        EventOperation::Create => "create",
-        EventOperation::Update => "update",
-        EventOperation::Delete => "delete",
-    };
-
-    // Apply mode: full = after_read hooks + data, metadata = no data. Select by
-    // target — a collection and a global may share a slug.
-    let mode = match event.target {
-        EventTarget::Collection => access.collection_modes.get(slug_str),
-        EventTarget::Global => access.global_modes.get(slug_str),
-    }
-    .copied()
-    .unwrap_or_default();
-
-    let data: Map<String, Value> = if mode == LiveMode::Full {
-        let (hooks, field_defs) = match event.target {
-            EventTarget::Collection => registry
-                .get_collection(slug_str)
-                .map(|d| (d.hooks.clone(), d.fields.clone())),
-            EventTarget::Global => registry
-                .get_global(slug_str)
-                .map(|d| (d.hooks.clone(), d.fields.clone())),
-        }
-        .unwrap_or_default();
-
-        let processed_data = hook_runner.apply_after_read_for_event(&EventAfterReadInput {
-            collection: slug_str,
-            hooks: &hooks,
-            fields: &field_defs,
-            document_id: event.document_id.as_ref(),
-            data: &event.data,
-            user: user_doc,
-            operation: op_str,
-            timestamp: event.timestamp.as_str(),
-        });
-
-        let mut visible: Map<String, Value> = processed_data
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-
-        // Data-aware field-read strip (each `access.read` rule sees the event's
-        // document as `ctx.data` / `ctx.document`), evaluated connection-less on
-        // a pool VM; then the document-independent API-hidden strip.
-        hook_runner.strip_read_access_for_event(
-            &field_defs,
-            &mut visible,
-            &processed_data,
-            slug_str,
-            user_doc,
-        );
-
-        for denial in collect_api_hidden_field_names(&field_defs, "") {
-            denial.strip_from(&mut visible);
-        }
-
-        visible
-    } else {
-        Map::new() // metadata mode: no data
-    };
+    let op_str = event_op_str(&event.operation);
 
     // Editor identity is server-side only — leaking the editor's id/email to
     // every subscriber is a PII exposure. Subscribers get a boolean "was this
@@ -359,7 +273,7 @@ mod tests {
         core::{
             Access, CollectionDefinition, DocumentFields, DocumentId, FieldAccess, FieldDefinition,
             FieldType, Slug,
-            event::{EventUser, EventViewMeta},
+            event::{EventOperation, EventUser, EventViewMeta},
         },
         db::{Filter, FilterOp},
     };

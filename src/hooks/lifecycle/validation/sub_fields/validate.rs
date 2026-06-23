@@ -386,6 +386,12 @@ fn validate_leaf_sub_field(
     //     collection the field author never allowed.
     checks::check_polymorphic_allowlist(sf, qualified, value, errors);
 
+    // 8c. Row bounds (min_rows / max_rows) for a nested Array/Blocks sub-field.
+    //     The top-level walker runs this for every field (a no-op unless bounds
+    //     are set); without it here, an array-in-array / array-in-blocks /
+    //     blocks-in-group `min_rows`/`max_rows` would never be enforced.
+    checks::check_row_bounds(sf, qualified, value, ctx.is_draft, errors);
+
     // 9. Richtext node attr validation
     if sf.field_type == FieldType::Richtext
         && !is_empty

@@ -107,19 +107,29 @@ pub async fn reset_password_action(
 ) -> Response {
     let ip = client_ip(&headers, &addr, &state.config.server);
 
-    // Rate limit by IP — prevents brute-forcing reset tokens.
-    // Uses the dedicated forgot-password IP limiter (not login limiter) to avoid
-    // reset failures blocking legitimate login attempts from the same IP.
-    if state.ip_forgot_password_limiter.is_blocked(&ip) {
-        return render_reset_error(&state, Some(&form.token), "error_reset_link_invalid");
-    }
-
+    // Local-only validation runs FIRST, before the rate-limit gate: a
+    // mismatched confirmation or a policy violation is a legitimate user typo,
+    // not a token guess, so it must not consume the IP's budget.
     if form.password != form.password_confirm {
         return render_reset_error(&state, Some(&form.token), "error_passwords_no_match");
     }
 
     if let Err(e) = state.config.auth.password_policy.validate(&form.password) {
         return render_reset_error(&state, Some(&form.token), &e.to_string());
+    }
+
+    // Rate limit by IP to prevent brute-forcing reset tokens. Atomically record
+    // this attempt and bail if it puts the IP over the threshold — one backend
+    // op, closing the check-then-record race the old `is_blocked` +
+    // `record_failure` split left open. The gate sits AFTER the local checks
+    // above so only genuine token-consumption attempts count. Every such attempt
+    // counts (the same idiom as login and forgot-password), so a transient
+    // internal error counts too — acceptable for a high-entropy token endpoint
+    // and strictly safer than refunding. Uses the dedicated forgot-password IP
+    // limiter (not the login limiter) so reset failures don't block legitimate
+    // logins from the same IP.
+    if state.ip_forgot_password_limiter.check_and_block(&ip) {
+        return render_reset_error(&state, Some(&form.token), "error_reset_link_invalid");
     }
 
     let pool = state.pool.clone();
@@ -138,9 +148,6 @@ pub async fn reset_password_action(
             Redirect::to(&paths::login_with_success("success_password_reset")).into_response()
         }
         Ok(Err(e)) => {
-            // Record failure on invalid/expired token — not on success
-            state.ip_forgot_password_limiter.record_failure(&ip);
-
             let msg = match e.downcast_ref::<ResetTokenError>() {
                 Some(ResetTokenError::Expired) => "error_reset_link_expired",
                 _ => "error_reset_link_invalid",

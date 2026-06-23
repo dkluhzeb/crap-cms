@@ -177,6 +177,13 @@ After commit:
                     full → after_read hooks → field strip → deliver
 ```
 
+The content-view access and row constraints (a, b) are resolved **once at
+subscribe time** and reused. The field strip in (c) is **not** cached — each
+event re-runs the data-aware field-read rules against that event's own document
+(`ctx.data` / `ctx.document`), so a rule that depends on document values gates
+each event individually. The admin SSE stream and the gRPC `Subscribe` stream
+share one implementation of this gate, so they cannot drift.
+
 ## Limitations
 
 - Events are **ephemeral** — missed events are not replayed

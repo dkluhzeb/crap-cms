@@ -23,14 +23,11 @@ use crate::{
     },
     core::{
         Document, EventReceiver, HookRef, LiveMode, MutationEvent, Registry, SharedTokenProvider,
-        event::{EventOperation, EventTarget, InvalidationReceiver, RecvError},
+        event::{InvalidationReceiver, RecvError},
     },
-    db::{
-        AccessResult, DbConnection, DbPool, EventViewGate, FilterClause,
-        query::filter::memory::matches_constraints_typed,
-    },
-    hooks::{AccessCheckInput, EventAfterReadInput, HookRunner},
-    service::helpers::collect_api_hidden_field_names,
+    db::{AccessResult, DbConnection, DbPool, EventViewGate, FilterClause},
+    hooks::{AccessCheckInput, HookRunner},
+    service::{EventGate, event_op_str},
 };
 
 /// Outbound channel capacity per subscriber. Small — we rely on `send_timeout`
@@ -236,121 +233,32 @@ struct SubscriberCtx {
     registry: Arc<Registry>,
 }
 
-/// Process a single event for a subscriber: access checks, mode-based data processing,
-/// and proto conversion. Returns None if the event should be skipped.
+/// Process a single event for a subscriber: requested-op filter, then the
+/// shared view gate + field strip, then proto conversion. Returns None if the
+/// event should be skipped. The gate is shared with the admin SSE stream so the
+/// security-critical pipeline can't drift between the two surfaces.
 fn process_event(event: &MutationEvent, ctx: &SubscriberCtx) -> Option<content::MutationEvent> {
-    let slug_str: &str = event.collection.as_ref();
-
-    let views = match event.target {
-        EventTarget::Collection => ctx.access.collection_views.get(slug_str),
-        EventTarget::Global => ctx.access.global_views.get(slug_str),
-    }?;
-
-    let op_str = match event.operation {
-        EventOperation::Create => "create",
-        EventOperation::Update => "update",
-        EventOperation::Delete => "delete",
-    };
-
-    if !ctx.requested_ops.contains(op_str) {
+    // gRPC subscribers can scope to a subset of operations; the SSE admin stream
+    // always wants all, so this filter is subscribe-specific and stays here.
+    if !ctx.requested_ops.contains(event_op_str(&event.operation)) {
         return None;
     }
 
-    // Fail closed: an event without view metadata (e.g. from a pre-view node
-    // during a rolling upgrade) cannot be safely gated, so drop it rather than
-    // default to the published view.
-    let view = event.view.as_ref()?;
-
-    // Gate by the content view this event belongs to (trash/draft/published).
-    // `None` means the subscriber cannot see that view, so the event is dropped
-    // — closing the draft/trash leak. The event's `view` metadata is carried
-    // independent of `live_mode`, so this holds even when `data` is empty
-    // (metadata-only collections, all deletes).
-    let constraints = views.constraints_for(view)?;
-
-    // Row-level constraints match against the event payload. Empty `data`
-    // (metadata mode / deletes) cannot satisfy a non-empty constraint, so a
-    // constrained subscriber is fail-closed for those — unchanged behavior.
-    // Field types (resolved from the schema) make Checkbox/Number constraints
-    // match SQL instead of a blind string compare.
-    let fields = match event.target {
-        EventTarget::Collection => ctx
-            .registry
-            .get_collection(slug_str)
-            .map(|d| d.fields.as_slice()),
-        EventTarget::Global => ctx
-            .registry
-            .get_global(slug_str)
-            .map(|d| d.fields.as_slice()),
+    let visible = EventGate {
+        collection_views: &ctx.access.collection_views,
+        global_views: &ctx.access.global_views,
+        collection_modes: &ctx.access.collection_modes,
+        global_modes: &ctx.access.global_modes,
+        registry: &ctx.registry,
+        hook_runner: &ctx.hook_runner,
+        user_doc: ctx.access.user_doc.as_ref(),
     }
-    .unwrap_or(&[]);
+    .evaluate(event)?;
 
-    if !constraints.is_empty() && !matches_constraints_typed(&event.data, constraints, fields) {
-        return None;
-    }
-
-    let mode = match event.target {
-        EventTarget::Collection => ctx.access.collection_modes.get(slug_str),
-        EventTarget::Global => ctx.access.global_modes.get(slug_str),
-    }
-    .copied()
-    .unwrap_or_default();
-
-    let fields: BTreeMap<String, prost_types::Value> = if mode == LiveMode::Full {
-        let (hooks, field_defs) = match event.target {
-            EventTarget::Collection => ctx
-                .registry
-                .get_collection(slug_str)
-                .map(|d| (d.hooks.clone(), d.fields.clone())),
-
-            EventTarget::Global => ctx
-                .registry
-                .get_global(slug_str)
-                .map(|d| (d.hooks.clone(), d.fields.clone())),
-        }
-        .unwrap_or_default();
-
-        let processed = ctx
-            .hook_runner
-            .apply_after_read_for_event(&EventAfterReadInput {
-                collection: slug_str,
-                hooks: &hooks,
-                fields: &field_defs,
-                document_id: event.document_id.as_ref(),
-                data: &event.data,
-                user: ctx.access.user_doc.as_ref(),
-                operation: op_str,
-                timestamp: event.timestamp.as_str(),
-            });
-
-        let mut visible: serde_json::Map<String, serde_json::Value> = processed
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-
-        // Data-aware field-read strip (each `access.read` rule sees the event's
-        // document as `ctx.data` / `ctx.document`), evaluated connection-less on a
-        // pool VM — a rule doing CRUD fails closed, matching the event
-        // `after_read` contract. Then the document-independent API-hidden strip.
-        ctx.hook_runner.strip_read_access_for_event(
-            &field_defs,
-            &mut visible,
-            &processed,
-            slug_str,
-            ctx.access.user_doc.as_ref(),
-        );
-
-        for denial in collect_api_hidden_field_names(&field_defs, "") {
-            denial.strip_from(&mut visible);
-        }
-
-        visible
-            .iter()
-            .map(|(k, v)| (k.clone(), json_to_prost_value(v)))
-            .collect()
-    } else {
-        BTreeMap::new()
-    };
+    let fields: BTreeMap<String, prost_types::Value> = visible
+        .iter()
+        .map(|(k, v)| (k.clone(), json_to_prost_value(v)))
+        .collect();
 
     Some(content::MutationEvent {
         sequence: event.sequence,

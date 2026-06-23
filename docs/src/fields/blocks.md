@@ -235,6 +235,8 @@ crap.fields.blocks({
 - **`min_rows`**: Minimum number of blocks. Validated on create/update (skipped for draft saves).
 - **`max_rows`**: Maximum number of blocks. Validated on create/update. The admin UI disables the "Add Block" button when the limit is reached.
 
+Row limits are enforced at every nesting depth — blocks nested inside an array, inside another blocks field, or inside a group are validated the same as a top-level one.
+
 ## Default Collapsed State (`collapsed`)
 
 Existing block rows render collapsed by default on page load (`admin.collapsed = true`). Set `admin.collapsed = false` to start rows expanded. New blocks added via the UI are always expanded.

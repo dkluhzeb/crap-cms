@@ -387,7 +387,18 @@ pub(crate) fn strip_access_data_aware<E, F>(
                             field.blocks.iter().find(|b| b.block_type == block_type)
                         {
                             strip_access_data_aware(&block.fields, r, extract, is_denied);
+                            continue;
                         }
+
+                        // Unresolvable block type (missing/unknown `_block_type`):
+                        // we can't map the row's keys to any block's field-access
+                        // rules, so a selective strip is impossible. Fail closed —
+                        // drop every non-system key rather than pass the row
+                        // through unstripped. Stored rows always carry a valid
+                        // type, and a forged unknown-type row is rejected by
+                        // validation anyway, so this only ever bites malformed
+                        // input on the write path.
+                        r.retain(|k, _| k.starts_with('_'));
                     }
                 }
             }
@@ -761,6 +772,52 @@ mod tests {
         let meta = doc.get("meta").unwrap().as_object().unwrap();
         assert!(meta.contains_key("public"), "non-gated group field kept");
         assert!(!meta.contains_key("token"), "gated group field stripped");
+    }
+
+    /// Fail-closed: a Blocks row whose `_block_type` resolves to no block
+    /// definition (forged/missing type) must NOT pass its data through
+    /// unstripped. The walker can't map the row's keys to any field-access rule,
+    /// so it drops every non-system key, keeping only `_`-prefixed metadata.
+    #[test]
+    fn data_aware_strip_drops_unresolved_block_row_data() {
+        let fields = vec![
+            FieldDefinition::builder("body", FieldType::Blocks)
+                .blocks(vec![crate::core::BlockDefinition::new(
+                    "text",
+                    vec![FieldDefinition::builder("value", FieldType::Text).build()],
+                )])
+                .build(),
+        ];
+        // Never consulted for the unknown row — there is no field to gate.
+        let is_denied = |_hook: &HookRef, _level: &DocumentFields| false;
+
+        let mut doc = json!({
+            "body": [
+                { "_block_type": "text", "value": "kept" },
+                { "_block_type": "forged", "smuggled": "leak", "_keepme": "meta" }
+            ]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        strip_read_access_data_aware(&fields, &mut doc, &is_denied);
+
+        let rows = doc.get("body").unwrap().as_array().unwrap();
+        assert_eq!(
+            rows[0].as_object().unwrap().get("value").unwrap(),
+            &json!("kept"),
+            "known block row passes through normally"
+        );
+        let forged = rows[1].as_object().unwrap();
+        assert!(
+            !forged.contains_key("smuggled"),
+            "unresolved-block-type row must have its data keys stripped"
+        );
+        assert!(
+            forged.contains_key("_block_type") && forged.contains_key("_keepme"),
+            "system (`_`-prefixed) keys are retained"
+        );
     }
 
     // ── Data-aware strip via a real Lua VM (ctx.data / ctx.document) ─────────

@@ -5,7 +5,10 @@ use anyhow::Result;
 use serde_json::{Map, Value};
 
 use crate::{
-    core::{Document, DocumentFields, FieldDefinition, Hooks, Registry, ValidationError},
+    core::{
+        Document, DocumentFields, FieldDefinition, Hooks, Registry, ValidationError,
+        nest_group_fields,
+    },
     db::{AccessResult, DbConnection, LocaleContext},
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
@@ -191,6 +194,56 @@ pub trait WriteHooks {
         );
 
         *data = level.into_iter().collect();
+    }
+
+    /// Strip **write**-denied fields from a version-snapshot `Value::Object` in
+    /// place (no-op for a non-object snapshot), evaluating each field's
+    /// `access.update` rule. Used by the version-restore path: a user who may
+    /// `update` a document but is write-denied on a specific field must not be
+    /// able to use a restore to overwrite that field's live value. The denied
+    /// field is dropped from the snapshot, so the partial restore leaves its
+    /// stored value untouched (the same input-stripping model `update` uses).
+    /// The snapshot is its own `ctx.document`. Mirrors
+    /// [`ReadHooks::strip_read_access_value`](crate::service::hooks::ReadHooks::strip_read_access_value).
+    fn strip_write_access_value(
+        &self,
+        fields: &[FieldDefinition],
+        snapshot: &mut Value,
+        collection: &str,
+        user: Option<&Document>,
+        locale: Option<&str>,
+    ) {
+        if !has_any_field_access(fields, |f| f.access.update.as_ref()) {
+            return;
+        }
+
+        let Some(obj) = snapshot.as_object() else {
+            return;
+        };
+
+        // Legacy snapshots may be stored in the flat `group__sub` column form,
+        // but the data-aware strip walks the canonical nested shape. Normalize
+        // first so a write-denied group sub-field is stripped regardless of how
+        // the snapshot was stored; `nest_group_fields` is idempotent for the
+        // nested snapshots current code writes. Mirrors the read-path variant.
+        let nested = nest_group_fields(&obj.clone().into_iter().collect(), fields);
+        let mut level: Map<String, Value> = nested.into_inner().into_iter().collect();
+
+        let document: DocumentFields = level.clone().into_iter().collect();
+
+        self.strip_write_access_map(
+            fields,
+            &mut level,
+            &WriteStripInput {
+                document: &document,
+                collection,
+                user,
+                locale,
+                operation: "update",
+            },
+        );
+
+        *snapshot = Value::Object(level);
     }
 
     /// Run schema-level field validation (required, unique, regex, type checks,

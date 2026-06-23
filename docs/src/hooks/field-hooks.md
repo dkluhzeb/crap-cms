@@ -67,6 +67,27 @@ For shared hooks that work across multiple collections, use the generic
 | `after_change` | Yes | Side effects after write with CRUD access (logging, cascades) |
 | `after_read` | No | Transform values before response (formatting, computed fields) |
 
+## Nesting
+
+Field hooks fire for **every field at every nesting depth**, not just top-level
+fields. A hook attached to a sub-field inside a group, an array row, a blocks
+row, or any combination (`array → group`, `blocks → group`, array-in-array,
+group-in-array, …) runs once per occurrence of that field in the data.
+
+`ctx.data` narrows to the **nearest enclosing scope** at each level, while
+`ctx.document` always stays the full document:
+
+| Field location | `ctx.data` is… | `ctx.document` is… |
+|----------------|----------------|--------------------|
+| Top level | the full document | the full document |
+| Inside a group `seo` | the `seo` object | the full document |
+| Inside an array/blocks row | that row's object | the full document |
+| A sub-field nested deeper | its nearest group/row object | the full document |
+
+So a hook on a field inside `blocks → group` sees the group object as `ctx.data`
+and can still reach sibling top-level fields via `ctx.document`. Layout wrappers
+(Row, Collapsible, Tabs) are transparent — they don't introduce a new scope.
+
 ## Definition
 
 ```lua

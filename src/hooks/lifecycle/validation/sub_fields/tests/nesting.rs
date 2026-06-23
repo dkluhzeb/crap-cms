@@ -350,3 +350,123 @@ fn test_validate_richtext_node_attrs_inside_array_draft_skips_required() {
         "draft mode should skip required checks for richtext node attrs in arrays"
     );
 }
+
+/// Regression: `min_rows` / `max_rows` on a nested Array (array-in-array) must
+/// be enforced. The top-level walker checked row bounds, but the sub-field
+/// walker never called `check_row_bounds`, so a nested array's count limits
+/// were silently ignored.
+#[test]
+fn test_validate_nested_array_min_rows_enforced() {
+    let lua = mlua::Lua::new();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+
+    // Array `sections` > Array `items` with min_rows = 2.
+    let fields = vec![
+        FieldDefinition::builder("sections", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("items", FieldType::Array)
+                    .min_rows(2)
+                    .fields(vec![
+                        FieldDefinition::builder("label", FieldType::Text).build(),
+                    ])
+                    .build(),
+            ])
+            .build(),
+    ];
+
+    // One section whose nested `items` has only a single row — violates min_rows.
+    let mut data = DocumentFields::new();
+    data.insert(
+        "sections".to_string(),
+        json!([{"items": [{"label": "only one"}]}]),
+    );
+
+    let result = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test").build(),
+    );
+
+    assert!(
+        result.is_err(),
+        "min_rows on a nested array (array-in-array) must be enforced"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        err.errors
+            .iter()
+            .any(|e| e.message.contains("at least 2") && e.field.contains("sections[0][items]")),
+        "expected a min_rows error keyed to the nested array, got: {:?}",
+        err.errors
+    );
+}
+
+/// Regression companion: `max_rows` on a Blocks-in-Group sub-field is enforced,
+/// and the nested row-bounds check is skipped on draft saves (matching the
+/// top-level behavior).
+#[test]
+fn test_validate_blocks_in_group_max_rows_enforced_and_draft_skipped() {
+    let lua = mlua::Lua::new();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+
+    // Array `rows` > Group `cfg` > Array `tags` with max_rows = 1.
+    let fields = vec![
+        FieldDefinition::builder("rows", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("cfg", FieldType::Group)
+                    .fields(vec![
+                        FieldDefinition::builder("tags", FieldType::Array)
+                            .max_rows(1)
+                            .fields(vec![
+                                FieldDefinition::builder("name", FieldType::Text).build(),
+                            ])
+                            .build(),
+                    ])
+                    .build(),
+            ])
+            .build(),
+    ];
+
+    // Group's nested `tags` array has two rows — violates max_rows = 1.
+    let mut data = DocumentFields::new();
+    data.insert(
+        "rows".to_string(),
+        json!([{"cfg": {"tags": [{"name": "a"}, {"name": "b"}]}}]),
+    );
+
+    let result = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test").build(),
+    );
+    assert!(
+        result.is_err(),
+        "max_rows on an array nested inside a group inside an array must be enforced"
+    );
+    assert!(
+        result
+            .unwrap_err()
+            .errors
+            .iter()
+            .any(|e| e.message.contains("at most 1")),
+        "expected a max_rows error"
+    );
+
+    // Draft saves skip row-bounds, same as the top level.
+    let draft = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test").draft(true).build(),
+    );
+    assert!(
+        draft.is_ok(),
+        "nested row-bounds must be skipped for draft saves"
+    );
+}

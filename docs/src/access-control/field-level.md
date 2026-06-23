@@ -32,6 +32,7 @@ Before a write operation, denied fields are **stripped from the input data**. Th
 
 - On create: denied fields get their default value (or NULL)
 - On update: denied fields keep their current value
+- On **version restore**: denied fields are stripped from the snapshot too, so a restore keeps the live value of any field the caller may not write (it can't be used as a side channel to overwrite a write-locked field)
 
 > **This is silent.** Stripping happens before validation and before any hook sees the data — the client gets no error or warning that fields were dropped, and the returned document reflects the stored state. If a client reports "I set field X but it didn't save", check whether field-level access is denying their role for that field.
 
@@ -56,6 +57,7 @@ Field-access functions receive the **document data**, not just the user — the 
 | `ctx.user` | The requesting user (or `nil` when anonymous). |
 | `ctx.collection` | The collection (or global) slug the field belongs to — lets a field-access function shared across collections branch on which one it is running for. |
 | `ctx.operation` | `"read"`, `"create"`, or `"update"`. |
+| `ctx.locale` | The content locale being accessed when localization is enabled, else `nil`. It is threaded on the standard collection/global read and write paths; some auxiliary surfaces (version snapshots, live events, restore, self-reads) leave it `nil`. Treat it as an optional hint — don't make a security decision depend on it being present. |
 
 This makes rules like these possible:
 
@@ -82,7 +84,7 @@ Because the rule is evaluated against each level, an array/blocks field rule run
 The optional `document` controls how data-dependent rules are evaluated:
 
 - **Omit `document`** → a **categorical** check: `ctx.data` / `ctx.document` are `nil`, so the result reflects only role/`ctx.user`-based rules. A data-dependent rule that allows when the document is absent is reported as allowed. This is the right choice for a **create** form (no row exists yet) or a static field-visibility list.
-- **Pass `document`** → a **data-aware** check: each rule is evaluated with `ctx.data` / `ctx.document` set to the supplied table, so the result matches what the enforcement strip would actually do for that row. This is the right choice for an **edit** form, where the row being edited is known. The helper answers for the document you pass, so for an edit form pass the record being edited.
+- **Pass `document`** → a **data-aware** check: each rule is evaluated with `ctx.data` *and* `ctx.document` both set to the supplied table, so role- and document-level rules give the same answer the enforcement strip would. This is the right choice for an **edit** form, where the row being edited is known. Note one limit: introspection evaluates every rule at the **document level** (`ctx.data` = the whole document you pass), whereas the enforcement strip evaluates an array/blocks rule **per row** with `ctx.data` = that row. For a rule that keys on a row's own fields the introspection answer can therefore differ from the actual per-row strip — which is fine for UI gating but is why this helper is not an enforcement substitute.
 
 ```lua
 -- Edit form: which fields can THIS user not edit on THIS record?
