@@ -10,6 +10,7 @@ mod hook;
 mod job;
 mod node;
 mod page;
+mod route;
 mod slot;
 mod theme;
 

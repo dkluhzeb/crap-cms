@@ -45,17 +45,12 @@ pub fn unpublish_global_document(ctx: &ServiceContext) -> Result<Document> {
     }
 
     // Access check
-    let access = wh.check_access(&AccessCheckInput {
-        document: None,
-        access: def.access.update.as_ref(),
-        user: ctx.user,
-        id: None,
-        data: None,
-        locale: None,
-        operation: "unpublish",
-        collection: ctx.slug,
-        ui_locale: None,
-    })?;
+    let access = wh.check_access(
+        &AccessCheckInput::builder("unpublish", ctx.slug)
+            .access(def.access.update.as_ref())
+            .user(ctx.user)
+            .build(),
+    )?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Update access denied".into()));

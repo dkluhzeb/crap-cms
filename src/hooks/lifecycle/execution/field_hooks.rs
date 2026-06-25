@@ -2,9 +2,12 @@
 //!
 //! Field hooks run per-field and receive `(value, context)`, returning the new
 //! value. The `FieldHookWalker` recurses over the canonical **nested** document
-//! shape: Group navigates into its nested object, Row/Collapsible/Tabs are
-//! transparent, and Array/Blocks recurse per row. A hook's `ctx.data` is its
-//! nearest scope (the group object / array row / document).
+//! shape. Every field that carries a value — scalar, Group, Array, Blocks —
+//! fires its own hook on that value; Group/Array/Blocks additionally recurse
+//! into their nested sub-fields. Row/Collapsible/Tabs are transparent layout
+//! wrappers with no value of their own, so they only pass through to their
+//! children (lifecycle hooks on them are rejected at parse time). A hook's
+//! `ctx.data` is its nearest scope (the group object / array row / document).
 
 use std::time::Instant;
 
@@ -71,37 +74,19 @@ struct FieldHookWalker<'a> {
 impl FieldHookWalker<'_> {
     /// Recursive field-hook execution over the canonical **nested** document
     /// shape — the same walk at the top level and inside array/blocks rows
-    /// (group data is a nested object at every level). Group navigates into its
-    /// object; Row/Collapsible/Tabs are transparent; Array/Blocks fire the
-    /// field's own hook then recurse per row.
+    /// (group data is a nested object at every level). Group/Array/Blocks fire
+    /// the field's own hook on its value then recurse into their sub-fields;
+    /// Row/Collapsible/Tabs are transparent (pass-through only); every other
+    /// field fires its own hook.
     fn walk(&self, data: &mut DocumentFields, fields: &[FieldDefinition]) -> Result<()> {
         for field in fields {
             match field.field_type {
                 FieldType::Group => {
-                    // Descend into the nested group object. An absent group is
-                    // treated as empty so sub-field hooks still run (e.g. to
-                    // auto-generate a value); write back only when non-empty so
-                    // an untouched absent group isn't materialized.
-                    let mut group_data: DocumentFields = match data.get(&field.name) {
-                        Some(JsonValue::Object(obj)) => {
-                            obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-                        }
-                        _ => DocumentFields::new(),
-                    };
-
-                    self.walk(&mut group_data, &field.fields)?;
-
-                    if !group_data.is_empty() {
-                        data.insert(
-                            field.name.clone(),
-                            JsonValue::Object(
-                                group_data
-                                    .iter()
-                                    .map(|(k, v)| (k.clone(), v.clone()))
-                                    .collect(),
-                            ),
-                        );
-                    }
+                    // A hook on the group field itself fires on the whole nested
+                    // object (parity with Array/Blocks); sub-field hooks then
+                    // fire within the possibly hook-updated object.
+                    self.run_single(data, field)?;
+                    self.walk_group(data, field)?;
                 }
 
                 FieldType::Row | FieldType::Collapsible => {
@@ -130,6 +115,36 @@ impl FieldHookWalker<'_> {
                     self.run_single(data, field)?;
                 }
             }
+        }
+
+        Ok(())
+    }
+
+    /// Run sub-field hooks within a `Group`'s nested object, writing the
+    /// mutated object back. An absent group is treated as empty so sub-field
+    /// hooks still run (e.g. to auto-generate a value); the object is written
+    /// back only when non-empty, so an untouched absent group isn't
+    /// materialized.
+    fn walk_group(&self, data: &mut DocumentFields, field: &FieldDefinition) -> Result<()> {
+        let mut group_data: DocumentFields = match data.get(&field.name) {
+            Some(JsonValue::Object(obj)) => {
+                obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+            }
+            _ => DocumentFields::new(),
+        };
+
+        self.walk(&mut group_data, &field.fields)?;
+
+        if !group_data.is_empty() {
+            data.insert(
+                field.name.clone(),
+                JsonValue::Object(
+                    group_data
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                ),
+            );
         }
 
         Ok(())
@@ -414,6 +429,75 @@ mod tests {
                 .and_then(|v| v.as_str()),
             Some("HI"),
             "before_change hook must transform a nested group sub-field"
+        );
+    }
+
+    /// Regression: a hook on a Group field ITSELF (not a sub-field) must fire on
+    /// the whole nested object — parity with Array/Blocks. Before the container
+    /// harmonization the Group arm only descended into sub-fields and silently
+    /// skipped the group's own hook (the VM was acquired but the hook never ran).
+    #[test]
+    fn field_hook_runs_on_group_itself() {
+        let lua = mlua::Lua::new();
+        lua.load(
+            r#"
+            package.loaded["hooks.stamp"] = function(value, ctx)
+
+                if type(value) == "table" then
+                    value.stamped = "yes"
+                    return value
+                end
+
+                return value
+            end
+        "#,
+        )
+        .exec()
+        .unwrap();
+
+        let fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .hooks(FieldHooks {
+                    before_change: vec![HookRef::new("hooks.stamp")],
+                    ..Default::default()
+                })
+                .fields(vec![
+                    FieldDefinition::builder("title", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+
+        let mut data: DocumentFields = [("meta".to_string(), json!({ "title": "hi" }))]
+            .into_iter()
+            .collect();
+
+        run_field_hooks_inner(
+            &lua,
+            &mut data,
+            &FieldHooksCall {
+                fields: &fields,
+                event: FieldHookEvent::BeforeChange,
+                collection: "posts",
+                operation: "create",
+                id: None,
+                locale: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            data.get("meta")
+                .and_then(|m| m.get("stamped"))
+                .and_then(|v| v.as_str()),
+            Some("yes"),
+            "a before_change hook on the group field itself must fire on the whole object"
+        );
+        assert_eq!(
+            data.get("meta")
+                .and_then(|m| m.get("title"))
+                .and_then(|v| v.as_str()),
+            Some("hi"),
+            "sub-field values must be preserved through the group-level hook"
         );
     }
 

@@ -20,6 +20,7 @@ use crate::config::{
         AccessConfig, CacheConfig, DepthConfig, EmailConfig, HooksConfig, JobsConfig, LiveConfig,
         LocaleConfig, LoggingConfig, McpConfig, PaginationConfig, UpdateConfig, UploadConfig,
     },
+    routes::RoutesConfig,
     server::{AdminConfig, DatabaseConfig, ServerConfig},
 };
 
@@ -53,6 +54,8 @@ pub struct CrapConfig {
     pub jobs: JobsConfig,
     /// CORS (Cross-Origin Resource Sharing) settings.
     pub cors: CorsConfig,
+    /// Custom HTTP route settings (`crap.routes.register`).
+    pub routes: RoutesConfig,
     /// Access control settings.
     pub access: AccessConfig,
     /// Default pagination settings.

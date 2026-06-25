@@ -37,17 +37,9 @@ pub(in crate::mcp) fn slug_exposed(
     };
 
     let result = runner.check_access(
-        &AccessCheckInput {
-            document: None,
-            access: Some(hook),
-            user: None,
-            id: None,
-            data: None,
-            locale: None,
-            operation: "mcp",
-            collection: slug,
-            ui_locale: None,
-        },
+        &AccessCheckInput::builder("mcp", slug)
+            .access(Some(hook))
+            .build(),
         conn,
     );
 

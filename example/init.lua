@@ -117,4 +117,22 @@ crap.template_data.register("system_info_counts", function(ctx)
 	}
 end)
 
+-- ── Custom HTTP route: public posts API ─────────────────────
+--
+-- Mounts `GET /blog/posts` handled by `routes/api_posts.lua`. Custom routes
+-- are public by default (set `access = "access.<fn>"` to gate one) and run
+-- in pool-mode like jobs, so the full `crap.*` API is available. The handler
+-- returns a response envelope ({ status?, headers?, cookies?, json?/body?,
+-- redirect? }), a bare string (200), or nil (404). A per-route `rate_limit`
+-- and `max_body` are available; the mount prefix and default body limit live
+-- under `[routes]` in crap.toml.
+-- NB: `/api`, `/admin`, `/static`, `/uploads`, `/mcp`, `/health`, `/ready`
+-- are reserved by the built-in router, so we mount under `/blog`.
+crap.routes.register({
+	path = "/blog/posts",
+	method = "GET",
+	handler = "routes.api_posts",
+	rate_limit = { max = 120, window = 60 },
+})
+
 crap.log.info("Crap Studio ready")

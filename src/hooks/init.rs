@@ -81,6 +81,11 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<Arc<Registry>>
     super::startup_checks::validate_hook_references(&lua, &snapshot)
         .context("Hook/access reference validation failed")?;
 
+    // Custom route handler/access refs must resolve and not collide — fail to
+    // boot rather than 500 (or panic at router assembly) on first request.
+    super::startup_checks::validate_routes(&lua, &config.routes.prefix)
+        .context("Custom route validation failed")?;
+
     // Reject field names that collide with the generated locale-suffixed
     // column pattern `{name}__{locale}`.
     super::startup_checks::validate_locale_field_collisions(&snapshot, &config.locale.locales)

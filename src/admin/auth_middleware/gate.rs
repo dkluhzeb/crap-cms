@@ -28,20 +28,15 @@ fn check_admin_access_blocking(
     user_doc: &Document,
 ) -> Option<Result<query::AccessResult, anyhow::Error>> {
     let conn = pool.get().ok()?;
-    Some(hook_runner.check_access(
-        &AccessCheckInput {
-            document: None,
-            access: Some(access),
-            user: Some(user_doc),
-            id: None,
-            data: None,
-            locale: None,
-            operation: "admin",
-            collection: "admin",
-            ui_locale: None,
-        },
-        &conn,
-    ))
+    Some(
+        hook_runner.check_access(
+            &AccessCheckInput::builder("admin", "admin")
+                .access(Some(access))
+                .user(Some(user_doc))
+                .build(),
+            &conn,
+        ),
+    )
 }
 
 /// Gate 2: Check `admin.access` Lua function. Returns a 403
@@ -146,18 +141,13 @@ fn check_collection_admin_access_blocking(
     user_doc: &Document,
 ) -> Option<Result<query::AccessResult, anyhow::Error>> {
     let conn = pool.get().ok()?;
-    Some(hook_runner.check_access(
-        &AccessCheckInput {
-            document: None,
-            access: Some(access),
-            user: Some(user_doc),
-            id: None,
-            data: None,
-            locale: None,
-            operation: "admin",
-            collection: slug,
-            ui_locale: None,
-        },
-        &conn,
-    ))
+    Some(
+        hook_runner.check_access(
+            &AccessCheckInput::builder("admin", slug)
+                .access(Some(access))
+                .user(Some(user_doc))
+                .build(),
+            &conn,
+        ),
+    )
 }

@@ -198,6 +198,12 @@ return function(ctx)
     })
     local userinfo = crap.json.decode(info_res.body)
 
+    -- Trust the email ONLY if the provider verified the user owns it. Without
+    -- this, a provider (or misconfigured IdP) that returns an unverified address
+    -- lets an attacker match — and take over — an existing local user by email.
+    -- Google's v2 userinfo uses `verified_email`; OIDC uses `email_verified`.
+    if not userinfo.verified_email then return nil end
+
     -- Find or create user
     local users = crap.collections.find("users", { where = { email = userinfo.email } })
     if #users.documents > 0 then return users.documents[1] end
@@ -209,6 +215,41 @@ return function(ctx)
 end
 ```
 
+> **Trust the provider's email claim before matching by email.** Match (or
+> create) a local user by email *only after* confirming the provider **verified**
+> that the user owns it — `verified_email` (Google v2 userinfo) or `email_verified`
+> (OIDC), as the example does. Skipping this is an account-takeover hole: a
+> provider that returns an unverified address lets an attacker match any existing
+> local user with that email. This applies to **every** flow — it is not a
+> browser-only concern. (The framework's own verify-email gate below checks
+> whether the *local* user document is verified; it cannot vouch for the *IdP's*
+> claim about the address — only `verified_email` can.)
+>
+> **Protect browser redirect flows against login-CSRF with `state` (+ PKCE).** A
+> browser authorization-code flow should generate a random `state` before
+> redirecting to the provider, persist it bound to that browser (an HttpOnly
+> cookie), and reject the callback unless the returned `state` matches. Without
+> it, an attacker can hand a victim a callback URL carrying the *attacker's*
+> `code` and silently log the victim's browser into the attacker's account. The
+> hook can compare the two sides itself: `ctx.headers["_query_state"]` is the
+> returned value and `ctx.headers["cookie"]` carries the request cookies. PKCE
+> additionally hardens the code exchange.
+>
+> **Non-browser flows don't use a cookie — pick the defense that fits the
+> client.** A cookie-bound `state` is a *browser-only* mechanism:
+>
+> - **Server-to-server (client-credentials)** integrations never hit this
+>   redirect callback at all — the backend gets a token from the provider
+>   directly and authenticates to the CMS via its API using a custom strategy
+>   (the [Authenticate Function](#authenticate-function) at the top of this page).
+>   There is no browser and nothing to CSRF.
+> - **Native / mobile / CLI** authorization-code flows *do* redirect but share no
+>   cookie jar with the CMS, so they rely on **PKCE** (plus a client-held
+>   `state`) rather than a cookie.
+>
+> Only the browser case can use a cookie; the `verified_email` check above,
+> by contrast, is required regardless of flow.
+>
 > **Verification & lock still apply.** The callback enforces the same account
 > guards as password login: a locked account, or an unverified account in a
 > collection that requires email verification, is refused a session (the user

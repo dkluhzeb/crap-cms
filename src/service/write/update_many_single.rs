@@ -37,17 +37,16 @@ pub(crate) fn update_many_single_in_conn(
     // Canonicalize incoming data to nested groups up front (idempotent).
     input.data = nest_group_fields(&input.data, &def.fields);
 
-    let access = write_hooks.check_access(&AccessCheckInput {
-        document: None,
-        access: def.access.update.as_ref(),
-        user: ctx.user,
-        id: Some(id),
-        data: Some(&input.data),
-        locale: input.locale_ctx.map(LocaleContext::access_locale),
-        operation: "update",
-        collection: ctx.slug,
-        ui_locale: input.ui_locale.as_deref(),
-    })?;
+    let access = write_hooks.check_access(
+        &AccessCheckInput::builder("update", ctx.slug)
+            .access(def.access.update.as_ref())
+            .user(ctx.user)
+            .id(Some(id))
+            .data(Some(&input.data))
+            .locale(input.locale_ctx.map(LocaleContext::access_locale))
+            .ui_locale(input.ui_locale.as_deref())
+            .build(),
+    )?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Update access denied".into()));

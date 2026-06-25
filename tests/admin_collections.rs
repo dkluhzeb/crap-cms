@@ -156,6 +156,10 @@ fn setup_app_with_config(
         ip_forgot_password_limiter: std::sync::Arc::new(
             crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
         ),
+        mfa_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
+        ip_mfa_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+            20, 300,
+        )),
         has_auth,
         translations,
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),

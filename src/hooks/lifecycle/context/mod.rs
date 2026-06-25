@@ -7,6 +7,7 @@ mod field_hook;
 mod hook_context;
 mod job;
 mod live;
+mod route;
 mod strategy;
 mod validate;
 
@@ -17,5 +18,6 @@ pub use field_hook::FieldHookContext;
 pub use hook_context::HookContext;
 pub use job::{JobHandlerContext, JobInfo};
 pub use live::LiveFilterContext;
+pub use route::{RouteContext, RouteHandlerInput};
 pub use strategy::{AuthStrategyContext, AuthStrategyInput};
 pub use validate::ValidateContext;

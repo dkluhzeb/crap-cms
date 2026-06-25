@@ -58,6 +58,12 @@ pub struct AdminState {
     pub forgot_password_limiter: Arc<LoginRateLimiter>,
     /// The rate limiter for password reset requests (per-IP).
     pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
+    /// The rate limiter for MFA code verification (per-user). Independent of the
+    /// login limiter so a successful password (which clears the login limiter
+    /// before issuing the MFA challenge) can't reset the MFA brute-force budget.
+    pub mfa_limiter: Arc<LoginRateLimiter>,
+    /// The rate limiter for MFA code verification (per-IP).
+    pub ip_mfa_limiter: Arc<LoginRateLimiter>,
     /// Whether authentication is enabled for the admin UI.
     pub has_auth: bool,
     /// The translations for the admin UI.

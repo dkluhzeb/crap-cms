@@ -39,17 +39,12 @@ pub fn find_version_by_id(
     // additionally requires edit-level access (`access.draft ?? access.update`),
     // so a published-only reader can't fetch a draft snapshot by id. Mirrors the
     // version-list and document draft-visibility gates.
-    let access = hooks.check_access(&AccessCheckInput {
-        document: None,
-        access: ctx.read_access_ref(),
-        user: ctx.user,
-        id: None,
-        data: None,
-        locale: None,
-        operation: "find_by_id",
-        collection: ctx.slug,
-        ui_locale: None,
-    })?;
+    let access = hooks.check_access(
+        &AccessCheckInput::builder("find_by_id", ctx.slug)
+            .access(ctx.read_access_ref())
+            .user(ctx.user)
+            .build(),
+    )?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Read access denied".into()));
@@ -74,17 +69,12 @@ pub fn find_version_by_id(
     // rule is enforced against the parent document, so a non-match hides the
     // snapshot ("preview your own drafts" can't reveal another owner's).
     if version.status == "draft" {
-        let draft_access = hooks.check_access(&AccessCheckInput {
-            document: None,
-            access: ctx.draft_access_ref(),
-            user: ctx.user,
-            id: None,
-            data: None,
-            locale: None,
-            operation: "find_by_id",
-            collection: ctx.slug,
-            ui_locale: None,
-        })?;
+        let draft_access = hooks.check_access(
+            &AccessCheckInput::builder("find_by_id", ctx.slug)
+                .access(ctx.draft_access_ref())
+                .user(ctx.user)
+                .build(),
+        )?;
 
         if !draft_snapshots_visible(ctx, &draft_access, &parent_id)? {
             return Ok(None);

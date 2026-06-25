@@ -26,6 +26,8 @@ pub struct AdminStartParamsBuilder {
     ip_login_limiter: Option<Arc<LoginRateLimiter>>,
     forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
     ip_forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
+    mfa_limiter: Option<Arc<LoginRateLimiter>>,
+    ip_mfa_limiter: Option<Arc<LoginRateLimiter>>,
     storage: Option<SharedStorage>,
     token_provider: Option<SharedTokenProvider>,
     password_provider: Option<SharedPasswordProvider>,
@@ -47,6 +49,8 @@ impl AdminStartParamsBuilder {
             ip_login_limiter: None,
             forgot_password_limiter: None,
             ip_forgot_password_limiter: None,
+            mfa_limiter: None,
+            ip_mfa_limiter: None,
             storage: None,
             token_provider: None,
             password_provider: None,
@@ -121,6 +125,18 @@ impl AdminStartParamsBuilder {
         self
     }
 
+    pub fn mfa_limiter(mut self, limiter: Arc<LoginRateLimiter>) -> Self {
+        self.mfa_limiter = Some(limiter);
+
+        self
+    }
+
+    pub fn ip_mfa_limiter(mut self, limiter: Arc<LoginRateLimiter>) -> Self {
+        self.ip_mfa_limiter = Some(limiter);
+
+        self
+    }
+
     pub fn storage(mut self, storage: SharedStorage) -> Self {
         self.storage = Some(storage);
 
@@ -168,6 +184,8 @@ impl AdminStartParamsBuilder {
             ip_forgot_password_limiter: self
                 .ip_forgot_password_limiter
                 .expect("ip_forgot_password_limiter is required"),
+            mfa_limiter: self.mfa_limiter.expect("mfa_limiter is required"),
+            ip_mfa_limiter: self.ip_mfa_limiter.expect("ip_mfa_limiter is required"),
             storage: self.storage.expect("storage is required"),
             token_provider: self.token_provider.expect("token_provider is required"),
             password_provider: self

@@ -101,6 +101,9 @@ struct TestSetup {
     _tmp: tempfile::TempDir,
     service: ContentService,
     pool: crap_cms::db::DbPool,
+    /// The same per-IP forgot/reset limiter the service holds, exposed so
+    /// rate-limit tests can seed and inspect it.
+    ip_forgot_password_limiter: Arc<crap_cms::core::rate_limit::LoginRateLimiter>,
 }
 
 fn setup_service(
@@ -137,6 +140,9 @@ fn setup_service(
 
     let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
+    let ip_forgot_password_limiter =
+        Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900));
+
     let service = ContentService::new(
         ContentServiceDeps::builder()
             .pool(db_pool.clone())
@@ -161,9 +167,7 @@ fn setup_service(
             .forgot_password_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
             ))
-            .ip_forgot_password_limiter(Arc::new(
-                crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
-            ))
+            .ip_forgot_password_limiter(Arc::clone(&ip_forgot_password_limiter))
             .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
             .token_provider(std::sync::Arc::new(
                 crap_cms::core::auth::JwtTokenProvider::new("test-jwt-secret"),
@@ -178,6 +182,7 @@ fn setup_service(
         _tmp: tmp,
         service,
         pool: db_pool,
+        ip_forgot_password_limiter,
     }
 }
 
@@ -441,6 +446,61 @@ async fn reset_password_short_password() {
 
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
     assert!(err.message().contains("at least 8 characters"));
+}
+
+/// Regression: the gRPC `reset_password` IP rate limit must be recorded
+/// atomically up front via `check_and_block`, not the old `is_blocked` (read)
+/// + later `record_failure` split. Under that split a burst of concurrent
+/// resets all observe the same under-limit count before any records, so more
+/// than the threshold slip through per window. Seeding the limiter to one below
+/// its threshold and firing several genuine (valid-policy, wrong-token)
+/// attempts concurrently must leave only one slot — the rest are rejected with
+/// `RESOURCE_EXHAUSTED`. The non-atomic version would let all of them pass the
+/// gate (zero rejections).
+#[tokio::test]
+async fn reset_password_ip_limiter_is_atomic_under_concurrency() {
+    let ts = setup_service(vec![make_users_def()], vec![]);
+
+    // Direct service calls carry no remote_addr, so the handler keys the
+    // limiter under "unknown" — seed that key. Harness IP limiter is 20/window.
+    let key = "unknown";
+    for _ in 0..19 {
+        let _ = ts.ip_forgot_password_limiter.check_and_block(key);
+    }
+    assert!(
+        !ts.ip_forgot_password_limiter.is_blocked(key),
+        "precondition: not yet blocked at 19/20"
+    );
+
+    let make_req = || {
+        Request::new(content::ResetPasswordRequest {
+            collection: "users".to_string(),
+            token: "wrong-token".to_string(),
+            new_password: "newpass123".to_string(),
+        })
+    };
+
+    let (res1, res2, res3, res4) = tokio::join!(
+        ts.service.reset_password(make_req()),
+        ts.service.reset_password(make_req()),
+        ts.service.reset_password(make_req()),
+        ts.service.reset_password(make_req()),
+    );
+
+    let rejected = [res1, res2, res3, res4]
+        .iter()
+        .filter(|r| matches!(r, Err(s) if s.code() == tonic::Code::ResourceExhausted))
+        .count();
+
+    assert!(
+        rejected >= 1,
+        "atomic check_and_block must reject at least one over-threshold concurrent \
+         attempt (got {rejected}); a non-atomic gate lets all four through"
+    );
+    assert!(
+        ts.ip_forgot_password_limiter.is_blocked(key),
+        "a genuine wrong-token reset attempt must advance the IP limiter to its threshold"
+    );
 }
 
 #[tokio::test]

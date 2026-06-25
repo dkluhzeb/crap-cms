@@ -13,6 +13,7 @@ pub(crate) const GLOBALS: &str = "globals";
 pub(crate) const HOOKS: &str = "hooks";
 pub(crate) const ACCESS: &str = "access";
 pub(crate) const JOBS: &str = "jobs";
+pub(crate) const ROUTES: &str = "routes";
 pub(crate) const PLUGINS: &str = "plugins";
 pub(crate) const TEMPLATES: &str = "templates";
 pub(crate) const STATIC: &str = "static";
@@ -57,6 +58,10 @@ pub(crate) fn globals_dir(root: &Path) -> PathBuf {
 
 pub(crate) fn jobs_dir(root: &Path) -> PathBuf {
     root.join(JOBS)
+}
+
+pub(crate) fn routes_dir(root: &Path) -> PathBuf {
+    root.join(ROUTES)
 }
 
 pub(crate) fn plugins_dir(root: &Path) -> PathBuf {

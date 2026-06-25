@@ -28,17 +28,13 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.collection_def()?;
 
-    let access = write_hooks.check_access(&AccessCheckInput {
-        document: None,
-        access: def.access.update.as_ref(),
-        user: ctx.user,
-        id: Some(id),
-        data: None,
-        locale: None,
-        operation: "unpublish",
-        collection: ctx.slug,
-        ui_locale: None,
-    })?;
+    let access = write_hooks.check_access(
+        &AccessCheckInput::builder("unpublish", ctx.slug)
+            .access(def.access.update.as_ref())
+            .user(ctx.user)
+            .id(Some(id))
+            .build(),
+    )?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Update access denied".into()));

@@ -145,6 +145,7 @@
   "mfa_code_label": "Verifizierungscode",
   "mfa_verify": "Verifizieren",
   "error_mfa_invalid_code": "Ungültiger oder abgelaufener Code. Bitte versuchen Sie es erneut.",
+  "error_mfa_too_many_attempts": "Zu viele Verifizierungsversuche. Bitte versuchen Sie es später erneut.",
 
   "restore_has_missing_relations": "Diese Version referenziert Inhalte, die nicht mehr existieren:",
   "restore_missing_warning": "Beim Wiederherstellen werden veraltete Referenzen in das Dokument geschrieben.",

@@ -401,20 +401,7 @@ fn check_access_none_ref_is_allowed() {
     let conn = pool.get().expect("DB connection");
 
     let result = runner
-        .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: None,
-                user: None,
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
-            &conn,
-        )
+        .check_access(&AccessCheckInput::builder("find", "test").build(), &conn)
         .expect("check_access failed");
     assert!(
         matches!(result, AccessResult::Allowed),
@@ -429,17 +416,9 @@ fn check_access_returns_allowed() {
 
     let result = runner
         .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: Some(&HookRef::new("hooks.access.allow_all")),
-                user: None,
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(Some(&HookRef::new("hooks.access.allow_all")))
+                .build(),
             &conn,
         )
         .expect("check_access failed");
@@ -456,17 +435,9 @@ fn check_access_returns_denied() {
 
     let result = runner
         .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: Some(&HookRef::new("hooks.access.deny_all")),
-                user: None,
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(Some(&HookRef::new("hooks.access.deny_all")))
+                .build(),
             &conn,
         )
         .expect("check_access failed");
@@ -483,17 +454,9 @@ fn check_access_returns_constrained() {
 
     let result = runner
         .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: Some(&HookRef::new("hooks.access.constrained")),
-                user: None,
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(Some(&HookRef::new("hooks.access.constrained")))
+                .build(),
             &conn,
         )
         .expect("check_access failed");
@@ -525,17 +488,10 @@ fn check_access_with_user_context() {
 
     let result = runner
         .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: Some(&HookRef::new("hooks.access.check_role")),
-                user: Some(&admin_user),
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(Some(&HookRef::new("hooks.access.check_role")))
+                .user(Some(&admin_user))
+                .build(),
             &conn,
         )
         .expect("check_access failed");
@@ -556,17 +512,10 @@ fn check_access_with_user_context() {
 
     let result = runner
         .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: Some(&HookRef::new("hooks.access.check_role")),
-                user: Some(&regular_user),
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(Some(&HookRef::new("hooks.access.check_role")))
+                .user(Some(&regular_user))
+                .build(),
             &conn,
         )
         .expect("check_access failed");
@@ -578,17 +527,9 @@ fn check_access_with_user_context() {
     // No user at all should be denied
     let result = runner
         .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: Some(&HookRef::new("hooks.access.check_role")),
-                user: None,
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(Some(&HookRef::new("hooks.access.check_role")))
+                .build(),
             &conn,
         )
         .expect("check_access failed");

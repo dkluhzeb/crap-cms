@@ -54,17 +54,15 @@ pub fn create_document_in_conn(
 
     // Collection-level access check. The incoming data is exposed to the
     // access function as `ctx.data` so it can gate on what is being written.
-    let access = write_hooks.check_access(&AccessCheckInput {
-        document: None,
-        access: def.access.create.as_ref(),
-        user: ctx.user,
-        id: None,
-        data: Some(&input.data),
-        locale: input.locale_ctx.map(LocaleContext::access_locale),
-        operation: "create",
-        collection: ctx.slug,
-        ui_locale: input.ui_locale.as_deref(),
-    })?;
+    let access = write_hooks.check_access(
+        &AccessCheckInput::builder("create", ctx.slug)
+            .access(def.access.create.as_ref())
+            .user(ctx.user)
+            .data(Some(&input.data))
+            .locale(input.locale_ctx.map(LocaleContext::access_locale))
+            .ui_locale(input.ui_locale.as_deref())
+            .build(),
+    )?;
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Create access denied".into()));
     }

@@ -49,6 +49,15 @@ impl LoginRateLimiter {
         )
     }
 
+    /// The shared backend this limiter records into. Lets other limiters
+    /// (e.g. per-route rate limits) reuse the same backing store — and thus the
+    /// same cross-instance state when a Redis backend is configured — instead of
+    /// each spinning up an isolated in-memory store.
+    #[must_use]
+    pub fn backend(&self) -> SharedRateLimitBackend {
+        self.backend.clone()
+    }
+
     /// Build the prefixed key for backend storage.
     fn prefixed_key(&self, key: &str) -> String {
         format!("{}:{}", self.prefix, key)

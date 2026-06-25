@@ -181,17 +181,15 @@ fn check_global_update_access(
     locale: Option<&str>,
     ui_locale: Option<&str>,
 ) -> Result<()> {
-    let access = write_hooks.check_access(&AccessCheckInput {
-        document: None,
-        access: def.access.update.as_ref(),
-        user: ctx.user,
-        id: None,
-        data,
-        locale,
-        operation: "update",
-        collection: ctx.slug,
-        ui_locale,
-    })?;
+    let access = write_hooks.check_access(
+        &AccessCheckInput::builder("update", ctx.slug)
+            .access(def.access.update.as_ref())
+            .user(ctx.user)
+            .data(data)
+            .locale(locale)
+            .ui_locale(ui_locale)
+            .build(),
+    )?;
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Update access denied".into()));
     }

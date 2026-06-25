@@ -83,19 +83,16 @@ fn global_view_visible(
     access_ref: Option<&HookRef>,
     input: &GetGlobalInput,
 ) -> Result<bool> {
-    let access = hooks.check_access(&AccessCheckInput {
-        document: None,
-        access: access_ref,
-        user: ctx.user,
-        id: None,
-        data: None,
-        locale: input.locale_ctx.map(LocaleContext::access_locale),
-        // Match this global-read's own `before_read` / `after_read` hooks, which
-        // report `"get"` — a global has no collection-style `find`.
-        operation: "get",
-        collection: ctx.slug,
-        ui_locale: input.ui_locale,
-    })?;
+    // Match this global-read's own `before_read` / `after_read` hooks, which
+    // report `"get"` — a global has no collection-style `find`.
+    let access = hooks.check_access(
+        &AccessCheckInput::builder("get", ctx.slug)
+            .access(access_ref)
+            .user(ctx.user)
+            .locale(input.locale_ctx.map(LocaleContext::access_locale))
+            .ui_locale(input.ui_locale)
+            .build(),
+    )?;
 
     match access {
         AccessResult::Allowed => Ok(true),

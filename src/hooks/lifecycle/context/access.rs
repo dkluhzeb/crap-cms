@@ -89,6 +89,11 @@ pub struct AccessContext<'a> {
 /// `check_access_with_lua`, and the `ReadHooks`/`WriteHooks::check_access`
 /// trait methods). Grouped into a struct so the access-check signature stays
 /// within the argument-count budget as `operation`/`collection` were added.
+///
+/// Construct via [`AccessCheckInput::builder`] — `operation` and `collection`
+/// are always required; every other field defaults to `None` and is set only
+/// when relevant. The builder is the single construction path so adding a new
+/// optional input is a one-line change here, not an edit at every call site.
 pub struct AccessCheckInput<'a> {
     /// The access hook ref (a bare ref or a `{ ref, options }` table), or `None`
     /// when no access function is configured (default-allow / default-deny
@@ -106,4 +111,108 @@ pub struct AccessCheckInput<'a> {
     pub operation: &'a str,
     pub collection: &'a str,
     pub ui_locale: Option<&'a str>,
+}
+
+impl<'a> AccessCheckInput<'a> {
+    /// Start building an access-check input for the given `operation` and
+    /// `collection` (the only required fields). All other fields default to
+    /// `None`; chain the setters for the ones the call site cares about, then
+    /// [`build`](AccessCheckInputBuilder::build).
+    #[must_use]
+    pub fn builder(operation: &'a str, collection: &'a str) -> AccessCheckInputBuilder<'a> {
+        AccessCheckInputBuilder {
+            access: None,
+            user: None,
+            id: None,
+            data: None,
+            document: None,
+            locale: None,
+            operation,
+            collection,
+            ui_locale: None,
+        }
+    }
+}
+
+/// Builder for [`AccessCheckInput`]. Optional setters take `Option<&T>` so a
+/// caller's already-optional value (`ctx.user`, `input.ui_locale.as_deref()`,
+/// …) flows straight through without an `if let`.
+pub struct AccessCheckInputBuilder<'a> {
+    access: Option<&'a HookRef>,
+    user: Option<&'a Document>,
+    id: Option<&'a str>,
+    data: Option<&'a DocumentFields>,
+    document: Option<&'a DocumentFields>,
+    locale: Option<&'a str>,
+    operation: &'a str,
+    collection: &'a str,
+    ui_locale: Option<&'a str>,
+}
+
+impl<'a> AccessCheckInputBuilder<'a> {
+    /// The access hook ref to evaluate (`None` ⇒ default-allow / default-deny).
+    #[must_use]
+    pub fn access(mut self, access: Option<&'a HookRef>) -> Self {
+        self.access = access;
+        self
+    }
+
+    /// The acting user document (`None` ⇒ anonymous).
+    #[must_use]
+    pub fn user(mut self, user: Option<&'a Document>) -> Self {
+        self.user = user;
+        self
+    }
+
+    /// The target document id (`update` / `delete` / `find_by_id`).
+    #[must_use]
+    pub fn id(mut self, id: Option<&'a str>) -> Self {
+        self.id = id;
+        self
+    }
+
+    /// Collection access: incoming write data. Field access: the field's
+    /// immediate level. See [`AccessContext::data`].
+    #[must_use]
+    pub fn data(mut self, data: Option<&'a DocumentFields>) -> Self {
+        self.data = data;
+        self
+    }
+
+    /// Field-access only: the full document. See [`AccessContext::document`].
+    #[must_use]
+    pub fn document(mut self, document: Option<&'a DocumentFields>) -> Self {
+        self.document = document;
+        self
+    }
+
+    /// The content locale this operation targets (`None` ⇒ localization off).
+    #[must_use]
+    pub fn locale(mut self, locale: Option<&'a str>) -> Self {
+        self.locale = locale;
+        self
+    }
+
+    /// The operator's admin UI locale (`None` ⇒ non-admin origin).
+    #[must_use]
+    pub fn ui_locale(mut self, ui_locale: Option<&'a str>) -> Self {
+        self.ui_locale = ui_locale;
+        self
+    }
+
+    /// Finalize the [`AccessCheckInput`].
+    #[must_use]
+    pub fn build(self) -> AccessCheckInput<'a> {
+        AccessCheckInput {
+            access: self.access,
+            user: self.user,
+            id: self.id,
+            data: self.data,
+            document: self.document,
+            locale: self.locale,
+            operation: self.operation,
+            collection: self.collection,
+            ui_locale: self.ui_locale,
+        }
+    }
 }

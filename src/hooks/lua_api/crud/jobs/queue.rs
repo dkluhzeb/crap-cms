@@ -117,17 +117,11 @@ fn queue_job_inner(
 
         let result = check_access_with_lua(
             lua,
-            &AccessCheckInput {
-                document: None,
-                access: job_def.access.as_ref(),
-                user: user_doc.as_ref(),
-                id: None,
-                data: payload.as_ref(),
-                locale: None,
-                operation: "trigger",
-                collection: slug,
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("trigger", slug)
+                .access(job_def.access.as_ref())
+                .user(user_doc.as_ref())
+                .data(payload.as_ref())
+                .build(),
         )
         .map_err(|e| RuntimeError(format!("access check error: {e:#}")))?;
 

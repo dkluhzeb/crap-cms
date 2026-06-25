@@ -55,6 +55,7 @@ mod auth_middleware;
 pub(crate) mod context;
 mod csp_nonce;
 pub mod custom_pages;
+pub mod custom_routes;
 pub mod handlers;
 mod mcp_handler;
 pub mod server;

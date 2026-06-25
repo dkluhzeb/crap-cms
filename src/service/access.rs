@@ -182,17 +182,15 @@ fn check_view(
     ctx: &ReadAccessCtx<'_>,
     access: Option<&HookRef>,
 ) -> Result<AccessResult, ServiceError> {
-    let result = hooks.check_access(&AccessCheckInput {
-        document: None,
-        access,
-        user: ctx.user,
-        id: ctx.id,
-        data: None,
-        locale: ctx.locale,
-        operation: ctx.operation,
-        collection: ctx.slug,
-        ui_locale: ctx.ui_locale,
-    })?;
+    let result = hooks.check_access(
+        &AccessCheckInput::builder(ctx.operation, ctx.slug)
+            .access(access)
+            .user(ctx.user)
+            .id(ctx.id)
+            .locale(ctx.locale)
+            .ui_locale(ctx.ui_locale)
+            .build(),
+    )?;
 
     // A view's row constraints may never touch system columns (the system
     // composes `_status`) or a locale-scoped field (its SQL vs in-memory value

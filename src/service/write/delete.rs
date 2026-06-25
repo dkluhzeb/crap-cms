@@ -110,20 +110,16 @@ pub(crate) fn delete_document_in_conn(
     };
 
     // Delete is locale-agnostic — the whole row is removed across all locales.
-    let access = write_hooks.check_access(&AccessCheckInput {
-        document: None,
-        access: access_ref,
-        user: ctx.user,
-        id: Some(id),
-        data: None,
-        locale: None,
-        // A soft delete is a "trash" operation (gated by the trash access fn);
-        // a hard delete is "delete". Keeps the operation label consistent with
-        // the access fn being invoked (and with the admin permission grid).
-        operation: if def.soft_delete { "trash" } else { "delete" },
-        collection: ctx.slug,
-        ui_locale: None,
-    })?;
+    // A soft delete is a "trash" operation (gated by the trash access fn);
+    // a hard delete is "delete". Keeps the operation label consistent with
+    // the access fn being invoked (and with the admin permission grid).
+    let access = write_hooks.check_access(
+        &AccessCheckInput::builder(if def.soft_delete { "trash" } else { "delete" }, ctx.slug)
+            .access(access_ref)
+            .user(ctx.user)
+            .id(Some(id))
+            .build(),
+    )?;
 
     if matches!(access, AccessResult::Denied) {
         let msg = if def.soft_delete {

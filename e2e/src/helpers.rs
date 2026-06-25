@@ -141,6 +141,8 @@ pub fn setup_app_at(
         ip_forgot_password_limiter: Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
             20, 900,
         )),
+        mfa_limiter: Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
+        ip_mfa_limiter: Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(20, 300)),
         has_auth,
         translations,
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),

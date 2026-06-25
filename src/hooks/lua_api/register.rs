@@ -26,6 +26,7 @@ use super::{
     log::register_log,
     pages::register_pages,
     richtext::{register_richtext_init, register_richtext_pool_init},
+    routes::register_routes,
     schema::{register_schema_init, register_schema_pool},
     storage::register_storage,
     template_data::register_template_data,
@@ -63,6 +64,7 @@ pub fn register_api(lua: &Lua, registry: &SharedRegistry, config: &CrapConfig) -
     register_fields(lua)?;
     register_template_data(lua)?;
     register_pages(lua)?;
+    register_routes(lua)?;
 
     // `crap.any.*` typing helpers — needed on the init VM too because
     // job files (loaded at init time via `load_def_dir`) wrap their
@@ -119,6 +121,7 @@ pub fn register_api_pool_init(
     register_fields(lua)?;
     register_template_data(lua)?;
     register_pages(lua)?;
+    register_routes(lua)?;
     register_transaction(lua)?;
 
     load_lua_helpers(lua)?;
@@ -156,6 +159,7 @@ pub(crate) fn register_any_factories(lua: &Lua) -> Result<()> {
         "access",
         "auth_strategy",
         "job_handler",
+        "route_handler",
         "row_label",
         "display_condition",
     ];

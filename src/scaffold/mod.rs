@@ -45,6 +45,7 @@ pub(crate) mod node;
 pub(crate) mod page;
 pub(crate) mod paths;
 pub(crate) mod render;
+pub(crate) mod route;
 pub(crate) mod slot;
 pub(crate) mod source_header;
 pub(crate) mod templates;
@@ -68,6 +69,7 @@ pub use self::job::{MakeJobOptions, make_job};
 pub use self::migration::make_migration;
 pub use self::node::{MakeNodeOptions, make_node};
 pub use self::page::{MakePageOptions, make_page};
+pub use self::route::{MakeRouteOptions, make_route};
 pub use self::slot::{MakeSlotOptions, make_slot};
 pub use self::templates::{
     TemplatesExtractParams, proto_export, templates_extract, templates_list,

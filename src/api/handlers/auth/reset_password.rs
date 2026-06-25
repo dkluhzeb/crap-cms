@@ -9,7 +9,7 @@ use crate::{
     api::{content, handlers::ContentService},
     core::{CollectionDefinition, SharedInvalidationTransport},
     db::DbPool,
-    service::{ServiceContext, ServiceError, auth::consume_reset_token},
+    service::{ServiceContext, auth::consume_reset_token},
 };
 
 /// Owned bundle for the `ResetPassword` spawn-blocking body.
@@ -22,13 +22,13 @@ struct ResetPasswordBlockingInput {
     invalidation_transport: SharedInvalidationTransport,
 }
 
-/// The outer `Status` carries infrastructure failures (pool/tx/commit) that
-/// always map to 500 internal. The inner `Result<(), ServiceError>` carries
-/// the semantic outcome of `consume_reset_token` — kept as `ServiceError`
-/// so the caller can record a rate-limit failure before mapping to `Status`.
-fn reset_password_blocking(
-    input: &ResetPasswordBlockingInput,
-) -> Result<Result<(), ServiceError>, Status> {
+/// Returns `Ok(())` on a committed reset. Infrastructure failures (pool / tx /
+/// commit) map to 500 internal; the semantic outcome of `consume_reset_token`
+/// (bad / expired token, …) maps through `Status::from(ServiceError)`. The
+/// rate-limit attempt is recorded up front by the caller (atomic
+/// `check_and_block`), so this body no longer reports failures back for the
+/// caller to record — it just produces the response status.
+fn reset_password_blocking(input: &ResetPasswordBlockingInput) -> Result<(), Status> {
     let mut conn = input
         .pool
         .get()
@@ -47,10 +47,7 @@ fn reset_password_blocking(
         .conn(&tx)
         .build();
 
-    let user_id = match consume_reset_token(&ctx, &input.token, &input.password) {
-        Ok(id) => id,
-        Err(e) => return Ok(Err(e)),
-    };
+    let user_id = consume_reset_token(&ctx, &input.token, &input.password).map_err(Status::from)?;
 
     tx.commit()
         .inspect_err(|e| error!("Reset password commit error: {}", e))
@@ -63,7 +60,7 @@ fn reset_password_blocking(
         .build()
         .publish_user_invalidation(&user_id);
 
-    Ok(Ok(()))
+    Ok(())
 }
 
 #[cfg(not(tarpaulin_include))]
@@ -77,12 +74,6 @@ impl ContentService {
             .remote_addr()
             .map_or_else(|| "unknown".to_string(), |a| a.ip().to_string());
         let req = request.into_inner();
-
-        if self.ip_forgot_password_limiter.is_blocked(&ip) {
-            return Err(Status::resource_exhausted(
-                "Too many attempts, try again later",
-            ));
-        }
 
         let def = self.get_collection_def(&req.collection)?;
 
@@ -103,6 +94,21 @@ impl ContentService {
             return Err(Status::invalid_argument(e.to_string()));
         }
 
+        // Atomically record this attempt against the IP limiter and bail if it
+        // is now over threshold — one backend op, closing the check-then-record
+        // race the old `is_blocked` + `record_failure` split left open (a burst
+        // of concurrent resets could all observe an under-limit count before any
+        // recorded). The gate sits AFTER the local validation above so only
+        // genuine token-consumption attempts count, and every such attempt
+        // counts (the same idiom as login / forgot-password / the admin reset
+        // twin). Uses the dedicated forgot-password IP limiter so reset failures
+        // don't block legitimate logins from the same IP.
+        if self.ip_forgot_password_limiter.check_and_block(&ip) {
+            return Err(Status::resource_exhausted(
+                "Too many attempts, try again later",
+            ));
+        }
+
         let input = ResetPasswordBlockingInput {
             pool: self.pool.clone(),
             slug: req.collection.clone(),
@@ -112,17 +118,11 @@ impl ContentService {
             invalidation_transport: self.invalidation_transport.clone(),
         };
 
-        let result = task::spawn_blocking(move || reset_password_blocking(&input))
+        task::spawn_blocking(move || reset_password_blocking(&input))
             .await
             .inspect_err(|e| error!("Reset password task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;
 
-        match result {
-            Ok(()) => Ok(Response::new(content::ResetPasswordResponse {})),
-            Err(e) => {
-                self.ip_forgot_password_limiter.record_failure(&ip);
-                Err(Status::from(e))
-            }
-        }
+        Ok(Response::new(content::ResetPasswordResponse {}))
     }
 }

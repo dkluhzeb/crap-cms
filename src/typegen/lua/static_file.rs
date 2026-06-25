@@ -30,7 +30,7 @@ use crate::core::{
 use crate::db::query::PaginationResult;
 use crate::hooks::lifecycle::{
     AccessContext, AuthStrategyContext, ConditionContext, FieldHookContext, HookContext, HookEvent,
-    JobHandlerContext, JobInfo, LiveFilterContext, ValidateContext,
+    JobHandlerContext, JobInfo, LiveFilterContext, RouteContext, ValidateContext,
 };
 use crate::hooks::lua_api::{
     access::render_crap_access_init_lua,
@@ -91,6 +91,7 @@ use crate::hooks::lua_api::{
     pages::{PageOptions, render_crap_pages_lua},
     parse::JobDefinitionConfig,
     richtext::{RichtextNodeSpec, render_crap_richtext_init_lua, render_crap_richtext_render_lua},
+    routes::render_crap_routes_lua,
     schema::{SchemaCollection, SchemaField, render_crap_schema_init_lua},
     storage::render_crap_storage_lua,
     template_data::render_crap_template_data_lua,
@@ -134,6 +135,7 @@ const BLOCK_RENDERS: &[BlockRender] = &[
     render_crap_schema,
     render_crap_jobs,
     render_crap_pages,
+    render_crap_routes,
     render_crap_template_data,
     render_crap_transaction,
 ];
@@ -325,6 +327,11 @@ function crap.any.auth_strategy(fn) end
 --- @param fn crap.job_handler_fn
 --- @return crap.job_handler_fn
 function crap.any.job_handler(fn) end
+
+--- Wrap a custom-route handler (so `ctx` types as `crap.RouteContext`).
+--- @param fn crap.route_handler_fn
+--- @return crap.route_handler_fn
+function crap.any.route_handler(fn) end
 
 --- Wrap a row-label function for arrays/blocks.
 --- @param fn crap.row_label_fn
@@ -543,6 +550,30 @@ fn render_crap_jobs(out: &mut String) {
 fn render_crap_pages(out: &mut String) {
     render_crap_pages_lua(out);
     PageOptions::render_lua_annotation(out);
+    out.push_str(
+        "\n--- @class crap.PageInfo\n\
+         --- @field slug string The page slug (URL segment + template filename).\n\
+         --- @field section? string Sidebar section heading.\n\
+         --- @field label? string Sidebar label.\n\
+         --- @field icon? string Material Symbols icon name.\n\
+         --- @field access \"public\" | \"gated\"\n",
+    );
+    out.push('\n');
+}
+fn render_crap_routes(out: &mut String) {
+    render_crap_routes_lua(out);
+    RouteContext::render_lua_annotation(out);
+    out.push_str(
+        "\n--- A custom-route handler: receives the request context and returns a\n\
+         --- response envelope `{ status?, headers?, cookies?, body?, json?, redirect? }`,\n\
+         --- a bare string (200 text), or nil (404).\n\
+         --- @alias crap.route_handler_fn fun(ctx: crap.RouteContext): table | string | nil\n\
+         \n\
+         --- @class crap.RouteInfo\n\
+         --- @field path string The mounted path.\n\
+         --- @field methods string[] HTTP methods this route answers.\n\
+         --- @field access \"public\" | \"disabled\" | \"gated\"\n",
+    );
     out.push('\n');
 }
 fn render_crap_template_data(out: &mut String) {
@@ -574,10 +605,10 @@ mod tests {
 
     #[test]
     fn block_render_count_matches_section_count() {
-        // Sanity check: 30 section renderers. If a future PR adds a
+        // Sanity check: 31 section renderers. If a future PR adds a
         // namespace but forgets to add a renderer, this catches it
         // before the diff test does.
-        assert_eq!(BLOCK_RENDERS.len(), 30);
+        assert_eq!(BLOCK_RENDERS.len(), 31);
     }
 
     #[test]

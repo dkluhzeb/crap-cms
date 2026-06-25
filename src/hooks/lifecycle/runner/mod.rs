@@ -8,6 +8,7 @@ mod hook_runner;
 mod jobs;
 mod migrations;
 mod read_write;
+mod routes;
 mod run;
 mod vm_pool;
 

@@ -204,6 +204,23 @@ fn parse_field_parts(lua: &Lua, field_tbl: &Table) -> Result<ParsedFieldParts> {
     let hooks = get_table(field_tbl, "hooks")
         .map_or(Ok(FieldHooks::default()), |tbl| parse_field_hooks(&tbl))?;
 
+    // Transparent layout wrappers (row/collapsible/tabs) have no value of their
+    // own, so a field lifecycle hook on them could never fire. Reject it loudly
+    // at parse time rather than silently ignoring it — the hook belongs on a
+    // child field. Group/Array/Blocks DO carry a value and run their own hook.
+    if matches!(
+        field_type,
+        FieldType::Row | FieldType::Collapsible | FieldType::Tabs
+    ) && !hooks.is_empty()
+    {
+        bail!(
+            "{} field '{name}': lifecycle hooks are not supported on transparent \
+             layout wrappers (row/collapsible/tabs) — they have no value of their \
+             own; put the hook on a child field instead",
+            field_type.as_str()
+        );
+    }
+
     let access = match get_table(field_tbl, "access") {
         Ok(tbl) => {
             deny_unknown_keys(&tbl, "field access", &["read", "create", "update"])?;
@@ -644,6 +661,64 @@ mod tests {
                 f.set("relation_to", "users").unwrap();
             })
             .is_ok()
+        );
+    }
+
+    /// A row/collapsible/tabs child for a hook-placement test.
+    fn set_layout_with_hook(lua: &Lua, f: &Table, ty: &str) {
+        f.set("type", ty).unwrap();
+
+        let fields = lua.create_table().unwrap();
+        let child = lua.create_table().unwrap();
+        child.set("name", "title").unwrap();
+        child.set("type", "text").unwrap();
+        fields.set(1, child).unwrap();
+
+        if ty == "tabs" {
+            // Tabs nest fields under a tab, not directly.
+            let tab = lua.create_table().unwrap();
+            tab.set("label", "Tab").unwrap();
+            tab.set("fields", fields).unwrap();
+            let tabs = lua.create_table().unwrap();
+            tabs.set(1, tab).unwrap();
+            f.set("tabs", tabs).unwrap();
+        } else {
+            f.set("fields", fields).unwrap();
+        }
+
+        let hooks = lua.create_table().unwrap();
+        let bc = lua.create_table().unwrap();
+        bc.set(1, "hooks.transform").unwrap();
+        hooks.set("before_change", bc).unwrap();
+        f.set("hooks", hooks).unwrap();
+    }
+
+    /// Regression: a lifecycle hook placed on a transparent layout wrapper
+    /// (row/collapsible/tabs) is rejected at parse time. These wrappers carry no
+    /// value, so the hook could never fire — it must fail loudly, not be a
+    /// silent no-op.
+    #[test]
+    fn test_lifecycle_hook_on_layout_wrapper_rejected() {
+        for ty in ["row", "collapsible", "tabs"] {
+            let lua = Lua::new();
+            let err = field_with(&lua, |f| set_layout_with_hook(&lua, f, ty))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("layout wrapper") || err.contains("transparent"),
+                "{ty}: {err}"
+            );
+        }
+    }
+
+    /// A lifecycle hook on a Group is valid — the group carries a value and runs
+    /// its own hook (parity with array/blocks).
+    #[test]
+    fn test_lifecycle_hook_on_group_accepted() {
+        let lua = Lua::new();
+        assert!(
+            field_with(&lua, |f| set_layout_with_hook(&lua, f, "group")).is_ok(),
+            "a hook on a group field must be accepted"
         );
     }
 

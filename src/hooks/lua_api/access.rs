@@ -256,17 +256,10 @@ fn check_impl(
 
     let result = check_access_with_lua(
         lua,
-        &AccessCheckInput {
-            document: None,
-            access: access.as_ref(),
-            user: user.as_ref(),
-            id: None,
-            data: None,
-            locale: None,
-            operation,
-            collection,
-            ui_locale: None,
-        },
+        &AccessCheckInput::builder(operation, collection)
+            .access(access.as_ref())
+            .user(user.as_ref())
+            .build(),
     )
     .map_err(|e| RuntimeError(format!("access check error: {e:#}")))?;
 

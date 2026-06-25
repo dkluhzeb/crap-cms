@@ -1,7 +1,9 @@
 //! MFA (Multi-Factor Authentication) handlers for the admin UI.
 
+use std::net::SocketAddr;
+
 use axum::{
-    extract::{Form, State},
+    extract::{ConnectInfo, Form, State},
     http::{HeaderMap, header::COOKIE},
     response::{IntoResponse, Redirect, Response},
 };
@@ -15,7 +17,7 @@ use crate::{
         context::{AuthBasePageContext, PageMeta, PageType, page::auth::MfaPage},
         handlers::{
             auth::{
-                MFA_PENDING_COOKIE, MfaForm, append_cookies, clear_mfa_pending_cookie,
+                MFA_PENDING_COOKIE, MfaForm, append_cookies, clear_mfa_pending_cookie, client_ip,
                 create_session_token, session_redirect,
             },
             shared::{paths, render_page},
@@ -72,6 +74,7 @@ pub async fn mfa_page(State(state): State<AdminState>, headers: HeaderMap) -> Re
 /// POST /admin/mfa — verify the MFA code and complete login.
 pub async fn verify_mfa_action(
     State(state): State<AdminState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Form(form): Form<MfaForm>,
 ) -> Response {
@@ -90,14 +93,32 @@ pub async fn verify_mfa_action(
         return response;
     };
 
+    let ip = client_ip(&headers, &addr, &state.config.server);
+    let user_id = pending_claims.sub.to_string();
+
+    // Throttle MFA code guessing. The 6-digit code lives in a 10^6 space behind
+    // a reusable pending token, so an unthrottled endpoint is brute-forceable
+    // within the pending window. Atomically record this attempt against the
+    // per-user AND per-IP MFA limiters and bail if either is now over threshold.
+    // These limiters are independent of the login limiter (which is cleared on
+    // the successful password *before* the challenge is issued), so an attacker
+    // who knows the password cannot reset the MFA budget by re-logging-in. Both
+    // are evaluated (not short-circuited) so each records the attempt.
+    let user_blocked = state.mfa_limiter.check_and_block(&user_id);
+    let ip_blocked = state.ip_mfa_limiter.check_and_block(&ip);
+    if user_blocked || ip_blocked {
+        return render_mfa_form(&state, Some("error_mfa_too_many_attempts"));
+    }
+
     // Verify the MFA code against the database
     let pool = state.pool.clone();
     let slug = pending_claims.collection.to_string();
-    let user_id = pending_claims.sub.to_string();
     let code = form.code.clone();
 
-    let verify_result =
-        task::spawn_blocking(move || verify_mfa_blocking(&pool, &slug, &user_id, &code)).await;
+    let verify_result = {
+        let user_id = user_id.clone();
+        task::spawn_blocking(move || verify_mfa_blocking(&pool, &slug, &user_id, &code)).await
+    };
 
     let verified = match verify_result {
         Ok(Ok(v)) => v,
@@ -117,7 +138,12 @@ pub async fn verify_mfa_action(
         return render_mfa_form(&state, Some("error_mfa_invalid_code"));
     }
 
-    // MFA verified — build full session
+    // MFA verified — login is now fully complete, so clear the MFA limiters
+    // (per-user and per-IP), mirroring how a successful password clears the
+    // login limiters.
+    state.mfa_limiter.clear(&user_id);
+    state.ip_mfa_limiter.clear(&ip);
+
     build_mfa_session_response(&state, &pending_claims)
 }
 

@@ -364,17 +364,12 @@ impl JoinAccessCheck for ReadHooksJoinGuard<'_> {
         user: Option<&Document>,
         collection: &str,
     ) -> anyhow::Result<AccessResult> {
-        self.hooks.check_access(&AccessCheckInput {
-            document: None,
-            access,
-            user,
-            id: None,
-            data: None,
-            locale: None,
-            operation: "find",
-            collection,
-            ui_locale: None,
-        })
+        self.hooks.check_access(
+            &AccessCheckInput::builder("find", collection)
+                .access(access)
+                .user(user)
+                .build(),
+        )
     }
 }
 

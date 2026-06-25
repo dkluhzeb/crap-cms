@@ -49,17 +49,11 @@ pub fn queue_job(ctx: &ServiceContext, input: &QueueJobInput) -> Result<JobRun, 
 
         let result = runner
             .check_access(
-                &AccessCheckInput {
-                    document: None,
-                    access: input.job_def.access.as_ref(),
-                    user: ctx.user,
-                    id: None,
-                    data: payload.as_ref(),
-                    locale: None,
-                    operation: "trigger",
-                    collection: ctx.slug,
-                    ui_locale: None,
-                },
+                &AccessCheckInput::builder("trigger", ctx.slug)
+                    .access(input.job_def.access.as_ref())
+                    .user(ctx.user)
+                    .data(payload.as_ref())
+                    .build(),
                 conn,
             )
             .map_err(ServiceError::Internal)?;

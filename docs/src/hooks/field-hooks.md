@@ -88,6 +88,21 @@ So a hook on a field inside `blocks → group` sees the group object as `ctx.dat
 and can still reach sibling top-level fields via `ctx.document`. Layout wrappers
 (Row, Collapsible, Tabs) are transparent — they don't introduce a new scope.
 
+## Which fields can carry a hook
+
+A field hook fires on the field's **value**. Scalar fields, `group`, `array`,
+and `blocks` all carry a value, so a hook on any of them runs:
+
+- `group` — the hook runs on the whole nested object, then sub-field hooks run
+  within it.
+- `array` / `blocks` — the hook runs on the whole list, then sub-field hooks run
+  per row.
+
+The transparent layout wrappers (`row`, `collapsible`, `tabs`) have **no value
+of their own** — they only group child fields visually. Placing a lifecycle hook
+directly on one is a configuration error and is **rejected at parse time**; put
+the hook on a child field instead.
+
 ## Definition
 
 ```lua

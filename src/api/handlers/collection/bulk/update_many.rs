@@ -66,17 +66,10 @@ fn update_many_blocking(input: UpdateManyBlockingInput) -> Result<i64, Status> {
 
     let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
     let read_access = ContentService::check_access_blocking(
-        &AccessCheckInput {
-            document: None,
-            access: input.def.access.read.as_ref(),
-            user: user_doc,
-            id: None,
-            data: None,
-            locale: None,
-            operation: "find",
-            collection: &input.def.slug,
-            ui_locale: None,
-        },
+        &AccessCheckInput::builder("find", &input.def.slug)
+            .access(input.def.access.read.as_ref())
+            .user(user_doc)
+            .build(),
         &input.hook_runner,
         &mut conn,
     )?;

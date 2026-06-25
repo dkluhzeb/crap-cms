@@ -922,6 +922,11 @@ function crap.any.auth_strategy(fn) end
 --- @return crap.job_handler_fn
 function crap.any.job_handler(fn) end
 
+--- Wrap a custom-route handler (so `ctx` types as `crap.RouteContext`).
+--- @param fn crap.route_handler_fn
+--- @return crap.route_handler_fn
+function crap.any.route_handler(fn) end
+
 --- Wrap a row-label function for arrays/blocks.
 --- @param fn crap.row_label_fn
 --- @return crap.row_label_fn
@@ -1963,9 +1968,10 @@ crap.pages = {}
 --- @param opts crap.PageOptions  Sidebar / access metadata (all keys optional).
 function crap.pages.register(slug, opts) end
 
---- List the slugs of every registered custom page (in iteration order
---- — not deterministic across runs).
---- @return string[]
+--- List every registered custom page as a table
+--- `{ slug, section?, label?, icon?, access = "public"|"gated" }` (in iteration
+--- order — not deterministic across runs). Mirrors `crap.routes.list()`.
+--- @return crap.PageInfo[]
 function crap.pages.list() end
 
 --- Sidebar / access metadata for a custom admin page.
@@ -1975,6 +1981,61 @@ function crap.pages.list() end
 --- @field icon? string Material Symbols icon name.
 --- @field access? string | crap.HookRef Lua function ref for access control (resolved against the same registry as collection-level `access.*`). A bare ref string or a `{ ref, options }` table whose options reach the gate as `ctx.options`.
 
+
+--- @class crap.PageInfo
+--- @field slug string The page slug (URL segment + template filename).
+--- @field section? string Sidebar section heading.
+--- @field label? string Sidebar label.
+--- @field icon? string Material Symbols icon name.
+--- @field access "public" | "gated"
+
+-- ── crap.routes ──────────────────────────────────────────────
+
+--- Declare custom HTTP endpoints. The handler lives at
+--- `<config_dir>/routes/<name>.lua` and returns `function(ctx) ... end`;
+--- this API mounts it on the admin server with its access/rate-limit metadata.
+--- @class crap.routes
+crap.routes = {}
+
+--- Register a custom HTTP route. Init-phase only — runtime registration has no
+--- effect (routes are mounted once at startup).
+--- @param def table  Route definition (path, method, handler, …).
+function crap.routes.register(def) end
+
+--- List every registered route (in declaration order) as a table
+--- `{ path = string, methods = string[], access = "public"|"disabled"|"gated" }`.
+--- @return crap.RouteInfo[]
+function crap.routes.list() end
+
+--- The `ctx` table a custom route handler receives. The dispatcher pre-parses
+--- cookies, query, and (by content-type) the body, so the handler reads them
+--- directly instead of plumbing the raw request itself.
+--- @class crap.RouteContext
+--- @field method string HTTP method, upper-cased (`"GET"`, `"POST"`, …).
+--- @field path string The matched route path.
+--- @field params table<string, string> Path parameters (`/items/{id}` → `ctx.params.id`).
+--- @field query table<string, string> Parsed query string parameters.
+--- @field headers table<string, string> Request headers (lowercase keys).
+--- @field cookies table<string, string> Parsed request cookies (`ctx.cookies.crap_session`).
+--- @field body? string Raw request body as a string, when present.
+--- @field json? table Parsed body when `Content-Type` is JSON; `nil` otherwise.
+--- @field form? table<string, string> Parsed body for `application/x-www-form-urlencoded`; `nil` otherwise.
+--- @field user? crap.AuthUser The authenticated user document, when the request carried a valid session/bearer; `nil` for anonymous requests.
+--- @field collection? string The auth collection the user belongs to; `nil` when anonymous.
+--- @field ip string The client's remote IP (spoof-resistant; honors trusted proxies).
+--- @field ui_locale? string Admin UI locale, when the request originated from the admin UI.
+--- @field options? table Per-route options from `crap.routes.register({ options = … })`.
+
+
+--- A custom-route handler: receives the request context and returns a
+--- response envelope `{ status?, headers?, cookies?, body?, json?, redirect? }`,
+--- a bare string (200 text), or nil (404).
+--- @alias crap.route_handler_fn fun(ctx: crap.RouteContext): table | string | nil
+
+--- @class crap.RouteInfo
+--- @field path string The mounted path.
+--- @field methods string[] HTTP methods this route answers.
+--- @field access "public" | "disabled" | "gated"
 
 -- ── crap.template_data ───────────────────────────────────────
 

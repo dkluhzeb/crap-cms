@@ -56,17 +56,10 @@ fn resolve_view(
     reject_constrained: bool,
 ) -> Option<Vec<FilterClause>> {
     match hook_runner.check_access(
-        &AccessCheckInput {
-            document: None,
-            access: access_ref,
-            user: user_doc,
-            id: None,
-            data: None,
-            locale: None,
-            operation: "subscribe",
-            collection: slug,
-            ui_locale: None,
-        },
+        &AccessCheckInput::builder("subscribe", slug)
+            .access(access_ref)
+            .user(user_doc)
+            .build(),
         conn,
     ) {
         Ok(result) => view_from_access(result, reject_constrained, slug),

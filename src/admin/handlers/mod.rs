@@ -4,6 +4,8 @@ pub(crate) mod auth;
 pub(crate) mod collections;
 /// Filesystem-routed custom admin page handler.
 pub(crate) mod custom_page;
+/// Lua-defined custom HTTP routes (`crap.routes.register`).
+pub(crate) mod custom_route;
 /// Dashboard overview handlers.
 pub(crate) mod dashboard;
 /// Event-related handlers for the admin UI.

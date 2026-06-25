@@ -55,17 +55,12 @@ pub fn check_access_or_forbid(
     let result = state
         .hook_runner
         .check_access(
-            &AccessCheckInput {
-                document: None,
-                access,
-                user: user_doc,
-                id,
-                data,
-                locale: None,
-                operation,
-                collection,
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder(operation, collection)
+                .access(access)
+                .user(user_doc)
+                .id(id)
+                .data(data)
+                .build(),
             &tx,
         )
         .inspect_err(|e| error!("Access check error: {}", e))
@@ -231,17 +226,10 @@ pub fn has_access_with_conn(
     }
 
     let result = state.hook_runner.check_access(
-        &AccessCheckInput {
-            document: None,
-            access,
-            user: user_doc,
-            id: None,
-            data: None,
-            locale: None,
-            operation,
-            collection,
-            ui_locale: None,
-        },
+        &AccessCheckInput::builder(operation, collection)
+            .access(access)
+            .user(user_doc)
+            .build(),
         conn,
     );
 

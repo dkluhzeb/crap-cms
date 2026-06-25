@@ -229,17 +229,10 @@ mod tests {
         access: Option<&'a HookRef>,
         data: Option<&'a DocumentFields>,
     ) -> AccessCheckInput<'a> {
-        AccessCheckInput {
-            document: None,
-            access,
-            user: None,
-            id: None,
-            data,
-            locale: None,
-            operation: "find",
-            collection: "test",
-            ui_locale: None,
-        }
+        AccessCheckInput::builder("find", "test")
+            .access(access)
+            .data(data)
+            .build()
     }
 
     // ── check_access_with_lua ───────────────────────────────────────────
@@ -493,17 +486,10 @@ mod tests {
         let user = make_user_doc("member");
         let result = check_access_with_lua(
             &lua,
-            &AccessCheckInput {
-                document: None,
-                access: Some(&HookRef::new("test_access.nil_keyed_constraint")),
-                user: Some(&user),
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(Some(&HookRef::new("test_access.nil_keyed_constraint")))
+                .user(Some(&user))
+                .build(),
         )
         .unwrap();
         assert!(
@@ -537,17 +523,10 @@ mod tests {
         let admin = make_user_doc("admin");
         let result = check_access_with_lua(
             &lua,
-            &AccessCheckInput {
-                document: None,
-                access: Some(&HookRef::new("test_access.check_user")),
-                user: Some(&admin),
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(Some(&HookRef::new("test_access.check_user")))
+                .user(Some(&admin))
+                .build(),
         )
         .unwrap();
         assert!(matches!(result, AccessResult::Allowed));
@@ -555,17 +534,10 @@ mod tests {
         let viewer = make_user_doc("viewer");
         let result = check_access_with_lua(
             &lua,
-            &AccessCheckInput {
-                document: None,
-                access: Some(&HookRef::new("test_access.check_user")),
-                user: Some(&viewer),
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(Some(&HookRef::new("test_access.check_user")))
+                .user(Some(&viewer))
+                .build(),
         )
         .unwrap();
         assert!(matches!(result, AccessResult::Denied));
@@ -587,34 +559,20 @@ mod tests {
         let lua = setup_lua();
         let result = check_access_with_lua(
             &lua,
-            &AccessCheckInput {
-                document: None,
-                access: Some(&HookRef::new("test_access.check_id")),
-                user: None,
-                id: Some("doc-123"),
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(Some(&HookRef::new("test_access.check_id")))
+                .id(Some("doc-123"))
+                .build(),
         )
         .unwrap();
         assert!(matches!(result, AccessResult::Allowed));
 
         let result = check_access_with_lua(
             &lua,
-            &AccessCheckInput {
-                document: None,
-                access: Some(&HookRef::new("test_access.check_id")),
-                user: None,
-                id: Some("doc-other"),
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(Some(&HookRef::new("test_access.check_id")))
+                .id(Some("doc-other"))
+                .build(),
         )
         .unwrap();
         assert!(matches!(result, AccessResult::Denied));
@@ -679,34 +637,20 @@ mod tests {
         // `access.check_locale` allows only when `ctx.locale == "en"`.
         let allowed = check_access_with_lua(
             &lua,
-            &AccessCheckInput {
-                document: None,
-                access: Some(&HookRef::new("test_access.check_locale")),
-                user: None,
-                id: None,
-                data: None,
-                locale: Some("en"),
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(Some(&HookRef::new("test_access.check_locale")))
+                .locale(Some("en"))
+                .build(),
         )
         .unwrap();
         assert!(matches!(allowed, AccessResult::Allowed));
 
         let denied = check_access_with_lua(
             &lua,
-            &AccessCheckInput {
-                document: None,
-                access: Some(&HookRef::new("test_access.check_locale")),
-                user: None,
-                id: None,
-                data: None,
-                locale: Some("de"),
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(Some(&HookRef::new("test_access.check_locale")))
+                .locale(Some("de"))
+                .build(),
         )
         .unwrap();
         assert!(matches!(denied, AccessResult::Denied));

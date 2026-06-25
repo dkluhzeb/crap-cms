@@ -70,17 +70,11 @@ pub fn perform_account_action(
     let runner = ctx.runner()?;
 
     let access = runner.check_access(
-        &AccessCheckInput {
-            document: None,
-            access: access_ref,
-            user: ctx.user,
-            id: Some(id),
-            data: None,
-            locale: None,
-            operation: action.operation(),
-            collection: ctx.slug,
-            ui_locale: None,
-        },
+        &AccessCheckInput::builder(action.operation(), ctx.slug)
+            .access(access_ref)
+            .user(ctx.user)
+            .id(Some(id))
+            .build(),
         conn.as_ref(),
     )?;
 

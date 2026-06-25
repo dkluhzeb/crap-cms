@@ -39,7 +39,11 @@ impl PaginationParams {
             .per_page
             .unwrap_or(config.default_limit)
             .clamp(1, config.max_limit);
-        let offset = (page - 1) * per_page;
+        // Saturating math: an absurd `page` (e.g. `i64::MAX` from the query
+        // string) would overflow `(page - 1) * per_page` — a panic under debug
+        // overflow checks, a silent wrap in release. Saturate instead, so a
+        // past-the-end page just yields a huge offset and an empty result.
+        let offset = page.saturating_sub(1).saturating_mul(per_page);
 
         Pagination {
             page,
@@ -131,6 +135,24 @@ mod tests {
         assert_eq!(p.page, 10_000);
         assert_eq!(p.per_page, 20);
         assert_eq!(p.offset, (10_000 - 1) * 20);
+    }
+
+    /// Regression: a colossal `page` (e.g. `i64::MAX` from the query string)
+    /// must not overflow `(page - 1) * per_page` — that panics under debug
+    /// overflow checks and wraps to a garbage offset in release. `resolve` now
+    /// saturates, so the offset pins to `i64::MAX` (a past-the-end empty page)
+    /// instead.
+    #[test]
+    fn resolve_saturates_offset_on_overflowing_page() {
+        let cfg = test_config();
+        let p = params(Some(i64::MAX), Some(1000)).resolve(&cfg);
+        assert_eq!(p.page, i64::MAX);
+        assert_eq!(p.per_page, 1000);
+        assert_eq!(
+            p.offset,
+            i64::MAX,
+            "offset must saturate, not overflow/wrap"
+        );
     }
 
     // ── PaginationResult metadata on empty / past-end totals ─────────────

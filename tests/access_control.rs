@@ -139,20 +139,7 @@ fn no_access_ref_allows() {
     let conn = pool.get().unwrap();
 
     let result = runner
-        .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: None,
-                user: None,
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
-            &conn,
-        )
+        .check_access(&AccessCheckInput::builder("find", "test").build(), &conn)
         .unwrap();
     assert!(matches!(result, query::AccessResult::Allowed));
 }
@@ -164,17 +151,9 @@ fn anyone_allows_anonymous() {
 
     let result = runner
         .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: Some(&HookRef::new("access.anyone")),
-                user: None,
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(Some(&HookRef::new("access.anyone")))
+                .build(),
             &conn,
         )
         .unwrap();
@@ -188,17 +167,9 @@ fn authenticated_denies_anonymous() {
 
     let result = runner
         .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: Some(&HookRef::new("access.authenticated")),
-                user: None,
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(Some(&HookRef::new("access.authenticated")))
+                .build(),
             &conn,
         )
         .unwrap();
@@ -213,17 +184,10 @@ fn authenticated_allows_user() {
 
     let result = runner
         .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: Some(&HookRef::new("access.authenticated")),
-                user: Some(&editor),
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(Some(&HookRef::new("access.authenticated")))
+                .user(Some(&editor))
+                .build(),
             &conn,
         )
         .unwrap();
@@ -238,17 +202,10 @@ fn admin_only_denies_editor() {
 
     let result = runner
         .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: Some(&HookRef::new("access.admin_only")),
-                user: Some(&editor),
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(Some(&HookRef::new("access.admin_only")))
+                .user(Some(&editor))
+                .build(),
             &conn,
         )
         .unwrap();
@@ -263,17 +220,10 @@ fn admin_only_allows_admin() {
 
     let result = runner
         .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: Some(&HookRef::new("access.admin_only")),
-                user: Some(&admin),
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(Some(&HookRef::new("access.admin_only")))
+                .user(Some(&admin))
+                .build(),
             &conn,
         )
         .unwrap();
@@ -293,17 +243,9 @@ fn published_or_author_allows_anonymous_to_read_published() {
 
     let result = runner
         .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: Some(&HookRef::new("access.published_or_author")),
-                user: None,
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(Some(&HookRef::new("access.published_or_author")))
+                .build(),
             &conn,
         )
         .unwrap();
@@ -319,17 +261,10 @@ fn published_or_author_allows_admin() {
 
     let result = runner
         .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: Some(&HookRef::new("access.published_or_author")),
-                user: Some(&admin),
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(Some(&HookRef::new("access.published_or_author")))
+                .user(Some(&admin))
+                .build(),
             &conn,
         )
         .unwrap();
@@ -442,17 +377,9 @@ fn access_check_plus_db_query_end_to_end() {
     let conn = pool.get().unwrap();
     let result = runner
         .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: posts.access.read.as_ref(),
-                user: None,
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(posts.access.read.as_ref())
+                .build(),
             &conn,
         )
         .unwrap();
@@ -462,17 +389,10 @@ fn access_check_plus_db_query_end_to_end() {
     let admin = make_user_doc("admin-1", "admin");
     let result = runner
         .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: posts.access.read.as_ref(),
-                user: Some(&admin),
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(posts.access.read.as_ref())
+                .user(Some(&admin))
+                .build(),
             &conn,
         )
         .unwrap();
@@ -485,17 +405,9 @@ fn access_check_plus_db_query_end_to_end() {
     // Verify author_or_admin denies anonymous delete
     let result = runner
         .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: posts.access.delete.as_ref(),
-                user: None,
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .access(posts.access.delete.as_ref())
+                .build(),
             &conn,
         )
         .unwrap();
@@ -512,17 +424,10 @@ fn runner_read_hooks_override_bypasses_collection_access() {
     let (_tmp, pool, _registry, runner) = setup();
     let conn = pool.get().unwrap();
 
-    let input = AccessCheckInput {
-        document: None,
-        access: Some(&HookRef::new("access.admin_only")),
-        user: None,
-        id: None,
-        data: None,
-        locale: None,
-        operation: "find",
-        collection: "test",
-        ui_locale: None,
-    };
+    let access = HookRef::new("access.admin_only");
+    let input = AccessCheckInput::builder("find", "test")
+        .access(Some(&access))
+        .build();
 
     // Without override, admin_only denies a nil user.
     let denied = RunnerReadHooks::new(&runner, &conn, None, None)
@@ -724,20 +629,7 @@ fn no_access_config_means_allowed() {
 
     // Collection-level: None access ref should return Allowed
     let result = runner
-        .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: None,
-                user: None,
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
-            &conn,
-        )
+        .check_access(&AccessCheckInput::builder("find", "test").build(), &conn)
         .unwrap();
     assert!(
         matches!(result, query::AccessResult::Allowed),
@@ -748,17 +640,9 @@ fn no_access_config_means_allowed() {
     let editor = make_user_doc("editor-1", "editor");
     let result = runner
         .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: None,
-                user: Some(&editor),
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .user(Some(&editor))
+                .build(),
             &conn,
         )
         .unwrap();
@@ -1032,20 +916,7 @@ fn default_deny_true_no_access_ref_returns_denied() {
 
     // No access function configured + default_deny = true → must be Denied
     let result = runner
-        .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: None,
-                user: None,
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
-            &conn,
-        )
+        .check_access(&AccessCheckInput::builder("find", "test").build(), &conn)
         .unwrap();
     assert!(
         matches!(result, query::AccessResult::Denied),
@@ -1056,17 +927,9 @@ fn default_deny_true_no_access_ref_returns_denied() {
     let user = make_user_doc("user-1", "editor");
     let result = runner
         .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: None,
-                user: Some(&user),
-                id: None,
-                data: None,
-                locale: None,
-                operation: "find",
-                collection: "test",
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("find", "test")
+                .user(Some(&user))
+                .build(),
             &conn,
         )
         .unwrap();

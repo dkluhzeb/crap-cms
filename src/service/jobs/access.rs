@@ -34,17 +34,10 @@ pub(super) fn can_read_job_runs(
 
     let result = runner
         .check_access(
-            &AccessCheckInput {
-                document: None,
-                access: Some(access),
-                user: ctx.user,
-                id: None,
-                data: None,
-                locale: None,
-                operation: "read",
-                collection: slug,
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("read", slug)
+                .access(Some(access))
+                .user(ctx.user)
+                .build(),
             conn,
         )
         .map_err(ServiceError::Internal)?;

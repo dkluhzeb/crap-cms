@@ -137,17 +137,37 @@ fn page_register(
     Ok(())
 }
 
-/// List the slugs of every registered custom page (in iteration order
-/// — not deterministic across runs).
-#[lua_fn(path = "crap.pages.list", returns = "string[]")]
+/// List every registered custom page as a table
+/// `{ slug, section?, label?, icon?, access = "public"|"gated" }` (in iteration
+/// order — not deterministic across runs). Mirrors `crap.routes.list()`.
+#[lua_fn(path = "crap.pages.list", returns = "crap.PageInfo[]")]
 fn page_list(lua: &Lua) -> LuaResult<Table> {
     let pages: Table = lua.named_registry_value(PAGES_KEY)?;
-    let names = lua.create_table()?;
-    for (i, pair) in (1..).zip(pages.pairs::<Value, Value>()) {
-        let (key, _) = pair?;
-        names.set(i, key)?;
+    let out = lua.create_table()?;
+
+    for (i, pair) in (1..).zip(pages.pairs::<String, Table>()) {
+        let (slug, entry) = pair?;
+        let info = lua.create_table()?;
+        info.set("slug", slug)?;
+
+        for key in ["section", "label", "icon"] {
+            if let Ok(Value::String(s)) = entry.get::<Value>(key) {
+                info.set(key, s)?;
+            }
+        }
+
+        // Mirror routes' stance label: a page is "gated" when it carries an
+        // access ref (a string or `{ ref, options }`), else "public".
+        let access = match entry.get::<Value>("access") {
+            Ok(Value::String(_) | Value::Table(_)) => "gated",
+            _ => "public",
+        };
+        info.set("access", access)?;
+
+        out.set(i, info)?;
     }
-    Ok(names)
+
+    Ok(out)
 }
 
 lua_table! {
@@ -284,19 +304,33 @@ mod tests {
     }
 
     #[test]
-    fn list_returns_registered_slugs() {
+    fn list_returns_page_info_tables() {
         let lua = lua_in_init_phase();
 
         lua.load(
             r#"
-            crap.pages.register("status", { label = "S" })
-            crap.pages.register("reports", { label = "R" })
+            crap.pages.register("status", { label = "S", section = "Tools" })
+            crap.pages.register("reports", { label = "R", access = "access.admin" })
         "#,
         )
         .exec()
         .unwrap();
 
-        let names: Table = lua.load("return crap.pages.list()").eval().unwrap();
-        assert_eq!(names.raw_len(), 2);
+        let list: Table = lua.load("return crap.pages.list()").eval().unwrap();
+        assert_eq!(list.raw_len(), 2);
+
+        // Iteration order over the map is not deterministic — key by slug.
+        let mut by_slug = std::collections::HashMap::new();
+        for i in 1..=list.raw_len() {
+            let info: Table = list.get(i).unwrap();
+            by_slug.insert(info.get::<String>("slug").unwrap(), info);
+        }
+
+        let status = &by_slug["status"];
+        assert_eq!(status.get::<String>("label").unwrap(), "S");
+        assert_eq!(status.get::<String>("section").unwrap(), "Tools");
+        assert_eq!(status.get::<String>("access").unwrap(), "public");
+
+        assert_eq!(by_slug["reports"].get::<String>("access").unwrap(), "gated");
     }
 }

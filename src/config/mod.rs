@@ -38,6 +38,7 @@ mod cors;
 mod features;
 /// Newtype wrapper for MCP API keys.
 pub mod mcp_api_key;
+mod routes;
 /// Newtype wrapper for S3 secret access keys.
 pub mod s3_secret_key;
 mod server;
@@ -56,6 +57,7 @@ pub use features::{
 };
 pub use mcp_api_key::McpApiKey;
 pub(crate) use parsing::{parse_duration_string, parse_filesize_string};
+pub use routes::RoutesConfig;
 pub use s3_secret_key::S3SecretKey;
 pub use server::{AdminConfig, CompressionMode, DatabaseBackend, DatabaseConfig, ServerConfig};
 pub use smtp_password::SmtpPassword;

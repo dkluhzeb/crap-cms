@@ -174,17 +174,12 @@ fn global_visibility(
         return Ok(Visibility::Hidden);
     };
 
-    let result = hooks.check_access(&AccessCheckInput {
-        document: None,
-        access: def.access.read.as_ref(),
-        user: ctx.user,
-        id: None,
-        data: None,
-        locale: None,
-        operation: "find",
-        collection: slug,
-        ui_locale: None,
-    })?;
+    let result = hooks.check_access(
+        &AccessCheckInput::builder("find", slug)
+            .access(def.access.read.as_ref())
+            .user(ctx.user)
+            .build(),
+    )?;
 
     Ok(match result {
         AccessResult::Allowed => Visibility::AllVisible,

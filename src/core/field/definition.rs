@@ -130,6 +130,17 @@ pub struct FieldHooks {
     pub after_read: Vec<HookRef>,
 }
 
+impl FieldHooks {
+    /// `true` when no lifecycle hook of any kind is configured.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.before_validate.is_empty()
+            && self.before_change.is_empty()
+            && self.after_change.is_empty()
+            && self.after_read.is_empty()
+    }
+}
+
 /// Which locales a `required` *localized* field must be filled in for a
 /// document to be considered complete. `All` expands to every configured
 /// locale; `List` names specific locales. Resolved against `LocaleConfig` at

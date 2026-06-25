@@ -8,6 +8,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **`crap.pages.list()` now returns a list of `crap.PageInfo` tables, not a list
+  of slug strings.** Each entry is `{ slug, section?, label?, icon?, access }`
+  (`access` is `"public"` or `"gated"`), matching the new `crap.routes.list()`
+  shape and exposing page metadata that was previously unreachable from Lua.
+  **Migration:** replace `crap.pages.list()[i]` (a slug string) with
+  `crap.pages.list()[i].slug`.
+
 - **Lua hook contexts now expose the affected document's id as `ctx.id`, not
   `ctx.document_id`.** The lifecycle hook context (`before_*`/`after_*`) and the
   live-broadcast contexts (`live` filter, `before_broadcast`) previously used
@@ -321,6 +328,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   rate-limit budget; only genuine token-consumption attempts count. A transient
   internal error now counts toward the limit (the price of atomicity), which is
   immaterial for these high-entropy tokens and strictly safer than refunding.
+
+- **The gRPC `ResetPassword` endpoint now rate-limits atomically too.** It was
+  the last auth entrypoint still using the non-atomic `is_blocked` +
+  `record_failure` split (every other path had migrated to `check_and_block`), so
+  a burst of concurrent gRPC reset attempts from one IP could exceed the
+  configured per-window limit. It now records each attempt up front with the
+  atomic `check_and_block` — after the collection / password-policy validation, so
+  a policy-rejected typo still doesn't consume budget — matching the admin reset
+  handler exactly.
+
+- **MFA code verification is now rate-limited.** `POST /admin/mfa` previously had
+  no rate limit at all, so the 6-digit code (a 10⁶ space) was brute-forceable
+  within the pending-token window. It now records each attempt against a
+  per-user **and** a per-IP MFA limiter via the atomic `check_and_block` before
+  the code is checked, and clears them on success. These limiters reuse the login
+  thresholds (`max_login_attempts` / `max_ip_login_attempts`,
+  `login_lockout_seconds`) but keep their own state — deliberately independent of
+  the login limiter, which is cleared on the successful password *before* the MFA
+  challenge is issued, so an attacker who knows the password cannot reset the MFA
+  guessing budget by simply logging in again. No new configuration keys.
 
 - **Version restore now honors field-level write access.** Restoring an older
   version snapshot wrote the snapshot's values wholesale, bypassing each field's
@@ -794,6 +821,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **Docs: the OAuth callback example now verifies the provider's email claim.**
+  The canonical `auth_callback` example matched a local user purely by
+  `userinfo.email`, which — copied verbatim — is an account-takeover hole: a
+  provider that returns an unverified address could match any existing user with
+  that email. The example now checks `verified_email` / `email_verified` first,
+  and a new flow-aware Security note distinguishes the universal email-claim
+  check from the browser-only `state`/PKCE login-CSRF defense (and notes that
+  server-to-server / native flows don't use a cookie-bound `state`).
+
+- **Paginated list views no longer overflow on an absurd `page` query value.**
+  `offset = (page - 1) * per_page` could overflow for a huge `?page=` (a panic
+  under debug overflow checks, a silent wrap in release). The offset now uses
+  saturating arithmetic, so a past-the-end page resolves to a saturated offset
+  and an empty result instead.
+
+- **Field lifecycle hooks on a `group` now fire on the group itself, and hooks on
+  a transparent layout wrapper are rejected.** A `before_change` / `after_change`
+  / etc. hook placed directly on a `group` field parsed cleanly but never ran —
+  only the group's sub-field hooks fired (`array` / `blocks` already ran their own
+  hook, so this was an inconsistency). A group hook now runs on the whole nested
+  object, then its sub-field hooks run, matching `array` / `blocks`. Conversely, a
+  lifecycle hook on a transparent layout wrapper (`row` / `collapsible` / `tabs`)
+  — which has no value of its own and could never fire — is now a hard parse-time
+  error instead of a silent no-op; move the hook to a child field.
 
 - **`min_rows` / `max_rows` are now enforced on nested array and blocks
   fields.** The row-count bounds were only checked for top-level array/blocks
@@ -1298,6 +1350,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   files, so trashed documents remain restorable.)
 
 ### Added
+
+- **Custom HTTP routes via `crap.routes.register`.** Mount arbitrary HTTP
+  endpoints on the admin server, handled in Lua (`routes/<name>.lua` returning
+  `function(ctx) ... end`) — webhooks, JSON APIs, OAuth initiation,
+  server-rendered fragments. Handlers run in **pool-mode** like job handlers
+  (per-op CRUD autocommit; `crap.transaction(fn)` for atomicity) with the full
+  `crap.*` API. `ctx` gives pre-parsed cookies, content-type-parsed
+  `json`/`form` bodies, path `params`, `query`, headers, the resolved `user`, and
+  a spoof-resistant `ip`; the handler returns a response envelope (`status`,
+  `headers`, `cookies`, `body`/`json`, `redirect`), a bare string (200), or `nil`
+  (404). Routes are **public by default** with an optional declarative `access`
+  gate (a hook ref, or `false` to disable), an optional per-IP `rate_limit`, and
+  opt-in `csrf`. Bad method / reserved or duplicate path / unresolvable handler
+  refs fail at startup. Mounts at the literal `path` by default; a dedicated
+  `[routes]` config section sets `prefix` (namespace) and `max_body` (default
+  body-size limit, per-route `max_body` overrides). Per-route rate limits use the
+  configured `auth.rate_limit_backend`, so they share state across instances on
+  Redis. See [`crap.routes`](lua-api/routes.md).
 
 - **`crap.access.field_read_denied` / `field_write_denied` accept an optional
   `document` for data-aware introspection.** `field_read_denied(collection [,

@@ -38,17 +38,13 @@ pub fn list_versions(
     // version snapshots are additionally gated at edit level
     // (`access.draft ?? access.update`): a reader without that access sees only
     // published versions, mirroring document draft visibility.
-    let access = hooks.check_access(&AccessCheckInput {
-        document: None,
-        access: ctx.read_access_ref(),
-        user: ctx.user,
-        id: Some(input.parent_id),
-        data: None,
-        locale: None,
-        operation: "find",
-        collection: ctx.slug,
-        ui_locale: None,
-    })?;
+    let access = hooks.check_access(
+        &AccessCheckInput::builder("find", ctx.slug)
+            .access(ctx.read_access_ref())
+            .user(ctx.user)
+            .id(Some(input.parent_id))
+            .build(),
+    )?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Read access denied".into()));
@@ -59,17 +55,13 @@ pub fn list_versions(
     // ("preview only your own drafts") is enforced against the parent document,
     // so a non-match downgrades to published-only instead of leaking another
     // owner's draft snapshots.
-    let draft_access = hooks.check_access(&AccessCheckInput {
-        document: None,
-        access: ctx.draft_access_ref(),
-        user: ctx.user,
-        id: Some(input.parent_id),
-        data: None,
-        locale: None,
-        operation: "find",
-        collection: ctx.slug,
-        ui_locale: None,
-    })?;
+    let draft_access = hooks.check_access(
+        &AccessCheckInput::builder("find", ctx.slug)
+            .access(ctx.draft_access_ref())
+            .user(ctx.user)
+            .id(Some(input.parent_id))
+            .build(),
+    )?;
     let published_only = !draft_snapshots_visible(ctx, &draft_access, input.parent_id)?;
 
     // Constrained read handling: for collections we enforce the filters against

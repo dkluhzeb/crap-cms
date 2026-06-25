@@ -154,6 +154,8 @@ pub(super) fn make_test_state_with_deny(default_deny: bool) -> AdminState {
     let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).unwrap());
     let login_limiter = Arc::new(LoginRateLimiter::new(5, 300));
     let ip_login_limiter = Arc::new(LoginRateLimiter::new(20, 300));
+    let mfa_limiter = Arc::new(LoginRateLimiter::new(5, 300));
+    let ip_mfa_limiter = Arc::new(LoginRateLimiter::new(20, 300));
     let translations = Arc::new(Translations::load(tmp.path()));
 
     AdminState {
@@ -171,6 +173,8 @@ pub(super) fn make_test_state_with_deny(default_deny: bool) -> AdminState {
         ip_login_limiter,
         forgot_password_limiter: Arc::new(LoginRateLimiter::new(3, 900)),
         ip_forgot_password_limiter: Arc::new(LoginRateLimiter::new(20, 900)),
+        mfa_limiter,
+        ip_mfa_limiter,
         has_auth: false,
         translations,
         sse_connections: Arc::new(AtomicUsize::new(0)),

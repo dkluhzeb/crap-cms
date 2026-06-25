@@ -39,6 +39,7 @@ pub mod pages;
 pub mod parse;
 pub(crate) mod register;
 pub(crate) mod richtext;
+pub(crate) mod routes;
 pub(crate) mod schema;
 mod serializers;
 pub(crate) mod storage;

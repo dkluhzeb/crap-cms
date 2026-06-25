@@ -34,33 +34,25 @@ pub(super) fn check_versions_gate(
 ) -> Result<(), ServiceError> {
     // An explicit toggle takes precedence and is boolean-only.
     if let Some(versions_ref) = ctx.versions_access_ref() {
-        let access = hooks.check_access(&AccessCheckInput {
-            document: None,
-            access: Some(versions_ref),
-            user: ctx.user,
-            id,
-            data: None,
-            locale: None,
-            operation,
-            collection: ctx.slug,
-            ui_locale: None,
-        })?;
+        let access = hooks.check_access(
+            &AccessCheckInput::builder(operation, ctx.slug)
+                .access(Some(versions_ref))
+                .user(ctx.user)
+                .id(id)
+                .build(),
+        )?;
 
         return versions_gate_decision(&access, ctx.slug);
     }
 
     // Unset → fall back to `access.update` (history follows edit access).
-    let access = hooks.check_access(&AccessCheckInput {
-        document: None,
-        access: ctx.update_access_ref(),
-        user: ctx.user,
-        id,
-        data: None,
-        locale: None,
-        operation,
-        collection: ctx.slug,
-        ui_locale: None,
-    })?;
+    let access = hooks.check_access(
+        &AccessCheckInput::builder(operation, ctx.slug)
+            .access(ctx.update_access_ref())
+            .user(ctx.user)
+            .id(id)
+            .build(),
+    )?;
 
     versions_via_update_decision(ctx, &access, id, operation)
 }

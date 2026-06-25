@@ -228,17 +228,13 @@ fn check_restore_versions_gate(
         return Ok(());
     };
 
-    let access = write_hooks.check_access(&AccessCheckInput {
-        document: None,
-        access: Some(versions_ref),
-        user: ctx.user,
-        id,
-        data: None,
-        locale: None,
-        operation: "restore",
-        collection: ctx.slug,
-        ui_locale: None,
-    })?;
+    let access = write_hooks.check_access(
+        &AccessCheckInput::builder("restore", ctx.slug)
+            .access(Some(versions_ref))
+            .user(ctx.user)
+            .id(id)
+            .build(),
+    )?;
 
     versions_gate_decision(&access, ctx.slug)
 }
@@ -255,17 +251,13 @@ pub(crate) fn restore_collection_version_core(
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.collection_def()?;
 
-    let access = write_hooks.check_access(&AccessCheckInput {
-        document: None,
-        access: def.access.update.as_ref(),
-        user: ctx.user,
-        id: Some(document_id),
-        data: None,
-        locale: None,
-        operation: "restore",
-        collection: ctx.slug,
-        ui_locale: None,
-    })?;
+    let access = write_hooks.check_access(
+        &AccessCheckInput::builder("restore", ctx.slug)
+            .access(def.access.update.as_ref())
+            .user(ctx.user)
+            .id(Some(document_id))
+            .build(),
+    )?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Update access denied".into()));
@@ -382,17 +374,12 @@ pub(crate) fn restore_global_version_core(
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.global_def()?;
 
-    let access = write_hooks.check_access(&AccessCheckInput {
-        document: None,
-        access: def.access.update.as_ref(),
-        user: ctx.user,
-        id: None,
-        data: None,
-        locale: None,
-        operation: "restore",
-        collection: ctx.slug,
-        ui_locale: None,
-    })?;
+    let access = write_hooks.check_access(
+        &AccessCheckInput::builder("restore", ctx.slug)
+            .access(def.access.update.as_ref())
+            .user(ctx.user)
+            .build(),
+    )?;
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Update access denied".into()));

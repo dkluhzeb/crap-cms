@@ -78,19 +78,13 @@ fn access_denied(
 ) -> bool {
     match check_access_with_lua(
         lua,
-        &AccessCheckInput {
-            access: Some(hook),
-            user,
-            id: None,
-            data: None,
-            // Threaded by the data-aware field-strip walker; `None` here on the
-            // legacy document-independent path.
-            document: None,
-            locale,
-            operation,
-            collection,
-            ui_locale: None,
-        },
+        &AccessCheckInput::builder(operation, collection)
+            .access(Some(hook))
+            .user(user)
+            // `data`/`document` threaded by the data-aware field-strip walker;
+            // `None` here on the legacy document-independent path.
+            .locale(locale)
+            .build(),
     ) {
         Ok(AccessResult::Allowed | AccessResult::Constrained(_)) => false,
         Ok(AccessResult::Denied) => true,
@@ -443,17 +437,13 @@ pub(crate) fn strip_read_access_with_lua(
     let is_denied = |hook: &HookRef, data: &DocumentFields| -> bool {
         match check_access_with_lua(
             lua,
-            &AccessCheckInput {
-                access: Some(hook),
-                user: input.user,
-                id: None,
-                data: Some(data),
-                document: Some(input.document),
-                locale: input.locale,
-                operation: "read",
-                collection: input.collection,
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder("read", input.collection)
+                .access(Some(hook))
+                .user(input.user)
+                .data(Some(data))
+                .document(Some(input.document))
+                .locale(input.locale)
+                .build(),
         ) {
             Ok(AccessResult::Allowed | AccessResult::Constrained(_)) => false,
             Ok(AccessResult::Denied) => true,
@@ -516,17 +506,13 @@ pub(crate) fn strip_write_access_with_lua(
     let is_denied = |hook: &HookRef, data: &DocumentFields| -> bool {
         match check_access_with_lua(
             lua,
-            &AccessCheckInput {
-                access: Some(hook),
-                user: input.user,
-                id: None,
-                data: Some(data),
-                document: Some(input.document),
-                locale: input.locale,
-                operation: input.operation,
-                collection: input.collection,
-                ui_locale: None,
-            },
+            &AccessCheckInput::builder(input.operation, input.collection)
+                .access(Some(hook))
+                .user(input.user)
+                .data(Some(data))
+                .document(Some(input.document))
+                .locale(input.locale)
+                .build(),
         ) {
             Ok(AccessResult::Allowed | AccessResult::Constrained(_)) => false,
             Ok(AccessResult::Denied) => true,
@@ -566,17 +552,13 @@ pub(crate) fn collect_read_denied_with_lua(
         field.access.read.as_ref().is_some_and(|hook| {
             match check_access_with_lua(
                 lua,
-                &AccessCheckInput {
-                    access: Some(hook),
-                    user,
-                    id: None,
-                    data: Some(document),
-                    document: Some(document),
-                    locale,
-                    operation: "read",
-                    collection,
-                    ui_locale: None,
-                },
+                &AccessCheckInput::builder("read", collection)
+                    .access(Some(hook))
+                    .user(user)
+                    .data(Some(document))
+                    .document(Some(document))
+                    .locale(locale)
+                    .build(),
             ) {
                 Ok(AccessResult::Allowed | AccessResult::Constrained(_)) => false,
                 Ok(AccessResult::Denied) => true,
@@ -625,17 +607,13 @@ pub(crate) fn collect_write_denied_with_lua(
         extract(field).is_some_and(|hook| {
             match check_access_with_lua(
                 lua,
-                &AccessCheckInput {
-                    access: Some(hook),
-                    user,
-                    id: None,
-                    data: Some(document),
-                    document: Some(document),
-                    locale,
-                    operation,
-                    collection,
-                    ui_locale: None,
-                },
+                &AccessCheckInput::builder(operation, collection)
+                    .access(Some(hook))
+                    .user(user)
+                    .data(Some(document))
+                    .document(Some(document))
+                    .locale(locale)
+                    .build(),
             ) {
                 Ok(AccessResult::Allowed | AccessResult::Constrained(_)) => false,
                 Ok(AccessResult::Denied) => true,

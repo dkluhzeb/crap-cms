@@ -113,6 +113,7 @@
 - [crap.schema](lua-api/schema.md)
 - [crap.richtext](lua-api/richtext.md)
 - [crap.jobs](lua-api/jobs.md)
+- [crap.routes](lua-api/routes.md)
 - [Filter Operators](lua-api/filter-operators.md)
 
 # MCP (Model Context Protocol)

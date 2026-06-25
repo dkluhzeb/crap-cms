@@ -155,17 +155,12 @@ pub(crate) fn enforce_access(
     let user_doc = hook_user(lua);
     let result = check_access_with_lua(
         lua,
-        &AccessCheckInput {
-            document: None,
-            access: params.access_fn,
-            user: user_doc.as_ref(),
-            id: params.id,
-            data: params.data,
-            locale: None,
-            operation: params.operation,
-            collection: params.slug,
-            ui_locale: None,
-        },
+        &AccessCheckInput::builder(params.operation, params.slug)
+            .access(params.access_fn)
+            .user(user_doc.as_ref())
+            .id(params.id)
+            .data(params.data)
+            .build(),
     )
     .map_err(|e| RuntimeError(format!("access check error: {e:#}")))?;
 

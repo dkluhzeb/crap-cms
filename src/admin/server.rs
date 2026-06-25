@@ -46,7 +46,8 @@ use crate::{
     admin::{
         AdminState, CSP_NONCE, CspNonce, Translations,
         handlers::{
-            auth as auth_handlers, collections, dashboard, events, globals, static_assets, uploads,
+            auth as auth_handlers, collections, custom_route::custom_routes_router, dashboard,
+            events, globals, static_assets, uploads,
         },
         server_builder::AdminStartParamsBuilder,
         templates,
@@ -77,6 +78,8 @@ pub struct AdminStartParams {
     pub ip_login_limiter: Arc<LoginRateLimiter>,
     pub forgot_password_limiter: Arc<LoginRateLimiter>,
     pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
+    pub mfa_limiter: Arc<LoginRateLimiter>,
+    pub ip_mfa_limiter: Arc<LoginRateLimiter>,
     pub storage: SharedStorage,
     pub token_provider: SharedTokenProvider,
     pub password_provider: SharedPasswordProvider,
@@ -109,6 +112,18 @@ pub async fn start(
     params: AdminStartParams,
     shutdown: CancellationToken,
 ) -> Result<()> {
+    let state = build_admin_state(params, shutdown.clone())?;
+
+    let h2c_enabled = state.config.server.h2c;
+    let app = build_router(state);
+
+    serve_admin(addr, app, h2c_enabled, shutdown).await
+}
+
+/// Assemble the [`AdminState`] from the start-params: load templates and
+/// translations, build the email renderer/provider, and resolve derived
+/// settings. Kept separate from the listener/serve loop so each stays focused.
+fn build_admin_state(params: AdminStartParams, shutdown: CancellationToken) -> Result<AdminState> {
     let AdminStartParams {
         config,
         config_dir,
@@ -121,6 +136,8 @@ pub async fn start(
         ip_login_limiter,
         forgot_password_limiter,
         ip_forgot_password_limiter,
+        mfa_limiter,
+        ip_mfa_limiter,
         storage,
         token_provider,
         password_provider,
@@ -153,7 +170,8 @@ pub async fn start(
     let subscriber_send_timeout_ms = config.live.subscriber_send_timeout_ms;
     let invalidation_transport: SharedInvalidationTransport =
         invalidation_transport.unwrap_or_else(|| Arc::new(InProcessInvalidationBus::new()));
-    let state = AdminState {
+
+    Ok(AdminState {
         config,
         config_dir: config_dir.clone(),
         pool,
@@ -168,9 +186,11 @@ pub async fn start(
         ip_login_limiter,
         forgot_password_limiter,
         ip_forgot_password_limiter,
+        mfa_limiter,
+        ip_mfa_limiter,
         has_auth,
         translations,
-        shutdown: shutdown.clone(),
+        shutdown,
         sse_connections: Arc::new(AtomicUsize::new(0)),
         max_sse_connections,
         storage,
@@ -181,11 +201,18 @@ pub async fn start(
         populate_singleflight: Arc::new(crate::db::query::Singleflight::new()),
         cache,
         custom_pages,
-    };
+    })
+}
 
-    let h2c_enabled = state.config.server.h2c;
-    let app = build_router(state);
-
+/// Bind the listener and run the Axum server (h2c or plain) with a graceful
+/// shutdown and a hard 10s drain deadline.
+#[cfg(not(tarpaulin_include))]
+async fn serve_admin(
+    addr: &str,
+    app: Router,
+    h2c_enabled: bool,
+    shutdown: CancellationToken,
+) -> Result<()> {
     let listener = TcpListener::bind(addr).await?;
     let shutdown_timeout = shutdown.clone();
 
@@ -379,14 +406,29 @@ pub fn build_router(state: AdminState) -> Router {
     let protected = protected_with_auth(&state);
     let upload_api = upload_router(state.clone());
 
-    let router = assemble_base_router(&state, protected, upload_api);
-    let router = with_request_layers(router, &state);
+    // Built-in routes carry the global double-submit CSRF / cache / security
+    // layers.
+    let base = assemble_base_router(&state, protected, upload_api);
+    let base = with_request_layers(base, &state);
+
+    // Custom routes are API-style: they bypass the global CSRF middleware
+    // (per-route `csrf = true` is enforced inside the dispatcher) and carry their
+    // own per-route body-size limit. Merged AFTER the CSRF layer so it doesn't
+    // wrap them.
+    let router = base.merge(custom_routes_router(&state));
+
     let router = with_cors_layer(router, &state);
     let router = with_compression_layer(router, &state);
     let router = with_tracing_layer(router);
     let router = with_timeout_layer(router, &state);
 
     router.with_state(state)
+}
+
+/// The maximum admin request body size in bytes (upload cap + 1 MiB headroom),
+/// clamped to 50 MiB if the addition would overflow `usize`.
+fn request_body_limit(state: &AdminState) -> usize {
+    usize::try_from(state.config.upload.max_file_size + 1024 * 1024).unwrap_or(50 * 1024 * 1024)
 }
 
 /// Build the protected (auth-required) sub-router and, when the deployment
@@ -467,13 +509,8 @@ fn assemble_base_router(
 /// control, and security headers (X-Frame-Options / CSP / etc).
 #[cfg(not(tarpaulin_include))]
 fn with_request_layers(router: Router<AdminState>, state: &AdminState) -> Router<AdminState> {
-    // 32-bit overflow path falls back to 50 MiB rather than usize::MAX —
-    // an effectively-unbounded request limit would be a DoS vector.
-    let body_limit = usize::try_from(state.config.upload.max_file_size + 1024 * 1024)
-        .unwrap_or(50 * 1024 * 1024);
-
     router
-        .layer(DefaultBodyLimit::max(body_limit))
+        .layer(DefaultBodyLimit::max(request_body_limit(state)))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             csrf_middleware,

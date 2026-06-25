@@ -146,6 +146,23 @@ pub enum MakeAction {
         #[arg(short, long)]
         force: bool,
     },
+    /// Generate a custom HTTP route handler (`routes/<name>.lua`)
+    Route {
+        /// Route handler name — the file `routes/<name>.lua`. Prompted if omitted.
+        name: Option<String>,
+
+        /// HTTP method (default: GET)
+        #[arg(short, long)]
+        method: Option<String>,
+
+        /// URL path to mount at (default: /<name>)
+        #[arg(short, long)]
+        path: Option<String>,
+
+        /// Overwrite existing file
+        #[arg(short, long)]
+        force: bool,
+    },
     /// Generate a slot-widget HBS file
     Slot {
         /// Slot name (e.g., "`dashboard_widgets`"). Prompted if omitted.

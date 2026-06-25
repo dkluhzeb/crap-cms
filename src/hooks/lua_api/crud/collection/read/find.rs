@@ -238,7 +238,9 @@ fn finalize_find_query(
 
     if let Some(p) = lua_page {
         let clamped = fq.limit.unwrap_or(params.default);
-        fq.offset = Some((p.max(1) - 1) * clamped);
+        // Saturating: an absurd `page` (e.g. i64::MAX) must not overflow the
+        // offset (a panic under debug overflow checks, a wrap in release).
+        fq.offset = Some(p.max(1).saturating_sub(1).saturating_mul(clamped));
     }
 
     if !params.cursor {
@@ -345,6 +347,26 @@ mod tests {
         assert_eq!(fq.limit, Some(10));
         assert_eq!(fq.offset, Some(20));
         assert!(page.is_none());
+    }
+
+    #[test]
+    fn page_offset_saturates_instead_of_overflowing() {
+        // A colossal `page` from Lua (e.g. i64::MAX) must not overflow
+        // `(page-1)*limit` — a panic under debug overflow checks. It saturates.
+        let (fq, page) = parse_find(json!({ "limit": 1000, "page": i64::MAX }));
+        let params = FindParams {
+            default: 20,
+            max: 1000,
+            cursor: false,
+            max_depth: 1,
+        };
+        let def = crate::core::CollectionDefinition::new("x");
+        let out = finalize_find_query(&params, &def, fq, page);
+        assert_eq!(
+            out.offset,
+            Some(i64::MAX),
+            "offset must saturate, not overflow"
+        );
     }
 
     #[test]

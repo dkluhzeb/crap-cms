@@ -265,6 +265,8 @@ struct RateLimiters {
     ip_login: Arc<LoginRateLimiter>,
     forgot_password: Arc<LoginRateLimiter>,
     ip_forgot_password: Arc<LoginRateLimiter>,
+    mfa: Arc<LoginRateLimiter>,
+    ip_mfa: Arc<LoginRateLimiter>,
     backend: Arc<dyn RateLimitBackend>,
 }
 
@@ -312,11 +314,33 @@ fn create_rate_limiters(cfg: &CrapConfig) -> Result<RateLimiters> {
         cfg.auth.forgot_password_window_seconds,
     ));
 
+    // MFA code verification reuses the login thresholds (same threat model: a
+    // bounded guessing budget per identity / IP) but lives in its OWN keyspace
+    // ("mfa" / "ip_mfa"). It must stay independent of the login limiter: a
+    // successful password clears the login limiter *before* the MFA challenge is
+    // issued, so sharing state would let an attacker who knows the password
+    // reset their MFA guessing budget by simply logging in again.
+    let mfa = Arc::new(LoginRateLimiter::with_backend(
+        backend.clone(),
+        "mfa",
+        cfg.auth.max_login_attempts,
+        cfg.auth.login_lockout_seconds,
+    ));
+
+    let ip_mfa = Arc::new(LoginRateLimiter::with_backend(
+        backend.clone(),
+        "ip_mfa",
+        cfg.auth.max_ip_login_attempts,
+        cfg.auth.login_lockout_seconds,
+    ));
+
     Ok(RateLimiters {
         login,
         ip_login,
         forgot_password,
         ip_forgot_password,
+        mfa,
+        ip_mfa,
         backend,
     })
 }
@@ -505,6 +529,8 @@ fn build_admin_params(res: &StartupResources) -> admin::server::AdminStartParams
         .ip_login_limiter(res.rate_limiters.ip_login.clone())
         .forgot_password_limiter(res.rate_limiters.forgot_password.clone())
         .ip_forgot_password_limiter(res.rate_limiters.ip_forgot_password.clone())
+        .mfa_limiter(res.rate_limiters.mfa.clone())
+        .ip_mfa_limiter(res.rate_limiters.ip_mfa.clone())
         .storage(res.storage.clone())
         .token_provider(res.token_provider.clone())
         .password_provider(res.password_provider.clone())

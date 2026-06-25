@@ -86,6 +86,9 @@ struct TestApp {
     /// The IP forgot-password limiter the router was built with — exposed so
     /// rate-limit tests can inspect/seed the same `Arc` the handlers use.
     ip_forgot_password_limiter: Arc<LoginRateLimiter>,
+    /// The per-user and per-IP MFA limiters, exposed for the same reason.
+    mfa_limiter: Arc<LoginRateLimiter>,
+    ip_mfa_limiter: Arc<LoginRateLimiter>,
 }
 
 fn setup_app(collections: Vec<CollectionDefinition>, globals: Vec<GlobalDefinition>) -> TestApp {
@@ -149,6 +152,8 @@ fn setup_app_in_dir(
         .any(crap_cms::core::CollectionDefinition::is_auth_collection);
 
     let ip_forgot_password_limiter = Arc::new(LoginRateLimiter::new(20, 900));
+    let mfa_limiter = Arc::new(LoginRateLimiter::new(5, 300));
+    let ip_mfa_limiter = Arc::new(LoginRateLimiter::new(20, 300));
 
     let state = AdminState {
         config,
@@ -170,6 +175,8 @@ fn setup_app_in_dir(
             crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
         ),
         ip_forgot_password_limiter: Arc::clone(&ip_forgot_password_limiter),
+        mfa_limiter: Arc::clone(&mfa_limiter),
+        ip_mfa_limiter: Arc::clone(&ip_mfa_limiter),
         has_auth,
         translations,
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -207,6 +214,8 @@ fn setup_app_in_dir(
         registry,
         jwt_secret: "test-jwt-secret".into(),
         ip_forgot_password_limiter,
+        mfa_limiter,
+        ip_mfa_limiter,
     }
 }
 
@@ -1592,6 +1601,74 @@ async fn reset_password_wrong_token_counts_against_ip_limiter() {
     );
 }
 
+/// Regression: MFA code verification must be rate-limited. Each `POST /admin/mfa`
+/// attempt counts against BOTH the per-user and per-IP MFA limiters via the
+/// atomic `check_and_block`, recorded up front before the code is checked.
+/// Seeding both to one below their thresholds and making a single attempt must
+/// tip both over — proving the gate is wired in both dimensions. Before this
+/// fix the endpoint had no limiter at all, so a 6-digit code was brute-forceable
+/// within the pending window.
+#[tokio::test]
+async fn mfa_verification_attempt_counts_against_limiters() {
+    let app = setup_app(vec![make_users_def()], vec![]);
+    let user_id = "mfa-user-1";
+    let ip = "127.0.0.1"; // ConnectInfo below + trust_proxy=off → this key
+
+    // A valid MFA pending token, signed the same way the login challenge step
+    // signs it. The user need not exist — the limiter gate runs before the code
+    // is verified, which is exactly the behavior under test.
+    let claims = auth::Claims::builder(user_id, "users")
+        .email("mfa@test.com")
+        .exp((chrono::Utc::now().timestamp() as u64) + 300)
+        .build()
+        .unwrap();
+    let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();
+
+    // Harness MFA limiters: per-user 5/window, per-IP 20/window. Seed each to
+    // one below threshold so a single attempt tips both.
+    for _ in 0..4 {
+        let _ = app.mfa_limiter.check_and_block(user_id);
+    }
+    for _ in 0..19 {
+        let _ = app.ip_mfa_limiter.check_and_block(ip);
+    }
+    assert!(
+        !app.mfa_limiter.is_blocked(user_id) && !app.ip_mfa_limiter.is_blocked(ip),
+        "precondition: neither limiter blocked yet"
+    );
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/admin/mfa")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header(
+                    "Cookie",
+                    format!("{}; crap_mfa_pending={token}", csrf_cookie()),
+                )
+                .header("X-CSRF-Token", TEST_CSRF)
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::from("code=000000"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "the MFA form re-renders regardless of outcome"
+    );
+    assert!(
+        app.mfa_limiter.is_blocked(user_id),
+        "the MFA attempt must advance the per-user MFA limiter to its threshold"
+    );
+    assert!(
+        app.ip_mfa_limiter.is_blocked(ip),
+        "the MFA attempt must advance the per-IP MFA limiter to its threshold"
+    );
+}
+
 #[tokio::test]
 async fn reset_password_mismatched_passwords() {
     let app = setup_app(vec![make_users_def()], vec![]);
@@ -1788,6 +1865,8 @@ end"#,
         .any(crap_cms::core::CollectionDefinition::is_auth_collection);
 
     let ip_forgot_password_limiter = Arc::new(LoginRateLimiter::new(20, 900));
+    let mfa_limiter = Arc::new(LoginRateLimiter::new(5, 300));
+    let ip_mfa_limiter = Arc::new(LoginRateLimiter::new(20, 300));
 
     let state = AdminState {
         config,
@@ -1807,6 +1886,8 @@ end"#,
         ip_login_limiter: Arc::new(LoginRateLimiter::new(20, 300)),
         forgot_password_limiter: Arc::new(LoginRateLimiter::new(3, 900)),
         ip_forgot_password_limiter: Arc::clone(&ip_forgot_password_limiter),
+        mfa_limiter: Arc::clone(&mfa_limiter),
+        ip_mfa_limiter: Arc::clone(&ip_mfa_limiter),
         has_auth,
         translations,
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -1844,6 +1925,8 @@ end"#,
         registry,
         jwt_secret: "test-jwt-secret".into(),
         ip_forgot_password_limiter,
+        mfa_limiter,
+        ip_mfa_limiter,
     }
 }
 
