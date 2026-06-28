@@ -29,7 +29,7 @@ use crate::{
         AuthUser, CollectionDefinition, Document,
         upload::{SharedStorage, StorageNotFound},
     },
-    db::{DbPool, Filter, FilterClause, FilterOp, FindQuery},
+    db::{DbPool, Filter, FilterClause, FilterOp, FindQuery, LocaleContext},
     hooks::HookRunner,
     service::{FindDocumentsInput, RunnerReadHooks, ServiceContext, find_documents},
 };
@@ -130,10 +130,20 @@ fn upload_doc_visible(input: &UploadVisibilityInput) -> bool {
         .limit(Some(1))
         .build();
 
+    // A localized upload collection (e.g. a `caption` field marked `localized`)
+    // stores that column per-locale (`caption__en`), so the SELECT needs a locale
+    // context — without one it references the bare logical column (`caption`),
+    // the query errors, and every file 404s. The default locale is sufficient:
+    // the gate only resolves the owning row, not a specific translation.
+    let locale_ctx = LocaleContext::from_locale_string(None, &input.locale_config)
+        .ok()
+        .flatten();
+
     // `include_drafts` lets a draft upload serve to a viewer with draft access;
     // the service downgrades to what each viewer may actually see.
     let find_input = FindDocumentsInput::builder(&fq)
         .include_drafts(true)
+        .locale_ctx(locale_ctx.as_ref())
         .build();
 
     find_documents(&ctx, &find_input).is_ok_and(|r| !r.docs.is_empty())

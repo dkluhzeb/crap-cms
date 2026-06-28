@@ -606,6 +606,77 @@ async fn serve_upload_path_traversal_blocked() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
+/// An upload collection with a *localized* field (stored per-locale as
+/// `caption__en`/`caption__de`) and no fast public path (`soft_delete` forces
+/// the per-document visibility find).
+fn make_localized_upload_def() -> CollectionDefinition {
+    let mut def = CollectionDefinition::new("media");
+    def.timestamps = true;
+    def.soft_delete = true;
+    def.upload = Some(CollectionUpload::new());
+
+    let mut caption = FieldDefinition::builder("caption", FieldType::Text).build();
+    caption.localized = true;
+    def.fields = vec![
+        // Upload system columns are normally injected by the Lua parser
+        // (`inject_upload_fields`); add the ones this test touches so the
+        // migration creates them.
+        FieldDefinition::builder("filename", FieldType::Text)
+            .required(true)
+            .build(),
+        FieldDefinition::builder("url", FieldType::Text).build(),
+        FieldDefinition::builder("alt", FieldType::Text).build(),
+        caption,
+    ];
+    def
+}
+
+/// Regression: the per-document upload serve gate runs a visibility find. For an
+/// upload collection with a localized field, the find's SELECT needs a locale
+/// context — without one it referenced the bare logical column (`caption`
+/// instead of `caption__en`), the query errored, and *every* file in the
+/// collection 404'd (e.g. broken thumbnails). The gate now passes the default
+/// locale.
+#[tokio::test]
+async fn serve_upload_localized_collection_resolves_owning_doc() {
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.admin.require_auth = false;
+    config.locale = make_locale_config(); // en + de → localized columns are per-locale
+    let app = setup_app_with_config(vec![make_localized_upload_def()], vec![], config);
+
+    // A document that owns the file (matched by `url`), plus the file on disk.
+    {
+        let conn = app.pool.get().unwrap();
+        conn.execute(
+            "INSERT INTO media (id, filename, url, caption__en) \
+             VALUES ('m1', 'pic.png', '/uploads/media/pic.png', 'hi')",
+            &[],
+        )
+        .unwrap();
+    }
+    let upload_dir = app._tmp.path().join("uploads").join("media");
+    std::fs::create_dir_all(&upload_dir).unwrap();
+    std::fs::write(upload_dir.join("pic.png"), tiny_png()).unwrap();
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::get("/uploads/media/pic.png")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "a localized upload collection's file must serve (regression: localized \
+         column made the visibility find error → 404)"
+    );
+}
+
 /// Regression (F1): under `[access] default_deny = true` (the secure default),
 /// a collection with no read hook denies reads — so the upload serve route must
 /// NOT serve its files via the public fast path. An anonymous request 404s.
