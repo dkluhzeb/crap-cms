@@ -213,6 +213,18 @@ fn validate_node_instance(
                         attr_def.name,
                         e,
                     );
+
+                    // Fail closed: an erroring validator must reject the
+                    // write, exactly like top-level fields (checks/custom.rs)
+                    // and array/blocks sub-fields do.
+                    errors.push(
+                        FieldError::with_key(
+                            data_key.clone(),
+                            format!("Validation failed (internal error in '{validate_ref}')"),
+                            "validation.custom_error",
+                        )
+                        .with_param("field", attr_def.name.clone()),
+                    );
                 }
             }
         }
@@ -577,6 +589,54 @@ mod tests {
 
         assert_eq!(errors.len(), 1);
         assert!(errors[0].message.contains("URL must start with /"));
+    }
+
+    /// Regression: an ERRORING custom validator (broken ref, Lua error)
+    /// was only warned about and the document saved — fail-open. It must
+    /// reject the write like the top-level and sub-field paths do.
+    #[test]
+    fn validate_richtext_custom_lua_validator_error_fails_closed() {
+        let lua = Lua::new();
+        lua.load(
+            r#"
+            package.loaded["validators"] = {
+                broken = function(value, ctx)
+                    error("validator exploded")
+                end
+            }
+        "#,
+        )
+        .exec()
+        .unwrap();
+
+        let mut reg = Registry::new();
+        reg.register_richtext_node(
+            RichtextNodeDef::builder("link", "Link")
+                .attrs(vec![
+                    FieldDefinition::builder("href", FieldType::Text)
+                        .validate("validators.broken")
+                        .build(),
+                ])
+                .build(),
+        );
+        let field = make_richtext_field(vec!["link".to_string()], "json");
+        let json = r#"{"type":"doc","content":[{"type":"link","attrs":{"href":"/x"}}]}"#;
+        let mut errors = Vec::new();
+
+        validate_richtext_node_attrs(
+            &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
+            json,
+            "content",
+            &field,
+            &mut errors,
+        );
+
+        assert_eq!(
+            errors.len(),
+            1,
+            "an erroring validator must produce a validation error, not pass"
+        );
+        assert_eq!(errors[0].key.as_deref(), Some("validation.custom_error"));
     }
 
     #[test]

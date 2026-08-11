@@ -8,6 +8,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **`crap.jobs.define` now validates the job slug** like `crap.collections.define`
+  and `crap.globals.define` already did — lowercase ASCII letters, digits, and
+  underscores, not starting with an underscore. A slug with a hyphen, uppercase
+  letter, or space is now rejected at load. **Migration:** rename any such job
+  slug to the allowed charset (e.g. `send-digest` → `send_digest`).
+
+- **`crap.richtext.register_node` node names are now restricted to lowercase
+  ASCII slugs** (letters, digits, underscore; no leading digit/underscore),
+  matching every other identifier. The name check previously used a
+  Unicode-aware test that accepted uppercase and non-ASCII names. **Migration:**
+  rename any non-conforming node name.
+
+- **A non-numeric value submitted for a Number field is now a validation error**
+  rather than being silently coerced to NULL on write. If any hook or client was
+  relying on that silent coercion, send `nil`/omit the field for "no value"
+  instead of a non-numeric string.
+
+- **`crap.http.request` errors on a response larger than `max_response_bytes`**
+  instead of silently returning a truncated body. Raise `[http] max_response_bytes`
+  if you intentionally fetch large responses.
+
 - **`crap.pages.list()` now returns a list of `crap.PageInfo` tables, not a list
   of slug strings.** Each entry is `{ slug, section?, label?, icon?, access }`
   (`access` is `"public"` or `"gated"`), matching the new `crap.routes.list()`
@@ -316,6 +337,80 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `max_file_size` still inherits the global default.
 
 ### Security
+
+- **`crap.collections.update(id, data, { unpublish = true })` now enforces
+  access.** The `unpublish` option used a bespoke code path that skipped access
+  evaluation entirely, so a caller whose `access.update` filter did not match a
+  document could still unpublish it (and the returned document skipped the
+  read-access and API-hidden strips). It now routes through the same service
+  path as `crap.collections.unpublish` — access check, row-level constraints,
+  lifecycle hooks, cache invalidation, and mutation event — and errors on a
+  collection without versioning instead of silently falling through to a plain
+  update.
+
+- **Version restore now verifies the version belongs to the target document.**
+  `restore_collection_version` looked the snapshot up by version id only, so a
+  caller with `update` access to one document could restore *another*
+  document's snapshot onto it — copying content they may be row-read-restricted
+  from into a document they control (cross-document snapshot injection). The
+  restore now rejects a version whose `_parent` does not match the target id.
+  Applies to every restore surface (Lua, admin, gRPC).
+
+- **Live event streams now run the field-read access strip *before* the
+  per-subscriber `after_read` hook**, matching the normal read pipeline. The
+  event path ran `after_read` first, so a hook that copied a read-denied
+  field's value into an unprotected field leaked it past the strip to a
+  subscriber the access rule denied. The strip now runs first, the API-hidden
+  strip second, and `after_read` sees only the already-stripped data.
+
+- **`crap.collections.ref_count` now gates on read access.** It was the only
+  read-shaped Lua op with no access check — it returned an incoming-reference
+  count for any document id. It now performs a read-visibility check (respecting
+  `read`/`draft`/`trash` and row-level constraints) and errors for a document
+  the caller may not read.
+
+- **An erroring custom validator on a richtext node attribute now fails the
+  write.** A Lua error (or unresolvable reference) in a node-attr `validate`
+  function was only logged and the document saved — fail-open, unlike top-level
+  fields and array/blocks sub-fields, which both reject. It now pushes a
+  `validation.custom_error` like its siblings.
+
+- **`crap.env.get` now hides the `CRAP_SECRET_*` prefix from hooks.** Config
+  `${VAR}` substitution steers operators toward `CRAP_`-prefixed environment
+  variables for secrets, but `crap.env.get` allowed reading any `CRAP_*` var
+  from a hook. The new `CRAP_SECRET_*` convention is reserved for config-only
+  secrets: substitution still reads it at load (pre-VM), but a hook reading it
+  now errors. Store secrets that must stay out of userland Lua under this prefix.
+
+- **`crap.richtext.register_node` now rejects a wrong-typed `inline` value.**
+  `inline` was read with mlua's boolean conversion, which applies Lua truthiness
+  to any value — `inline = "false"` (a truthy string) silently registered the
+  node as inline **true**. It now errors on a non-boolean, matching the strict
+  parsing invariant; `label` is read strictly too.
+
+- **Data-aware field read/write access now evaluates identically whether a field
+  sits directly at its level or inside a transparent layout wrapper
+  (Row/Collapsible/Tabs).** The in-place access strip snapshotted each level's
+  `ctx.data` sibling view once, so direct siblings correctly saw the original
+  pre-strip data — but a wrapper re-entered the strip on the *same* level, taking
+  a fresh snapshot *after* earlier siblings had already been removed. An
+  `access.read`/`access.update` rule that keys on a sibling's value (e.g. show a
+  field only when a preceding, itself-access-gated field is present) therefore
+  produced a different keep/strip decision based purely on layout placement,
+  which with an inverted rule could keep a field that should have been stripped.
+  Layout wrappers now forward the parent level's snapshot, restoring the
+  documented transparency invariant. Genuine new levels (a group's object,
+  array/blocks rows) still snapshot their own level.
+
+- **`crap.routes.register` now rejects a wrong-typed `csrf` value instead of
+  silently disabling CSRF protection.** `csrf` was read with an `if let
+  Value::Boolean` guard, so a present-but-non-boolean value (e.g. `csrf = 1`, a
+  common mistake) was silently dropped and the route fell back to CSRF **off** —
+  a fail-open, unlike every other config key on the strict route surface. It now
+  errors at load if `csrf` is present and not a boolean. `max_body` got the same
+  treatment: a wrong-typed value now errors rather than being ignored, and a
+  whole-valued float (Lua `2^16`) is accepted as the byte cap instead of silently
+  falling back to the default limit.
 
 - **The email-verification and password-reset endpoints now rate-limit
   atomically.** Both used a non-atomic `is_blocked` + `record_failure` split, so
@@ -821,6 +916,112 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **`min_rows` on a scalar `has_many` field is now satisfiable, and omitted
+  array fields no longer fail it on partial updates.** The row-count check
+  only counted a real JSON array, so a `has_many` Text/Number/Select field
+  (stored as a JSON-encoded string) always counted as zero rows and could never
+  meet `min_rows` from the admin form; and a partial update that omitted an
+  array field counted it as zero rows rather than keeping its stored rows. Scalar
+  `has_many` counts now go through the element check that understands the
+  encoding, and an omitted field on update is exempt (mirroring `required`).
+
+- **Field validation now handles both `has_many` value encodings uniformly.**
+  Typed surfaces (Lua/gRPC) submit a real array while the admin form submits a
+  JSON-encoded string; several checks understood only one. As a result a
+  `required` `has_many` field submitted as an array falsely failed, per-element
+  length/bounds checks and the select-option allowlist were silently skipped for
+  array input, and a plain non-empty string satisfied `required` on an
+  Array/Blocks field (which then persisted nothing). All of these now normalize
+  either encoding to an element list before checking; a present but wrong-shaped
+  value is an error, not a silent pass.
+
+- **A non-numeric value on a Number field is now rejected instead of silently
+  stored as NULL.** An unparseable value (`"abc"`) passed validation via an
+  early return, counted as present for `required`, and was coerced to NULL at
+  the persist edge — silent data loss that also bypassed bounds. Number fields
+  now reject a present, non-numeric value; numeric strings (the admin-form
+  encoding) still pass.
+
+- **Nested validation no longer skips malformed rows.** Inside an array/blocks
+  row, an unknown or missing block type is now a `validation.unknown_block_type`
+  error (it was silently skipped, unlike at the top level); a missing or
+  wrong-typed group still validates its `required` children (a missing group
+  used to skip all child validation); and a nested `required` Array/Blocks given
+  `[]` is now rejected.
+
+- **Field-level `after_change` mutations are now visible to collection and
+  registered `after_change` hooks on every surface.** The runtime hook path
+  (admin/gRPC/MCP) ran field `after_change` hooks on a throwaway copy of the
+  data and discarded the result, so a field hook that transformed a value was
+  invisible to the collection-level `after_change` hooks that ran next — while
+  the Lua CRUD path applied them. Both paths now apply the field-hook result.
+
+- **The global-unpublish `before_change` hook now runs through the WriteHooks
+  adapter.** It went through the raw hook runner with no `LuaCrudInfra`, so CRUD
+  performed inside the hook (e.g. an audit-log write) never queued its mutation
+  event or invalidated caches — but only on the global unpublish path. It now
+  uses the same adapter as every other write, and `crap.globals.unpublish` is
+  available as a conn-mode op.
+
+- **`crap.collections.create_many` no longer strips a `password` field from
+  non-auth collections.** Bulk create removed `password` from every collection,
+  while single `create` only separates it for auth collections — so a non-auth
+  collection with a legitimate `password` field silently lost the value on bulk
+  create. Bulk items now go through the same extraction as single create.
+
+- **Lua read hooks are now depth-capped.** A `before_read`/`after_read` hook that
+  read its own collection (`crap.collections.find`/`find_by_id`/`count`,
+  `crap.globals.get`) recursed with no limit — a stack overflow that aborted the
+  process. Reads now use the same hook-depth guard as writes (cap 3, hooks
+  skipped beyond).
+
+- **`crap.http.request` now follows redirects with correct method/body
+  semantics and errors on oversized responses.** The redirect loop replayed the
+  original method but dropped the body on every redirect, so a POST hitting a 307
+  was replayed with an empty body (silent data loss); 303 (and non-GET/HEAD
+  301/302) now convert to GET, while 307/308 preserve method and body.
+  Credential headers (`Authorization`, `Cookie`, …) are no longer replayed to a
+  different host on redirect. A response body over `max_response_bytes` is now a
+  hard error instead of being silently truncated (which could hand back
+  truncated JSON or error confusingly on a mid-character cut), and duplicate
+  response headers (multiple `Set-Cookie`) are comma-joined rather than
+  last-wins-dropped. The private-network SSRF filter also now blocks CGNAT
+  (`100.64.0.0/10`), `192.0.0.0/24`, and `198.18.0.0/15`.
+
+- **`crap.util` date helpers no longer panic or wrap on bad input.**
+  `date_format` with an invalid format string (`"%J"`, a trailing `%`) panicked
+  inside the callback; it now returns a clean error. `date_add`/`date_diff` used
+  unchecked arithmetic (panic in debug, silent wrap in release) and now error on
+  overflow.
+
+- **Time-only and month-only date formats are now range-checked.** `"99:99"` and
+  `"2024-99"` used to pass a digit-shape-only check while full dates were
+  correctly range-validated; the hour/minute/second and month ranges are now
+  enforced.
+
+- **`crap.schema` introspection now exposes Tabs sub-fields and global
+  versioning.** Fields wrapped in a `Tabs` layout were invisible to
+  `crap.schema.get_collection` (their children live under `.tabs`, not
+  `.fields`), and `get_global` hardcoded `has_versions`/`has_drafts` to `false`
+  even for versioned globals. Both now report correctly.
+
+- **Several Lua registration surfaces now reject unknown keys and invalid
+  input.** `crap.storage.register` and `crap.email.register` reject unknown
+  handler keys (a typo like `exsits`/`sned` used to be silently ignored),
+  `crap.hooks.remove` rejects an unknown event name (like `register` already
+  did), `crap.jobs.queue` errors on an unconvertible payload instead of gating
+  access against `nil`, and a custom-page `access` value that errors on read now
+  drops the page (fail-closed) rather than serving it ungated. A DB error while
+  snapshotting a document for delete hooks is now propagated rather than
+  swallowed as "not found".
+
+- **`crap.collections.delete_many` can now empty the trash, and
+  `crap.globals.update` accepts `draft`.** `delete_many` gained a `trash = true`
+  option that permanently removes already-soft-deleted rows (previously
+  impossible from Lua — `include_deleted` was hardcoded false); `crap.globals.update`
+  gained the `draft` option for a version-only save, matching
+  `crap.collections.update`.
 
 - **Docs: the OAuth callback example now verifies the provider's email claim.**
   The canonical `auth_callback` example matched a local user purely by

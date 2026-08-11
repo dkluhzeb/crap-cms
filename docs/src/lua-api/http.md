@@ -51,6 +51,8 @@ local resp = crap.http.request({
 
 - Uses [reqwest](https://docs.rs/reqwest) (blocking HTTP client). Since Lua hooks run inside `spawn_blocking`, blocking I/O is correct and won't stall the async runtime.
 - Non-2xx responses are **not** errors — they return normally with the status code. Only transport-level failures (DNS, timeout, connection refused) throw Lua errors.
+- **Redirects** follow standard method/body semantics: `307`/`308` preserve the method and body; `303` (and non-GET/HEAD `301`/`302`) switch to `GET` and drop the body. Credential headers (`Authorization`, `Cookie`, …) are not replayed to a different host on redirect. Up to 10 redirects are followed.
+- **Response size**: a body larger than `[http] max_response_bytes` is a hard error, not a silent truncation. Duplicate response headers (e.g. multiple `Set-Cookie`) are comma-joined in `resp.headers`.
 - Available in both init.lua and hooks.
 - **TLS certificate verification** is always enabled (reqwest's default with the `rustls-tls` feature). There is no opt-out — `crap.http.request` will not connect to servers with invalid or self-signed certificates. Use a proper CA-signed certificate on any HTTPS endpoint you call.
 

@@ -23,6 +23,9 @@ use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 use crate::hooks::lifecycle::InitPhase;
 use crate::typegen::lua::{LuaFnSpec, LuaParam, lua_fn, lua_table};
 
+/// Allowed keys on a `crap.storage.register` handler table.
+const STORAGE_HANDLER_KEYS: &[&str] = &["put", "get", "delete", "url", "exists"];
+
 /// Register a custom storage backend's handler. **Init-only** — call from
 /// `init.lua` when `[upload] storage = "custom"`. Stores the handler as
 /// `crap._storage`; the custom backend delegates every operation to it.
@@ -55,6 +58,21 @@ fn storage_register(
         if !matches!(handler.get::<Value>(name)?, Value::Nil | Value::Function(_)) {
             return Err(RuntimeError(format!(
                 "crap.storage.register: '{name}' must be a function when provided"
+            )));
+        }
+    }
+
+    // Reject unknown keys so a typo (`exsits`) surfaces at load instead of
+    // silently falling back to the get-probe.
+    for pair in handler.clone().pairs::<Value, Value>() {
+        let (key, _) = pair?;
+        if let Value::String(s) = &key
+            && !STORAGE_HANDLER_KEYS.contains(&s.to_str()?.as_ref())
+        {
+            return Err(RuntimeError(format!(
+                "crap.storage.register: unknown key '{}' (allowed: {})",
+                s.to_str()?,
+                STORAGE_HANDLER_KEYS.join(", ")
             )));
         }
     }
@@ -142,6 +160,24 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("url"), "should name the bad key: {err}");
+    }
+
+    /// Regression: unknown handler keys (a typo like `exsits`) were silently
+    /// accepted, so the operator's existence check never ran.
+    #[test]
+    fn unknown_handler_key_is_rejected() {
+        let lua = lua_in_init_phase();
+        let err = lua
+            .load(
+                r"crap.storage.register({
+                  put = function() end, get = function() end, delete = function() end,
+                  exsits = function(k) return true end,
+                })",
+            )
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("exsits"), "should name the unknown key: {err}");
     }
 
     #[test]

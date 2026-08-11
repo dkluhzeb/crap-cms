@@ -87,6 +87,17 @@ struct SchemaOption {
     value: String,
 }
 
+/// One tab under a `Tabs` layout field. Tabs are transparent wrappers, but
+/// their sub-fields live under `.tabs[].fields` (not `.fields`), so
+/// introspection must project them or the wrapped fields are invisible.
+#[derive(Serialize)]
+struct SchemaTab {
+    label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    fields: Vec<SchemaField>,
+}
+
 /// One block definition under a `Blocks` field. Note: emitted key is
 /// `type`, hence the `#[serde(rename)]`.
 #[derive(Serialize)]
@@ -212,6 +223,14 @@ pub(crate) struct SchemaField {
         optional
     )]
     blocks: Vec<SchemaBlock>,
+    /// Tab definitions for `Tabs` layout field types. Each tab carries its
+    /// own sub-fields (Tabs store children under `.tabs`, not `.fields`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[lua(
+        ty = "{ label: string, description?: string, fields: crap.SchemaField[] }[]",
+        optional
+    )]
+    tabs: Vec<SchemaTab>,
 }
 
 // ── Builders (CollectionDefinition / FieldDefinition → projection) ───
@@ -256,8 +275,10 @@ fn build_global(def: &GlobalDefinition) -> SchemaCollection {
         timestamps: false,
         has_auth: false,
         has_upload: false,
-        has_versions: false,
-        has_drafts: false,
+        // Globals genuinely lack timestamps/auth/upload, but they DO support
+        // versioning — use the real helpers rather than hardcoding false.
+        has_versions: def.has_versions(),
+        has_drafts: def.has_drafts(),
         fields: def.fields.iter().map(build_field).collect(),
     }
 }
@@ -327,6 +348,15 @@ fn build_field(f: &FieldDefinition) -> SchemaField {
                 group: b.group.clone(),
                 image_url: b.image_url.clone(),
                 fields: b.fields.iter().map(build_field).collect(),
+            })
+            .collect(),
+        tabs: f
+            .tabs
+            .iter()
+            .map(|t| SchemaTab {
+                label: t.label.clone(),
+                description: t.description.clone(),
+                fields: t.fields.iter().map(build_field).collect(),
             })
             .collect(),
     }

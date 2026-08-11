@@ -273,6 +273,17 @@ pub(crate) fn restore_collection_version_core(
     let version = query::find_version_by_id(conn, ctx.slug, version_id)?
         .ok_or_else(|| ServiceError::NotFound(format!("Version '{version_id}' not found")))?;
 
+    // The version must belong to the target document. Without this check, a
+    // caller with update access to one document could restore ANOTHER
+    // document's snapshot onto it (cross-document snapshot injection,
+    // bypassing row-level read filters on the source). NotFound rather than
+    // AccessDenied so version ids can't be probed across documents.
+    if version.parent.as_ref() != document_id {
+        return Err(ServiceError::NotFound(format!(
+            "Version '{version_id}' not found"
+        )));
+    }
+
     let mut snapshot = version.snapshot;
 
     warn_on_snapshot_drift(&snapshot, &def.fields, ctx.slug, version_id);

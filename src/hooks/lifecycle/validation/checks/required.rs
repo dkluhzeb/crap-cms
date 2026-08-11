@@ -45,19 +45,34 @@ pub(crate) fn check_required(
 }
 
 /// Check if a field value is "present" for required validation purposes.
+/// Join-shaped and `has_many` fields accept both value encodings that reach
+/// validation: the typed `Value::Array` (Lua/gRPC) and the JSON-string
+/// encoding (admin form).
 fn is_value_present(field: &FieldDefinition, value: Option<&Value>, is_empty: bool) -> bool {
     if !field.has_parent_column() {
-        // Array/Blocks/Relationship: check for non-empty array or string
+        // Array/Blocks/Relationship (join-shaped)
         return match value {
             Some(Value::Array(arr)) => !arr.is_empty(),
-            Some(Value::String(s)) => !s.is_empty(),
+            Some(Value::String(s)) => match field.field_type {
+                // A bare string is meaningless for Array/Blocks — only a
+                // non-empty JSON-encoded array counts as present.
+                FieldType::Array | FieldType::Blocks => {
+                    serde_json::from_str::<Vec<Value>>(s).is_ok_and(|arr| !arr.is_empty())
+                }
+                // has-many relationship: JSON-array string, or a bare id
+                _ if field.has_many => serde_json::from_str::<Vec<Value>>(s)
+                    .map_or(!s.is_empty(), |arr| !arr.is_empty()),
+                // has-one relationship/upload: a non-empty id string
+                _ => !s.is_empty(),
+            },
             _ => false,
         };
     }
 
     if field.has_many {
-        // has_many with parent column: value is a JSON array string
+        // has_many with parent column: typed array or JSON array string
         return match value {
+            Some(Value::Array(arr)) => !arr.is_empty(),
             Some(Value::String(s)) => {
                 serde_json::from_str::<Vec<Value>>(s).map_or(!s.is_empty(), |arr| !arr.is_empty())
             }
@@ -75,6 +90,63 @@ mod tests {
     use crate::core::RelationshipConfig;
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
+
+    /// Regression: a `has_many` scalar field submitted as a typed array
+    /// (Lua/gRPC) falsely failed `required` — the presence check only
+    /// understood the JSON-string encoding.
+    #[test]
+    fn has_many_required_satisfied_by_typed_array() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .required(true)
+                .build(),
+        ];
+        let mut data = DocumentFields::new();
+        data.insert("tags".to_string(), json!(["x"]));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(
+            result.is_ok(),
+            "non-empty typed array must satisfy required, got: {result:?}"
+        );
+    }
+
+    /// Regression: a bare non-empty string satisfied `required` on an
+    /// Array/Blocks field even though nothing would be persisted to the
+    /// join table — silent data loss on a required field.
+    #[test]
+    fn array_required_not_satisfied_by_bare_string() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .required(true)
+                .build(),
+        ];
+        let mut data = DocumentFields::new();
+        data.insert("items".to_string(), json!("hello"));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(
+            result.is_err(),
+            "a bare string must not satisfy required on an Array field"
+        );
+    }
 
     #[test]
     fn test_validate_required_field_empty_string() {

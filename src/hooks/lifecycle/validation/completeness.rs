@@ -306,7 +306,16 @@ fn read_existing_columns(
             }
         }
     }
+    // A DB error here fails closed (missing columns → spurious required-locale
+    // errors block the write), which is the safe direction — but log the real
+    // cause so it isn't silently hidden as "all locales absent".
     fetch_row_columns(ctx.conn, ctx.table, &cols, id)
+        .inspect_err(|e| {
+            tracing::error!(
+                table = ctx.table,
+                "completeness: failed to read existing localized columns: {e}"
+            );
+        })
         .ok()
         .flatten()
 }

@@ -152,7 +152,10 @@ pub(crate) fn post_process_single(
         fields: &def.fields,
         collection: slug,
         operation,
-        locale: opts.locale_ctx().map(LocaleContext::access_locale),
+        // `hook_locale` (not `access_locale`): in All-locale mode the value is
+        // a per-locale map, so `ctx.locale` is None rather than a misleading
+        // single locale — see the doc on `LocaleContext::hook_locale`.
+        locale: opts.locale_ctx().and_then(LocaleContext::hook_locale),
         user,
         ui_locale: opts.ui_locale(),
         context: req_context,
@@ -318,7 +321,9 @@ pub(crate) fn post_process_docs(
         fields: &def.fields,
         collection: slug,
         operation: "find",
-        locale: opts.locale_ctx().map(LocaleContext::access_locale),
+        // `hook_locale`: None in All-locale mode (per-locale map value) — see
+        // the single-doc path above and `LocaleContext::hook_locale`.
+        locale: opts.locale_ctx().and_then(LocaleContext::hook_locale),
         user,
         ui_locale: opts.ui_locale(),
         context: req_context,

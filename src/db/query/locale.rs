@@ -73,6 +73,22 @@ impl LocaleContext {
             LocaleMode::Default | LocaleMode::All => self.config.default_locale.as_str(),
         }
     }
+
+    /// The locale to expose to lifecycle hooks as `ctx.locale`. Unlike
+    /// [`Self::access_locale`], this returns `None` in `All` mode: an
+    /// all-locales read shapes localized fields as a `{ en = .., de = .. }`
+    /// map, so claiming a single `ctx.locale` (the default) would mislead a
+    /// field hook into overwriting the whole map believing it holds one
+    /// locale's scalar. `Single`/`Default` reads target one locale and
+    /// expose it normally.
+    #[must_use]
+    pub fn hook_locale(&self) -> Option<&str> {
+        match &self.mode {
+            LocaleMode::Single(l) => Some(l.as_str()),
+            LocaleMode::Default => Some(self.config.default_locale.as_str()),
+            LocaleMode::All => None,
+        }
+    }
 }
 
 /// Get locale-aware SELECT expressions and result column names for a collection.

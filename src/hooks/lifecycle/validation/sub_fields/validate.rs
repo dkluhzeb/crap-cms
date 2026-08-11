@@ -110,24 +110,41 @@ fn validate_children_recursive(
                 // Navigate into the Group's nested object and validate children.
                 // Form parser stores Group data as nested objects (e.g., {"meta": {"title": "..."}}).
                 let data_key = format!("{}{}", group_prefix, sf.name);
+                let qualified = format!("{}[{}][{}]", ctx.parent_name, ctx.idx, data_key);
+                let params = SubFieldParams {
+                    lua: ctx.lua,
+                    parent_name: &qualified,
+                    idx: 0,
+                    table: ctx.table,
+                    registry: ctx.registry,
+                    is_draft: ctx.is_draft,
+                    locale: ctx.locale,
+                    operation: ctx.operation,
+                    id: ctx.id,
+                    document: ctx.document,
+                };
 
-                if let Some(group_val) = ctx.row_obj.get(&data_key)
-                    && let Some(group_obj) = group_val.as_object()
+                // Rows are submitted whole, so an absent group means all its
+                // children are absent — validate them against an empty object
+                // so `required` sub-fields still fire. A present non-object
+                // (non-null) value is a malformed row, not a skip.
+                let group_val = ctx.row_obj.get(&data_key);
+
+                if let Some(v) = group_val
+                    && !v.is_null()
+                    && v.as_object().is_none()
                 {
-                    let qualified = format!("{}[{}][{}]", ctx.parent_name, ctx.idx, data_key);
-                    let params = SubFieldParams {
-                        lua: ctx.lua,
-                        parent_name: &qualified,
-                        idx: 0,
-                        table: ctx.table,
-                        registry: ctx.registry,
-                        is_draft: ctx.is_draft,
-                        locale: ctx.locale,
-                        operation: ctx.operation,
-                        id: ctx.id,
-                        document: ctx.document,
-                    };
-
+                    errors.push(
+                        FieldError::with_key(
+                            qualified.clone(),
+                            format!("{} must be an object", sf.name),
+                            "validation.invalid_row_type",
+                        )
+                        .with_param("field", sf.name.clone()),
+                    );
+                } else {
+                    let empty = serde_json::Map::new();
+                    let group_obj = group_val.and_then(Value::as_object).unwrap_or(&empty);
                     validate_sub_fields_inner(&params, &sf.fields, group_obj, errors);
                 }
             }
@@ -204,6 +221,23 @@ fn validate_nested_rows(
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             let Some(bd) = call.sf.blocks.iter().find(|b| b.block_type == bt) else {
+                // Mirror the top-level blocks walker: an unknown (or missing)
+                // block type is a malformed row and must error, not be
+                // silently skipped into the stored JSON.
+                errors.push(
+                    FieldError::with_key(
+                        format!("{}[{nested_idx}]", call.qualified),
+                        format!(
+                            "{} row {nested_idx} has unknown block type '{bt}'",
+                            call.sf.name
+                        ),
+                        "validation.unknown_block_type",
+                    )
+                    .with_param("field", call.sf.name.clone())
+                    .with_param("index", nested_idx.to_string())
+                    .with_param("block_type", bt.to_string()),
+                );
+
                 continue;
             };
 
@@ -292,10 +326,16 @@ fn validate_leaf_sub_field(
 
     let is_empty = is_empty_value(value);
 
+    // An empty array counts as absent for `required` (matching the top-level
+    // `is_value_present`), but NOT for the other checks — `min_rows` etc.
+    // must still see the empty list to enforce count bounds.
+    let is_missing_for_required =
+        is_empty || matches!(value, Some(Value::Array(arr)) if arr.is_empty());
+
     // 1. Required check (skip for Checkbox — absent/false is valid, and skipped
     //    on drafts via `sub_field_required`).
     if sub_field_required(ctx, sf, qualified, errors)
-        && is_empty
+        && is_missing_for_required
         && sf.field_type != FieldType::Checkbox
     {
         errors.push(
@@ -390,7 +430,9 @@ fn validate_leaf_sub_field(
     //     The top-level walker runs this for every field (a no-op unless bounds
     //     are set); without it here, an array-in-array / array-in-blocks /
     //     blocks-in-group `min_rows`/`max_rows` would never be enforced.
-    checks::check_row_bounds(sf, qualified, value, ctx.is_draft, errors);
+    //     `is_update: false` — rows are always submitted whole, so an absent
+    //     nested field genuinely has zero rows (no partial-update exemption).
+    checks::check_row_bounds(sf, qualified, value, ctx.is_draft, false, errors);
 
     // 9. Richtext node attr validation
     if sf.field_type == FieldType::Richtext

@@ -6,16 +6,13 @@ use mlua::{
     Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value as LuaValue,
 };
 use serde::Deserialize;
-use serde_json::Value;
 
 use anyhow::Result;
 
 use crate::{
-    core::{CollectionDefinition, Document, Registry},
-    db::{DbConnection, query},
+    core::Registry,
     hooks::{
-        HookContext, HookEvent,
-        lifecycle::{converters::document_to_lua_table, run_hooks_inner},
+        lifecycle::converters::document_to_lua_table,
         lua_api::crud::{
             get_tx_conn,
             helpers::{
@@ -24,7 +21,7 @@ use crate::{
             },
         },
     },
-    service::{LuaWriteHooks, ServiceContext, persist_unpublish, unpublish_document},
+    service::{LuaWriteHooks, ServiceContext, unpublish_document},
     typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
 
@@ -60,6 +57,121 @@ impl FromLua for UnpublishOptions {
     }
 }
 
+/// Parameters for the shared unpublish routing.
+pub(super) struct UnpublishCall<'a> {
+    collection: &'a str,
+    id: &'a str,
+    override_access: bool,
+    hooks: bool,
+    events: bool,
+}
+
+impl<'a> UnpublishCall<'a> {
+    /// Create a builder with the required fields.
+    pub(super) fn builder(collection: &'a str, id: &'a str) -> UnpublishCallBuilder<'a> {
+        UnpublishCallBuilder::new(collection, id)
+    }
+}
+
+/// Builder for [`UnpublishCall`].
+pub(super) struct UnpublishCallBuilder<'a> {
+    collection: &'a str,
+    id: &'a str,
+    override_access: bool,
+    hooks: bool,
+    events: bool,
+}
+
+impl<'a> UnpublishCallBuilder<'a> {
+    fn new(collection: &'a str, id: &'a str) -> Self {
+        Self {
+            collection,
+            id,
+            override_access: false,
+            hooks: true,
+            events: true,
+        }
+    }
+
+    pub(super) fn override_access(mut self, v: bool) -> Self {
+        self.override_access = v;
+        self
+    }
+
+    pub(super) fn hooks(mut self, v: bool) -> Self {
+        self.hooks = v;
+        self
+    }
+
+    pub(super) fn events(mut self, v: bool) -> Self {
+        self.events = v;
+        self
+    }
+
+    pub(super) fn build(self) -> UnpublishCall<'a> {
+        UnpublishCall {
+            collection: self.collection,
+            id: self.id,
+            override_access: self.override_access,
+            hooks: self.hooks,
+            events: self.events,
+        }
+    }
+}
+
+/// Route an unpublish through the full service path — access check (incl.
+/// row-level constraints), hook depth guard, lifecycle hooks, cache
+/// invalidation, and mutation event. Shared by `crap.collections.unpublish`
+/// and the `unpublish = true` option on `crap.collections.update`, so both
+/// surfaces behave identically.
+pub(super) fn unpublish_via_service(
+    lua: &Lua,
+    registry: &Arc<Registry>,
+    call: &UnpublishCall<'_>,
+) -> LuaResult<Table> {
+    let conn = get_tx_conn(lua)?;
+
+    let user = hook_user(lua);
+    let ui_locale = hook_ui_locale(lua);
+    let lua_infra = hook_lua_infra(lua);
+    let def = resolve_collection(registry, call.collection)?;
+
+    if !def.has_versions() {
+        return Err(RuntimeError(format!(
+            "Collection '{}' does not have versioning enabled",
+            call.collection
+        )));
+    }
+
+    let (hooks_enabled, _guard) = check_hook_depth(lua, call.hooks, call.collection, "update");
+
+    let write_hooks = LuaWriteHooks::builder(lua)
+        .user(user.as_ref())
+        .ui_locale(ui_locale.as_deref())
+        .override_access(call.override_access)
+        .registry(Some(registry.as_ref()))
+        .hooks_enabled(hooks_enabled)
+        .build();
+
+    let locale_config = hook_locale_config(lua);
+
+    let ctx = ServiceContext::collection(call.collection, &def)
+        .conn(conn)
+        .write_hooks(&write_hooks)
+        .user(user.as_ref())
+        .override_access(call.override_access)
+        .emit_events(call.events)
+        .locale_config(locale_config.as_ref())
+        .lua_infra(lua_infra.as_ref())
+        .invalidation_transport(hook_invalidation_transport(lua))
+        .build();
+
+    let doc = unpublish_document(&ctx, call.id)
+        .map_err(|e| RuntimeError(format!("unpublish error: {e:#}")))?;
+
+    document_to_lua_table(lua, &doc)
+}
+
 /// Unpublish a document — sets `_status` to `"draft"` without modifying
 /// the underlying field data. Only available on collections with
 /// `versions` enabled.
@@ -77,45 +189,15 @@ fn collections_unpublish(
     #[lua(ty = "crap.UnpublishOptions", doc = "Optional options.")] opts: Option<UnpublishOptions>,
 ) -> LuaResult<Table> {
     let opts = opts.unwrap_or_default();
-    let conn = get_tx_conn(lua)?;
 
-    let user = hook_user(lua);
-    let ui_locale = hook_ui_locale(lua);
-    let lua_infra = hook_lua_infra(lua);
-    let def = resolve_collection(state, &collection)?;
-
-    if !def.has_versions() {
-        return Err(RuntimeError(format!(
-            "Collection '{collection}' does not have versioning enabled"
-        )));
-    }
-
-    let (hooks_enabled, _guard) = check_hook_depth(lua, opts.hooks, &collection, "update");
-
-    let write_hooks = LuaWriteHooks::builder(lua)
-        .user(user.as_ref())
-        .ui_locale(ui_locale.as_deref())
-        .override_access(opts.override_access)
-        .registry(Some(state.as_ref()))
-        .hooks_enabled(hooks_enabled)
-        .build();
-
-    let locale_config = hook_locale_config(lua);
-
-    let ctx = ServiceContext::collection(&collection, &def)
-        .conn(conn)
-        .write_hooks(&write_hooks)
-        .user(user.as_ref())
-        .override_access(opts.override_access)
-        .locale_config(locale_config.as_ref())
-        .lua_infra(lua_infra.as_ref())
-        .invalidation_transport(hook_invalidation_transport(lua))
-        .build();
-
-    let doc = unpublish_document(&ctx, &id)
-        .map_err(|e| RuntimeError(format!("unpublish error: {e:#}")))?;
-
-    document_to_lua_table(lua, &doc)
+    unpublish_via_service(
+        lua,
+        state,
+        &UnpublishCall::builder(&collection, &id)
+            .override_access(opts.override_access)
+            .hooks(opts.hooks)
+            .build(),
+    )
 }
 
 lua_table! {
@@ -123,170 +205,6 @@ lua_table! {
     path: "crap.collections",
     state: Arc<Registry>,
     fns: [collections_unpublish],
-}
-
-/// Parameters for the unpublish operation.
-pub(super) struct UnpublishCtx<'a> {
-    pub(super) collection: &'a str,
-    pub(super) id: &'a str,
-    pub(super) def: &'a CollectionDefinition,
-    pub(super) run_hooks: bool,
-    pub(super) locale_str: Option<&'a str>,
-    pub(super) hook_user: Option<&'a Document>,
-    pub(super) hook_ui_locale: Option<&'a str>,
-}
-
-impl<'a> UnpublishCtx<'a> {
-    /// Create a builder with the required fields.
-    pub(super) fn builder(
-        collection: &'a str,
-        id: &'a str,
-        def: &'a CollectionDefinition,
-    ) -> UnpublishCtxBuilder<'a> {
-        UnpublishCtxBuilder::new(collection, id, def)
-    }
-}
-
-/// Handle the unpublish code path: revert to draft, fire hooks, return document.
-pub(super) fn handle_unpublish(
-    lua: &Lua,
-    conn: &dyn DbConnection,
-    ctx: &UnpublishCtx,
-) -> mlua::Result<Table> {
-    // Internal hook lifecycle lookup — fetches doc state before unpublish, not a user-facing read.
-    let existing_doc = query::find_by_id_raw(conn, ctx.collection, ctx.def, ctx.id, None, false)
-        .map_err(|e| RuntimeError(format!("find error: {e:#}")))?
-        .ok_or_else(|| {
-            RuntimeError(format!(
-                "Document {} not found in {}",
-                ctx.id, ctx.collection
-            ))
-        })?;
-
-    let (hooks_enabled, _guard) = check_hook_depth(lua, ctx.run_hooks, ctx.collection, "update");
-
-    if hooks_enabled {
-        let before_ctx = HookContext::builder(ctx.collection, "update")
-            .data(existing_doc.fields.clone())
-            .document_id(ctx.id)
-            .draft(true)
-            .locale(ctx.locale_str)
-            .user(ctx.hook_user)
-            .ui_locale(ctx.hook_ui_locale)
-            .build();
-
-        run_hooks_inner(lua, &ctx.def.hooks, HookEvent::BeforeChange, before_ctx)
-            .map_err(|e| RuntimeError(format!("before_change hook error: {e:#}")))?;
-    }
-
-    let lua_infra = hook_lua_infra(lua);
-    let locale_config = hook_locale_config(lua);
-
-    let svc_ctx = ServiceContext::collection(ctx.collection, ctx.def)
-        .conn(conn)
-        .locale_config(locale_config.as_ref())
-        .lua_infra(lua_infra.as_ref())
-        .build();
-
-    persist_unpublish(&svc_ctx, ctx.id)
-        .map_err(|e| RuntimeError(format!("unpublish error: {e:#}")))?;
-
-    // Internal hook lifecycle lookup — fetches doc state after unpublish, not
-    // a user-facing read. Use the same locale-aware context as the unpublish
-    // read so localized fields produce a SELECT that matches actual columns.
-    let post_locale_ctx = svc_ctx.default_locale_ctx();
-
-    let updated_doc = query::find_by_id_raw(
-        conn,
-        ctx.collection,
-        ctx.def,
-        ctx.id,
-        post_locale_ctx.as_ref(),
-        false,
-    )
-    .map_err(|e| RuntimeError(format!("find error after unpublish: {e:#}")))?
-    .ok_or_else(|| {
-        RuntimeError(format!(
-            "Document {} not found after unpublish in {}",
-            ctx.id, ctx.collection
-        ))
-    })?;
-
-    if hooks_enabled {
-        let mut after_data = updated_doc.fields.clone();
-        after_data.insert("id".to_string(), Value::String(ctx.id.to_string()));
-
-        let after_ctx = HookContext::builder(ctx.collection, "update")
-            .data(after_data)
-            .document_id(ctx.id)
-            .draft(true)
-            .locale(ctx.locale_str)
-            .user(ctx.hook_user)
-            .ui_locale(ctx.hook_ui_locale)
-            .build();
-
-        run_hooks_inner(lua, &ctx.def.hooks, HookEvent::AfterChange, after_ctx)
-            .map_err(|e| RuntimeError(format!("after_change hook error: {e:#}")))?;
-    }
-
-    document_to_lua_table(lua, &updated_doc)
-}
-
-/// Builder for [`UnpublishCtx`].
-pub(super) struct UnpublishCtxBuilder<'a> {
-    collection: &'a str,
-    id: &'a str,
-    def: &'a CollectionDefinition,
-    run_hooks: bool,
-    locale_str: Option<&'a str>,
-    hook_user: Option<&'a Document>,
-    hook_ui_locale: Option<&'a str>,
-}
-
-impl<'a> UnpublishCtxBuilder<'a> {
-    pub(super) fn new(collection: &'a str, id: &'a str, def: &'a CollectionDefinition) -> Self {
-        Self {
-            collection,
-            id,
-            def,
-            run_hooks: true,
-            locale_str: None,
-            hook_user: None,
-            hook_ui_locale: None,
-        }
-    }
-
-    pub(super) fn run_hooks(mut self, v: bool) -> Self {
-        self.run_hooks = v;
-        self
-    }
-
-    pub(super) fn locale_str(mut self, v: Option<&'a str>) -> Self {
-        self.locale_str = v;
-        self
-    }
-
-    pub(super) fn hook_user(mut self, v: Option<&'a Document>) -> Self {
-        self.hook_user = v;
-        self
-    }
-
-    pub(super) fn hook_ui_locale(mut self, v: Option<&'a str>) -> Self {
-        self.hook_ui_locale = v;
-        self
-    }
-
-    pub(super) fn build(self) -> UnpublishCtx<'a> {
-        UnpublishCtx {
-            collection: self.collection,
-            id: self.id,
-            def: self.def,
-            run_hooks: self.run_hooks,
-            locale_str: self.locale_str,
-            hook_user: self.hook_user,
-            hook_ui_locale: self.hook_ui_locale,
-        }
-    }
 }
 
 /// Register `crap.collections.unpublish(collection, id, opts?)`. Parent

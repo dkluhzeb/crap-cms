@@ -2,7 +2,11 @@ use serde_json::Value;
 
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
 
-/// Validate that Select/Radio value exists in the options list.
+use super::shared::{decode_element_list, element_display};
+
+/// Validate that Select/Radio value exists in the options list. A present
+/// value of the wrong shape (non-string single value, undecodable `has_many`
+/// list) is an invalid option — never a silent pass.
 pub(crate) fn check_option_valid(
     field: &FieldDefinition,
     data_key: &str,
@@ -17,13 +21,16 @@ pub(crate) fn check_option_valid(
         return;
     }
 
-    let Some(Value::String(s)) = value else {
-        return;
-    };
-
     if field.has_many {
-        check_has_many_options(field, data_key, s, errors);
-    } else if !field.options.iter().any(|opt| opt.value == *s) {
+        check_has_many_options(field, data_key, value, errors);
+        return;
+    }
+
+    let valid = matches!(
+        value,
+        Some(Value::String(s)) if field.options.iter().any(|opt| opt.value == *s)
+    );
+    if !valid {
         errors.push(
             FieldError::with_key(
                 data_key.to_owned(),
@@ -35,16 +42,15 @@ pub(crate) fn check_option_valid(
     }
 }
 
-/// Validate each value in a `has_many` select/radio JSON array against the options list.
+/// Validate each value in a `has_many` select/radio element list against the
+/// options list. Accepts both the typed array and JSON-string encodings.
 fn check_has_many_options(
     field: &FieldDefinition,
     data_key: &str,
-    json_str: &str,
+    value: Option<&Value>,
     errors: &mut Vec<FieldError>,
 ) {
-    let values: Vec<String> = if let Ok(v) = serde_json::from_str(json_str) {
-        v
-    } else {
+    let Some(values) = decode_element_list(value) else {
         errors.push(
             FieldError::with_key(
                 data_key.to_owned(),
@@ -61,15 +67,23 @@ fn check_has_many_options(
     };
 
     for v in &values {
-        if !field.options.iter().any(|opt| opt.value == *v) {
+        let valid = v
+            .as_str()
+            .is_some_and(|s| field.options.iter().any(|opt| opt.value == s));
+
+        if !valid {
             errors.push(
                 FieldError::with_key(
                     data_key.to_owned(),
-                    format!("{} has an invalid option: {}", field.name, v),
+                    format!(
+                        "{} has an invalid option: {}",
+                        field.name,
+                        element_display(v)
+                    ),
                     "validation.invalid_option_value",
                 )
                 .with_param("field", field.name.clone())
-                .with_param("value", v.clone()),
+                .with_param("value", element_display(v)),
             );
         }
     }
@@ -81,6 +95,78 @@ mod tests {
     use crate::core::{FieldDefinition, FieldType, LocalizedString, SelectOption};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
+
+    /// Regression: a `has_many` select submitted as a typed array (Lua/gRPC)
+    /// bypassed the options allowlist entirely — only the JSON-string
+    /// encoding was checked.
+    #[test]
+    fn has_many_select_typed_array_invalid_option_rejected() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, colors TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("colors", FieldType::Select)
+                .has_many(true)
+                .options(vec![
+                    SelectOption::new(LocalizedString::Plain("Red".to_string()), "red"),
+                    SelectOption::new(LocalizedString::Plain("Blue".to_string()), "blue"),
+                ])
+                .build(),
+        ];
+        let mut data = DocumentFields::new();
+        data.insert("colors".to_string(), json!(["red", "green"]));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(result.is_err(), "'green' is not an allowed option");
+        let err = result.unwrap_err();
+        assert!(
+            err.errors
+                .iter()
+                .any(|e| e.key.as_deref() == Some("validation.invalid_option_value")),
+            "expected invalid_option_value, got: {:?}",
+            err.errors
+        );
+    }
+
+    /// Regression: a present non-string value on a single Select/Radio
+    /// silently bypassed the allowlist (e.g. `status = 5` persisted).
+    #[test]
+    fn single_select_non_string_value_rejected() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, color TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("color", FieldType::Select)
+                .options(vec![SelectOption::new(
+                    LocalizedString::Plain("Red".to_string()),
+                    "red",
+                )])
+                .build(),
+        ];
+        let mut data = DocumentFields::new();
+        data.insert("color".to_string(), json!(5));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(result.is_err(), "non-string select value must be rejected");
+        let err = result.unwrap_err();
+        assert!(
+            err.errors
+                .iter()
+                .any(|e| e.key.as_deref() == Some("validation.invalid_option")),
+            "expected invalid_option, got: {:?}",
+            err.errors
+        );
+    }
 
     #[test]
     fn test_validate_select_option_valid() {

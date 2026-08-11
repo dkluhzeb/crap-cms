@@ -332,14 +332,38 @@ pub(crate) fn strip_access_data_aware<E, F>(
     E: Fn(&FieldDefinition) -> Option<&HookRef>,
     F: Fn(&HookRef, &DocumentFields) -> bool,
 {
-    // Snapshot the current level for `ctx.data` (read-only sibling view); the
-    // real map is mutated (denied fields removed) as we go.
-    let level_snapshot: DocumentFields =
-        level.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    // Snapshot the current level once for `ctx.data` (read-only sibling view);
+    // every field at this level — including those wrapped in a transparent
+    // Row/Collapsible/Tabs — evaluates against this same pre-strip view, so a
+    // field's strip decision never depends on its layout placement. The real
+    // map is mutated (denied fields removed) as we go.
+    let snapshot: DocumentFields = level.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
 
+    strip_level_with_snapshot(fields, level, &snapshot, extract, is_denied);
+}
+
+/// Inner worker for [`strip_access_data_aware`]: strips one document level
+/// against an already-computed `snapshot` (the `ctx.data` sibling view).
+///
+/// Kept separate from the public entry so transparent layout wrappers
+/// (Row/Collapsible/Tabs) — which do NOT introduce a new document level —
+/// forward the *parent* level's snapshot, making a wrapped field evaluate
+/// `ctx.data` identically to a direct sibling. Genuine new levels (a Group's
+/// object, Array/Blocks rows) re-enter via [`strip_access_data_aware`] so they
+/// snapshot their own level.
+fn strip_level_with_snapshot<E, F>(
+    fields: &[FieldDefinition],
+    level: &mut Map<String, Value>,
+    snapshot: &DocumentFields,
+    extract: &E,
+    is_denied: &F,
+) where
+    E: Fn(&FieldDefinition) -> Option<&HookRef>,
+    F: Fn(&HookRef, &DocumentFields) -> bool,
+{
     for field in fields {
         if let Some(hook) = extract(field)
-            && is_denied(hook, &level_snapshot)
+            && is_denied(hook, snapshot)
         {
             level.remove(&field.name);
             continue; // Parent denied → its sub-fields go with it.
@@ -352,11 +376,11 @@ pub(crate) fn strip_access_data_aware<E, F>(
                 }
             }
             FieldType::Row | FieldType::Collapsible => {
-                strip_access_data_aware(&field.fields, level, extract, is_denied);
+                strip_level_with_snapshot(&field.fields, level, snapshot, extract, is_denied);
             }
             FieldType::Tabs => {
                 for tab in &field.tabs {
-                    strip_access_data_aware(&tab.fields, level, extract, is_denied);
+                    strip_level_with_snapshot(&tab.fields, level, snapshot, extract, is_denied);
                 }
             }
             FieldType::Array => {
@@ -660,6 +684,17 @@ mod tests {
             .build()
     }
 
+    /// Like [`read_gated`] but with an explicit hook reference, so a mock
+    /// `is_denied` can branch per field.
+    fn read_gated_with(name: &str, hook: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Text)
+            .access(FieldAccess {
+                read: Some(hook.into()),
+                ..Default::default()
+            })
+            .build()
+    }
+
     /// A doc-dependent rule (hide `secret` unless `status == "published"`)
     /// strips at the document level based on `ctx.data`.
     #[test]
@@ -750,6 +785,60 @@ mod tests {
         let meta = doc.get("meta").unwrap().as_object().unwrap();
         assert!(meta.contains_key("public"), "non-gated group field kept");
         assert!(!meta.contains_key("token"), "gated group field stripped");
+    }
+
+    /// Layout wrappers (Row/Collapsible/Tabs) are transparent: a field wrapped
+    /// in one must evaluate `ctx.data` against the SAME pre-strip sibling
+    /// snapshot as a direct sibling. Regression for the wrapper-re-snapshot bug
+    /// where the Row recursion re-snapshotted the level *after* a preceding
+    /// sibling had already been stripped, flipping the strip decision purely
+    /// based on placement.
+    #[test]
+    fn data_aware_strip_transparent_wrapper_shares_sibling_snapshot() {
+        // `secret` is always denied; `dependent` is kept only while `secret` is
+        // still present in the sibling view (`ctx.data`).
+        let is_denied = |hook: &HookRef, level: &DocumentFields| match hook.reference() {
+            "always" => true,
+            "needs_secret" => level.get_str("secret").is_none(),
+            _ => false,
+        };
+
+        // (a) `secret` and `dependent` as direct siblings.
+        let direct = vec![
+            read_gated_with("secret", "always"),
+            read_gated_with("dependent", "needs_secret"),
+        ];
+        let mut d = json!({ "secret": "s", "dependent": "d" })
+            .as_object()
+            .unwrap()
+            .clone();
+        strip_read_access_data_aware(&direct, &mut d, &is_denied);
+        assert!(!d.contains_key("secret"), "secret always stripped");
+        let direct_kept = d.contains_key("dependent");
+
+        // (b) same fields + data, but `dependent` wrapped in a transparent Row.
+        let wrapped = vec![
+            read_gated_with("secret", "always"),
+            FieldDefinition::builder("row", FieldType::Row)
+                .fields(vec![read_gated_with("dependent", "needs_secret")])
+                .build(),
+        ];
+        let mut w = json!({ "secret": "s", "dependent": "d" })
+            .as_object()
+            .unwrap()
+            .clone();
+        strip_read_access_data_aware(&wrapped, &mut w, &is_denied);
+        let wrapped_kept = w.contains_key("dependent");
+
+        assert_eq!(
+            direct_kept, wrapped_kept,
+            "transparent Row changed the strip decision \
+             (direct kept={direct_kept}, row-wrapped kept={wrapped_kept})"
+        );
+        assert!(
+            direct_kept,
+            "`dependent` must see the pre-strip `secret` sibling → kept in both layouts"
+        );
     }
 
     /// Fail-closed: a Blocks row whose `_block_type` resolves to no block

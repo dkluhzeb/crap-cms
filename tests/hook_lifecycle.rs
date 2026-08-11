@@ -321,6 +321,55 @@ fn run_before_write_full_lifecycle() {
     );
 }
 
+/// Regression: `HookRunner::run_after_write` ran field-level `after_change`
+/// hooks on a clone of `ctx.data` and dropped the mutations — the
+/// collection-level and registered `after_change` hooks saw the pre-hook
+/// values (the Lua-path adapter applied them). The returned context must
+/// carry the field-hook transformation.
+#[test]
+fn run_after_write_applies_field_after_change_mutations() {
+    let (_tmp, pool, registry, runner) = setup();
+    let def = registry.get_collection("articles").unwrap().clone();
+
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Test"));
+
+    let ctx = HookContext {
+        collection: "articles".to_string(),
+        operation: "update".to_string(),
+        data,
+        locale: None,
+        draft: None,
+        context: ReqContext::new(),
+        user: None,
+        ui_locale: None,
+        document_id: Some("doc-1".to_string()),
+        edited_by: None,
+    };
+
+    let mut conn = pool.get().expect("DB connection");
+    let tx = conn.transaction().expect("Start transaction");
+
+    let result = runner
+        .run_after_write(
+            &def.hooks,
+            &def.fields,
+            crap_cms::hooks::lifecycle::HookEvent::AfterChange,
+            ctx,
+            &tx,
+            None,
+        )
+        .expect("run_after_write failed");
+
+    // The field-level after_change_marker hook appends "_after_changed";
+    // its mutation must be visible in the context handed onward.
+    assert_eq!(
+        result.data.get("title").and_then(|v| v.as_str()),
+        Some("Test_after_changed"),
+        "field after_change mutation must be applied to ctx.data"
+    );
+}
+
 #[test]
 fn run_before_write_fails_on_validation_error() {
     let (_tmp, pool, registry, runner) = setup();

@@ -367,6 +367,10 @@ input[type="checkbox"]:disabled {
   color: var(--color-primary);
 }
 
+/* biome-ignore lint/style/noDescendingSpecificity: `.form__group-chevron` is a
+   shared class; the higher-specificity compound rules that precede it (e.g.
+   `.form__collapsible--collapsed .form__group-chevron`) set `transform`, while
+   this base rule sets font/color — no cascade conflict. */
 .form__group-chevron {
   font-size: var(--icon-md);
   color: var(--text-tertiary);

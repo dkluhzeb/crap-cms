@@ -2,9 +2,12 @@ use serde_json::Value;
 
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
 
-/// Validate individual values within a `has_many` JSON array.
+use super::shared::{decode_element_list, element_display};
+
+/// Validate individual values within a `has_many` element list.
 /// Checks count bounds (`min_rows/max_rows`) for all `has_many` field types
-/// and per-element constraints for Text/Number.
+/// and per-element constraints for Text/Number. Accepts both the typed
+/// `Value::Array` shape (Lua/gRPC) and the JSON-string encoding (admin form).
 pub(crate) fn check_has_many_elements(
     field: &FieldDefinition,
     data_key: &str,
@@ -16,32 +19,34 @@ pub(crate) fn check_has_many_elements(
         return;
     }
 
-    // Select/Radio: only check count bounds (per-element option validation is in check_option_valid)
+    let relevant = matches!(
+        field.field_type,
+        FieldType::Select | FieldType::Radio | FieldType::Text | FieldType::Number
+    );
+    if !relevant {
+        return;
+    }
+
+    let Some(values) = decode_element_list(value) else {
+        return;
+    };
+
+    check_count_bounds(field, data_key, values.len(), errors);
+
+    // Select/Radio: per-element option validation is in check_option_valid.
     if field.field_type == FieldType::Select || field.field_type == FieldType::Radio {
-        if let Some(Value::String(s)) = value
-            && let Ok(values) = serde_json::from_str::<Vec<Value>>(s)
-        {
-            check_count_bounds(field, data_key, values.len(), errors);
-        }
-
         return;
     }
 
-    if field.field_type != FieldType::Text && field.field_type != FieldType::Number {
-        return;
-    }
-
-    if let Some(Value::String(s)) = value
-        && let Ok(values) = serde_json::from_str::<Vec<String>>(s)
-    {
-        check_count_bounds(field, data_key, values.len(), errors);
-
-        for v in &values {
-            match field.field_type {
-                FieldType::Text => check_text_value_length(field, data_key, v, errors),
-                FieldType::Number => check_number_value_bounds(field, data_key, v, errors),
-                _ => {}
+    for v in &values {
+        match field.field_type {
+            FieldType::Text => {
+                if let Some(s) = v.as_str() {
+                    check_text_value_length(field, data_key, s, errors);
+                }
             }
+            FieldType::Number => check_number_value_bounds(field, data_key, v, errors),
+            _ => {}
         }
     }
 }
@@ -92,16 +97,24 @@ fn check_text_value_length(
     }
 }
 
-/// Validate a single number value against min/max constraints.
+/// Validate a single number value against min/max constraints. Elements
+/// arrive as JSON numbers (typed surfaces) or number-strings (admin form).
 fn check_number_value_bounds(
     field: &FieldDefinition,
     data_key: &str,
-    v: &str,
+    element: &Value,
     errors: &mut Vec<FieldError>,
 ) {
-    let Ok(num) = v.parse::<f64>() else {
+    let num = match element {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.parse::<f64>().ok(),
+        _ => None,
+    };
+    let Some(num) = num else {
         return;
     };
+    let v = element_display(element);
+    let v = v.as_str();
 
     if let Some(min_val) = field.min
         && num < min_val
@@ -176,6 +189,72 @@ mod tests {
     use crate::core::{FieldDefinition, FieldType, LocalizedString, SelectOption};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
+
+    /// Regression: elements submitted as a typed array (Lua/gRPC) were
+    /// silently skipped — the check only understood the JSON-string
+    /// encoding, so per-element bounds and counts never ran.
+    #[test]
+    fn typed_array_elements_validated() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .min_length(2)
+                .build(),
+        ];
+        let mut data = DocumentFields::new();
+        data.insert("tags".to_string(), json!(["ab", "x"]));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(result.is_err(), "element 'x' violates min_length=2");
+        let err = result.unwrap_err();
+        assert!(
+            err.errors
+                .iter()
+                .any(|e| e.key.as_deref() == Some("validation.has_many_min_length")),
+            "expected has_many_min_length, got: {:?}",
+            err.errors
+        );
+    }
+
+    /// Regression companion: count bounds must also fire for typed arrays.
+    #[test]
+    fn typed_array_count_bounds_enforced() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .min_rows(2)
+                .build(),
+        ];
+        let mut data = DocumentFields::new();
+        data.insert("tags".to_string(), json!(["only-one"]));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(result.is_err(), "1 element violates min_rows=2");
+        let err = result.unwrap_err();
+        assert!(
+            err.errors
+                .iter()
+                .any(|e| e.key.as_deref() == Some("validation.has_many_min_rows")),
+            "expected has_many_min_rows, got: {:?}",
+            err.errors
+        );
+    }
 
     #[test]
     fn test_validate_has_many_select_valid() {

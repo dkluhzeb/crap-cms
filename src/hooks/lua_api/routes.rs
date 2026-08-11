@@ -167,17 +167,44 @@ fn route_register(
         entry.set("rate_limit", rl)?;
     }
 
-    if let Value::Boolean(csrf) = def.get::<Value>("csrf")? {
-        entry.set("csrf", csrf)?;
+    // `csrf` is a security opt-in — a present-but-wrong-typed value must fail
+    // loudly, never silently fall back to CSRF-disabled (fail-open).
+    match def.get::<Value>("csrf")? {
+        Value::Nil => {}
+        Value::Boolean(csrf) => entry.set("csrf", csrf)?,
+        other => {
+            return Err(RuntimeError(format!(
+                "crap.routes.register: `csrf` must be a boolean, got {}",
+                other.type_name()
+            )));
+        }
     }
 
-    if let Value::Integer(max_body) = def.get::<Value>("max_body")? {
-        if max_body <= 0 {
-            return Err(RuntimeError(
-                "crap.routes.register: max_body must be a positive integer (bytes)".into(),
-            ));
+    // Accept an integer or a whole-valued number (Lua `2^16` is a float), but
+    // reject any other type instead of silently ignoring the cap. The numeric
+    // branches re-read as `i64` so mlua does the integral coercion (a
+    // fractional float then errors), avoiding a lossy `f64 as i64`.
+    match def.get::<Value>("max_body")? {
+        Value::Nil => {}
+        Value::Integer(_) | Value::Number(_) => {
+            let max_body: i64 = def.get("max_body").map_err(|_| {
+                RuntimeError(
+                    "crap.routes.register: max_body must be a positive integer (bytes)".into(),
+                )
+            })?;
+            if max_body <= 0 {
+                return Err(RuntimeError(
+                    "crap.routes.register: max_body must be a positive integer (bytes)".into(),
+                ));
+            }
+            entry.set("max_body", max_body)?;
         }
-        entry.set("max_body", max_body)?;
+        other => {
+            return Err(RuntimeError(format!(
+                "crap.routes.register: `max_body` must be a positive integer (bytes), got {}",
+                other.type_name()
+            )));
+        }
     }
 
     if let Value::Table(opts) = def.get::<Value>("options")? {
@@ -377,6 +404,60 @@ mod tests {
         let err = lua
             .load(
                 r#"crap.routes.register({ path = "/u", method = "POST", handler = "routes.u", max_body = 0 })"#,
+            )
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("max_body"), "{err}");
+    }
+
+    #[test]
+    fn stores_csrf_boolean() {
+        let lua = lua_in_init_phase();
+        lua.load(
+            r#"crap.routes.register({ path = "/f", method = "POST", handler = "routes.f", csrf = true })"#,
+        )
+        .exec()
+        .unwrap();
+        let e: Table = entries(&lua).get(1).unwrap();
+        assert!(e.get::<bool>("csrf").unwrap());
+    }
+
+    /// `csrf` is a security opt-in: a wrong-typed value must error, not silently
+    /// leave CSRF protection disabled (fail-open regression).
+    #[test]
+    fn rejects_wrong_typed_csrf() {
+        let lua = lua_in_init_phase();
+        let err = lua
+            .load(
+                r#"crap.routes.register({ path = "/f", method = "POST", handler = "routes.f", csrf = 1 })"#,
+            )
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("csrf") && err.contains("boolean"), "{err}");
+    }
+
+    /// A whole-valued float (`2^16` is a float in Lua 5.4) is a valid byte cap,
+    /// not silently ignored.
+    #[test]
+    fn accepts_whole_valued_float_max_body() {
+        let lua = lua_in_init_phase();
+        lua.load(
+            r#"crap.routes.register({ path = "/u", method = "POST", handler = "routes.u", max_body = 2^16 })"#,
+        )
+        .exec()
+        .unwrap();
+        let e: Table = entries(&lua).get(1).unwrap();
+        assert_eq!(e.get::<i64>("max_body").unwrap(), 65536);
+    }
+
+    #[test]
+    fn rejects_wrong_typed_max_body() {
+        let lua = lua_in_init_phase();
+        let err = lua
+            .load(
+                r#"crap.routes.register({ path = "/u", method = "POST", handler = "routes.u", max_body = "big" })"#,
             )
             .exec()
             .unwrap_err()

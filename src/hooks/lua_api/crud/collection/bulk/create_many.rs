@@ -5,18 +5,16 @@ use std::sync::Arc;
 use anyhow::Result;
 use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::Deserialize;
-use serde_json::Value as JsonValue;
 
 use crate::{
-    core::{DocumentFields, Registry},
+    core::{CollectionDefinition, Registry},
     hooks::{
-        lifecycle::converters::{
-            document_to_lua_table, lua_table_to_hashmap, lua_table_to_json_map,
-        },
+        lifecycle::converters::document_to_lua_table,
         lua_api::crud::{
             get_tx_conn,
             helpers::{
-                check_hook_depth, hook_lua_infra, hook_ui_locale, hook_user, resolve_collection,
+                ExtractedData, check_hook_depth, extract_data, hook_lua_infra, hook_ui_locale,
+                hook_user, resolve_collection,
             },
         },
     },
@@ -110,7 +108,7 @@ fn collections_create_many(
             )));
         };
 
-        parsed_items.push(parse_item(&item_table)?);
+        parsed_items.push(parse_item(&item_table, &def)?);
     }
 
     let write_hooks = LuaWriteHooks::builder(lua)
@@ -186,19 +184,12 @@ pub(crate) fn register_create_many(
     Ok(())
 }
 
-/// Parse a single Lua table item into a `CreateManyItem`.
-fn parse_item(item_table: &Table) -> LuaResult<CreateManyItem> {
-    let mut data = service::values_from_strings(lua_table_to_hashmap(item_table)?);
-
-    let composite_data: DocumentFields = lua_table_to_json_map(item_table)?
-        .into_iter()
-        .filter(|(_, v)| !matches!(v, JsonValue::String(_)))
-        .collect();
-    data.extend(composite_data);
-
-    let password = data
-        .remove("password")
-        .and_then(|v| v.as_str().map(std::string::ToString::to_string));
+/// Parse a single Lua table item into a `CreateManyItem`. Delegates to
+/// `extract_data` so bulk items get exactly the single-`create` semantics —
+/// in particular, `password` is only separated out for auth collections (a
+/// non-auth collection may have a legitimate field named `password`).
+fn parse_item(item_table: &Table, def: &CollectionDefinition) -> LuaResult<CreateManyItem> {
+    let ExtractedData { data, password } = extract_data(item_table, def)?;
 
     Ok(CreateManyItem { data, password })
 }

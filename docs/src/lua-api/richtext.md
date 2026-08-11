@@ -13,8 +13,12 @@ registering at runtime would only land in the VM that ran the call,
 fragmenting the set.
 
 **Parameters:**
-- `name` (string) — Node name (alphanumeric + underscores only).
-- `spec` (table) — Node specification.
+- `name` (string) — Node name. Must be a valid slug: lowercase ASCII
+  letters, digits, and underscores, not starting with a digit or
+  underscore (e.g. `callout`, `pull_quote`) — same rule as collection and
+  job slugs. Must not collide with a built-in ProseMirror node type.
+- `spec` (table) — Node specification. Unknown keys are rejected;
+  `inline` must be a boolean (a wrong-typed value errors at load).
 
 **Spec fields:**
 

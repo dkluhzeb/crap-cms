@@ -9,9 +9,22 @@ use crate::typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
 /// Get an environment variable.
 #[lua_fn(path = "crap.env.get", returns_doc = "Value or nil if not set.")]
 fn env_get(_: &Lua, #[lua(doc = "Variable name.")] key: String) -> LuaResult<Option<String>> {
+    // `CRAP_SECRET_*` is reserved for config-only secrets — hidden from
+    // hooks even though it shares the `CRAP_` prefix. Config `${VAR}`
+    // substitution runs at load (pre-VM), so operators can store secrets
+    // under this prefix and reference them in `crap.toml` while keeping them
+    // unreadable from userland Lua.
+    if key.starts_with("CRAP_SECRET_") {
+        return Err(mlua::Error::RuntimeError(format!(
+            "crap.env.get: '{key}' is hidden from hooks — the CRAP_SECRET_* \
+             prefix is reserved for config-only secrets"
+        )));
+    }
+
     if !key.starts_with("CRAP_") && !key.starts_with("LUA_") {
         return Ok(None);
     }
+
     Ok(env::var(&key).ok())
 }
 
@@ -107,5 +120,24 @@ mod tests {
         let lua = setup_lua();
         let val: Option<String> = env_get_fn(&lua).call("CRAP_NONEXISTENT_VAR_12345").unwrap();
         assert_eq!(val, None);
+    }
+
+    /// `CRAP_SECRET_*` is reserved for config-only secrets: even though it
+    /// shares the `CRAP_` prefix, reading it from a hook must error rather
+    /// than return the value.
+    #[test]
+    fn blocks_crap_secret_prefix_with_error() {
+        // SAFETY: Test is single-threaded; no concurrent env access.
+        unsafe { std::env::set_var("CRAP_SECRET_TOKEN", "s3cr3t") };
+        let lua = setup_lua();
+        let result: LuaResult<Option<String>> = env_get_fn(&lua).call("CRAP_SECRET_TOKEN");
+        // SAFETY: Test is single-threaded; no concurrent env access.
+        unsafe { std::env::remove_var("CRAP_SECRET_TOKEN") };
+
+        let err = result.expect_err("CRAP_SECRET_* must be hidden from hooks");
+        assert!(
+            err.to_string().contains("CRAP_SECRET_"),
+            "error should explain the reservation, got: {err}"
+        );
     }
 }

@@ -65,25 +65,38 @@ pub(crate) fn check_date_field(
 /// Accepts: YYYY-MM-DD, YYYY-MM-DDTHH:MM, YYYY-MM-DDTHH:MM:SS, full ISO 8601/RFC 3339,
 /// HH:MM (time only), HH:MM:SS, YYYY-MM (month only).
 pub(crate) fn is_valid_date_format(value: &str) -> bool {
-    // Time only: HH:MM or HH:MM:SS
+    // Time only: HH:MM or HH:MM:SS — range-checked, not just digit shape
+    // (`"99:99"` used to pass the digit-only test).
     if value.len() <= 8 && value.contains(':') && !value.contains('T') {
         let parts: Vec<&str> = value.split(':').collect();
 
-        if parts.len() >= 2 {
-            return parts.iter().all(|p| p.chars().all(|c| c.is_ascii_digit()));
+        if parts.len() == 2 || parts.len() == 3 {
+            let nums: Option<Vec<u32>> = parts.iter().map(|p| p.parse::<u32>().ok()).collect();
+            if let Some(nums) = nums {
+                let all_two_digit = parts.iter().all(|p| p.len() == 2);
+                let hh = nums[0];
+                let mm = nums[1];
+                let ss = nums.get(2).copied().unwrap_or(0);
+
+                return all_two_digit && hh < 24 && mm < 60 && ss < 60;
+            }
         }
+
+        return false;
     }
 
-    // Month only: YYYY-MM
+    // Month only: YYYY-MM — the month must be 01-12 (`"2024-99"` used to pass).
     if value.len() == 7 && value.as_bytes().get(4) == Some(&b'-') && !value.contains('T') {
         let parts: Vec<&str> = value.split('-').collect();
 
-        if parts.len() == 2 {
-            return parts[0].len() == 4
-                && parts[0].chars().all(|c| c.is_ascii_digit())
-                && parts[1].len() == 2
-                && parts[1].chars().all(|c| c.is_ascii_digit());
+        if parts.len() == 2 && parts[0].len() == 4 && parts[1].len() == 2 {
+            let year_ok = parts[0].chars().all(|c| c.is_ascii_digit());
+            let month_ok = parts[1].parse::<u32>().is_ok_and(|m| (1..=12).contains(&m));
+
+            return year_ok && month_ok;
         }
+
+        return false;
     }
 
     // Full RFC 3339
@@ -181,6 +194,27 @@ mod tests {
     fn test_invalid_date_format_time_like_but_non_digit() {
         assert!(!is_valid_date_format("ab:cd"));
         assert!(!is_valid_date_format("1a:30"));
+    }
+
+    /// Regression: time-only and month-only formats were digit-shape-only,
+    /// so out-of-range values slipped through while `"2024-13-01"` (full
+    /// date) was correctly rejected. They must be range-checked too.
+    #[test]
+    fn out_of_range_time_and_month_are_rejected() {
+        // Time-only out of range
+        assert!(!is_valid_date_format("99:99"));
+        assert!(!is_valid_date_format("24:00"));
+        assert!(!is_valid_date_format("12:60"));
+        assert!(!is_valid_date_format("10:30:60"));
+        // Month-only out of range
+        assert!(!is_valid_date_format("2024-00"));
+        assert!(!is_valid_date_format("2024-13"));
+        assert!(!is_valid_date_format("2024-99"));
+        // In-range boundaries still pass
+        assert!(is_valid_date_format("23:59"));
+        assert!(is_valid_date_format("23:59:59"));
+        assert!(is_valid_date_format("2024-01"));
+        assert!(is_valid_date_format("2024-12"));
     }
 
     // --- validate_fields_inner integration tests ---

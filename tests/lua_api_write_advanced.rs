@@ -91,6 +91,56 @@ fn eval_lua_db(runner: &HookRunner, pool: &DbPool, code: &str) -> String {
 
 // ── Lua CRUD Password Handling (Auth Collections) ────────────────────────────
 
+/// Regression: `create_many` stripped a field named `password` from EVERY
+/// collection (single `create` only separates it for auth collections) — a
+/// non-auth collection with a legitimate `password` field silently lost the
+/// value on bulk create.
+#[test]
+fn lua_create_many_keeps_password_field_on_non_auth_collection() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
+        crap.collections.create_many("wifi_networks", {
+            { ssid = "HomeNet", password = "hunter2" },
+        })
+        local r = crap.collections.find("wifi_networks", {})
+        return tostring(r.documents[1].password)
+    "#,
+    );
+    assert_eq!(
+        result, "hunter2",
+        "bulk create must persist a non-auth collection's password field"
+    );
+}
+
+/// Regression: a `before_read` hook reading its own collection recursed
+/// without any depth cap — stack overflow, process abort. Reads must be
+/// depth-capped exactly like writes (cap 3, hooks silently skipped beyond).
+#[test]
+fn lua_read_hook_recursion_is_depth_capped() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let conn = pool.get().expect("conn");
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
+            _G._read_depth_counter = 0
+            crap.collections.find("recursive_read", {})
+            return tostring(_G._read_depth_counter)
+            "#,
+            &conn,
+            None,
+        )
+        .expect("recursive before_read must be depth-capped, not overflow");
+
+    let count: i32 = result.parse().expect("counter must be numeric");
+    assert!(
+        (1..=3).contains(&count),
+        "before_read fired {count} times; the depth cap must stop the recursion"
+    );
+}
+
 #[test]
 fn lua_delete_with_hooks_false() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
@@ -283,6 +333,35 @@ fn lua_delete_many_result_shape_includes_deleted_and_skipped() {
     assert_eq!(result, "ok");
 }
 
+/// Parity: `delete_many` can now target the trash. Previously
+/// `include_deleted` was hardcoded false so Lua could never empty trash.
+/// A `trash = true` call permanently removes already-soft-deleted rows.
+#[test]
+fn lua_delete_many_trash_option_empties_trash() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
+        local a = crap.collections.create("trashable", { title = "A" })
+        local b = crap.collections.create("trashable", { title = "B" })
+
+        -- Soft-delete both (moves them to trash, does not remove).
+        crap.collections.delete("trashable", a.id)
+        crap.collections.delete("trashable", b.id)
+
+        -- A normal delete_many without trash must NOT touch trashed rows.
+        local normal = crap.collections.delete_many("trashable", {})
+        if normal.deleted ~= 0 then return "NORMAL_HIT_TRASH:" .. tostring(normal.deleted) end
+
+        -- trash = true permanently removes the trashed rows.
+        local purged = crap.collections.delete_many("trashable", {}, { trash = true })
+        return "purged:" .. tostring(purged.deleted)
+    "#,
+    );
+    assert_eq!(result, "purged:2", "trash option must empty the trash");
+}
+
 // ── CRUD: update_many nonexistent collection ─────────────────────────────────
 
 #[test]
@@ -349,6 +428,68 @@ fn lua_globals_update_nonexistent() {
         None,
     );
     assert!(result.is_err());
+}
+
+/// Parity: `crap.globals.update` now accepts `draft = true` for a
+/// version-only save (main row unchanged), matching `crap.collections.update`.
+#[test]
+fn lua_globals_update_draft_option_keeps_main_row_published() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
+        crap.globals.update("versioned_banner", { headline = "Published" })
+        -- Draft save: main row stays on the published value.
+        crap.globals.update("versioned_banner", { headline = "Draft edit" }, { draft = true })
+        local g = crap.globals.get("versioned_banner")
+        return tostring(g.headline)
+    "#,
+    );
+    assert_eq!(
+        result, "Published",
+        "draft save must not change the published main row"
+    );
+}
+
+/// Parity: `crap.globals.unpublish` now exists and reverts a versioned
+/// global's `_status` to draft without touching field data.
+#[test]
+fn lua_globals_unpublish_sets_draft_status() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
+        crap.globals.update("versioned_banner", { headline = "Live" })
+        local d = crap.globals.unpublish("versioned_banner")
+        return tostring(d._status)
+    "#,
+    );
+    assert_eq!(result, "draft", "unpublish must set _status to draft");
+}
+
+/// Parity: `crap.globals.unpublish` errors on a global without versioning.
+#[test]
+fn lua_globals_unpublish_errors_without_versioning() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let conn = pool.get().expect("conn");
+    let result = runner.eval_lua_with_conn(
+        r#"
+        crap.globals.unpublish("settings")
+        return "unreachable"
+    "#,
+        &conn,
+        None,
+    );
+    assert!(
+        result.is_err(),
+        "unpublish on a non-versioned global must error"
+    );
+    assert!(
+        result.unwrap_err().to_string().contains("versioning"),
+        "error should mention versioning"
+    );
 }
 
 // ── CRUD: CRUD without TxContext errors ──────────────────────────────────────
@@ -675,16 +816,40 @@ fn lua_crypto_random_bytes() {
 // ══════════════════════════════════════════════════════════════════════════════
 
 #[test]
-fn lua_hooks_remove_nonexistent_event() {
+fn lua_hooks_remove_unknown_event_name_errors() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    // Removing from a non-existent event list should be a no-op
+    // An UNKNOWN event name is a typo — `remove` now rejects it (matching
+    // `register`), instead of silently doing nothing.
+    let conn = pool.get().expect("conn");
+    let result = runner.eval_lua_with_conn(
+        r#"
+        local function my_fn(ctx) return ctx end
+        crap.hooks.remove("nonexistent_event", my_fn)
+        return "unreachable"
+        "#,
+        &conn,
+        None,
+    );
+    assert!(
+        result.is_err(),
+        "remove on an unknown event name must error"
+    );
+    assert!(
+        result.unwrap_err().to_string().contains("unknown event"),
+        "error should name the unknown event"
+    );
+}
+
+#[test]
+fn lua_hooks_remove_known_event_with_no_hooks_is_noop() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    // A VALID event that simply has no registered hooks is still a no-op.
     let result = eval_lua_db(
         &runner,
         &pool,
         r#"
         local function my_fn(ctx) return ctx end
-        -- Should not error when removing from an event that has no hooks
-        crap.hooks.remove("nonexistent_event", my_fn)
+        crap.hooks.remove("before_change", my_fn)
         return "ok"
     "#,
     );

@@ -11,6 +11,7 @@ mod option;
 mod polymorphic;
 mod required;
 mod row_bounds;
+mod shared;
 mod unique;
 
 pub(crate) use self::custom::{CustomValidateCtx, check_custom_validate};

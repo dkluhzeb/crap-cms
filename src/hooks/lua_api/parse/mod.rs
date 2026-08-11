@@ -16,4 +16,4 @@ pub use collection::parse_collection_definition;
 pub use global::parse_global_definition;
 pub use job::{JobDefinitionConfig, parse_job_definition};
 
-pub(crate) use helpers::deny_unknown_keys;
+pub(crate) use helpers::{deny_unknown_keys, get_bool, get_string_strict};

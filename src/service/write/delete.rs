@@ -54,10 +54,11 @@ fn prepare_delete_hook_data(
         let lc = locale_config.cloned().unwrap_or_default();
         let locale_ctx = LocaleContext::from_locale_string(None, &lc)?;
 
-        query::find_by_id(conn, ctx.slug, def, id, locale_ctx.as_ref())
-            .ok()
-            .flatten()
-            .map(|d| d.fields)
+        // Propagate a genuine DB error rather than swallowing it — a
+        // transient failure here must not silently degrade delete hooks to
+        // `{ id }` only (losing upload-cleanup fields) and look like "not
+        // found". `?` on the query; `Option` still means genuinely absent.
+        query::find_by_id(conn, ctx.slug, def, id, locale_ctx.as_ref())?.map(|d| d.fields)
     } else {
         None
     };

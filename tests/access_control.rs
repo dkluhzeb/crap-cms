@@ -2951,6 +2951,151 @@ fn lua_restore_version_override_access_bypasses() {
     assert_eq!(result, id, "restored doc id must match parent doc id");
 }
 
+/// Parity/security: `crap.collections.ref_count` was the only read-shaped
+/// Lua op with no access gate — it returned a count for arbitrary ids. It
+/// now gates on read access (a Constrained read rule hides other owners'
+/// documents).
+#[test]
+fn lua_ref_count_is_gated_by_read_access() {
+    let (_tmp, pool, registry, runner) = row_setup();
+    let (id, _v) = seed_versioned_article(&pool, &registry, "user_b", "B's doc");
+
+    let conn = pool.get().unwrap();
+
+    // user_a cannot read user_b's row (own_rows) → ref_count must be denied.
+    let user_a = make_user_doc("user_a", "editor");
+    let code =
+        format!(r#"return tostring(crap.collections.ref_count("versioned_articles", "{id}"))"#);
+    let denied = runner.eval_lua_with_conn(&code, &conn, Some(&user_a));
+    assert!(
+        denied.is_err(),
+        "user_a must not read ref_count of user_b's row"
+    );
+
+    // user_b (owner) can.
+    let user_b = make_user_doc("user_b", "editor");
+    let allowed = runner
+        .eval_lua_with_conn(&code, &conn, Some(&user_b))
+        .expect("owner must be able to read their own ref_count");
+    assert_eq!(allowed, "0", "no incoming references expected");
+}
+
+/// Regression: the `unpublish = true` option on `crap.collections.update`
+/// used a bespoke code path with no access evaluation at all — a user whose
+/// `access.update` filter did not match the row could still unpublish it,
+/// while the dedicated `crap.collections.unpublish` correctly denied.
+#[test]
+fn lua_update_unpublish_option_respects_access() {
+    let (_tmp, pool, registry, runner) = row_setup();
+    let (id, _version_id) = seed_versioned_article(&pool, &registry, "user_b", "B's doc");
+    let user_a = make_user_doc("user_a", "editor");
+
+    let conn = pool.get().unwrap();
+    let code = format!(
+        r#"
+        crap.collections.update("versioned_articles", "{id}", {{}}, {{ unpublish = true }})
+        return "OK"
+        "#
+    );
+    let result = runner.eval_lua_with_conn(&code, &conn, Some(&user_a));
+
+    assert!(
+        result.is_err(),
+        "user_a must not unpublish user_b's row via the update unpublish option"
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("access denied") || err.contains("Update access denied"),
+        "error should mention access denied, got: {err}"
+    );
+}
+
+/// The allowed side of the same regression: the owner unpublishes their own
+/// row via the update option, and the result matches the dedicated
+/// `crap.collections.unpublish` (status flips to draft).
+#[test]
+fn lua_update_unpublish_option_allows_owner_and_sets_draft() {
+    let (_tmp, pool, registry, runner) = row_setup();
+    let (id, _version_id) = seed_versioned_article(&pool, &registry, "user_b", "B's doc");
+    let user_b = make_user_doc("user_b", "editor");
+
+    let conn = pool.get().unwrap();
+    let code = format!(
+        r#"
+        local d = crap.collections.update("versioned_articles", "{id}", {{}}, {{ unpublish = true }})
+        return d._status
+        "#
+    );
+    let result = runner
+        .eval_lua_with_conn(&code, &conn, Some(&user_b))
+        .expect("owner must be able to unpublish via the update option");
+    assert_eq!(result, "draft", "unpublish must set _status to draft");
+}
+
+/// Regression: `unpublish = true` on a collection without versioning was
+/// silently ignored (the call fell through to a plain update). It must
+/// error like the dedicated `crap.collections.unpublish` does.
+#[test]
+fn lua_update_unpublish_option_errors_without_versioning() {
+    let (_tmp, pool, registry, runner) = row_setup();
+    let id = seed_article(&pool, &registry, "articles", "user_a", "Plain");
+    let user_a = make_user_doc("user_a", "editor");
+
+    let conn = pool.get().unwrap();
+    let code = format!(
+        r#"
+        crap.collections.update("articles", "{id}", {{}}, {{ unpublish = true }})
+        return "OK"
+        "#
+    );
+    let result = runner.eval_lua_with_conn(&code, &conn, Some(&user_a));
+
+    assert!(
+        result.is_err(),
+        "unpublish on a non-versioned collection must error, not silently update"
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("versioning"),
+        "error should mention versioning, got: {err}"
+    );
+}
+
+/// Regression: version restore never verified that the version row belongs
+/// to the target document — a caller with update access to document A could
+/// restore document B's snapshot onto A (cross-document snapshot injection,
+/// bypassing row-level read filters on B). The version's `_parent` must
+/// match the target document id.
+#[test]
+fn restore_version_rejects_version_from_other_document() {
+    let (_tmp, pool, registry, runner) = row_setup();
+    let (id_a, _version_a) = seed_versioned_article(&pool, &registry, "user_b", "Doc A");
+    let (_id_b, version_b) = seed_versioned_article(&pool, &registry, "user_b", "Doc B");
+
+    let def = registry
+        .get_collection("versioned_articles")
+        .unwrap()
+        .clone();
+    let lc = LocaleConfig::default();
+
+    // user_b owns both docs, so the access check passes — only the
+    // parent check can stop the cross-document restore.
+    let user_b = make_user_doc("user_b", "editor");
+    let ctx = ServiceContext::collection("versioned_articles", &def)
+        .pool(&pool)
+        .user(Some(&user_b))
+        .runner(&runner)
+        .build();
+
+    let err = restore_collection_version(&ctx, &id_a, &version_b, &lc)
+        .expect_err("restoring another document's version must fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("not found") || msg.contains("Version"),
+        "expected a not-found style error, got: {msg}"
+    );
+}
+
 /// Regression (#15): a job access function receives the queued payload as
 /// `ctx.data`, so it can gate on *what* is being queued, not only who is queuing.
 /// (#8 already gave it `ctx.operation = "trigger"` and `ctx.collection = <slug>`.)

@@ -14,7 +14,10 @@ use crate::{
         lifecycle::converters::document_to_lua_table,
         lua_api::crud::{
             get_tx_conn,
-            helpers::{hook_populate_singleflight, hook_ui_locale, hook_user, resolve_collection},
+            helpers::{
+                check_hook_depth, hook_populate_singleflight, hook_ui_locale, hook_user,
+                resolve_collection,
+            },
         },
     },
     service::{FindByIdInput, LuaReadHooks, ServiceContext, find_document_by_id},
@@ -101,10 +104,15 @@ fn collections_find_by_id(
         .map_err(|e| RuntimeError(e.to_string()))?;
     let def = resolve_collection(reg, &collection)?;
 
+    // Depth guard: a before_read/after_read hook that reads the same
+    // collection recurses — cap it like the write paths do.
+    let (hooks_enabled, _guard) = check_hook_depth(lua, true, &collection, "find_by_id");
+
     let hooks = LuaReadHooks::builder(lua)
         .user(user.as_ref())
         .ui_locale(ui_locale.as_deref())
         .override_access(opts.override_access)
+        .hooks_enabled(hooks_enabled)
         .build();
 
     let ctx = ServiceContext::collection(&collection, &def)

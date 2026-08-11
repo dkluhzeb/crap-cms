@@ -7,8 +7,11 @@ use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 
 use crate::{
     core::Registry,
-    hooks::lua_api::crud::{get_tx_conn, helpers::resolve_collection},
-    service::{ServiceContext, document_info},
+    hooks::lua_api::crud::{
+        get_tx_conn,
+        helpers::{hook_user, resolve_collection},
+    },
+    service::{FindByIdInput, LuaReadHooks, ServiceContext, document_info, find_document_by_id},
     typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
 };
 
@@ -50,6 +53,29 @@ fn ref_count_inner(lua: &Lua, reg: &Registry, collection: &str, id: &str) -> Lua
     let conn = get_tx_conn(lua)?;
 
     let def = resolve_collection(reg, collection)?;
+
+    // Gate on read access: this is the only read-shaped op that previously
+    // returned data for arbitrary ids with no access check. Reuse the read
+    // path's visibility gate (read/draft/trash + row constraints) via a
+    // depth-0 lookup — the count is only returned for a document the caller
+    // may actually read.
+    let user = hook_user(lua);
+    let hooks = LuaReadHooks::builder(lua).user(user.as_ref()).build();
+
+    let read_ctx = ServiceContext::collection(collection, &def)
+        .conn(conn)
+        .read_hooks(&hooks)
+        .user(user.as_ref())
+        .build();
+
+    let visible = find_document_by_id(&read_ctx, &FindByIdInput::builder(id).depth(0).build())
+        .map_err(|e| RuntimeError(format!("{e}")))?;
+
+    if visible.is_none() {
+        return Err(RuntimeError(format!(
+            "Document '{id}' not found in '{collection}' or not readable"
+        )));
+    }
 
     let ctx = ServiceContext::collection(collection, &def)
         .conn(conn)

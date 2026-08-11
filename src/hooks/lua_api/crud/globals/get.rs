@@ -12,7 +12,7 @@ use crate::db::LocaleContext;
 use crate::hooks::lifecycle::converters::document_to_lua_table;
 use crate::hooks::lua_api::crud::{
     get_tx_conn,
-    helpers::{hook_ui_locale, hook_user, resolve_global},
+    helpers::{check_hook_depth, hook_ui_locale, hook_user, resolve_global},
 };
 use crate::service::{GetGlobalInput, LuaReadHooks, ServiceContext, get_global_document};
 use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table};
@@ -74,10 +74,15 @@ fn globals_get(
     let ui_locale = hook_ui_locale(lua);
     let def = resolve_global(&state.registry, &slug)?;
 
+    // Depth guard: a before_read/after_read hook that reads the same
+    // global recurses — cap it like the write paths do.
+    let (hooks_enabled, _guard) = check_hook_depth(lua, true, &slug, "get_global");
+
     let hooks = LuaReadHooks::builder(lua)
         .user(user.as_ref())
         .ui_locale(ui_locale.as_deref())
         .override_access(opts.override_access)
+        .hooks_enabled(hooks_enabled)
         .build();
 
     let ctx = ServiceContext::global(&slug, &def)

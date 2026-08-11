@@ -67,6 +67,17 @@ For shared hooks that work across multiple collections, use the generic
 | `after_change` | Yes | Side effects after write with CRUD access (logging, cascades) |
 | `after_read` | No | Transform values before response (formatting, computed fields) |
 
+### `after_read` with `locale = "all"`
+
+When a read requests **all locales** (`locale = "all"`), a localized
+field's value is a per-locale **map** (`{ en = "Hi", de = "Hallo" }`),
+not a single scalar — and `ctx.locale` is `nil` for that read (there is
+no single target locale). An `after_read` field hook must handle both
+shapes: return the map unchanged (or a transformed map) rather than
+replacing it with a scalar, which would drop every other locale's value.
+For single-locale reads the value is the plain scalar and `ctx.locale`
+is that locale, as usual.
+
 ## Nesting
 
 Field hooks fire for **every field at every nesting depth**, not just top-level

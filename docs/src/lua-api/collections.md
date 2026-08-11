@@ -259,6 +259,12 @@ opts?)`, `delete_many(query, opts?)`, `list_versions(id, opts?)`,
 `restore_version(id, version_id, opts?)`, and `ref_count(id)` —
 same shape as the slug-keyed equivalents, slug bound.
 
+`delete_many` accepts a `trash = true` option that permanently removes
+**already-soft-deleted** rows (empty the trash) — a hard delete of
+trashed documents gated by `access.delete`. Without it, `delete_many`
+never touches trashed rows. `ref_count(id)` is gated by read access: it
+errors for a document the current user cannot read.
+
 ## Typing factories — `crap.collections.<slug>.{hook,field_hook,condition,access,...}`
 
 Per-collection **typing helpers** that wrap your function literal

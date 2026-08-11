@@ -7,6 +7,7 @@
   grid-template-columns: var(--sidebar-width) 1fr;
 
   min-height: 100vh;
+  /* biome-ignore lint/suspicious/noDuplicateProperties: 100vh above is the fallback for browsers without dynamic-viewport (dvh) support; 100dvh overrides it where supported. */
   min-height: 100dvh;
 
   background-color: var(--bg-body);

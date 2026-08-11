@@ -21,7 +21,10 @@ dispatcher later does `require("jobs.foo")` to call the handler, it
 hits the cache and the top-level `define` does **not** re-run.
 
 **Parameters:**
-- `slug` (string) — Unique job identifier
+- `slug` (string) — Unique job identifier. Must be a valid slug:
+  lowercase ASCII letters, digits, and underscores, not starting with an
+  underscore (e.g. `send_digest`, not `send-digest`) — same rule as
+  collection and global slugs.
 - `config` (table) — Job configuration:
   - `handler` (string, required) — Lua function ref (e.g., `"jobs.cleanup.run"`)
   - `schedule` (string, optional) — Cron expression (e.g., `"0 3 * * *"`)

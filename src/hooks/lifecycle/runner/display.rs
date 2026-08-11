@@ -245,7 +245,17 @@ fn execute_render_hooks(lua: &Lua, mut context: JsonValue) -> JsonValue {
 /// serving the page without its access gate.
 fn page_from_entry(lua: &Lua, slug: String, opts: &Table) -> Option<CustomPage> {
     let access = match opts.get::<Value>("access") {
-        Ok(Value::Nil) | Err(_) => None,
+        Ok(Value::Nil) => None,
+        // An error reading the `access` key (e.g. a metatable `__index` that
+        // raises) must fail CLOSED — drop the page rather than serve it
+        // ungated, matching the decode-failure arm below.
+        Err(e) => {
+            warn!(
+                "custom page '{slug}': error reading access value ({e}); \
+                 dropping the page instead of serving it ungated"
+            );
+            return None;
+        }
         Ok(v) => match lua.from_value::<HookRef>(v) {
             Ok(hook_ref) => Some(hook_ref),
             Err(e) => {

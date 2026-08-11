@@ -244,22 +244,25 @@ impl HookRunner {
         hooks: &Hooks,
         fields: &[FieldDefinition],
         event: HookEvent,
-        ctx: HookContext,
+        mut ctx: HookContext,
         conn: &dyn DbConnection,
         infra: Option<LuaCrudInfra>,
     ) -> Result<HookContext> {
-        // Run field-level after_change hooks (with CRUD access)
+        // Run field-level after_change hooks (with CRUD access). Their
+        // mutations are applied to `ctx.data` so the collection-level and
+        // registered `after_change` hooks below see the transformed values —
+        // matching the Lua-path adapter (`LuaWriteHooks::run_after_write`).
         if matches!(event, HookEvent::AfterChange) {
             let has_field_hooks = has_field_hooks_for_event(fields, &FieldHookEvent::AfterChange);
 
             if has_field_hooks {
-                let mut data = ctx.data.clone();
                 let wctx = FieldWriteCtx::builder(conn)
                     .user(ctx.user.as_ref())
                     .ui_locale(ctx.ui_locale.as_deref())
                     .infra(infra.clone())
                     .build();
 
+                let mut data = ctx.data.clone();
                 self.run_field_hooks_with_conn(
                     &mut data,
                     &FieldHooksCall {
@@ -272,6 +275,7 @@ impl HookRunner {
                     },
                     wctx,
                 )?;
+                ctx.data = data;
             }
         }
 

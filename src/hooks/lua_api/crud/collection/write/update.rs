@@ -6,7 +6,7 @@ use anyhow::Result;
 use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, Table, Value};
 use serde::Deserialize;
 
-use super::unpublish::{UnpublishCtx, handle_unpublish};
+use super::unpublish::{UnpublishCall, unpublish_via_service};
 
 use crate::{
     config::LocaleConfig,
@@ -47,8 +47,8 @@ pub(crate) struct UpdateOptions {
     /// Run lifecycle hooks (default: `true`). Set `false` to bypass hooks.
     #[lua(optional)]
     pub(crate) hooks: bool,
-    /// When `true` and the collection has `versions`, sets `_status` to
-    /// `"draft"` (unpublishes). Data is not modified.
+    /// When `true`, sets `_status` to `"draft"` (unpublishes). Data is not
+    /// modified. Requires `versions` on the collection — errors otherwise.
     #[lua(optional)]
     pub(crate) unpublish: bool,
     /// Emit a live-update event for the updated document (default: `true`).
@@ -113,15 +113,17 @@ fn collections_update(
         .map_err(|e| RuntimeError(e.to_string()))?;
     let def = resolve_collection(reg, &collection)?;
 
-    if opts.unpublish && def.has_versions() {
-        return handle_unpublish(
+    // The unpublish option routes through the same service path as the
+    // dedicated `crap.collections.unpublish` — access check, hooks, cache
+    // invalidation, mutation event — and errors without versioning.
+    if opts.unpublish {
+        return unpublish_via_service(
             lua,
-            conn,
-            &UnpublishCtx::builder(&collection, &id, &def)
-                .run_hooks(opts.hooks)
-                .locale_str(opts.locale.as_deref())
-                .hook_user(user.as_ref())
-                .hook_ui_locale(ui_locale.as_deref())
+            reg,
+            &UnpublishCall::builder(&collection, &id)
+                .override_access(opts.override_access)
+                .hooks(opts.hooks)
+                .events(opts.events)
                 .build(),
         );
     }

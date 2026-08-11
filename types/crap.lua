@@ -996,7 +996,7 @@ function crap.collections.create(collection, data, opts) end
 --- @field overrideAccess? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass collection-level and field-level access for the current user.
 --- @field draft? boolean When `true` and the collection has `versions.drafts`, performs a version-only save (main table unchanged, only a draft version snapshot is created).
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set `false` to bypass hooks.
---- @field unpublish? boolean When `true` and the collection has `versions`, sets `_status` to `"draft"` (unpublishes). Data is not modified.
+--- @field unpublish? boolean When `true`, sets `_status` to `"draft"` (unpublishes). Data is not modified. Requires `versions` on the collection — errors otherwise.
 --- @field events? boolean Emit a live-update event for the updated document (default: `true`). Set `false` for a quiet write.
 
 --- Update an existing document.
@@ -1125,6 +1125,7 @@ function crap.collections.count(collection, query) end
 --- @field overrideAccess? boolean Skip access control checks (default: `false`).
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set `false` to bypass.
 --- @field forceHardDelete? boolean Bypass `soft_delete` and remove rows permanently (default: `false`).
+--- @field trash? boolean Target already-trashed documents and permanently remove them (empty the trash). Implies a hard delete gated by `access.delete`; matches only rows with `_deleted_at` set (default: `false`).
 --- @field events? boolean Emit a live-update event per deleted document (default: `false` — bulk operations are quiet). Set `true` to notify subscribers.
 
 --- Result of a bulk update operation.
@@ -1275,6 +1276,7 @@ function crap.globals.config.list() end
 --- @field locale? string Locale code for localized fields. Nil = default locale.
 --- @field overrideAccess? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass the global's update access function.
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set false to bypass hooks (e.g., for seeding/migrations).
+--- @field draft? boolean When `true` and the global has `versions.drafts`, performs a version-only save (main row unchanged, only a draft version snapshot is created). Matches `crap.collections.update`'s `draft`.
 --- @field events? boolean Emit a live-update event for the updated global (default: `true`). Set `false` for a quiet write.
 
 --- Optional options for `crap.globals.validate`. Globals are a singleton
@@ -1892,6 +1894,7 @@ function crap.schema.list_globals() end
 --- @field options? { label: string, value: string }[]
 --- @field fields? crap.SchemaField[] Sub-fields for `Group` / `Array` field types (recursive).
 --- @field blocks? { type: string, label?: string, group?: string, image_url?: string, fields: crap.SchemaField[] }[] Block definitions for `Blocks` field types.
+--- @field tabs? { label: string, description?: string, fields: crap.SchemaField[] }[] Tab definitions for `Tabs` layout field types. Each tab carries its own sub-fields (Tabs store children under `.tabs`, not `.fields`).
 
 
 -- ── crap.jobs ────────────────────────────────────────────────

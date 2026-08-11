@@ -38,6 +38,11 @@ pub(crate) struct GlobalUpdateOptions {
     /// (e.g., for seeding/migrations).
     #[lua(optional)]
     pub(crate) hooks: bool,
+    /// When `true` and the global has `versions.drafts`, performs a
+    /// version-only save (main row unchanged, only a draft version
+    /// snapshot is created). Matches `crap.collections.update`'s `draft`.
+    #[lua(optional)]
+    pub(crate) draft: bool,
     /// Emit a live-update event for the updated global (default: `true`).
     /// Set `false` for a quiet write.
     #[lua(optional)]
@@ -50,6 +55,7 @@ impl Default for GlobalUpdateOptions {
             locale: None,
             override_access: false,
             hooks: true,
+            draft: false,
             events: true,
         }
     }
@@ -116,6 +122,7 @@ fn globals_update(
     let write_input = WriteInput::builder(data)
         .locale_ctx(locale_ctx.as_ref())
         .locale(opts.locale)
+        .draft(opts.draft)
         .ui_locale(ui_locale.clone())
         .build();
 

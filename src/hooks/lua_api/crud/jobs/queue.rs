@@ -109,11 +109,23 @@ fn queue_job_inner(
 
     if job_def.access.is_some() {
         let user_doc = hook_user(lua);
-        // Expose the queued payload to the access fn as `ctx.data`.
-        let payload: Option<DocumentFields> = data
-            .as_ref()
-            .and_then(|t| lua_api::lua_to_json(&Value::Table(t.clone())).ok())
-            .and_then(|j| serde_json::from_value(j).ok());
+
+        // Expose the queued payload to the access fn as `ctx.data`. A payload
+        // that can't be converted to a JSON object is an error — silently
+        // dropping it to `nil` would let a data-gating access rule evaluate
+        // against nothing while the job still queues with that payload.
+        let payload: Option<DocumentFields> = match data.as_ref() {
+            None => None,
+            Some(t) => {
+                let json = lua_api::lua_to_json(&Value::Table(t.clone()))
+                    .map_err(|e| RuntimeError(format!("invalid job payload: {e:#}")))?;
+                Some(serde_json::from_value(json).map_err(|e| {
+                    RuntimeError(format!(
+                        "job payload must be a table/object for access checks: {e}"
+                    ))
+                })?)
+            }
+        };
 
         let result = check_access_with_lua(
             lua,

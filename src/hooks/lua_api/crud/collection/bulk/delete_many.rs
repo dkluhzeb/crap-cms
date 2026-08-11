@@ -10,7 +10,10 @@ use serde::{Deserialize, Serialize};
 use crate::{
     config::LocaleConfig,
     core::{CollectionDefinition, HookRef, Registry, upload},
-    db::{FilterClause, FindQuery, LocaleContext, query::filter::normalize_filter_fields},
+    db::{
+        Filter, FilterClause, FilterOp, FindQuery, LocaleContext,
+        query::filter::normalize_filter_fields,
+    },
     hooks::{
         lifecycle::LuaStorage,
         lua_api::crud::{
@@ -93,6 +96,11 @@ pub(crate) struct DeleteManyOpts {
     #[serde(rename = "forceHardDelete")]
     #[lua(rename = "forceHardDelete", optional)]
     pub(crate) force_hard_delete: bool,
+    /// Target already-trashed documents and permanently remove them (empty
+    /// the trash). Implies a hard delete gated by `access.delete`; matches
+    /// only rows with `_deleted_at` set (default: `false`).
+    #[lua(optional)]
+    pub(crate) trash: bool,
     /// Emit a live-update event per deleted document (default: `false` —
     /// bulk operations are quiet). Set `true` to notify subscribers.
     #[lua(optional)]
@@ -106,6 +114,7 @@ impl Default for DeleteManyOpts {
             override_access: false,
             hooks: true,
             force_hard_delete: false,
+            trash: false,
             events: false,
         }
     }
@@ -157,7 +166,11 @@ fn collections_delete_many(
     let ui_locale = hook_ui_locale(lua);
     let lua_infra = hook_lua_infra(lua);
     let def = resolve_collection(reg, &collection)?;
-    let soft_delete = def.soft_delete && !opts.force_hard_delete;
+
+    // Emptying trash is a permanent (hard) delete of already-trashed rows,
+    // gated by `access.delete` — same as `forceHardDelete`. Mirrors the admin
+    // empty-trash path.
+    let soft_delete = def.soft_delete && !opts.force_hard_delete && !opts.trash;
 
     // Validate the requested locale up front. delete_many matches documents
     // across locales, so the locale isn't used for filtering — but an invalid
@@ -165,7 +178,7 @@ fn collections_delete_many(
     LocaleContext::from_locale_string(opts.locale.as_deref(), lc)
         .map_err(|e| RuntimeError(e.to_string()))?;
 
-    let filters = build_delete_filters(
+    let mut filters = build_delete_filters(
         lua,
         &def,
         &collection,
@@ -173,6 +186,15 @@ fn collections_delete_many(
         opts.override_access,
         query,
     )?;
+
+    // `trash = true`: restrict to physically-trashed rows (`_deleted_at`
+    // set). Without this the include_deleted find would also match live rows.
+    if opts.trash {
+        filters.push(FilterClause::Single(Filter {
+            field: "_deleted_at".to_string(),
+            op: FilterOp::Exists,
+        }));
+    }
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, opts.hooks, &collection, "delete_many");
 
@@ -184,8 +206,12 @@ fn collections_delete_many(
         .hooks_enabled(hooks_enabled)
         .build();
 
+    // Clear `soft_delete` on the service def for a hard delete OR a trash
+    // purge, so the per-row delete hard-removes and its read doesn't append
+    // `_deleted_at IS NULL` (which would hide the already-trashed rows).
+    // Mirrors the admin empty-trash path.
     let mut service_def = def.clone();
-    if opts.force_hard_delete {
+    if opts.force_hard_delete || opts.trash {
         service_def.soft_delete = false;
     }
 
@@ -204,7 +230,8 @@ fn collections_delete_many(
     let delete_opts = DeleteManyOptions {
         run_hooks: hooks_enabled,
         max_documents: state.bulk_max_documents,
-        ..Default::default()
+        // Empty-trash needs the find to include soft-deleted rows.
+        include_deleted: opts.trash,
     };
 
     let svc_result = service::delete_many(&ctx, &filters, lc, &delete_opts)

@@ -1,11 +1,12 @@
 use serde_json::Value;
 
-use crate::core::{FieldDefinition, validate::FieldError};
+use crate::core::{FieldDefinition, FieldType, validate::FieldError};
 use crate::db::f64_to_exact_i64;
 
 /// Validate min / max bounds for number fields, plus whole-number rejection
-/// for `Integer` fields. Skipped for `has_many` fields (validated per-element
-/// in `check_has_many_elements`).
+/// for `Integer` fields and numeric-type rejection for Number fields.
+/// Skipped for `has_many` fields (validated per-element in
+/// `check_has_many_elements`).
 pub(crate) fn check_numeric_bounds(
     field: &FieldDefinition,
     data_key: &str,
@@ -17,7 +18,13 @@ pub(crate) fn check_numeric_bounds(
     // when no min/max bounds are set.
     let is_integer = field.integer;
 
-    if is_empty || field.has_many || (!is_integer && field.min.is_none() && field.max.is_none()) {
+    if is_empty || field.has_many {
+        return;
+    }
+
+    let is_number_field = field.field_type == FieldType::Number;
+
+    if !is_number_field && !is_integer && field.min.is_none() && field.max.is_none() {
         return;
     }
 
@@ -28,6 +35,19 @@ pub(crate) fn check_numeric_bounds(
     };
 
     let Some(v) = num_val else {
+        // A present, non-empty value that isn't numeric at all: the persist
+        // edge would coerce it to NULL — silent data loss, and a `required`
+        // bypass (the value counted as present). Reject it instead.
+        if is_number_field {
+            errors.push(
+                FieldError::with_key(
+                    data_key.to_owned(),
+                    format!("{} must be a number", field.name),
+                    "validation.invalid_number",
+                )
+                .with_param("field", field.name.clone()),
+            );
+        }
         return;
     };
 
@@ -97,6 +117,71 @@ mod tests {
     use crate::core::{FieldDefinition, FieldType};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
+
+    /// Regression: a non-numeric value on a Number field passed all
+    /// validation (parse failure was a silent early-return) and the persist
+    /// edge coerced it to NULL — silent data loss that also bypassed
+    /// `required` and every bound.
+    #[test]
+    fn non_numeric_value_on_number_field_rejected() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, score REAL)")
+            .unwrap();
+
+        // With bounds set (the original repro)…
+        let bounded = vec![
+            FieldDefinition::builder("score", FieldType::Number)
+                .min(0.0)
+                .build(),
+        ];
+        let mut data = DocumentFields::new();
+        data.insert("score".to_string(), json!("abc"));
+        let result = validate_fields_inner(
+            &lua,
+            &bounded,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(result.is_err(), "'abc' must be rejected on a bounded field");
+
+        // …and with no constraints at all (would still persist NULL).
+        let unbounded = vec![FieldDefinition::builder("score", FieldType::Number).build()];
+        let mut data = DocumentFields::new();
+        data.insert("score".to_string(), json!("abc"));
+        let result = validate_fields_inner(
+            &lua,
+            &unbounded,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(
+            result.is_err(),
+            "'abc' must be rejected even without bounds"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.errors
+                .iter()
+                .any(|e| e.key.as_deref() == Some("validation.invalid_number")),
+            "expected invalid_number, got: {:?}",
+            err.errors
+        );
+
+        // Numeric strings stay accepted (admin form encoding).
+        let mut data = DocumentFields::new();
+        data.insert("score".to_string(), json!("42.5"));
+        let result = validate_fields_inner(
+            &lua,
+            &unbounded,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(
+            result.is_ok(),
+            "numeric strings must still pass: {result:?}"
+        );
+    }
 
     #[test]
     fn test_validate_number_min_fails() {

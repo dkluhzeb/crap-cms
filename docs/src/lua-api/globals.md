@@ -109,6 +109,7 @@ document.
 | `locale` | string | Locale code. Updates locale-specific field values; omit for default locale. |
 | `overrideAccess` | boolean | Bypass the global's `access.update` check (default `false`). |
 | `hooks` | boolean | Run lifecycle hooks (default `true`). Set `false` for seeding/migrations. |
+| `draft` | boolean | When `true` and the global has `versions.drafts`, performs a version-only save (main row unchanged, only a draft snapshot). Default `false`. Mirrors `crap.collections.update`. |
 
 ```lua
 local settings = crap.globals.site_settings.update({
@@ -120,6 +121,26 @@ local settings = crap.globals.site_settings.update({
 crap.globals.site_settings.update({
     site_name = "Neuer Seitenname",
 }, { locale = "de" })
+
+-- Save a draft edit (main row stays on the published value)
+crap.globals.site_settings.update({ tagline = "WIP" }, { draft = true })
+```
+
+### `crap.globals.<slug>.unpublish(opts?)`
+
+Revert a versioned global's `_status` to `"draft"` without modifying its
+stored field data. Only available on globals with `versions` enabled
+(errors otherwise). Mirrors `crap.collections.unpublish`.
+
+**Options:**
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `overrideAccess` | boolean | Bypass the global's `access.update` check (default `false`). |
+| `hooks` | boolean | Run lifecycle hooks (default `true`). |
+
+```lua
+crap.globals.banner.unpublish()
 ```
 
 ### `crap.globals.validate(slug, data, opts?)`

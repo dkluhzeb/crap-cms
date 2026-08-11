@@ -17,7 +17,10 @@ use crate::{
     hooks::lua_api::crud::{
         filter::convert_where_clause,
         get_tx_conn,
-        helpers::{hook_populate_singleflight, hook_ui_locale, hook_user, resolve_collection},
+        helpers::{
+            check_hook_depth, hook_populate_singleflight, hook_ui_locale, hook_user,
+            resolve_collection,
+        },
     },
     service::{FindDocumentsInput, LuaReadHooks, ServiceContext, find_documents},
     typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
@@ -283,10 +286,15 @@ fn find_inner(
         find_query.order_by = Some("-_deleted_at".to_string());
     }
 
+    // Depth guard: a before_read/after_read hook that finds in the same
+    // collection recurses — cap it like the write paths do.
+    let (hooks_enabled, _guard) = check_hook_depth(lua, true, collection, "find");
+
     let hooks = LuaReadHooks::builder(lua)
         .user(user.as_ref())
         .ui_locale(ui_locale.as_deref())
         .override_access(override_access)
+        .hooks_enabled(hooks_enabled)
         .build();
 
     let ctx = ServiceContext::collection(collection, &def)

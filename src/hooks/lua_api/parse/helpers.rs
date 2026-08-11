@@ -132,7 +132,7 @@ pub(super) fn get_localized_string(tbl: &Table, key: &str) -> Option<LocalizedSt
 ///
 /// Unlike [`get_string`], a present-but-wrong-typed value is NOT silently
 /// dropped.
-pub(super) fn get_string_strict(
+pub(crate) fn get_string_strict(
     tbl: &Table,
     key: &str,
     context: &str,
@@ -235,7 +235,7 @@ pub(super) fn get_string_sequence(tbl: &Table, key: &str, context: &str) -> LuaR
 /// - Any other type -> error naming the key and the actual type, so typos
 ///   like `required = "true"` (string) surface at parse time instead of
 ///   silently falling back to the default.
-pub(super) fn get_bool(tbl: &Table, key: &str, default: bool) -> mlua::Result<bool> {
+pub(crate) fn get_bool(tbl: &Table, key: &str, default: bool) -> mlua::Result<bool> {
     match tbl.get::<Value>(key)? {
         Value::Nil => Ok(default),
         Value::Boolean(b) => Ok(b),

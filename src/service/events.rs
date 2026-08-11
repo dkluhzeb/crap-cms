@@ -8,8 +8,9 @@
 //! 2. drop the event if it carries no view metadata (fail-closed),
 //! 3. gate it by the content view it belongs to (published/draft/trash),
 //! 4. drop it if a row constraint doesn't match the payload,
-//! 5. in `Full` mode, run `after_read`, then the data-aware field-read strip,
-//!    then the API-hidden strip — yielding the visible data map; in `Metadata`
+//! 5. in `Full` mode, run the data-aware field-read strip, then the API-hidden
+//!    strip, then `after_read` on the stripped data (the same order as the
+//!    normal read pipeline) — yielding the visible data map; in `Metadata`
 //!    mode, emit no data.
 //!
 //! Keeping this in one place means a change to the strip pipeline (e.g. a new
@@ -24,7 +25,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     core::{
-        Document, LiveMode, MutationEvent, Registry,
+        Document, DocumentFields, LiveMode, MutationEvent, Registry,
         event::{EventOperation, EventTarget},
     },
     db::{EventViewGate, query::filter::memory::matches_constraints_typed},
@@ -126,8 +127,15 @@ impl EventGate<'_> {
         Some(self.strip_full_payload(event, slug))
     }
 
-    /// `Full`-mode payload: `after_read` enrichment, then the data-aware
-    /// field-read strip, then the document-independent API-hidden strip.
+    /// `Full`-mode payload: the data-aware field-read strip, then the
+    /// document-independent API-hidden strip, then `after_read` enrichment —
+    /// the same order as the normal read pipeline (`post_process`).
+    ///
+    /// Strip-before-`after_read` is load-bearing: the per-subscriber
+    /// `after_read` hook must only ever see the already-access-stripped form
+    /// (as documented), otherwise it could copy a read-denied field's value
+    /// into an unprotected field that survives the strip — leaking it to a
+    /// subscriber the access rule denies.
     fn strip_full_payload(&self, event: &MutationEvent, slug: &str) -> Map<String, Value> {
         let (hooks, field_defs) = match event.target {
             EventTarget::Collection => self
@@ -141,32 +149,20 @@ impl EventGate<'_> {
         }
         .unwrap_or_default();
 
-        let processed = self
-            .hook_runner
-            .apply_after_read_for_event(&EventAfterReadInput {
-                collection: slug,
-                hooks: &hooks,
-                fields: &field_defs,
-                document_id: event.document_id.as_ref(),
-                data: &event.data,
-                user: self.user_doc,
-                operation: event_op_str(&event.operation),
-                timestamp: event.timestamp.as_str(),
-            });
-
-        let mut visible: Map<String, Value> = processed
+        let mut visible: Map<String, Value> = event
+            .data
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
         // Data-aware field-read strip (each `access.read` rule sees the event's
-        // document as `ctx.data` / `ctx.document`), evaluated connection-less on
-        // a pool VM — a rule doing CRUD fails closed, matching the event
-        // `after_read` contract. Then the document-independent API-hidden strip.
+        // original document as `ctx.data` / `ctx.document`, matching the
+        // per-level snapshot semantics of normal reads), evaluated
+        // connection-less on a pool VM — a rule doing CRUD fails closed.
         self.hook_runner.strip_read_access_for_event(
             &field_defs,
             &mut visible,
-            &processed,
+            &event.data,
             slug,
             self.user_doc,
         );
@@ -175,6 +171,126 @@ impl EventGate<'_> {
             denial.strip_from(&mut visible);
         }
 
-        visible
+        // Per-subscriber `after_read` enrichment on the stripped data.
+        let stripped: DocumentFields = visible
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        let processed = self
+            .hook_runner
+            .apply_after_read_for_event(&EventAfterReadInput {
+                collection: slug,
+                hooks: &hooks,
+                fields: &field_defs,
+                document_id: event.document_id.as_ref(),
+                data: &stripped,
+                user: self.user_doc,
+                operation: event_op_str(&event.operation),
+                timestamp: event.timestamp.as_str(),
+            });
+
+        processed
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod tests {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use crate::config::CrapConfig;
+    use crate::core::event::EventViewMeta;
+    use crate::core::{DocumentFields, LiveMode, MutationEvent};
+    use crate::db::EventViewGate;
+    use crate::hooks::{self, lifecycle::HookRunner};
+
+    use super::*;
+
+    fn fixture_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
+    }
+
+    /// Regression: the Full-mode event pipeline ran per-subscriber
+    /// `after_read` hooks BEFORE the field-read strip (normal reads strip
+    /// first). A hook copying a read-denied field's value into an
+    /// unprotected field leaked it past the strip to a denied subscriber.
+    #[test]
+    fn full_payload_strips_before_after_read() {
+        let config_dir = fixture_dir();
+        let config = CrapConfig::test_default();
+        let registry = hooks::init_lua(&config_dir, &config).unwrap();
+        let runner = HookRunner::builder()
+            .config_dir(&config_dir)
+            .registry(Arc::clone(&registry))
+            .config(&config)
+            .build()
+            .unwrap();
+
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Hello"));
+        data.insert("secret".to_string(), json!("s3cr3t-value"));
+
+        let event = MutationEvent {
+            sequence: 1,
+            timestamp: "2026-08-11T00:00:00Z".to_string(),
+            target: EventTarget::Collection,
+            operation: EventOperation::Update,
+            collection: "event_leak".into(),
+            document_id: "d1".into(),
+            data,
+            edited_by: None,
+            view: Some(EventViewMeta::default()),
+        };
+
+        let mut views = HashMap::new();
+        views.insert(
+            "event_leak".to_string(),
+            EventViewGate {
+                published: Some(vec![]),
+                draft: None,
+                trash: None,
+            },
+        );
+        let mut modes = HashMap::new();
+        modes.insert("event_leak".to_string(), LiveMode::Full);
+        let empty_views = HashMap::new();
+        let empty_modes = HashMap::new();
+
+        let gate = EventGate {
+            collection_views: &views,
+            global_views: &empty_views,
+            collection_modes: &modes,
+            global_modes: &empty_modes,
+            registry: &registry,
+            hook_runner: &runner,
+            user_doc: None,
+        };
+
+        let visible = gate.evaluate(&event).expect("event must be delivered");
+
+        assert!(
+            visible.get("secret").is_none(),
+            "read-denied field must be stripped from the payload"
+        );
+
+        let summary = visible
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .expect("after_read hook must have set summary");
+        assert!(
+            !summary.contains("s3cr3t-value"),
+            "after_read must not see the denied field's value; got: {summary}"
+        );
+        assert_eq!(
+            summary, "seen:nil",
+            "the hook ran on the already-stripped data"
+        );
     }
 }

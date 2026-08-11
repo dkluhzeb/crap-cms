@@ -383,6 +383,139 @@ fn test_validate_blocks_unknown_block_type_rejected() {
     );
 }
 
+/// Regression: the same rejection must apply to blocks NESTED inside an
+/// array/blocks row — `validate_nested_rows` silently skipped unknown
+/// block types while the top-level walker errored.
+#[test]
+fn nested_blocks_unknown_block_type_rejected() {
+    let lua = mlua::Lua::new();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+    let fields = vec![
+        FieldDefinition::builder("sections", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("content", FieldType::Blocks)
+                    .blocks(vec![BlockDefinition::new(
+                        "text",
+                        vec![FieldDefinition::builder("body", FieldType::Text).build()],
+                    )])
+                    .build(),
+            ])
+            .build(),
+    ];
+    let mut data = DocumentFields::new();
+    data.insert(
+        "sections".to_string(),
+        json!([{"content": [{"_block_type": "bogus", "x": 1}]}]),
+    );
+    let result = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test").build(),
+    );
+    assert!(
+        result.is_err(),
+        "Unknown block type in a nested blocks row must be rejected"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        err.errors
+            .iter()
+            .any(|e| e.key.as_deref() == Some("validation.unknown_block_type")),
+        "expected unknown_block_type, got: {:?}",
+        err.errors
+    );
+}
+
+/// Regression: a row that omits a group (or sends it as a non-object)
+/// skipped ALL child validation — a required sub-field inside the group
+/// never fired. An absent group must validate its children as absent.
+#[test]
+fn missing_group_in_row_enforces_required_children() {
+    let lua = mlua::Lua::new();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+    let fields = vec![
+        FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("meta", FieldType::Group)
+                    .fields(vec![
+                        FieldDefinition::builder("title", FieldType::Text)
+                            .required(true)
+                            .build(),
+                    ])
+                    .build(),
+            ])
+            .build(),
+    ];
+    let mut data = DocumentFields::new();
+    data.insert("items".to_string(), json!([{}]));
+    let result = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test").build(),
+    );
+    assert!(
+        result.is_err(),
+        "row without the group must still fail the group's required child"
+    );
+
+    // A wrong-typed group value is a malformed row, not a skip.
+    let mut data = DocumentFields::new();
+    data.insert("items".to_string(), json!([{"meta": "not-an-object"}]));
+    let result = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test").build(),
+    );
+    assert!(result.is_err(), "non-object group value must be rejected");
+}
+
+/// Regression: a nested required Array/Blocks sub-field given `[]` passed
+/// `required` (top level demands a non-empty array for join-shaped fields).
+#[test]
+fn nested_required_array_rejects_empty_array() {
+    let lua = mlua::Lua::new();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+    let fields = vec![
+        FieldDefinition::builder("outer", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("inner", FieldType::Array)
+                    .required(true)
+                    .fields(vec![FieldDefinition::builder("v", FieldType::Text).build()])
+                    .build(),
+            ])
+            .build(),
+    ];
+    let mut data = DocumentFields::new();
+    data.insert("outer".to_string(), json!([{"inner": []}]));
+    let result = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test").build(),
+    );
+    assert!(
+        result.is_err(),
+        "empty array must not satisfy required on a nested array sub-field"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        err.errors
+            .iter()
+            .any(|e| e.key.as_deref() == Some("validation.required")),
+        "expected a required error, got: {:?}",
+        err.errors
+    );
+}
+
 /// Regression: non-object rows in an array field must produce a validation
 /// error — primitives should not silently bypass sub-field validation.
 #[test]

@@ -200,6 +200,44 @@ nothing. The full list:
   and `allow_credentials = true` with the wildcard origin is an error.
   Invalid entries used to be silently dropped from the allowlist (or
   kept but never matched), surfacing only as blocked requests.
+- **`crap.routes.register` validates `csrf` and `max_body` types.** A
+  non-boolean `csrf` (e.g. `csrf = 1`) used to be silently dropped,
+  leaving the route with CSRF protection **off** — a fail-open — and a
+  wrong-typed `max_body` was silently ignored, leaving the default body
+  limit. Both now error at load. `max_body` accepts a whole-valued
+  float, so `max_body = 2^16` (a float in Lua) works instead of being
+  ignored.
+- **`crap.richtext.register_node` validates `inline` and `label` types.**
+  `inline` was read with Lua truthiness, so `inline = "false"` (a truthy
+  string) silently registered the node as inline **true**. A non-boolean
+  `inline` now errors at load; `label` is read strictly too.
+- **`crap.storage.register` / `crap.email.register` reject unknown handler
+  keys.** A typo'd handler function (`exsits`, `sned`) used to be silently
+  ignored; it now errors at load.
+- **`crap.hooks.remove` validates the event name.** An unknown event name
+  used to be a silent no-op (unlike `crap.hooks.register`, which already
+  errored); it now errors.
+
+### 6a. Rename job slugs and richtext node names to valid slugs
+
+Two registration surfaces that previously accepted looser identifiers now
+enforce the standard slug rule (lowercase ASCII letters, digits, and
+underscores; not starting with an underscore):
+
+- **`crap.jobs.define(slug, …)`** — a job slug with a hyphen, uppercase
+  letter, or space now errors at load. Rename e.g. `send-digest` →
+  `send_digest`.
+- **`crap.richtext.register_node(name, …)`** — a node name with uppercase
+  or non-ASCII characters (the old check was Unicode-aware) now errors.
+  Rename to a lowercase ASCII slug.
+
+### 6b. Number fields reject non-numeric input
+
+A non-numeric value submitted for a `number` field (e.g. the string
+`"abc"`) used to pass validation and be silently coerced to `NULL` on
+write — silent data loss that also bypassed `required` and min/max
+bounds. It is now a validation error. Send `nil` / omit the field for
+"no value"; numeric strings (the admin-form encoding) still work.
 
 ### 7. Runtime option tables also reject unknown keys
 
@@ -250,6 +288,42 @@ arrays/relationships to `[]`); there is no per-locale delete.
 
 ## Security fixes
 
+- **`crap.collections.update(id, data, { unpublish = true })` now enforces
+  access.** The `unpublish` option used a bespoke path that skipped access
+  evaluation, so a caller whose `access.update` filter didn't match a document
+  could still unpublish it (and the returned document skipped the read/API-hidden
+  strips). It now routes through the same service path as
+  `crap.collections.unpublish`. **Action:** none, unless you relied on the
+  missing check — that was a bug.
+- **Version restore now verifies the version belongs to the target document.**
+  A caller with `update` access to document A could restore document B's snapshot
+  onto A (cross-document snapshot injection). Restore now rejects a version whose
+  `_parent` doesn't match the target id, on every surface. **Action:** none.
+- **Live event streams run the field-read strip before the per-subscriber
+  `after_read` hook**, matching normal reads. Previously `after_read` ran first,
+  so a hook copying a read-denied field's value into an unprotected field could
+  leak it to a denied subscriber. **Action:** none.
+- **`crap.collections.ref_count` now gates on read access.** It was the only
+  read-shaped Lua op with no access check. It now performs a read-visibility
+  check and errors for a document the caller can't read. **Action:** none, unless
+  a hook read counts for documents the current user can't see — gate accordingly
+  or pass a privileged user.
+- **A richtext node-attr custom `validate` function that errors now fails the
+  write** (it was logged and the document saved — fail-open, unlike top-level
+  and sub-field validators). **Action:** none.
+- **`crap.env.get` hides the `CRAP_SECRET_*` prefix from hooks.** Config `${VAR}`
+  substitution still reads it at load, but a hook reading a `CRAP_SECRET_*` var
+  now errors. **Action:** store secrets that must stay out of userland Lua under
+  the `CRAP_SECRET_*` prefix; other `CRAP_*` vars remain hook-readable.
+- **Data-aware field access is now consistent across transparent layout
+  wrappers.** An `access.read` / `access.update` rule that keys on a sibling
+  field's value (`ctx.data`) produced a different keep/strip decision depending
+  on whether the field sat directly at its level or inside a
+  Row/Collapsible/Tabs wrapper — the wrapper re-snapshotted `ctx.data` after
+  earlier siblings had already been stripped. With an inverted rule this could
+  keep a field that should have been stripped. Wrappers now evaluate against the
+  same pre-strip sibling view as a direct sibling. **Action:** none; layout
+  wrappers were always documented as transparent — this restores that behavior.
 - **Version history no longer leaks other owners' draft snapshots under a
   filtered draft rule.** If `access.draft` returns a filter table (e.g.
   `{ author = ctx.user.id }`), the version surfaces (`ListVersions` / `GetVersion`
@@ -555,6 +629,22 @@ serialize as integers (see *Behavior changes* above). Composes with
 
 `Count` can now count soft-deleted (trashed) documents via a `trash`
 flag, mirroring `FindRequest.trash`.
+
+### Lua parity: empty trash, global drafts, and global unpublish
+
+- **`crap.collections.delete_many(slug, query, { trash = true })`** now
+  permanently removes already-soft-deleted rows (empty the trash) — a
+  hard delete of trashed documents gated by `access.delete`. This was
+  impossible from Lua before (the query surface can't filter the system
+  `_deleted_at` column).
+- **`crap.globals.update(slug, data, { draft = true })`** performs a
+  version-only save (main row unchanged), matching
+  `crap.collections.update`'s `draft` option.
+- **`crap.globals.unpublish(slug, opts?)`** is new — it reverts a
+  versioned global's `_status` to draft without changing field data,
+  mirroring `crap.collections.unpublish`.
+
+Additive; no action needed.
 
 ## Reference
 

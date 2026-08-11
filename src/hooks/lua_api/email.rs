@@ -147,6 +147,19 @@ fn email_register(
         ));
     }
 
+    // Reject unknown keys so a typo (`sned`) surfaces at load.
+    for pair in handler.clone().pairs::<Value, Value>() {
+        let (key, _) = pair?;
+        if let Value::String(s) = &key
+            && s.to_str()?.as_ref() != "send"
+        {
+            return Err(RuntimeError(format!(
+                "crap.email.register: unknown key '{}' (only 'send' is allowed)",
+                s.to_str()?
+            )));
+        }
+    }
+
     let crap: Table = lua.globals().get("crap")?;
     crap.set("_email_send", send)?;
 
@@ -213,6 +226,19 @@ mod tests {
         };
         let err = err.to_string();
         assert!(err.contains("unknown field `retires`"), "unexpected: {err}");
+    }
+
+    /// Regression: an unknown handler key (a typo like `sned`) was silently
+    /// ignored instead of surfacing at load.
+    #[test]
+    fn register_unknown_handler_key_is_rejected() {
+        let lua = lua_in_init_phase();
+        let err = lua
+            .load(r"crap.email.register({ send = function() end, sned = function() end })")
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("sned"), "should name the unknown key: {err}");
     }
 
     #[test]

@@ -14,7 +14,7 @@ use crate::{
     hooks::lua_api::crud::{
         filter::convert_where_clause,
         get_tx_conn,
-        helpers::{hook_user, resolve_collection},
+        helpers::{check_hook_depth, hook_user, resolve_collection},
     },
     service::{CountDocumentsInput, LuaReadHooks, ServiceContext, count_documents},
     typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
@@ -152,9 +152,14 @@ fn count_inner(
 
     normalize_filter_fields(&mut filters, &def.fields);
 
+    // Depth guard: a before_read hook that counts the same collection
+    // recurses — cap it like the write paths do.
+    let (hooks_enabled, _guard) = check_hook_depth(lua, true, collection, "count");
+
     let hooks = LuaReadHooks::builder(lua)
         .user(user.as_ref())
         .override_access(override_access)
+        .hooks_enabled(hooks_enabled)
         .build();
 
     let ctx = ServiceContext::collection(collection, &def)

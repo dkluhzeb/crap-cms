@@ -9,6 +9,7 @@ use serde::Deserialize;
 
 use crate::core::job::JobDefinitionBuilder;
 use crate::core::{HookRef, JobDefinition, JobLabels};
+use crate::db::query;
 use crate::typegen::lua::LuaAnnotation;
 
 /// Typed `config` table passed to `crap.jobs.define(slug, config)`.
@@ -64,6 +65,12 @@ impl FromLua for JobDefinitionConfig {
 /// Returns an error if `handler` is missing or the cron expression is
 /// invalid.
 pub fn parse_job_definition(slug: &str, config: JobDefinitionConfig) -> Result<JobDefinition> {
+    // Validate the slug like collections and globals do — the job slug is a
+    // stored value (`_crap_jobs.slug`), so this is a consistency guarantee
+    // rather than an injection fix, but it keeps every registration surface
+    // uniform.
+    query::validate_slug(slug)?;
+
     let handler = config
         .handler
         .ok_or_else(|| anyhow!("Job '{slug}' missing required 'handler' field"))?;
@@ -122,8 +129,8 @@ mod tests {
         let lua = Lua::new();
         let cfg = from_lua_table(&lua, r#"return { handler = "jobs.my_job.run" }"#);
 
-        let job = parse_job_definition("my-job", cfg).unwrap();
-        assert_eq!(job.slug, "my-job");
+        let job = parse_job_definition("my_job", cfg).unwrap();
+        assert_eq!(job.slug, "my_job");
         assert_eq!(job.handler.reference(), "jobs.my_job.run");
         assert!(job.schedule.is_none());
         assert_eq!(job.queue, "default");
@@ -174,7 +181,7 @@ mod tests {
     #[test]
     fn test_parse_job_definition_missing_handler() {
         let cfg = JobDefinitionConfig::default();
-        let result = parse_job_definition("bad-job", cfg);
+        let result = parse_job_definition("bad_job", cfg);
         assert!(result.is_err());
         assert!(
             result
@@ -191,7 +198,7 @@ mod tests {
             &lua,
             r#"return { handler = "jobs.bad.run", schedule = "not a cron" }"#,
         );
-        let result = parse_job_definition("bad-job", cfg);
+        let result = parse_job_definition("bad_job", cfg);
         assert!(result.is_err());
         assert!(
             result
@@ -210,5 +217,25 @@ mod tests {
         );
         let job = parse_job_definition("hourly", cfg).unwrap();
         assert_eq!(job.schedule.as_deref(), Some("0 0 * * * * *"));
+    }
+
+    /// Regression: `crap.jobs.define` never validated the slug, unlike
+    /// collections and globals. An invalid slug (hyphen, uppercase, leading
+    /// underscore) must now be rejected at load.
+    #[test]
+    fn parse_job_definition_rejects_invalid_slug() {
+        let lua = Lua::new();
+        for bad in ["my-job", "MyJob", "_hidden", "has space"] {
+            let cfg = from_lua_table(&lua, r#"return { handler = "jobs.x.run" }"#);
+            let result = parse_job_definition(bad, cfg);
+            assert!(
+                result.is_err(),
+                "slug '{bad}' should be rejected by validate_slug"
+            );
+        }
+
+        // A valid slug still parses.
+        let cfg = from_lua_table(&lua, r#"return { handler = "jobs.x.run" }"#);
+        assert!(parse_job_definition("my_job", cfg).is_ok());
     }
 }

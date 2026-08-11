@@ -181,6 +181,12 @@ fn register_global_functions(lua: &Lua, crap: &Table, ctx: &CrudRegisterCtx<'_>)
         Arc::clone(registry),
         locale_config,
     )?;
+    globals::unpublish::register_globals_unpublish(
+        lua,
+        &globals_table,
+        Arc::clone(registry),
+        locale_config,
+    )?;
 
     Ok(())
 }

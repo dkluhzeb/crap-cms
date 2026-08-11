@@ -2,7 +2,7 @@
 //! date helpers, and pure Lua table/string utilities loaded after the namespace is set.
 
 use anyhow::{Context as _, Result};
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc, format::StrftimeItems};
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Value as LuaValue};
 use nanoid::nanoid;
 use serde_json::Value;
@@ -83,6 +83,14 @@ fn util_date_format(
 ) -> LuaResult<String> {
     let dt =
         DateTime::from_timestamp(ts, 0).ok_or_else(|| RuntimeError("invalid timestamp".into()))?;
+
+    // Pre-validate the format string: chrono's `DelayedFormat` Display panics
+    // (via `.to_string()`) on an unknown specifier, so a Lua caller must not be
+    // able to reach `.format().to_string()` with a bad pattern.
+    if StrftimeItems::new(&fmt).any(|item| matches!(item, chrono::format::Item::Error)) {
+        return Err(RuntimeError(format!("invalid date format string: {fmt}")));
+    }
+
     Ok(dt.format(&fmt).to_string())
 }
 
@@ -96,7 +104,8 @@ fn util_date_add(
     #[lua(doc = "Base timestamp.")] ts: i64,
     #[lua(doc = "Seconds to add (may be negative).")] secs: i64,
 ) -> LuaResult<i64> {
-    Ok(ts + secs)
+    ts.checked_add(secs)
+        .ok_or_else(|| RuntimeError("date_add overflow".into()))
 }
 
 /// Difference (in seconds) between two Unix timestamps (`a - b`).
@@ -109,7 +118,8 @@ fn util_date_diff(
     #[lua(doc = "First timestamp.")] a: i64,
     #[lua(doc = "Second timestamp.")] b: i64,
 ) -> LuaResult<i64> {
-    Ok(a - b)
+    a.checked_sub(b)
+        .ok_or_else(|| RuntimeError("date_diff overflow".into()))
 }
 
 lua_table! {
@@ -196,6 +206,38 @@ fn slugify(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: an invalid chrono format string reached
+    /// `DelayedFormat::to_string()`, which panics — a Lua caller could crash
+    /// the callback. It must return a clean error instead.
+    #[test]
+    fn date_format_rejects_invalid_format_string() {
+        let lua = Lua::new();
+        for bad in ["%J", "%", "%Q"] {
+            let err = util_date_format(&lua, 0, bad.to_string())
+                .expect_err("invalid format must error, not panic");
+            assert!(
+                err.to_string().contains("invalid date format"),
+                "unexpected: {err}"
+            );
+        }
+        // A valid format still works.
+        assert_eq!(
+            util_date_format(&lua, 0, "%Y-%m-%d".to_string()).unwrap(),
+            "1970-01-01"
+        );
+    }
+
+    /// Regression: `date_add`/`date_diff` used unchecked i64 arithmetic —
+    /// overflow panicked in debug and wrapped in release. Now a clean error.
+    #[test]
+    fn date_add_diff_reject_overflow() {
+        let lua = Lua::new();
+        assert!(util_date_add(&lua, i64::MAX, 1).is_err());
+        assert!(util_date_diff(&lua, i64::MIN, 1).is_err());
+        assert_eq!(util_date_add(&lua, 100, 5).unwrap(), 105);
+        assert_eq!(util_date_diff(&lua, 100, 40).unwrap(), 60);
+    }
 
     #[test]
     fn slugify_basic() {

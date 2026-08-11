@@ -287,6 +287,9 @@ pub struct LuaReadHooks<'a> {
     pub user: Option<&'a Document>,
     pub ui_locale: Option<&'a str>,
     pub override_access: bool,
+    /// `false` when the hook-depth guard tripped — lifecycle hooks
+    /// (`before_read`/`after_read`) are skipped, access checks still run.
+    pub hooks_enabled: bool,
 }
 
 impl<'a> LuaReadHooks<'a> {
@@ -303,6 +306,7 @@ pub struct LuaReadHooksBuilder<'a> {
     pub(in crate::service) user: Option<&'a Document>,
     pub(in crate::service) ui_locale: Option<&'a str>,
     pub(in crate::service) override_access: bool,
+    pub(in crate::service) hooks_enabled: bool,
 }
 
 impl<'a> LuaReadHooksBuilder<'a> {
@@ -312,6 +316,7 @@ impl<'a> LuaReadHooksBuilder<'a> {
             user: None,
             ui_locale: None,
             override_access: false,
+            hooks_enabled: true,
         }
     }
 
@@ -330,12 +335,18 @@ impl<'a> LuaReadHooksBuilder<'a> {
         self
     }
 
+    pub fn hooks_enabled(mut self, hooks_enabled: bool) -> Self {
+        self.hooks_enabled = hooks_enabled;
+        self
+    }
+
     pub fn build(self) -> LuaReadHooks<'a> {
         LuaReadHooks {
             lua: self.lua,
             user: self.user,
             ui_locale: self.ui_locale,
             override_access: self.override_access,
+            hooks_enabled: self.hooks_enabled,
         }
     }
 }
@@ -388,6 +399,10 @@ impl ReadHooks for LuaReadHooks<'_> {
         operation: &str,
         locale: Option<&str>,
     ) -> Result<ReqContext> {
+        if !self.hooks_enabled {
+            return Ok(ReqContext::new());
+        }
+
         let ctx = HookContext::builder(slug, operation)
             .user(self.user)
             .locale(locale)
@@ -397,6 +412,10 @@ impl ReadHooks for LuaReadHooks<'_> {
     }
 
     fn after_read_one(&self, ctx: &AfterReadCtx, doc: Document) -> Document {
+        if !self.hooks_enabled {
+            return doc;
+        }
+
         apply_after_read_inner(self.lua, ctx, doc)
     }
 

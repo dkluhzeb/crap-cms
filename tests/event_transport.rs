@@ -204,3 +204,113 @@ crap.globals.define("site", {
     assert_eq!(ev.operation, EventOperation::Update);
     assert_eq!(ev.collection.as_ref(), "site");
 }
+
+/// Regression: the global-unpublish `before_change` call went through the
+/// RAW hook runner with `infra: None` instead of the `WriteHooks` adapter, so
+/// CRUD performed inside the hook (e.g. an audit-log create) never queued
+/// its mutation event — subscribers of that collection silently missed the
+/// write, but only on the global unpublish path.
+#[tokio::test]
+async fn global_unpublish_before_change_nested_crud_emits_event() {
+    use crap_cms::config::CrapConfig;
+    use crap_cms::hooks::{self, HookRunner};
+    use crap_cms::service::{ServiceContext, unpublish_global_document};
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let globals_dir = tmp.path().join("globals");
+    let collections_dir = tmp.path().join("collections");
+    let hooks_dir = tmp.path().join("hooks");
+    std::fs::create_dir_all(&globals_dir).unwrap();
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+    std::fs::write(
+        globals_dir.join("site.lua"),
+        r#"
+crap.globals.define("site", {
+    versions = true,
+    fields = {
+        { name = "title", type = "text" },
+    },
+    hooks = {
+        before_change = { "hooks.site_hooks.log" },
+    },
+})
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        collections_dir.join("audit_log.lua"),
+        r#"
+crap.collections.define("audit_log", {
+    labels = { singular = "AuditLog", plural = "AuditLogs" },
+    fields = {
+        { name = "note", type = "text" },
+    },
+})
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        hooks_dir.join("site_hooks.lua"),
+        r#"
+local M = {}
+
+function M.log(ctx)
+    crap.collections.create("audit_log", { note = "global unpublished" })
+    return ctx
+end
+
+return M
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let pool = crap_cms::db::pool::create_pool(tmp.path(), &config).expect("pool");
+    crap_cms::db::migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .expect("runner");
+
+    let transport: SharedEventTransport = Arc::new(InProcessEventBus::new(16));
+    let mut rx = transport.subscribe();
+
+    let def = registry.get_global("site").expect("global def");
+    let ctx = ServiceContext::global("site", def)
+        .pool(&pool)
+        .runner(&runner)
+        .event_transport(Some(transport.clone()))
+        .build();
+
+    unpublish_global_document(&ctx).expect("unpublish global");
+
+    // Two events must arrive: the global's own update, and the nested
+    // audit_log create queued by the before_change hook.
+    let mut saw_global_update = false;
+    let mut saw_nested_create = false;
+    for _ in 0..2 {
+        let ev = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("expected two mutation events after global unpublish")
+            .expect("mutation event");
+        match ev.target {
+            EventTarget::Global if ev.collection.as_ref() == "site" => saw_global_update = true,
+            EventTarget::Collection if ev.collection.as_ref() == "audit_log" => {
+                assert_eq!(ev.operation, EventOperation::Create);
+                saw_nested_create = true;
+            }
+            _ => panic!("unexpected event: {ev:?}"),
+        }
+    }
+    assert!(saw_global_update, "global update event must be emitted");
+    assert!(
+        saw_nested_create,
+        "the before_change hook's nested create must emit its mutation event"
+    );
+}

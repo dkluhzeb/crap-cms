@@ -54,6 +54,13 @@ fn hooks_remove(
     )]
     func: Function,
 ) -> LuaResult<()> {
+    if !is_known_event(&event) {
+        return Err(RuntimeError(format!(
+            "crap.hooks.remove: unknown event '{event}'. Known events: {}",
+            KNOWN_EVENTS.join(", ")
+        )));
+    }
+
     let event_hooks: Table = lua.named_registry_value("_crap_event_hooks")?;
     let Value::Table(list) = event_hooks.get::<Value>(event.as_str())? else {
         return Ok(());
@@ -150,6 +157,21 @@ mod tests {
         assert!(
             result.is_ok(),
             "remove on nonexistent event should be a noop"
+        );
+    }
+
+    /// Regression: `remove` accepted an UNKNOWN event name as a silent
+    /// no-op — the same typo class `register` guards against. It must error.
+    #[test]
+    fn remove_unknown_event_name_is_rejected() {
+        let lua = lua_with_hooks();
+        let remove_fn: Function = crap_hooks(&lua).get("remove").unwrap();
+        let dummy_fn = lua.create_function(|_, ()| Ok(())).unwrap();
+        let result: LuaResult<()> = remove_fn.call(("after_chnage", dummy_fn));
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("unknown event"),
+            "remove on an unknown event must error, got: {err}"
         );
     }
 

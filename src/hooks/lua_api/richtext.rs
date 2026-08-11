@@ -4,7 +4,7 @@ use mlua::{Error::RuntimeError, FromLua, Function, Lua, Result as LuaResult, Tab
 use serde_json::Value as JsonValue;
 use tracing::warn;
 
-use super::parse::{deny_unknown_keys, fields::parse_fields};
+use super::parse::{deny_unknown_keys, fields::parse_fields, get_bool, get_string_strict};
 use crate::core::{
     FieldDefinition, RichtextNodeDef, SharedRegistry,
     richtext::{render_html_custom_nodes, render_prosemirror_to_html},
@@ -79,9 +79,13 @@ impl FromLua for RichtextNodeSpec {
             None => Vec::new(),
         };
 
+        // Strict reads: `tbl.get::<Option<bool>>` applies Lua truthiness to
+        // ANY value (so `inline = "false"` would register as inline TRUE),
+        // and `Option<String>` coerces silently. Use the strict helpers so a
+        // wrong-typed value errors at load, matching the project invariant.
         Ok(Self {
-            label: tbl.get::<Option<String>>("label")?,
-            inline: tbl.get::<Option<bool>>("inline")?.unwrap_or(false),
+            label: get_string_strict(&tbl, "label", "crap.richtext.register_node spec")?,
+            inline: get_bool(&tbl, "inline", false)?,
             attrs,
             searchable_attrs,
             render: tbl.get::<Option<Function>>("render")?,
@@ -108,14 +112,23 @@ const RESERVED_NODE_NAMES: &[&str] = &[
     "hard_break",
 ];
 
-/// Validates that a node name is non-empty, contains only alphanumeric
-/// characters and underscores, and does not collide with a built-in
-/// `ProseMirror` node type (the built-in match arm in the renderer would
-/// shadow the custom render function).
+/// Validates that a node name is non-empty, contains only lowercase ASCII
+/// letters, digits, and underscores, does not start with a digit or
+/// underscore, and does not collide with a built-in `ProseMirror` node type
+/// (the built-in match arm in the renderer would shadow the custom render
+/// function). The charset matches every other identifier in the system
+/// (`validate_slug`) — `is_alphanumeric` used to accept Unicode/uppercase.
 fn validate_node_name(name: &str) -> LuaResult<()> {
-    if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+    let valid = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && !name.starts_with(|c: char| c.is_ascii_digit() || c == '_');
+
+    if !valid {
         return Err(RuntimeError(format!(
-            "Invalid node name '{name}': must be non-empty and contain only alphanumeric characters and underscores"
+            "Invalid node name '{name}': must be non-empty, use only lowercase ASCII letters, \
+             digits, and underscores, and not start with a digit or underscore"
         )));
     }
 
@@ -535,6 +548,54 @@ mod tests {
         assert!(
             err.contains("searchable_attrs") && err.contains("array of strings"),
             "expected searchable_attrs type error, got: {err}"
+        );
+    }
+
+    /// Regression: `inline` was read via mlua's `Option<bool>` conversion,
+    /// which applies Lua truthiness to ANY value — `inline = "false"` (a
+    /// truthy string) silently registered the node as inline TRUE. A
+    /// wrong-typed value must now error.
+    #[test]
+    fn register_node_wrong_typed_inline_rejected() {
+        let (lua, _registry) = setup_lua();
+
+        let err = lua
+            .load(r#"crap.richtext.register_node("cta", { inline = "false" })"#)
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("inline") && err.contains("boolean"),
+            "expected a boolean type error for inline, got: {err}"
+        );
+    }
+
+    /// Regression: `validate_node_name` used the Unicode-aware
+    /// `is_alphanumeric`, accepting uppercase, non-ASCII, and leading
+    /// digits/underscores — diverging from every other identifier rule.
+    #[test]
+    fn register_node_name_must_be_ascii_slug() {
+        for bad in ["CTA", "日本語", "_x", "9x", "my-node"] {
+            let (lua, _registry) = setup_lua();
+            let code = format!(r#"crap.richtext.register_node("{bad}", {{}})"#);
+            let err = lua.load(&code).exec().unwrap_err().to_string();
+            assert!(
+                err.contains("Invalid node name"),
+                "node name '{bad}' should be rejected, got: {err}"
+            );
+        }
+
+        // A valid lowercase-ASCII name still works.
+        let (lua, registry) = setup_lua();
+        lua.load(r#"crap.richtext.register_node("my_node", {})"#)
+            .exec()
+            .unwrap();
+        assert!(
+            registry
+                .read()
+                .unwrap()
+                .get_richtext_node("my_node")
+                .is_some()
         );
     }
 

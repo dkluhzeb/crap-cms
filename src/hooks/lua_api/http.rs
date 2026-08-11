@@ -80,21 +80,30 @@ fn http_request(
 ) -> LuaResult<Table> {
     let r = parse_request_opts(opts)?;
 
+    let original_host = host_of(&r.url);
     let mut current_url = r.url;
     let mut current_client =
         resolve_and_build_client(&current_url, state.allow_private_networks, r.timeout)?;
+    let mut current_method = r.method.clone();
+    let mut current_body = r.body.clone();
     let mut redirects: u8 = 0;
 
     loop {
-        let mut req = current_client.request(r.method.clone(), &current_url);
+        let mut req = current_client.request(current_method.clone(), &current_url);
 
+        // Sensitive headers (Authorization, Cookie, …) are only replayed to
+        // the ORIGINAL host — a redirect to another host must not receive
+        // the caller's credentials (matches reqwest's own redirect policy).
+        let same_host = host_of(&current_url) == original_host;
         for (k, v) in &r.headers {
+            if !same_host && is_sensitive_header(k) {
+                continue;
+            }
+
             req = req.header(k.as_str(), v.as_str());
         }
 
-        if redirects == 0
-            && let Some(ref b) = r.body
-        {
+        if let Some(ref b) = current_body {
             req = req.body(b.clone());
         }
 
@@ -103,6 +112,7 @@ fn http_request(
             .map_err(|e| RuntimeError(format!("HTTP transport error: {e}")))?;
 
         if resp.status().is_redirection() {
+            let status = resp.status().as_u16();
             let next = follow_redirect(
                 &current_url,
                 &resp,
@@ -112,6 +122,20 @@ fn http_request(
             )?;
             current_url = next.0;
             current_client = next.1;
+
+            // Standard redirect semantics: 303 (and 301/302 for non-GET/HEAD)
+            // switch to GET and drop the body; 307/308 preserve method + body.
+            match status {
+                303 => {
+                    current_method = Method::GET;
+                    current_body = None;
+                }
+                301 | 302 if current_method != Method::GET && current_method != Method::HEAD => {
+                    current_method = Method::GET;
+                    current_body = None;
+                }
+                _ => {}
+            }
 
             continue;
         }
@@ -256,6 +280,22 @@ fn follow_redirect(
     Ok((next_url, client))
 }
 
+/// Lowercased host component of a URL, if parseable.
+fn host_of(url: &str) -> Option<String> {
+    Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_lowercase))
+}
+
+/// Headers that carry credentials — never replayed to a different host on
+/// redirect (same list reqwest's redirect policy scrubs).
+fn is_sensitive_header(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "authorization" | "cookie" | "cookie2" | "proxy-authorization" | "www-authenticate"
+    )
+}
+
 /// Build a `HttpResponse` from a `reqwest` response.
 fn build_response_struct(
     resp: reqwest::blocking::Response,
@@ -263,20 +303,39 @@ fn build_response_struct(
 ) -> LuaResult<HttpResponse> {
     let status = i64::from(resp.status().as_u16());
 
-    let headers = resp
-        .headers()
-        .iter()
-        .filter_map(|(name, val)| {
-            val.to_str()
-                .ok()
-                .map(|v| (name.as_str().to_string(), v.to_string()))
-        })
-        .collect();
+    // Duplicate headers (multiple Set-Cookie, Vary, …) are comma-joined
+    // rather than last-wins-dropped; non-UTF-8 values are skipped.
+    let mut headers: HashMap<String, String> = HashMap::new();
+    for (name, val) in resp.headers() {
+        let Ok(v) = val.to_str() else {
+            continue;
+        };
 
-    let mut body = String::new();
-    resp.take(max_bytes)
-        .read_to_string(&mut body)
+        headers
+            .entry(name.as_str().to_string())
+            .and_modify(|existing| {
+                existing.push_str(", ");
+                existing.push_str(v);
+            })
+            .or_insert_with(|| v.to_string());
+    }
+
+    // Read one byte past the cap so an over-limit body is a hard error —
+    // silent truncation handed back corrupted data (truncated JSON parsed
+    // downstream, or a UTF-8 error when the cut landed mid-character).
+    let mut body_bytes = Vec::new();
+    resp.take(max_bytes.saturating_add(1))
+        .read_to_end(&mut body_bytes)
         .map_err(|e| RuntimeError(format!("failed to read response body: {e}")))?;
+
+    if body_bytes.len() as u64 > max_bytes {
+        return Err(RuntimeError(format!(
+            "response body exceeds max_response_bytes ({max_bytes})"
+        )));
+    }
+
+    let body = String::from_utf8(body_bytes)
+        .map_err(|e| RuntimeError(format!("response body is not valid UTF-8: {e}")))?;
 
     Ok(HttpResponse {
         status,
@@ -345,6 +404,21 @@ fn validate_url(url_str: &str) -> StdResult<(String, SocketAddr), String> {
     Err("DNS resolution returned no addresses".to_string())
 }
 
+/// Non-public IPv4 ranges beyond loopback/unspecified: RFC 1918 private,
+/// link-local, CGNAT (100.64.0.0/10 — Tailscale/fly.io internal networks),
+/// IETF protocol assignments (192.0.0.0/24), and benchmarking (198.18.0.0/15).
+fn is_private_v4(v4: std::net::Ipv4Addr) -> bool {
+    let o = v4.octets();
+
+    v4.is_loopback()
+        || v4.is_unspecified()
+        || v4.is_private()
+        || v4.is_link_local()
+        || (o[0] == 100 && (o[1] & 0xc0) == 64)
+        || (o[0] == 192 && o[1] == 0 && o[2] == 0)
+        || (o[0] == 198 && (o[1] & 0xfe) == 18)
+}
+
 /// Check whether an IP address is private/loopback/link-local/unspecified.
 fn is_private_ip(ip: IpAddr) -> bool {
     if ip.is_loopback() || ip.is_unspecified() {
@@ -352,14 +426,13 @@ fn is_private_ip(ip: IpAddr) -> bool {
     }
 
     match ip {
-        IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
+        IpAddr::V4(v4) => is_private_v4(v4),
         IpAddr::V6(v6) => {
-            // Check IPv6-mapped IPv4 (::ffff:x.x.x.x) — extract the inner v4 and re-check
-            if let Some(mapped) = v6.to_ipv4_mapped() {
-                return mapped.is_loopback()
-                    || mapped.is_unspecified()
-                    || mapped.is_private()
-                    || mapped.is_link_local();
+            // IPv6-mapped (::ffff:x.x.x.x) and the deprecated IPv4-compatible
+            // (::x.x.x.x) forms both embed a v4 address — extract and re-check
+            // with the full v4 range list.
+            if let Some(v4) = v6.to_ipv4() {
+                return is_private_v4(v4);
             }
 
             let segments = v6.segments();
@@ -571,5 +644,217 @@ mod tests {
     fn is_private_ip_allows_public_ipv6_mapped() {
         // ::ffff:93.184.215.14 — public via IPv6-mapped
         assert!(!is_private_ip("::ffff:93.184.215.14".parse().unwrap()));
+    }
+
+    /// Regression: CGNAT (100.64.0.0/10 — Tailscale/fly.io internal),
+    /// 192.0.0.0/24, 198.18.0.0/15, and the deprecated IPv4-compatible
+    /// IPv6 form were not blocked.
+    #[test]
+    fn is_private_ip_detects_special_use_ranges() {
+        assert!(is_private_ip("100.64.0.1".parse().unwrap()));
+        assert!(is_private_ip("100.101.102.103".parse().unwrap()));
+        assert!(is_private_ip("100.127.255.255".parse().unwrap()));
+        assert!(is_private_ip("192.0.0.1".parse().unwrap()));
+        assert!(is_private_ip("198.18.0.1".parse().unwrap()));
+        assert!(is_private_ip("198.19.255.255".parse().unwrap()));
+        // IPv4-compatible IPv6 embedding of an RFC1918 address
+        assert!(is_private_ip("::192.168.1.1".parse().unwrap()));
+        // Boundary neighbors stay public
+        assert!(!is_private_ip("100.63.255.255".parse().unwrap()));
+        assert!(!is_private_ip("100.128.0.0".parse().unwrap()));
+        assert!(!is_private_ip("198.17.255.255".parse().unwrap()));
+        assert!(!is_private_ip("198.20.0.0".parse().unwrap()));
+    }
+
+    // ── Scripted local server for redirect / body-limit semantics ──────
+
+    use std::io::Write as _;
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::thread;
+
+    fn headers_end(buf: &[u8]) -> Option<usize> {
+        buf.windows(4).position(|w| w == b"\r\n\r\n")
+    }
+
+    fn content_length(head: &str) -> usize {
+        head.lines()
+            .find_map(|l| {
+                let (name, value) = l.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse().ok())?
+            })
+            .unwrap_or(0)
+    }
+
+    /// Serve one scripted response per incoming connection, capturing each
+    /// raw request. Returns the base URL and the captured-requests channel.
+    fn scripted_server(responses: Vec<String>) -> (String, mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::channel();
+
+        thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 1024];
+
+                loop {
+                    let n = stream.read(&mut tmp).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+
+                    if let Some(pos) = headers_end(&buf) {
+                        let head = String::from_utf8_lossy(&buf[..pos]).to_string();
+                        let want = pos + 4 + content_length(&head);
+                        while buf.len() < want {
+                            let n = stream.read(&mut tmp).unwrap();
+                            if n == 0 {
+                                break;
+                            }
+                            buf.extend_from_slice(&tmp[..n]);
+                        }
+                        break;
+                    }
+                }
+
+                tx.send(String::from_utf8_lossy(&buf).to_string()).unwrap();
+                stream.write_all(response.as_bytes()).unwrap();
+                stream.flush().unwrap();
+            }
+        });
+
+        (format!("http://{addr}"), rx)
+    }
+
+    fn lua_with_http(max_response_bytes: u64) -> Lua {
+        let lua = Lua::new();
+        lua.globals()
+            .set("crap", lua.create_table().unwrap())
+            .unwrap();
+        register_http(&lua, true, max_response_bytes).unwrap();
+        lua
+    }
+
+    fn redirect_resp(status: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\nLocation: /next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+    }
+
+    fn ok_resp(body: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    /// Regression: the redirect loop replayed the method but dropped the
+    /// body on every redirect class — a POST hitting a 307 was replayed
+    /// with an empty body (silent data loss).
+    #[test]
+    fn redirect_307_preserves_method_and_body() {
+        let (base, rx) =
+            scripted_server(vec![redirect_resp("307 Temporary Redirect"), ok_resp("ok")]);
+        let lua = lua_with_http(1024 * 1024);
+
+        let code = format!(
+            r#"
+            local resp = crap.http.request({{
+                url = "{base}/start",
+                method = "POST",
+                body = "hello-body",
+                timeout = 5,
+            }})
+            return resp.status
+            "#
+        );
+        let status: i64 = lua.load(&code).eval().unwrap();
+        assert_eq!(status, 200);
+
+        let _first = rx.recv().unwrap();
+        let second = rx.recv().unwrap();
+        assert!(
+            second.starts_with("POST /next"),
+            "307 must preserve the method, got: {}",
+            second.lines().next().unwrap_or("")
+        );
+        assert!(
+            second.contains("hello-body"),
+            "307 must preserve the body; replayed request:\n{second}"
+        );
+    }
+
+    /// The 303 side of the same regression: See Other must convert the
+    /// replay to GET and drop the body.
+    #[test]
+    fn redirect_303_converts_to_get_and_drops_body() {
+        let (base, rx) = scripted_server(vec![redirect_resp("303 See Other"), ok_resp("ok")]);
+        let lua = lua_with_http(1024 * 1024);
+
+        let code = format!(
+            r#"
+            local resp = crap.http.request({{
+                url = "{base}/start",
+                method = "POST",
+                body = "hello-body",
+                timeout = 5,
+            }})
+            return resp.status
+            "#
+        );
+        let status: i64 = lua.load(&code).eval().unwrap();
+        assert_eq!(status, 200);
+
+        let _first = rx.recv().unwrap();
+        let second = rx.recv().unwrap();
+        assert!(
+            second.starts_with("GET /next"),
+            "303 must convert to GET, got: {}",
+            second.lines().next().unwrap_or("")
+        );
+        assert!(
+            !second.contains("hello-body"),
+            "303 must drop the body; replayed request:\n{second}"
+        );
+    }
+
+    /// Regression: a response over `max_response_bytes` was silently
+    /// truncated (or errored with a confusing UTF-8 message when the cut
+    /// landed mid-character). It must be a hard error; an at-limit
+    /// response still passes.
+    #[test]
+    fn oversized_response_body_is_a_hard_error() {
+        let (base, _rx) = scripted_server(vec![ok_resp("0123456789")]);
+        let lua = lua_with_http(8);
+
+        let code = format!(
+            r#"
+            local resp = crap.http.request({{ url = "{base}/big", timeout = 5 }})
+            return resp.body
+            "#
+        );
+        let err = lua
+            .load(&code)
+            .eval::<String>()
+            .expect_err("over-limit body must error, not truncate");
+        assert!(
+            err.to_string().contains("max_response_bytes"),
+            "unexpected error: {err}"
+        );
+
+        let (base, _rx) = scripted_server(vec![ok_resp("01234567")]);
+        let lua = lua_with_http(8);
+        let code = format!(
+            r#"
+            local resp = crap.http.request({{ url = "{base}/fits", timeout = 5 }})
+            return resp.body
+            "#
+        );
+        let body: String = lua.load(&code).eval().unwrap();
+        assert_eq!(body, "01234567", "at-limit body must pass through intact");
     }
 }
