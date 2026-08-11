@@ -274,7 +274,7 @@ fn recover_stale_jobs_on_full_setup() {
     .unwrap();
 
     // Recover stale jobs
-    scheduler::recover_stale_jobs(&conn, &registry).unwrap();
+    scheduler::recover_stale_jobs(&conn, &registry, 30).unwrap();
 
     let stale = job_query::list_job_runs(&conn, None, Some("stale"), 100, 0).unwrap();
     assert_eq!(stale.len(), 1);

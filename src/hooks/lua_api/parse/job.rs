@@ -221,11 +221,19 @@ mod tests {
 
     /// Regression: `crap.jobs.define` never validated the slug, unlike
     /// collections and globals. An invalid slug (hyphen, uppercase, leading
-    /// underscore) must now be rejected at load.
+    /// underscore) must now be rejected at load. The leading-underscore rule
+    /// also prevents a user job from colliding with a `__`-prefixed system
+    /// pseudo-cron slug (e.g. `__retention_purge`) in `_crap_cron_fired`.
     #[test]
     fn parse_job_definition_rejects_invalid_slug() {
         let lua = Lua::new();
-        for bad in ["my-job", "MyJob", "_hidden", "has space"] {
+        for bad in [
+            "my-job",
+            "MyJob",
+            "_hidden",
+            "__retention_purge",
+            "has space",
+        ] {
             let cfg = from_lua_table(&lua, r#"return { handler = "jobs.x.run" }"#);
             let result = parse_job_definition(bad, cfg);
             assert!(

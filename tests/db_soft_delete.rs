@@ -24,7 +24,6 @@ use crap_cms::core::DocumentFields;
 use crap_cms::core::Registry;
 use crap_cms::core::collection::CollectionDefinition;
 use crap_cms::core::field::{FieldDefinition, FieldType};
-use crap_cms::core::upload::create_storage;
 use crap_cms::db::{DbConnection, DbPool, DbValue, FindQuery, migrate, ops, pool, query};
 use crap_cms::scheduler::purge_soft_deleted;
 
@@ -328,10 +327,12 @@ fn purge_soft_deleted_removes_expired_docs() {
     .unwrap();
     drop(conn);
 
-    // Run purge
-    let conn = pool.get().unwrap();
-    let storage = create_storage(_tmp.path(), &crap_cms::config::UploadConfig::default()).unwrap();
-    let purged = purge_soft_deleted(&conn, &registry, &*storage, &LocaleConfig::default()).unwrap();
+    // Run purge inside an IMMEDIATE transaction (the ref-count lock relies on
+    // it); files are returned for post-commit cleanup.
+    let mut conn = pool.get().unwrap();
+    let tx = conn.transaction_immediate().unwrap();
+    let (purged, _files) = purge_soft_deleted(&tx, &registry, &LocaleConfig::default()).unwrap();
+    tx.commit().unwrap();
     assert_eq!(purged, 1, "should purge exactly the one expired doc");
     drop(conn);
 

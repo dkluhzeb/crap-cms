@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Scheduler behavior changes (stabilization).** Three runtime behaviors
+  changed and are now frozen: (1) a crashed worker's in-flight jobs are
+  **requeued and re-run** by surviving nodes (at-least-once) — **job handlers
+  must be idempotent**; jobs that must never double-run need their own guard;
+  (2) the default job-history retention (`[jobs] auto_purge`) is now **30 days**
+  (was 7) — set it to disable retention entirely, or to a duration to override;
+  (3) frequent cron jobs now fire on **every** due window (a minutely cron
+  previously ran every 2 minutes) — schedules that unintentionally relied on the
+  halved rate will now run at their true frequency.
+
 - **API casing is now uniformly snake_case (pre-freeze stabilization).** The two
   camelCase Lua option keys — `overrideAccess` and `forceHardDelete` — are
   renamed to `override_access` and `force_hard_delete`, and the pagination result
@@ -976,6 +986,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **Frequent cron jobs no longer fire on only every other schedule window.**
+  The multi-node cron dedup guard used a strict `<` comparison against a window
+  boundary the loop reuses as both a window start and the previous window's
+  recorded fire time, so a minutely cron (with the default 60s cron interval)
+  actually ran every *two* minutes. The guard now uses `<=`; cross-node dedup is
+  unaffected.
+
+- **A job whose handler outruns its timeout can no longer double-execute or
+  corrupt state.** `tokio::time::timeout` cannot cancel a `spawn_blocking` task,
+  so a timed-out handler kept running while the loop re-queued the job. The
+  terminal writes (`complete_job`/`fail_job`/`mark_stale`) are now compare-and-set
+  on `(status='running', attempt)`, so a stale write from the still-running
+  original is a harmless no-op instead of clobbering the live retry.
+
+- **Jobs no longer stick in `running` forever after a panic or early error.**
+  A panicked handler, or an execution that errored before writing a terminal
+  status (missing email provider, malformed job data), was only logged — the row
+  stayed `running` and permanently consumed a concurrency slot. The scheduler now
+  transitions such jobs out of `running` via a guarded `fail_job`.
+
+- **A crashed worker's in-flight jobs are now reclaimed by surviving nodes
+  (at-least-once).** The heartbeat was written but never read at runtime — stale
+  recovery ran only at startup and unconditionally marked *every* running job
+  stale (clobbering other live nodes' jobs). Recovery is now heartbeat-threshold
+  based and runs periodically: a dead worker's retryable jobs are **requeued**
+  (a peer re-runs them) and exhausted ones go terminal `stale`; a job with a
+  fresh heartbeat is left untouched. **Job handlers must be idempotent.**
+
+- **The soft-delete retention purge is now transactional.** The per-document
+  ref-count decrement + hard-delete ran on an autocommit connection, so a
+  concurrent create could increment a to-be-purged document's ref count between
+  the check and the delete and leave a dangling reference. The DB half now runs
+  in one IMMEDIATE transaction; upload files are deleted only after it commits.
+
+- **A transient cron-tick error no longer silently drops that window's cron
+  jobs.** `last_cron_check` advanced even when the tick's transaction rolled
+  back; it now advances only on success, so the window is re-covered next tick.
+
+- **The global `max_concurrent` cap is no longer exceeded by overlapping poll
+  ticks.** Poll execution is now single-flighted, so two overlapping polls can't
+  each read a stale running-count and over-claim. Job-row retention purge is also
+  gated behind the same single-winner claim as the soft-delete purge (was
+  redundantly run on every node).
 
 - **Backups and exports now carry a structural `format_version`.** `restore` /
   `import` refuse a file written by a newer format than the binary understands

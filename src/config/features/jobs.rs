@@ -195,7 +195,7 @@ impl Default for JobsConfig {
             poll_interval: 1,
             cron_interval: 60,
             heartbeat_interval: 10,
-            auto_purge: Some(7 * 86400), // 7 days
+            auto_purge: Some(30 * 86400), // 30 days; set to none/"off" to disable
             priority_decay: 0,
             queues: HashMap::new(),
         }
@@ -295,7 +295,7 @@ mod tests {
     #[test]
     fn auto_purge_default_config() {
         let cfg = JobsConfig::default();
-        assert_eq!(cfg.auto_purge, Some(7 * 86400));
+        assert_eq!(cfg.auto_purge, Some(30 * 86400));
     }
 
     #[test]
@@ -305,7 +305,7 @@ mod tests {
         assert_eq!(cfg.poll_interval, 1);
         assert_eq!(cfg.cron_interval, 60);
         assert_eq!(cfg.heartbeat_interval, 10);
-        assert_eq!(cfg.auto_purge, Some(7 * 86400));
+        assert_eq!(cfg.auto_purge, Some(30 * 86400));
         // `queues` is empty in pure Default; `apply_queue_defaults` is
         // what seeds the framework defaults at load time.
         assert!(cfg.queues.is_empty());

@@ -142,7 +142,7 @@ fn complete_job_sets_completed_status() {
         job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
     assert_eq!(claimed.len(), 1);
 
-    job_query::complete_job(&conn, &run.id, Some("{\"done\":true}")).unwrap();
+    job_query::complete_job(&conn, &run.id, 1, Some("{\"done\":true}")).unwrap();
 
     let fetched = job_query::get_job_run(&conn, &run.id).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Completed);
@@ -252,7 +252,7 @@ fn purge_old_jobs() {
         job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default", 0).unwrap();
     let job_concurrency = HashMap::new();
     job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
-    job_query::complete_job(&conn, &run.id, None).unwrap();
+    job_query::complete_job(&conn, &run.id, 1, None).unwrap();
 
     // Backdate created_at so the purge threshold catches it
     conn.execute(
@@ -412,7 +412,7 @@ fn mark_stale_changes_status() {
     let job_concurrency = HashMap::new();
     job_query::claim_pending_jobs(&conn, 5, &job_concurrency, &HashMap::new(), 0).unwrap();
 
-    job_query::mark_stale(&conn, &run.id, "server restarted").unwrap();
+    job_query::mark_stale(&conn, &run.id, 1, "server restarted").unwrap();
 
     let fetched = job_query::get_job_run(&conn, &run.id).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Stale);

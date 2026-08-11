@@ -591,6 +591,15 @@ Wire-contract changes — regenerate your gRPC stubs and adjust:
 
 ## Behavior changes (likely no action)
 
+- **Scheduler reliability + defaults.** A crashed worker's in-flight jobs are
+  now requeued and re-run by surviving nodes (at-least-once) — **make job
+  handlers idempotent** if they aren't already. Job-history retention
+  (`[jobs] auto_purge`) now defaults to **30 days** (was 7; unset it to disable).
+  A latent bug where frequent cron jobs fired on only every other window is
+  fixed, so a minutely cron now runs every minute instead of every two. These
+  are frozen contracts going forward — see the [Frozen Contracts](../internals/frozen-contracts.md)
+  reference.
+
 - **Whole-valued `number` fields now serialize as integers.** Because
   `number` is stored as floating-point, an integer round-tripped through
   the database as `42.0` and was emitted that way on every read surface

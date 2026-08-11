@@ -91,6 +91,8 @@ pub(crate) fn parse_filesize_string(s: &str) -> Option<u64> {
 pub(crate) mod serde_duration {
     use serde::{self, Deserialize, Deserializer, Serializer};
 
+    use crate::config::parsing::parse_duration_string;
+
     pub fn deserialize<'de, D>(deserializer: D) -> Result<u64, D::Error>
     where
         D: Deserializer<'de>,
@@ -105,7 +107,7 @@ pub(crate) mod serde_duration {
         match DurationValue::deserialize(deserializer)? {
             DurationValue::Seconds(s) => Ok(s),
             DurationValue::Human(s) => {
-                super::parse_duration_string(&s).ok_or_else(|| {
+                parse_duration_string(&s).ok_or_else(|| {
                     serde::de::Error::custom(format!(
                         "invalid duration '{s}': use an integer (seconds) or a string like \"30s\", \"5m\", \"2h\", \"7d\""
                     ))
@@ -131,6 +133,8 @@ pub(crate) mod serde_duration {
 pub(crate) mod serde_duration_option {
     use serde::{self, Deserialize, Deserializer, Serializer};
 
+    use crate::config::parsing::parse_duration_string;
+
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
     where
         D: Deserializer<'de>,
@@ -140,22 +144,22 @@ pub(crate) mod serde_duration_option {
         enum DurationValue {
             Seconds(u64),
             Human(String),
+            // `false` = disabled (→ None); `true` is rejected (meaningless).
+            Bool(bool),
         }
 
         let opt: Option<DurationValue> = Option::deserialize(deserializer)?;
         match opt {
-            None => Ok(None),
+            None | Some(DurationValue::Bool(false)) => Ok(None),
+            Some(DurationValue::Bool(true)) => Err(serde::de::Error::custom(
+                "invalid duration: use `false` to disable, or a duration like \"30s\", \"5m\", \"2h\", \"7d\"",
+            )),
             Some(DurationValue::Seconds(s)) => Ok(Some(s)),
-            Some(DurationValue::Human(s)) => {
-                if s.is_empty() {
-                    return Ok(None);
-                }
-                super::parse_duration_string(&s).map(Some).ok_or_else(|| {
-                    serde::de::Error::custom(format!(
-                        "invalid duration '{s}': use an integer (seconds) or a string like \"30s\", \"5m\", \"2h\", \"7d\""
-                    ))
-                })
-            }
+            Some(DurationValue::Human(s)) => parse_duration_string(&s).map(Some).ok_or_else(|| {
+                serde::de::Error::custom(format!(
+                    "invalid duration '{s}': use `false` to disable, an integer (seconds), or a string like \"30s\", \"5m\", \"2h\", \"7d\""
+                ))
+            }),
         }
     }
 
@@ -178,6 +182,8 @@ pub(crate) mod serde_duration_option {
 pub(crate) mod serde_duration_ms {
     use serde::{self, Deserialize, Deserializer, Serializer};
 
+    use crate::config::parsing::parse_duration_string;
+
     pub fn deserialize<'de, D>(deserializer: D) -> Result<u64, D::Error>
     where
         D: Deserializer<'de>,
@@ -192,7 +198,7 @@ pub(crate) mod serde_duration_ms {
         match DurationValue::deserialize(deserializer)? {
             DurationValue::Millis(ms) => Ok(ms),
             DurationValue::Human(s) => {
-                let secs = super::parse_duration_string(&s).ok_or_else(|| {
+                let secs = parse_duration_string(&s).ok_or_else(|| {
                     serde::de::Error::custom(format!(
                         "invalid duration '{s}': use an integer (milliseconds) or a string like \"30s\", \"5m\", \"2h\""
                     ))
@@ -501,7 +507,33 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         std::fs::write(tmp.path().join("crap.toml"), "[jobs]\nmax_concurrent = 5\n").unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
-        assert_eq!(config.jobs.auto_purge, Some(7 * 86400)); // default
+        assert_eq!(config.jobs.auto_purge, Some(30 * 86400)); // default 30 days
+    }
+
+    /// `auto_purge = false` disables retention (→ None). Omitting the field
+    /// uses the default; `false` is the explicit opt-out.
+    #[test]
+    fn serde_duration_option_false_disables() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("crap.toml"), "[jobs]\nauto_purge = false\n").unwrap();
+        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        assert_eq!(config.jobs.auto_purge, None);
+    }
+
+    /// An empty string is no longer a magic "disable" value — it's rejected
+    /// with a message pointing at `false`.
+    #[test]
+    fn serde_duration_option_empty_string_is_rejected() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("crap.toml"), "[jobs]\nauto_purge = \"\"\n").unwrap();
+        let err = format!(
+            "{:#}",
+            crate::config::CrapConfig::load(tmp.path()).unwrap_err()
+        );
+        assert!(
+            err.contains("false"),
+            "error should point at `false`, got: {err}"
+        );
     }
 
     /// BUG-4 regression: a filesize value that would overflow u64 when

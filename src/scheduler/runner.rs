@@ -11,11 +11,9 @@ use tracing::{debug, error, info, warn};
 use crate::{
     config::LocaleConfig,
     core::{
-        CollectionDefinition, JobDefinition, JobRun, Registry,
+        CollectionDefinition, DocumentFields, JobDefinition, JobRun, Registry,
         email::{EmailJobData, EmailProvider, SYSTEM_EMAIL_JOB},
-        upload::{
-            self, ImageConvertJobData, SYSTEM_IMAGE_CONVERT_JOB, SharedStorage, StorageBackend,
-        },
+        upload::{self, ImageConvertJobData, SYSTEM_IMAGE_CONVERT_JOB, SharedStorage},
     },
     db::{DbConnection, DbPool, DbValue, query, query::jobs as job_query},
     hooks::HookRunner,
@@ -72,7 +70,7 @@ pub fn execute_job(
                 .get()
                 .context("Failed to get DB connection for completion")?;
 
-            job_query::complete_job(&c, &job_run.id, result_json.as_deref())?;
+            job_query::complete_job(&c, &job_run.id, job_run.attempt, result_json.as_deref())?;
 
             let elapsed = start.elapsed();
 
@@ -127,7 +125,7 @@ fn execute_system_email(
                 .get()
                 .context("Failed to get DB connection for email job completion")?;
 
-            job_query::complete_job(&c, &job_run.id, None)?;
+            job_query::complete_job(&c, &job_run.id, job_run.attempt, None)?;
 
             let elapsed = start.elapsed();
 
@@ -237,7 +235,7 @@ fn execute_system_image_convert(
             )
             .context("Failed to update document URL column")?;
 
-            job_query::complete_job(&tx, &job_run.id, None)?;
+            job_query::complete_job(&tx, &job_run.id, job_run.attempt, None)?;
 
             tx.commit()
                 .context("Failed to commit image-convert completion transaction")?;
@@ -376,24 +374,62 @@ pub fn check_cron_schedules(
 /// # Errors
 ///
 /// Returns an error if listing stale jobs or marking any one stale fails.
-pub fn recover_stale_jobs(conn: &dyn DbConnection, registry: &Registry) -> Result<()> {
-    // Find all running jobs — on startup, these are stale (server was restarted)
-    let stale = job_query::find_stale_jobs(conn, 0)?;
+/// Recover jobs whose owning worker died mid-execution (heartbeat expired).
+///
+/// A `running` row whose `heartbeat_at` is older than `stale_threshold_secs`
+/// (or null) is assumed dead — its worker stopped heartbeating. This is the
+/// at-least-once delivery guarantee: a retryable dead job is **requeued** (so a
+/// surviving peer re-runs it) and an exhausted one is marked terminal `stale`.
+///
+/// Runs both at startup (recover this node's own pre-crash jobs) and
+/// periodically at runtime (any node reclaims a crashed peer's jobs). The
+/// threshold MUST exceed the heartbeat interval so a merely-slow heartbeat
+/// doesn't wrongly reclaim a live job; the caller passes
+/// `heartbeat_interval * N`. All writes are compare-and-set on
+/// `(running, attempt)` so two nodes recovering the same job — or the original
+/// worker briefly resuming — cannot double-act or clobber the result.
+pub fn recover_stale_jobs(
+    conn: &dyn DbConnection,
+    registry: &Registry,
+    stale_threshold_secs: u64,
+) -> Result<()> {
+    let stale = job_query::find_stale_jobs(conn, stale_threshold_secs)?;
+
+    let mut requeued = 0u32;
+    let mut terminal = 0u32;
 
     for job in &stale {
-        let timeout = registry
-            .jobs
-            .get(job.slug.as_str())
-            .map_or(60, |d| d.timeout);
+        let _ = registry.jobs.get(job.slug.as_str()); // slug may be undefined; still recover
 
-        // Any job that was running when we started is stale
-        let error = format!("stale: server restarted (was running, timeout={timeout}s)");
-        job_query::mark_stale(conn, &job.id, &error)?;
-        info!("Marked stale job {} ({})", job.id, job.slug);
+        if job.attempt < job.max_attempts {
+            // Retryable → requeue with backoff (guarded on running+attempt).
+            job_query::fail_job(
+                conn,
+                &job.id,
+                "stale: worker heartbeat expired, requeued",
+                true,
+                job.attempt,
+            )?;
+            requeued += 1;
+            info!(
+                "Requeued stale job {} ({}) attempt {}/{}",
+                job.id, job.slug, job.attempt, job.max_attempts
+            );
+        } else {
+            // Retries exhausted → terminal stale (guarded).
+            job_query::mark_stale(
+                conn,
+                &job.id,
+                job.attempt,
+                "stale: worker heartbeat expired, retries exhausted",
+            )?;
+            terminal += 1;
+            info!("Marked stale job {} ({})", job.id, job.slug);
+        }
     }
 
-    if !stale.is_empty() {
-        info!("Recovered {} stale job(s)", stale.len());
+    if requeued > 0 || terminal > 0 {
+        info!("Recovered stale jobs: {requeued} requeued, {terminal} terminal");
     }
 
     Ok(())
@@ -426,13 +462,24 @@ pub(crate) fn parse_retention_seconds(s: &str) -> Option<i64> {
 /// # Errors
 ///
 /// Returns an error if the collection scan, upload cleanup, or hard-delete fails.
+/// Do the transactional DB half of the retention purge (ref-count check +
+/// decrement + hard delete). Returns the number of docs deleted and the field
+/// maps of any deleted upload documents, whose files the CALLER must delete
+/// **after committing** — so a crash/rollback leaves orphaned files (safe)
+/// rather than DB rows pointing at deleted files (unsafe).
+///
+/// `conn` MUST be an IMMEDIATE transaction: the per-doc `get_ref_count_locked`
+/// → `before_hard_delete` → `delete` sequence relies on it being atomic
+/// (`SQLite` serializes writers; Postgres holds the `FOR UPDATE` lock until
+/// commit) so a concurrent create can't increment a to-be-purged doc's
+/// ref count between the read and the delete and leave a dangling reference.
 pub fn purge_soft_deleted(
     conn: &dyn DbConnection,
     registry: &Registry,
-    storage: &dyn StorageBackend,
     locale_config: &LocaleConfig,
-) -> Result<u64> {
+) -> Result<(u64, Vec<DocumentFields>)> {
     let mut total = 0u64;
+    let mut files_to_clean = Vec::new();
 
     for (slug, def) in &registry.collections {
         if !def.soft_delete {
@@ -451,18 +498,18 @@ pub fn purge_soft_deleted(
             continue;
         };
 
-        let purged = purge_collection(&PurgeCollectionInput {
+        let (purged, mut files) = purge_collection(&PurgeCollectionInput {
             conn,
             slug,
             def,
             retention_seconds: seconds,
-            storage,
             locale_config,
         })?;
         total += purged;
+        files_to_clean.append(&mut files);
     }
 
-    Ok(total)
+    Ok((total, files_to_clean))
 }
 
 /// Purge expired soft-deleted documents from a single collection.
@@ -476,11 +523,10 @@ struct PurgeCollectionInput<'a> {
     slug: &'a str,
     def: &'a CollectionDefinition,
     retention_seconds: i64,
-    storage: &'a dyn StorageBackend,
     locale_config: &'a LocaleConfig,
 }
 
-fn purge_collection(p: &PurgeCollectionInput<'_>) -> Result<u64> {
+fn purge_collection(p: &PurgeCollectionInput<'_>) -> Result<(u64, Vec<DocumentFields>)> {
     // Find docs past the retention threshold
     let (offset_sql, offset_param) = p.conn.date_offset_expr(p.retention_seconds, 1);
     let threshold_sql = format!(
@@ -514,17 +560,21 @@ fn purge_collection(p: &PurgeCollectionInput<'_>) -> Result<u64> {
         // Decrement ref counts on targets before hard delete (CASCADE removes junction rows)
         query::ref_count::before_hard_delete(p.conn, p.slug, &id, &p.def.fields, p.locale_config)?;
 
-        // Collect upload file paths BEFORE deleting from DB
+        // Collect upload file field-maps BEFORE deleting from DB; the caller
+        // deletes the actual files after committing the transaction.
         if p.def.is_upload_collection()
             && let Ok(Some(doc)) = query::find_by_id_unfiltered(p.conn, p.slug, p.def, &id, None)
         {
-            upload_docs.push(doc);
+            upload_docs.push(doc.fields);
         }
 
         // Cancel pending image conversions — see
-        // `core/upload/queue.rs::delete_image_jobs_for_document`.
+        // `core/upload/queue.rs::delete_image_jobs_for_document`. A failure
+        // here only orphans a pending conversion job (it will no-op on a
+        // missing doc), so log and continue rather than abort the purge.
         if p.def.is_upload_collection() {
-            let _ = upload::delete_image_jobs_for_document(p.conn, p.slug, &id);
+            let _ = upload::delete_image_jobs_for_document(p.conn, p.slug, &id)
+                .inspect_err(|e| warn!("Failed to cancel image jobs for {}/{}: {e}", p.slug, id));
         }
 
         // Clean up FTS index before hard delete
@@ -537,13 +587,6 @@ fn purge_collection(p: &PurgeCollectionInput<'_>) -> Result<u64> {
         purged += 1;
     }
 
-    // Delete files AFTER all DB deletes have succeeded.
-    // If the process crashes here, we get orphaned files (harmless)
-    // rather than DB records pointing to missing files (harmful).
-    for doc in &upload_docs {
-        upload::delete_upload_files(p.storage, &doc.fields);
-    }
-
     if purged > 0 {
         info!(
             "Purged {} expired soft-deleted doc(s) from '{}'",
@@ -551,7 +594,7 @@ fn purge_collection(p: &PurgeCollectionInput<'_>) -> Result<u64> {
         );
     }
 
-    Ok(purged)
+    Ok((purged, upload_docs))
 }
 
 /// Dedup slug used to claim the retention-purge cron tick via
@@ -761,117 +804,143 @@ mod tests {
         Registry::snapshot(&shared)
     }
 
+    const TEST_STALE_THRESHOLD: u64 = 30;
+
+    /// At-least-once: a dead (stale-heartbeat) job that still has retries left
+    /// is REQUEUED (→ pending), so a surviving peer re-runs it.
     #[test]
-    fn recover_stale_jobs_marks_running_as_stale() {
+    fn recover_requeues_retryable_stale_job() {
         let pool = make_test_pool();
         let conn = pool.get().unwrap();
         let registry = make_registry_with_jobs(vec![
-            JobDefinition::builder("my_job", "some.handler")
-                .timeout(120)
-                .build(),
+            JobDefinition::builder("my_job", "some.handler").build(),
         ]);
 
-        // Insert a running job (simulates server crash with running job)
+        // Running at attempt 1 of 3, heartbeat 600s stale (worker died).
+        job_query::insert_job(&conn, "my_job", "{}", "manual", 3, "default", 0).unwrap();
+        conn.execute_batch(
+            "UPDATE _crap_jobs SET status = 'running', attempt = 1, \
+             heartbeat_at = datetime('now', '-600 seconds')",
+        )
+        .unwrap();
+
+        recover_stale_jobs(&conn, &registry, TEST_STALE_THRESHOLD).unwrap();
+
+        let pending = job_query::list_job_runs(&conn, None, Some("pending"), 100, 0).unwrap();
+        assert_eq!(pending.len(), 1, "retryable stale job must be requeued");
+        assert_eq!(
+            job_query::list_job_runs(&conn, None, Some("stale"), 100, 0)
+                .unwrap()
+                .len(),
+            0
+        );
+    }
+
+    /// A dead job that has exhausted its retries goes terminal `stale`.
+    #[test]
+    fn recover_marks_exhausted_stale_job_terminal() {
+        let pool = make_test_pool();
+        let conn = pool.get().unwrap();
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition::builder("my_job", "some.handler").build(),
+        ]);
+
+        // Running at attempt 1 of 1 (no retries left).
         job_query::insert_job(&conn, "my_job", "{}", "manual", 1, "default", 0).unwrap();
         conn.execute_batch(
-            "UPDATE _crap_jobs SET status = 'running', heartbeat_at = datetime('now', '-600 seconds')",
-        ).unwrap();
+            "UPDATE _crap_jobs SET status = 'running', attempt = 1, \
+             heartbeat_at = datetime('now', '-600 seconds')",
+        )
+        .unwrap();
 
-        recover_stale_jobs(&conn, &registry).unwrap();
+        recover_stale_jobs(&conn, &registry, TEST_STALE_THRESHOLD).unwrap();
 
-        let jobs = job_query::list_job_runs(&conn, None, Some("stale"), 100, 0).unwrap();
-        assert_eq!(jobs.len(), 1);
+        let stale = job_query::list_job_runs(&conn, None, Some("stale"), 100, 0).unwrap();
+        assert_eq!(stale.len(), 1);
         assert!(
-            jobs[0]
+            stale[0]
                 .error
                 .as_ref()
                 .unwrap()
-                .contains("stale: server restarted")
+                .contains("heartbeat expired")
         );
-        assert!(jobs[0].error.as_ref().unwrap().contains("timeout=120s"));
     }
 
+    /// The multi-node fix: a running job with a FRESH heartbeat belongs to a
+    /// live peer and must NOT be recovered.
     #[test]
-    fn recover_stale_jobs_uses_job_timeout() {
+    fn recover_ignores_fresh_heartbeat_job() {
         let pool = make_test_pool();
         let conn = pool.get().unwrap();
         let registry = make_registry_with_jobs(vec![
-            JobDefinition::builder("long_job", "some.handler")
-                .timeout(3600)
-                .build(), // 1 hour
+            JobDefinition::builder("my_job", "some.handler").build(),
         ]);
 
-        job_query::insert_job(&conn, "long_job", "{}", "manual", 1, "default", 0).unwrap();
+        job_query::insert_job(&conn, "my_job", "{}", "manual", 3, "default", 0).unwrap();
         conn.execute_batch(
-            "UPDATE _crap_jobs SET status = 'running', heartbeat_at = datetime('now', '-600 seconds')",
-        ).unwrap();
+            "UPDATE _crap_jobs SET status = 'running', attempt = 1, heartbeat_at = datetime('now')",
+        )
+        .unwrap();
 
-        recover_stale_jobs(&conn, &registry).unwrap();
+        recover_stale_jobs(&conn, &registry, TEST_STALE_THRESHOLD).unwrap();
 
-        let jobs = job_query::list_job_runs(&conn, None, Some("stale"), 100, 0).unwrap();
-        assert_eq!(jobs.len(), 1);
-        assert!(jobs[0].error.as_ref().unwrap().contains("timeout=3600s"));
+        // Untouched: still running, not requeued, not stale.
+        assert_eq!(
+            job_query::list_job_runs(&conn, None, Some("running"), 100, 0)
+                .unwrap()
+                .len(),
+            1,
+            "a live peer's fresh-heartbeat job must not be reclaimed"
+        );
     }
 
     #[test]
-    fn recover_stale_jobs_default_timeout_for_unknown_slug() {
-        let pool = make_test_pool();
-        let conn = pool.get().unwrap();
-        // Registry has no job definitions — slug not found, uses default timeout=60
-        let registry = make_registry_with_jobs(vec![]);
-
-        job_query::insert_job(&conn, "unknown_job", "{}", "manual", 1, "default", 0).unwrap();
-        conn.execute_batch(
-            "UPDATE _crap_jobs SET status = 'running', heartbeat_at = datetime('now', '-600 seconds')",
-        ).unwrap();
-
-        recover_stale_jobs(&conn, &registry).unwrap();
-
-        let jobs = job_query::list_job_runs(&conn, None, Some("stale"), 100, 0).unwrap();
-        assert_eq!(jobs.len(), 1);
-        assert!(jobs[0].error.as_ref().unwrap().contains("timeout=60s"));
-    }
-
-    #[test]
-    fn recover_stale_jobs_no_running_is_noop() {
+    fn recover_ignores_pending_job() {
         let pool = make_test_pool();
         let conn = pool.get().unwrap();
         let registry = make_registry_with_jobs(vec![]);
 
-        // Insert a pending job — should not be affected
         job_query::insert_job(&conn, "my_job", "{}", "manual", 1, "default", 0).unwrap();
 
-        recover_stale_jobs(&conn, &registry).unwrap();
+        recover_stale_jobs(&conn, &registry, TEST_STALE_THRESHOLD).unwrap();
 
-        let stale = job_query::list_job_runs(&conn, None, Some("stale"), 100, 0).unwrap();
-        assert_eq!(stale.len(), 0);
-
-        let pending = job_query::list_job_runs(&conn, None, Some("pending"), 100, 0).unwrap();
-        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            job_query::list_job_runs(&conn, None, Some("stale"), 100, 0)
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            job_query::list_job_runs(&conn, None, Some("pending"), 100, 0)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
-    fn recover_stale_jobs_multiple_running() {
+    fn recover_multiple_running() {
         let pool = make_test_pool();
         let conn = pool.get().unwrap();
         let registry = make_registry_with_jobs(vec![
-            JobDefinition::builder("job_a", "handler_a")
-                .timeout(60)
-                .build(),
-            JobDefinition::builder("job_b", "handler_b")
-                .timeout(120)
-                .build(),
+            JobDefinition::builder("job_a", "handler_a").build(),
+            JobDefinition::builder("job_b", "handler_b").build(),
         ]);
 
-        job_query::insert_job(&conn, "job_a", "{}", "manual", 1, "default", 0).unwrap();
-        job_query::insert_job(&conn, "job_b", "{}", "manual", 1, "default", 0).unwrap();
-        conn.execute_batch("UPDATE _crap_jobs SET status = 'running'")
+        // Both retryable + stale (null heartbeat) → both requeued.
+        job_query::insert_job(&conn, "job_a", "{}", "manual", 3, "default", 0).unwrap();
+        job_query::insert_job(&conn, "job_b", "{}", "manual", 3, "default", 0).unwrap();
+        conn.execute_batch("UPDATE _crap_jobs SET status = 'running', attempt = 1")
             .unwrap();
 
-        recover_stale_jobs(&conn, &registry).unwrap();
+        recover_stale_jobs(&conn, &registry, TEST_STALE_THRESHOLD).unwrap();
 
-        let stale = job_query::list_job_runs(&conn, None, Some("stale"), 100, 0).unwrap();
-        assert_eq!(stale.len(), 2);
+        assert_eq!(
+            job_query::list_job_runs(&conn, None, Some("pending"), 100, 0)
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     // ── check_cron_schedules (unit-level with in-memory DB + pool) ──────

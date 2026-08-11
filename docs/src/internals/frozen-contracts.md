@@ -91,6 +91,33 @@ stored data, or clients.
   union of allowed views that downgrades rather than erroring. Changing a
   fallback target silently re-permissions every config that omits that key.
 
+## Scheduler & jobs
+
+- **`JobStatus` value set** `{pending, running, completed, failed, stale}`
+  (lowercase) — stored in `_crap_jobs.status`, matched in SQL, and surfaced to
+  clients. Adding a value is a forward-compat break for older cluster nodes
+  (which parse an unknown status back to `pending`); renaming breaks stored rows.
+- **`_crap_jobs` columns** are append-only-text: `data`/`result`/`error` are
+  free TEXT, read positionally. `scheduled_by` is a free-form provenance string
+  (`cron`/`hook`/`api`/`grpc`/`manual`/`system`…) clients may match on.
+- **`_crap_cron_fired` dedup key** = bare `slug`, window encoded in the `fired_at`
+  value; system pseudo-crons use `__`-prefixed slugs (`__retention_purge`), which
+  is why user job slugs cannot start with `_`.
+- **Delivery guarantee = at-least-once.** A job that times out, or whose worker
+  crashes (heartbeat expires past `heartbeat_interval × 3`), is **requeued** and
+  re-runs; an exhausted one goes terminal `stale`. **Handlers must be
+  idempotent.** `max_attempts = retries + 1`.
+- **Retry backoff curve** `min(2^(attempt-1) × 5, 300)` seconds — 5,10,20,…,300 —
+  hardcoded, no config knob.
+- **Cron** is UTC-only, does **not** catch up after downtime (missed runs are
+  dropped), and coalesces multiple missed occurrences to one fire. Accepts 5-field
+  (seconds prepended) or 6/7-field (leading field = seconds) expressions.
+- **`[jobs]` / `[jobs.queues.<name>]` config keys** and the `Option<T>` tri-state
+  (`None` = inherit default, `Some(0)` = operator-chosen unlimited/none) are
+  frozen; `deny_unknown_fields` rejects typos. `auto_purge` defaults to 30 days;
+  `auto_purge = false` disables it (an empty string is rejected, not a disable
+  sentinel).
+
 ## Project layout / CLI
 
 - **Discovery directories** `collections/` `globals/` `jobs/` `hooks/` and the

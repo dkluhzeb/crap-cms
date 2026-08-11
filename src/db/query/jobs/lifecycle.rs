@@ -242,20 +242,43 @@ fn find_active_by_unique_key(
 /// # Errors
 ///
 /// Returns a backend error if the UPDATE fails.
-pub fn complete_job(conn: &dyn DbConnection, id: &str, result_json: Option<&str>) -> Result<()> {
+/// Mark a job completed. Compare-and-set: only applies while the row is still
+/// the SAME running execution (`status = 'running' AND attempt = ?`).
+///
+/// This is load-bearing for correctness under timeout. `tokio::time::timeout`
+/// cannot cancel a `spawn_blocking` task, so a handler that outran its timeout
+/// keeps running while the loop already re-queued the job (`fail_job` set it
+/// back to `pending`, possibly re-claimed at a higher `attempt`). Without the
+/// guard, the zombie's late `complete_job` would clobber that live state
+/// (flipping a re-queued or failed row to `completed`). With it, the stale
+/// write is a harmless no-op. `attempt` is the executing run's attempt number.
+pub fn complete_job(
+    conn: &dyn DbConnection,
+    id: &str,
+    attempt: u32,
+    result_json: Option<&str>,
+) -> Result<()> {
     let result_val = match result_json {
         Some(r) => DbValue::Text(r.to_string()),
         None => DbValue::Null,
     };
-    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+    let (p1, p2, p3) = (
+        conn.placeholder(1),
+        conn.placeholder(2),
+        conn.placeholder(3),
+    );
 
     conn.execute(
         &format!(
             "UPDATE _crap_jobs SET status = 'completed', result = {p2}, completed_at = {}
-         WHERE id = {p1}",
+         WHERE id = {p1} AND status = 'running' AND attempt = {p3}",
             conn.now_expr()
         ),
-        &[DbValue::Text(id.to_string()), result_val],
+        &[
+            DbValue::Text(id.to_string()),
+            result_val,
+            DbValue::Integer(i64::from(attempt)),
+        ],
     )
     .context("Failed to complete job")?;
 
@@ -296,31 +319,39 @@ pub fn fail_job(
         // (the previous hardcoded "+N seconds" text param was SQLite-only and
         // is a type error against Postgres `make_interval`).
         let (offset_sql, offset_param) = conn.date_offset_expr(-delay, 3);
+        let p4 = conn.placeholder(4);
 
+        // Compare-and-set on (running, attempt) — see `complete_job`: a stale
+        // zombie write from a timed-out execution must not resurrect or
+        // re-fail a row the loop already moved on from.
         conn.execute(
             &format!(
                 "UPDATE _crap_jobs SET status = 'pending', error = {p2}, \
                  started_at = NULL, completed_at = NULL, heartbeat_at = NULL, \
                  retry_after = {offset_sql} \
-                 WHERE id = {p1}"
+                 WHERE id = {p1} AND status = 'running' AND attempt = {p4}"
             ),
             &[
                 DbValue::Text(id.to_string()),
                 DbValue::Text(error.to_string()),
                 offset_param,
+                DbValue::Integer(i64::from(attempt)),
             ],
         )
         .context("Failed to retry job")?;
     } else {
+        let p3 = conn.placeholder(3);
+
         conn.execute(
             &format!(
                 "UPDATE _crap_jobs SET status = 'failed', error = {p2}, completed_at = {}
-             WHERE id = {p1}",
+             WHERE id = {p1} AND status = 'running' AND attempt = {p3}",
                 conn.now_expr()
             ),
             &[
                 DbValue::Text(id.to_string()),
                 DbValue::Text(error.to_string()),
+                DbValue::Integer(i64::from(attempt)),
             ],
         )
         .context("Failed to fail job")?;
@@ -353,17 +384,24 @@ pub fn update_heartbeat(conn: &dyn DbConnection, id: &str) -> Result<()> {
 /// # Errors
 ///
 /// Returns a backend error if the UPDATE fails.
-pub fn mark_stale(conn: &dyn DbConnection, id: &str, error: &str) -> Result<()> {
-    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+pub fn mark_stale(conn: &dyn DbConnection, id: &str, attempt: u32, error: &str) -> Result<()> {
+    let (p1, p2, p3) = (
+        conn.placeholder(1),
+        conn.placeholder(2),
+        conn.placeholder(3),
+    );
+    // Compare-and-set on (running, attempt) — a peer that already reclaimed or
+    // completed this job, or a concurrent recoverer, must not be clobbered.
     conn.execute(
         &format!(
             "UPDATE _crap_jobs SET status = 'stale', error = {p2}, completed_at = {}
-         WHERE id = {p1}",
+         WHERE id = {p1} AND status = 'running' AND attempt = {p3}",
             conn.now_expr()
         ),
         &[
             DbValue::Text(id.to_string()),
             DbValue::Text(error.to_string()),
+            DbValue::Integer(i64::from(attempt)),
         ],
     )?;
 
@@ -393,17 +431,54 @@ mod tests {
     fn test_complete_job() {
         let (_dir, conn) = setup_db();
         let job = insert_job(&conn, "test", "{}", "manual", 1, "default", 0).unwrap();
-        // Claim it first
+        // Claim it first (running at attempt 1, mirroring a real claim).
         conn.execute(
-            "UPDATE _crap_jobs SET status = 'running' WHERE id = ?1",
+            "UPDATE _crap_jobs SET status = 'running', attempt = 1 WHERE id = ?1",
             &[DbValue::Text(job.id.clone())],
         )
         .unwrap();
 
-        complete_job(&conn, &job.id, Some("{\"ok\":true}")).unwrap();
+        complete_job(&conn, &job.id, 1, Some("{\"ok\":true}")).unwrap();
         let fetched = get_job_run(&conn, &job.id).unwrap().unwrap();
         assert_eq!(fetched.status, JobStatus::Completed);
         assert_eq!(fetched.result.as_deref(), Some("{\"ok\":true}"));
+    }
+
+    /// Regression: the terminal writes are compare-and-set on (running,
+    /// attempt), so a stale write from a timed-out zombie execution (wrong
+    /// attempt, or a row already re-queued) is a no-op and cannot clobber the
+    /// live state.
+    #[test]
+    fn terminal_writes_are_guarded_by_running_and_attempt() {
+        let (_dir, conn) = setup_db();
+        let job = insert_job(&conn, "test", "{}", "manual", 3, "default", 0).unwrap();
+        // Row is now running at attempt 2 (the live retry).
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'running', attempt = 2 WHERE id = ?1",
+            &[DbValue::Text(job.id.clone())],
+        )
+        .unwrap();
+
+        // A zombie from attempt 1 tries to complete — must be a no-op.
+        complete_job(&conn, &job.id, 1, Some("stale")).unwrap();
+        assert_eq!(
+            get_job_run(&conn, &job.id).unwrap().unwrap().status,
+            JobStatus::Running,
+            "stale complete at wrong attempt must not clobber the running row"
+        );
+
+        // A zombie from attempt 1 tries to fail — also a no-op.
+        fail_job(&conn, &job.id, "stale", false, 1).unwrap();
+        assert_eq!(
+            get_job_run(&conn, &job.id).unwrap().unwrap().status,
+            JobStatus::Running
+        );
+
+        // The live execution (attempt 2) completes normally.
+        complete_job(&conn, &job.id, 2, Some("real")).unwrap();
+        let f = get_job_run(&conn, &job.id).unwrap().unwrap();
+        assert_eq!(f.status, JobStatus::Completed);
+        assert_eq!(f.result.as_deref(), Some("real"));
     }
 
     #[test]
@@ -411,7 +486,7 @@ mod tests {
         let (_dir, conn) = setup_db();
         let job = insert_job(&conn, "test", "{}", "manual", 1, "default", 0).unwrap();
         conn.execute(
-            "UPDATE _crap_jobs SET status = 'running' WHERE id = ?1",
+            "UPDATE _crap_jobs SET status = 'running', attempt = 1 WHERE id = ?1",
             &[DbValue::Text(job.id.clone())],
         )
         .unwrap();
@@ -463,12 +538,12 @@ mod tests {
         let (_dir, conn) = setup_db();
         let job = insert_job(&conn, "test", "{}", "manual", 1, "default", 0).unwrap();
         conn.execute(
-            "UPDATE _crap_jobs SET status = 'running' WHERE id = ?1",
+            "UPDATE _crap_jobs SET status = 'running', attempt = 1 WHERE id = ?1",
             &[DbValue::Text(job.id.clone())],
         )
         .unwrap();
 
-        mark_stale(&conn, &job.id, "heartbeat timeout").unwrap();
+        mark_stale(&conn, &job.id, 1, "heartbeat timeout").unwrap();
         let fetched = get_job_run(&conn, &job.id).unwrap().unwrap();
         assert_eq!(fetched.status, JobStatus::Stale);
         assert_eq!(fetched.error.as_deref(), Some("heartbeat timeout"));

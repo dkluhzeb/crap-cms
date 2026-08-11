@@ -2,7 +2,10 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use anyhow::{Context as _, Result};
@@ -16,9 +19,9 @@ use tracing::{debug, error, info, warn};
 use crate::{
     config::{JobsConfig, LocaleConfig},
     core::{
-        JobDefinition, JobRun, Registry, SharedEmailProvider, SharedStorage,
+        DocumentFields, JobDefinition, JobRun, Registry, SharedEmailProvider, SharedStorage,
         email::{SYSTEM_EMAIL_JOB, SYSTEM_EMAIL_QUEUE},
-        upload::{IMAGE_CONVERT_QUEUE, SYSTEM_IMAGE_CONVERT_JOB},
+        upload::{IMAGE_CONVERT_QUEUE, SYSTEM_IMAGE_CONVERT_JOB, delete_upload_files},
     },
     db::{BoxedConnection, DbConnection, DbPool, query::jobs as job_query},
     hooks::HookRunner,
@@ -56,7 +59,14 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
 
     warn_unused_queue_config(&config, &registry);
 
-    recover_on_startup(&pool, &registry)?;
+    // A `running` job is assumed dead once its heartbeat is older than this.
+    // Must exceed the heartbeat interval (a merely-slow heartbeat must not
+    // reclaim a live job); 3× gives two missed beats of slack.
+    let stale_threshold_secs = config
+        .heartbeat_interval
+        .saturating_mul(STALE_HEARTBEAT_MULTIPLIER);
+
+    recover_on_startup(&pool, &registry, stale_threshold_secs)?;
 
     let poll_interval = Duration::from_secs(config.poll_interval);
     let cron_interval = Duration::from_secs(config.cron_interval);
@@ -75,6 +85,11 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
     let mut heartbeat_ticker = interval(heartbeat_interval);
 
     let running_jobs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    // Single-flight guard for the poll: at most one `poll_and_execute` runs at
+    // a time. Without it, two overlapping poll tasks each read the same stale
+    // `count_running` before either claim commits and each claim up to
+    // `available`, pushing running past the global `max_concurrent` cap.
+    let poll_in_flight = Arc::new(AtomicBool::new(false));
     let mut last_cron_check = Utc::now();
     let mut purge_counter: u64 = 0;
 
@@ -85,10 +100,16 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
                 break Ok(());
             }
             _ = poll_ticker.tick() => {
+                // Skip this tick if the previous poll is still in flight.
+                if poll_in_flight.swap(true, Ordering::SeqCst) {
+                    continue;
+                }
+
                 let pool = pool.clone();
                 let hook_runner = hook_runner.clone();
                 let registry = Arc::clone(&registry);
                 let running_jobs = running_jobs.clone();
+                let poll_in_flight = poll_in_flight.clone();
                 let max_concurrent = config.max_concurrent;
 
                 let ep = email_provider.clone();
@@ -105,18 +126,23 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
                     ) {
                         error!("Scheduler poll error: {}", e);
                     }
+                    // Release the single-flight guard once this poll finishes.
+                    poll_in_flight.store(false, Ordering::SeqCst);
                 });
             }
             _ = cron_ticker.tick() => {
                 let now = Utc::now();
 
-                if let Err(e) =
-                    check_cron_schedules(&pool, &registry, last_cron_check, now, &queue_retries)
-                {
-                    error!("Scheduler cron error: {}", e);
+                // Only advance `last_cron_check` when the tick SUCCEEDS. The
+                // whole tick runs in one transaction; a transient failure
+                // rolls back every slug's enqueue for the window `(last_check,
+                // now]`, so advancing unconditionally would silently drop all
+                // cron jobs due in that window — the next tick must re-cover it.
+                match check_cron_schedules(&pool, &registry, last_cron_check, now, &queue_retries) {
+                    Ok(()) => last_cron_check = now,
+                    Err(e) => error!("Scheduler cron error (window will be retried): {}", e),
                 }
 
-                last_cron_check = now;
                 purge_counter += 1;
 
                 run_periodic_purges(&PurgeTickInput {
@@ -130,7 +156,18 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
                 });
             }
             _ = heartbeat_ticker.tick() => {
+                // Refresh this node's own running-job heartbeats first, then
+                // reclaim any DEAD peer's jobs (heartbeat expired past the
+                // threshold) — this is the runtime half of the at-least-once
+                // recovery, so a crashed worker's jobs don't wait for that node
+                // to restart.
                 update_heartbeats(&pool, &running_jobs);
+
+                if let Ok(conn) = pool.get()
+                    && let Err(e) = recover_stale_jobs(&conn, &registry, stale_threshold_secs)
+                {
+                    error!("Scheduler stale-recovery error: {}", e);
+                }
             }
             // Image conversion now runs through the unified job queue as
             // `_system_image_convert` system jobs — see
@@ -148,12 +185,12 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
 /// unified job queue as `_system_image_convert` jobs — see the
 /// alpha.9 image-queue → job-queue harmonization in CHANGELOG.)
 #[cfg(not(tarpaulin_include))]
-fn recover_on_startup(pool: &DbPool, registry: &Registry) -> Result<()> {
+fn recover_on_startup(pool: &DbPool, registry: &Registry, stale_threshold_secs: u64) -> Result<()> {
     let conn = pool
         .get()
         .context("Scheduler: failed to get DB connection for recovery")?;
 
-    recover_stale_jobs(&conn, registry)?;
+    recover_stale_jobs(&conn, registry, stale_threshold_secs)?;
 
     Ok(())
 }
@@ -239,16 +276,6 @@ fn run_periodic_purges(p: &PurgeTickInput<'_>) {
         return;
     }
 
-    if let Some(secs) = p.auto_purge_secs
-        && let Ok(conn) = p.pool.get()
-    {
-        match job_query::purge_old_jobs(&conn, secs) {
-            Ok(n) if n > 0 => info!("Auto-purged {} old job run(s)", n),
-            Ok(_) => {}
-            Err(e) => warn!("Auto-purge error: {}", e),
-        }
-    }
-
     let Ok(mut conn) = p.pool.get() else {
         return;
     };
@@ -292,11 +319,59 @@ fn run_periodic_purges(p: &PurgeTickInput<'_>) {
         return;
     }
 
-    match purge_soft_deleted(&conn, p.registry, &**p.storage, p.locale_config) {
-        Ok(n) if n > 0 => info!("Purged {} expired soft-deleted doc(s)", n),
-        Ok(_) => {}
-        Err(e) => warn!("Soft-delete purge error: {}", e),
+    // Job-row retention: gated behind the same single-winner claim as the
+    // soft-delete purge (was previously run on every node — redundant work).
+    if let Some(secs) = p.auto_purge_secs {
+        match job_query::purge_old_jobs(&conn, secs) {
+            Ok(n) if n > 0 => info!("Auto-purged {} old job run(s)", n),
+            Ok(_) => {}
+            Err(e) => warn!("Auto-purge error: {}", e),
+        }
     }
+
+    // Delete upload files only AFTER the purge transaction has committed.
+    let files_to_clean = run_soft_delete_purge(&mut conn, p.registry, p.locale_config);
+    for fields in &files_to_clean {
+        delete_upload_files(&**p.storage, fields);
+    }
+}
+
+/// Run the soft-delete retention purge in one IMMEDIATE transaction so the
+/// per-doc ref-count decrement + delete is atomic, and return the upload
+/// field-maps whose files the caller must delete post-commit. Any failure
+/// returns an empty list — a rollback leaves orphaned files (safe) rather than
+/// DB rows pointing at deleted files (unsafe).
+#[cfg(not(tarpaulin_include))]
+fn run_soft_delete_purge(
+    conn: &mut BoxedConnection,
+    registry: &Registry,
+    locale_config: &LocaleConfig,
+) -> Vec<DocumentFields> {
+    let tx = match conn.transaction_immediate() {
+        Ok(tx) => tx,
+        Err(e) => {
+            warn!("Failed to open transaction for soft-delete purge: {e}");
+            return Vec::new();
+        }
+    };
+
+    let (purged, files) = match purge_soft_deleted(&tx, registry, locale_config) {
+        Ok(result) => result,
+        Err(e) => {
+            warn!("Soft-delete purge error: {e}"); // tx drops → rollback
+            return Vec::new();
+        }
+    };
+
+    if let Err(e) = tx.commit() {
+        warn!("Failed to commit soft-delete purge: {e}");
+        return Vec::new();
+    }
+
+    if purged > 0 {
+        info!("Purged {purged} expired soft-deleted doc(s)");
+    }
+    files
 }
 
 /// Update heartbeats for all currently running jobs.
@@ -475,6 +550,11 @@ const SYSTEM_IMAGE_CONVERT_FALLBACK_TIMEOUT_SECS: u64 = 300;
 /// `JobsConfig::apply_queue_defaults` for the `email` queue.
 const SYSTEM_EMAIL_FALLBACK_TIMEOUT_SECS: u64 = 30;
 
+/// A `running` job is treated as dead (its worker stopped heartbeating) once
+/// its `heartbeat_at` is older than `heartbeat_interval * this`. Must be > 1
+/// so a single missed heartbeat tick doesn't reclaim a live job.
+const STALE_HEARTBEAT_MULTIPLIER: u64 = 3;
+
 /// Resolve the job definition for a claimed job run.
 #[cfg(not(tarpaulin_include))]
 fn resolve_job_def(
@@ -589,26 +669,37 @@ fn spawn_job_execution(s: &SpawnJobInput<'_>) {
             guard.retain(|id| id != &job_id);
         }
 
-        match result {
-            Ok(Ok(Ok(()))) => {}
-            Ok(Ok(Err(e))) => error!("Job {} ({}) execution error: {}", id_log, slug_log, e),
-            Ok(Err(e)) => error!("Job {} ({}) panicked: {}", id_log, slug_log, e),
+        // On any non-clean outcome, transition the row out of `running` via a
+        // guarded `fail_job` (compare-and-set on running+attempt). `execute_job`
+        // writes a terminal status itself on the normal success/handler-error
+        // paths and returns `Ok(())`; it returns `Err` ONLY from an early path
+        // that ran before writing a terminal status (missing provider, bad
+        // job data, a post-handler pool.get failure), and a panic leaves the
+        // row `running` too — without this, those jobs stick in `running`
+        // forever, permanently consuming a concurrency slot.
+        let fail_reason = match result {
+            Ok(Ok(Ok(()))) => None,
+            Ok(Ok(Err(e))) => {
+                error!("Job {} ({}) execution error: {}", id_log, slug_log, e);
+                Some(format!("execution error: {e}"))
+            }
+            Ok(Err(e)) => {
+                error!("Job {} ({}) panicked: {}", id_log, slug_log, e);
+                Some(format!("handler panicked: {e}"))
+            }
             Err(_) => {
                 error!(
                     "Job {} ({}) timed out after {}s",
                     id_log, slug_log, timeout_secs
                 );
-
-                if let Ok(c) = pool_timeout.get() {
-                    let _ = job_query::fail_job(
-                        &c,
-                        &id_log,
-                        &format!("timeout after {timeout_secs}s"),
-                        should_retry,
-                        attempt,
-                    );
-                }
+                Some(format!("timeout after {timeout_secs}s"))
             }
+        };
+
+        if let Some(reason) = fail_reason
+            && let Ok(c) = pool_timeout.get()
+        {
+            let _ = job_query::fail_job(&c, &id_log, &reason, should_retry, attempt);
         }
     });
 }

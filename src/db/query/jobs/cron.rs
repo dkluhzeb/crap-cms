@@ -46,11 +46,21 @@ pub fn try_claim_cron_window(
         return Ok(true);
     }
 
-    // Row exists — try to update only if last fire was before window start
+    // Row exists — claim only if the last recorded fire is at or before this
+    // window's start. `<=` (not `<`) is load-bearing: the loop advances
+    // `last_cron_check` to each tick's `now` and records `fired_at = now`, so
+    // the NEXT window's `window_start` equals the PREVIOUS window's stored
+    // `fired_at` (the same instant). The window is half-open `(window_start,
+    // now]`, so a fire recorded AT `window_start` belongs to the previous
+    // window and this window's fire is genuinely new — with strict `<` it was
+    // skipped, making a frequent cron (e.g. every-minute at a 60s interval)
+    // fire only every other window. Cross-node dedup still holds: a peer whose
+    // window started strictly before another node's recorded fire sees
+    // `fired_at > window_start` and correctly backs off.
     let updated = conn.execute(
         &format!(
             "UPDATE _crap_cron_fired SET fired_at = {p2}
-             WHERE slug = {p1} AND fired_at < {p3}"
+             WHERE slug = {p1} AND fired_at <= {p3}"
         ),
         &[
             DbValue::Text(slug.to_string()),
@@ -99,5 +109,25 @@ mod tests {
         // Next window: window_start advances past the stored fire (00:05 <
         // 00:10), so the update succeeds.
         assert!(claim(&c, "2026-01-01T00:15:00Z", "2026-01-01T00:10:00Z"));
+    }
+
+    /// Regression: consecutive loop windows are ADJACENT — the loop records
+    /// `fired_at = now` and then advances `last_check` to that same `now`, so
+    /// the next window's `window_start` equals the previous window's stored
+    /// `fired_at`. With strict `<` the next window was wrongly skipped
+    /// (a minutely cron fired every other minute). `<=` claims it.
+    #[test]
+    fn adjacent_window_boundary_still_claims() {
+        let c = conn();
+        // Tick N: window (00:00, 00:01], fire recorded at 00:01.
+        assert!(claim(&c, "2026-01-01T00:01:00Z", "2026-01-01T00:00:00Z"));
+        // Tick N+1: window (00:01, 00:02] — window_start == the stored fire.
+        // This is a NEW window and must claim.
+        assert!(
+            claim(&c, "2026-01-01T00:02:00Z", "2026-01-01T00:01:00Z"),
+            "adjacent window (window_start == prior fired_at) must claim"
+        );
+        // Tick N+2 stays consistent.
+        assert!(claim(&c, "2026-01-01T00:03:00Z", "2026-01-01T00:02:00Z"));
     }
 }

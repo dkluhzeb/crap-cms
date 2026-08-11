@@ -158,13 +158,25 @@ delay = min(2^(attempt - 1) * 5, 300)  // seconds, capped at 5 minutes
 
 This is fixed and not currently configurable per-job. Plan your `retries` budget knowing that attempt 6+ is at least ~5 minutes out, not a handful of seconds.
 
-## Crash Recovery
+## Crash Recovery (at-least-once)
 
-On startup, the scheduler marks any previously-running jobs as stale (the server was
-restarted while they were executing). Jobs with remaining retry attempts are re-queued.
+A running job updates a **heartbeat** timestamp every `heartbeat_interval`
+seconds. If a worker dies mid-job, its heartbeat stops; once it is older than
+`heartbeat_interval × 3` the job is considered dead and **recovered**:
 
-Running jobs update a heartbeat timestamp periodically so stale detection works even
-during normal operation.
+- a job with retry attempts remaining is **re-queued** (any surviving node
+  re-runs it), and
+- a job that has exhausted its retries is marked terminal `stale`.
+
+Recovery runs both at startup and periodically at runtime, so in a multi-node
+cluster a **crashed node's in-flight jobs are reclaimed by the surviving
+nodes** — you don't have to wait for the dead node to restart. A job whose
+heartbeat is still fresh (a live node is working it) is never reclaimed.
+
+This makes job delivery **at-least-once**: a job that times out or whose worker
+crashes will run again, so **job handlers must be idempotent**. A job that must
+never run twice needs its own guard (e.g. a unique key or an idempotency check
+at the top of the handler).
 
 ## Configuration (`crap.toml`)
 
@@ -174,7 +186,7 @@ max_concurrent = 10       # global concurrency limit
 poll_interval = 1         # seconds between pending job polls
 cron_interval = 60        # seconds between cron schedule checks
 heartbeat_interval = 10   # seconds between heartbeat updates
-auto_purge = "7d"         # auto-delete completed jobs older than this
+auto_purge = "30d"        # auto-delete old job runs (default 30d); `false` disables
 ```
 
 ## CLI Commands

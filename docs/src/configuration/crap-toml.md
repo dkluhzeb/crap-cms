@@ -45,7 +45,7 @@ token_expiry = "2h"
 # Supported suffixes: s (seconds), m (minutes), h (hours), d (days)
 poll_interval = "5s"
 login_lockout_seconds = "5m"
-auto_purge = "7d"
+auto_purge = "30d"
 ```
 
 Fields that support this: `token_expiry`, `login_lockout_seconds`, `reset_token_expiry`, `forgot_password_window_seconds`, `max_age`, `poll_interval`, `cron_interval`, `heartbeat_interval`, `auto_purge`, `grpc_rate_limit_window`, `connection_timeout`, `smtp_timeout`, `busy_timeout`, `request_timeout`, `grpc_timeout`.
@@ -220,7 +220,7 @@ max_concurrent = 10          # Cluster-wide cap on concurrent jobs (counted via 
 poll_interval = "1s"         # How often to poll for pending jobs
 cron_interval = "1m"         # How often to check cron schedules
 heartbeat_interval = "10s"   # How often running jobs update their heartbeat
-auto_purge = "7d"            # Auto-purge completed/failed runs older than this
+auto_purge = "30d"           # Auto-purge old job runs; `false` disables (default 30d)
 priority_decay = 0           # Priority aging ("1m", "30s", "1h"); 0 = disabled
 
 [jobs.queues]
@@ -481,7 +481,7 @@ See [Live Updates](../live-updates/overview.md) for full documentation.
 | `poll_interval` | integer/string | `1` (`"1s"`) | How often to poll for pending jobs. Accepts seconds or human-readable. |
 | `cron_interval` | integer/string | `60` (`"1m"`) | How often to evaluate cron schedules. Accepts seconds or human-readable. |
 | `heartbeat_interval` | integer/string | `10` (`"10s"`) | How often running jobs update their heartbeat. Used to detect stale jobs. Accepts seconds or human-readable. |
-| `auto_purge` | integer/string | `"7d"` | Auto-purge completed/failed runs older than this duration. Accepts seconds or human-readable (`"7d"`, `"24h"`, `"30m"`, `"3600"`). Set to `""` (empty string) to disable auto-purge. Absent = 7 days default. |
+| `auto_purge` | integer/string/bool | `"30d"` | Auto-purge completed/failed/stale runs older than this duration. Accepts seconds or human-readable (`"30d"`, `"24h"`, `"30m"`, `"3600"`). Set to `false` to disable auto-purge. Absent = 30 days default. |
 | `priority_decay` | integer/string | `0` | Priority aging period: wait time required for a job's effective scheduling priority to bump by `+1`. `0` disables decay (pure static `priority DESC, created_at ASC` ordering — index-friendly fast path). Positive durations (`"1m"`, `"30s"`, `"1h"`) enable aging-based promotion so older lower-priority jobs eventually get claimed instead of starving forever. |
 
 ### `[jobs.queues]`
