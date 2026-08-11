@@ -29,8 +29,7 @@ pub(crate) struct ListVersionsOptions {
     /// Skip access control checks (default: `false`). Set to `true` in
     /// trusted internal code (jobs, migrations) to bypass collection-level
     /// read-access checks.
-    #[serde(rename = "overrideAccess")]
-    #[lua(rename = "overrideAccess", optional)]
+    #[lua(optional)]
     pub(crate) override_access: bool,
 }
 
@@ -66,8 +65,9 @@ pub(crate) struct VersionSummary {
 #[derive(Serialize, LuaAnnotation)]
 #[lua(class = "crap.ListVersionsResult")]
 pub(crate) struct ListVersionsResult {
-    /// Versions, newest first.
-    docs: Vec<VersionSummary>,
+    /// Versions, newest first. Named `documents` for consistency with
+    /// `find` / `create_many` (was `docs`).
+    documents: Vec<VersionSummary>,
     /// Pagination metadata.
     #[lua(ty = "crap.PaginationInfo")]
     pagination: PaginationResult,
@@ -118,7 +118,7 @@ fn collections_list_versions(
     let paginated = list_versions(&ctx, &input).map_err(|e| RuntimeError(format!("{e}")))?;
 
     let result = ListVersionsResult {
-        docs: paginated
+        documents: paginated
             .docs
             .into_iter()
             .map(|v| VersionSummary {

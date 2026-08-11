@@ -22,8 +22,7 @@ use crate::{
 #[lua(class = "crap.UndeleteOptions")]
 pub(crate) struct UndeleteOptions {
     /// Skip access control checks (default: `false`).
-    #[serde(rename = "overrideAccess")]
-    #[lua(rename = "overrideAccess", optional)]
+    #[lua(optional)]
     pub(crate) override_access: bool,
 }
 

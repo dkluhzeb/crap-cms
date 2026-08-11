@@ -151,7 +151,7 @@ fn lua_delete_with_hooks_false() {
         local doc = crap.collections.create("articles", { title = "To Delete" })
         crap.collections.delete("articles", doc.id, { hooks = false })
         local r = crap.collections.find("articles", {})
-        return tostring(r.pagination.totalDocs)
+        return tostring(r.pagination.total_docs)
     "#,
     );
     assert_eq!(result, "0");
@@ -270,7 +270,7 @@ fn lua_update_many_with_operator_filters() {
 
         -- Verify
         local all = crap.collections.find("articles", { where = { status = "archived" } })
-        if all.pagination.totalDocs ~= 2 then return "WRONG_ARCHIVED:" .. tostring(all.pagination.totalDocs) end
+        if all.pagination.total_docs ~= 2 then return "WRONG_ARCHIVED:" .. tostring(all.pagination.total_docs) end
         return "ok"
     "#,
     );
@@ -298,7 +298,7 @@ fn lua_delete_many_with_operator_filters() {
 
         -- Verify remaining
         local all = crap.collections.find("articles", {})
-        if all.pagination.totalDocs ~= 1 then return "WRONG_REMAINING:" .. tostring(all.pagination.totalDocs) end
+        if all.pagination.total_docs ~= 1 then return "WRONG_REMAINING:" .. tostring(all.pagination.total_docs) end
         return "ok"
     "#,
     );
@@ -627,7 +627,7 @@ fn lua_find_or_filter_number_value() {
                 },
             },
         })
-        if r.pagination.totalDocs ~= 2 then return "WRONG:" .. tostring(r.pagination.totalDocs) end
+        if r.pagination.total_docs ~= 2 then return "WRONG:" .. tostring(r.pagination.total_docs) end
         return "ok"
     "#,
     );

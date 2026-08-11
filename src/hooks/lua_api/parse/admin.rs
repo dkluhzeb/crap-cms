@@ -111,6 +111,7 @@ fn apply_identifier_strings(
         builder = builder.row_label(v);
     }
     if let Some(v) = get_string_strict(admin_tbl, "position", "field admin")? {
+        check_admin_enum("position", &v, &["main", "sidebar"])?;
         builder = builder.position(v);
     }
     if let Some(v) = get_optional_hook_ref(admin_tbl, "condition", "admin condition")
@@ -125,12 +126,27 @@ fn apply_identifier_strings(
         builder = builder.language(v);
     }
     if let Some(v) = get_string_strict(admin_tbl, "picker", "field admin")? {
+        check_admin_enum("picker", &v, &["select", "card", "drawer", "none"])?;
         builder = builder.picker(v);
     }
     if let Some(v) = get_string_strict(admin_tbl, "format", "field admin")? {
+        check_admin_enum("format", &v, &["html", "json"])?;
         builder = builder.richtext_format(v);
     }
     Ok(builder)
+}
+
+/// Reject a present-but-unrecognized value for an enum-typed `admin.*` key.
+/// Previously any string was accepted and silently defaulted downstream — a
+/// typo (`position = "sidbar"`, `format = "lexical"`) is now a load error.
+fn check_admin_enum(key: &str, value: &str, allowed: &[&str]) -> LuaResult<()> {
+    if allowed.contains(&value) {
+        return Ok(());
+    }
+    Err(RuntimeError(format!(
+        "field admin '{key}': unknown value '{value}'. Valid values: {}",
+        allowed.join(", ")
+    )))
 }
 
 /// Apply the singular/plural label overrides from the `labels` sub-table.
@@ -243,7 +259,7 @@ mod tests {
         let nodes = lua.create_table().unwrap();
         nodes.set(1, "paragraph").unwrap();
         admin_tbl.set("nodes", nodes).unwrap();
-        admin_tbl.set("format", "lexical").unwrap();
+        admin_tbl.set("format", "json").unwrap();
         admin_tbl.set("language", "en").unwrap();
         admin_tbl.set("rows", 5u32).unwrap();
         let admin = parse_field_admin(&admin_tbl).unwrap();
@@ -251,10 +267,31 @@ mod tests {
         assert!(admin.labels.plural.is_some());
         assert_eq!(admin.features, vec!["bold", "italic"]);
         assert_eq!(admin.nodes, vec!["paragraph"]);
-        assert_eq!(admin.richtext_format.as_deref(), Some("lexical"));
+        assert_eq!(admin.richtext_format.as_deref(), Some("json"));
         assert_eq!(admin.language.as_deref(), Some("en"));
         assert_eq!(admin.rows, Some(5));
         assert!(admin.resizable);
+    }
+
+    /// Regression: enum-typed `admin.*` values are validated — a typo
+    /// (`format = "lexical"`, `position = "sidbar"`, `picker = "grid"`) is a
+    /// load error, not silently stored-and-ignored.
+    #[test]
+    fn admin_enum_values_are_validated() {
+        let lua = Lua::new();
+        for (key, bad) in [
+            ("position", "sidbar"),
+            ("picker", "grid"),
+            ("format", "lexical"),
+        ] {
+            let admin_tbl = lua.create_table().unwrap();
+            admin_tbl.set(key, bad).unwrap();
+            let err = parse_field_admin(&admin_tbl).unwrap_err().to_string();
+            assert!(
+                err.contains(key) && err.contains(bad),
+                "expected {key} rejection for '{bad}', got: {err}"
+            );
+        }
     }
 
     #[test]

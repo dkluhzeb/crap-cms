@@ -81,7 +81,7 @@ Get a global's current value. Returns the typed document.
 | Key | Type | Description |
 | --- | --- | --- |
 | `locale` | string | Locale code (e.g. `"en"`, `"de"`). Fetches locale-specific field values; omit for default locale. |
-| `overrideAccess` | boolean | Bypass the global's `access.read` check (default `false`). |
+| `override_access` | boolean | Bypass the global's `access.read` check (default `false`). |
 | `draft` | boolean | Read unpublished (draft) content (default `false`). Gated by `access.draft` (falling back to `access.update`); a reader without draft access silently gets the published snapshot, never an error. When the global has drafts enabled and has been unpublished, a normal read serves the last published snapshot; set `true` to read the draft. |
 
 ```lua
@@ -107,7 +107,7 @@ document.
 | Key | Type | Description |
 |-----|------|-------------|
 | `locale` | string | Locale code. Updates locale-specific field values; omit for default locale. |
-| `overrideAccess` | boolean | Bypass the global's `access.update` check (default `false`). |
+| `override_access` | boolean | Bypass the global's `access.update` check (default `false`). |
 | `hooks` | boolean | Run lifecycle hooks (default `true`). Set `false` for seeding/migrations. |
 | `draft` | boolean | When `true` and the global has `versions.drafts`, performs a version-only save (main row unchanged, only a draft snapshot). Default `false`. Mirrors `crap.collections.update`. |
 
@@ -136,7 +136,7 @@ stored field data. Only available on globals with `versions` enabled
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `overrideAccess` | boolean | Bypass the global's `access.update` check (default `false`). |
+| `override_access` | boolean | Bypass the global's `access.update` check (default `false`). |
 | `hooks` | boolean | Run lifecycle hooks (default `true`). |
 
 ```lua
@@ -158,7 +158,7 @@ fixed `default` row — there is no create mode and no `id` option. Mirrors
 | Key | Type | Description |
 |-----|------|-------------|
 | `locale` | string | Locale code for localized-field validation; omit for default locale. |
-| `overrideAccess` | boolean | Bypass the global's `access.update` check (default `false`). |
+| `override_access` | boolean | Bypass the global's `access.update` check (default `false`). |
 | `draft` | boolean | Validate as a draft (relaxes required checks for globals with drafts enabled). |
 
 ```lua

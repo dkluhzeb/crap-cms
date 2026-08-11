@@ -187,7 +187,7 @@ grpcurl -plaintext -d '{
 }' "$ADDR" crap.ContentAPI/Find
 }
 
-# Get next page using cursor from previous response's pagination.endCursor
+# Get next page using cursor from previous response's pagination.end_cursor
 find_posts_cursor_next() {
   local cursor="${1:?Usage: find_posts_cursor_next <after_cursor>}"
   grpcurl -plaintext -d "{
@@ -198,7 +198,7 @@ find_posts_cursor_next() {
   }" "$ADDR" crap.ContentAPI/Find
 }
 
-# Get previous page using cursor from response's pagination.startCursor
+# Get previous page using cursor from response's pagination.start_cursor
 find_posts_cursor_prev() {
   local cursor="${1:?Usage: find_posts_cursor_prev <before_cursor>}"
   grpcurl -plaintext -d "{

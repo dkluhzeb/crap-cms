@@ -850,7 +850,7 @@ fn access_hook_filter_table_on_undelete_enforces_match() {
         let conn = pool.get().unwrap();
         let code = format!(
             r#"
-            crap.collections.delete("articles", "{id}", {{ overrideAccess = true }})
+            crap.collections.delete("articles", "{id}", {{ override_access = true }})
             return "OK"
             "#
         );
@@ -1131,7 +1131,7 @@ function M.price_increase_only(ctx)
     if ctx.id == nil then
         error("id missing in before_change update")
     end
-    local old = crap.collections.find_by_id(ctx.collection, ctx.id, { overrideAccess = true })
+    local old = crap.collections.find_by_id(ctx.collection, ctx.id, { override_access = true })
     if old ~= nil and ctx.data.price ~= nil and ctx.data.price < old.price then
         error("price may only increase")
     end
@@ -2736,10 +2736,10 @@ fn search_documents_includes_drafts_when_opted_in() {
     );
 }
 
-// ── 8. Lua `crap.collections.delete` respects `forceHardDelete` on soft-delete collections ──
+// ── 8. Lua `crap.collections.delete` respects `force_hard_delete` on soft-delete collections ──
 //
 // The `articles` collection in the row-enforcement fixture has `soft_delete = true`.
-// `forceHardDelete = true` must actually hard-delete the row (previously was
+// `force_hard_delete = true` must actually hard-delete the row (previously was
 // silently soft-deleted). The default (no opt) must still soft-delete: row stays
 // present with `_deleted_at` set.
 
@@ -2773,13 +2773,13 @@ fn lua_delete_force_hard_delete_removes_row_on_soft_delete_collection() {
     let conn = pool.get().unwrap();
     let code = format!(
         r#"
-        crap.collections.delete("articles", "{id}", {{ forceHardDelete = true }})
+        crap.collections.delete("articles", "{id}", {{ force_hard_delete = true }})
         return "OK"
         "#
     );
     let result = runner
         .eval_lua_with_conn(&code, &conn, Some(&user_a))
-        .expect("forceHardDelete on soft-delete collection should succeed");
+        .expect("force_hard_delete on soft-delete collection should succeed");
     assert_eq!(result, "OK");
 
     // Row must be GONE from the DB (not just _deleted_at set).
@@ -2787,7 +2787,7 @@ fn lua_delete_force_hard_delete_removes_row_on_soft_delete_collection() {
     let (exists, _) = raw_article_row_state(&pool, &id);
     assert!(
         !exists,
-        "forceHardDelete = true must hard-delete the row; row still present"
+        "force_hard_delete = true must hard-delete the row; row still present"
     );
 }
 
@@ -2822,7 +2822,7 @@ fn lua_delete_default_soft_deletes_row_on_soft_delete_collection() {
 
 #[test]
 fn lua_delete_force_hard_delete_false_soft_deletes() {
-    // Explicit `forceHardDelete = false` must behave like the default — soft-delete.
+    // Explicit `force_hard_delete = false` must behave like the default — soft-delete.
     let (_tmp, pool, registry, runner) = row_setup();
     let id = seed_article(&pool, &registry, "articles", "user_a", "Explicit false");
     let user_a = make_user_doc("user_a", "editor");
@@ -2830,19 +2830,19 @@ fn lua_delete_force_hard_delete_false_soft_deletes() {
     let conn = pool.get().unwrap();
     let code = format!(
         r#"
-        crap.collections.delete("articles", "{id}", {{ forceHardDelete = false }})
+        crap.collections.delete("articles", "{id}", {{ force_hard_delete = false }})
         return "OK"
         "#
     );
     runner
         .eval_lua_with_conn(&code, &conn, Some(&user_a))
-        .expect("delete with forceHardDelete = false should succeed");
+        .expect("delete with force_hard_delete = false should succeed");
     drop(conn);
 
     let (exists, has_deleted_at) = raw_article_row_state(&pool, &id);
     assert!(
         exists,
-        "forceHardDelete = false must preserve the row (soft-delete); row missing"
+        "force_hard_delete = false must preserve the row (soft-delete); row missing"
     );
     assert!(has_deleted_at, "soft-deleted row must have _deleted_at set");
 }
@@ -2850,7 +2850,7 @@ fn lua_delete_force_hard_delete_false_soft_deletes() {
 // ── 9. Lua `crap.collections.list_versions` / `restore_version` respect access by default ──
 //
 // Both list_versions and restore_version used to hardcode `override_access = true`.
-// They now go through the normal access path unless `opts.overrideAccess = true`.
+// They now go through the normal access path unless `opts.override_access = true`.
 // Regression: make sure a non-owner is denied by default and can bypass via opts.
 
 #[test]
@@ -2864,7 +2864,7 @@ fn lua_list_versions_respects_access_by_default() {
     let code = format!(
         r#"
         local r = crap.collections.list_versions("versioned_articles", "{id}")
-        return "OK:" .. tostring(#r.docs)
+        return "OK:" .. tostring(#r.documents)
         "#
     );
     let result = runner.eval_lua_with_conn(&code, &conn, Some(&user_a));
@@ -2889,18 +2889,18 @@ fn lua_list_versions_override_access_bypasses() {
     let code = format!(
         r#"
         local r = crap.collections.list_versions(
-            "versioned_articles", "{id}", {{ overrideAccess = true }}
+            "versioned_articles", "{id}", {{ override_access = true }}
         )
-        return tostring(#r.docs)
+        return tostring(#r.documents)
         "#
     );
     let result = runner
         .eval_lua_with_conn(&code, &conn, Some(&user_a))
-        .expect("overrideAccess = true must bypass the access check");
+        .expect("override_access = true must bypass the access check");
     let count: usize = result.parse().expect("docs count should be numeric");
     assert!(
         count >= 1,
-        "expected at least one version with overrideAccess = true, got: {result}"
+        "expected at least one version with override_access = true, got: {result}"
     );
 }
 
@@ -2940,14 +2940,14 @@ fn lua_restore_version_override_access_bypasses() {
         r#"
         local d = crap.collections.restore_version(
             "versioned_articles", "{id}", "{version_id}",
-            {{ overrideAccess = true }}
+            {{ override_access = true }}
         )
         return d.id
         "#
     );
     let result = runner
         .eval_lua_with_conn(&code, &conn, Some(&user_a))
-        .expect("overrideAccess = true must bypass the access check");
+        .expect("override_access = true must bypass the access check");
     assert_eq!(result, id, "restored doc id must match parent doc id");
 }
 
@@ -3093,6 +3093,51 @@ fn restore_version_rejects_version_from_other_document() {
     assert!(
         msg.contains("not found") || msg.contains("Version"),
         "expected a not-found style error, got: {msg}"
+    );
+}
+
+/// Regression: restoring a version now returns the document to the snapshot's
+/// own publication status — a draft snapshot restores as a draft, rather than
+/// force-publishing every restore.
+#[test]
+fn restore_preserves_snapshot_draft_status() {
+    let (_tmp, pool, registry, runner) = row_setup();
+
+    let def = registry
+        .get_collection("versioned_articles")
+        .unwrap()
+        .clone();
+    let lc = LocaleConfig::default();
+
+    // Seed a document and create a DRAFT version snapshot for it.
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Draft snapshot"));
+    data.insert("author_id".to_string(), json!("user_b"));
+    let mut conn = pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let doc = query::create(&tx, "versioned_articles", &def, &data, None).unwrap();
+    let snapshot = json!({ "title": "Draft snapshot", "author_id": "user_b" });
+    let version =
+        query::create_version(&tx, "versioned_articles", &doc.id, "draft", &snapshot).unwrap();
+    tx.commit().unwrap();
+
+    let user_b = make_user_doc("user_b", "editor");
+    let ctx = ServiceContext::collection("versioned_articles", &def)
+        .pool(&pool)
+        .user(Some(&user_b))
+        .runner(&runner)
+        .build();
+
+    restore_collection_version(&ctx, &doc.id, &version.id, &lc).expect("restore should succeed");
+
+    // The main row's _status must now be "draft" (the snapshot's status),
+    // not force-published.
+    let conn = pool.get().unwrap();
+    let status = query::get_document_status(&conn, "versioned_articles", &doc.id).unwrap();
+    assert_eq!(
+        status.as_deref(),
+        Some("draft"),
+        "restore must preserve the snapshot's draft status"
     );
 }
 

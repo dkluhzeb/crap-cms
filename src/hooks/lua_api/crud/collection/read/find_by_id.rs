@@ -51,8 +51,7 @@ pub(crate) struct FindByIdOptions {
     /// Skip access control checks (default: `false`). Set to `true` in
     /// trusted internal code to bypass collection-level and field-level
     /// access for the current user.
-    #[serde(rename = "overrideAccess")]
-    #[lua(rename = "overrideAccess", optional)]
+    #[lua(optional)]
     pub(crate) override_access: bool,
 }
 

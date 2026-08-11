@@ -86,15 +86,13 @@ pub(crate) struct DeleteManyOpts {
     /// locales). Nil = default locale.
     pub(crate) locale: Option<String>,
     /// Skip access control checks (default: `false`).
-    #[serde(rename = "overrideAccess")]
-    #[lua(rename = "overrideAccess", optional)]
+    #[lua(optional)]
     pub(crate) override_access: bool,
     /// Run lifecycle hooks (default: `true`). Set `false` to bypass.
     #[lua(optional)]
     pub(crate) hooks: bool,
     /// Bypass `soft_delete` and remove rows permanently (default: `false`).
-    #[serde(rename = "forceHardDelete")]
-    #[lua(rename = "forceHardDelete", optional)]
+    #[lua(optional)]
     pub(crate) force_hard_delete: bool,
     /// Target already-trashed documents and permanently remove them (empty
     /// the trash). Implies a hard delete gated by `access.delete`; matches

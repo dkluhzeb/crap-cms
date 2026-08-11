@@ -137,7 +137,7 @@ function M.run(ctx)
     })
 
     -- Return value is stored as the job result (optional)
-    return { processed = result.pagination.totalDocs }
+    return { processed = result.pagination.total_docs }
 end
 return M
 ```

@@ -132,11 +132,11 @@ access function, using whatever user fields/roles your project defines.
 
 Access functions run with transaction context — they can call `crap.collections.find()` etc. to make decisions based on data in other collections.
 
-> **Note:** Lua CRUD functions enforce access control by default (`overrideAccess = false`). If your access function calls CRUD internally, pass `overrideAccess = true` to avoid recursive access checks:
+> **Note:** Lua CRUD functions enforce access control by default (`override_access = false`). If your access function calls CRUD internally, pass `override_access = true` to avoid recursive access checks:
 >
 > ```lua
 > function M.check(ctx)
->     local count = crap.collections.items.count({ overrideAccess = true })
+>     local count = crap.collections.items.count({ override_access = true })
 >     return count < 100  -- allow if under limit
 > end
 > ```

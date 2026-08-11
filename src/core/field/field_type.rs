@@ -95,9 +95,38 @@ impl FieldType {
         )
     }
 
-    /// Parse a string into a `FieldType`, defaulting to `Text` if unknown.
-    pub fn parse_lossy(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
+    /// The complete set of valid field-type strings — the frozen public
+    /// contract. Used for strict parsing and for did-you-mean error messages.
+    pub const ALL: &'static [&'static str] = &[
+        "text",
+        "number",
+        "textarea",
+        "select",
+        "radio",
+        "checkbox",
+        "date",
+        "email",
+        "json",
+        "richtext",
+        "relationship",
+        "array",
+        "group",
+        "upload",
+        "blocks",
+        "row",
+        "collapsible",
+        "tabs",
+        "code",
+        "join",
+    ];
+
+    /// Strictly parse a string into a `FieldType`. Returns `None` for any
+    /// unrecognized type — callers MUST surface an error rather than
+    /// defaulting, so that a typo'd or future type name is never silently
+    /// stored as a `Text` column (which would freeze that column's shape).
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.to_lowercase().as_str() {
             "text" => FieldType::Text,
             "number" => FieldType::Number,
             "textarea" => FieldType::Textarea,
@@ -118,11 +147,19 @@ impl FieldType {
             "tabs" => FieldType::Tabs,
             "code" => FieldType::Code,
             "join" => FieldType::Join,
-            other => {
-                tracing::warn!("Unknown field type '{}', defaulting to Text", other);
-                FieldType::Text
-            }
-        }
+            _ => return None,
+        })
+    }
+
+    /// Parse a string into a `FieldType`, defaulting to `Text` if unknown.
+    /// Prefer [`FieldType::parse`] at user-input boundaries — this exists only
+    /// for internal callers where an unknown value genuinely cannot occur.
+    #[must_use]
+    pub fn parse_lossy(s: &str) -> Self {
+        Self::parse(s).unwrap_or_else(|| {
+            tracing::warn!("Unknown field type '{}', defaulting to Text", s);
+            FieldType::Text
+        })
     }
 
     /// Whether this field type is allowed as a richtext node attribute.

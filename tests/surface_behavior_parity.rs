@@ -175,7 +175,7 @@ impl ParityHarness {
 
     fn lua_find_total(&self, where_frag: &str) -> i64 {
         self.lua_eval(&format!(
-            "return tostring(crap.collections.find(\"articles\", {{ {where_frag} }}).pagination.totalDocs)"
+            "return tostring(crap.collections.find(\"articles\", {{ {where_frag} }}).pagination.total_docs)"
         ))
         .parse()
         .expect("lua find total int")

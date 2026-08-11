@@ -26,8 +26,7 @@ pub(crate) struct GlobalGetOptions {
     pub(crate) locale: Option<String>,
     /// Skip access control checks (default: `false`). Set to `true` in
     /// trusted internal code to bypass the global's read access function.
-    #[serde(rename = "overrideAccess")]
-    #[lua(rename = "overrideAccess", optional)]
+    #[lua(optional)]
     pub(crate) override_access: bool,
     /// Include unpublished (draft) content (default: `false`). When the global
     /// has drafts enabled and has been unpublished, a normal read serves the

@@ -284,6 +284,12 @@ pub(crate) fn restore_collection_version_core(
         )));
     }
 
+    // Restore returns the document to its exact state at that point in time —
+    // including its publication status. A draft snapshot restores as a draft,
+    // a published one as published (rather than force-publishing every
+    // restore). For a collection without a status axis the snapshot status is
+    // always "published", so this is a no-op there.
+    let restored_status = version.status.clone();
     let mut snapshot = version.snapshot;
 
     warn_on_snapshot_drift(&snapshot, &def.fields, ctx.slug, version_id);
@@ -317,7 +323,7 @@ pub(crate) fn restore_collection_version_core(
         def,
         document_id,
         &snapshot,
-        "published",
+        &restored_status,
         locale_config,
     )?;
 
@@ -412,6 +418,9 @@ pub(crate) fn restore_global_version_core(
     let version = query::find_version_by_id(conn, &gtable, version_id)?
         .ok_or_else(|| ServiceError::NotFound(format!("Version '{version_id}' not found")))?;
 
+    // Restore to the snapshot's own publication status (see the collection
+    // variant above) rather than force-publishing.
+    let restored_status = version.status.clone();
     let mut snapshot = version.snapshot;
 
     warn_on_snapshot_drift(&snapshot, &def.fields, ctx.slug, version_id);
@@ -429,8 +438,14 @@ pub(crate) fn restore_global_version_core(
         .validate_fields(&def.fields, &validation_data, &val_ctx)
         .map_err(ServiceError::Validation)?;
 
-    let mut doc =
-        query::restore_global_version(conn, ctx.slug, def, &snapshot, "published", locale_config)?;
+    let mut doc = query::restore_global_version(
+        conn,
+        ctx.slug,
+        def,
+        &snapshot,
+        &restored_status,
+        locale_config,
+    )?;
 
     write_hooks.strip_read_access_doc(&def.fields, &mut doc, ctx.slug, ctx.user, None);
     doc.strip_fields(&helpers::collect_api_hidden_field_names(&def.fields, ""));

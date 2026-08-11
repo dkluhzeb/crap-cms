@@ -2,7 +2,7 @@ local M = {}
 
 function M.up()
 	crap.log.info("Seeding Crap Studio data...")
-	local opts = { overrideAccess = true }
+	local opts = { override_access = true }
 
 	-- ========================
 	-- USERS (6)
@@ -1153,10 +1153,10 @@ function M.down()
 		"users",
 	}
 
-	local opts = { overrideAccess = true }
+	local opts = { override_access = true }
 
 	for _, collection in ipairs(collections) do
-		local result = crap.collections.find(collection, { limit = 1000, overrideAccess = true })
+		local result = crap.collections.find(collection, { limit = 1000, override_access = true })
 		if result and result.documents then
 			for _, doc in ipairs(result.documents) do
 				crap.collections.delete(collection, doc.id, opts)

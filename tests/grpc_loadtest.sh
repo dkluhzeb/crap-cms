@@ -367,7 +367,7 @@ scenario_create() {
     result=$(grpcurl -plaintext -H "authorization: Bearer ${JWT_TOKEN}" -d '{
         "collection": "posts",
         "where": "{\"slug\":{\"like\":\"loadtest-ghz-%\"}}",
-        "forceHardDelete": true
+        "force_hard_delete": true
     }' "$GRPC_ADDR" crap.ContentAPI/DeleteMany 2>/dev/null)
     deleted=$(echo "$result" | jq -r '((.deleted // "0") | tonumber) + ((.softDeleted // "0") | tonumber)')
     ok "Cleaned up ${deleted} loadtest posts"
@@ -383,7 +383,7 @@ scenario_create() {
     #
     # This purge exists for the BENCH environment specifically:
     # - Runs from before commit 28334c72 used soft-delete (no
-    #   `forceHardDelete: true`), which left posts + their versions
+    #   `force_hard_delete: true`), which left posts + their versions
     #   intact. Tens of thousands of those orphans accumulated in
     #   `example/data/crap.db` and bloat the SQLite page cache; we
     #   measured `count @ 50` and `find_by_id @ 50` drop to ~1/3 of

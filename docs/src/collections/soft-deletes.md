@@ -129,7 +129,7 @@ When `trash = true`:
 crap.collections.posts.delete(id)
 
 -- Force permanent delete
-crap.collections.posts.delete(id, { forceHardDelete = true })
+crap.collections.posts.delete(id, { force_hard_delete = true })
 
 -- Undelete from trash
 crap.collections.posts.undelete(id)

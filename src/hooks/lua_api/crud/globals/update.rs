@@ -31,8 +31,7 @@ pub(crate) struct GlobalUpdateOptions {
     pub(crate) locale: Option<String>,
     /// Skip access control checks (default: `false`). Set to `true` in
     /// trusted internal code to bypass the global's update access function.
-    #[serde(rename = "overrideAccess")]
-    #[lua(rename = "overrideAccess", optional)]
+    #[lua(optional)]
     pub(crate) override_access: bool,
     /// Run lifecycle hooks (default: `true`). Set false to bypass hooks
     /// (e.g., for seeding/migrations).

@@ -30,8 +30,7 @@ use crate::{
 #[lua(class = "crap.CreateManyOptions")]
 pub(crate) struct CreateManyOpts {
     /// Skip access control checks (default: `false`).
-    #[serde(rename = "overrideAccess")]
-    #[lua(rename = "overrideAccess", optional)]
+    #[lua(optional)]
     pub(crate) override_access: bool,
     /// Create documents as drafts (default: `false`).
     #[lua(optional)]

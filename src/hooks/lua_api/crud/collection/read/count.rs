@@ -36,8 +36,7 @@ pub(crate) struct CountQueryInput {
     #[lua(optional)]
     pub(crate) locale: Option<String>,
     /// Skip access control checks (default: `false`).
-    #[serde(rename = "overrideAccess")]
-    #[lua(rename = "overrideAccess", optional)]
+    #[lua(optional)]
     pub(crate) override_access: Option<bool>,
     /// Include draft documents (default: `false`).
     #[lua(optional)]

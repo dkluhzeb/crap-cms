@@ -28,8 +28,7 @@ pub(crate) struct RestoreVersionOptions {
     /// Skip access control checks (default: `false`). Set to `true` in
     /// trusted internal code (jobs, migrations) to bypass collection-level
     /// access checks.
-    #[serde(rename = "overrideAccess")]
-    #[lua(rename = "overrideAccess", optional)]
+    #[lua(optional)]
     pub(crate) override_access: bool,
 }
 

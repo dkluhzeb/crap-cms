@@ -251,7 +251,7 @@ function M.price_increase_only(ctx)
     if ctx.operation ~= "update" then
         return ctx
     end
-    local old = crap.collections.find_by_id(ctx.collection, ctx.id, { overrideAccess = true })
+    local old = crap.collections.find_by_id(ctx.collection, ctx.id, { override_access = true })
     if old and ctx.data.price < old.price then
         error("price may only increase")
     end
@@ -286,7 +286,7 @@ state:
 ```lua
 -- before_change: capture the persisted old value
 function M.capture_status(ctx)
-    local old = crap.collections.find_by_id(ctx.collection, ctx.id, { overrideAccess = true })
+    local old = crap.collections.find_by_id(ctx.collection, ctx.id, { override_access = true })
     ctx.context.old_status = old and old.status
     return ctx
 end

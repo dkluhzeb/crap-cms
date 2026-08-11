@@ -236,6 +236,16 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<&str>) -
 
     let export_file: ExportFile = serde_json::from_str(&content).context("Failed to parse JSON")?;
 
+    // Refuse an export written by a newer format than this binary understands.
+    if export_file.format_version > crate::commands::export::file::EXPORT_FORMAT_VERSION {
+        bail!(
+            "This export uses format version {} but this crap-cms only supports up to {}. \
+             Upgrade crap-cms to import it.",
+            export_file.format_version,
+            crate::commands::export::file::EXPORT_FORMAT_VERSION
+        );
+    }
+
     let current = env!("CARGO_PKG_VERSION");
     if let Some(warning) =
         CrapConfig::check_version_against(Some(&export_file.crap_version), current)

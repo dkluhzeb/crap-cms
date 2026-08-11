@@ -270,7 +270,7 @@ check_on_startup = true   # Print a one-line notice on `serve` startup when a ne
 |-------|------|---------|-------------|
 | `admin_port` | integer | `3000` | Port for the Axum admin UI |
 | `grpc_port` | integer | `50051` | Port for the Tonic gRPC API |
-| `host` | string | `"0.0.0.0"` | Bind address for both servers |
+| `host` | string | `"0.0.0.0"` | Bind address for both servers. **The default `0.0.0.0` binds every network interface** — the expected default for a served CMS and container deployments, but it means the admin UI and gRPC API are reachable from anywhere the host is routable. Put crap-cms behind a firewall or reverse proxy, or set `host = "127.0.0.1"` to bind loopback only (e.g. when a proxy on the same host is the only intended client). |
 | `h2c` | boolean | `false` | Enable HTTP/2 cleartext (h2c). Allows reverse proxies (Caddy, nginx) to speak HTTP/2 to the backend without TLS. Browsers that don't support h2c fall back to HTTP/1.1 on the same port. |
 | `trust_proxy` | boolean | `false` | Trust the `X-Forwarded-For` header for client IP extraction on the **admin HTTP server**. **Enable when running behind a reverse proxy** (nginx, Caddy, etc.) so per-IP rate limiting uses the real client IP. When false (default), the TCP socket address is used and XFF is ignored — preventing IP spoofing when exposed directly to the internet. Does not affect the gRPC server, which always uses the TCP peer address from Tonic's `remote_addr()`. |
 | `compression` | string | `"off"` | Response compression. `"off"` = disabled (default), `"gzip"` = gzip only, `"br"` = brotli only, `"all"` = gzip + brotli. Most deployments use a reverse proxy (nginx/caddy) for compression, so this is opt-in. |

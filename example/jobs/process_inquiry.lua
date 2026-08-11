@@ -17,7 +17,7 @@ M.run = crap.any.job_handler(function(context)
     return
   end
 
-  local inquiry = crap.collections.inquiries.find_by_id(inquiry_id, { overrideAccess = true })
+  local inquiry = crap.collections.inquiries.find_by_id(inquiry_id, { override_access = true })
   if not inquiry then
     crap.log.warn("process_inquiry: inquiry not found: " .. inquiry_id)
     return
@@ -69,7 +69,7 @@ M.run = crap.any.job_handler(function(context)
   -- Update status to contacted
   crap.collections.inquiries.update(inquiry_id, {
     status = "contacted",
-  }, { overrideAccess = true })
+  }, { override_access = true })
 
   crap.log.info("Processed inquiry: " .. inquiry_id)
 end)

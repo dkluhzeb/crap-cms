@@ -67,16 +67,15 @@ pub(crate) struct FindQueryInput {
     #[lua(optional)]
     pub(crate) draft: Option<bool>,
     /// Skip access control checks (default: `false`).
-    #[serde(rename = "overrideAccess")]
-    #[lua(rename = "overrideAccess", optional)]
+    #[lua(optional)]
     pub(crate) override_access: Option<bool>,
     /// Include soft-deleted documents (trash listings).
     #[lua(optional)]
     pub(crate) trash: Option<bool>,
-    /// Forward cursor token (from previous response's `endCursor`).
+    /// Forward cursor token (from previous response's `end_cursor`).
     #[lua(optional)]
     pub(crate) after_cursor: Option<String>,
-    /// Backward cursor token (from previous response's `startCursor`).
+    /// Backward cursor token (from previous response's `start_cursor`).
     #[lua(optional)]
     pub(crate) before_cursor: Option<String>,
     /// FTS5 full-text search query.
@@ -422,7 +421,7 @@ mod tests {
     fn find_query_override_access_camel_case() {
         // Lua-side `overrideAccess` deserializes into `override_access`.
         let input: FindQueryInput =
-            serde_json::from_value(json!({ "overrideAccess": true })).unwrap();
+            serde_json::from_value(json!({ "override_access": true })).unwrap();
         assert_eq!(input.override_access, Some(true));
     }
 }

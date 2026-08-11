@@ -10,10 +10,10 @@ return crap.any.collection_hook(function(context)
 
   local result = crap.collections.users.find({
     where = { role = "admin" },
-    overrideAccess = true,
+    override_access = true,
   })
 
-  local admin_count = result and result.pagination.totalDocs or 0
+  local admin_count = result and result.pagination.total_docs or 0
   if admin_count <= 1 then
     error("Cannot delete the last admin user")
   end

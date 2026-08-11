@@ -13,11 +13,11 @@ use super::cursor::{self, SortDirection};
 
 /// Pagination metadata for a find result.
 //
-// Surfaced as `crap.PaginationInfo` on the Lua side. Rust internals
-// use snake_case; Lua emits camelCase via the `rename_all` strategy.
+// Surfaced as `crap.PaginationInfo` on the Lua side. Field names are
+// snake_case on both the Rust and Lua/JSON side, matching every other
+// returned shape in the API (unified in the pre-freeze casing pass).
 #[derive(Debug, Clone, Serialize, LuaAnnotation)]
-#[serde(rename_all = "camelCase")]
-#[lua(class = "crap.PaginationInfo", rename_all = "camelCase")]
+#[lua(class = "crap.PaginationInfo")]
 pub struct PaginationResult {
     /// Total matching documents (before limit/page).
     pub total_docs: i64,
@@ -466,20 +466,20 @@ mod tests {
     // ── Serialization ─────────────────────────────────────────────────
 
     #[test]
-    fn serialize_page_mode_camel_case_omits_cursor_fields() {
+    fn serialize_page_mode_snake_case_omits_cursor_fields() {
         let docs = vec![make_doc("a")];
         let pr = PaginationResult::builder(&docs, 5, 10).page(1, 0);
         let json = serde_json::to_value(&pr).unwrap();
 
-        // camelCase keys present
-        assert!(json.get("totalDocs").is_some());
-        assert!(json.get("hasNextPage").is_some());
-        assert!(json.get("totalPages").is_some());
-        assert!(json.get("pageStart").is_some());
+        // snake_case keys present (unified casing)
+        assert!(json.get("total_docs").is_some());
+        assert!(json.get("has_next_page").is_some());
+        assert!(json.get("total_pages").is_some());
+        assert!(json.get("page_start").is_some());
 
         // cursor fields omitted (None → skip)
-        assert!(json.get("startCursor").is_none());
-        assert!(json.get("endCursor").is_none());
+        assert!(json.get("start_cursor").is_none());
+        assert!(json.get("end_cursor").is_none());
     }
 
     #[test]
@@ -498,13 +498,13 @@ mod tests {
         let json = serde_json::to_value(&pr).unwrap();
 
         // cursor fields present
-        assert!(json.get("startCursor").is_some());
+        assert!(json.get("start_cursor").is_some());
 
         // page fields omitted (None → skip)
-        assert!(json.get("totalPages").is_none());
+        assert!(json.get("total_pages").is_none());
         assert!(json.get("page").is_none());
-        assert!(json.get("pageStart").is_none());
-        assert!(json.get("prevPage").is_none());
-        assert!(json.get("nextPage").is_none());
+        assert!(json.get("page_start").is_none());
+        assert!(json.get("prev_page").is_none());
+        assert!(json.get("next_page").is_none());
     }
 }

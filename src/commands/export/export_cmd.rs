@@ -67,6 +67,7 @@ pub fn export(
     }
 
     let output_file = ExportFile {
+        format_version: crate::commands::export::file::EXPORT_FORMAT_VERSION,
         crap_version: env!("CARGO_PKG_VERSION").to_string(),
         exported_at: Utc::now().to_rfc3339(),
         collections: collections_data,

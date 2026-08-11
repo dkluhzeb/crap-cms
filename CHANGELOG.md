@@ -8,6 +8,66 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **API casing is now uniformly snake_case (pre-freeze stabilization).** The two
+  camelCase Lua option keys — `overrideAccess` and `forceHardDelete` — are
+  renamed to `override_access` and `force_hard_delete`, and the pagination result
+  object (`result.pagination`) now uses snake_case fields (`total_docs`,
+  `has_next_page`, `has_prev_page`, `total_pages`, `page_start`, `prev_page`,
+  `next_page`, `start_cursor`, `end_cursor`). Everything else in the API was
+  already snake_case; this removes the last inconsistency before the surface
+  freezes. **Migration:** rename `overrideAccess` → `override_access` and
+  `forceHardDelete` → `force_hard_delete` in option tables, and update any code
+  reading `result.pagination.totalDocs` etc. to the snake_case field.
+
+- **`crap.collections.list_versions` returns `documents`, not `docs`.** The result
+  array key is unified with `find` / `create_many`. **Migration:** replace
+  `result.docs` with `result.documents` for `list_versions` callers.
+
+- **Restoring a version now preserves the snapshot's publication status.**
+  `restore_version` previously force-published the document regardless of the
+  snapshot's status; restoring a draft snapshot now yields a draft (a published
+  snapshot still restores as published). **Migration:** if you relied on
+  restore-always-publishes, publish explicitly after restoring a draft snapshot.
+
+- **A present-but-unknown field `type` is now rejected** instead of silently
+  becoming a `Text` column. A typo (`type = "tex"`) or a not-yet-supported type
+  name fails at load. An omitted `type` still defaults to `text`. **Migration:**
+  fix any misspelled field types. This also lets future field types be added
+  without reinterpreting existing schemas.
+
+- **A non-numeric value for a Number field is a validation error** (was silently
+  coerced to `NULL`). **Migration:** send `nil` / omit the field for "no value".
+
+- **`crap.routes.register { access = true }` is rejected.** `true` previously
+  meant "public" (same as omitting `access`) — a footgun for a caller expecting
+  "require auth". **Migration:** omit `access` for a public route, or pass a hook
+  ref to gate it.
+
+- **Enum-typed `admin.*` values are validated.** `admin.position`
+  (`main`/`sidebar`), `admin.picker` (`select`/`card`/`drawer`/`none`), and
+  `admin.format` (`html`/`json`) now reject an unrecognized value at load instead
+  of silently defaulting. **Migration:** fix any typo'd value (e.g.
+  `format = "lexical"`).
+
+- **`crap.email.send` rejects a `retries` option.** `retries` only applies to
+  the queued path (`crap.email.queue`); passing it to an immediate send was
+  silently ignored and is now an error. **Migration:** drop `retries` from
+  `crap.email.send` calls, or use `crap.email.queue`.
+
+- **Field names ending in `_tz` / `_lang`, and upload system-column names, are
+  reserved.** `_tz`/`_lang` are used for timezone/language companion columns; the
+  upload metadata columns (`filename`, `mime_type`, `filesize`, `width`,
+  `height`, `url`, `focal_x`, `focal_y`, and size variants) are auto-generated on
+  upload collections. A user field colliding with either is now rejected at load
+  rather than silently overwritten. **Migration:** rename any such field.
+
+- **Generated SQL identifiers over 63 bytes are rejected at migration.** Long
+  `collection` / `group` / `field` / `locale` combinations that would exceed
+  Postgres's 63-byte identifier limit (and silently truncate into a collision)
+  now fail on every backend — so the problem surfaces in SQLite development.
+  **Migration:** shorten over-long names (the error names the offending
+  identifier).
+
 - **`crap.jobs.define` now validates the job slug** like `crap.collections.define`
   and `crap.globals.define` already did — lowercase ASCII letters, digits, and
   underscores, not starting with an underscore. A slug with a hyphen, uppercase
@@ -916,6 +976,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **Backups and exports now carry a structural `format_version`.** `restore` /
+  `import` refuse a file written by a newer format than the binary understands
+  (rather than misreading it), while a pre-versioning file — which omits the
+  field — is still accepted. This lets the backup/export format evolve safely.
+
+- **`count` accepts a `status_filter` for parity with `find`.** A status-filtered
+  read (e.g. `?where[_status]=draft`) can now be counted with the same view
+  scoping as the matching `find`, so the reported total matches the filtered
+  rows. Additive — the default (no status filter) is unchanged.
 
 - **`min_rows` on a scalar `has_many` field is now satisfiable, and omitted
   array fields no longer fail it on partial updates.** The row-count check

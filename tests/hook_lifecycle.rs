@@ -420,8 +420,8 @@ fn eval_lua_crud_in_hook_context() {
     let result = runner
         .eval_lua_with_conn(
             r#"
-        local r = crap.collections.find("articles", { overrideAccess = true })
-        return tostring(r.pagination.totalDocs)
+        local r = crap.collections.find("articles", { override_access = true })
+        return tostring(r.pagination.total_docs)
         "#,
             &conn,
             None,

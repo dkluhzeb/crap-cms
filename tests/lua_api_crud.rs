@@ -101,8 +101,8 @@ fn lua_crud_create_and_find() {
         if doc.id == nil then return "NO_ID" end
 
         local result = crap.collections.find("articles", {})
-        if result.pagination.totalDocs ~= 1 then
-            return "WRONG_TOTAL:" .. tostring(result.pagination.totalDocs)
+        if result.pagination.total_docs ~= 1 then
+            return "WRONG_TOTAL:" .. tostring(result.pagination.total_docs)
         end
         local found = result.documents[1]
         -- after_read field hook uppercases title
@@ -197,8 +197,8 @@ fn lua_crud_delete() {
         end
 
         local result = crap.collections.find("articles", {})
-        if result.pagination.totalDocs ~= 0 then
-            return "NOT_DELETED:total=" .. tostring(result.pagination.totalDocs)
+        if result.pagination.total_docs ~= 0 then
+            return "NOT_DELETED:total=" .. tostring(result.pagination.total_docs)
         end
         return "ok"
     "#,
@@ -223,24 +223,24 @@ fn lua_crud_find_pagination_fields() {
         -- Page 1, limit 2 → page 1 of 3
         local r = crap.collections.find("articles", { limit = 2, page = 1 })
         local p = r.pagination
-        if p.totalDocs ~= 5 then return "TOTAL:" .. tostring(p.totalDocs) end
+        if p.total_docs ~= 5 then return "TOTAL:" .. tostring(p.total_docs) end
         if p.limit ~= 2 then return "LIMIT:" .. tostring(p.limit) end
-        if p.totalPages ~= 3 then return "TOTAL_PAGES:" .. tostring(p.totalPages) end
+        if p.total_pages ~= 3 then return "TOTAL_PAGES:" .. tostring(p.total_pages) end
         if p.page ~= 1 then return "PAGE:" .. tostring(p.page) end
-        if p.hasNextPage ~= true then return "HAS_NEXT:false" end
-        if p.hasPrevPage ~= false then return "HAS_PREV:true" end
-        if p.nextPage ~= 2 then return "NEXT_PAGE:" .. tostring(p.nextPage) end
-        if p.prevPage ~= nil then return "PREV_PAGE:" .. tostring(p.prevPage) end
+        if p.has_next_page ~= true then return "HAS_NEXT:false" end
+        if p.has_prev_page ~= false then return "HAS_PREV:true" end
+        if p.next_page ~= 2 then return "NEXT_PAGE:" .. tostring(p.next_page) end
+        if p.prev_page ~= nil then return "PREV_PAGE:" .. tostring(p.prev_page) end
         if #r.documents ~= 2 then return "DOCS:" .. tostring(#r.documents) end
 
         -- Page 3 (last) → has prev, no next
         local r2 = crap.collections.find("articles", { limit = 2, page = 3 })
         local p2 = r2.pagination
         if p2.page ~= 3 then return "P2_PAGE:" .. tostring(p2.page) end
-        if p2.hasPrevPage ~= true then return "P2_HAS_PREV:false" end
-        if p2.hasNextPage ~= false then return "P2_HAS_NEXT:true" end
-        if p2.prevPage ~= 2 then return "P2_PREV:" .. tostring(p2.prevPage) end
-        if p2.nextPage ~= nil then return "P2_NEXT:" .. tostring(p2.nextPage) end
+        if p2.has_prev_page ~= true then return "P2_HAS_PREV:false" end
+        if p2.has_next_page ~= false then return "P2_HAS_NEXT:true" end
+        if p2.prev_page ~= 2 then return "P2_PREV:" .. tostring(p2.prev_page) end
+        if p2.next_page ~= nil then return "P2_NEXT:" .. tostring(p2.next_page) end
         if #r2.documents ~= 1 then return "P2_DOCS:" .. tostring(#r2.documents) end
 
         return "ok"
@@ -276,16 +276,16 @@ fn lua_crud_find_with_where() {
         local result = crap.collections.find("articles", {
             where = { status = "published" },
         })
-        if result.pagination.totalDocs ~= 2 then
-            return "WRONG_TOTAL:" .. tostring(result.pagination.totalDocs)
+        if result.pagination.total_docs ~= 2 then
+            return "WRONG_TOTAL:" .. tostring(result.pagination.total_docs)
         end
 
         -- Filter by status = draft
         local drafts = crap.collections.find("articles", {
             where = { status = "draft" },
         })
-        if drafts.pagination.totalDocs ~= 1 then
-            return "WRONG_DRAFT_TOTAL:" .. tostring(drafts.pagination.totalDocs)
+        if drafts.pagination.total_docs ~= 1 then
+            return "WRONG_DRAFT_TOTAL:" .. tostring(drafts.pagination.total_docs)
         end
         -- after_read field hook uppercases title
         if drafts.documents[1].title ~= "BETA ARTICLE" then
@@ -347,8 +347,8 @@ fn lua_find_with_where_clause() {
         local result = crap.collections.find("articles", {
             where = { status = { equals = "published" } },
         })
-        if result.pagination.totalDocs ~= 1 then
-            return "WRONG_TOTAL:" .. tostring(result.pagination.totalDocs)
+        if result.pagination.total_docs ~= 1 then
+            return "WRONG_TOTAL:" .. tostring(result.pagination.total_docs)
         end
         -- after_read field hook uppercases title
         if result.documents[1].title ~= "WHERE TEST ALPHA" then
@@ -380,8 +380,8 @@ fn lua_find_with_limit_offset() {
         if #result.documents ~= 2 then
             return "WRONG_COUNT:" .. tostring(#result.documents)
         end
-        if result.pagination.totalDocs ~= 5 then
-            return "WRONG_TOTAL:" .. tostring(result.pagination.totalDocs)
+        if result.pagination.total_docs ~= 5 then
+            return "WRONG_TOTAL:" .. tostring(result.pagination.total_docs)
         end
         return "ok"
     "#,

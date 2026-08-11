@@ -1,6 +1,6 @@
 //! Parsing functions for collection Lua definitions.
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use mlua::{Lua, Table};
 
 use crate::{
@@ -194,6 +194,19 @@ pub fn parse_collection_definition(
     if let Some(ref u) = upload
         && u.enabled
     {
+        // Reject a user field whose name collides with an auto-generated
+        // upload column (filename/mime_type/filesize/width/height/url/
+        // focal_x/focal_y + per-size/format variants) — it would otherwise be
+        // silently overwritten by the injected field.
+        let reserved = u.system_field_names();
+        if let Some(f) = fields.iter().find(|f| reserved.contains(&f.name)) {
+            bail!(
+                "Field name '{}' is reserved on an upload collection — it collides with an \
+                 automatically generated upload column",
+                f.name
+            );
+        }
+
         inject_upload_fields(&mut fields, u);
     }
 
@@ -276,6 +289,34 @@ mod tests {
         assert_eq!(
             def.admin.list_columns,
             vec!["title", "_status", "created_at"]
+        );
+    }
+
+    /// Regression: a user field colliding with an auto-generated upload
+    /// column (e.g. `filename`) on an upload collection is rejected, not
+    /// silently overwritten by the injected field.
+    #[test]
+    fn upload_collection_rejects_reserved_field_name() {
+        let lua = Lua::new();
+        let config = lua.create_table().unwrap();
+
+        let upload_tbl = lua.create_table().unwrap();
+        upload_tbl.set("enabled", true).unwrap();
+        config.set("upload", upload_tbl).unwrap();
+
+        let fields = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "filename").unwrap();
+        field.set("type", "text").unwrap();
+        fields.set(1, field).unwrap();
+        config.set("fields", fields).unwrap();
+
+        let err = parse_collection_definition(&lua, "media", &config)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("filename") && err.contains("reserved"),
+            "expected upload-column collision rejection, got: {err}"
         );
     }
 

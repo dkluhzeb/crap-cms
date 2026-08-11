@@ -42,7 +42,7 @@ crap.routes.register({
 | `path` | yes | Mount path (after the optional `routes.prefix`). `{param}` segments become `ctx.params`. May not collide with a reserved prefix (`/admin`, `/static`, `/api`, `/uploads`, `/mcp`, `/health`, `/ready`, `/`). |
 | `method` | yes | A method or array of methods. One of `GET/HEAD/POST/PUT/PATCH/DELETE/OPTIONS`. |
 | `handler` | yes | Hook ref to the handler function. |
-| `access` | no | `omitted`/`true` = **public**; `false` = registered but **disabled** (404); a hook ref = **gated** (evaluated before the handler; falsey → 403). |
+| `access` | no | `omitted`/nil = **public**; `false` = registered but **disabled** (404); a hook ref = **gated** (evaluated before the handler; falsey → 403). `access = true` is **rejected** — it would silently mean "public", a footgun for a caller expecting "require auth"; omit `access` for a public route or pass a hook ref to gate it. |
 | `rate_limit` | no | `{ max, window }` (window in seconds), per-IP. |
 | `csrf` | no | `true` enforces the admin double-submit CSRF token on mutating methods. Default `false` (custom routes are API-style). |
 | `max_body` | no | Per-route request body-size limit in bytes. Overrides the `routes.max_body` config default. |

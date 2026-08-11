@@ -31,16 +31,14 @@ pub(crate) struct DeleteOptions {
     /// Skip access control checks (default: `false`). Set to `true` in
     /// trusted internal code to bypass collection-level access for the
     /// current user.
-    #[serde(rename = "overrideAccess")]
-    #[lua(rename = "overrideAccess", optional)]
+    #[lua(optional)]
     pub(crate) override_access: bool,
     /// Run lifecycle hooks (default: `true`). Set `false` to bypass hooks.
     #[lua(optional)]
     pub(crate) hooks: bool,
     /// Bypass `soft_delete` and remove the row permanently. Mirrors the
     /// same flag on the gRPC/HTTP delete handlers.
-    #[serde(rename = "forceHardDelete")]
-    #[lua(rename = "forceHardDelete", optional)]
+    #[lua(optional)]
     pub(crate) force_hard_delete: bool,
     /// Emit a live-update event for the deleted document (default: `true`).
     /// Set `false` for a quiet delete.

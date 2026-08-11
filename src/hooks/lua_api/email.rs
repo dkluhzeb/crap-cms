@@ -73,6 +73,16 @@ fn email_send(
     _: &Lua,
     #[lua(ty = "crap.EmailOptions", doc = "Email options.")] opts: EmailOptions,
 ) -> LuaResult<bool> {
+    // `retries` only applies to the queued path — silently ignoring it on an
+    // immediate send hides the caller's mistake. Reject it explicitly.
+    if opts.retries.is_some() {
+        return Err(RuntimeError(
+            "crap.email.send: `retries` is only honoured by crap.email.queue \
+             (immediate sends do not retry); remove it or use crap.email.queue."
+                .into(),
+        ));
+    }
+
     validate_email_fields(&opts.to, &opts.subject)?;
 
     state
@@ -226,6 +236,25 @@ mod tests {
         };
         let err = err.to_string();
         assert!(err.contains("unknown field `retires`"), "unexpected: {err}");
+    }
+
+    /// Regression: `crap.email.send` with `retries` is rejected — `retries`
+    /// only applies to the queued path, and silently ignoring it on an
+    /// immediate send hid the caller's mistake.
+    #[test]
+    fn send_rejects_retries_option() {
+        let lua = lua_in_init_phase();
+        let err = lua
+            .load(
+                r#"crap.email.send({ to = "a@example.com", subject = "hi", html = "<p>hi</p>", retries = 3 })"#,
+            )
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("retries") && err.contains("queue"),
+            "expected retries-on-send rejection, got: {err}"
+        );
     }
 
     /// Regression: an unknown handler key (a typo like `sned`) was silently

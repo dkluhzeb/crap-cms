@@ -11,8 +11,8 @@ this document.
 
 | Step | Admin | gRPC | Lua CRUD |
 |------|-------|------|----------|
-| Access control (collection-level) | Yes | Yes | Yes (overrideAccess) |
-| Field-level write stripping | Yes | Yes | Yes (overrideAccess) |
+| Access control (collection-level) | Yes | Yes | Yes (override_access) |
+| Field-level write stripping | Yes | Yes | Yes (override_access) |
 | Password extraction (auth) | Yes | Yes | Yes |
 | before_validate (field + collection + registered) | Yes | Yes | Yes |
 | Validation | Yes | Yes | Yes |
@@ -29,8 +29,8 @@ this document.
 
 | Step | Admin | gRPC | Lua CRUD |
 |------|-------|------|----------|
-| Access control (collection-level) | Yes | Yes | Yes (overrideAccess) |
-| Field-level write stripping | Yes | Yes | Yes (overrideAccess) |
+| Access control (collection-level) | Yes | Yes | Yes (override_access) |
+| Field-level write stripping | Yes | Yes | Yes (override_access) |
 | Password extraction (auth) | Yes | Yes | Yes |
 | Unpublish path | Yes | Yes | Yes |
 | before_validate (field + collection + registered) | Yes | Yes | Yes |
@@ -47,7 +47,7 @@ this document.
 
 | Step | Admin | gRPC | Lua CRUD |
 |------|-------|------|----------|
-| Access control | Yes | Yes | Yes (overrideAccess) |
+| Access control | Yes | Yes | Yes (override_access) |
 | before_delete (collection + registered) | Yes | Yes | Yes |
 | DB delete | Yes | Yes | Yes |
 | after_delete (collection + registered) | Yes | Yes | Yes |
@@ -58,7 +58,7 @@ this document.
 
 | Step | Admin | gRPC | Lua CRUD |
 |------|-------|------|----------|
-| Access control (collection-level) | Yes | Yes | Yes (overrideAccess) |
+| Access control (collection-level) | Yes | Yes | Yes (override_access) |
 | Constraint filter merging | Yes | Yes | Yes |
 | Draft-aware filtering | Yes | Yes | Yes |
 | before_read hooks | Yes | Yes | Yes |
@@ -68,13 +68,13 @@ this document.
 | after_read hooks (field + collection + registered) | Yes | Yes | Yes |
 | Relationship population (depth) | Yes | Yes | Yes |
 | Select field stripping | Yes | Yes | Yes |
-| Field-level read stripping | Yes | Yes | Yes (overrideAccess) |
+| Field-level read stripping | Yes | Yes | Yes (override_access) |
 
 ## FIND_BY_ID Lifecycle
 
 | Step | Admin | gRPC | Lua CRUD |
 |------|-------|------|----------|
-| Access control (collection-level) | Yes | Yes | Yes (overrideAccess) |
+| Access control (collection-level) | Yes | Yes | Yes (override_access) |
 | before_read hooks | Yes | Yes | Yes |
 | Draft version overlay | Yes | Yes | Yes |
 | Hydrate join tables | Yes | Yes | Yes |
@@ -82,7 +82,7 @@ this document.
 | after_read hooks (field + collection + registered) | Yes | Yes | Yes |
 | Relationship population (depth) | Yes | Yes | Yes |
 | Select field stripping | Yes | Yes | Yes |
-| Field-level read stripping | Yes | Yes | Yes (overrideAccess) |
+| Field-level read stripping | Yes | Yes | Yes (override_access) |
 
 ## Operation Availability
 

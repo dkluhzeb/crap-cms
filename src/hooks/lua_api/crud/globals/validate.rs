@@ -36,8 +36,7 @@ pub(crate) struct GlobalValidateOptions {
     /// Locale code for localized fields. Nil = default locale.
     pub(crate) locale: Option<String>,
     /// Skip access control checks (default: `false`).
-    #[serde(rename = "overrideAccess")]
-    #[lua(rename = "overrideAccess", optional)]
+    #[lua(optional)]
     pub(crate) override_access: bool,
     /// Validate as a draft (relaxes required-field checks for globals with
     /// drafts enabled).

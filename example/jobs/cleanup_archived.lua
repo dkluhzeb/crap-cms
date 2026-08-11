@@ -14,7 +14,7 @@ M.run = crap.any.job_handler(function(_context)
       status = "archived",
       created_at = { less_than = cutoff },
     },
-    overrideAccess = true,
+    override_access = true,
   })
 
   if not result or not result.documents then
@@ -23,7 +23,7 @@ M.run = crap.any.job_handler(function(_context)
 
   local count = 0
   for _, doc in ipairs(result.documents) do
-    crap.collections.inquiries.delete(doc.id, { overrideAccess = true })
+    crap.collections.inquiries.delete(doc.id, { override_access = true })
     count = count + 1
   end
 

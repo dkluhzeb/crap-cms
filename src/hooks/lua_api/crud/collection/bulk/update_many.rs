@@ -68,8 +68,7 @@ pub(crate) struct UpdateManyOpts {
     /// Locale code for localized fields. Nil = default locale.
     pub(crate) locale: Option<String>,
     /// Skip access control checks (default: `false`).
-    #[serde(rename = "overrideAccess")]
-    #[lua(rename = "overrideAccess", optional)]
+    #[lua(optional)]
     pub(crate) override_access: bool,
     /// Apply changes to draft versions (default: `false`).
     #[lua(optional)]

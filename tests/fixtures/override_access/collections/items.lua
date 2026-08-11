@@ -1,4 +1,4 @@
---- Test collection with rich access control for overrideAccess tests.
+--- Test collection with rich access control for override_access tests.
 crap.collections.define("items", {
     labels = { singular = "Item", plural = "Items" },
     fields = {

@@ -133,6 +133,19 @@ fn parse_field_name(field_tbl: &Table) -> Result<String> {
         );
     }
 
+    // The `_tz` / `_lang` suffixes are reserved for the companion columns
+    // synthesized for timezone-aware Date fields and language-picker Code
+    // fields (`{field}_tz`, `{field}_lang`). A user field literally named
+    // `start_date_tz` would collide with the companion of `start_date`.
+    // Reserving the suffix pattern is the safe freeze direction — it can be
+    // loosened later (additive) but never added post-freeze.
+    if name.ends_with("_tz") || name.ends_with("_lang") {
+        bail!(
+            "Field name '{name}' is reserved — the '_tz' and '_lang' suffixes are used for \
+             timezone/language companion columns (e.g. a Date field's '{{field}}_tz')"
+        );
+    }
+
     Ok(name)
 }
 
@@ -184,8 +197,18 @@ pub(super) fn parse_single_field(lua: &Lua, field_tbl: &Table) -> Result<FieldDe
 fn parse_field_parts(lua: &Lua, field_tbl: &Table) -> Result<ParsedFieldParts> {
     let name = parse_field_name(field_tbl)?;
 
-    let type_str: String = get_string_val(field_tbl, "type").unwrap_or_else(|_| "text".to_string());
-    let field_type = FieldType::parse_lossy(&type_str);
+    // An absent `type` defaults to text; a PRESENT-but-unknown type is a hard
+    // error (never silently coerced to Text — that would freeze the wrong
+    // column shape and lock out ever adding a real field type of that name).
+    let field_type = match field_tbl.get::<Option<String>>("type")? {
+        None => FieldType::Text,
+        Some(type_str) => FieldType::parse(&type_str).ok_or_else(|| {
+            anyhow!(
+                "Field '{name}': unknown field type '{type_str}'. Valid types: {}",
+                FieldType::ALL.join(", ")
+            )
+        })?,
+    };
 
     validate_field_keys(field_tbl, &field_type)?;
 
@@ -1534,6 +1557,33 @@ mod tests {
         }
     }
 
+    /// Regression: a present-but-unknown field `type` must be rejected, not
+    /// silently coerced to `Text` (which would freeze the wrong column shape
+    /// and lock out ever adding a real field type of that name).
+    #[test]
+    fn parse_rejects_unknown_field_type() {
+        let lua = Lua::new();
+        for ty in ["slug", "tex", "relation", "Text ", "richtext2"] {
+            let err = parse_one(&lua, "f", ty).unwrap_err().to_string();
+            assert!(
+                err.contains("unknown field type") && err.contains(ty.trim()),
+                "expected unknown-type rejection for '{ty}', got: {err}"
+            );
+        }
+    }
+
+    /// An omitted `type` still defaults to text (absent ≠ unknown).
+    #[test]
+    fn parse_defaults_absent_type_to_text() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "f").unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let parsed = parse_fields(&lua, &fields_tbl).expect("absent type defaults to text");
+        assert_eq!(parsed[0].field_type, FieldType::Text);
+    }
+
     /// Regression: a field whose name starts with `_` must be rejected — the
     /// underscore prefix is reserved for system columns.
     #[test]
@@ -1544,6 +1594,21 @@ mod tests {
             assert!(
                 err.contains("underscore"),
                 "expected underscore rejection for '{name}', got: {err}"
+            );
+        }
+    }
+
+    /// Regression: `_tz` / `_lang` suffixes are reserved for the timezone /
+    /// language companion columns — a field named `start_date_tz` would
+    /// collide with the companion of `start_date`.
+    #[test]
+    fn parse_rejects_tz_and_lang_suffix_field_names() {
+        let lua = Lua::new();
+        for name in ["start_date_tz", "snippet_lang", "event_tz", "content_lang"] {
+            let err = parse_one(&lua, name, "text").unwrap_err().to_string();
+            assert!(
+                err.contains("reserved") && (err.contains("_tz") || err.contains("_lang")),
+                "expected suffix rejection for '{name}', got: {err}"
             );
         }
     }

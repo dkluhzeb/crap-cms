@@ -210,6 +210,7 @@ struct WriteManifestParams<'a> {
 #[cfg(not(tarpaulin_include))]
 fn write_backup_manifest(p: &WriteManifestParams<'_>) -> Result<()> {
     let manifest = BackupManifest {
+        format_version: crate::commands::db::manifest::BACKUP_FORMAT_VERSION,
         crap_version: env!("CARGO_PKG_VERSION").to_string(),
         timestamp: Local::now().to_rfc3339(),
         db_size: p.db_size,

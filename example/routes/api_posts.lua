@@ -27,7 +27,7 @@ return crap.any.route_handler(function(ctx)
 	end
 
 	return {
-		json = { posts = posts, total = result.pagination and result.pagination.totalDocs or #posts },
+		json = { posts = posts, total = result.pagination and result.pagination.total_docs or #posts },
 		headers = { ["cache-control"] = "public, max-age=60" },
 	}
 end)

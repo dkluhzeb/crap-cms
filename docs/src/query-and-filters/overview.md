@@ -73,15 +73,15 @@ local result = crap.collections.posts.find({
     limit = 10,
     page = 3,
 })
--- result.pagination.totalDocs   = 150 (total matching documents)
+-- result.pagination.total_docs   = 150 (total matching documents)
 -- result.pagination.limit       = 10
--- result.pagination.totalPages  = 15
+-- result.pagination.total_pages  = 15
 -- result.pagination.page        = 3   (1-based)
--- result.pagination.pageStart   = 21  (1-based index of first doc on this page)
--- result.pagination.hasNextPage = true
--- result.pagination.hasPrevPage = true
--- result.pagination.prevPage    = 2
--- result.pagination.nextPage    = 4
+-- result.pagination.page_start   = 21  (1-based index of first doc on this page)
+-- result.pagination.has_next_page = true
+-- result.pagination.has_prev_page = true
+-- result.pagination.prev_page    = 2
+-- result.pagination.next_page    = 4
 -- #result.documents             = 10  (this page)
 ```
 
@@ -109,23 +109,23 @@ local result = crap.collections.posts.find({
     order_by = "-created_at",
     limit = 10,
 })
--- result.pagination.hasNextPage  = true
--- result.pagination.hasPrevPage  = false
--- result.pagination.startCursor  = "eyJpZCI6ImFiYzEyMyJ9"  (cursor of first doc)
--- result.pagination.endCursor    = "eyJpZCI6Inh5ejc4OSJ9"  (cursor of last doc)
+-- result.pagination.has_next_page  = true
+-- result.pagination.has_prev_page  = false
+-- result.pagination.start_cursor  = "eyJpZCI6ImFiYzEyMyJ9"  (cursor of first doc)
+-- result.pagination.end_cursor    = "eyJpZCI6Inh5ejc4OSJ9"  (cursor of last doc)
 
 -- Next page (forward)
 local page2 = crap.collections.posts.find({
     order_by = "-created_at",
     limit = 10,
-    after_cursor = result.pagination.endCursor,
+    after_cursor = result.pagination.end_cursor,
 })
 
 -- Previous page (backward)
 local page1_again = crap.collections.posts.find({
     order_by = "-created_at",
     limit = 10,
-    before_cursor = page2.pagination.startCursor,
+    before_cursor = page2.pagination.start_cursor,
 })
 ```
 

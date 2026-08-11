@@ -713,17 +713,17 @@ function crap.fields.join(config) end
 
 --- Pagination metadata for a find result.
 --- @class crap.PaginationInfo
---- @field totalDocs integer Total matching documents (before limit/page).
+--- @field total_docs integer Total matching documents (before limit/page).
 --- @field limit integer Applied limit for this query.
---- @field hasNextPage boolean Whether a next page exists.
---- @field hasPrevPage boolean Whether a previous page exists.
---- @field totalPages? integer Total number of pages (offset mode only).
+--- @field has_next_page boolean Whether a next page exists.
+--- @field has_prev_page boolean Whether a previous page exists.
+--- @field total_pages? integer Total number of pages (offset mode only).
 --- @field page? integer Current page number (offset mode only, 1-based).
---- @field pageStart? integer 1-based index of the first document on the current page (offset mode only).
---- @field prevPage? integer Previous page number (offset mode only, nil if on first page).
---- @field nextPage? integer Next page number (offset mode only, nil if on last page).
---- @field startCursor? string Opaque cursor of the first document in results (cursor mode only).
---- @field endCursor? string Opaque cursor of the last document in results (cursor mode only).
+--- @field page_start? integer 1-based index of the first document on the current page (offset mode only).
+--- @field prev_page? integer Previous page number (offset mode only, nil if on first page).
+--- @field next_page? integer Next page number (offset mode only, nil if on last page).
+--- @field start_cursor? string Opaque cursor of the first document in results (cursor mode only).
+--- @field end_cursor? string Opaque cursor of the last document in results (cursor mode only).
 
 --- A single content document with an ID, user-defined fields, and optional timestamps.
 ---
@@ -789,10 +789,10 @@ function crap.fields.join(config) end
 --- @field locale? string Locale code for localized fields (`"en"`, `"de"`, `"all"`).
 --- @field select? string[] Fields to return. Nil/empty = all fields.
 --- @field draft? boolean Include draft documents (versioned collections only).
---- @field overrideAccess? boolean Skip access control checks (default: `false`).
+--- @field override_access? boolean Skip access control checks (default: `false`).
 --- @field trash? boolean Include soft-deleted documents (trash listings).
---- @field after_cursor? string Forward cursor token (from previous response's `endCursor`).
---- @field before_cursor? string Backward cursor token (from previous response's `startCursor`).
+--- @field after_cursor? string Forward cursor token (from previous response's `end_cursor`).
+--- @field before_cursor? string Backward cursor token (from previous response's `start_cursor`).
 --- @field search? string FTS5 full-text search query.
 
 --- Result of `crap.collections.find(...)`. Constructed by the handler
@@ -972,12 +972,12 @@ function crap.collections.config.list() end
 --- @field select? string[] Fields to return. Nil or empty = all fields. `id` is always included.
 --- @field draft? boolean When `true` and the collection has `versions.drafts`, returns the latest draft version snapshot instead of the published main-table data.
 --- @field trash? boolean When `true` and the collection has `soft_delete`, looks up the document among soft-deleted (trash) rows instead of live ones.
---- @field overrideAccess? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass collection-level and field-level access for the current user.
+--- @field override_access? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass collection-level and field-level access for the current user.
 
 --- Optional options for `crap.collections.create`.
 --- @class crap.CreateOptions
 --- @field locale? string Locale code for localized fields. Nil = default locale.
---- @field overrideAccess? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass collection-level and field-level access for the current user.
+--- @field override_access? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass collection-level and field-level access for the current user.
 --- @field draft? boolean When `true` and the collection has `versions.drafts`, creates the document with `_status = 'draft'` and skips required-field validation.
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set `false` to bypass hooks (e.g., for seeding/migrations).
 --- @field events? boolean Emit a live-update event for the created document (default: `true`). Set `false` for a quiet write (e.g., seeding/migrations).
@@ -993,7 +993,7 @@ function crap.collections.create(collection, data, opts) end
 --- Optional options for `crap.collections.update`.
 --- @class crap.UpdateOptions
 --- @field locale? string Locale code for localized fields. Nil = default locale.
---- @field overrideAccess? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass collection-level and field-level access for the current user.
+--- @field override_access? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass collection-level and field-level access for the current user.
 --- @field draft? boolean When `true` and the collection has `versions.drafts`, performs a version-only save (main table unchanged, only a draft version snapshot is created).
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set `false` to bypass hooks.
 --- @field unpublish? boolean When `true`, sets `_status` to `"draft"` (unpublishes). Data is not modified. Requires `versions` on the collection — errors otherwise.
@@ -1010,9 +1010,9 @@ function crap.collections.update(collection, id, data, opts) end
 
 --- Optional options for `crap.collections.delete`.
 --- @class crap.DeleteOptions
---- @field overrideAccess? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass collection-level access for the current user.
+--- @field override_access? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass collection-level access for the current user.
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set `false` to bypass hooks.
---- @field forceHardDelete? boolean Bypass `soft_delete` and remove the row permanently. Mirrors the same flag on the gRPC/HTTP delete handlers.
+--- @field force_hard_delete? boolean Bypass `soft_delete` and remove the row permanently. Mirrors the same flag on the gRPC/HTTP delete handlers.
 --- @field events? boolean Emit a live-update event for the deleted document (default: `true`). Set `false` for a quiet delete.
 
 --- Delete a document.
@@ -1025,7 +1025,7 @@ function crap.collections.delete(collection, id, opts) end
 
 --- Optional options for `crap.collections.unpublish`.
 --- @class crap.UnpublishOptions
---- @field overrideAccess? boolean Skip access control checks (default: `false`).
+--- @field override_access? boolean Skip access control checks (default: `false`).
 --- @field hooks? boolean Run lifecycle hooks (default: `true`).
 
 --- Unpublish a document — sets `_status` to `"draft"` without modifying
@@ -1040,7 +1040,7 @@ function crap.collections.unpublish(collection, id, opts) end
 
 --- Optional options for `crap.collections.undelete`.
 --- @class crap.UndeleteOptions
---- @field overrideAccess? boolean Skip access control checks (default: `false`).
+--- @field override_access? boolean Skip access control checks (default: `false`).
 
 --- Restore a soft-deleted document. Only available on collections with
 --- `soft_delete` enabled.
@@ -1054,7 +1054,7 @@ function crap.collections.undelete(collection, id, opts) end
 --- Optional options for `crap.collections.validate`.
 --- @class crap.ValidateOptions
 --- @field locale? string Locale code for localized fields. Nil = default locale.
---- @field overrideAccess? boolean Skip access control checks (default: `false`).
+--- @field override_access? boolean Skip access control checks (default: `false`).
 --- @field draft? boolean Validate as a draft (relaxes required-field checks the same way as `crap.collections.create({ draft = true })`).
 --- @field id? string Existing document ID to exclude from uniqueness checks (set when validating an update).
 
@@ -1078,7 +1078,7 @@ function crap.collections.validate(collection, data, opts) end
 --- @class crap.CountQuery
 --- @field where? table<string, crap.FilterValue | crap.OrCondition[]>
 --- @field locale? string Locale code for localized fields.
---- @field overrideAccess? boolean Skip access control checks (default: `false`).
+--- @field override_access? boolean Skip access control checks (default: `false`).
 --- @field draft? boolean Include draft documents (default: `false`).
 --- @field trash? boolean Count only soft-deleted (trash) documents (default: `false`).
 --- @field search? string FTS5 full-text search query.
@@ -1102,7 +1102,7 @@ function crap.collections.count(collection, query) end
 --- single-create options so the bulk-only `events` default (`false`) is
 --- explicit.
 --- @class crap.CreateManyOptions
---- @field overrideAccess? boolean Skip access control checks (default: `false`).
+--- @field override_access? boolean Skip access control checks (default: `false`).
 --- @field draft? boolean Create documents as drafts (default: `false`).
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set `false` to bypass.
 --- @field events? boolean Emit a live-update event per created document (default: `false` — bulk operations are quiet). Set `true` to notify subscribers.
@@ -1112,7 +1112,7 @@ function crap.collections.count(collection, query) end
 --- explicit (and bulk-irrelevant keys like `unpublish` are not accepted).
 --- @class crap.UpdateManyOptions
 --- @field locale? string Locale code for localized fields. Nil = default locale.
---- @field overrideAccess? boolean Skip access control checks (default: `false`).
+--- @field override_access? boolean Skip access control checks (default: `false`).
 --- @field draft? boolean Apply changes to draft versions (default: `false`).
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set `false` to bypass.
 --- @field events? boolean Emit a live-update event per modified document (default: `false` — bulk operations are quiet). Set `true` to notify subscribers.
@@ -1122,9 +1122,9 @@ function crap.collections.count(collection, query) end
 --- explicit.
 --- @class crap.DeleteManyOptions
 --- @field locale? string Locale code. Validated but not used for matching (`delete_many` spans locales). Nil = default locale.
---- @field overrideAccess? boolean Skip access control checks (default: `false`).
+--- @field override_access? boolean Skip access control checks (default: `false`).
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set `false` to bypass.
---- @field forceHardDelete? boolean Bypass `soft_delete` and remove rows permanently (default: `false`).
+--- @field force_hard_delete? boolean Bypass `soft_delete` and remove rows permanently (default: `false`).
 --- @field trash? boolean Target already-trashed documents and permanently remove them (empty the trash). Implies a hard delete gated by `access.delete`; matches only rows with `_deleted_at` set (default: `false`).
 --- @field events? boolean Emit a live-update event per deleted document (default: `false` — bulk operations are quiet). Set `true` to notify subscribers.
 
@@ -1157,7 +1157,7 @@ function crap.collections.count(collection, query) end
 
 --- Result of `crap.collections.list_versions(...)`.
 --- @class crap.ListVersionsResult
---- @field docs crap.VersionSummary[] Versions, newest first.
+--- @field documents crap.VersionSummary[] Versions, newest first. Named `documents` for consistency with `find` / `create_many` (was `docs`).
 --- @field pagination crap.PaginationInfo Pagination metadata.
 
 --- Bulk create multiple documents from an array of data tables.
@@ -1200,7 +1200,7 @@ function crap.collections.delete_many(collection, query, opts) end
 --- @class crap.ListVersionsOptions
 --- @field limit? integer Max number of versions to return.
 --- @field offset? integer Offset for pagination.
---- @field overrideAccess? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code (jobs, migrations) to bypass collection-level read-access checks.
+--- @field override_access? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code (jobs, migrations) to bypass collection-level read-access checks.
 
 --- List version snapshots for a document, newest first. Returns a table
 --- of [`crap.VersionSummary`](lua://crap.VersionSummary) rows plus
@@ -1215,7 +1215,7 @@ function crap.collections.list_versions(collection, id, opts) end
 
 --- Optional options for `crap.collections.restore_version`.
 --- @class crap.RestoreVersionOptions
---- @field overrideAccess? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code (jobs, migrations) to bypass collection-level access checks.
+--- @field override_access? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code (jobs, migrations) to bypass collection-level access checks.
 
 --- Restore a previous version: copies the snapshot data back onto the
 --- parent document and writes a new version row. Returns the restored
@@ -1268,13 +1268,13 @@ function crap.globals.config.list() end
 --- Optional options for `crap.globals.get`.
 --- @class crap.GlobalGetOptions
 --- @field locale? string Locale code for localized fields. Nil = default locale.
---- @field overrideAccess? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass the global's read access function.
+--- @field override_access? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass the global's read access function.
 --- @field draft? boolean Include unpublished (draft) content (default: `false`). When the global has drafts enabled and has been unpublished, a normal read serves the last published snapshot; set this to `true` to read the draft instead.
 
 --- Optional options for `crap.globals.update`.
 --- @class crap.GlobalUpdateOptions
 --- @field locale? string Locale code for localized fields. Nil = default locale.
---- @field overrideAccess? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass the global's update access function.
+--- @field override_access? boolean Skip access control checks (default: `false`). Set to `true` in trusted internal code to bypass the global's update access function.
 --- @field hooks? boolean Run lifecycle hooks (default: `true`). Set false to bypass hooks (e.g., for seeding/migrations).
 --- @field draft? boolean When `true` and the global has `versions.drafts`, performs a version-only save (main row unchanged, only a draft version snapshot is created). Matches `crap.collections.update`'s `draft`.
 --- @field events? boolean Emit a live-update event for the updated global (default: `true`). Set `false` for a quiet write.
@@ -1284,7 +1284,7 @@ function crap.globals.config.list() end
 --- mode against the fixed `default` row.
 --- @class crap.GlobalValidateOptions
 --- @field locale? string Locale code for localized fields. Nil = default locale.
---- @field overrideAccess? boolean Skip access control checks (default: `false`).
+--- @field override_access? boolean Skip access control checks (default: `false`).
 --- @field draft? boolean Validate as a draft (relaxes required-field checks for globals with drafts enabled).
 
 --- Get a global's current value.

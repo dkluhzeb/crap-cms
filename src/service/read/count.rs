@@ -54,7 +54,7 @@ pub fn count_documents(ctx: &ServiceContext, input: &CountDocumentsInput) -> Res
         let scope = resolve_view_scope(
             hooks,
             &read_ctx,
-            requested_views(None, input.include_drafts),
+            requested_views(input.status_filter.as_deref(), input.include_drafts),
         )?;
         if !scope.is_anything_visible() {
             return Err(ServiceError::AccessDenied("Read access denied".into()));

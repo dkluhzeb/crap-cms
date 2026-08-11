@@ -84,11 +84,11 @@ local result = crap.collections.media.delete_many({
 
 ### Force Hard Delete
 
-The `forceHardDelete` option bypasses the ref count check. This is used internally for **Empty Trash** operations and can be used in Lua hooks:
+The `force_hard_delete` option bypasses the ref count check. This is used internally for **Empty Trash** operations and can be used in Lua hooks:
 
 ```lua
 crap.collections.media.delete("m1", {
-    forceHardDelete = true  -- skips ref count check
+    force_hard_delete = true  -- skips ref count check
 })
 ```
 

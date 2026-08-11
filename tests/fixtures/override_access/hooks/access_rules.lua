@@ -1,4 +1,4 @@
---- Access control functions for overrideAccess tests.
+--- Access control functions for override_access tests.
 local M = {}
 
 --- Allow everyone (including anonymous).

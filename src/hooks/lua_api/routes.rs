@@ -91,9 +91,33 @@ fn validate_hook_ref(lua: &Lua, value: Value, field: &str) -> LuaResult<Value> {
     Ok(value)
 }
 
+/// Resolve the `access` gate from the registration table onto the stored
+/// entry. nil → public (omit); false → disabled (404); ref → gated. `true`
+/// is REJECTED: it previously meant "public" (same as nil), but a user writing
+/// `access = true` almost certainly means "require auth" and would silently get
+/// an open endpoint. Forcing an explicit nil/false/ref removes that footgun and
+/// keeps `true` reserved for a future meaning.
+fn apply_access(lua: &Lua, def: &Table, entry: &Table) -> LuaResult<()> {
+    match def.get::<Value>("access")? {
+        Value::Nil => {}
+        Value::Boolean(false) => entry.set("access", false)?,
+        Value::Boolean(true) => {
+            return Err(RuntimeError(
+                "crap.routes.register: `access = true` is not allowed — omit `access` \
+                 (or nil) for a public route, `false` to disable it, or a hook \
+                 reference (e.g. \"access.is_admin\") to require authorization."
+                    .into(),
+            ));
+        }
+        other => entry.set("access", validate_hook_ref(lua, other, "access")?)?,
+    }
+    Ok(())
+}
+
 /// Register a custom HTTP route. Init-phase only — runtime registration has no
 /// effect (routes are mounted once at startup).
 #[lua_fn(path = "crap.routes.register")]
+
 fn route_register(
     lua: &Lua,
     #[lua(ty = "table", doc = "Route definition (path, method, handler, …).")] def: Table,
@@ -141,12 +165,7 @@ fn route_register(
     entry.set("methods", methods_tbl)?;
     entry.set("handler", handler)?;
 
-    // access: nil → public (omit); false → disabled; ref → gated.
-    match def.get::<Value>("access")? {
-        Value::Nil | Value::Boolean(true) => {}
-        Value::Boolean(false) => entry.set("access", false)?,
-        other => entry.set("access", validate_hook_ref(lua, other, "access")?)?,
-    }
+    apply_access(lua, &def, &entry)?;
 
     if let Value::Table(rl) = def.get::<Value>("rate_limit")? {
         deny_unknown_keys(&rl, "crap.routes.register rate_limit", &["max", "window"])
@@ -383,6 +402,24 @@ mod tests {
         assert_eq!(
             gated_e.get::<String>("access").unwrap(),
             "access.admin_only"
+        );
+    }
+
+    /// Regression: `access = true` is rejected (it silently meant "public",
+    /// a footgun for a user expecting "require auth"). nil/false/ref still work.
+    #[test]
+    fn rejects_access_true() {
+        let lua = lua_in_init_phase();
+        let err = lua
+            .load(
+                r#"crap.routes.register({ path = "/x", method = "GET", handler = "routes.x", access = true })"#,
+            )
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("access = true") && err.contains("not allowed"),
+            "expected access=true rejection, got: {err}"
         );
     }
 

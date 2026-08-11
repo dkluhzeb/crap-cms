@@ -32,7 +32,7 @@ return crap.collections.users.auth_strategy(function(context)
 		return nil
 	end
 
-	local user = crap.collections.find_by_id(context.collection, user_id, { overrideAccess = true })
+	local user = crap.collections.find_by_id(context.collection, user_id, { override_access = true })
 	if not user then
 		return nil
 	end

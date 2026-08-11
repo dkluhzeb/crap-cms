@@ -18,6 +18,11 @@ pub struct CountDocumentsInput<'a> {
     /// and the collection has drafts, the service injects
     /// `_status = "published"` post-validation.
     pub include_drafts: bool,
+    /// Explicit `_status` view filter (e.g. `["draft"]`), mirroring
+    /// [`FindDocumentsInput::status_filter`]. Passed to `requested_views` so a
+    /// status-filtered count scopes to the same views as the matching `find`
+    /// — otherwise the reported total would not match the filtered rows.
+    pub status_filter: Option<Vec<String>>,
 }
 
 impl<'a> CountDocumentsInput<'a> {
@@ -34,6 +39,7 @@ pub struct CountDocumentsInputBuilder<'a> {
     search: Option<&'a str>,
     trash: bool,
     include_drafts: bool,
+    status_filter: Option<Vec<String>>,
 }
 
 impl<'a> CountDocumentsInputBuilder<'a> {
@@ -44,7 +50,13 @@ impl<'a> CountDocumentsInputBuilder<'a> {
             search: None,
             trash: false,
             include_drafts: false,
+            status_filter: None,
         }
+    }
+
+    pub fn status_filter(mut self, status_filter: Option<Vec<String>>) -> Self {
+        self.status_filter = status_filter;
+        self
     }
 
     pub fn locale_ctx(mut self, locale_ctx: Option<&'a LocaleContext>) -> Self {
@@ -74,6 +86,7 @@ impl<'a> CountDocumentsInputBuilder<'a> {
             search: self.search,
             trash: self.trash,
             include_drafts: self.include_drafts,
+            status_filter: self.status_filter,
         }
     }
 }
@@ -101,9 +114,11 @@ mod tests {
             .search(Some("hello"))
             .trash(true)
             .include_drafts(false)
+            .status_filter(Some(vec!["draft".to_string()]))
             .build();
         assert_eq!(c.search, Some("hello"));
         assert!(c.trash);
         assert!(!c.include_drafts);
+        assert_eq!(c.status_filter.as_deref(), Some(&["draft".to_string()][..]));
     }
 }

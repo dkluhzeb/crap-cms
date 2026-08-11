@@ -1273,7 +1273,7 @@ async fn grpc_create_published_sets_status() {
 
 // ── Production-critical: FK cascade fires through the full service path ──
 //
-// Mirrors the gRPC `DeleteMany` + `forceHardDelete: true` path used by the
+// Mirrors the gRPC `DeleteMany` + `force_hard_delete: true` path used by the
 // loadtest. Build a versioned + soft-delete collection, create rows + version
 // snapshots, then hard-delete via the bulk service entry point. Asserts the
 // `_versions_*` rows are gone — i.e. SQLite's FK cascade fires as designed
@@ -1333,7 +1333,7 @@ fn bulk_hard_delete_cascades_to_versions_via_service() {
         .unwrap();
     assert_eq!(pre_versions, 6, "fixture should have 6 versions");
 
-    // Simulate the gRPC `forceHardDelete: true` path: clear soft_delete
+    // Simulate the gRPC `force_hard_delete: true` path: clear soft_delete
     // on the def before calling the service. This matches what
     // `delete_many_impl` does at `src/api/handlers/collection/bulk/delete_many.rs:122`.
     let mut hard_delete_def = def.clone();

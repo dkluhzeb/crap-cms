@@ -31,8 +31,7 @@ use crate::{
 #[lua(class = "crap.UnpublishOptions")]
 pub(crate) struct UnpublishOptions {
     /// Skip access control checks (default: `false`).
-    #[serde(rename = "overrideAccess")]
-    #[lua(rename = "overrideAccess", optional)]
+    #[lua(optional)]
     pub(crate) override_access: bool,
     /// Run lifecycle hooks (default: `true`).
     #[lua(optional)]

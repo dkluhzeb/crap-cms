@@ -34,8 +34,7 @@ pub(crate) struct CreateOptions {
     /// Skip access control checks (default: `false`). Set to `true` in
     /// trusted internal code to bypass collection-level and field-level
     /// access for the current user.
-    #[serde(rename = "overrideAccess")]
-    #[lua(rename = "overrideAccess", optional)]
+    #[lua(optional)]
     pub(crate) override_access: bool,
     /// When `true` and the collection has `versions.drafts`, creates the
     /// document with `_status = 'draft'` and skips required-field

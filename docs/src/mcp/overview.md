@@ -252,7 +252,7 @@ exclude_collections = ["users"]  # Hide sensitive collections
 
 MCP operates with **full access** — collection-level and field-level access control
 functions are not applied. This is by design: MCP is a machine-to-machine API surface
-(equivalent to Lua's `overrideAccess = true`), gated by transport-level authentication:
+(equivalent to Lua's `override_access = true`), gated by transport-level authentication:
 
 - **stdio:** Access is controlled by who can run the process.
 - **HTTP:** Access is controlled by the `api_key` setting (minimum 32 characters).

@@ -6,7 +6,7 @@ use anyhow::{Context as _, Result, bail};
 
 use crate::{
     cli::{self, Spinner},
-    commands::db::manifest::BackupManifest,
+    commands::db::manifest::{BACKUP_FORMAT_VERSION, BackupManifest},
     config::CrapConfig,
     db::{DbConnection, pool},
 };
@@ -77,6 +77,18 @@ fn read_and_display_manifest(backup_dir: &Path) -> Result<()> {
 
     let manifest: BackupManifest =
         serde_json::from_str(&manifest_str).context("Failed to parse manifest.json")?;
+
+    // Refuse a backup written by a NEWER format than this binary understands —
+    // we cannot know how to read a future layout, and guessing risks a corrupt
+    // restore. Older/equal (incl. pre-versioning → 1) is accepted.
+    if manifest.format_version > BACKUP_FORMAT_VERSION {
+        bail!(
+            "This backup uses format version {} but this crap-cms only supports up to {}. \
+             Upgrade crap-cms to restore it.",
+            manifest.format_version,
+            BACKUP_FORMAT_VERSION
+        );
+    }
 
     cli::header("Restoring from backup");
 

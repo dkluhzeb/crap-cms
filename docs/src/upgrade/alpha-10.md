@@ -24,7 +24,7 @@ clean.
   `crap.collections.*` / `crap.globals.*` / `crap.jobs.define` calls.
 - **Plugin authors: drop option keys from bulk-op *queries*.** The
   `update_many` / `delete_many` query table only accepts `where`. Move
-  `overrideAccess` / `locale` / `draft` to the options argument.
+  `override_access` / `locale` / `draft` to the options argument.
 - **Plugin authors: `crap.hooks.register` rejects unknown events.** A
   typo'd event name is now an error instead of a silent no-op.
 - **Check field names.** A field named `id` / `parent_id` /
@@ -46,18 +46,45 @@ clean.
 
 ## Required action items
 
+### 0. Rename camelCase keys to snake_case (API casing unified)
+
+The API is now uniformly snake_case. Two Lua **option keys** and the
+**pagination result** fields were the last camelCase holdouts and are
+renamed:
+
+```diff
+  crap.collections.posts.find(query, {
+-     overrideAccess = true,
++     override_access = true,
+  })
+  crap.collections.posts.delete(id, {
+-     forceHardDelete = true,
++     force_hard_delete = true,
+  })
+
+- local total = result.pagination.totalDocs
++ local total = result.pagination.total_docs
+```
+
+Pagination fields renamed: `totalDocs → total_docs`, `hasNextPage →
+has_next_page`, `hasPrevPage → has_prev_page`, `totalPages →
+total_pages`, `pageStart → page_start`, `prevPage → prev_page`,
+`nextPage → next_page`, `startCursor → start_cursor`, `endCursor →
+end_cursor`. Also, `crap.collections.list_versions` returns
+`result.documents` instead of `result.docs` (matching `find`).
+
 ### 1. Remove unknown keys from Lua CRUD option tables
 
 Every option table now rejects unrecognized keys
 (`deny_unknown_fields`), matching the behavior the query tables already
 had. This catches typos that previously defeated the option they were
-meant to set — most dangerously a misspelled `overrideAccess`, which
+meant to set — most dangerously a misspelled `override_access`, which
 silently left access control **on**.
 
 ```diff
   crap.collections.posts.create(data, {
 -     overrideAcces = true,   -- silently ignored before; now an error
-+     overrideAccess = true,
++     override_access = true,
   })
 ```
 
@@ -69,18 +96,18 @@ Affected: the option arguments of `create`, `update`, `delete`,
 ### 2. Move bulk-op options off the query table
 
 The `update_many` / `delete_many` query (2nd) argument previously
-*declared* option keys it never read — `overrideAccess` / `locale` /
-`draft` on `update_many`, and `overrideAccess` / `locale` on
+*declared* option keys it never read — `override_access` / `locale` /
+`draft` on `update_many`, and `override_access` / `locale` on
 `delete_many`. The effective values came from the options argument all
 along. The query table now carries only `where`; pass the options in
 the options argument.
 
 ```diff
   crap.collections.posts.update_many(
--     { where = { status = "draft" }, overrideAccess = true },
+-     { where = { status = "draft" }, override_access = true },
 +     { where = { status = "draft" } },
       { status = "published" },
-+     { overrideAccess = true }
++     { override_access = true }
   )
 
   crap.collections.posts.delete_many(
@@ -238,6 +265,30 @@ A non-numeric value submitted for a `number` field (e.g. the string
 write — silent data loss that also bypassed `required` and min/max
 bounds. It is now a validation error. Send `nil` / omit the field for
 "no value"; numeric strings (the admin-form encoding) still work.
+
+### 6c. More freeze-hardening rejections (fix if you hit them)
+
+The stabilization pass tightened a few more previously-lenient spots.
+Each only bites a definition that was already relying on ignored input:
+
+- **Unknown field `type`** (e.g. `type = "tex"`) is rejected instead of
+  silently becoming a `Text` column. An omitted `type` still defaults to
+  `text`.
+- **Reserved field names**: a field ending in `_tz` / `_lang` (timezone /
+  language companion suffixes), or colliding with an upload metadata
+  column (`filename`, `url`, `width`, `focal_x`, …) on an upload
+  collection, is rejected.
+- **Enum-typed `admin.*` values** — `admin.position`, `admin.picker`,
+  `admin.format` — reject an unrecognized value (e.g. `format =
+  "lexical"`).
+- **`crap.routes.register { access = true }`** is rejected — omit
+  `access` for a public route, or pass a hook ref to gate it (`true`
+  silently meant "public").
+- **`crap.email.send { retries = N }`** is rejected — `retries` only
+  applies to `crap.email.queue`.
+- **Over-long generated identifiers** (>63 bytes on Postgres) are
+  rejected at migration — shorten very long collection/group/field/locale
+  name combinations. The error names the offending identifier.
 
 ### 7. Runtime option tables also reject unknown keys
 

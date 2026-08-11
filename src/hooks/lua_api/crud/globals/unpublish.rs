@@ -24,8 +24,7 @@ use crate::typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn,
 #[lua(class = "crap.GlobalUnpublishOptions")]
 pub(crate) struct GlobalUnpublishOptions {
     /// Skip access control checks (default: `false`).
-    #[serde(rename = "overrideAccess")]
-    #[lua(rename = "overrideAccess", optional)]
+    #[lua(optional)]
     pub(crate) override_access: bool,
     /// Run lifecycle hooks (default: `true`).
     #[lua(optional)]

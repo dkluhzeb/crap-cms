@@ -14,7 +14,7 @@ use crate::{
     db::{DbConnection, DbPool, query::jobs as job_query},
 };
 
-use super::{backfill_ref_counts, checkbox_columns, collection, global};
+use super::{backfill_ref_counts, checkbox_columns, collection, global, identifier_check};
 
 /// Sync all collection tables with their Lua definitions.
 ///
@@ -34,6 +34,17 @@ pub fn sync_all(pool: &DbPool, registry: &Registry, locale_config: &LocaleConfig
         .context("Failed to start migration transaction")?;
 
     create_system_tables(&tx)?;
+
+    // Portability guard: reject any generated identifier that would overflow
+    // Postgres's 63-byte limit (and silently truncate/collide) BEFORE creating
+    // any table — on every backend, so it surfaces in SQLite development.
+    for (slug, def) in &registry.collections {
+        identifier_check::check_identifiers(slug, &def.fields, locale_config)?;
+    }
+    for (slug, def) in &registry.globals {
+        let table = crate::db::query::helpers::global_table(slug);
+        identifier_check::check_identifiers(&table, &def.fields, locale_config)?;
+    }
 
     for (slug, def) in &registry.collections {
         collection::sync_collection_table(&tx, slug, def, locale_config)?;

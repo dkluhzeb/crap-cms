@@ -99,15 +99,15 @@ fn find_explicit_override_access_true_returns_all() {
     let result = runner
         .eval_lua_with_conn(
             r#"
-        local r = crap.collections.find("items", { overrideAccess = true })
-        return tostring(r.pagination.totalDocs)
+        local r = crap.collections.find("items", { override_access = true })
+        return tostring(r.pagination.total_docs)
         "#,
             &conn,
-            None, // no user — doesn't matter when overrideAccess=true
+            None, // no user — doesn't matter when override_access=true
         )
         .unwrap();
 
-    assert_eq!(result, "3", "overrideAccess=true should return all items");
+    assert_eq!(result, "3", "override_access=true should return all items");
 }
 
 #[test]
@@ -120,8 +120,8 @@ fn find_override_access_false_admin_returns_all() {
     let result = runner
         .eval_lua_with_conn(
             r#"
-        local r = crap.collections.find("items", { overrideAccess = false })
-        return tostring(r.pagination.totalDocs)
+        local r = crap.collections.find("items", { override_access = false })
+        return tostring(r.pagination.total_docs)
         "#,
             &conn,
             Some(&admin),
@@ -130,7 +130,7 @@ fn find_override_access_false_admin_returns_all() {
 
     assert_eq!(
         result, "3",
-        "admin with overrideAccess=false should see all items"
+        "admin with override_access=false should see all items"
     );
 }
 
@@ -144,8 +144,8 @@ fn find_override_access_false_editor_sees_only_own() {
     let result = runner
         .eval_lua_with_conn(
             r#"
-        local r = crap.collections.find("items", { overrideAccess = false })
-        return tostring(r.pagination.totalDocs)
+        local r = crap.collections.find("items", { override_access = false })
+        return tostring(r.pagination.total_docs)
         "#,
             &conn,
             Some(&editor),
@@ -166,8 +166,8 @@ fn find_override_access_false_anonymous_denied() {
     let conn = pool.get().unwrap();
     let result = runner.eval_lua_with_conn(
         r#"
-        local r = crap.collections.find("items", { overrideAccess = false })
-        return tostring(r.pagination.totalDocs)
+        local r = crap.collections.find("items", { override_access = false })
+        return tostring(r.pagination.total_docs)
         "#,
         &conn,
         None, // anonymous
@@ -175,7 +175,7 @@ fn find_override_access_false_anonymous_denied() {
 
     assert!(
         result.is_err(),
-        "anonymous find with overrideAccess=false should error"
+        "anonymous find with override_access=false should error"
     );
     let err = result.unwrap_err().to_string();
     assert!(
@@ -195,7 +195,7 @@ fn find_override_access_false_strips_denied_read_fields() {
     let result = runner
         .eval_lua_with_conn(
             r#"
-        local r = crap.collections.find("items", { overrideAccess = false })
+        local r = crap.collections.find("items", { override_access = false })
         local has_notes = false
         for _, doc in ipairs(r.documents) do
             if doc.notes ~= nil then has_notes = true end
@@ -223,7 +223,7 @@ fn find_override_access_false_admin_sees_all_fields() {
     let result = runner
         .eval_lua_with_conn(
             r#"
-        local r = crap.collections.find("items", { overrideAccess = false })
+        local r = crap.collections.find("items", { override_access = false })
         local notes_count = 0
         for _, doc in ipairs(r.documents) do
             if doc.notes ~= nil then notes_count = notes_count + 1 end
@@ -249,7 +249,7 @@ fn find_by_id_override_access_false_admin_returns_doc() {
     let conn = pool.get().unwrap();
     let code = format!(
         r#"
-        local doc = crap.collections.find_by_id("items", "{}", {{ overrideAccess = false }})
+        local doc = crap.collections.find_by_id("items", "{}", {{ override_access = false }})
         if doc then return doc.title else return "NIL" end
         "#,
         ids[0]
@@ -270,7 +270,7 @@ fn find_by_id_override_access_false_editor_own_item_ok() {
     // ids[0] is owned by editor-1 → should be accessible
     let code = format!(
         r#"
-        local doc = crap.collections.find_by_id("items", "{}", {{ overrideAccess = false }})
+        local doc = crap.collections.find_by_id("items", "{}", {{ override_access = false }})
         if doc then return doc.title else return "NIL" end
         "#,
         ids[0]
@@ -291,7 +291,7 @@ fn find_by_id_override_access_false_editor_other_item_nil() {
     // ids[2] is owned by other-1 → constrained read should return nil
     let code = format!(
         r#"
-        local doc = crap.collections.find_by_id("items", "{}", {{ overrideAccess = false }})
+        local doc = crap.collections.find_by_id("items", "{}", {{ override_access = false }})
         if doc then return "FOUND" else return "NIL" end
         "#,
         ids[2]
@@ -311,7 +311,7 @@ fn find_by_id_override_access_false_strips_read_fields() {
     let conn = pool.get().unwrap();
     let code = format!(
         r#"
-        local doc = crap.collections.find_by_id("items", "{}", {{ overrideAccess = false }})
+        local doc = crap.collections.find_by_id("items", "{}", {{ override_access = false }})
         if doc and doc.notes ~= nil then return "HAS_NOTES" else return "NO_NOTES" end
         "#,
         ids[0]
@@ -333,7 +333,7 @@ fn find_by_id_override_access_false_anonymous_denied() {
     let conn = pool.get().unwrap();
     let code = format!(
         r#"
-        local doc = crap.collections.find_by_id("items", "{}", {{ overrideAccess = false }})
+        local doc = crap.collections.find_by_id("items", "{}", {{ override_access = false }})
         return "FOUND"
         "#,
         ids[0]
@@ -352,7 +352,7 @@ fn create_explicit_override_access_true_works_without_user() {
     let result = runner
         .eval_lua_with_conn(
             r#"
-        local doc = crap.collections.create("items", { title = "Test" }, { overrideAccess = true })
+        local doc = crap.collections.create("items", { title = "Test" }, { override_access = true })
         return doc.id
         "#,
             &conn,
@@ -362,7 +362,7 @@ fn create_explicit_override_access_true_works_without_user() {
 
     assert!(
         !result.is_empty(),
-        "create with explicit overrideAccess=true should work"
+        "create with explicit override_access=true should work"
     );
 }
 
@@ -373,7 +373,7 @@ fn create_override_access_false_anonymous_denied() {
     let conn = pool.get().unwrap();
     let result = runner.eval_lua_with_conn(
         r#"
-        local doc = crap.collections.create("items", { title = "Test" }, { overrideAccess = false })
+        local doc = crap.collections.create("items", { title = "Test" }, { override_access = false })
         return doc.id
         "#,
         &conn,
@@ -382,7 +382,7 @@ fn create_override_access_false_anonymous_denied() {
 
     assert!(
         result.is_err(),
-        "anonymous create with overrideAccess=false should error"
+        "anonymous create with override_access=false should error"
     );
     let err = result.unwrap_err().to_string();
     assert!(
@@ -399,7 +399,7 @@ fn create_override_access_false_editor_allowed() {
     let conn = pool.get().unwrap();
     let result = runner.eval_lua_with_conn(
         r#"
-        local doc = crap.collections.create("items", { title = "Editor Post" }, { overrideAccess = false })
+        local doc = crap.collections.create("items", { title = "Editor Post" }, { override_access = false })
         return doc.title
         "#,
         &conn,
@@ -422,7 +422,7 @@ fn create_override_access_false_strips_denied_write_fields() {
         local doc = crap.collections.create("items", {
             title = "Test",
             notes = "should-be-stripped",
-        }, { overrideAccess = false })
+        }, { override_access = false })
         if doc.notes == nil or doc.notes == "" then return "STRIPPED" else return doc.notes end
         "#,
             &conn,
@@ -448,7 +448,7 @@ fn create_override_access_false_admin_keeps_all_fields() {
         local doc = crap.collections.create("items", {
             title = "Admin Post",
             notes = "admin-notes",
-        }, { overrideAccess = false })
+        }, { override_access = false })
         return doc.notes or "MISSING"
         "#,
             &conn,
@@ -469,7 +469,7 @@ fn update_override_access_false_anonymous_denied() {
     let conn = pool.get().unwrap();
     let code = format!(
         r#"
-        local doc = crap.collections.update("items", "{}", {{ title = "New" }}, {{ overrideAccess = false }})
+        local doc = crap.collections.update("items", "{}", {{ title = "New" }}, {{ override_access = false }})
         return doc.title
         "#,
         ids[0]
@@ -477,7 +477,7 @@ fn update_override_access_false_anonymous_denied() {
     let result = runner.eval_lua_with_conn(&code, &conn, None);
     assert!(
         result.is_err(),
-        "anonymous update with overrideAccess=false should error"
+        "anonymous update with override_access=false should error"
     );
 }
 
@@ -490,7 +490,7 @@ fn update_override_access_false_editor_allowed() {
     let conn = pool.get().unwrap();
     let code = format!(
         r#"
-        local doc = crap.collections.update("items", "{}", {{ title = "Updated" }}, {{ overrideAccess = false }})
+        local doc = crap.collections.update("items", "{}", {{ title = "Updated" }}, {{ override_access = false }})
         return doc.title
         "#,
         ids[0]
@@ -516,7 +516,7 @@ fn update_override_access_false_strips_status_for_editor() {
             title = "Updated",
             status = "published",
             notes = "new-notes",
-        }}, {{ overrideAccess = false }})
+        }}, {{ override_access = false }})
         return doc.status .. "|" .. (doc.notes or "NIL")
         "#,
         ids[0] // Item A, status=draft, notes=secret-a
@@ -544,7 +544,7 @@ fn update_override_access_false_admin_updates_all_fields() {
         local doc = crap.collections.update("items", "{}", {{
             status = "published",
             notes = "admin-updated",
-        }}, {{ overrideAccess = false }})
+        }}, {{ override_access = false }})
         return doc.status .. "|" .. doc.notes
         "#,
         ids[0]
@@ -568,7 +568,7 @@ fn delete_explicit_override_access_true_works_without_user() {
     let conn = pool.get().unwrap();
     let code = format!(
         r#"
-        crap.collections.delete("items", "{}", {{ overrideAccess = true }})
+        crap.collections.delete("items", "{}", {{ override_access = true }})
         return "OK"
         "#,
         ids[0]
@@ -585,7 +585,7 @@ fn delete_override_access_false_anonymous_denied() {
     let conn = pool.get().unwrap();
     let code = format!(
         r#"
-        crap.collections.delete("items", "{}", {{ overrideAccess = false }})
+        crap.collections.delete("items", "{}", {{ override_access = false }})
         return "OK"
         "#,
         ids[0]
@@ -593,7 +593,7 @@ fn delete_override_access_false_anonymous_denied() {
     let result = runner.eval_lua_with_conn(&code, &conn, None);
     assert!(
         result.is_err(),
-        "anonymous delete with overrideAccess=false should error"
+        "anonymous delete with override_access=false should error"
     );
 }
 
@@ -606,7 +606,7 @@ fn delete_override_access_false_editor_denied() {
     let conn = pool.get().unwrap();
     let code = format!(
         r#"
-        crap.collections.delete("items", "{}", {{ overrideAccess = false }})
+        crap.collections.delete("items", "{}", {{ override_access = false }})
         return "OK"
         "#,
         ids[0]
@@ -614,7 +614,7 @@ fn delete_override_access_false_editor_denied() {
     let result = runner.eval_lua_with_conn(&code, &conn, Some(&editor));
     assert!(
         result.is_err(),
-        "editor delete with overrideAccess=false should error (admin_only)"
+        "editor delete with override_access=false should error (admin_only)"
     );
     let err = result.unwrap_err().to_string();
     assert!(
@@ -632,7 +632,7 @@ fn delete_override_access_false_admin_allowed() {
     let conn = pool.get().unwrap();
     let code = format!(
         r#"
-        crap.collections.delete("items", "{}", {{ overrideAccess = false }})
+        crap.collections.delete("items", "{}", {{ override_access = false }})
         return "OK"
         "#,
         ids[0]
@@ -666,11 +666,11 @@ fn user_context_none_when_no_user_provided() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let conn = pool.get().unwrap();
-    // Create with explicit overrideAccess=true works without user
+    // Create with explicit override_access=true works without user
     let result = runner
         .eval_lua_with_conn(
             r#"
-        local doc = crap.collections.create("items", { title = "No User" }, { overrideAccess = true })
+        local doc = crap.collections.create("items", { title = "No User" }, { override_access = true })
         return doc.id
         "#,
             &conn,
@@ -679,7 +679,7 @@ fn user_context_none_when_no_user_provided() {
         .unwrap();
     assert!(!result.is_empty());
 
-    // Default overrideAccess=false without user is denied (authenticated required)
+    // Default override_access=false without user is denied (authenticated required)
     let result = runner.eval_lua_with_conn(
         r#"
         local doc = crap.collections.create("items", { title = "No User" })
@@ -703,8 +703,8 @@ fn user_context_propagated_correctly() {
             r#"
         crap.collections.create("items", { title = "Mine", owner = "editor-1" })
         crap.collections.create("items", { title = "Theirs", owner = "other-1" })
-        local r = crap.collections.find("items", { overrideAccess = false })
-        return tostring(r.pagination.totalDocs)
+        local r = crap.collections.find("items", { override_access = false })
+        return tostring(r.pagination.total_docs)
         "#,
             &conn,
             Some(&editor),
@@ -725,20 +725,20 @@ fn default_override_access_is_false() {
     seed_items(&pool, &registry);
 
     let conn = pool.get().unwrap();
-    // Without specifying overrideAccess at all, should enforce access control.
+    // Without specifying override_access at all, should enforce access control.
     // With no user provided, anonymous access is denied.
     let result = runner.eval_lua_with_conn(
         r#"
         local r = crap.collections.find("items", {})
-        return tostring(r.pagination.totalDocs)
+        return tostring(r.pagination.total_docs)
         "#,
         &conn,
-        None, // no user — default overrideAccess=false means access check runs
+        None, // no user — default override_access=false means access check runs
     );
 
     assert!(
         result.is_err(),
-        "default (no overrideAccess specified) should enforce access control"
+        "default (no override_access specified) should enforce access control"
     );
 }
 
@@ -751,8 +751,8 @@ fn explicit_override_access_true_bypasses_all() {
     let result = runner
         .eval_lua_with_conn(
             r#"
-        local r = crap.collections.find("items", { overrideAccess = true })
-        return tostring(r.pagination.totalDocs)
+        local r = crap.collections.find("items", { override_access = true })
+        return tostring(r.pagination.total_docs)
         "#,
             &conn,
             None,
@@ -761,6 +761,6 @@ fn explicit_override_access_true_bypasses_all() {
 
     assert_eq!(
         result, "3",
-        "explicit overrideAccess=true should bypass access control"
+        "explicit override_access=true should bypass access control"
     );
 }
