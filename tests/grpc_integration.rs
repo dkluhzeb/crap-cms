@@ -22,10 +22,9 @@
     clippy::unreadable_literal
 )]
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use prost_types::{ListValue, Struct, Value, value::Kind};
 use tonic::Request;
 
 use crap_cms::api::content;
@@ -89,24 +88,24 @@ fn make_global_def() -> GlobalDefinition {
 }
 
 /// Build a prost Struct from key-value string pairs.
-fn make_struct(pairs: &[(&str, &str)]) -> Struct {
-    let mut fields = BTreeMap::new();
+fn make_struct(pairs: &[(&str, &str)]) -> content::DataMap {
+    let mut fields = HashMap::new();
     for (k, v) in pairs {
         fields.insert(
             k.to_string(),
-            Value {
-                kind: Some(Kind::StringValue(v.to_string())),
+            content::FieldValue {
+                kind: Some(content::field_value::Kind::StringValue(v.to_string())),
             },
         );
     }
-    Struct { fields }
+    content::DataMap { fields }
 }
 
 /// Extract a string field from a proto Document's fields struct.
 fn get_proto_field(doc: &content::Document, field: &str) -> Option<String> {
     doc.fields.as_ref().and_then(|s| {
         s.fields.get(field).and_then(|v| match &v.kind {
-            Some(Kind::StringValue(s)) => Some(s.clone()),
+            Some(content::field_value::Kind::StringValue(s)) => Some(s.clone()),
             _ => None,
         })
     })
@@ -870,25 +869,29 @@ async fn describe_nonexistent_collection() {
 
 // ── Deep nesting validation via gRPC ────────────────────────────────────
 
-fn str_val(s: &str) -> Value {
-    Value {
-        kind: Some(Kind::StringValue(s.to_string())),
+fn str_val(s: &str) -> content::FieldValue {
+    content::FieldValue {
+        kind: Some(content::field_value::Kind::StringValue(s.to_string())),
     }
 }
 
-fn struct_val(pairs: &[(&str, Value)]) -> Value {
-    let mut fields = BTreeMap::new();
+fn struct_val(pairs: &[(&str, content::FieldValue)]) -> content::FieldValue {
+    let mut fields = HashMap::new();
     for (k, v) in pairs {
         fields.insert(k.to_string(), v.clone());
     }
-    Value {
-        kind: Some(Kind::StructValue(Struct { fields })),
+    content::FieldValue {
+        kind: Some(content::field_value::Kind::StructValue(content::DataMap {
+            fields,
+        })),
     }
 }
 
-fn list_val(items: Vec<Value>) -> Value {
-    Value {
-        kind: Some(Kind::ListValue(ListValue { values: items })),
+fn list_val(items: Vec<content::FieldValue>) -> content::FieldValue {
+    content::FieldValue {
+        kind: Some(content::field_value::Kind::ListValue(content::FieldList {
+            values: items,
+        })),
     }
 }
 
@@ -936,7 +939,7 @@ async fn grpc_create_rejects_empty_required_in_nested_array() {
     // Row with empty required fields inside Array > Tabs > Row
     let row = struct_val(&[("first_name", str_val("")), ("last_name", str_val(""))]);
 
-    let mut fields = BTreeMap::new();
+    let mut fields = HashMap::new();
     fields.insert("name".to_string(), str_val("Test"));
     fields.insert("team_members".to_string(), list_val(vec![row]));
 
@@ -945,7 +948,7 @@ async fn grpc_create_rejects_empty_required_in_nested_array() {
         .create(Request::new(content::CreateRequest {
             events: None,
             collection: "nested_test".to_string(),
-            data: Some(Struct { fields }),
+            data: Some(content::DataMap { fields }),
             locale: None,
             draft: None,
         }))
@@ -1034,7 +1037,7 @@ async fn grpc_create_accepts_valid_nested_array() {
         ("last_name", str_val("Doe")),
     ]);
 
-    let mut fields = BTreeMap::new();
+    let mut fields = HashMap::new();
     fields.insert("name".to_string(), str_val("Test"));
     fields.insert("team_members".to_string(), list_val(vec![row]));
 
@@ -1043,7 +1046,7 @@ async fn grpc_create_accepts_valid_nested_array() {
         .create(Request::new(content::CreateRequest {
             events: None,
             collection: "nested_test".to_string(),
-            data: Some(Struct { fields }),
+            data: Some(content::DataMap { fields }),
             locale: None,
             draft: None,
         }))

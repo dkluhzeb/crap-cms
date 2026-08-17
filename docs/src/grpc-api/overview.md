@@ -92,13 +92,19 @@ All documents use the same message format:
 message Document {
   string id = 1;
   string collection = 2;
-  google.protobuf.Struct fields = 3;
+  DataMap fields = 3;
   optional string created_at = 4;
   optional string updated_at = 5;
 }
 ```
 
-The `fields` property is a `Struct` (JSON object) containing all user-defined field values.
+The `fields` property is a `DataMap` — a `map<string, FieldValue>` keyed by the
+Lua field name. Each `FieldValue` is a `oneof` over the JSON-shaped value types
+(`null_value`, `int_value`, `double_value`, `string_value`, `bool_value`,
+`struct_value` for nested objects, `list_value` for arrays). Numbers split into
+`int_value` (an exact `int64`) and `double_value` (fractional), so integers keep
+full precision on the wire. See [Type Safety](type-safety.md) for the full
+`DataMap`/`FieldValue`/`FieldList` definitions.
 
 ## Testing with grpcurl
 

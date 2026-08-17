@@ -20,7 +20,6 @@
 
 use std::sync::Arc;
 
-use prost_types::{Struct, Value, value::Kind};
 use serde_json::json;
 use tonic::Request;
 
@@ -176,17 +175,17 @@ fn setup_service(defs: Vec<CollectionDefinition>) -> TestSetup {
     }
 }
 
-fn make_struct(fields: &[(&str, &str)]) -> Struct {
-    let mut map = std::collections::BTreeMap::new();
+fn make_struct(fields: &[(&str, &str)]) -> content::DataMap {
+    let mut map = std::collections::HashMap::new();
     for (k, v) in fields {
         map.insert(
             k.to_string(),
-            Value {
-                kind: Some(Kind::StringValue(v.to_string())),
+            content::FieldValue {
+                kind: Some(content::field_value::Kind::StringValue(v.to_string())),
             },
         );
     }
-    Struct { fields: map }
+    content::DataMap { fields: map }
 }
 
 fn get_proto_field(doc: &content::Document, name: &str) -> Option<String> {
@@ -195,9 +194,10 @@ fn get_proto_field(doc: &content::Document, name: &str) -> Option<String> {
         .fields
         .get(name)
         .and_then(|v| match v.kind.as_ref()? {
-            Kind::StringValue(s) => Some(s.clone()),
-            Kind::NumberValue(n) => Some(n.to_string()),
-            Kind::BoolValue(b) => Some(b.to_string()),
+            content::field_value::Kind::StringValue(s) => Some(s.clone()),
+            content::field_value::Kind::IntValue(n) => Some(n.to_string()),
+            content::field_value::Kind::DoubleValue(n) => Some(n.to_string()),
+            content::field_value::Kind::BoolValue(b) => Some(b.to_string()),
             _ => None,
         })
 }

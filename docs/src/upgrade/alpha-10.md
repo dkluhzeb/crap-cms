@@ -491,6 +491,22 @@ arrays/relationships to `[]`); there is no per-locale delete.
 
 Wire-contract changes — regenerate your gRPC stubs and adjust:
 
+- **Document `data`/`fields` are now typed `DataMap`/`FieldValue`, not
+  `google.protobuf.Struct`.** Every `google.protobuf.Struct` used for
+  document content — `Document.fields`, the `data` on `Create` / `Update` /
+  `UpdateGlobal` / `UpdateMany` / `Validate` / `ValidateGlobal`, the
+  `CreateMany.documents`, and `MutationEvent.data` — is now a `DataMap`
+  (`map<string, FieldValue>`, still keyed by Lua field name so adding a
+  field never changes the proto). A `FieldValue` is a `oneof` over
+  `null_value` / `int_value` (`int64`) / `double_value` / `string_value` /
+  `bool_value` / `struct_value` (nested `DataMap`) / `list_value`
+  (`FieldList`). Read values through the oneof accessors instead of
+  `Struct`'s `Value.number_value` — and read integers from `int_value`, not
+  `double_value`. This also fixes the old precision loss: integers above
+  2^53 (~9.0e15) were silently rounded when they went through `Struct`'s
+  only numeric kind (a `double`); they now round-trip exactly via
+  `int_value`. Regenerate stubs and update any code that constructed or
+  read `Struct` for document data.
 - **Removed always-true `success` fields** from `DeleteResponse`,
   `ForgotPasswordResponse`, `ResetPasswordResponse`, `VerifyEmailResponse`,
   and `AccountActionResponse`. A non-error response is the success signal;
@@ -607,8 +623,9 @@ Wire-contract changes — regenerate your gRPC stubs and adjust:
   fractions are unchanged (`42.5` stays `42.5`). JSON treats `42` and
   `42.0` as the same number, so virtually all clients are unaffected —
   the only thing that changes is a consumer that *string-matched*
-  `"42.0"`, which will now see `"42"`. (gRPC is unaffected — it always
-  carried numbers as `double`.)
+  `"42.0"`, which will now see `"42"`. (Over gRPC, the same whole value
+  now arrives as `FieldValue.int_value` rather than the old always-`double`
+  representation — see the gRPC wire-contract change below.)
 
 - **JSON-decoded floats now keep full precision.** crap-cms now uses a
   correctly-rounded JSON float parser, so a `number` value read back
@@ -616,8 +633,11 @@ Wire-contract changes — regenerate your gRPC stubs and adjust:
   keyset pagination cursors — is bit-identical to what was written.
   Previously the parser could be off by up to one ULP for some
   magnitudes (very large/small exponents). This only makes values *more*
-  exact, so no action is needed. (gRPC is unaffected — it carries
-  numbers as protobuf `double`, not JSON.)
+  exact, so no action is needed. (Over gRPC, integers no longer round-trip
+  through a `double` at all: `FieldValue` carries an exact `int_value`
+  (`int64`) for whole numbers and `double_value` only for fractional ones,
+  so the old silent rounding of integers above 2^53 (~9.0e15) is gone —
+  see the gRPC wire-contract change below.)
 
 ## Additive features (alpha.10)
 

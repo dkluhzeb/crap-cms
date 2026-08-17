@@ -92,6 +92,55 @@ fn create_with_locale_writes_correct_column() {
     assert_eq!(doc.get_str("title"), Some("English Title"));
 }
 
+/// Regression: the upload DELETE existence-precheck used to call
+/// `find_by_id(.., None)`, which selects bare `title` instead of `title__en`
+/// on a localized collection and errors — the handler swallowed that into a
+/// spurious 404 (the media-404 locale footgun). Pin that `None` fails on a
+/// localized collection while a proper `LocaleContext` finds the row, so the
+/// precheck must build the context.
+#[test]
+fn find_by_id_requires_locale_context_on_localized_collection() {
+    let (_tmp, pool, def, locale_config) = setup_localized();
+
+    let locale_ctx = query::LocaleContext {
+        mode: query::LocaleMode::Single("en".to_string()),
+        config: locale_config.clone(),
+    };
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("English Title"));
+    data.insert("slug_field".to_string(), json!("test-page"));
+
+    let mut conn = pool.get().expect("conn");
+    let tx = conn.transaction().expect("tx");
+    let created =
+        query::create(&tx, "localized_pages", &def, &data, Some(&locale_ctx)).expect("Create");
+    tx.commit().expect("Commit");
+
+    let conn = pool.get().expect("conn");
+
+    // The footgun: a bare `None` locale references unsuffixed columns that do
+    // not exist on a localized collection, so the SELECT errors.
+    let none_result = query::find_by_id(&conn, "localized_pages", &def, &created.id, None);
+    assert!(
+        none_result.is_err(),
+        "find_by_id with None locale must error on a localized collection"
+    );
+
+    // The fix: a proper locale context selects `title__en` and finds the doc.
+    let found = query::find_by_id(
+        &conn,
+        "localized_pages",
+        &def,
+        &created.id,
+        Some(&locale_ctx),
+    )
+    .expect("find_by_id with a locale context should succeed");
+    assert!(
+        found.is_some(),
+        "the document must be found with a locale context"
+    );
+}
+
 #[test]
 fn find_with_locale_coalesce_fallback() {
     let (_tmp, pool, def, locale_config) = setup_localized();

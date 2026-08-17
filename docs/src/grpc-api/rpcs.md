@@ -92,7 +92,7 @@ Create a new document.
 ```protobuf
 message CreateRequest {
   string collection = 1;
-  google.protobuf.Struct data = 2;
+  DataMap data = 2;
   optional string locale = 3;           // locale code for localized fields
   optional bool draft = 4;              // true = create as draft (versioned collections)
   optional bool events = 5;             // default: true. false = quiet write (no live-update event)
@@ -123,7 +123,7 @@ Bulk-create multiple documents in a single call. The whole batch is created in *
 ```protobuf
 message CreateManyRequest {
   string collection = 1;
-  repeated google.protobuf.Struct documents = 2;  // documents to create
+  repeated DataMap documents = 2;  // documents to create
   optional string locale = 3;           // locale code for localized fields
   optional bool draft = 4;              // true = create as drafts
   optional bool hooks = 5;              // default: true. Set false to skip hooks.
@@ -154,7 +154,7 @@ Update an existing document.
 message UpdateRequest {
   string collection = 1;
   string id = 2;
-  google.protobuf.Struct data = 3;
+  DataMap data = 3;
   optional string locale = 4;           // locale code for localized fields
   optional bool draft = 5;              // true = version-only save (main table unchanged)
   optional bool unpublish = 6;          // true = set status to draft
@@ -266,7 +266,7 @@ Password updates are rejected in bulk operations. Use single-document `Update` i
 message UpdateManyRequest {
   string collection = 1;
   optional string where = 2;            // JSON where clause (omit = all docs)
-  google.protobuf.Struct data = 3;      // field values to apply
+  DataMap data = 3;      // field values to apply
   optional string locale = 4;           // locale code for localized fields
   optional bool draft = 5;              // true = save as drafts
   optional bool hooks = 6;              // default: true. Set false to skip hooks & validation.
@@ -344,7 +344,7 @@ Update a global's value.
 ```protobuf
 message UpdateGlobalRequest {
   string slug = 1;
-  google.protobuf.Struct data = 2;
+  DataMap data = 2;
   optional string locale = 3;           // locale code for localized fields
   optional bool events = 4;             // default: true. false = quiet write (no live-update event)
 }
@@ -481,7 +481,7 @@ Check field data against collection rules without persisting. Runs field validat
 ```protobuf
 message ValidateRequest {
   string collection = 1;
-  google.protobuf.Struct data = 2;
+  DataMap data = 2;
   optional bool draft = 3;              // relaxes required-field checks for draft collections
   optional string locale = 4;           // locale code for localized field validation
   optional string id = 5;               // when set, exclude this ID from unique checks (update path)
@@ -509,7 +509,7 @@ Check global field data against its rules without persisting. The global equival
 ```protobuf
 message ValidateGlobalRequest {
   string slug = 1;
-  google.protobuf.Struct data = 2;
+  DataMap data = 2;
   optional bool draft = 3;              // relaxes required-field checks for globals with drafts enabled
   optional string locale = 4;           // locale code for localized field validation
 }
@@ -762,7 +762,7 @@ message MutationEvent {
   MutationOperation operation = 4; // CREATE, UPDATE, or DELETE
   string collection = 5;
   string document_id = 6;
-  google.protobuf.Struct data = 7;
+  DataMap data = 7;
 }
 ```
 

@@ -2,8 +2,8 @@
 //!
 //! Wire-level coverage for the bulk operations. The in-process trait
 //! tests verify the batch semantics, but only the wire-level test
-//! catches a future regression where `repeated google.protobuf.Struct`
-//! framing breaks for large batches.
+//! catches a future regression where `repeated DataMap` framing breaks
+//! for large batches.
 
 #![allow(
     clippy::cast_possible_truncation,
@@ -19,9 +19,9 @@
     clippy::unreadable_literal
 )]
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
-use prost_types::{Struct, Value, value::Kind};
+use crap_cms::api::content::{DataMap, FieldValue, field_value::Kind};
 
 use crap_cms::{
     api::content::{
@@ -48,17 +48,17 @@ fn make_def() -> CollectionDefinition {
     def
 }
 
-fn proto_struct(pairs: &[(&str, &str)]) -> Struct {
-    let mut fields = BTreeMap::new();
+fn proto_struct(pairs: &[(&str, &str)]) -> DataMap {
+    let mut fields = HashMap::new();
     for (k, v) in pairs {
         fields.insert(
             (*k).to_string(),
-            Value {
+            FieldValue {
                 kind: Some(Kind::StringValue((*v).to_string())),
             },
         );
     }
-    Struct { fields }
+    DataMap { fields }
 }
 
 // ── create_many_inserts_all_documents ────────────────────────────────────
@@ -68,7 +68,7 @@ async fn create_many_inserts_all_documents() {
     let ctx = spawn_grpc_server(vec![make_def()], vec![]).await;
     let mut client = ContentApiClient::new(ctx.channel.clone());
 
-    let docs: Vec<Struct> = (0..7)
+    let docs: Vec<DataMap> = (0..7)
         .map(|i| proto_struct(&[("title", &format!("Bulk {i}")), ("status", "draft")]))
         .collect();
 
@@ -106,7 +106,7 @@ async fn update_many_applies_to_all_matching() {
     let ctx = spawn_grpc_server(vec![make_def()], vec![]).await;
     let mut client = ContentApiClient::new(ctx.channel.clone());
 
-    let docs: Vec<Struct> = (0..5)
+    let docs: Vec<DataMap> = (0..5)
         .map(|i| proto_struct(&[("title", &format!("Doc {i}")), ("status", "draft")]))
         .collect();
     client
@@ -143,7 +143,7 @@ async fn delete_many_removes_all_matching() {
     let ctx = spawn_grpc_server(vec![make_def()], vec![]).await;
     let mut client = ContentApiClient::new(ctx.channel.clone());
 
-    let docs: Vec<Struct> = (0..4)
+    let docs: Vec<DataMap> = (0..4)
         .map(|i| proto_struct(&[("title", &format!("Trash {i}"))]))
         .collect();
     client

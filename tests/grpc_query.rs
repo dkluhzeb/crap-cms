@@ -18,10 +18,9 @@
     clippy::unreadable_literal
 )]
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use prost_types::{ListValue, Struct, Value, value::Kind};
 use tonic::Request;
 
 use crap_cms::api::content;
@@ -58,24 +57,24 @@ fn make_posts_def() -> CollectionDefinition {
 }
 
 /// Build a prost Struct from key-value string pairs.
-fn make_struct(pairs: &[(&str, &str)]) -> Struct {
-    let mut fields = BTreeMap::new();
+fn make_struct(pairs: &[(&str, &str)]) -> content::DataMap {
+    let mut fields = HashMap::new();
     for (k, v) in pairs {
         fields.insert(
             k.to_string(),
-            Value {
-                kind: Some(Kind::StringValue(v.to_string())),
+            content::FieldValue {
+                kind: Some(content::field_value::Kind::StringValue(v.to_string())),
             },
         );
     }
-    Struct { fields }
+    content::DataMap { fields }
 }
 
 /// Extract a string field from a proto Document's fields struct.
 fn get_proto_field(doc: &content::Document, field: &str) -> Option<String> {
     doc.fields.as_ref().and_then(|s| {
         s.fields.get(field).and_then(|v| match &v.kind {
-            Some(Kind::StringValue(s)) => Some(s.clone()),
+            Some(content::field_value::Kind::StringValue(s)) => Some(s.clone()),
             _ => None,
         })
     })
@@ -244,25 +243,29 @@ fn setup_service_with_hook(collections: Vec<CollectionDefinition>, init_lua: &st
 
 // ── Dot-notation helpers ──────────────────────────────────────────────────
 
-fn str_val(s: &str) -> Value {
-    Value {
-        kind: Some(Kind::StringValue(s.to_string())),
+fn str_val(s: &str) -> content::FieldValue {
+    content::FieldValue {
+        kind: Some(content::field_value::Kind::StringValue(s.to_string())),
     }
 }
 
-fn struct_val(pairs: &[(&str, Value)]) -> Value {
-    let mut fields = BTreeMap::new();
+fn struct_val(pairs: &[(&str, content::FieldValue)]) -> content::FieldValue {
+    let mut fields = HashMap::new();
     for (k, v) in pairs {
         fields.insert(k.to_string(), v.clone());
     }
-    Value {
-        kind: Some(Kind::StructValue(Struct { fields })),
+    content::FieldValue {
+        kind: Some(content::field_value::Kind::StructValue(content::DataMap {
+            fields,
+        })),
     }
 }
 
-fn list_val(items: Vec<Value>) -> Value {
-    Value {
-        kind: Some(Kind::ListValue(ListValue { values: items })),
+fn list_val(items: Vec<content::FieldValue>) -> content::FieldValue {
+    content::FieldValue {
+        kind: Some(content::field_value::Kind::ListValue(content::FieldList {
+            values: items,
+        })),
     }
 }
 
@@ -272,9 +275,9 @@ fn make_product_struct(
     color: &str,
     width: &str,
     height: &str,
-    content_blocks: Vec<Value>,
-) -> Struct {
-    let mut fields = BTreeMap::new();
+    content_blocks: Vec<content::FieldValue>,
+) -> content::DataMap {
+    let mut fields = HashMap::new();
     fields.insert("name".to_string(), str_val(name));
     fields.insert(
         "seo".to_string(),
@@ -291,7 +294,7 @@ fn make_product_struct(
         ])]),
     );
     fields.insert("content".to_string(), list_val(content_blocks));
-    Struct { fields }
+    content::DataMap { fields }
 }
 
 fn make_products_def() -> CollectionDefinition {
@@ -436,7 +439,7 @@ async fn find_with_depth_1_populates_relationship() {
     assert!(cat_field.is_some(), "category field should be present");
 
     match &cat_field.unwrap().kind {
-        Some(Kind::StructValue(s)) => {
+        Some(content::field_value::Kind::StructValue(s)) => {
             assert!(
                 s.fields.contains_key("name"),
                 "Populated category should have 'name' field"
@@ -513,7 +516,7 @@ async fn find_by_id_default_depth_populates() {
     assert!(cat_field.is_some(), "category field should be present");
 
     match &cat_field.unwrap().kind {
-        Some(Kind::StructValue(s)) => {
+        Some(content::field_value::Kind::StructValue(s)) => {
             assert!(
                 s.fields.contains_key("name"),
                 "Populated category should have 'name' field"

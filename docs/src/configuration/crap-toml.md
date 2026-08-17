@@ -105,6 +105,7 @@ host = "0.0.0.0"        # Bind address
 # grpc_max_message_size = "16MB" # Max gRPC message size (default 16MB)
 # request_timeout = "30s"        # Admin HTTP request timeout (none by default)
 # grpc_timeout = "30s"           # gRPC request timeout (none by default)
+# public_schema_introspection = true  # ListCollections/DescribeCollection without auth (default true)
 
 [database]
 path = "data/crap.db"   # Relative to config dir, or absolute
@@ -282,6 +283,7 @@ check_on_startup = true   # Print a one-line notice on `serve` startup when a ne
 | `request_timeout` | integer/string | — (none) | Admin HTTP request timeout. When set, requests exceeding this duration return `408 Request Timeout`. SSE streams are exempt (handled by shutdown). Accepts seconds or human-readable (`"30s"`, `"5m"`). |
 | `grpc_timeout` | integer/string | — (none) | gRPC request timeout. When set, RPCs exceeding this duration return `DEADLINE_EXCEEDED`. Applies to all RPCs including Subscribe streams. Accepts seconds or human-readable (`"30s"`, `"5m"`). |
 | `bulk_max_documents` | integer | `0` (no limit) | Maximum documents a single `create_many` / `update_many` / `delete_many` may affect before it is rejected. Bulk ops are **atomic** (one transaction), so a very large operation holds the database write-lock for its whole duration and accumulates per-document state in memory; set a positive cap to reject a runaway/over-broad bulk op before it locks the DB or exhausts memory. An over-limit op fails (gRPC `FAILED_PRECONDITION` / HTTP `409`) and changes nothing. `0` disables the limit. Enforced identically on every surface (gRPC, Lua, admin, MCP). |
+| `public_schema_introspection` | boolean | `true` | Whether the gRPC schema-introspection RPCs (`ListCollections`, `DescribeCollection`) are readable without authentication. `true` (default) exposes the content model publicly, as in a headless CMS. Set to `false` to require an authenticated caller — the schema shape (collection and field names/types) is then hidden from anonymous clients. Never affects document data, which is always access-gated. |
 
 ### `[database]`
 

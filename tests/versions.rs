@@ -20,7 +20,6 @@
 
 use std::sync::Arc;
 
-use prost_types::{Struct, Value, value::Kind};
 use serde_json::json;
 use tonic::Request;
 
@@ -169,17 +168,17 @@ fn setup_service(defs: Vec<CollectionDefinition>) -> TestSetup {
     }
 }
 
-fn make_struct(fields: &[(&str, &str)]) -> Struct {
-    let mut map = std::collections::BTreeMap::new();
+fn make_struct(fields: &[(&str, &str)]) -> content::DataMap {
+    let mut map = std::collections::HashMap::new();
     for (k, v) in fields {
         map.insert(
             k.to_string(),
-            Value {
-                kind: Some(Kind::StringValue(v.to_string())),
+            content::FieldValue {
+                kind: Some(content::field_value::Kind::StringValue(v.to_string())),
             },
         );
     }
-    Struct { fields: map }
+    content::DataMap { fields: map }
 }
 
 // ── DB-Level Version Tests ──────────────────────────────────────────────

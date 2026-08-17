@@ -23,9 +23,15 @@ message MutationEvent {
   MutationOperation operation = 4; // CREATE, UPDATE, or DELETE
   string collection = 5;
   string document_id = 6;
-  google.protobuf.Struct data = 7;
+  DataMap data = 7;
 }
 ```
+
+The `data` payload is a `DataMap` (`map<string, FieldValue>` keyed by field
+name); each `FieldValue` is a `oneof` over the typed value kinds
+(`int_value`/`double_value`/`string_value`/`bool_value`/`struct_value`/`list_value`/`null_value`),
+so numbers keep full precision (integers arrive as `int_value`, not a rounded
+`double`). See [Type Safety](../grpc-api/type-safety.md) for the definitions.
 
 Events deliberately do **not** identify the editing user — exposing editor
 ids/emails to every subscriber would leak PII. Editor-based suppression or

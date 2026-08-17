@@ -12,7 +12,7 @@ use tracing::error;
 use crate::{
     api::{
         content,
-        handlers::{ContentService, proto::prost_struct_to_json_map},
+        handlers::{ContentService, proto::data_map_to_json_map},
     },
     core::{DocumentFields, GlobalDefinition, Registry, SharedTokenProvider},
     db::{DbPool, LocaleContext, query::helpers::global_table},
@@ -108,7 +108,7 @@ impl ContentService {
 
         let data: DocumentFields = req
             .data
-            .map(|s| prost_struct_to_json_map(&s))
+            .map(|s| data_map_to_json_map(&s))
             .unwrap_or_default()
             .into();
 

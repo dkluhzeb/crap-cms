@@ -17,10 +17,9 @@
     clippy::unreadable_literal
 )]
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use prost_types::{ListValue, Struct, Value, value::Kind};
 use tonic::Request;
 
 use crap_cms::api::content;
@@ -56,48 +55,52 @@ fn make_posts_def() -> CollectionDefinition {
 }
 
 /// Build a prost Struct from key-value string pairs.
-fn make_struct(pairs: &[(&str, &str)]) -> Struct {
-    let mut fields = BTreeMap::new();
+fn make_struct(pairs: &[(&str, &str)]) -> content::DataMap {
+    let mut fields = HashMap::new();
     for (k, v) in pairs {
         fields.insert(
             k.to_string(),
-            Value {
-                kind: Some(Kind::StringValue(v.to_string())),
+            content::FieldValue {
+                kind: Some(content::field_value::Kind::StringValue(v.to_string())),
             },
         );
     }
-    Struct { fields }
+    content::DataMap { fields }
 }
 
 /// Extract a string field from a proto Document's fields struct.
 fn get_proto_field(doc: &content::Document, field: &str) -> Option<String> {
     doc.fields.as_ref().and_then(|s| {
         s.fields.get(field).and_then(|v| match &v.kind {
-            Some(Kind::StringValue(s)) => Some(s.clone()),
+            Some(content::field_value::Kind::StringValue(s)) => Some(s.clone()),
             _ => None,
         })
     })
 }
 
-fn str_val(s: &str) -> Value {
-    Value {
-        kind: Some(Kind::StringValue(s.to_string())),
+fn str_val(s: &str) -> content::FieldValue {
+    content::FieldValue {
+        kind: Some(content::field_value::Kind::StringValue(s.to_string())),
     }
 }
 
-fn struct_val(pairs: &[(&str, Value)]) -> Value {
-    let mut fields = BTreeMap::new();
+fn struct_val(pairs: &[(&str, content::FieldValue)]) -> content::FieldValue {
+    let mut fields = HashMap::new();
     for (k, v) in pairs {
         fields.insert(k.to_string(), v.clone());
     }
-    Value {
-        kind: Some(Kind::StructValue(Struct { fields })),
+    content::FieldValue {
+        kind: Some(content::field_value::Kind::StructValue(content::DataMap {
+            fields,
+        })),
     }
 }
 
-fn list_val(items: Vec<Value>) -> Value {
-    Value {
-        kind: Some(Kind::ListValue(ListValue { values: items })),
+fn list_val(items: Vec<content::FieldValue>) -> content::FieldValue {
+    content::FieldValue {
+        kind: Some(content::field_value::Kind::ListValue(content::FieldList {
+            values: items,
+        })),
     }
 }
 
@@ -495,7 +498,7 @@ async fn create_and_find_with_locale_all() {
 
     // When locale=all, title should be a struct with en/de keys
     match &title_val.unwrap().kind {
-        Some(Kind::StructValue(s)) => {
+        Some(content::field_value::Kind::StructValue(s)) => {
             assert!(
                 s.fields.contains_key("en"),
                 "locale=all should have 'en' key"
@@ -652,7 +655,7 @@ async fn update_global_with_nested_fields() {
     let ts = setup_service(vec![], vec![make_complex_global_def()]);
 
     // Build complex nested data
-    let mut data_fields = BTreeMap::new();
+    let mut data_fields = HashMap::new();
     data_fields.insert("site_name".to_string(), str_val("My Site"));
     data_fields.insert(
         "seo".to_string(),
@@ -680,7 +683,7 @@ async fn update_global_with_nested_fields() {
         .update_global(Request::new(content::UpdateGlobalRequest {
             events: None,
             slug: "site_config".to_string(),
-            data: Some(Struct {
+            data: Some(content::DataMap {
                 fields: data_fields,
             }),
             locale: None,
@@ -711,7 +714,7 @@ async fn update_global_with_nested_fields() {
     // Verify seo group
     let seo = fields.fields.get("seo");
     assert!(seo.is_some(), "seo group should exist");
-    if let Some(Kind::StructValue(s)) = seo.unwrap().kind.as_ref() {
+    if let Some(content::field_value::Kind::StructValue(s)) = seo.unwrap().kind.as_ref() {
         assert!(
             s.fields.contains_key("meta_title"),
             "seo should have meta_title"
@@ -721,14 +724,14 @@ async fn update_global_with_nested_fields() {
     // Verify nav_items array
     let nav = fields.fields.get("nav_items");
     assert!(nav.is_some(), "nav_items should exist");
-    if let Some(Kind::ListValue(l)) = nav.unwrap().kind.as_ref() {
+    if let Some(content::field_value::Kind::ListValue(l)) = nav.unwrap().kind.as_ref() {
         assert_eq!(l.values.len(), 2, "Should have 2 nav items");
     }
 
     // Verify blocks
     let sections = fields.fields.get("sections");
     assert!(sections.is_some(), "sections should exist");
-    if let Some(Kind::ListValue(l)) = sections.unwrap().kind.as_ref() {
+    if let Some(content::field_value::Kind::ListValue(l)) = sections.unwrap().kind.as_ref() {
         assert_eq!(l.values.len(), 1, "Should have 1 section block");
     }
 }
@@ -771,14 +774,14 @@ async fn find_with_has_many_relationship_filter() {
         .unwrap();
 
     // Create posts with tags (has-many: pass as comma-separated or list)
-    let mut post1_fields = BTreeMap::new();
+    let mut post1_fields = HashMap::new();
     post1_fields.insert("title".to_string(), str_val("Rust Post"));
     post1_fields.insert("tags".to_string(), list_val(vec![str_val(&tag_rust.id)]));
     ts.service
         .create(Request::new(content::CreateRequest {
             events: None,
             collection: "posts".to_string(),
-            data: Some(Struct {
+            data: Some(content::DataMap {
                 fields: post1_fields,
             }),
             locale: None,
@@ -787,14 +790,14 @@ async fn find_with_has_many_relationship_filter() {
         .await
         .unwrap();
 
-    let mut post2_fields = BTreeMap::new();
+    let mut post2_fields = HashMap::new();
     post2_fields.insert("title".to_string(), str_val("Web Post"));
     post2_fields.insert("tags".to_string(), list_val(vec![str_val(&tag_web.id)]));
     ts.service
         .create(Request::new(content::CreateRequest {
             events: None,
             collection: "posts".to_string(),
-            data: Some(Struct {
+            data: Some(content::DataMap {
                 fields: post2_fields,
             }),
             locale: None,
@@ -803,7 +806,7 @@ async fn find_with_has_many_relationship_filter() {
         .await
         .unwrap();
 
-    let mut post3_fields = BTreeMap::new();
+    let mut post3_fields = HashMap::new();
     post3_fields.insert("title".to_string(), str_val("Both Post"));
     post3_fields.insert(
         "tags".to_string(),
@@ -813,7 +816,7 @@ async fn find_with_has_many_relationship_filter() {
         .create(Request::new(content::CreateRequest {
             events: None,
             collection: "posts".to_string(),
-            data: Some(Struct {
+            data: Some(content::DataMap {
                 fields: post3_fields,
             }),
             locale: None,
@@ -1251,7 +1254,7 @@ async fn localized_required_group_subfield_nested_roundtrip() {
     let ts = setup_service_with_locale(vec![def], vec![], vec!["en", "de"]);
 
     // Create in en with the group supplied NESTED.
-    let mut fields = BTreeMap::new();
+    let mut fields = HashMap::new();
     fields.insert("slug".to_string(), str_val("p1"));
     fields.insert(
         "seo".to_string(),
@@ -1262,7 +1265,7 @@ async fn localized_required_group_subfield_nested_roundtrip() {
         .create(Request::new(content::CreateRequest {
             events: None,
             collection: "posts".to_string(),
-            data: Some(Struct { fields }),
+            data: Some(content::DataMap { fields }),
             locale: Some("en".to_string()),
             draft: None,
         }))
@@ -1302,10 +1305,12 @@ async fn localized_required_group_subfield_nested_roundtrip() {
         .unwrap();
     let seo = found.fields.as_ref().unwrap().fields.get("seo").unwrap();
     let meta_title = match &seo.kind {
-        Some(Kind::StructValue(s)) => s.fields.get("meta_title").and_then(|v| match &v.kind {
-            Some(Kind::StringValue(s)) => Some(s.as_str()),
-            _ => None,
-        }),
+        Some(content::field_value::Kind::StructValue(s)) => {
+            s.fields.get("meta_title").and_then(|v| match &v.kind {
+                Some(content::field_value::Kind::StringValue(s)) => Some(s.as_str()),
+                _ => None,
+            })
+        }
         _ => None,
     };
     assert_eq!(meta_title, Some("Hello SEO"));

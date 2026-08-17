@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Context as _, Result};
+use tracing::warn;
 
 use super::{
     exif::apply_exif_orientation,
@@ -54,7 +55,12 @@ impl Drop for CleanupGuard {
     fn drop(&mut self) {
         if !self.committed {
             for key in &self.keys {
-                let _ = self.storage.delete(key);
+                // Best-effort rollback cleanup; a failure here leaves an
+                // orphaned file, so log it rather than swallowing silently
+                // (mirrors `delete_upload_files` in metadata.rs).
+                if let Err(e) = self.storage.delete(key) {
+                    warn!("Failed to clean up orphaned upload '{key}' after rollback: {e}");
+                }
             }
         }
     }

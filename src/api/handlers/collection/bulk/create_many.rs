@@ -12,7 +12,7 @@ use crate::{
         content,
         handlers::{
             ContentService,
-            proto::{document_to_proto, prost_struct_to_json_map},
+            proto::{data_map_to_json_map, document_to_proto},
         },
     },
     core::{
@@ -106,14 +106,25 @@ impl ContentService {
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
-        let items: Vec<CreateManyItem> = req
-            .documents
-            .iter()
-            .map(|s| CreateManyItem {
-                data: prost_struct_to_json_map(s).into(),
+        // Auth collections: reject a `password` key in bulk create rather than
+        // silently dropping it (mirrors UpdateMany). Bulk-created auth users get
+        // their password set via a follow-up single Create/Update.
+        let is_auth = def.is_auth_collection();
+        let mut items: Vec<CreateManyItem> = Vec::with_capacity(req.documents.len());
+        for s in &req.documents {
+            let map = data_map_to_json_map(s);
+
+            if is_auth && map.contains_key("password") {
+                return Err(Status::invalid_argument(
+                    "Password is not supported in CreateMany. Use Create for individual documents.",
+                ));
+            }
+
+            items.push(CreateManyItem {
+                data: map.into(),
                 password: None,
-            })
-            .collect();
+            });
+        }
 
         let input = CreateManyBlockingInput {
             pool: self.pool.clone(),

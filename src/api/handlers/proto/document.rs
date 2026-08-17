@@ -1,106 +1,105 @@
 //! Document and value conversion between Rust types and protobuf.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
-use prost_types::{Struct, Value, value::Kind};
 use serde_json::{Map, Number, Value as JsonValue};
 use tracing::warn;
 
-use crate::{api::content, core::Document};
+use crate::{
+    api::content::{self, DataMap, FieldList, FieldValue, field_value::Kind},
+    core::Document,
+};
 
-/// Convert a core `Document` to a protobuf `Document`, mapping all fields to a prost Struct.
+/// Convert a core `Document` to a protobuf `Document`, mapping all fields to a
+/// typed `DataMap`.
 pub(in crate::api::handlers) fn document_to_proto(
     doc: &Document,
     collection: &str,
 ) -> content::Document {
-    let mut fields = Struct {
-        fields: BTreeMap::new(),
-    };
+    let mut fields = HashMap::new();
 
     for (k, v) in &doc.fields {
-        fields.fields.insert(k.clone(), json_to_prost_value(v));
+        fields.insert(k.clone(), json_to_field_value(v));
     }
 
     content::Document {
         id: doc.id.to_string(),
         collection: collection.to_string(),
-        fields: Some(fields),
+        fields: Some(DataMap { fields }),
         created_at: doc.created_at.clone(),
         updated_at: doc.updated_at.clone(),
     }
 }
 
-/// Convert a `serde_json::Value` to a `Value` for protobuf serialization.
-pub(in crate::api::handlers) fn json_to_prost_value(v: &JsonValue) -> Value {
-    match v {
-        JsonValue::Null => Value {
-            kind: Some(Kind::NullValue(0)),
-        },
-        JsonValue::Bool(b) => Value {
-            kind: Some(Kind::BoolValue(*b)),
-        },
-        JsonValue::Number(n) => Value {
-            kind: Some(Kind::NumberValue(n.as_f64().unwrap_or_else(|| {
-                warn!("JSON number overflows f64 in gRPC conversion, defaulting to 0");
-                0.0
-            }))),
-        },
-        JsonValue::String(s) => Value {
-            kind: Some(Kind::StringValue(s.clone())),
-        },
-        JsonValue::Array(arr) => {
-            let values: Vec<_> = arr.iter().map(json_to_prost_value).collect();
-            Value {
-                kind: Some(Kind::ListValue(prost_types::ListValue { values })),
-            }
-        }
+/// Map a JSON number to the wire variant that preserves its value: an integer
+/// that fits `i64` keeps full precision via `int_value`; a fractional value or
+/// an integer outside `i64` range falls back to `double_value` (the former
+/// `google.protobuf.Struct` path rounded *every* integer through a double).
+fn number_to_kind(n: &Number) -> Kind {
+    if let Some(i) = n.as_i64() {
+        return Kind::IntValue(i);
+    }
+
+    if let Some(f) = n.as_f64() {
+        return Kind::DoubleValue(f);
+    }
+
+    warn!("JSON number not representable as i64 or f64 in gRPC conversion, defaulting to 0");
+    Kind::IntValue(0)
+}
+
+/// Convert a `serde_json::Value` to a protobuf `FieldValue`.
+pub(in crate::api::handlers) fn json_to_field_value(v: &JsonValue) -> FieldValue {
+    let kind = match v {
+        JsonValue::Null => Kind::NullValue(0),
+        JsonValue::Bool(b) => Kind::BoolValue(*b),
+        JsonValue::Number(n) => number_to_kind(n),
+        JsonValue::String(s) => Kind::StringValue(s.clone()),
+        JsonValue::Array(arr) => Kind::ListValue(FieldList {
+            values: arr.iter().map(json_to_field_value).collect(),
+        }),
         JsonValue::Object(map) => {
-            let mut fields = BTreeMap::new();
+            let mut fields = HashMap::new();
             for (k, v) in map {
-                fields.insert(k.clone(), json_to_prost_value(v));
+                fields.insert(k.clone(), json_to_field_value(v));
             }
-            Value {
-                kind: Some(Kind::StructValue(Struct { fields })),
-            }
+            Kind::StructValue(DataMap { fields })
         }
-    }
+    };
+
+    FieldValue { kind: Some(kind) }
 }
 
-/// Convert a prost Struct to a JSON Value map, preserving arrays and nested objects.
-/// Used for extracting join table data (has-many relationships and arrays).
-pub(in crate::api::handlers) fn prost_struct_to_json_map(s: &Struct) -> HashMap<String, JsonValue> {
-    let mut map = HashMap::new();
-
-    for (k, v) in &s.fields {
-        map.insert(k.clone(), prost_value_to_json(v));
-    }
-
-    map
+/// Convert a protobuf `DataMap` to a JSON `Value` map, preserving arrays and
+/// nested objects. Used for extracting join-table data (has-many, arrays).
+pub(in crate::api::handlers) fn data_map_to_json_map(dm: &DataMap) -> HashMap<String, JsonValue> {
+    dm.fields
+        .iter()
+        .map(|(k, v)| (k.clone(), field_value_to_json(v)))
+        .collect()
 }
 
-/// Convert a `Value` back to a `serde_json::Value`.
-pub(in crate::api::handlers) fn prost_value_to_json(v: &Value) -> JsonValue {
+/// Convert a protobuf `FieldValue` back to a `serde_json::Value`.
+pub(in crate::api::handlers) fn field_value_to_json(v: &FieldValue) -> JsonValue {
     match &v.kind {
         Some(Kind::BoolValue(b)) => JsonValue::Bool(*b),
-        Some(Kind::NumberValue(n)) => Number::from_f64(*n).map_or_else(
+        Some(Kind::IntValue(i)) => JsonValue::Number(Number::from(*i)),
+        Some(Kind::DoubleValue(n)) => Number::from_f64(*n).map_or_else(
             || {
-                warn!(
-                    "Non-finite float {} in gRPC response, converting to null",
-                    n
-                );
+                warn!("Non-finite float {n} in gRPC request, converting to null");
                 JsonValue::Null
             },
             JsonValue::Number,
         ),
         Some(Kind::StringValue(s)) => JsonValue::String(s.clone()),
         Some(Kind::ListValue(list)) => {
-            JsonValue::Array(list.values.iter().map(prost_value_to_json).collect())
+            JsonValue::Array(list.values.iter().map(field_value_to_json).collect())
         }
-        Some(Kind::StructValue(s)) => {
-            let obj: Map<String, JsonValue> = s
+        Some(Kind::StructValue(dm)) => {
+            let obj: Map<String, JsonValue> = dm
                 .fields
                 .iter()
-                .map(|(k, v)| (k.clone(), prost_value_to_json(v)))
+                .map(|(k, v)| (k.clone(), field_value_to_json(v)))
                 .collect();
             JsonValue::Object(obj)
         }
@@ -112,114 +111,93 @@ pub(in crate::api::handlers) fn prost_value_to_json(v: &Value) -> JsonValue {
 mod tests {
     use super::*;
     use crate::core::Document;
-    use prost_types::{Struct, Value, value::Kind};
     use serde_json::json;
-    use std::collections::BTreeMap;
 
-    // ── json_to_prost_value + prost_value_to_json roundtrip ────────────────
+    // ── json_to_field_value + field_value_to_json roundtrip ────────────────
+
+    fn roundtrip(v: &JsonValue) -> JsonValue {
+        field_value_to_json(&json_to_field_value(v))
+    }
 
     #[test]
     fn roundtrip_null() {
-        let json_val = json!(null);
-        let prost_val = json_to_prost_value(&json_val);
-        let back = prost_value_to_json(&prost_val);
-        assert_eq!(back, json_val);
+        assert_eq!(roundtrip(&json!(null)), json!(null));
     }
 
     #[test]
     fn roundtrip_bool() {
         for b in [true, false] {
-            let json_val = json!(b);
-            let prost_val = json_to_prost_value(&json_val);
-            let back = prost_value_to_json(&prost_val);
-            assert_eq!(back, json_val);
+            assert_eq!(roundtrip(&json!(b)), json!(b));
         }
     }
 
     #[test]
-    fn roundtrip_number() {
-        let json_val = json!(42.5);
-        let prost_val = json_to_prost_value(&json_val);
-        let back = prost_value_to_json(&prost_val);
-        assert_eq!(back, json_val);
+    fn roundtrip_float_stays_double() {
+        assert_eq!(roundtrip(&json!(42.5)), json!(42.5));
+    }
+
+    /// Integers keep their integer JSON shape (no `.0`), unlike the old
+    /// Struct/double path.
+    #[test]
+    fn roundtrip_integer_stays_integer() {
+        assert_eq!(roundtrip(&json!(42)), json!(42));
+        assert_eq!(roundtrip(&json!(-7)), json!(-7));
+        assert_eq!(roundtrip(&json!(0)), json!(0));
+    }
+
+    /// The whole point of the typed value message: an integer above 2^53 that a
+    /// double would round now round-trips exactly via `int_value`.
+    #[test]
+    fn roundtrip_large_integer_keeps_precision() {
+        let big = 9_007_199_254_740_993_i64; // 2^53 + 1 — not exactly representable as f64
+        let v = json!(big);
+        let fv = json_to_field_value(&v);
+        assert!(matches!(fv.kind, Some(Kind::IntValue(i)) if i == big));
+        assert_eq!(field_value_to_json(&fv), json!(big));
     }
 
     #[test]
     fn roundtrip_string() {
-        let json_val = json!("hello world");
-        let prost_val = json_to_prost_value(&json_val);
-        let back = prost_value_to_json(&prost_val);
-        assert_eq!(back, json_val);
+        assert_eq!(roundtrip(&json!("hello world")), json!("hello world"));
     }
 
     #[test]
-    fn roundtrip_array() {
-        let json_val = json!([1, "two", true, null]);
-        let prost_val = json_to_prost_value(&json_val);
-        let back = prost_value_to_json(&prost_val);
-        // Numbers become f64 in prost, so 1 becomes 1.0
-        assert_eq!(back, json!([1.0, "two", true, null]));
+    fn roundtrip_array_preserves_element_types() {
+        let v = json!([1, "two", true, null, 3.5]);
+        assert_eq!(roundtrip(&v), v);
     }
 
     #[test]
-    fn roundtrip_object() {
-        let json_val = json!({"name": "test", "count": 5, "active": true});
-        let prost_val = json_to_prost_value(&json_val);
-        let back = prost_value_to_json(&prost_val);
-        assert_eq!(back["name"], json!("test"));
-        assert_eq!(back["count"], json!(5.0));
-        assert_eq!(back["active"], json!(true));
+    fn roundtrip_object_preserves_value_types() {
+        let v = json!({"name": "test", "count": 5, "ratio": 0.5, "active": true});
+        assert_eq!(roundtrip(&v), v);
     }
 
     #[test]
-    fn prost_value_to_json_none_kind() {
-        let prost_val = Value { kind: None };
-        let back = prost_value_to_json(&prost_val);
-        assert_eq!(back, json!(null));
+    fn field_value_none_kind_is_null() {
+        let fv = FieldValue { kind: None };
+        assert_eq!(field_value_to_json(&fv), json!(null));
     }
 
-    // ── prost_struct_to_json_map ───────────────────────────────────────────
+    // ── data_map_to_json_map ───────────────────────────────────────────────
 
     #[test]
-    fn prost_struct_to_json_map_preserves_nested_structure() {
-        let mut inner_fields = BTreeMap::new();
-        inner_fields.insert(
-            "x".to_string(),
-            Value {
-                kind: Some(Kind::NumberValue(10.0)),
-            },
-        );
+    fn data_map_to_json_map_preserves_nested_structure() {
+        let inner = json!({"x": 10});
+        let map = json!({"tags": ["a", "b"], "nested": inner});
+        let JsonValue::Object(obj) = map else {
+            unreachable!()
+        };
 
-        let mut fields = BTreeMap::new();
-        fields.insert(
-            "tags".to_string(),
-            Value {
-                kind: Some(Kind::ListValue(prost_types::ListValue {
-                    values: vec![
-                        Value {
-                            kind: Some(Kind::StringValue("a".to_string())),
-                        },
-                        Value {
-                            kind: Some(Kind::StringValue("b".to_string())),
-                        },
-                    ],
-                })),
-            },
-        );
-        fields.insert(
-            "nested".to_string(),
-            Value {
-                kind: Some(Kind::StructValue(Struct {
-                    fields: inner_fields,
-                })),
-            },
-        );
+        let mut fields = HashMap::new();
+        for (k, v) in &obj {
+            fields.insert(k.clone(), json_to_field_value(v));
+        }
+        let dm = DataMap { fields };
 
-        let s = Struct { fields };
-        let map = prost_struct_to_json_map(&s);
-
-        assert_eq!(map.get("tags").unwrap(), &json!(["a", "b"]));
-        assert_eq!(map.get("nested").unwrap(), &json!({"x": 10.0}));
+        let back = data_map_to_json_map(&dm);
+        assert_eq!(back.get("tags").unwrap(), &json!(["a", "b"]));
+        assert_eq!(back.get("nested").unwrap(), &json!({"x": 10}));
     }
 
     // ── document_to_proto ──────────────────────────────────────────────────
@@ -243,9 +221,7 @@ mod tests {
         let title = &fields.fields["title"];
         assert!(matches!(&title.kind, Some(Kind::StringValue(s)) if s == "Hello"));
         let count = &fields.fields["count"];
-        assert!(
-            matches!(&count.kind, Some(Kind::NumberValue(n)) if (*n - 42.0).abs() < f64::EPSILON)
-        );
+        assert!(matches!(&count.kind, Some(Kind::IntValue(42))));
     }
 
     #[test]

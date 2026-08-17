@@ -6,6 +6,7 @@ use std::{
     sync::{Arc, atomic::AtomicUsize},
 };
 
+use tokio::task;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, metadata::MetadataMap};
 use tracing::error;
@@ -379,6 +380,53 @@ impl ContentService {
             .map_err(|_| Status::internal("Internal error"))?;
         Ok(result)
     }
+
+    /// Gate the schema-introspection RPCs on authentication when
+    /// `[server] public_schema_introspection = false`. Public (the default) is a
+    /// no-op; otherwise an anonymous caller is rejected before the schema shape
+    /// is returned. Document data is unaffected — always access-gated.
+    async fn require_schema_introspection_auth(
+        &self,
+        metadata: &MetadataMap,
+    ) -> Result<(), Status> {
+        if self.server_config.public_schema_introspection {
+            return Ok(());
+        }
+
+        let token = Self::extract_token(metadata);
+        let headers = self.metadata_headers(metadata);
+        let pool = self.pool.clone();
+        let token_provider = self.token_provider.clone();
+        let hook_runner = self.hook_runner.clone();
+        let registry = Arc::clone(&self.registry);
+
+        let authed = task::spawn_blocking(move || {
+            let conn = pool
+                .get()
+                .inspect_err(|e| error!("Schema introspection auth pool error: {}", e))
+                .map_err(|_| Status::internal("Internal error"))?;
+
+            Self::resolve_auth_user(
+                token.as_deref(),
+                &headers,
+                &*token_provider,
+                &hook_runner,
+                &registry,
+                &conn,
+            )
+        })
+        .await
+        .inspect_err(|e| error!("Schema introspection auth task error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))??;
+
+        if authed.is_none() {
+            return Err(Status::unauthenticated(
+                "Authentication required for schema introspection",
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 /// Untestable as unit: all methods are async gRPC handlers requiring full server + Lua VM + DB.
@@ -502,6 +550,8 @@ impl ContentApi for ContentService {
         &self,
         request: Request<content::ListCollectionsRequest>,
     ) -> Result<Response<content::ListCollectionsResponse>, Status> {
+        self.require_schema_introspection_auth(request.metadata())
+            .await?;
         Ok(self.list_collections_impl(request))
     }
 
@@ -509,6 +559,8 @@ impl ContentApi for ContentService {
         &self,
         request: Request<content::DescribeCollectionRequest>,
     ) -> Result<Response<content::DescribeCollectionResponse>, Status> {
+        self.require_schema_introspection_auth(request.metadata())
+            .await?;
         self.describe_collection_impl(request)
     }
 

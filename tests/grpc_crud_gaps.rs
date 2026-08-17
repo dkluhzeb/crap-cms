@@ -17,10 +17,9 @@
     clippy::unreadable_literal
 )]
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use prost_types::{Struct, Value, value::Kind};
 use tonic::Request;
 
 use crap_cms::api::content;
@@ -74,24 +73,24 @@ fn make_users_def() -> CollectionDefinition {
 }
 
 /// Build a prost Struct from key-value string pairs.
-fn make_struct(pairs: &[(&str, &str)]) -> Struct {
-    let mut fields = BTreeMap::new();
+fn make_struct(pairs: &[(&str, &str)]) -> content::DataMap {
+    let mut fields = HashMap::new();
     for (k, v) in pairs {
         fields.insert(
             k.to_string(),
-            Value {
-                kind: Some(Kind::StringValue(v.to_string())),
+            content::FieldValue {
+                kind: Some(content::field_value::Kind::StringValue(v.to_string())),
             },
         );
     }
-    Struct { fields }
+    content::DataMap { fields }
 }
 
 /// Extract a string field from a proto Document's fields struct.
 fn get_proto_field(doc: &content::Document, field: &str) -> Option<String> {
     doc.fields.as_ref().and_then(|s| {
         s.fields.get(field).and_then(|v| match &v.kind {
-            Some(Kind::StringValue(s)) => Some(s.clone()),
+            Some(content::field_value::Kind::StringValue(s)) => Some(s.clone()),
             _ => None,
         })
     })

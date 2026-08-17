@@ -7,7 +7,7 @@ use tonic::{Request, Response, Status};
 use tracing::error;
 
 use crate::{
-    api::handlers::proto::pagination_result_to_proto,
+    api::handlers::proto::{clamp_limit, pagination_result_to_proto},
     api::{
         content,
         handlers::{ContentService, enum_mapping},
@@ -101,7 +101,7 @@ impl ContentService {
             slug: req.slug.clone(),
             // The proto status filter is an enum; `Unspecified` = no filter.
             status: enum_mapping::job_status_filter(req.status()).map(|s| s.as_str().to_string()),
-            limit: req.limit.unwrap_or(50).min(1000),
+            limit: clamp_limit(req.limit.unwrap_or(50), 1000),
             offset: req.offset.unwrap_or(0).max(0),
         };
 

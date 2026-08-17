@@ -18,10 +18,9 @@
     clippy::unreadable_literal
 )]
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use prost_types::{Struct, Value, value::Kind};
 use tonic::Request;
 
 use crap_cms::api::content;
@@ -63,24 +62,24 @@ fn make_posts_def() -> CollectionDefinition {
 }
 
 /// Build a prost Struct from key-value string pairs.
-fn make_struct(pairs: &[(&str, &str)]) -> Struct {
-    let mut fields = BTreeMap::new();
+fn make_struct(pairs: &[(&str, &str)]) -> content::DataMap {
+    let mut fields = HashMap::new();
     for (k, v) in pairs {
         fields.insert(
             k.to_string(),
-            Value {
-                kind: Some(Kind::StringValue(v.to_string())),
+            content::FieldValue {
+                kind: Some(content::field_value::Kind::StringValue(v.to_string())),
             },
         );
     }
-    Struct { fields }
+    content::DataMap { fields }
 }
 
 /// Extract a string field from a proto Document's fields struct.
 fn get_proto_field(doc: &content::Document, field: &str) -> Option<String> {
     doc.fields.as_ref().and_then(|s| {
         s.fields.get(field).and_then(|v| match &v.kind {
-            Some(Kind::StringValue(s)) => Some(s.clone()),
+            Some(content::field_value::Kind::StringValue(s)) => Some(s.clone()),
             _ => None,
         })
     })
@@ -234,7 +233,7 @@ fn make_numbered_posts_def() -> CollectionDefinition {
     def
 }
 
-fn make_item(name: &str, score: &str, tag: &str) -> Struct {
+fn make_item(name: &str, score: &str, tag: &str) -> content::DataMap {
     make_struct(&[("name", name), ("score", score), ("tag", tag)])
 }
 
@@ -1246,7 +1245,7 @@ async fn find_depth_0_returns_id_only() {
     assert!(cat_field.is_some(), "category field should be present");
 
     match &cat_field.unwrap().kind {
-        Some(Kind::StringValue(s)) => {
+        Some(content::field_value::Kind::StringValue(s)) => {
             assert_eq!(
                 s, &cat_doc.id,
                 "At depth=0, category should be the raw ID string"

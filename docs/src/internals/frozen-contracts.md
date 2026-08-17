@@ -56,6 +56,32 @@ stored data, or clients.
   back to text) are a **deliberate, permanent** leniency.
 - **Cursor token format** (base64url JSON) — kept decodable for in-flight URLs.
 
+## gRPC wire format (`proto/content.proto`)
+
+- **Document values use the typed `FieldValue` / `DataMap` / `FieldList`
+  messages**, not `google.protobuf.Struct`. `FieldValue` mirrors JSON but splits
+  numbers into `int_value` (`int64`, exact) and `double_value`. A producer sets
+  exactly one variant; an integer that fits `i64` uses `int_value`, a fractional
+  value or an out-of-`i64` integer uses `double_value`. This is the frozen shape
+  for every `data` / `fields` field — do not revert it to `Struct` (that would
+  re-introduce the >2^53 rounding this replaced).
+- **JSON-string escape hatches are intentional and permanent** — do NOT promote
+  them to typed messages: `FindRequest.where` (a JSON filter string, so new
+  operators need no wire change), `FieldInfo.type` (field-type name as a free
+  string), and the job `data_json` / `result_json` payloads.
+- **Schema introspection is a one-way lossy projection.** `DescribeCollection`
+  flattens `tabs` sub-fields into `fields` (tab grouping is not reconstructable),
+  and `FieldInfo.name` is the **Lua** field name (nested), never the flattened
+  DB column (`group__sub`).
+- **Enum defaults.** Every enum has an explicit `*_UNSPECIFIED = 0`. A value the
+  server can't map collapses to `UNSPECIFIED` (e.g. a `cli`-scheduled run in
+  `JobScheduledBy`, a non-`published`/`draft` version status) rather than
+  erroring; adding an enum value is wire-safe, removing/renumbering is not.
+- **Removed proto fields are compacted, not reserved.** While the wire format is
+  pre-freeze (alpha), a removed field's tag is reclaimed by renumbering the
+  survivors so the message stays gap-free. After the freeze, removed tags must
+  instead be `reserved`.
+
 ## Hooks
 
 - **The 9 `HookEvent`s** and their per-operation firing order:
@@ -81,7 +107,19 @@ stored data, or clients.
 - **Pagination limit and populate depth are clamped at every read surface**
   (Lua / gRPC / MCP / admin) via `apply_pagination_limits` (cap `max_limit`) and
   `min(max_depth)`. Any new read surface **must** apply the same clamps — an
-  untrusted limit/depth must never reach the query layer unclamped.
+  untrusted limit/depth must never reach the query layer unclamped. This
+  includes the gRPC `ListJobRuns` / `ListVersions` limits, which are floored at
+  0 (a negative `limit` must never bind as an unbounded `LIMIT -1`).
+
+## Server-config posture (frozen defaults)
+
+- **gRPC per-IP rate limiting is off by default** (`grpc_rate_limit_requests =
+  0`) and keys on the raw TCP peer (no `X-Forwarded-For`). Live deployments set
+  it explicitly; behind an L7 proxy set it at the proxy. Changing the default to
+  non-zero would collapse all clients behind a proxy into one bucket.
+- **Schema introspection is public by default** (`public_schema_introspection =
+  true`): `ListCollections` / `DescribeCollection` need no auth. Operators set it
+  `false` to require authentication. It never gates document data.
 
 ## Access model
 

@@ -20,9 +20,9 @@
     clippy::unreadable_literal
 )]
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
-use prost_types::{Struct, Value, value::Kind};
+use crap_cms::api::content::{DataMap, FieldValue, field_value::Kind};
 
 use crap_cms::{
     api::content::{ValidateRequest, content_api_client::ContentApiClient},
@@ -45,17 +45,17 @@ fn make_def() -> CollectionDefinition {
     def
 }
 
-fn proto_struct(pairs: &[(&str, &str)]) -> Struct {
-    let mut fields = BTreeMap::new();
+fn proto_struct(pairs: &[(&str, &str)]) -> DataMap {
+    let mut fields = HashMap::new();
     for (k, v) in pairs {
         fields.insert(
             (*k).to_string(),
-            Value {
+            FieldValue {
                 kind: Some(Kind::StringValue((*v).to_string())),
             },
         );
     }
-    Struct { fields }
+    DataMap { fields }
 }
 
 // ── validate_valid_data_returns_valid_true ───────────────────────────────
@@ -95,8 +95,8 @@ async fn validate_missing_required_returns_errors_map() {
     let resp = client
         .validate(ValidateRequest {
             collection: "posts".to_string(),
-            data: Some(Struct {
-                fields: BTreeMap::new(),
+            data: Some(DataMap {
+                fields: HashMap::new(),
             }),
             ..Default::default()
         })

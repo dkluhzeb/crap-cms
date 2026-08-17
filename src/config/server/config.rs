@@ -102,6 +102,14 @@ pub struct ServerConfig {
     /// admin, MCP).
     #[serde(default)]
     pub bulk_max_documents: i64,
+
+    /// Whether the gRPC schema-introspection RPCs (`ListCollections`,
+    /// `DescribeCollection`) are readable without authentication. Default:
+    /// `true` — the content model is public, like a headless-CMS schema. Set to
+    /// `false` to require an authenticated caller; the schema shape (collection
+    /// and field names/types) is then hidden from anonymous clients. Never
+    /// affects document data, which is always access-gated regardless.
+    pub public_schema_introspection: bool,
 }
 
 fn default_grpc_rate_limit_window() -> u64 {
@@ -130,6 +138,7 @@ impl Default for ServerConfig {
             grpc_timeout: None,
             grpc_max_message_size: default_grpc_max_message_size(),
             bulk_max_documents: 0,
+            public_schema_introspection: true,
         }
     }
 }
@@ -183,6 +192,24 @@ mod tests {
         .unwrap();
         let config = CrapConfig::load(tmp.path()).unwrap();
         assert!(!config.server.h2c);
+    }
+
+    #[test]
+    fn server_config_public_schema_introspection_defaults_true() {
+        let server = ServerConfig::default();
+        assert!(server.public_schema_introspection);
+    }
+
+    #[test]
+    fn server_config_public_schema_introspection_from_toml() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            tmp.path().join("crap.toml"),
+            "[server]\npublic_schema_introspection = false\n",
+        )
+        .unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
+        assert!(!config.server.public_schema_introspection);
     }
 
     #[test]

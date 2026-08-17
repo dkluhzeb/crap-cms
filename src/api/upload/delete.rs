@@ -16,7 +16,7 @@ use crate::{
         CollectionDefinition, Document, ReqContext, SharedInvalidationTransport, SharedStorage,
         event::EventOperation,
     },
-    db::{DbPool, query},
+    db::{DbPool, LocaleContext, query},
     hooks::HookRunner,
     service::{ServiceContext, ServiceError, delete_document},
 };
@@ -54,6 +54,49 @@ use super::helpers::{
     SuccessBody, check_upload_access, classify_delete_error, extract_bearer_user, json_error,
     json_ok, publish_upload_event,
 };
+
+/// Existence precheck for `delete_upload`. Builds a proper locale context so the
+/// SELECT targets locale-suffixed columns (`caption__en`) on localized
+/// collections — a bare `None` locale generates unsuffixed column names and
+/// errors, which the old `.ok().flatten()` swallowed into a spurious 404.
+/// Distinguishes a genuine 404 (`Ok(None)`) from a backend error (surfaced as
+/// 500 rather than reported to the client as "not found").
+fn ensure_upload_exists(
+    state: &AdminState,
+    def: &CollectionDefinition,
+    slug: &str,
+    id: &str,
+) -> Result<(), Box<Response>> {
+    let internal = || {
+        Box::new(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal error",
+        ))
+    };
+
+    let locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale)
+        .inspect_err(|e| error!("Upload delete locale context error: {e}"))
+        .map_err(|_| internal())?;
+
+    let conn = state
+        .pool
+        .get()
+        .inspect_err(|e| error!("Upload delete pool error: {e}"))
+        .map_err(|_| internal())?;
+
+    let doc = query::find_by_id(&conn, slug, def, id, locale_ctx.as_ref())
+        .inspect_err(|e| error!("Upload delete existence check failed: {e}"))
+        .map_err(|_| internal())?;
+
+    if doc.is_none() {
+        return Err(Box::new(json_error(
+            StatusCode::NOT_FOUND,
+            &format!("Document '{id}' not found"),
+        )));
+    }
+
+    Ok(())
+}
 
 #[cfg(not(tarpaulin_include))]
 pub(super) async fn delete_upload(
@@ -104,19 +147,8 @@ pub(super) async fn delete_upload(
         return *resp;
     }
 
-    let doc_exists = state
-        .pool
-        .get()
-        .ok()
-        .and_then(|conn| {
-            query::find_by_id(&conn, &slug, &def, &id, None)
-                .ok()
-                .flatten()
-        })
-        .is_some();
-
-    if !doc_exists {
-        return json_error(StatusCode::NOT_FOUND, &format!("Document '{id}' not found"));
+    if let Err(resp) = ensure_upload_exists(&state, &def, &slug, &id) {
+        return *resp;
     }
 
     let input = UploadDeleteBlockingInput {

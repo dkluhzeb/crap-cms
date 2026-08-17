@@ -175,11 +175,11 @@ async fn default_deny_blocks_find_by_id() {
 async fn default_deny_blocks_create() {
     let ts = setup_default_deny();
 
-    let data = prost_types::Struct {
+    let data = content::DataMap {
         fields: [(
             "title".to_string(),
-            prost_types::Value {
-                kind: Some(prost_types::value::Kind::StringValue("Hello".to_string())),
+            content::FieldValue {
+                kind: Some(content::field_value::Kind::StringValue("Hello".to_string())),
             },
         )]
         .into(),

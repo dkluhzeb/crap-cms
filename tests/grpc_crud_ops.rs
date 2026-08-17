@@ -17,10 +17,9 @@
     clippy::unreadable_literal
 )]
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use prost_types::{ListValue, Struct, Value, value::Kind};
 use tonic::Request;
 
 use crap_cms::api::content;
@@ -38,61 +37,65 @@ use serde_json::json;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-fn str_val(s: &str) -> Value {
-    Value {
-        kind: Some(Kind::StringValue(s.to_string())),
+fn str_val(s: &str) -> content::FieldValue {
+    content::FieldValue {
+        kind: Some(content::field_value::Kind::StringValue(s.to_string())),
     }
 }
 
-fn list_val(items: Vec<Value>) -> Value {
-    Value {
-        kind: Some(Kind::ListValue(ListValue { values: items })),
+fn list_val(items: Vec<content::FieldValue>) -> content::FieldValue {
+    content::FieldValue {
+        kind: Some(content::field_value::Kind::ListValue(content::FieldList {
+            values: items,
+        })),
     }
 }
 
-fn make_struct(pairs: &[(&str, &str)]) -> Struct {
-    let mut fields = BTreeMap::new();
+fn make_struct(pairs: &[(&str, &str)]) -> content::DataMap {
+    let mut fields = HashMap::new();
     for (k, v) in pairs {
         fields.insert(
             k.to_string(),
-            Value {
-                kind: Some(Kind::StringValue(v.to_string())),
+            content::FieldValue {
+                kind: Some(content::field_value::Kind::StringValue(v.to_string())),
             },
         );
     }
-    Struct { fields }
+    content::DataMap { fields }
 }
 
 fn get_proto_field(doc: &content::Document, field: &str) -> Option<String> {
     doc.fields.as_ref().and_then(|s| {
         s.fields.get(field).and_then(|v| match &v.kind {
-            Some(Kind::StringValue(s)) => Some(s.clone()),
+            Some(content::field_value::Kind::StringValue(s)) => Some(s.clone()),
             _ => None,
         })
     })
 }
 
-fn get_proto_value(doc: &content::Document, field: &str) -> Option<Value> {
+fn get_proto_value(doc: &content::Document, field: &str) -> Option<content::FieldValue> {
     doc.fields
         .as_ref()
         .and_then(|s| s.fields.get(field).cloned())
 }
 
-fn get_list_items(doc: &content::Document, field: &str) -> Vec<Value> {
+fn get_list_items(doc: &content::Document, field: &str) -> Vec<content::FieldValue> {
     match get_proto_value(doc, field) {
-        Some(Value {
-            kind: Some(Kind::ListValue(lv)),
+        Some(content::FieldValue {
+            kind: Some(content::field_value::Kind::ListValue(lv)),
         }) => lv.values,
         _ => vec![],
     }
 }
 
-fn get_struct_field_str(val: &Value, field: &str) -> Option<String> {
+fn get_struct_field_str(val: &content::FieldValue, field: &str) -> Option<String> {
     match &val.kind {
-        Some(Kind::StructValue(s)) => s.fields.get(field).and_then(|v| match &v.kind {
-            Some(Kind::StringValue(s)) => Some(s.clone()),
-            _ => None,
-        }),
+        Some(content::field_value::Kind::StructValue(s)) => {
+            s.fields.get(field).and_then(|v| match &v.kind {
+                Some(content::field_value::Kind::StringValue(s)) => Some(s.clone()),
+                _ => None,
+            })
+        }
         _ => None,
     }
 }
@@ -550,7 +553,7 @@ async fn grpc_unpublish_response_has_draft_status() {
         .as_ref()
         .and_then(|s| s.fields.get("_status"))
         .and_then(|v| match &v.kind {
-            Some(Kind::StringValue(s)) => Some(s.as_str()),
+            Some(content::field_value::Kind::StringValue(s)) => Some(s.as_str()),
             _ => None,
         });
 
@@ -768,7 +771,7 @@ async fn grpc_create_and_update_has_many() {
         .unwrap();
 
     // Create post with tag1 and tag2
-    let mut post_fields = BTreeMap::new();
+    let mut post_fields = HashMap::new();
     post_fields.insert("title".to_string(), str_val("Tagged Post"));
     post_fields.insert(
         "tags".to_string(),
@@ -779,7 +782,7 @@ async fn grpc_create_and_update_has_many() {
         .create(Request::new(content::CreateRequest {
             events: None,
             collection: "posts".to_string(),
-            data: Some(Struct {
+            data: Some(content::DataMap {
                 fields: post_fields,
             }),
             locale: None,
@@ -810,14 +813,14 @@ async fn grpc_create_and_update_has_many() {
     assert_eq!(tags.len(), 2, "should have 2 tags initially");
 
     // Update: replace with tag3 only
-    let mut update_fields = BTreeMap::new();
+    let mut update_fields = HashMap::new();
     update_fields.insert("tags".to_string(), list_val(vec![str_val(&tag3.id)]));
     ts.service
         .update(Request::new(content::UpdateRequest {
             events: None,
             collection: "posts".to_string(),
             id: post.id.clone(),
-            data: Some(Struct {
+            data: Some(content::DataMap {
                 fields: update_fields,
             }),
             locale: None,
@@ -872,13 +875,13 @@ async fn grpc_find_with_depth_populates_group_relationship() {
         .unwrap();
 
     // Create post with group > relationship
-    let mut post_fields = BTreeMap::new();
+    let mut post_fields = HashMap::new();
     post_fields.insert("title".to_string(), str_val("Tech Post"));
     post_fields.insert(
         "meta".to_string(),
-        Value {
-            kind: Some(Kind::StructValue(Struct {
-                fields: BTreeMap::from([("category".to_string(), str_val(&cat.id))]),
+        content::FieldValue {
+            kind: Some(content::field_value::Kind::StructValue(content::DataMap {
+                fields: HashMap::from([("category".to_string(), str_val(&cat.id))]),
             })),
         },
     );
@@ -888,7 +891,7 @@ async fn grpc_find_with_depth_populates_group_relationship() {
         .create(Request::new(content::CreateRequest {
             events: None,
             collection: "posts".to_string(),
-            data: Some(Struct {
+            data: Some(content::DataMap {
                 fields: post_fields,
             }),
             locale: None,
@@ -922,16 +925,16 @@ async fn grpc_find_with_depth_populates_group_relationship() {
     // At depth=1, the relationship should be populated (a struct, not a string ID)
     // But in group context, it may return the ID. Check if we get any value.
     let cat_value = match &meta_val.kind {
-        Some(Kind::StructValue(s)) => s.fields.get("category"),
+        Some(content::field_value::Kind::StructValue(s)) => s.fields.get("category"),
         _ => None,
     };
     assert!(cat_value.is_some(), "meta.category should have a value");
 
     // If populated, it should be a struct with 'name'
     match cat_value.unwrap().kind.as_ref() {
-        Some(Kind::StructValue(inner)) => {
+        Some(content::field_value::Kind::StructValue(inner)) => {
             let name = inner.fields.get("name").and_then(|v| match &v.kind {
-                Some(Kind::StringValue(s)) => Some(s.clone()),
+                Some(content::field_value::Kind::StringValue(s)) => Some(s.clone()),
                 _ => None,
             });
             assert_eq!(
@@ -940,7 +943,7 @@ async fn grpc_find_with_depth_populates_group_relationship() {
                 "populated category should have name"
             );
         }
-        Some(Kind::StringValue(id)) => {
+        Some(content::field_value::Kind::StringValue(id)) => {
             // Depth=1 may not populate through groups — still valid if ID is correct
             assert_eq!(id, &cat.id, "should at least store the category ID");
         }
@@ -956,13 +959,13 @@ async fn grpc_update_many_with_nested_array() {
 
     // Create 2 products
     for name in &["Product A", "Product B"] {
-        let mut fields = BTreeMap::new();
+        let mut fields = HashMap::new();
         fields.insert("name".to_string(), str_val(name));
         fields.insert(
             "variants".to_string(),
-            list_val(vec![Value {
-                kind: Some(Kind::StructValue(Struct {
-                    fields: BTreeMap::from([("color".to_string(), str_val("red"))]),
+            list_val(vec![content::FieldValue {
+                kind: Some(content::field_value::Kind::StructValue(content::DataMap {
+                    fields: HashMap::from([("color".to_string(), str_val("red"))]),
                 })),
             }]),
         );
@@ -971,7 +974,7 @@ async fn grpc_update_many_with_nested_array() {
             .create(Request::new(content::CreateRequest {
                 events: None,
                 collection: "products".to_string(),
-                data: Some(Struct { fields }),
+                data: Some(content::DataMap { fields }),
                 locale: None,
                 draft: None,
             }))
@@ -980,12 +983,12 @@ async fn grpc_update_many_with_nested_array() {
     }
 
     // UpdateMany: change all variants to blue
-    let mut update_fields = BTreeMap::new();
+    let mut update_fields = HashMap::new();
     update_fields.insert(
         "variants".to_string(),
-        list_val(vec![Value {
-            kind: Some(Kind::StructValue(Struct {
-                fields: BTreeMap::from([("color".to_string(), str_val("blue"))]),
+        list_val(vec![content::FieldValue {
+            kind: Some(content::field_value::Kind::StructValue(content::DataMap {
+                fields: HashMap::from([("color".to_string(), str_val("blue"))]),
             })),
         }]),
     );
@@ -996,7 +999,7 @@ async fn grpc_update_many_with_nested_array() {
             events: None,
             collection: "products".to_string(),
             r#where: None,
-            data: Some(Struct {
+            data: Some(content::DataMap {
                 fields: update_fields,
             }),
             ..Default::default()

@@ -8,6 +8,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **gRPC document values now use a typed `FieldValue` message instead of
+  `google.protobuf.Struct`.** Every `data` / `fields` field on the wire
+  (`Document.fields`, `CreateRequest.data`, `UpdateRequest.data`,
+  `CreateManyRequest.documents`, `MutationEvent.data`, the `Validate*` requests,
+  etc.) now carries a typed `DataMap` of `FieldValue`s. `FieldValue` mirrors JSON
+  (null / bool / string / object / list) but splits numbers into `int_value`
+  (`int64`, exact) and `double_value` (`double`). Previously all numbers went
+  through Struct's only numeric kind — a double — so an integer field above 2^53
+  (~9.0e15) was **silently rounded on the wire**; it now round-trips exactly.
+  **Migration:** gRPC clients must regenerate stubs from the updated
+  `content.proto` and read numbers from `int_value` / `double_value` (and null
+  via `null_value`) instead of Struct's `number_value`. Integers now arrive as
+  `int_value`, not a float.
+
+- **gRPC `CreateMany` rejects a `password` field for auth collections.**
+  Previously a per-document `password` in a bulk create was silently dropped
+  (the user was created unable to authenticate). It now returns
+  `INVALID_ARGUMENT`, matching `UpdateMany`. **Migration:** set the password with
+  a follow-up single `Create` / `Update`, which extract and policy-validate it.
+
 - **Scheduler behavior changes (stabilization).** Three runtime behaviors
   changed and are now frozen: (1) a crashed worker's in-flight jobs are
   **requeued and re-run** by surviving nodes (at-least-once) — **job handlers
@@ -407,6 +427,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `max_file_size` still inherits the global default.
 
 ### Security
+
+- **A revoked session could keep receiving live events after an invalidation
+  burst.** The gRPC `Subscribe` stream's session-revocation handler swallowed a
+  lagged or closed invalidation broadcast (`RecvError::Lagged`/`Closed`) and kept
+  streaming, while the event handler correctly treats a lag as fatal. If ≥64
+  revocations (the invalidation bus capacity) were published while a subscriber
+  was busy forwarding a slow event, that subscriber could lag past *its own*
+  revocation and continue receiving events on a revoked token. It now fails
+  closed: a lagged or closed invalidation drops the subscriber and forces a
+  reconnect (which re-authenticates).
+
+- **Unbounded read via a negative gRPC `limit`.** `ListJobRuns` and
+  `ListVersions` accept an `optional int64 limit`; `ListJobRuns` capped the top
+  (`.min(1000)`) but neither floored a negative value, and `ListVersions` passed
+  it through raw. A client sending `limit = -1` bound as `LIMIT -1`, which SQLite
+  treats as *no limit* — returning the entire job-run (or version) history and
+  bypassing the intended cap. Both now clamp/floor the limit at 0 (a shared
+  `clamp_limit` / `floor_optional_limit`), matching the read-surface clamp
+  invariant.
 
 - **`crap.collections.update(id, data, { unpublish = true })` now enforces
   access.** The `unpublish` option used a bespoke code path that skipped access
@@ -986,6 +1025,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **Deleting an upload document on a localized collection returned a spurious
+  404.** The `DELETE /api/upload/{slug}/{id}` existence precheck queried with a
+  `None` locale, which references unsuffixed columns (`caption` instead of
+  `caption__en`) on a localized collection — the SELECT errored and the handler
+  swallowed it into "document not found", so the real delete was never reached.
+  The precheck now builds a proper locale context (matching the update path) and
+  distinguishes a genuine 404 (`Ok(None)`) from a backend error (now surfaced as
+  500 rather than reported as "not found").
+
+- **gRPC wire format compacted before freeze.** Two removed fields left tag gaps
+  (`DeleteResponse` field 1 `success`, `JobDefinitionInfo` field 2 `handler`);
+  the surviving fields are renumbered to close the gaps so the frozen proto has
+  no burned tags. This is a wire-format break for any current alpha gRPC client
+  of those two messages (tags are wire-only; no stored data depends on them).
+
+- **Orphaned-file cleanup after an upload rollback is now logged.** The upload
+  `CleanupGuard`'s rollback path swallowed a storage-delete error silently; it
+  now logs a warning (matching `delete_upload_files`) so a leaked file is
+  observable.
 
 - **Frequent cron jobs no longer fire on only every other schedule window.**
   The multi-node cron dedup guard used a strict `<` comparison against a window
@@ -1675,6 +1734,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   files, so trashed documents remain restorable.)
 
 ### Added
+
+- **`[server] public_schema_introspection` config flag.** Controls whether the
+  gRPC schema-introspection RPCs (`ListCollections`, `DescribeCollection`) are
+  readable without authentication. Default `true` (the content model is public,
+  as in a headless CMS). Set to `false` in production to require an
+  authenticated caller — the schema shape (collection and field names/types) is
+  then hidden from anonymous clients. Never affects document data, which is
+  always access-gated.
 
 - **Custom HTTP routes via `crap.routes.register`.** Mount arbitrary HTTP
   endpoints on the admin server, handled in Lua (`routes/<name>.lua` returning

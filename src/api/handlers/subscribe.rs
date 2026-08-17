@@ -1,7 +1,7 @@
 //! Subscribe handler — real-time mutation event streaming.
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     pin::Pin,
     sync::{
         Arc,
@@ -19,7 +19,7 @@ use tracing::{error, warn};
 use crate::{
     api::{
         content,
-        handlers::{ContentService, enum_mapping, proto::json_to_prost_value},
+        handlers::{ContentService, enum_mapping, proto::json_to_field_value},
     },
     core::{
         Document, EventReceiver, HookRef, LiveMode, MutationEvent, Registry, SharedTokenProvider,
@@ -248,9 +248,9 @@ fn process_event(event: &MutationEvent, ctx: &SubscriberCtx) -> Option<content::
     }
     .evaluate(event)?;
 
-    let fields: BTreeMap<String, prost_types::Value> = visible
+    let fields: HashMap<String, content::FieldValue> = visible
         .iter()
-        .map(|(k, v)| (k.clone(), json_to_prost_value(v)))
+        .map(|(k, v)| (k.clone(), json_to_field_value(v)))
         .collect();
 
     Some(content::MutationEvent {
@@ -260,7 +260,7 @@ fn process_event(event: &MutationEvent, ctx: &SubscriberCtx) -> Option<content::
         operation: enum_mapping::mutation_operation(&event.operation).into(),
         collection: event.collection.to_string(),
         document_id: event.document_id.to_string(),
-        data: Some(prost_types::Struct { fields }),
+        data: Some(content::DataMap { fields }),
     })
 }
 
@@ -338,9 +338,24 @@ async fn handle_invalidation(
     recv: Result<String, RecvError>,
     send_timeout_dur: Duration,
 ) -> Result<(), ()> {
-    let Ok(user_id) = recv else {
-        // Lag or closed — keep going.
-        return Ok(());
+    let user_id = match recv {
+        Ok(user_id) => user_id,
+
+        // Security: the invalidation bus is a fixed-capacity broadcast. If it
+        // lagged we may have missed *our own* revocation, and if it closed no
+        // future revocation can ever reach us — either way we can no longer
+        // guarantee this session is still valid. Fail closed: drop the
+        // subscriber and force a reconnect (which re-authenticates) rather than
+        // keep streaming to a possibly-revoked token.
+        Err(RecvError::Lagged(n)) => {
+            warn!(
+                "Subscribe invalidation stream lagged by {} — dropping subscriber \
+                 to force re-auth (a revocation may have been missed)",
+                n
+            );
+            return Err(());
+        }
+        Err(RecvError::Closed) => return Err(()),
     };
 
     let Some(my_id) = my_user_id else {
@@ -726,5 +741,69 @@ mod tests {
         }
         assert!(!try_acquire_subscribe_slot(&counter, 3));
         assert_eq!(counter.load(Ordering::Relaxed), 3);
+    }
+
+    /// A lagged invalidation bus means this subscriber may have missed its own
+    /// revocation — it must fail closed (drop → force re-auth), not keep
+    /// streaming to a possibly-revoked token.
+    #[tokio::test]
+    async fn invalidation_lag_drops_subscriber_fail_closed() {
+        let (tx, _rx) = mpsc::channel::<OutboundItem>(4);
+        let r = handle_invalidation(
+            &tx,
+            Some("u1"),
+            Err(RecvError::Lagged(5)),
+            Duration::from_millis(50),
+        )
+        .await;
+        assert!(r.is_err(), "lagged invalidation must drop the subscriber");
+    }
+
+    /// A closed invalidation bus means no future revocation can ever reach us —
+    /// also fail closed.
+    #[tokio::test]
+    async fn invalidation_closed_drops_subscriber_fail_closed() {
+        let (tx, _rx) = mpsc::channel::<OutboundItem>(4);
+        let r = handle_invalidation(
+            &tx,
+            Some("u1"),
+            Err(RecvError::Closed),
+            Duration::from_millis(50),
+        )
+        .await;
+        assert!(r.is_err(), "closed invalidation must drop the subscriber");
+    }
+
+    /// A revocation targeting a different user leaves this subscriber running.
+    #[tokio::test]
+    async fn invalidation_for_other_user_keeps_streaming() {
+        let (tx, _rx) = mpsc::channel::<OutboundItem>(4);
+        let r = handle_invalidation(
+            &tx,
+            Some("u1"),
+            Ok("someone_else".to_string()),
+            Duration::from_millis(50),
+        )
+        .await;
+        assert!(r.is_ok(), "another user's revocation must not affect us");
+    }
+
+    /// A revocation targeting this user sends a terminal `PermissionDenied` and
+    /// drops the subscriber.
+    #[tokio::test]
+    async fn invalidation_for_self_sends_denied_and_drops() {
+        let (tx, mut rx) = mpsc::channel::<OutboundItem>(4);
+        let r = handle_invalidation(
+            &tx,
+            Some("u1"),
+            Ok("u1".to_string()),
+            Duration::from_millis(50),
+        )
+        .await;
+        assert!(r.is_err(), "our own revocation must drop us");
+
+        let item = rx.recv().await.expect("a terminal item should be sent");
+        let status = item.expect_err("terminal item should be a Status error");
+        assert_eq!(status.code(), tonic::Code::PermissionDenied);
     }
 }

@@ -17,10 +17,9 @@
     clippy::unreadable_literal
 )]
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use prost_types::{ListValue, Struct, Value, value::Kind};
 use tonic::Request;
 
 use crap_cms::api::content;
@@ -36,82 +35,88 @@ use crap_cms::hooks::lifecycle::HookRunner;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-fn str_val(s: &str) -> Value {
-    Value {
-        kind: Some(Kind::StringValue(s.to_string())),
+fn str_val(s: &str) -> content::FieldValue {
+    content::FieldValue {
+        kind: Some(content::field_value::Kind::StringValue(s.to_string())),
     }
 }
 
-fn struct_val(pairs: &[(&str, Value)]) -> Value {
-    let mut fields = BTreeMap::new();
+fn struct_val(pairs: &[(&str, content::FieldValue)]) -> content::FieldValue {
+    let mut fields = HashMap::new();
     for (k, v) in pairs {
         fields.insert(k.to_string(), v.clone());
     }
-    Value {
-        kind: Some(Kind::StructValue(Struct { fields })),
+    content::FieldValue {
+        kind: Some(content::field_value::Kind::StructValue(content::DataMap {
+            fields,
+        })),
     }
 }
 
-fn list_val(items: Vec<Value>) -> Value {
-    Value {
-        kind: Some(Kind::ListValue(ListValue { values: items })),
+fn list_val(items: Vec<content::FieldValue>) -> content::FieldValue {
+    content::FieldValue {
+        kind: Some(content::field_value::Kind::ListValue(content::FieldList {
+            values: items,
+        })),
     }
 }
 
-fn make_struct(pairs: &[(&str, &str)]) -> Struct {
-    let mut fields = BTreeMap::new();
+fn make_struct(pairs: &[(&str, &str)]) -> content::DataMap {
+    let mut fields = HashMap::new();
     for (k, v) in pairs {
         fields.insert(
             k.to_string(),
-            Value {
-                kind: Some(Kind::StringValue(v.to_string())),
+            content::FieldValue {
+                kind: Some(content::field_value::Kind::StringValue(v.to_string())),
             },
         );
     }
-    Struct { fields }
+    content::DataMap { fields }
 }
 
 fn get_proto_field(doc: &content::Document, field: &str) -> Option<String> {
     doc.fields.as_ref().and_then(|s| {
         s.fields.get(field).and_then(|v| match &v.kind {
-            Some(Kind::StringValue(s)) => Some(s.clone()),
+            Some(content::field_value::Kind::StringValue(s)) => Some(s.clone()),
             _ => None,
         })
     })
 }
 
 /// Extract a nested Value from a proto Document's fields struct.
-fn get_proto_value(doc: &content::Document, field: &str) -> Option<Value> {
+fn get_proto_value(doc: &content::Document, field: &str) -> Option<content::FieldValue> {
     doc.fields
         .as_ref()
         .and_then(|s| s.fields.get(field).cloned())
 }
 
 /// Extract the list of Values from a `ListValue` field.
-fn get_list_items(doc: &content::Document, field: &str) -> Vec<Value> {
+fn get_list_items(doc: &content::Document, field: &str) -> Vec<content::FieldValue> {
     match get_proto_value(doc, field) {
-        Some(Value {
-            kind: Some(Kind::ListValue(lv)),
+        Some(content::FieldValue {
+            kind: Some(content::field_value::Kind::ListValue(lv)),
         }) => lv.values,
         _ => vec![],
     }
 }
 
 /// Extract a string from a nested struct value.
-fn get_struct_field_str(val: &Value, field: &str) -> Option<String> {
+fn get_struct_field_str(val: &content::FieldValue, field: &str) -> Option<String> {
     match &val.kind {
-        Some(Kind::StructValue(s)) => s.fields.get(field).and_then(|v| match &v.kind {
-            Some(Kind::StringValue(s)) => Some(s.clone()),
-            _ => None,
-        }),
+        Some(content::field_value::Kind::StructValue(s)) => {
+            s.fields.get(field).and_then(|v| match &v.kind {
+                Some(content::field_value::Kind::StringValue(s)) => Some(s.clone()),
+                _ => None,
+            })
+        }
         _ => None,
     }
 }
 
 /// Extract a nested struct Value from a struct value.
-fn get_struct_field_value(val: &Value, field: &str) -> Option<Value> {
+fn get_struct_field_value(val: &content::FieldValue, field: &str) -> Option<content::FieldValue> {
     match &val.kind {
-        Some(Kind::StructValue(s)) => s.fields.get(field).cloned(),
+        Some(content::field_value::Kind::StructValue(s)) => s.fields.get(field).cloned(),
         _ => None,
     }
 }
@@ -387,10 +392,10 @@ fn make_localized_products_def() -> CollectionDefinition {
 fn make_product_data(
     name: &str,
     seo_title: &str,
-    variants: Vec<Value>,
-    content_blocks: Vec<Value>,
-) -> Struct {
-    let mut fields = BTreeMap::new();
+    variants: Vec<content::FieldValue>,
+    content_blocks: Vec<content::FieldValue>,
+) -> content::DataMap {
+    let mut fields = HashMap::new();
     fields.insert("name".to_string(), str_val(name));
     fields.insert(
         "seo".to_string(),
@@ -398,11 +403,11 @@ fn make_product_data(
     );
     fields.insert("variants".to_string(), list_val(variants));
     fields.insert("content".to_string(), list_val(content_blocks));
-    Struct { fields }
+    content::DataMap { fields }
 }
 
 /// Build a single variant value.
-fn make_variant(color: &str, width: &str, height: &str) -> Value {
+fn make_variant(color: &str, width: &str, height: &str) -> content::FieldValue {
     struct_val(&[
         ("color", str_val(color)),
         (
@@ -413,12 +418,12 @@ fn make_variant(color: &str, width: &str, height: &str) -> Value {
 }
 
 /// Build a text block value.
-fn make_text_block(body: &str) -> Value {
+fn make_text_block(body: &str) -> content::FieldValue {
     struct_val(&[("_block_type", str_val("text")), ("body", str_val(body))])
 }
 
 /// Build a section block value.
-fn make_section_block(heading: &str, author: &str) -> Value {
+fn make_section_block(heading: &str, author: &str) -> content::FieldValue {
     struct_val(&[
         ("_block_type", str_val("section")),
         ("heading", str_val(heading)),
@@ -427,7 +432,7 @@ fn make_section_block(heading: &str, author: &str) -> Value {
 }
 
 /// Create a product and return the document.
-async fn create_product(ts: &TestSetup, data: Struct) -> content::Document {
+async fn create_product(ts: &TestSetup, data: content::DataMap) -> content::Document {
     ts.service
         .create(Request::new(content::CreateRequest {
             events: None,
@@ -654,7 +659,7 @@ async fn grpc_update_replaces_array_rows() {
     assert_eq!(get_list_items(&found, "variants").len(), 2);
 
     // Update: replace with single variant
-    let mut update_fields = BTreeMap::new();
+    let mut update_fields = HashMap::new();
     update_fields.insert(
         "variants".to_string(),
         list_val(vec![make_variant("green", "5", "6")]),
@@ -664,7 +669,7 @@ async fn grpc_update_replaces_array_rows() {
             events: None,
             collection: "products".to_string(),
             id: doc.id.clone(),
-            data: Some(Struct {
+            data: Some(content::DataMap {
                 fields: update_fields,
             }),
             locale: None,
@@ -705,7 +710,7 @@ async fn grpc_update_replaces_blocks() {
     );
 
     // Update: replace with section block
-    let mut update_fields = BTreeMap::new();
+    let mut update_fields = HashMap::new();
     update_fields.insert(
         "content".to_string(),
         list_val(vec![make_section_block("New Section", "Charlie")]),
@@ -715,7 +720,7 @@ async fn grpc_update_replaces_blocks() {
             events: None,
             collection: "products".to_string(),
             id: doc.id.clone(),
-            data: Some(Struct {
+            data: Some(content::DataMap {
                 fields: update_fields,
             }),
             locale: None,
@@ -752,7 +757,7 @@ async fn grpc_update_group_subfield() {
     let doc = create_product(&ts, data).await;
 
     // Update group sub-field
-    let mut update_fields = BTreeMap::new();
+    let mut update_fields = HashMap::new();
     update_fields.insert(
         "seo".to_string(),
         struct_val(&[("meta_title", str_val("Updated SEO"))]),
@@ -762,7 +767,7 @@ async fn grpc_update_group_subfield() {
             events: None,
             collection: "products".to_string(),
             id: doc.id.clone(),
-            data: Some(Struct {
+            data: Some(content::DataMap {
                 fields: update_fields,
             }),
             locale: None,
@@ -883,7 +888,7 @@ async fn grpc_localized_array_crud() {
     );
 
     // Create with English locale and array data
-    let mut fields = BTreeMap::new();
+    let mut fields = HashMap::new();
     fields.insert("name".to_string(), str_val("Localized Widget"));
     fields.insert(
         "variants".to_string(),
@@ -895,7 +900,7 @@ async fn grpc_localized_array_crud() {
         .create(Request::new(content::CreateRequest {
             events: None,
             collection: "products".to_string(),
-            data: Some(Struct { fields }),
+            data: Some(content::DataMap { fields }),
             locale: Some("en".to_string()),
             draft: None,
         }))
@@ -926,7 +931,7 @@ async fn grpc_localized_array_crud() {
     );
 
     // Update with German locale — different array data
-    let mut de_fields = BTreeMap::new();
+    let mut de_fields = HashMap::new();
     de_fields.insert(
         "variants".to_string(),
         list_val(vec![struct_val(&[("color", str_val("rot"))])]),
@@ -936,7 +941,7 @@ async fn grpc_localized_array_crud() {
             events: None,
             collection: "products".to_string(),
             id: doc.id.clone(),
-            data: Some(Struct { fields: de_fields }),
+            data: Some(content::DataMap { fields: de_fields }),
             locale: Some("de".to_string()),
             draft: None,
             unpublish: None,
@@ -997,7 +1002,7 @@ async fn grpc_localized_array_crud() {
 async fn grpc_validation_required_in_group_provided_passes() {
     let ts = setup_service(vec![make_products_with_required_group_field()], vec![]);
 
-    let mut fields = std::collections::BTreeMap::new();
+    let mut fields = std::collections::HashMap::new();
     fields.insert("name".to_string(), str_val("HasSEO"));
     fields.insert(
         "seo".to_string(),
@@ -1009,7 +1014,7 @@ async fn grpc_validation_required_in_group_provided_passes() {
         .create(Request::new(content::CreateRequest {
             events: None,
             collection: "products".to_string(),
-            data: Some(Struct { fields }),
+            data: Some(content::DataMap { fields }),
             locale: None,
             draft: None,
         }))

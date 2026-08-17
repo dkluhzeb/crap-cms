@@ -31,20 +31,19 @@ fn fixture_dir() -> PathBuf {
 }
 
 /// Build a prost `Struct` from string key/value pairs (the gRPC `data` field).
-fn make_struct(pairs: &[(&str, &str)]) -> prost_types::Struct {
-    use prost_types::{Value, value::Kind};
+fn make_struct(pairs: &[(&str, &str)]) -> content::DataMap {
     let fields = pairs
         .iter()
         .map(|(k, v)| {
             (
                 (*k).to_string(),
-                Value {
-                    kind: Some(Kind::StringValue((*v).to_string())),
+                content::FieldValue {
+                    kind: Some(content::field_value::Kind::StringValue((*v).to_string())),
                 },
             )
         })
         .collect();
-    prost_types::Struct { fields }
+    content::DataMap { fields }
 }
 
 /// A gRPC `ContentService` and a Lua `HookRunner` over one shared registry+pool.

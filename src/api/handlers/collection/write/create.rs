@@ -13,7 +13,7 @@ use crate::{
         handlers::{
             ContentService,
             collection::helpers::extract_auth_password,
-            proto::{document_to_proto, prost_struct_to_json_map},
+            proto::{data_map_to_json_map, document_to_proto},
         },
     },
     core::{
@@ -104,7 +104,7 @@ impl ContentService {
 
         let mut data: DocumentFields = req
             .data
-            .map(|s| prost_struct_to_json_map(&s))
+            .map(|s| data_map_to_json_map(&s))
             .unwrap_or_default()
             .into();
 

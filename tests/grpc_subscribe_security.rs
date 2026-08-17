@@ -20,8 +20,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use prost_types::{Struct, Value, value::Kind};
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use tokio::time::{sleep, timeout};
 use tokio_stream::StreamExt;
 use tonic::{Code, Request};
@@ -38,17 +37,17 @@ use crap_cms::core::field::*;
 use crap_cms::db::{migrate, pool};
 use crap_cms::hooks::lifecycle::HookRunner;
 
-fn make_struct(pairs: &[(&str, &str)]) -> Struct {
-    let mut fields = BTreeMap::new();
+fn make_struct(pairs: &[(&str, &str)]) -> content::DataMap {
+    let mut fields = HashMap::new();
     for (k, v) in pairs {
         fields.insert(
             k.to_string(),
-            Value {
-                kind: Some(Kind::StringValue(v.to_string())),
+            content::FieldValue {
+                kind: Some(content::field_value::Kind::StringValue(v.to_string())),
             },
         );
     }
-    Struct { fields }
+    content::DataMap { fields }
 }
 
 struct TestSetup {

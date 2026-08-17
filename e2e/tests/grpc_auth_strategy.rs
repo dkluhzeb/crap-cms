@@ -31,9 +31,9 @@
     clippy::unreadable_literal
 )]
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
-use prost_types::{Struct, Value, value::Kind};
+use crap_cms::api::content::{DataMap, FieldValue, field_value::Kind};
 
 use crap_cms::{
     api::content::{CreateRequest, LoginRequest, content_api_client::ContentApiClient},
@@ -75,17 +75,17 @@ return M
 
 // ── helpers ──────────────────────────────────────────────────────────────
 
-fn proto_struct(pairs: &[(&str, &str)]) -> Struct {
-    let mut fields = BTreeMap::new();
+fn proto_struct(pairs: &[(&str, &str)]) -> DataMap {
+    let mut fields = HashMap::new();
     for (k, v) in pairs {
         fields.insert(
             (*k).to_string(),
-            Value {
+            FieldValue {
                 kind: Some(Kind::StringValue((*v).to_string())),
             },
         );
     }
-    Struct { fields }
+    DataMap { fields }
 }
 
 fn users_def_with_strategy(name: &str, authenticate: &str) -> CollectionDefinition {

@@ -26,6 +26,38 @@ package crap;
 
 import "google/protobuf/struct.proto";
 
+// ── Typed field values ──────────────────────────────────────────────────────
+// Document field values travel as a typed tree rather than
+// google.protobuf.Struct so integers keep full precision. Struct's only numeric
+// kind is a double, which silently rounds integer values above 2^53 (~9.0e15);
+// FieldValue adds an explicit int64 variant.
+
+// DataMap is an object of field values (keys are the Lua field names).
+message DataMap {
+  map<string, FieldValue> fields = 1;
+}
+
+// FieldList is an ordered list of field values (array / blocks rows, etc.).
+message FieldList {
+  repeated FieldValue values = 1;
+}
+
+// FieldValue is a single JSON-shaped value: null, number, string, bool, object,
+// or list. Numbers split into int_value (an exact integer up to i64) and
+// double_value (fractional, or an integer outside i64 range). A producer sets
+// exactly one variant.
+message FieldValue {
+  oneof kind {
+    google.protobuf.NullValue null_value = 1;
+    double double_value = 2;
+    string string_value = 3;
+    bool bool_value = 4;
+    DataMap struct_value = 5;
+    FieldList list_value = 6;
+    int64 int_value = 7;
+  }
+}
+
 // ContentAPI is the primary gRPC interface for Crap CMS.
 // It exposes collection CRUD, global management, authentication, schema
 // introspection, real-time subscriptions, versioning, and background jobs.
@@ -663,7 +695,7 @@ message CreateRequest {
   // Document field values as a protobuf Struct (JSON-compatible key/value map).
   // For auth collections, include a "password" key; it is extracted before
   // hooks run and stored as an Argon2id hash in a hidden column.
-  google.protobuf.Struct data = 2;
+  DataMap data = 2;
 
   // BCP-47 locale for localized field writes.
   optional string locale = 3;
@@ -689,7 +721,7 @@ message CreateManyRequest {
   string collection = 1;
 
   // List of documents to create. Each item is a protobuf Struct with field values.
-  repeated google.protobuf.Struct documents = 2;
+  repeated DataMap documents = 2;
 
   // BCP-47 locale for localized field writes.
   optional string locale = 3;
@@ -726,7 +758,7 @@ message UpdateRequest {
   // Updated field values. Only provided fields are written; others are unchanged
   // (partial update semantics). For auth collections, "password" is handled
   // specially — empty string means keep the existing password unchanged.
-  google.protobuf.Struct data = 3;
+  DataMap data = 3;
 
   // BCP-47 locale for localized field writes.
   optional string locale = 4;
@@ -773,7 +805,7 @@ message DeleteRequest {
 // status error, so the response is only sent on success.
 message DeleteResponse {
   // True if the document was soft-deleted (moved to trash) rather than permanently deleted.
-  bool soft_deleted = 2;
+  bool soft_deleted = 1;
 }
 
 // UndeleteRequest undeletes a soft-deleted document from trash.
@@ -819,7 +851,7 @@ message UpdateGlobalRequest {
   string slug = 1;
 
   // Updated field values (partial update semantics).
-  google.protobuf.Struct data = 2;
+  DataMap data = 2;
 
   // BCP-47 locale for localized field writes.
   optional string locale = 3;
@@ -962,7 +994,7 @@ message UpdateManyRequest {
   optional string where = 2;
 
   // The field values to apply to all matching documents (partial update).
-  google.protobuf.Struct data = 3;
+  DataMap data = 3;
 
   // BCP-47 locale for localized field writes.
   optional string locale = 4;
@@ -1032,7 +1064,7 @@ message Document {
   // All field values as a JSON-compatible Struct.
   // Field-level access control (read) is applied before this is populated.
   // Password and other hidden columns are never included.
-  google.protobuf.Struct fields = 3;
+  DataMap fields = 3;
 
   // ISO-8601 UTC creation timestamp (e.g., "2024-01-15T10:30:00Z").
   // Absent when the collection has timestamps=false.
@@ -1128,7 +1160,9 @@ message DescribeCollectionResponse {
 
 // FieldInfo describes a single field from a collection or global definition.
 message FieldInfo {
-  // The field name (column name in the database, key in Document.fields).
+  // The field name as defined in Lua, and the key used in Document.fields.
+  // For a group sub-field this is the nested Lua name (e.g. `sub`), NOT the
+  // flattened database column (`group__sub`).
   string name = 1;
 
   // The field type string as defined in Lua.
@@ -1282,7 +1316,7 @@ message MutationEvent {
 
   // The document field values at the time of the event.
   // For delete events, this is an empty struct.
-  google.protobuf.Struct data = 7;
+  DataMap data = 7;
 
   // NOTE: events deliberately do NOT identify the editing user — exposing
   // editor ids/emails to every subscriber would leak PII. Editor-based
@@ -1362,25 +1396,25 @@ message JobDefinitionInfo {
 
   // Cron schedule expression (e.g., "0 * * * *" for hourly).
   // Absent for jobs that are only triggered manually.
-  optional string schedule = 3;
+  optional string schedule = 2;
 
   // Queue name this job runs on (default: "default").
-  string queue = 4;
+  string queue = 3;
 
   // Number of retry attempts after failure. 0 = no retries.
-  uint32 retries = 5;
+  uint32 retries = 4;
 
   // Maximum execution time in seconds before the job is considered timed out.
-  uint64 timeout = 6;
+  uint64 timeout = 5;
 
   // Maximum number of simultaneous runs of this job.
-  uint32 concurrency = 7;
+  uint32 concurrency = 6;
 
   // When true, a new run is skipped if another run of this job is already active.
-  bool skip_if_running = 8;
+  bool skip_if_running = 7;
 
   // Human-readable label for the job (from Lua definition labels.singular).
-  optional string label = 9;
+  optional string label = 8;
 }
 
 // TriggerJobRequest queues a job for immediate execution.
@@ -1494,7 +1528,7 @@ message ValidateRequest {
   string collection = 1;
 
   // Document field values to validate (same format as CreateRequest.data).
-  google.protobuf.Struct data = 2;
+  DataMap data = 2;
 
   // When true, validate as a draft (relaxes required-field checks for
   // collections with drafts enabled).
@@ -1526,7 +1560,7 @@ message ValidateGlobalRequest {
   string slug = 1;
 
   // Global field values to validate (same format as UpdateGlobalRequest.data).
-  google.protobuf.Struct data = 2;
+  DataMap data = 2;
 
   // When true, validate as a draft (relaxes required-field checks for
   // globals with drafts enabled).

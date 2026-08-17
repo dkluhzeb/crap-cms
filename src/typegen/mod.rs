@@ -6,7 +6,7 @@
 //! - `go` — Go structs with json tags
 //! - `python` — Python dataclasses
 //! - `rust_types` — Rust structs with serde derives
-//! - `rust_proto` — Rust `prost_types` → typed-struct conversion impls
+//! - `rust_proto` — typed proto (`FieldValue`/`DataMap`) → typed-struct conversion impls
 //!
 //! ## Layout
 //!

@@ -17,10 +17,9 @@
     clippy::unreadable_literal
 )]
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use prost_types::{ListValue, Struct, Value, value::Kind};
 use tonic::Request;
 
 use crap_cms::api::content;
@@ -36,34 +35,38 @@ use crap_cms::hooks::lifecycle::HookRunner;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-fn str_val(s: &str) -> Value {
-    Value {
-        kind: Some(Kind::StringValue(s.to_string())),
+fn str_val(s: &str) -> content::FieldValue {
+    content::FieldValue {
+        kind: Some(content::field_value::Kind::StringValue(s.to_string())),
     }
 }
 
-fn struct_val(pairs: &[(&str, Value)]) -> Value {
-    let mut fields = BTreeMap::new();
+fn struct_val(pairs: &[(&str, content::FieldValue)]) -> content::FieldValue {
+    let mut fields = HashMap::new();
     for (k, v) in pairs {
         fields.insert((*k).to_string(), v.clone());
     }
-    Value {
-        kind: Some(Kind::StructValue(Struct { fields })),
+    content::FieldValue {
+        kind: Some(content::field_value::Kind::StructValue(content::DataMap {
+            fields,
+        })),
     }
 }
 
-fn list_val(items: Vec<Value>) -> Value {
-    Value {
-        kind: Some(Kind::ListValue(ListValue { values: items })),
+fn list_val(items: Vec<content::FieldValue>) -> content::FieldValue {
+    content::FieldValue {
+        kind: Some(content::field_value::Kind::ListValue(content::FieldList {
+            values: items,
+        })),
     }
 }
 
-fn make_struct(pairs: &[(&str, &str)]) -> Struct {
-    let mut fields = BTreeMap::new();
+fn make_struct(pairs: &[(&str, &str)]) -> content::DataMap {
+    let mut fields = HashMap::new();
     for (k, v) in pairs {
         fields.insert(k.to_string(), str_val(v));
     }
-    Struct { fields }
+    content::DataMap { fields }
 }
 
 struct TestSetup {
@@ -279,8 +282,8 @@ async fn create_matrix_article(setup: &TestSetup) -> (String, Vec<(&'static str,
     ];
     let id_of = |label: &str| tags.iter().find(|(l, _)| *l == label).unwrap().1.clone();
 
-    let data = Struct {
-        fields: BTreeMap::from([
+    let data = content::DataMap {
+        fields: HashMap::from([
             ("title".to_string(), str_val("a1")),
             ("tag".to_string(), str_val(&id_of("top-level"))),
             (

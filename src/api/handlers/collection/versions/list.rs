@@ -8,7 +8,7 @@ use tonic::{Request, Response, Status};
 use tracing::error;
 
 use crate::{
-    api::handlers::proto::pagination_result_to_proto,
+    api::handlers::proto::{floor_optional_limit, pagination_result_to_proto},
     api::{
         content,
         handlers::{ContentService, enum_mapping},
@@ -97,7 +97,7 @@ impl ContentService {
             registry: Arc::clone(&self.registry),
             collection: req.collection.clone(),
             id: req.id.clone(),
-            limit: req.limit,
+            limit: floor_optional_limit(req.limit),
             def,
             token,
             headers,
