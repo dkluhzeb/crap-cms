@@ -339,6 +339,23 @@ arrays/relationships to `[]`); there is no per-locale delete.
 
 ## Security fixes
 
+- **A revoked session could keep receiving live events after an invalidation
+  burst.** The gRPC `Subscribe` stream's revocation handler swallowed a lagged or
+  closed invalidation broadcast and kept streaming, while the event handler
+  treats a lag as fatal. If enough revocations were published while a subscriber
+  was busy (past the invalidation bus's capacity), it could lag past its own
+  revocation and keep receiving events on a revoked token. It now fails closed: a
+  lagged/closed invalidation drops the subscriber and forces a reconnect (which
+  re-authenticates). **Action:** none — clients already reconnect. (This is
+  distinct from the "Un-verifying a user tears down their live-update streams"
+  fix below, which is about *publishing* the invalidation; this one is about
+  *receiving* it reliably.)
+- **A negative gRPC `limit` no longer triggers an unbounded read.** `ListJobRuns`
+  and `ListVersions` accept an `optional int64 limit`. A client sending
+  `limit = -1` bound as SQLite `LIMIT -1` (= no limit), returning the entire
+  job-run / version history and bypassing the 1000-row cap. The limit is now
+  floored at 0 on both. **Action:** none.
+
 - **`crap.collections.update(id, data, { unpublish = true })` now enforces
   access.** The `unpublish` option used a bespoke path that skipped access
   evaluation, so a caller whose `access.update` filter didn't match a document
@@ -506,7 +523,14 @@ Wire-contract changes — regenerate your gRPC stubs and adjust:
   2^53 (~9.0e15) were silently rounded when they went through `Struct`'s
   only numeric kind (a `double`); they now round-trip exactly via
   `int_value`. Regenerate stubs and update any code that constructed or
-  read `Struct` for document data.
+  read `Struct` for document data. If you use the built-in
+  `crap-cms typegen client` generator, regenerate it too — the Rust (`-l rs`)
+  output now decodes the typed `FieldValue` (the other languages emit type
+  definitions only and are unaffected).
+- **`CreateMany` rejects a `password` field for auth collections.** It
+  previously dropped it silently (creating a user unable to authenticate); it
+  now returns `INVALID_ARGUMENT`, matching `UpdateMany`. Set passwords with a
+  follow-up single `Create`/`Update`.
 - **Removed always-true `success` fields** from `DeleteResponse`,
   `ForgotPasswordResponse`, `ResetPasswordResponse`, `VerifyEmailResponse`,
   and `AccountActionResponse`. A non-error response is the success signal;
@@ -640,6 +664,20 @@ Wire-contract changes — regenerate your gRPC stubs and adjust:
   see the gRPC wire-contract change below.)
 
 ## Additive features (alpha.10)
+
+### `[server] public_schema_introspection` — gate schema discovery
+
+New boolean, default `true` (unchanged behavior). The gRPC schema-introspection
+RPCs (`ListCollections`, `DescribeCollection`) are readable without auth by
+default, as in a headless CMS. Set it to `false` in production to require an
+authenticated caller — the schema shape (collection and field names/types) is
+then hidden from anonymous clients. It never gates document data, which is
+always access-controlled.
+
+```toml
+[server]
+public_schema_introspection = false   # require auth to read the schema
+```
 
 ### Hook refs accept per-config `options` (`ctx.options`)
 

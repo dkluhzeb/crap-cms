@@ -120,6 +120,8 @@ For auth collections, include `password` in the data to set the user's password.
 
 Bulk-create multiple documents in a single call. The whole batch is created in **one transaction** (atomic) — if any document fails, the entire batch rolls back and nothing is created. Per-document lifecycle hooks run by default — set `hooks=false` to skip them. The number of documents one call may create is capped by `[server] bulk_max_documents` (default `0` = unlimited); exceeding it errors and creates nothing. Returns the created count plus the created documents (with server-assigned IDs).
 
+Unlike single [Create](#create), `CreateMany` **rejects** a `password` field for auth collections (`INVALID_ARGUMENT`) rather than silently dropping it. Set the password with a follow-up single `Create`/`Update`, which extract and policy-validate it.
+
 ```protobuf
 message CreateManyRequest {
   string collection = 1;
@@ -618,6 +620,8 @@ grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
 
 List all collections and globals (lightweight overview).
 
+**Access:** public by default — any caller may read the content model, as in a headless CMS. Set `[server] public_schema_introspection = false` to require an authenticated caller (an anonymous request then gets `UNAUTHENTICATED`). This gates only the schema shape; document data is always access-gated.
+
 ```protobuf
 message ListCollectionsRequest {}
 
@@ -634,6 +638,8 @@ grpcurl -plaintext -d '{}' localhost:50051 crap.ContentAPI/ListCollections
 ## DescribeCollection
 
 Get full field schema for a collection or global.
+
+**Access:** same gate as [ListCollections](#listcollections) — public by default; require auth with `[server] public_schema_introspection = false`.
 
 ```protobuf
 message DescribeCollectionRequest {
