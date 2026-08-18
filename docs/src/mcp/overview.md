@@ -109,6 +109,12 @@ For each collection (e.g., `posts`), a set of CRUD tools is generated:
 Collections with `soft_delete` also get `undelete_posts`; versioned collections
 add `unpublish_posts`, `list_versions_posts`, and `restore_version_posts`.
 
+> **Reserved slug prefixes.** Because tool names are built as `{op}_{slug}` and
+> `{op}` includes the compound forms `create_many_` / `update_many_` /
+> `delete_many_` / `find_by_id_`, a collection or global slug **may not begin with
+> `many_` or `by_id_`** — those would collide with a bulk/by-id tool name. A slug
+> that does is rejected at load time, the same way an invalid slug is.
+
 `validate_*` runs the full before-write pipeline (field coercion, validators,
 unique checks, `before_validate` hooks) and reports per-field errors without
 writing a row. Pass an `id` to validate in update mode (the row is excluded from
@@ -117,6 +123,15 @@ unique checks); omit it to validate in create mode.
 Input schemas are generated from your field definitions. Required fields, select
 options, and relationship types are all reflected in the JSON Schema.
 
+Write tools are **strict about data keys**: an argument that is neither a declared
+top-level field (layout wrappers like Row/Collapsible/Tabs are transparent — their
+sub-fields count as top-level) nor a reserved argument (see below) is **rejected**
+with an error, rather than silently ignored. A misspelled field name fails loudly
+instead of quietly writing nothing. The bulk tools additionally **reject a
+`password` key** (`create_many` / `update_many`) — auth-collection passwords must
+be set through the single `create_*` / `update_*` tools, which run the full
+password pipeline per document.
+
 Alongside field values, the write tools accept a few **reserved top-level
 arguments** (excluded from the document's field data, like `id` and
 `password`):
@@ -124,7 +139,7 @@ arguments** (excluded from the document's field data, like `id` and
 | Argument | Tools | Description |
 |----------|-------|-------------|
 | `locale` | `create_*`, `update_*`, `update_many_*`, `validate_*`, `global_read_*`, `global_update_*`, `global_validate_*` | Locale code for localized fields. |
-| `draft` | `create_*`, `create_many_*`, `update_*`, `update_many_*`, `validate_*`, `global_validate_*` | Write as a draft version. |
+| `draft` | `create_*`, `create_many_*`, `update_*`, `update_many_*`, `validate_*`, `global_update_*`, `global_validate_*` | Write as a draft version. |
 | `force_hard_delete` | `delete_*`, `delete_many_*` | Skip `soft_delete` and remove the row permanently. |
 
 > A collection with a field literally named `locale`, `draft`, or
@@ -158,11 +173,16 @@ When `config_tools = true`:
 
 | Tool | Description |
 |------|-------------|
-| `read_config_file` | Read a file from the config directory |
+| `read_config_file` | Read a file from the config directory (secrets in `crap.toml` are redacted) |
 | `write_config_file` | Write a Lua file to the config directory |
 | `list_config_files` | List files in the config directory |
 
 These are opt-in because they allow writing to the filesystem.
+
+`read_config_file` **redacts secrets when it reads `crap.toml`** — `auth.secret`,
+`email.smtp_pass`, `mcp.api_key`, and the S3 `secret_key` come back masked, the
+same values sanitized from the `crap://config` resource. Secrets never leave the
+server through the MCP surface.
 
 ## MCP Descriptions
 
@@ -351,6 +371,12 @@ In cursor mode, `page`/`totalPages`/`pageStart`/`nextPage`/`prevPage` are replac
 Supported operators: `equals`, `not_equals`, `greater_than`, `greater_than_equal`,
 `less_than`, `less_than_equal`, `like`, `contains`, `in` (array), `not_in` (array),
 `exists`, `not_exists`.
+
+A malformed clause is **rejected loudly**, never silently dropped: an unknown
+operator, an `in` / `not_in` whose value is not an array, or a bare array as the
+whole condition all return an error. This matters most for `delete_many` /
+`update_many` — a filter that fails to parse must never fall through to "match
+everything".
 
 > **Note:** The shortened names `greater_than_equal` / `less_than_equal` are MCP's
 > canonical spelling; the gRPC/Lua API uses `greater_than_or_equal` /
