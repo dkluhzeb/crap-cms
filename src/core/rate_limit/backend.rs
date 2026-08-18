@@ -45,6 +45,23 @@ pub trait RateLimitBackend: Send + Sync {
     /// Returns an error if the backend fails.
     fn clear(&self, key: &str) -> Result<()>;
 
+    /// Remove the single most-recent event for `key`, if any ("refund" one
+    /// increment). Used to undo an attempt that turned out legitimate (e.g. a
+    /// successful login) so it doesn't count toward a shared per-IP limit —
+    /// without wiping the other, still-suspect events the way [`clear`] would.
+    ///
+    /// The default is a safe no-op: leaving the event counted only errs toward
+    /// blocking, never toward permitting more attempts. Backends that can
+    /// cheaply drop the newest event override this.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend fails.
+    fn refund(&self, key: &str, window_secs: u64) -> Result<()> {
+        let _ = (key, window_secs);
+        Ok(())
+    }
+
     /// Backend identifier (`"memory"`, `"redis"`, `"none"`).
     fn kind(&self) -> &'static str;
 }

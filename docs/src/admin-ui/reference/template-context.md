@@ -563,7 +563,11 @@ false, drafts aren't on.
 Per-user permissions for a collection page.
 
 Field semantics:
-- `read` — can the user view the collection at all.
+- `read` — can the user view the collection at all. This is the **union**
+  of the document-list views the read path serves (published ∪ draft ∪
+  trash, each resolved with its fallback), matching the service's
+  union-and-downgrade read model — a user allowed only drafts (or only
+  trash) can still view the collection, so `read` is `true` for them.
 - `create` — can the user create new items.
 - `update` — can the user update existing items (drives the Save /
   Publish / Save Draft / Unpublish row in the edit sidebar).

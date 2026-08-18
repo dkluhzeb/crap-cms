@@ -83,8 +83,9 @@ pub async fn verify_mfa_action(
         return Redirect::to(paths::LOGIN).into_response();
     };
 
-    let Ok(pending_claims) = state.token_provider.validate_token(&mfa_token) else {
-        // Token expired or invalid — clear cookie, redirect to login
+    let Ok(pending_claims) = state.token_provider.validate_pending_token(&mfa_token) else {
+        // Token expired, invalid, or not an MFA-pending token (a full session
+        // token can't be replayed here) — clear cookie, redirect to login.
         let cookie = clear_mfa_pending_cookie(state.config.admin.dev_mode);
         let mut response = Redirect::to(paths::LOGIN).into_response();
 

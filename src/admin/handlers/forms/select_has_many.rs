@@ -48,13 +48,18 @@ pub(crate) fn transform_select_has_many(
 }
 
 /// Normalize one raw form value into a canonical JSON string array.
-fn canonical_json_array(val: &str) -> String {
+///
+/// Shared with the composite parser, which normalizes `has_many` sub-fields
+/// nested inside array/blocks rows (which this module's top-level walk doesn't
+/// descend into).
+pub(super) fn canonical_json_array(val: &str) -> String {
     if val.is_empty() {
         return "[]".to_string();
     }
 
-    // JSON API / validate endpoint — already an array of strings.
-    if let Some(canonical) = parse_as_json_string_array(val) {
+    // JSON API / validate endpoint — a JSON array. Each element is stringified
+    // so a numeric/bool `has_many` (e.g. `[1, 2]`) isn't corrupted.
+    if let Some(canonical) = parse_as_json_array(val) {
         return canonical;
     }
 
@@ -68,10 +73,15 @@ fn canonical_json_array(val: &str) -> String {
     json!(values).to_string()
 }
 
-/// If `val` already parses as a JSON array of strings, return it re-serialized
-/// in canonical form. Mixed / non-string arrays and non-array JSON return `None`
-/// and the caller falls back to comma-separated parsing.
-fn parse_as_json_string_array(val: &str) -> Option<String> {
+/// If `val` parses as a JSON array, return a canonical JSON **string** array —
+/// every element stringified (numbers/bools rendered as text, nulls dropped).
+/// A non-array JSON value, or text that doesn't parse as JSON, returns `None`
+/// so the caller falls back to comma-separated parsing.
+///
+/// Elements are stringified rather than requiring all-strings: a number
+/// `has_many` posts `[1, 2]` from the JSON endpoint, and comma-splitting the
+/// raw text `"[1,2]"` would corrupt it into `["[1", "2]"]`.
+fn parse_as_json_array(val: &str) -> Option<String> {
     let trimmed = val.trim_start();
     if !trimmed.starts_with('[') {
         return None;
@@ -80,7 +90,14 @@ fn parse_as_json_string_array(val: &str) -> Option<String> {
     let parsed: Value = serde_json::from_str(trimmed).ok()?;
     let arr = parsed.as_array()?;
 
-    let strings: Vec<&str> = arr.iter().map(|v| v.as_str()).collect::<Option<_>>()?;
+    let strings: Vec<String> = arr
+        .iter()
+        .filter_map(|v| match v {
+            Value::Null => None,
+            Value::String(s) => Some(s.clone()),
+            other => Some(other.to_string()),
+        })
+        .collect();
 
     Some(json!(strings).to_string())
 }
@@ -230,6 +247,22 @@ mod tests {
             r#"["design","motion","3d"]"#,
             "JSON array input must pass through unchanged, not be split on the quote-delimited commas",
         );
+    }
+
+    /// Regression: a numeric `has_many` posts a JSON array of numbers
+    /// (`[1, 2]`). Previously `parse_as_json_string_array` rejected the
+    /// non-string elements and the caller comma-split the raw text `"[1,2]"`
+    /// into `["[1", "2]"]`. Each element must be stringified instead.
+    #[test]
+    fn transform_select_has_many_stringifies_numeric_array() {
+        let mut form = HashMap::new();
+        form.insert("scores".to_string(), "[1,2,3]".to_string());
+
+        let mut field = make_field("scores", FieldType::Number);
+        field.has_many = true;
+
+        transform_select_has_many(&mut form, &[field]);
+        assert_eq!(form.get("scores").unwrap(), r#"["1","2","3"]"#);
     }
 
     #[test]

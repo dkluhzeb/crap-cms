@@ -12,10 +12,6 @@
     clippy::unreadable_literal
 )]
 
-use std::time::Duration;
-
-use tokio::time::sleep;
-
 use crap_cms::core::{collection::*, field::LocalizedString};
 use crap_cms_e2e::{browser, helpers::*};
 
@@ -52,7 +48,16 @@ async fn session_dialog_singleton_mounts() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the singleton's shadow <dialog> to mount (DOM-settle, not timing)
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "!!document.querySelector('crap-session-dialog')?.shadowRoot?.querySelector('dialog')"
+        )
+        .await,
+        "crap-session-dialog should mount its <dialog> element"
+    );
 
     let mount_state = browser::shadow_eval(
         &page,
@@ -94,7 +99,16 @@ async fn session_dialog_show_displays_warning() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the singleton's shadow content to mount before calling show()
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "!!document.querySelector('crap-session-dialog')?.shadowRoot?.querySelector('dialog')"
+        )
+        .await,
+        "crap-session-dialog should mount before show()"
+    );
 
     // Trigger the dialog via its public show() API with a known message.
     page.evaluate(
@@ -108,7 +122,17 @@ async fn session_dialog_show_displays_warning() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(200)).await;
+
+    // Poll until show() opens the shadow <dialog>
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('crap-session-dialog')?.shadowRoot\
+                ?.querySelector('dialog')?.hasAttribute('open') === true"
+        )
+        .await,
+        "dialog should be open after show()"
+    );
 
     let is_open = browser::shadow_eval(
         &page,

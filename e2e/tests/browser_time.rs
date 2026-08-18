@@ -11,10 +11,9 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 
 use serde_json::json;
-use tokio::time::sleep;
 
 use crap_cms::{
     core::{DocumentFields, collection::*, field::*},
@@ -71,7 +70,16 @@ async fn time_element_renders_formatted() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Poll until <crap-time> has formatted (non-empty) text content
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "(document.querySelector('crap-time')?.textContent.trim().length ?? 0) > 0"
+        )
+        .await,
+        "crap-time should render non-empty formatted text"
+    );
 
     // <crap-time> should contain formatted text, not empty or raw ISO
     let result = page

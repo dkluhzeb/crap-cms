@@ -8,6 +8,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Custom routes reject `csrf = true` on safe-method-only routes at load.** CSRF
+  is enforced only on mutating methods (POST/PUT/PATCH/DELETE), so declaring
+  `csrf = true` on a route that answers only GET/HEAD/OPTIONS was inert and gave
+  a false sense of protection. Such a registration now fails to load.
+  **Migration:** a safe-method handler must not mutate state; if it does, declare
+  a mutating method (which the CSRF check then covers).
+
 - **MCP tools reject unknown field keys.** The collection/global write tools
   (`create`, `update`, `create_many`, `update_many`, `validate`, and the global
   equivalents) previously let the field-driven write pipeline silently drop any
@@ -446,6 +453,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `max_file_size` still inherits the global default.
 
 ### Security
+
+- **Admin MFA was bypassable with only the password.** The `crap_mfa_pending`
+  token issued after a correct password (before the email code) was a fully
+  valid session JWT — nothing distinguished it from a real session token, so an
+  attacker who knew the password could copy the pending-cookie value into
+  `crap_session` and reach the admin without ever entering the second factor.
+  Tokens now carry a `token_use` claim; session validation (admin cookie/bearer,
+  gRPC, upload serve) accepts only `session` tokens, and the MFA endpoint accepts
+  only `mfa_pending`. Legacy tokens without the claim decode as `session`
+  (unchanged). No config change required.
+
+- **Per-account login/reset rate limits were bypassable via email casing.** The
+  per-email login and forgot-password limiters keyed on the raw submitted
+  address while the account lookup is case-insensitive, so `Victim@x.com` /
+  `VICTIM@X.COM` / … each got a fresh lockout budget for the same account. The
+  limiter key is now normalized (trim + lowercase) to match the lookup.
+
+- **Login/MFA rate-limit hardening.** Three shared-limiter weaknesses were
+  closed: (1) MFA-code **email issuance** is now throttled per user, so a
+  password-holder can no longer loop `/admin/login` to flood a victim's inbox
+  with codes; (2) a successful login now **refunds only its own attempt** on the
+  shared per-IP limiter instead of clearing every recorded failure, so one valid
+  account on a shared IP can't repeatedly wipe a concurrent brute-force of other
+  accounts; (3) email-verification and password-reset each get their **own**
+  per-IP limiter keyspace instead of sharing forgot-password's, so a burst on one
+  can't exhaust the budget the others need.
+
+- **A crafted upload filename could panic the file-serve request (DoS).** The
+  stored filename's extension is not sanitized upstream, so a control byte
+  (e.g. a CRLF) could reach `Content-Disposition`, where the header value was
+  built with `.expect(...)` and panicked the request task on every fetch of that
+  file. Control characters are now stripped from the disposition filename and the
+  header is built without panicking.
+
+- **The dashboard leaked collections hidden by `access.admin`.** The sidebar nav
+  applies the `access.admin` gate but the dashboard cards did not, so a
+  collection/global that was readable but admin-hidden still surfaced its
+  existence, document count, and last-updated time as a dashboard card. Nav and
+  dashboard now share one `is_admin_visible` check (evaluated under operation
+  `"admin"`, matching the route middleware).
+
+- **Custom routes shipped without the static protective headers.** Merged custom
+  routes bypassed the whole `security_headers` layer, not just CSRF — a custom
+  route (including one returning HTML) was served with no `X-Frame-Options`,
+  `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`, or
+  HSTS. Those static headers now apply to the full router (custom routes
+  included); the nonce-bound admin CSP remains admin-only.
 
 - **MCP `where`-filter shapes could silently widen a bulk delete/update to the
   whole collection.** The MCP filter parser rejected unknown operators loudly
@@ -1067,6 +1121,89 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **A Group nested inside a Blocks field lost its data.** The admin form parser
+  ran block rows with empty sub-field definitions, so a group inside a block was
+  stored as a one-element array (`[{…}]`) instead of an object (`{…}`) — the
+  group then rendered empty and was overwritten on the next save. The blocks
+  parser now resolves each row's sub-field definitions from its `_block_type`, so
+  group sub-fields store (and round-trip) as objects. (Nested arrays and nested
+  blocks inside a block row were unaffected.)
+
+- **A group in a newly-added array/blocks row lost its data on save.** The
+  new-row template named group children `<group>[field]`, but the form parser
+  (and the render path for existing rows) require the `<group>[0][field]` index
+  to recognize the group as a single object. A freshly-added row's group fields
+  therefore parsed to `{}` and were dropped. The build phase now emits the `[0]`,
+  matching the render phase. (Existing rows were unaffected.)
+
+- **A multi-value (`has_many`) field nested in an array/blocks row rendered
+  empty after reload.** The top-level `has_many` normalizer doesn't descend into
+  composite rows, so a nested multi-select/tag field was stored as a collapsed
+  `"a,b"` string the renderer couldn't parse. Nested `has_many` select/radio/
+  text/number values are now normalized to a canonical JSON array, matching
+  top-level `has_many`.
+
+- **A has-many *relationship* nested in a group/array/block row showed no
+  selected chips.** The nested enrich path resolved labels only for single
+  relationships and returned early for has-many, so the current selection was
+  invisible in the editor (the ids were saved correctly — only the display was
+  missing). Nested has-many relationships now resolve every selected id's label,
+  matching the top-level field.
+
+- **`perms.read` now reflects the union of readable views.** The template-context
+  `perms.read` flag was computed from `access.read` alone, so a user allowed only
+  drafts (or only trash) — who *can* view the collection — saw `perms.read =
+  false`. It is now the union of the document-list views the read path serves
+  (published ∪ draft ∪ trash), matching the collection's actual visibility. Only
+  affects custom templates that gate on `{{perms.read}}` (no built-in template
+  does).
+
+- **Admin translation interpolation is now single-pass.** A translation
+  parameter whose value itself looked like a `{{placeholder}}` could be
+  re-substituted, and the result depended on hash-map iteration order. Each
+  `{{key}}` is now replaced exactly once; unknown placeholders are left literal.
+
+- **A self-referential template slot no longer crashes the worker.** An overlay
+  slot file that renders its own slot (`{{slot "x"}}` inside `slots/x/…`) would
+  recurse until the render stack overflowed; the cycle is now detected and
+  skipped. (An invalid editor-locale that falls back to no locale context is
+  also now logged instead of silently swallowed.)
+
+- **Draft-only documents 404'd on their delete-confirm and version-history
+  pages.** Both pages read the document published-only, so a document that had
+  only ever been saved as a draft (visible in the list) returned "not found"
+  when its editor clicked Delete or Versions. Both now read the draft view (still
+  access-scoped).
+
+- **The edit-page version sidebar was evaluated as an anonymous user.** The
+  sidebar's version list omitted the current user from its service context, so on
+  any collection/global whose `versions`/`update`/`read` access depends on the
+  user it rendered empty and logged an error on every edit-page load, while the
+  dedicated versions page worked. The sidebar now passes the user (collection and
+  global).
+
+- **Sorting an admin list by a has-many field returned 500 instead of 400.** A
+  has-many relationship/upload has no sortable column, but the sort validator
+  accepted it and the query then failed deep in the DB layer. Such sorts are now
+  rejected at the 400 gate, matching the module's "invalid URL param → 400"
+  contract.
+
+- **A numeric `has_many` value was corrupted on the JSON endpoint.** A value
+  posted as a JSON array of numbers (`[1, 2]`) was rejected by the string-array
+  normalizer and then comma-split from its raw text into `["[1", "2]"]`. Array
+  elements are now stringified, so numeric/bool `has_many` values round-trip.
+
+- **Admin version-restore denials now return 403.** A denied version restore
+  (collection or global) previously logged an error and silently redirected to
+  the edit page; it now returns a proper Forbidden response. The
+  back-references and evaluate-conditions endpoints likewise return their real
+  status codes (404 / 403 / 500) instead of always `200` with an error body.
+
+- **Dashboard card stats no longer fail silently.** A backend error while
+  computing a collection's count or a global's last-updated time was swallowed
+  and rendered as "0"; it is now logged before degrading, matching the versions
+  sidebar.
 
 - **MCP `update_global` ignored the `draft` flag.** A draft-enabled global was
   always published via MCP, and a `draft` key fell into field data and was

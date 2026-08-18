@@ -59,15 +59,22 @@ async fn richtext_renders_editor() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
 
-    // Check for ProseMirror editor inside shadow root
-    let has_editor = browser::shadow_eval(
-        &page,
-        "crap-richtext",
-        "return root.querySelector('.ProseMirror') ? 'true' : 'false';",
-    )
-    .await;
+    // Poll the shadow root until the ProseMirror editor is mounted (shadow DOM,
+    // so wait_for_js can't see it).
+    let mut has_editor = String::new();
+    for _ in 0..60 {
+        has_editor = browser::shadow_eval(
+            &page,
+            "crap-richtext",
+            "return root.querySelector('.ProseMirror') ? 'true' : 'false';",
+        )
+        .await;
+        if has_editor == "true" {
+            break;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
     assert_eq!(
         has_editor, "true",
         "crap-richtext shadow root should contain .ProseMirror element"
@@ -100,7 +107,9 @@ async fn richtext_typing_updates_hidden_input() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the editor to initialize (its `_view` becomes available).
+    browser::wait_for_js(&page, "document.querySelector('crap-richtext')?._view").await;
 
     // Insert text via ProseMirror API
     page.evaluate(
@@ -115,7 +124,13 @@ async fn richtext_typing_updates_hidden_input() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(300)).await;
+
+    // Wait for the hidden textarea (light DOM) to reflect the typed text.
+    browser::wait_for_js(
+        &page,
+        "(document.querySelector('crap-richtext textarea')?.value ?? '').includes('Hello from ProseMirror')",
+    )
+    .await;
 
     // Check that the hidden textarea reflects the update
     let result = page
@@ -155,7 +170,9 @@ async fn richtext_bold_toolbar() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the editor to initialize (its `_view` becomes available).
+    browser::wait_for_js(&page, "document.querySelector('crap-richtext')?._view").await;
 
     // Insert text, select all, and apply bold
     page.evaluate(
@@ -174,7 +191,14 @@ async fn richtext_bold_toolbar() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(200)).await;
+
+    // Wait until the inserted text lands in the hidden textarea, confirming the
+    // insert/select dispatch was applied before clicking bold.
+    browser::wait_for_js(
+        &page,
+        "(document.querySelector('crap-richtext textarea')?.value ?? '').includes('bold text')",
+    )
+    .await;
 
     // Click the bold button in the shadow root toolbar
     page.evaluate(
@@ -182,7 +206,13 @@ async fn richtext_bold_toolbar() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(300)).await;
+
+    // Wait for the hidden textarea (light DOM) to reflect the <strong> markup.
+    browser::wait_for_js(
+        &page,
+        "(document.querySelector('crap-richtext textarea')?.value ?? '').includes('<strong>')",
+    )
+    .await;
 
     // The hidden textarea should contain <strong> tag
     let result = page

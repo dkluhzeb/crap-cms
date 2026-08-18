@@ -154,6 +154,17 @@ impl RouteResponse {
     }
 }
 
+/// The mutating (state-changing) methods. CSRF protection is only meaningful on
+/// these — the dispatcher gates its CSRF check on the same set, and the loader
+/// rejects `csrf = true` on a route that answers none of them.
+pub const MUTATING_METHODS: &[&str] = &["POST", "PUT", "PATCH", "DELETE"];
+
+/// Whether an upper-cased method name mutates state.
+#[must_use]
+pub fn is_mutating_method(method: &str) -> bool {
+    MUTATING_METHODS.contains(&method)
+}
+
 /// Validate an HTTP method name (case-insensitive); returns the upper-cased
 /// form on success.
 ///

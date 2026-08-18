@@ -11,10 +11,6 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use std::time::Duration;
-
-use tokio::time::sleep;
-
 use crap_cms::core::{collection::*, field::*, upload::CollectionUpload};
 
 use crap_cms_e2e::{browser, helpers::*};
@@ -73,7 +69,9 @@ async fn focal_point_click_updates_inputs() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the injected slotted <img> to appear before styling it
+    browser::wait_for_element(&page, "crap-focal-point img").await;
 
     // The page's CSP `style-src` blocks the inline `style=...` attribute
     // we wrote into the HTML — it's stored on the element but not applied
@@ -92,7 +90,17 @@ async fn focal_point_click_updates_inputs() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(100)).await;
+
+    // Wait until the CSSOM width change has actually taken effect in layout,
+    // so the click coordinates below are computed against the 400×300 box
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('crap-focal-point img').getBoundingClientRect().width === 400"
+        )
+        .await,
+        "img should lay out at 400px wide before clicking"
+    );
 
     // Simulate a click in the top-left quadrant on the slotted img.
     page.evaluate(
@@ -108,7 +116,16 @@ async fn focal_point_click_updates_inputs() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(300)).await;
+
+    // Poll until the click handler has written a new focal_x (was "0.5000")
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "(document.querySelector('input[name=\"focal_x\"]')?.value ?? '') !== '0.5000'"
+        )
+        .await,
+        "focal_x should change after clicking the image"
+    );
 
     // Check that hidden inputs were updated (should be near 0.25)
     let result = page

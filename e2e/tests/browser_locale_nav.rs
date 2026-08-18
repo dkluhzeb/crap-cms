@@ -12,10 +12,6 @@
     clippy::unreadable_literal
 )]
 
-use std::time::Duration;
-
-use tokio::time::sleep;
-
 use crap_cms::{
     config::{CrapConfig, LocaleConfig},
     core::{collection::*, field::LocalizedString},
@@ -70,7 +66,9 @@ async fn ui_locale_picker_renders_with_multiple_locales() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the UI locale picker component to render
+    browser::wait_for_element(&page, "crap-ui-locale-picker").await;
 
     let has_picker: bool = page
         .evaluate("() => !!document.querySelector('crap-ui-locale-picker')")
@@ -130,7 +128,9 @@ async fn ui_locale_dropdown_opens_on_toggle() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the dropdown element to render before reading/clicking
+    browser::wait_for_element(&page, "[data-ui-locale-dropdown]").await;
 
     let initially_open: bool = page
         .evaluate(
@@ -146,7 +146,17 @@ async fn ui_locale_dropdown_opens_on_toggle() {
     page.evaluate("() => document.querySelector('[data-ui-locale-toggle]')?.click()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(200)).await;
+
+    // Poll until the --open class is added to the dropdown
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('[data-ui-locale-dropdown]')\
+                ?.classList.contains('locale-picker__dropdown--open') ?? false"
+        )
+        .await,
+        "dropdown should be open after clicking toggle"
+    );
 
     let opened: bool = page
         .evaluate(

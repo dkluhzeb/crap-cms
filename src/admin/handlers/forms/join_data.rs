@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::core::{DocumentFields, FieldDefinition, FieldType, prefixed_name, walk_leaf_fields};
 
-use super::composite::parse_composite_form_data;
+use super::composite::{parse_blocks_form_data, parse_composite_form_data};
 
 /// Extract join table data from form submission for has-many relationships and
 /// array fields. Returns a map suitable for `query::save_join_table_data`.
@@ -37,7 +37,7 @@ pub(crate) fn extract_join_data_from_form(
             }
             FieldType::Blocks => {
                 let full_name = prefixed_name(prefix, &field.name);
-                let json_rows = parse_composite_form_data(form, &full_name, &[]);
+                let json_rows = parse_blocks_form_data(form, &full_name, &field.blocks);
                 join_data.insert(full_name, Value::Array(json_rows));
             }
             _ => {}

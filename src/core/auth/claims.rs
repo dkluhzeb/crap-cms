@@ -4,6 +4,28 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::{DocumentId, Slug};
 
+/// What a signed token is authorized to do.
+///
+/// A full `Session` token authenticates a request on every surface (admin
+/// cookie/bearer, gRPC, upload serve). An `MfaPending` token is minted after
+/// a correct password when MFA is required and authorizes **only** the MFA
+/// completion endpoint — it must never be accepted as a session credential,
+/// or an attacker who holds the password could skip the second factor.
+///
+/// Serialized as `token_use` with `#[serde(default)]` = `Session`, so tokens
+/// minted before this field existed decode as full sessions (which is what
+/// they were).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenUse {
+    /// A full session credential — accepted by every authenticated surface.
+    #[default]
+    Session,
+    /// A short-lived MFA-challenge token — accepted **only** by the MFA
+    /// completion endpoint, never as a session.
+    MfaPending,
+}
+
 /// JWT claims for auth tokens.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
@@ -15,6 +37,10 @@ pub struct Claims {
     pub email: String,
     /// Expiration time (Unix timestamp).
     pub exp: u64,
+    /// What this token authorizes. A missing value decodes as
+    /// [`TokenUse::Session`] for backward compatibility.
+    #[serde(default)]
+    pub token_use: TokenUse,
     /// Issued-at time (Unix timestamp). Optional for backward compatibility with
     /// tokens issued before this field was added. Refreshed on every token
     /// reissue — do NOT use this to enforce a session absolute max age.
@@ -54,6 +80,7 @@ pub struct ClaimsBuilder {
     exp: Option<u64>,
     auth_time: Option<u64>,
     session_version: u64,
+    token_use: TokenUse,
 }
 
 impl ClaimsBuilder {
@@ -66,6 +93,7 @@ impl ClaimsBuilder {
             exp: None,
             auth_time: None,
             session_version: 0,
+            token_use: TokenUse::Session,
         }
     }
 
@@ -105,6 +133,15 @@ impl ClaimsBuilder {
         self
     }
 
+    /// Set what this token authorizes. Defaults to [`TokenUse::Session`];
+    /// the MFA challenge path sets [`TokenUse::MfaPending`].
+    #[must_use]
+    pub fn token_use(mut self, token_use: TokenUse) -> Self {
+        self.token_use = token_use;
+
+        self
+    }
+
     /// Build the final `Claims` instance.
     ///
     /// # Errors
@@ -127,6 +164,7 @@ impl ClaimsBuilder {
             iat: Some(Utc::now().timestamp().max(0).cast_unsigned()),
             auth_time: self.auth_time,
             session_version: self.session_version,
+            token_use: self.token_use,
         })
     }
 }
@@ -276,5 +314,47 @@ mod builder_tests {
         }"#;
         let claims: Claims = serde_json::from_str(json).unwrap();
         assert!(claims.auth_time.is_none());
+    }
+
+    // ── token_use claim (MFA-bypass fix) ──────────────────────────────────
+
+    #[test]
+    fn default_token_use_is_session() {
+        let claims = ClaimsBuilder::new("u", "users")
+            .email("a@b.com")
+            .exp(9999999999)
+            .build()
+            .unwrap();
+        assert_eq!(claims.token_use, TokenUse::Session);
+    }
+
+    #[test]
+    fn token_use_mfa_pending_round_trips() {
+        let claims = ClaimsBuilder::new("u", "users")
+            .email("a@b.com")
+            .exp(9999999999)
+            .token_use(TokenUse::MfaPending)
+            .build()
+            .unwrap();
+        let json = serde_json::to_string(&claims).unwrap();
+        assert!(json.contains(r#""token_use":"mfa_pending""#));
+        let round: Claims = serde_json::from_str(&json).unwrap();
+        assert_eq!(round.token_use, TokenUse::MfaPending);
+    }
+
+    #[test]
+    fn claims_missing_token_use_deserializes_as_session() {
+        // A legacy JWT minted before this claim existed must decode as a full
+        // session token (which is what it was) — not accidentally become an
+        // unusable/pending token.
+        let json = r#"{
+            "sub": "u",
+            "collection": "users",
+            "email": "a@b.com",
+            "exp": 9999999999,
+            "session_version": 0
+        }"#;
+        let claims: Claims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.token_use, TokenUse::Session);
     }
 }

@@ -74,8 +74,13 @@ async fn delete_shows_confirm_dialog() {
     .wait_for_navigation()
     .await
     .unwrap();
-    // Wait for JS components (especially <crap-confirm>) to register
-    sleep(Duration::from_millis(500)).await;
+    // Wait for JS components (especially <crap-confirm> and its singleton
+    // <crap-confirm-dialog>) to register before interacting.
+    browser::wait_for_js(
+        &page,
+        "customElements.get('crap-confirm') && document.querySelector('crap-confirm-dialog') && document.querySelector('button.button--danger')",
+    )
+    .await;
 
     // Click the delete button (the form is wrapped by <crap-confirm>; the
     // confirm prompt is rendered by the page-singleton <crap-confirm-dialog>).
@@ -125,8 +130,12 @@ async fn confirm_cancel_stays_on_page() {
     .wait_for_navigation()
     .await
     .unwrap();
-    // Wait for JS components to register
-    sleep(Duration::from_millis(500)).await;
+    // Wait for JS components to register before interacting.
+    browser::wait_for_js(
+        &page,
+        "customElements.get('crap-confirm') && document.querySelector('crap-confirm-dialog') && document.querySelector('button.button--danger')",
+    )
+    .await;
 
     // Click delete to open confirm dialog
     page.find_element("button.button--danger")
@@ -135,7 +144,20 @@ async fn confirm_cancel_stays_on_page() {
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
+
+    // Wait for the confirm dialog (shadow DOM) to open before clicking cancel.
+    for _ in 0..60 {
+        let is_open = browser::shadow_eval(
+            &page,
+            "crap-confirm-dialog",
+            "return root.querySelector('dialog')?.hasAttribute('open') ? 'true' : 'false';",
+        )
+        .await;
+        if is_open == "true" {
+            break;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
 
     // Click cancel in the confirm-dialog shadow DOM
     page.evaluate(
@@ -143,7 +165,20 @@ async fn confirm_cancel_stays_on_page() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(300)).await;
+
+    // Wait for the confirm dialog (shadow DOM) to close after cancel.
+    for _ in 0..60 {
+        let is_open = browser::shadow_eval(
+            &page,
+            "crap-confirm-dialog",
+            "return root.querySelector('dialog')?.hasAttribute('open') ? 'true' : 'false';",
+        )
+        .await;
+        if is_open == "false" {
+            break;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
 
     // Should still be on the delete page
     let url = page.url().await.unwrap().unwrap_or_default();
@@ -187,8 +222,12 @@ async fn confirm_accept_deletes() {
     .wait_for_navigation()
     .await
     .unwrap();
-    // Wait for JS components to register
-    sleep(Duration::from_millis(500)).await;
+    // Wait for JS components to register before interacting.
+    browser::wait_for_js(
+        &page,
+        "customElements.get('crap-confirm') && document.querySelector('crap-confirm-dialog') && document.querySelector('button.button--danger')",
+    )
+    .await;
 
     // Click delete to trigger confirm
     page.find_element("button.button--danger")
@@ -197,7 +236,20 @@ async fn confirm_accept_deletes() {
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
+
+    // Wait for the confirm dialog (shadow DOM) to open before confirming.
+    for _ in 0..60 {
+        let is_open = browser::shadow_eval(
+            &page,
+            "crap-confirm-dialog",
+            "return root.querySelector('dialog')?.hasAttribute('open') ? 'true' : 'false';",
+        )
+        .await;
+        if is_open == "true" {
+            break;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
 
     // Click confirm in the confirm-dialog shadow DOM
     page.evaluate(
@@ -205,7 +257,9 @@ async fn confirm_accept_deletes() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_secs(1)).await;
+
+    // Wait for the redirect away from the delete page after confirming.
+    browser::wait_for_js(&page, "!window.location.href.includes('/delete')").await;
 
     // Should redirect away from the delete page (to the list)
     let url = page.url().await.unwrap().unwrap_or_default();

@@ -3,9 +3,11 @@
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap};
 
-use crate::core::{FieldDefinition, FieldType};
+use crate::core::{BlockDefinition, FieldDefinition, FieldType};
 
 use crate::core::field::flatten_array_sub_fields;
+
+use super::select_has_many::canonical_json_array;
 /// Collect form entries into indexed rows, splitting each key into sub-key + value.
 fn collect_indexed_rows(
     form: &HashMap<String, String>,
@@ -68,13 +70,21 @@ fn resolve_nested_key(
     flat_defs: &[&FieldDefinition],
 ) -> Value {
     let sf_def = flat_defs.iter().find(|sf| sf.name == base_key).copied();
-    let nested_sub_defs = sf_def.map_or(&[][..], |sf| sf.fields.as_slice());
 
     let sub_form: HashMap<String, String> = nested_entries
         .iter()
         .map(|(rest, value)| (format!("{base_key}{rest}"), value.clone()))
         .collect();
 
+    // A nested Blocks sub-field is heterogeneous: dispatch each row on its own
+    // `_block_type` (its field defs live in `blocks`, not `fields`).
+    if let Some(sf) = sf_def
+        && sf.field_type == FieldType::Blocks
+    {
+        return Value::Array(parse_blocks_form_data(&sub_form, base_key, &sf.blocks));
+    }
+
+    let nested_sub_defs = sf_def.map_or(&[][..], |sf| sf.fields.as_slice());
     let nested_rows = parse_composite_form_data(&sub_form, base_key, nested_sub_defs);
 
     let is_single_object = sf_def.is_some_and(|sf| {
@@ -94,6 +104,40 @@ fn resolve_nested_key(
     }
 }
 
+/// Parse one indexed row into a JSON object, resolving each nested composite
+/// key against `flat_defs` (the flattened sub-field defs for that row).
+fn parse_row(entries: Vec<(String, String)>, flat_defs: &[&FieldDefinition]) -> Value {
+    let (mut obj, nested_keys) = partition_entries(entries);
+
+    // Normalize `has_many` scalar leaves (select/radio/text/number) into a
+    // canonical JSON-array string — the same shape top-level `has_many` fields
+    // use. The top-level normalizer doesn't descend into array/blocks rows, so
+    // without this a nested multi-value field stays a collapsed `"a,b"` string
+    // the renderer can't parse (`from_str` fails → empty selection on reload).
+    for def in flat_defs {
+        if !def.has_many
+            || !matches!(
+                def.field_type,
+                FieldType::Select | FieldType::Radio | FieldType::Text | FieldType::Number
+            )
+        {
+            continue;
+        }
+
+        if let Some(Value::String(raw)) = obj.get(&def.name) {
+            let canonical = canonical_json_array(raw);
+            obj.insert(def.name.clone(), Value::String(canonical));
+        }
+    }
+
+    for (base_key, nested_entries) in nested_keys {
+        let value = resolve_nested_key(&base_key, &nested_entries, flat_defs);
+        obj.insert(base_key, value);
+    }
+
+    Value::Object(obj)
+}
+
 /// Recursively parse composite form data from flat form keys.
 ///
 /// Handles arbitrarily nested keys like `content[0][items][1][title]`.
@@ -111,15 +155,34 @@ pub(crate) fn parse_composite_form_data(
     let flat_defs = flatten_array_sub_fields(sub_field_defs);
 
     rows.into_values()
+        .map(|entries| parse_row(entries, &flat_defs))
+        .collect()
+}
+
+/// Parse a **Blocks** field's rows. Unlike arrays, block rows are heterogeneous:
+/// each row's sub-field defs are selected by its `_block_type` value (each block
+/// type carries its own `fields`). Without this, a Group inside a block row can't
+/// be recognized as a single-object composite and gets stored as a one-element
+/// array instead of an object — invisible on render and lost on the next save.
+pub(crate) fn parse_blocks_form_data(
+    form: &HashMap<String, String>,
+    field_name: &str,
+    blocks: &[BlockDefinition],
+) -> Vec<Value> {
+    let prefix = format!("{field_name}[");
+    let rows = collect_indexed_rows(form, &prefix);
+
+    rows.into_values()
         .map(|entries| {
-            let (mut obj, nested_keys) = partition_entries(entries);
+            // The row's `_block_type` leaf selects which block's fields apply.
+            let block_fields = entries
+                .iter()
+                .find(|(k, _)| k == "_block_type")
+                .and_then(|(_, bt)| blocks.iter().find(|b| &b.block_type == bt))
+                .map_or(&[][..], |b| b.fields.as_slice());
+            let flat_defs = flatten_array_sub_fields(block_fields);
 
-            for (base_key, nested_entries) in nested_keys {
-                let value = resolve_nested_key(&base_key, &nested_entries, &flat_defs);
-                obj.insert(base_key, value);
-            }
-
-            Value::Object(obj)
+            parse_row(entries, &flat_defs)
         })
         .collect()
 }
@@ -222,6 +285,85 @@ mod tests {
         assert_eq!(images[0]["alt"], "First");
         assert_eq!(images[1]["url"], "img2.jpg");
         assert_eq!(images[1]["alt"], "Second");
+    }
+
+    /// Regression: a Group nested inside a Blocks row must store as an OBJECT,
+    /// not a one-element array. The blocks parser resolves the row's sub-field
+    /// defs from its `_block_type`; previously it ran with empty defs (from the
+    /// `&[]` call in `join_data`), so the group wasn't recognized as a single
+    /// object and its data was lost on render / re-save.
+    #[test]
+    fn parse_group_in_blocks_stores_as_object() {
+        use crate::core::BlockDefinition;
+
+        // A group inside a block row is submitted with a `[0]` index on the
+        // group name (how the enrich path names group children).
+        let mut form = HashMap::new();
+        form.insert("content[0][_block_type]".to_string(), "hero".to_string());
+        form.insert("content[0][title]".to_string(), "Welcome".to_string());
+        form.insert(
+            "content[0][meta][0][author]".to_string(),
+            "Alice".to_string(),
+        );
+        form.insert("content[0][meta][0][year]".to_string(), "2026".to_string());
+
+        let mut meta = make_field("meta", FieldType::Group);
+        meta.fields = vec![
+            make_field("author", FieldType::Text),
+            make_field("year", FieldType::Text),
+        ];
+        let hero = BlockDefinition::new("hero", vec![make_field("title", FieldType::Text), meta]);
+
+        let result = parse_blocks_form_data(&form, "content", &[hero]);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["_block_type"], "hero");
+        assert_eq!(result[0]["title"], "Welcome");
+        // The group must be an object, not `[{...}]`.
+        let meta_val = &result[0]["meta"];
+        assert!(
+            meta_val.is_object(),
+            "group must serialize as object, got {meta_val}"
+        );
+        assert_eq!(meta_val["author"], "Alice");
+        assert_eq!(meta_val["year"], "2026");
+    }
+
+    /// Regression: a `has_many` select nested in an array row is normalized to
+    /// a canonical JSON-array string (like top-level `has_many`), so it round-trips
+    /// instead of staying a collapsed `"a,b"` the renderer can't parse.
+    #[test]
+    fn has_many_select_in_array_row_normalizes_to_json_array() {
+        let mut form = HashMap::new();
+        form.insert("items[0][title]".to_string(), "T".to_string());
+        form.insert("items[0][tags]".to_string(), "a,b,c".to_string());
+
+        let mut tags = make_field("tags", FieldType::Select);
+        tags.has_many = true;
+        let sub_defs = vec![make_field("title", FieldType::Text), tags];
+
+        let result = parse_composite_form_data(&form, "items", &sub_defs);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["title"], "T");
+        assert_eq!(result[0]["tags"], r#"["a","b","c"]"#);
+    }
+
+    /// An unknown `_block_type` (or none) falls back to empty defs — the row
+    /// still parses its scalar leaves without panicking.
+    #[test]
+    fn parse_blocks_unknown_type_keeps_scalars() {
+        use crate::core::BlockDefinition;
+
+        let mut form = HashMap::new();
+        form.insert("content[0][_block_type]".to_string(), "mystery".to_string());
+        form.insert("content[0][body]".to_string(), "text".to_string());
+
+        let known = BlockDefinition::new("hero", vec![make_field("title", FieldType::Text)]);
+        let result = parse_blocks_form_data(&form, "content", &[known]);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["_block_type"], "mystery");
+        assert_eq!(result[0]["body"], "text");
     }
 
     #[test]

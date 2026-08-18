@@ -358,7 +358,59 @@ action needed for these.
   are unaffected; only hand-edited or stale bookmarked URLs with
   since-renamed fields can be affected.
 
+- **Custom routes reject `csrf = true` on safe-method-only routes.** CSRF is
+  enforced only on mutating methods, so `csrf = true` on a GET/HEAD/OPTIONS-only
+  route was inert. Such a registration now **fails to load**. **Action:** if you
+  set `csrf = true` on a safe-method route, either drop it (the handler must not
+  mutate state) or add a mutating method (POST/PUT/PATCH/DELETE), which the CSRF
+  check then covers.
+
+- **Draft-only documents are now reachable from Delete and Versions.** A document
+  saved only as a draft no longer 404s on its delete-confirm or version-history
+  page. **Action:** none.
+
+- **The edit-page version sidebar now honors per-user version access.** It was
+  evaluated as anonymous, so on collections/globals whose `versions`/`read`
+  access depends on the user it rendered empty and logged an error; it now passes
+  the current user. **Action:** none.
+
+- **Sorting a list by a has-many field returns 400, not 500.** A has-many
+  relationship/upload isn't sortable (no column); it's now rejected at the param
+  gate. **Action:** none.
+
+- **Some admin JSON endpoints now return real status codes.** Version-restore
+  denials return 403 (was a silent redirect); back-references and
+  evaluate-conditions return 404/403/500 instead of `200` with an error body. A
+  client that checks `response.ok` and skips on failure keeps working. **Action:**
+  none.
+
 ## Security fixes
+
+- **Admin MFA could be bypassed with only the password.** The MFA-pending cookie
+  was a valid session token; an attacker who knew the password could use it as a
+  session and skip the email code. Tokens now carry a `token_use` claim and only
+  `session` tokens authenticate. **Action:** none — existing sessions keep
+  working (legacy tokens decode as `session`).
+
+- **Rate-limit hardening (login/MFA).** Per-account login/reset limiters no longer
+  reset per email-casing variant; MFA-code email issuance is throttled per user;
+  a successful login refunds only its own attempt on the shared per-IP limiter
+  (instead of wiping other accounts' failures); and email-verify / reset each get
+  their own per-IP keyspace. **Action:** none.
+
+- **A crafted upload filename could crash the file-serve request.** A control
+  byte in a stored filename reached `Content-Disposition` and panicked the
+  request task; control chars are now stripped and the header is built without
+  panicking. **Action:** none.
+
+- **The dashboard leaked `access.admin`-hidden collections.** Dashboard cards now
+  apply the same `access.admin` gate as the sidebar nav (evaluated under
+  operation `"admin"`). **Action:** none — if you relied on a collection showing
+  on the dashboard while `access.admin` denied it, that was a leak.
+
+- **Custom routes now receive the static security headers.** Merged custom routes
+  were served with no `X-Frame-Options` / nosniff / referrer / permissions / HSTS
+  headers; those now apply to the full router. **Action:** none.
 
 - **A revoked session could keep receiving live events after an invalidation
   burst.** The gRPC `Subscribe` stream's revocation handler swallowed a lagged or

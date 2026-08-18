@@ -1,7 +1,7 @@
 use axum::{
     Extension,
     extract::{Path, State},
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use tokio::task;
 use tracing::error;
@@ -9,7 +9,7 @@ use tracing::error;
 use crate::{
     admin::{
         AdminState,
-        handlers::shared::{get_user_doc, htmx_redirect, paths, redirect_response},
+        handlers::shared::{forbidden, get_user_doc, htmx_redirect, paths, redirect_response},
     },
     config::LocaleConfig,
     core::{
@@ -87,6 +87,9 @@ pub async fn restore_version(
 
     match result {
         Ok(Ok(_)) => htmx_redirect(&redirect),
+        Ok(Err(ServiceError::AccessDenied(_))) => {
+            forbidden(&state, "You don't have permission to restore this version").into_response()
+        }
         Ok(Err(e)) => {
             error!("Restore version error: {}", e);
 

@@ -408,7 +408,17 @@ fn content_disposition(mime: &str, filename: Option<&str>) -> String {
         .filter(|n| !n.is_empty());
 
     match original {
-        Some(name) => format!("attachment; filename=\"{}\"", name.replace('"', "_")),
+        Some(name) => {
+            // Replace `"` (would break out of the quoted-string) and any control
+            // character (`\r`/`\n`/… — an invalid `HeaderValue` byte). The stored
+            // filename's extension is not sanitized upstream, so a crafted upload
+            // can carry a CRLF here; without this the header build would panic.
+            let safe: String = name
+                .chars()
+                .map(|c| if c == '"' || c.is_control() { '_' } else { c })
+                .collect();
+            format!("attachment; filename=\"{safe}\"")
+        }
         None => "attachment".to_string(),
     }
 }
@@ -452,10 +462,15 @@ async fn serve_with_headers(
     let filename = path.file_name().and_then(|n| n.to_str());
     let disposition = content_disposition(mime, filename);
 
-    response.headers_mut().insert(
-        CONTENT_DISPOSITION,
-        disposition.parse().expect("valid disposition"),
-    );
+    // Never `.expect` on a data-derived header value. `content_disposition`
+    // sanitizes control chars, but fall back to a bare `attachment` rather than
+    // panic the request task if any unexpected byte survives.
+    let disposition = disposition
+        .parse()
+        .unwrap_or_else(|_| HeaderValue::from_static("attachment"));
+    response
+        .headers_mut()
+        .insert(CONTENT_DISPOSITION, disposition);
 
     apply_response_headers(&mut response, cache_control, mime, varied);
     response
@@ -569,6 +584,18 @@ mod tests {
             .to_str()
             .unwrap();
         assert_eq!(disposition, "attachment");
+    }
+
+    /// Regression: a stored filename carrying control bytes (the extension is
+    /// not sanitized upstream, so a crafted upload can smuggle a CRLF here) must
+    /// not produce an unparseable header value — previously `.expect` panicked
+    /// the request task on any such file.
+    #[test]
+    fn content_disposition_sanitizes_control_chars() {
+        let disposition = content_disposition("application/pdf", Some("nano123_photo.pd\r\nf"));
+        assert_eq!(disposition, "attachment; filename=\"photo.pd__f\"");
+        // Must be a valid header value (no panic on insert).
+        assert!(disposition.parse::<HeaderValue>().is_ok());
     }
 
     #[tokio::test]

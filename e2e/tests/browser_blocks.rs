@@ -11,10 +11,9 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 
 use serde_json::json;
-use tokio::time::sleep;
 
 use crap_cms::{
     core::{DocumentFields, collection::*, field::*},
@@ -125,9 +124,8 @@ async fn block_picker_adds_block() {
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
 
-    let rows = page.find_elements(".form__array-row").await.unwrap();
+    let rows = browser::wait_for_element_count(&page, ".form__array-row", 1).await;
     assert_eq!(rows.len(), 1, "should have 1 block row after adding");
 
     server_handle.abort();
@@ -165,7 +163,8 @@ async fn blocks_remove_block() {
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
+    // Wait for the added row before removing it
+    browser::wait_for_element_count(&page, ".form__array-row", 1).await;
 
     // Remove the block
     page.find_element("button[data-action=\"remove-array-row\"]")
@@ -174,9 +173,8 @@ async fn blocks_remove_block() {
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
 
-    let rows = page.find_elements(".form__array-row").await.unwrap();
+    let rows = browser::wait_for_element_count(&page, ".form__array-row", 0).await;
     assert_eq!(rows.len(), 0, "block row should be removed");
 
     server_handle.abort();
@@ -214,7 +212,8 @@ async fn blocks_different_types() {
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
+    // Wait for the first row before adding a second
+    browser::wait_for_element_count(&page, ".form__array-row", 1).await;
 
     // Switch select to image_block and add second block
     page.evaluate(
@@ -229,9 +228,8 @@ async fn blocks_different_types() {
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
 
-    let rows = page.find_elements(".form__array-row").await.unwrap();
+    let rows = browser::wait_for_element_count(&page, ".form__array-row", 2).await;
     assert_eq!(rows.len(), 2, "should have 2 block rows of different types");
 
     // Check that we have both block types via hidden inputs
@@ -339,7 +337,7 @@ async fn block_with_relationship_saves_correctly() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+    browser::wait_for_element(&page, "input[name=\"title\"]").await;
 
     // Fill title
     page.find_element("input[name=\"title\"]")
@@ -361,7 +359,7 @@ async fn block_with_relationship_saves_correctly() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(500)).await;
+    browser::wait_for_element_count(&page, ".form__array-row", 1).await;
 
     // Fill the heading field inside the block
     page.evaluate(
@@ -383,7 +381,8 @@ async fn block_with_relationship_saves_correctly() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(800)).await;
+    // Wait for async relationship search results to render before selecting
+    browser::wait_for_element(&page, ".form__array-row .relationship-search__option").await;
 
     // Select first option
     page.evaluate(
@@ -394,7 +393,12 @@ async fn block_with_relationship_saves_correctly() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(300)).await;
+    // Wait for the selection to write its hidden input into the block row
+    browser::wait_for_js(
+        &page,
+        "document.querySelector('.form__array-row input[type=\"hidden\"][name*=\"image\"]') !== null",
+    )
+    .await;
 
     // Verify the hidden input has the correct field name (not __INDEX__)
     let field_name_result = page

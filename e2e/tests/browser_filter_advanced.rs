@@ -76,22 +76,56 @@ async fn filter_builder_adds_multiple_conditions() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the filter-builder trigger to render AND for its owning component
+    // (`crap-list-settings`) to upgrade — the button exists in server HTML, but a
+    // click before the component wires its delegated handler is a no-op under
+    // load (the drawer never opens, so the filter-builder never renders).
+    browser::wait_for_element(&page, "[data-action=\"open-filter-builder\"]").await;
+    browser::wait_for_js(&page, "customElements.get('crap-list-settings')").await;
 
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
 
-    // Add three conditions in sequence by clicking "Add" three times.
-    for _ in 0..3 {
+    // Wait for the drawer's filter-builder (shadow DOM) to render its Add button.
+    for _ in 0..60 {
+        let ready = browser::shadow_eval(
+            &page,
+            "crap-drawer",
+            "return root.querySelector('.filter-builder > button.button--ghost') ? 'true' : 'false';",
+        )
+        .await;
+        if ready == "true" {
+            break;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+
+    // Add three conditions in sequence by clicking "Add" three times, polling
+    // until each new row appears before clicking again (shadow DOM, no light-DOM
+    // signal available so we poll shadow_eval).
+    for i in 0..3 {
         let _ = browser::shadow_eval(
             &page,
             "crap-drawer",
             "root.querySelector('.filter-builder > button.button--ghost')?.click(); return '';",
         )
         .await;
-        sleep(Duration::from_millis(150)).await;
+
+        let expected = i + 1;
+        for _ in 0..60 {
+            let count = browser::shadow_eval(
+                &page,
+                "crap-drawer",
+                "return String(root.querySelectorAll('.filter-builder__row').length);",
+            )
+            .await;
+            if count.parse::<i64>().unwrap_or(0) >= expected {
+                break;
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
     }
 
     let row_count = browser::shadow_eval(
@@ -128,22 +162,54 @@ async fn filter_builder_removes_condition() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the filter-builder trigger to render AND for its owning component
+    // (`crap-list-settings`) to upgrade — the button exists in server HTML, but a
+    // click before the component wires its delegated handler is a no-op under
+    // load (the drawer never opens, so the filter-builder never renders).
+    browser::wait_for_element(&page, "[data-action=\"open-filter-builder\"]").await;
+    browser::wait_for_js(&page, "customElements.get('crap-list-settings')").await;
 
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
 
-    // Add two conditions.
-    for _ in 0..2 {
+    // Wait for the drawer's filter-builder (shadow DOM) to render its Add button.
+    for _ in 0..60 {
+        let ready = browser::shadow_eval(
+            &page,
+            "crap-drawer",
+            "return root.querySelector('.filter-builder > button.button--ghost') ? 'true' : 'false';",
+        )
+        .await;
+        if ready == "true" {
+            break;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+
+    // Add two conditions, polling until each row appears before the next click.
+    for i in 0..2 {
         let _ = browser::shadow_eval(
             &page,
             "crap-drawer",
             "root.querySelector('.filter-builder > button.button--ghost')?.click(); return '';",
         )
         .await;
-        sleep(Duration::from_millis(150)).await;
+
+        let expected = i + 1;
+        for _ in 0..60 {
+            let count = browser::shadow_eval(
+                &page,
+                "crap-drawer",
+                "return String(root.querySelectorAll('.filter-builder__row').length);",
+            )
+            .await;
+            if count.parse::<i64>().unwrap_or(0) >= expected {
+                break;
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
     }
 
     let before = browser::shadow_eval(
@@ -164,7 +230,20 @@ async fn filter_builder_removes_condition() {
          btn?.click(); return '';",
     )
     .await;
-    sleep(Duration::from_millis(200)).await;
+
+    // Poll (shadow DOM) until the row count drops to 1 after removal.
+    for _ in 0..60 {
+        let count = browser::shadow_eval(
+            &page,
+            "crap-drawer",
+            "return String(root.querySelectorAll('.filter-builder__row').length);",
+        )
+        .await;
+        if count.parse::<i64>().unwrap_or(-1) == 1 {
+            break;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
 
     let after = browser::shadow_eval(
         &page,

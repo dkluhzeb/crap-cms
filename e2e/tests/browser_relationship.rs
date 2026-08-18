@@ -105,7 +105,8 @@ async fn relationship_search_shows_results() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+    // Wait for the relationship input to mount before focusing it.
+    browser::wait_for_element(&page, ".relationship-search__input").await;
 
     // Focus the has-one relationship input to trigger a search (shows all results)
     page.evaluate(
@@ -116,8 +117,12 @@ async fn relationship_search_shows_results() {
     )
     .await
     .unwrap();
-    // Wait for debounce (250ms) + fetch
-    sleep(Duration::from_millis(800)).await;
+    // Wait for debounce + fetch to populate the dropdown (assert wants >= 2).
+    browser::wait_for_js(
+        &page,
+        "document.querySelectorAll('.relationship-search__option').length >= 2",
+    )
+    .await;
 
     // Dropdown should appear with results
     let result = page
@@ -162,13 +167,15 @@ async fn relationship_select_sets_value() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+    // Wait for the relationship input to mount before focusing it.
+    browser::wait_for_element(&page, ".relationship-search__input").await;
 
     // Focus the has-one input to trigger initial search
     page.evaluate("() => document.querySelector('.relationship-search__input')?.focus()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(800)).await;
+    // Wait for the dropdown options to load before clicking one.
+    browser::wait_for_element(&page, ".relationship-search__option").await;
 
     // Click the first option via mousedown (how the component listens)
     page.evaluate(
@@ -179,7 +186,12 @@ async fn relationship_select_sets_value() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(300)).await;
+    // Wait for the hidden input to receive the selected value.
+    browser::wait_for_js(
+        &page,
+        "document.querySelector('.relationship-search__hidden input[type=hidden]')?.value",
+    )
+    .await;
 
     // Hidden input should have a value
     let result = page
@@ -227,7 +239,8 @@ async fn relationship_has_many_multiple_chips() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+    // Wait for the has-many component to mount before focusing its input.
+    browser::wait_for_element(&page, "crap-relationship-search[has-many]").await;
 
     // Focus the has-many input (tags field) to trigger search
     page.evaluate(
@@ -240,7 +253,12 @@ async fn relationship_has_many_multiple_chips() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(800)).await;
+    // Wait for the dropdown options to load.
+    browser::wait_for_element(
+        &page,
+        "crap-relationship-search[has-many] .relationship-search__option",
+    )
+    .await;
 
     // Select first option
     page.evaluate(
@@ -251,10 +269,15 @@ async fn relationship_has_many_multiple_chips() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(300)).await;
+    // Wait for the first chip to register.
+    browser::wait_for_element_count(&page, ".pill-list__chip", 1).await;
 
     // Wait for dropdown to close after first selection
-    sleep(Duration::from_millis(500)).await;
+    browser::wait_for_element_gone(
+        &page,
+        "crap-relationship-search[has-many] .relationship-search__option",
+    )
+    .await;
 
     // Type a space then delete it to trigger input event which triggers search
     page.evaluate(
@@ -271,8 +294,12 @@ async fn relationship_has_many_multiple_chips() {
     )
     .await
     .unwrap();
-    // Wait for debounce (250ms) + network fetch
-    sleep(Duration::from_secs(1)).await;
+    // Wait for the dropdown options to repopulate after re-triggering search.
+    browser::wait_for_element(
+        &page,
+        "crap-relationship-search[has-many] .relationship-search__option",
+    )
+    .await;
 
     // Select the unselected option
     page.evaluate(
@@ -289,7 +316,8 @@ async fn relationship_has_many_multiple_chips() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(300)).await;
+    // Wait for the second chip to register.
+    browser::wait_for_element_count(&page, ".pill-list__chip", 2).await;
 
     // Should have 2 chips
     let result = page
@@ -334,7 +362,8 @@ async fn relationship_remove_chip() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+    // Wait for the has-many component to mount before focusing its input.
+    browser::wait_for_element(&page, "crap-relationship-search[has-many]").await;
 
     // Focus the has-many input to trigger search
     page.evaluate(
@@ -347,7 +376,12 @@ async fn relationship_remove_chip() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(800)).await;
+    // Wait for the dropdown options to load before selecting one.
+    browser::wait_for_element(
+        &page,
+        "crap-relationship-search[has-many] .relationship-search__option",
+    )
+    .await;
 
     // Select first option
     page.evaluate(
@@ -358,7 +392,8 @@ async fn relationship_remove_chip() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(300)).await;
+    // Wait for the chip to appear.
+    browser::wait_for_element_count(&page, ".pill-list__chip", 1).await;
 
     // Should have a chip
     let result = page
@@ -372,7 +407,8 @@ async fn relationship_remove_chip() {
     page.evaluate("() => document.querySelector('.pill-list__chip-remove')?.click()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
+    // Wait for the chip to be removed.
+    browser::wait_for_element_gone(&page, ".pill-list__chip").await;
 
     let result = page
         .evaluate("() => document.querySelectorAll('.pill-list__chip').length")
@@ -413,7 +449,8 @@ async fn relationship_enter_selects_first_result() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+    // Wait for the has-many component to mount before focusing its input.
+    browser::wait_for_element(&page, "crap-relationship-search[has-many]").await;
 
     // Focus has-many input and type to trigger search
     page.evaluate(
@@ -457,7 +494,8 @@ async fn relationship_enter_selects_first_result() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(300)).await;
+    // Wait for the chip produced by the Enter selection.
+    browser::wait_for_element_count(&page, ".pill-list__chip", 1).await;
 
     // Should have a chip
     let result = page
@@ -502,7 +540,8 @@ async fn has_one_relationship_persists() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+    // Wait for the relationship input to mount.
+    browser::wait_for_element(&page, ".relationship-search__input").await;
 
     // Fill title
     page.find_element("input[name=\"title\"]")
@@ -519,7 +558,8 @@ async fn has_one_relationship_persists() {
     page.evaluate("() => document.querySelector('.relationship-search__input')?.focus()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(800)).await;
+    // Wait for the dropdown options to load before selecting one.
+    browser::wait_for_element(&page, ".relationship-search__option").await;
 
     // Select first option
     page.evaluate(
@@ -530,22 +570,34 @@ async fn has_one_relationship_persists() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(300)).await;
+    // Wait for the has-one hidden input to receive the selected value.
+    browser::wait_for_js(
+        &page,
+        "document.querySelector('crap-relationship-search:not([has-many]) input[type=hidden]')?.value",
+    )
+    .await;
 
     // Submit form
     page.evaluate("() => document.querySelector('#edit-form')?.requestSubmit()")
         .await
         .unwrap();
-    sleep(Duration::from_secs(2)).await;
 
-    // Verify in database
-    let conn = app.pool.get().unwrap();
-    let rows = conn
-        .query_all(
-            "SELECT category FROM posts WHERE title = 'Persist Test'",
-            &[],
-        )
-        .unwrap();
+    // Poll the DB until the post row lands (submit is async).
+    let mut rows = Vec::new();
+    for _ in 0..60 {
+        let conn = app.pool.get().unwrap();
+        rows = conn
+            .query_all(
+                "SELECT category FROM posts WHERE title = 'Persist Test'",
+                &[],
+            )
+            .unwrap();
+        if !rows.is_empty() {
+            break;
+        }
+        drop(conn);
+        sleep(Duration::from_millis(100)).await;
+    }
     assert_eq!(rows.len(), 1, "should have created one post");
 
     let saved_cat = rows[0]
@@ -593,7 +645,8 @@ async fn has_many_relationship_persists() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+    // Wait for the has-many component to mount.
+    browser::wait_for_element(&page, "crap-relationship-search[has-many]").await;
 
     // Fill title
     page.find_element("input[name=\"title\"]")
@@ -617,7 +670,12 @@ async fn has_many_relationship_persists() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(800)).await;
+    // Wait for the dropdown options to load.
+    browser::wait_for_element(
+        &page,
+        "crap-relationship-search[has-many] .relationship-search__option",
+    )
+    .await;
 
     // Select first option
     page.evaluate(
@@ -628,7 +686,8 @@ async fn has_many_relationship_persists() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(500)).await;
+    // Wait for the first chip to register.
+    browser::wait_for_element_count(&page, ".pill-list__chip", 1).await;
 
     // Re-trigger search to select second option
     page.evaluate(
@@ -642,7 +701,12 @@ async fn has_many_relationship_persists() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_secs(1)).await;
+    // Wait for the dropdown options to repopulate.
+    browser::wait_for_element(
+        &page,
+        "crap-relationship-search[has-many] .relationship-search__option",
+    )
+    .await;
 
     // Select the unselected option
     page.evaluate(
@@ -659,7 +723,8 @@ async fn has_many_relationship_persists() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(300)).await;
+    // Wait for the second chip to register.
+    browser::wait_for_element_count(&page, ".pill-list__chip", 2).await;
 
     // Should have 2 chips
     let result = page
@@ -673,13 +738,20 @@ async fn has_many_relationship_persists() {
     page.evaluate("() => document.querySelector('#edit-form')?.requestSubmit()")
         .await
         .unwrap();
-    sleep(Duration::from_secs(2)).await;
 
-    // Verify in database — check join table has both references
-    let conn = app.pool.get().unwrap();
-    let rows = conn
-        .query_all("SELECT related_id FROM posts_tags ORDER BY related_id", &[])
-        .unwrap();
+    // Poll the DB until both join-table references land (submit is async).
+    let mut rows = Vec::new();
+    for _ in 0..60 {
+        let conn = app.pool.get().unwrap();
+        rows = conn
+            .query_all("SELECT related_id FROM posts_tags ORDER BY related_id", &[])
+            .unwrap();
+        if rows.len() == 2 {
+            break;
+        }
+        drop(conn);
+        sleep(Duration::from_millis(100)).await;
+    }
     assert_eq!(
         rows.len(),
         2,
@@ -734,7 +806,8 @@ async fn relationship_inline_create_selects_item() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+    // Wait for the inline-create control to mount.
+    browser::wait_for_element(&page, "[data-inline-create=\"categories\"]").await;
 
     // Fill post title
     page.find_element("input[name=\"title\"]")
@@ -756,7 +829,8 @@ async fn relationship_inline_create_selects_item() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_secs(2)).await;
+    // Wait for the create panel to open.
+    browser::wait_for_js(&page, "document.querySelector('.create-panel')?.open").await;
 
     // The create panel dialog should be open
     let panel_open = page
@@ -771,6 +845,16 @@ async fn relationship_inline_create_selects_item() {
     let state: String = panel_open.into_value().unwrap_or_default();
     assert_eq!(state, "open", "create panel should be open");
 
+    // The create form is fetched and mounted ASYNCHRONOUSLY after the dialog
+    // opens (see create-panel.js), so wait for its name input to exist before
+    // filling it — otherwise the fill targets a not-yet-mounted form and the
+    // submit finds no form (the panel never closes).
+    browser::wait_for_js(
+        &page,
+        "document.querySelector('.create-panel__body input[name=name]')",
+    )
+    .await;
+
     // Fill the category name in the panel form
     page.evaluate(
         "() => { \
@@ -781,7 +865,12 @@ async fn relationship_inline_create_selects_item() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(300)).await;
+    // Wait for the name value to be applied before submitting.
+    browser::wait_for_js(
+        &page,
+        "document.querySelector('.create-panel__body input[name=name]')?.value === 'NewInlineCategory'",
+    )
+    .await;
 
     page.evaluate(
         "() => { \
@@ -889,7 +978,8 @@ async fn relationship_inline_create_validation_error_rerenders() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+    // Wait for the inline-create control to mount.
+    browser::wait_for_element(&page, "[data-inline-create=\"categories\"]").await;
 
     // Open the inline-create panel for categories.
     page.evaluate(
@@ -900,7 +990,8 @@ async fn relationship_inline_create_validation_error_rerenders() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_secs(2)).await;
+    // Wait for the panel form to render before submitting it.
+    browser::wait_for_element(&page, ".create-panel__body form").await;
 
     // Submit the form with the required `name` left empty — this triggers
     // a 422 from the server and exercises the re-render path.

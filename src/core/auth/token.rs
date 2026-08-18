@@ -2,9 +2,10 @@
 
 use std::sync::Arc;
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 
 use crate::core::Claims;
+use crate::core::auth::claims::TokenUse;
 
 /// Thread-safe shared reference to a token provider.
 pub type SharedTokenProvider = Arc<dyn TokenProvider>;
@@ -22,13 +23,32 @@ pub trait TokenProvider: Send + Sync {
     /// Returns an error if signing fails (e.g. claim serialization).
     fn create_token(&self, claims: &Claims) -> Result<String>;
 
-    /// Validate a token and return decoded claims.
+    /// Validate a **session** token and return decoded claims.
+    ///
+    /// Rejects any token whose [`Claims::token_use`] is not
+    /// [`TokenUse::Session`] — notably the short-lived MFA-pending token,
+    /// which must never authenticate a request. Every authenticated surface
+    /// (admin cookie/bearer, gRPC, upload serve) goes through here, so the
+    /// discriminator check is enforced in one place rather than at each
+    /// call site.
     ///
     /// # Errors
     ///
     /// Returns an error if the token is malformed, has an invalid signature,
-    /// is expired, or is missing required claims.
+    /// is expired, is missing required claims, or is not a session token.
     fn validate_token(&self, token: &str) -> Result<Claims>;
+
+    /// Validate an **MFA-pending** token and return decoded claims.
+    ///
+    /// The mirror of [`validate_token`](Self::validate_token) for the one
+    /// endpoint that legitimately consumes a pending token: it accepts only
+    /// [`TokenUse::MfaPending`] and rejects a full session token.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the token is malformed, has an invalid signature,
+    /// is expired, is missing required claims, or is not an MFA-pending token.
+    fn validate_pending_token(&self, token: &str) -> Result<Claims>;
 
     /// Backend identifier.
     fn kind(&self) -> &'static str;
@@ -56,6 +76,37 @@ impl TokenProvider for JwtTokenProvider {
     }
 
     fn validate_token(&self, token: &str) -> Result<Claims> {
+        let claims = self.decode(token)?;
+
+        if claims.token_use != TokenUse::Session {
+            bail!("token is not a session token");
+        }
+
+        Ok(claims)
+    }
+
+    fn validate_pending_token(&self, token: &str) -> Result<Claims> {
+        let claims = self.decode(token)?;
+
+        if claims.token_use != TokenUse::MfaPending {
+            bail!("token is not an MFA-pending token");
+        }
+
+        Ok(claims)
+    }
+
+    fn kind(&self) -> &'static str {
+        "jwt"
+    }
+}
+
+impl JwtTokenProvider {
+    /// Decode + verify a JWT and return its claims, WITHOUT checking
+    /// [`Claims::token_use`]. Private so the purpose check can't be skipped
+    /// by an outside caller — public validation always goes through
+    /// [`validate_token`](TokenProvider::validate_token) or
+    /// [`validate_pending_token`](TokenProvider::validate_pending_token).
+    fn decode(&self, token: &str) -> Result<Claims> {
         let key = jsonwebtoken::DecodingKey::from_secret(self.secret.as_bytes());
 
         // Pin the algorithm explicitly: `Validation::new(HS256)` refuses any
@@ -71,10 +122,6 @@ impl TokenProvider for JwtTokenProvider {
             .context("Invalid JWT token")?;
 
         Ok(data.claims)
-    }
-
-    fn kind(&self) -> &'static str {
-        "jwt"
     }
 }
 
@@ -166,6 +213,76 @@ mod tests {
     #[test]
     fn kind_is_jwt() {
         assert_eq!(provider().kind(), "jwt");
+    }
+
+    // ── MFA bypass regression: token_use discriminator ────────────────────
+    //
+    // A short-lived MFA-pending token must NOT authenticate a session on any
+    // surface. Before the `token_use` claim existed, the pending token was a
+    // valid session JWT — an attacker who knew the password could copy the
+    // `crap_mfa_pending` cookie value into `crap_session` and skip MFA.
+
+    fn pending_claims() -> Claims {
+        Claims::builder("u", "users")
+            .email("a@b.com")
+            .exp((chrono::Utc::now().timestamp() as u64) + 3600)
+            .token_use(TokenUse::MfaPending)
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn validate_token_rejects_mfa_pending_token() {
+        let p = provider();
+        let token = p.create_token(&pending_claims()).unwrap();
+
+        let err = p.validate_token(&token).unwrap_err();
+        assert!(
+            err.to_string().contains("not a session token"),
+            "MFA-pending token must not validate as a session, got: {err}",
+        );
+    }
+
+    #[test]
+    fn validate_pending_token_accepts_mfa_pending_token() {
+        let p = provider();
+        let token = p.create_token(&pending_claims()).unwrap();
+
+        let claims = p.validate_pending_token(&token).unwrap();
+        assert_eq!(claims.token_use, TokenUse::MfaPending);
+    }
+
+    #[test]
+    fn validate_pending_token_rejects_session_token() {
+        let p = provider();
+        let session = Claims::builder("u", "users")
+            .email("a@b.com")
+            .exp((chrono::Utc::now().timestamp() as u64) + 3600)
+            .build()
+            .unwrap();
+        let token = p.create_token(&session).unwrap();
+
+        let err = p.validate_pending_token(&token).unwrap_err();
+        assert!(
+            err.to_string().contains("not an MFA-pending token"),
+            "a full session token must not complete MFA, got: {err}",
+        );
+    }
+
+    #[test]
+    fn validate_token_accepts_session_token() {
+        let p = provider();
+        let session = Claims::builder("u", "users")
+            .email("a@b.com")
+            .exp((chrono::Utc::now().timestamp() as u64) + 3600)
+            .build()
+            .unwrap();
+        let token = p.create_token(&session).unwrap();
+
+        assert_eq!(
+            p.validate_token(&token).unwrap().token_use,
+            TokenUse::Session,
+        );
     }
 
     // ── L-1: algorithm pinning + required exp claim ───────────────────────

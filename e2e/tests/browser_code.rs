@@ -59,15 +59,21 @@ async fn code_renders_codemirror() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
 
-    // Check for CodeMirror editor inside shadow root
-    let has_editor = browser::shadow_eval(
-        &page,
-        "crap-code",
-        "return root.querySelector('.cm-editor') ? 'true' : 'false';",
-    )
-    .await;
+    // Poll the shadow root until CodeMirror mounts (replaces a fixed sleep)
+    let mut has_editor = String::new();
+    for _ in 0..60 {
+        has_editor = browser::shadow_eval(
+            &page,
+            "crap-code",
+            "return root.querySelector('.cm-editor') ? 'true' : 'false';",
+        )
+        .await;
+        if has_editor == "true" {
+            break;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
     assert_eq!(
         has_editor, "true",
         "crap-code shadow root should contain .cm-editor"
@@ -100,7 +106,8 @@ async fn code_typing_updates_hidden_input() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+    // Wait for the CodeMirror view to be initialized before dispatching edits
+    browser::wait_for_js(&page, "document.querySelector('crap-code')?._view != null").await;
 
     // Type into the CodeMirror editor via JS (direct interaction with shadow DOM)
     page.evaluate(
@@ -114,7 +121,12 @@ async fn code_typing_updates_hidden_input() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(300)).await;
+    // Wait for the hidden textarea to reflect the typed content
+    browser::wait_for_js(
+        &page,
+        "(document.querySelector('crap-code textarea')?.value ?? '').includes('hello world')",
+    )
+    .await;
 
     // Check that the hidden textarea has been updated
     let result = page
@@ -163,7 +175,8 @@ async fn code_syntax_highlighting_renders() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+    // Wait for the CodeMirror view to be initialized before dispatching edits
+    browser::wait_for_js(&page, "document.querySelector('crap-code')?._view != null").await;
 
     // Insert a JSON snippet with at least a string and a number — both
     // should be tagged by the parser.
@@ -178,25 +191,32 @@ async fn code_syntax_highlighting_renders() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(500)).await;
 
     // Look for any highlighted span. CodeMirror's HighlightStyle generates
     // scoped class names (`ͼ` Greek-iota prefix from style-mod). The real
     // test is whether the span has a non-default `color` — meaning the
-    // highlight style actually applied.
-    let result = browser::shadow_eval(
-        &page,
-        "crap-code",
-        "const line = root.querySelector('.cm-line'); \
-         if (!line) return 'no-line'; \
-         const span = line.querySelector('span[class*=\"ͼ\"]'); \
-         if (!span) return 'no-span'; \
-         const color = getComputedStyle(span).color; \
-         return color === 'rgb(0, 0, 0)' || color === 'inherit' || color === '' \
-           ? 'unstyled' \
-           : 'colored';",
-    )
-    .await;
+    // highlight style actually applied. Poll until the highlight renders
+    // (replaces a fixed sleep).
+    let mut result = String::new();
+    for _ in 0..60 {
+        result = browser::shadow_eval(
+            &page,
+            "crap-code",
+            "const line = root.querySelector('.cm-line'); \
+             if (!line) return 'no-line'; \
+             const span = line.querySelector('span[class*=\"ͼ\"]'); \
+             if (!span) return 'no-span'; \
+             const color = getComputedStyle(span).color; \
+             return color === 'rgb(0, 0, 0)' || color === 'inherit' || color === '' \
+               ? 'unstyled' \
+               : 'colored';",
+        )
+        .await;
+        if result == "colored" {
+            break;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
     assert_eq!(
         result, "colored",
         "expected highlighted tokens to have a non-default color; got: '{result}'"
@@ -257,16 +277,23 @@ async fn code_language_picker_persists_choice() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
 
     // Picker is in the shadow root; hidden input is a sibling of <crap-code>.
-    let picker_state = browser::shadow_eval(
-        &page,
-        "crap-code",
-        "const sel = root.querySelector('select.lang-picker__select'); \
-         return sel ? sel.value : 'missing';",
-    )
-    .await;
+    // Poll until the picker renders inside the shadow root (replaces a fixed sleep).
+    let mut picker_state = String::new();
+    for _ in 0..60 {
+        picker_state = browser::shadow_eval(
+            &page,
+            "crap-code",
+            "const sel = root.querySelector('select.lang-picker__select'); \
+             return sel ? sel.value : 'missing';",
+        )
+        .await;
+        if picker_state != "missing" {
+            break;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
     assert_eq!(
         picker_state, "javascript",
         "default language is the operator default"
@@ -293,7 +320,12 @@ async fn code_language_picker_persists_choice() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(100)).await;
+    // Wait for the hidden _lang input to reflect the picker change
+    browser::wait_for_js(
+        &page,
+        "document.querySelector('input[type=hidden][name=\"code_lang\"]')?.value === 'python'",
+    )
+    .await;
 
     let after_hidden = page
         .evaluate(
@@ -371,7 +403,8 @@ async fn code_picker_appears_inside_blocks_after_add() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+    // Wait for the add-block button to be ready
+    browser::wait_for_element(&page, "[data-action=\"add-block-row\"]").await;
 
     // Click the "Add Code" button — the block-picker dispatches add-block-row.
     page.evaluate(
@@ -382,16 +415,24 @@ async fn code_picker_appears_inside_blocks_after_add() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(300)).await;
 
     // The newly cloned <crap-code> should render its picker in the shadow root.
-    let picker_present = browser::shadow_eval(
-        &page,
-        "crap-code",
-        "const sel = root.querySelector('select.lang-picker__select'); \
-         return sel ? `${sel.options.length} options` : 'missing';",
-    )
-    .await;
+    // Poll until the cloned block row's picker renders with options (replaces a
+    // fixed sleep).
+    let mut picker_present = String::new();
+    for _ in 0..60 {
+        picker_present = browser::shadow_eval(
+            &page,
+            "crap-code",
+            "const sel = root.querySelector('select.lang-picker__select'); \
+             return sel ? `${sel.options.length} options` : 'missing';",
+        )
+        .await;
+        if picker_present.contains("options") && !picker_present.contains("0 options") {
+            break;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
     assert!(
         picker_present.contains("options") && !picker_present.contains("0 options"),
         "expected picker with options inside the cloned block row, got: {picker_present}"

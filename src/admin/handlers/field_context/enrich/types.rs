@@ -81,7 +81,9 @@ fn doc_to_label_item(doc: &Document, title_field: Option<&String>) -> Relationsh
 /// Resolve has-many selected items by looking up each ID in the DB.
 ///
 /// Internal UI enrichment — direct query for display labels, not a user-facing read.
-fn resolve_has_many_items(
+/// Shared with the nested enrich path (a has-many relationship inside a
+/// group/array/block row resolves labels the same way).
+pub(super) fn resolve_has_many_items(
     ids: &[String],
     collection: &str,
     related_def: &CollectionDefinition,
@@ -294,7 +296,8 @@ fn prepare_upload_doc(
 /// Resolve has-many upload items by looking up each ID in the DB.
 ///
 /// Internal UI enrichment — direct query for display labels, not a user-facing read.
-fn resolve_upload_has_many(
+/// Shared with the nested enrich path (a has-many upload inside a row).
+pub(super) fn resolve_upload_has_many(
     ids: &[String],
     collection: &str,
     related_def: &CollectionDefinition,

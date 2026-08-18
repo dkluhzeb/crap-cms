@@ -59,15 +59,19 @@ async fn client_side_validation_shows_errors() {
         .wait_for_navigation()
         .await
         .unwrap();
-    // Wait for JS/HTMX to initialize
-    sleep(Duration::from_millis(500)).await;
+    // Wait for the form to be ready before submitting
+    browser::wait_for_element(&page, "#edit-form").await;
 
     // Submit with empty required field using requestSubmit
     page.evaluate("() => document.querySelector('#edit-form')?.requestSubmit()")
         .await
         .unwrap();
     // Wait for validation fetch + error rendering
-    sleep(Duration::from_secs(2)).await;
+    browser::wait_for_js(
+        &page,
+        "document.querySelectorAll('.form__error').length > 0",
+    )
+    .await;
 
     let result = page
         .evaluate("() => document.querySelectorAll('.form__error').length")
@@ -106,14 +110,19 @@ async fn validation_clears_on_valid_resubmit() {
         .wait_for_navigation()
         .await
         .unwrap();
-    // Wait for JS/HTMX to initialize
-    sleep(Duration::from_millis(500)).await;
+    // Wait for the form to be ready before submitting
+    browser::wait_for_element(&page, "#edit-form").await;
 
     // Trigger validation error
     page.evaluate("() => document.querySelector('#edit-form')?.requestSubmit()")
         .await
         .unwrap();
-    sleep(Duration::from_secs(2)).await;
+    // Wait for the validation error to appear before fixing the field
+    browser::wait_for_js(
+        &page,
+        "document.querySelectorAll('.form__error').length > 0",
+    )
+    .await;
 
     // Fill in the required field
     page.find_element("input[name=\"title\"]")
@@ -130,7 +139,12 @@ async fn validation_clears_on_valid_resubmit() {
     page.evaluate("() => document.querySelector('#edit-form')?.requestSubmit()")
         .await
         .unwrap();
-    sleep(Duration::from_secs(2)).await;
+    // Wait for the errors to clear after the valid resubmit
+    browser::wait_for_js(
+        &page,
+        "document.querySelectorAll('.form__error').length === 0",
+    )
+    .await;
 
     let result = page
         .evaluate("() => document.querySelectorAll('.form__error').length")
@@ -188,14 +202,14 @@ async fn validation_expands_collapsed_array_row() {
         .wait_for_navigation()
         .await
         .unwrap();
-    // Wait for JS to initialize
-    sleep(Duration::from_millis(500)).await;
+    // Wait for the add-row button to be ready
+    browser::wait_for_element(&page, "button[data-action=\"add-array-row\"]").await;
 
     // Add a row
     page.evaluate("() => document.querySelector('button[data-action=\"add-array-row\"]')?.click()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
+    browser::wait_for_element_count(&page, ".form__array-row", 1).await;
 
     // Fill name but leave array sub-field empty
     page.find_element("input[name=\"name\"]")
@@ -212,7 +226,12 @@ async fn validation_expands_collapsed_array_row() {
     page.evaluate("() => document.querySelector('#edit-form')?.requestSubmit()")
         .await
         .unwrap();
-    sleep(Duration::from_secs(2)).await;
+    // Wait for the validation error indicator to render on the array row
+    browser::wait_for_js(
+        &page,
+        "document.querySelectorAll('.form__array-row--has-errors, .form__array-row-error-badge, .form__error').length > 0",
+    )
+    .await;
 
     // Error badge or expanded state should appear on the array row
     let result = page
@@ -286,13 +305,17 @@ async fn save_as_draft_skips_required_via_validate_endpoint() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+    // Wait for the "Save as draft" button to be ready
+    browser::wait_for_element(&page, "button[value=\"save_draft\"]").await;
 
     // Leave `title` (required) empty. Click "Save as draft" — the
     // button with `name="_action" value="save_draft"`.
     page.evaluate("() => document.querySelector('button[value=\"save_draft\"]')?.click()")
         .await
         .unwrap();
+    // Bounded wait: this is a negative assertion (no inline errors should ever
+    // appear), so there is no positive same-page signal to poll — keep a fixed
+    // delay to give the validate endpoint time to (wrongly) render errors.
     sleep(Duration::from_secs(2)).await;
 
     // No inline `form__error` with `data-validate-error` should be

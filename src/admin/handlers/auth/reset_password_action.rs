@@ -15,7 +15,7 @@ use crate::{
         AdminState,
         context::{AuthBasePageContext, PageMeta, PageType, page::auth::ResetPasswordPage},
         handlers::{
-            auth::{ResetPasswordForm, client_ip},
+            auth::{ResetPasswordForm, client_ip, scoped_limiter},
             shared::{paths, render_page},
         },
     },
@@ -125,10 +125,16 @@ pub async fn reset_password_action(
     // above so only genuine token-consumption attempts count. Every such attempt
     // counts (the same idiom as login and forgot-password), so a transient
     // internal error counts too — acceptable for a high-entropy token endpoint
-    // and strictly safer than refunding. Uses the dedicated forgot-password IP
-    // limiter (not the login limiter) so reset failures don't block legitimate
-    // logins from the same IP.
-    if state.ip_forgot_password_limiter.check_and_block(&ip) {
+    // and strictly safer than refunding. Uses its OWN per-IP keyspace (not the
+    // shared forgot-password limiter) so reset-token attempts and the
+    // forgot-password request flow don't drain each other's budget.
+    let ip_reset_limiter = scoped_limiter(
+        &state,
+        "ip_reset_password",
+        state.config.auth.max_ip_login_attempts,
+        state.config.auth.forgot_password_window_seconds,
+    );
+    if ip_reset_limiter.check_and_block(&ip) {
         return render_reset_error(&state, Some(&form.token), "error_reset_link_invalid");
     }
 

@@ -26,7 +26,10 @@ stored data, or clients.
   hoisted out, everything else in `data`), the "relational spine vs nested JSON"
   boundary (top-level array/blocks/relationship get join tables; anything nested
   inside a row is JSON), and the version-snapshot JSON shape (restore must read
-  every snapshot ever written).
+  every snapshot ever written). A **group** nested in a row (array or block) is
+  stored as a JSON **object** (`{…}`), not a one-element array — the block form
+  parser selects a row's sub-field defs from its `_block_type` so the group is
+  recognized as a single-object composite.
 - **Column types.** Timestamps and dates are `TEXT` (ISO-8601) on every backend;
   numbers are floating point (`REAL`/`DOUBLE PRECISION`); integers/flags are
   `BIGINT` on Postgres. Whole-valued numbers serialize back as JSON integers.
@@ -145,6 +148,26 @@ stored data, or clients.
 - **Schema introspection is public by default** (`public_schema_introspection =
   true`): `ListCollections` / `DescribeCollection` need no auth. Operators set it
   `false` to require authentication. It never gates document data.
+- **Static protective headers apply to every response.** `X-Frame-Options`,
+  `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`, and
+  (outside dev mode) HSTS are stamped on the full router — built-in admin routes
+  **and** merged custom routes. Only the nonce-bound admin CSP is admin-only
+  (custom routes render their own bodies and carry no nonce).
+
+## Custom routes & admin responses
+
+- **CSRF is enforced only on mutating methods** (POST/PUT/PATCH/DELETE).
+  Declaring `csrf = true` on a custom route that answers only safe methods
+  (GET/HEAD/OPTIONS) is rejected at load — a safe-method handler must not mutate
+  state, and a route that mutates must declare a mutating method.
+- **Admin list sort eligibility requires a real column.** A field is sortable
+  only if it has a parent column (`has_parent_column()`); a has-many
+  relationship/upload (no column) is rejected at the 400 param gate, never passed
+  to the query layer.
+- **Admin JSON/lazy-load endpoints return real HTTP status codes.** Version
+  restore returns 403 on denial (not a silent redirect); back-references and
+  evaluate-conditions return 404 (unknown), 403 (denied), or 500 (error) with
+  their JSON body — never `200` with an error payload.
 
 ## Access model
 
@@ -153,6 +176,20 @@ stored data, or clients.
   (`draft ?? update`, `trash ?? update`, `versions ?? update`). Reads are a
   union of allowed views that downgrades rather than erroring. Changing a
   fallback target silently re-permissions every config that omits that key.
+- **`access.admin` gates admin-UI visibility uniformly.** Both the sidebar nav
+  and the dashboard cards hide a collection/global the user can't `admin`, and
+  the rule is evaluated under operation `"admin"` — the same value the route
+  middleware passes — so a hook branching on `ctx.operation` behaves identically
+  in the UI filter and the real gate.
+
+## Auth tokens
+
+- **The `token_use` claim** partitions signed tokens into `session` (accepted by
+  every authenticated surface — admin cookie/bearer, gRPC, upload serve) and
+  `mfa_pending` (accepted only by the MFA-completion endpoint). Session
+  validation rejects a non-`session` token, so an MFA-pending token can never
+  authenticate a request. A token minted before the claim existed decodes as
+  `session`. Never accept `mfa_pending` as a session, or MFA becomes bypassable.
 
 ## Scheduler & jobs
 

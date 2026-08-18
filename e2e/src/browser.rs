@@ -1,7 +1,11 @@
 use std::{net::SocketAddr, time::Duration};
 
 use chromiumoxide::{Browser, BrowserConfig, Element, Page};
-use tokio::{net::TcpListener, task::JoinHandle, time::sleep};
+use tokio::{
+    net::TcpListener,
+    task::JoinHandle,
+    time::{sleep, timeout},
+};
 use tokio_stream::StreamExt;
 
 use crap_cms::{
@@ -76,15 +80,109 @@ pub async fn find_element_after_nav(page: &Page, selector: &str) -> Element {
     panic!("element not found after retry budget: {selector}");
 }
 
-/// Evaluate JS that returns a string from within a shadow root.
+/// Poll until `selector` matches exactly `count` elements, or a ~3s budget runs
+/// out, then return the final matches. Use after an action that mutates the DOM
+/// asynchronously (an array row clone/remove, a live re-render) instead of a
+/// fixed `sleep` — the fixed delay races the browser under load and is the
+/// source of intermittent count-assertion flakiness in the full suite. The
+/// final query result is returned even when it isn't `count`, so the caller's
+/// assertion still runs and reports the real mismatch.
+pub async fn wait_for_element_count(page: &Page, selector: &str, count: usize) -> Vec<Element> {
+    let mut last = Vec::new();
+
+    for _ in 0..60 {
+        if let Some(els) = poll_find(page, selector).await {
+            if els.len() == count {
+                return els;
+            }
+            last = els;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+
+    last
+}
+
+/// Poll until `selector` matches at least one element, or a ~3s budget runs
+/// out. Returns whether it appeared. Use for "this element should show up after
+/// an async action" where the caller doesn't need the element handle itself
+/// (otherwise use [`find_element_after_nav`], which returns it).
+pub async fn wait_for_element(page: &Page, selector: &str) -> bool {
+    for _ in 0..60 {
+        if let Some(els) = poll_find(page, selector).await
+            && !els.is_empty()
+        {
+            return true;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+    false
+}
+
+/// Poll until `selector` matches no elements (a row removed, a toast dismissed,
+/// a dialog closed), or the budget runs out. Returns whether it became empty.
+pub async fn wait_for_element_gone(page: &Page, selector: &str) -> bool {
+    for _ in 0..60 {
+        if let Some(els) = poll_find(page, selector).await
+            && els.is_empty()
+        {
+            return true;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+    false
+}
+
+/// Poll until the JS expression `predicate` evaluates truthy, or a ~3s budget
+/// runs out. Returns whether it became true. The general-purpose "wait until the
+/// page reaches a state" helper — a value changed, a class toggled, an element
+/// became visible/hidden — replacing a fixed sleep with an observable signal.
+/// `predicate` is a JS expression (not a statement), e.g.
+/// `document.querySelectorAll('.row').length === 2`.
+pub async fn wait_for_js(page: &Page, predicate: &str) -> bool {
+    let script =
+        format!("() => {{ try {{ return !!({predicate}); }} catch (e) {{ return false; }} }}");
+
+    for _ in 0..60 {
+        // A per-call timeout is essential: while the page is navigating (e.g. a
+        // redirect after save), the JS execution context is torn down and a
+        // pending `evaluate` can never resolve. Bounding each call lets the loop
+        // retry against the new context instead of deadlocking on one await.
+        let truthy = match timeout(Duration::from_secs(1), page.evaluate(script.clone())).await {
+            Ok(Ok(v)) => v.into_value::<bool>().unwrap_or(false),
+            _ => false,
+        };
+        if truthy {
+            return true;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+    false
+}
+
+/// One bounded `find_elements` poll. `None` = the call errored or timed out
+/// (the execution context is churning during a navigation); the caller retries.
+/// The timeout is what prevents a wedged CDP call from deadlocking a poll loop.
+async fn poll_find(page: &Page, selector: &str) -> Option<Vec<Element>> {
+    match timeout(Duration::from_secs(1), page.find_elements(selector)).await {
+        Ok(Ok(els)) => Some(els),
+        _ => None,
+    }
+}
+
+/// Evaluate JS that returns a string from within a shadow root. Returns an empty
+/// string on error or timeout (rather than panicking) so it's safe to call in a
+/// poll loop — a transient failure while the page is settling just retries.
 pub async fn shadow_eval(page: &Page, host_selector: &str, js: &str) -> String {
     let script = format!(
         "() => {{ const host = document.querySelector('{host_selector}'); \
          if (!host || !host.shadowRoot) return ''; \
          return (function(root) {{ {js} }})(host.shadowRoot); }}"
     );
-    let result = page.evaluate(script).await.unwrap();
-    result.into_value::<String>().unwrap_or_default()
+    match timeout(Duration::from_secs(1), page.evaluate(script)).await {
+        Ok(Ok(v)) => v.into_value::<String>().unwrap_or_default(),
+        _ => String::new(),
+    }
 }
 
 /// Launch a headless Chrome browser. Returns the browser and a join handle

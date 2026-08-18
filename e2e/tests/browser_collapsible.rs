@@ -11,13 +11,9 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use std::time::Duration;
-
-use tokio::time::sleep;
-
 use crap_cms::core::{collection::*, field::*};
 
-use crap_cms_e2e::{BrowserTestCtx, helpers::*, setup_browser_test};
+use crap_cms_e2e::{BrowserTestCtx, browser, helpers::*, setup_browser_test};
 
 fn make_collapsible_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("articles");
@@ -66,8 +62,8 @@ async fn collapsible_starts_expanded() {
         .await
         .unwrap();
 
-    // Wait for JS components to initialize
-    sleep(Duration::from_millis(500)).await;
+    // Wait for JS components to initialize (toggle button is wired up on init)
+    browser::wait_for_element(&page, "[data-action=\"toggle-group\"]").await;
 
     // Collapsible should start expanded (no --collapsed class)
     let collapsed = page
@@ -124,13 +120,10 @@ async fn collapsible_toggles_on_click() {
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
 
-    // Should now be collapsed
-    let collapsed = page
-        .find_elements(".form__collapsible--collapsed")
-        .await
-        .unwrap();
+    // Should now be collapsed — poll until the class appears
+    let collapsed =
+        browser::wait_for_element_count(&page, ".form__collapsible--collapsed", 1).await;
     assert_eq!(
         collapsed.len(),
         1,
@@ -185,7 +178,9 @@ async fn collapsible_re_expands() {
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
+
+    // Wait until it is actually collapsed before toggling back
+    browser::wait_for_element(&page, ".form__collapsible--collapsed").await;
 
     // Re-expand
     page.find_element("[data-action=\"toggle-group\"]")
@@ -194,9 +189,9 @@ async fn collapsible_re_expands() {
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
 
-    // Should no longer be collapsed
+    // Should no longer be collapsed — poll until the class is gone
+    browser::wait_for_element_gone(&page, ".form__collapsible--collapsed").await;
     let collapsed = page
         .find_elements(".form__collapsible--collapsed")
         .await

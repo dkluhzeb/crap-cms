@@ -209,10 +209,12 @@ pub fn evaluate_condition_results(
 /// (e.g. `CollectionPermissions::for_user`) can share a single transaction
 /// instead of paying for a pool acquisition per check.
 ///
-/// Called without `id` / `data`; access fns that gate on doc content
-/// (rather than user role) will return false here, which errs on the safe
-/// side for UI visibility — the server-side enforcement runs the same fn
-/// with full context when the user actually tries the action.
+/// Called without `id` / `data`. An access fn that returns a row **filter**
+/// (`Constrained`) counts as visible here (`true`) — the user can act on
+/// *some* rows, so the UI shows the entry/button. Only a fn that returns a
+/// plain `false` (a content-gating check with no `id`/`data` to satisfy)
+/// evaluates false. Either way the server-side enforcement re-runs the same
+/// fn with full context when the user actually tries the action.
 pub fn has_access_with_conn(
     state: &AdminState,
     access: Option<&HookRef>,
@@ -239,17 +241,18 @@ pub fn has_access_with_conn(
     )
 }
 
-/// Quick read-access check for dashboard/list visibility. Convenience
-/// wrapper around [`has_access_with_conn`] that opens its own transaction.
-/// Use the with-conn variant when checking multiple permissions in a row.
+/// Boolean access check for a single `operation`, opening its own transaction.
+/// Backs the convenience wrappers below; use [`has_access_with_conn`] directly
+/// when checking multiple permissions in a row (to share one transaction).
 ///
 /// `collection` is the slug exposed to the access function as `ctx.collection`
 /// (empty for slug-less custom pages, whose access rule has no collection).
-pub fn has_read_access(
+fn has_op_access(
     state: &AdminState,
     access: Option<&HookRef>,
     user_doc: Option<&Document>,
     collection: &str,
+    operation: &str,
 ) -> bool {
     if access.is_none() {
         return !state.config.access.default_deny;
@@ -263,13 +266,71 @@ pub fn has_read_access(
         return false;
     };
 
-    let allowed = has_access_with_conn(state, access, user_doc, &tx, "read", collection);
+    let allowed = has_access_with_conn(state, access, user_doc, &tx, operation, collection);
 
     if let Err(e) = tx.commit() {
         warn!("tx commit failed: {e}");
     }
 
     allowed
+}
+
+/// Quick read-access check for dashboard/list visibility (operation `"read"`).
+pub fn has_read_access(
+    state: &AdminState,
+    access: Option<&HookRef>,
+    user_doc: Option<&Document>,
+    collection: &str,
+) -> bool {
+    has_op_access(state, access, user_doc, collection, "read")
+}
+
+/// Admin-UI visibility for a collection/global entry (nav + dashboard).
+///
+/// Shows the entry only if the viewer passes **both** `access.read` (can they
+/// read it at all) **and** `access.admin` (the admin-UI gate). A `None` admin
+/// rule is permissive — `read` alone decides. The admin rule is evaluated
+/// under operation `"admin"` so a hook branching on `ctx.operation` sees the
+/// same value the route middleware passes, keeping nav/dashboard visibility in
+/// lockstep with the real gate.
+pub fn is_admin_visible(
+    state: &AdminState,
+    read_access: Option<&HookRef>,
+    admin_access: Option<&HookRef>,
+    user_doc: Option<&Document>,
+    collection: &str,
+) -> bool {
+    if !has_read_access(state, read_access, user_doc, collection) {
+        return false;
+    }
+
+    match admin_access {
+        None => true,
+        Some(admin_ref) => has_op_access(state, Some(admin_ref), user_doc, collection, "admin"),
+    }
+}
+
+/// [`is_admin_visible`] against an existing connection/transaction. Use this
+/// when filtering many entries in one pass (e.g. the sidebar nav) so each check
+/// shares one transaction instead of acquiring a pooled connection per entry.
+pub fn is_admin_visible_with_conn(
+    state: &AdminState,
+    read_access: Option<&HookRef>,
+    admin_access: Option<&HookRef>,
+    user_doc: Option<&Document>,
+    conn: &dyn crate::db::DbConnection,
+    collection: &str,
+) -> bool {
+    if !has_access_with_conn(state, read_access, user_doc, conn, "read", collection) {
+        return false;
+    }
+
+    match admin_access {
+        None => true,
+        Some(admin_ref) => {
+            has_access_with_conn(state, Some(admin_ref), user_doc, conn, "admin", collection)
+        }
+    }
 }
 
 #[cfg(test)]

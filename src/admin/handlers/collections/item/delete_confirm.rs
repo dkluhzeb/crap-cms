@@ -41,7 +41,11 @@ fn fetch_delete_title(
         .user(user_doc)
         .build();
 
-    let input = FindByIdInput::builder(id).build();
+    // Read the draft view too: a draft-only document (never published) shows in
+    // the list (which includes drafts) and must be deletable through this confirm
+    // page. Without `use_draft`, the published-only read returns None → 404. The
+    // ctx is user-scoped, so read-only users still downgrade safely.
+    let input = FindByIdInput::builder(id).use_draft(true).build();
 
     match find_document_by_id(&ctx, &input) {
         Ok(Some(doc)) => Ok(def

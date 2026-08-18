@@ -11,13 +11,9 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use std::time::Duration;
-
-use tokio::time::sleep;
-
 use crap_cms::core::{collection::*, field::*};
 
-use crap_cms_e2e::{BrowserTestCtx, helpers::*, setup_browser_test};
+use crap_cms_e2e::{BrowserTestCtx, browser, helpers::*, setup_browser_test};
 
 fn make_tags_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("articles");
@@ -94,7 +90,13 @@ async fn tags_add_via_enter() {
         .unwrap();
 
     add_tag(&page, "rust").await;
-    sleep(Duration::from_millis(300)).await;
+
+    // Poll (via shadow root JS) until the chip is rendered.
+    browser::wait_for_js(
+        &page,
+        "document.querySelector('crap-tags').shadowRoot.querySelectorAll('.chip').length === 1",
+    )
+    .await;
 
     assert_eq!(
         chip_count(&page).await,
@@ -131,7 +133,13 @@ async fn tags_remove_via_click() {
         .unwrap();
 
     add_tag(&page, "removeme").await;
-    sleep(Duration::from_millis(300)).await;
+
+    // Wait for the chip (and its remove button) to render before clicking.
+    browser::wait_for_js(
+        &page,
+        "document.querySelector('crap-tags').shadowRoot.querySelectorAll('.chip').length === 1",
+    )
+    .await;
 
     // Click the chip's remove button via shadow root.
     page.evaluate(
@@ -139,7 +147,13 @@ async fn tags_remove_via_click() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(300)).await;
+
+    // Wait until the chip is gone.
+    browser::wait_for_js(
+        &page,
+        "document.querySelector('crap-tags').shadowRoot.querySelectorAll('.chip').length === 0",
+    )
+    .await;
 
     assert_eq!(
         chip_count(&page).await,
@@ -177,7 +191,14 @@ async fn tags_prevent_duplicates() {
 
     for _ in 0..2 {
         add_tag(&page, "duplicate").await;
-        sleep(Duration::from_millis(200)).await;
+
+        // The first add creates one chip; the second is a no-op — either way
+        // the count settles at exactly 1.
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('crap-tags').shadowRoot.querySelectorAll('.chip').length === 1",
+        )
+        .await;
     }
 
     assert_eq!(
@@ -225,9 +246,19 @@ async fn tags_submit_persists() {
         .await
         .unwrap();
 
-    for tag in &["alpha", "beta"] {
+    for (i, tag) in ["alpha", "beta"].iter().enumerate() {
         add_tag(&page, tag).await;
-        sleep(Duration::from_millis(200)).await;
+
+        // Wait for the chip count to reach the expected running total before
+        // adding the next tag (shadow-root chips).
+        let expected = i + 1;
+        browser::wait_for_js(
+            &page,
+            &format!(
+                "document.querySelector('crap-tags').shadowRoot.querySelectorAll('.chip').length === {expected}"
+            ),
+        )
+        .await;
     }
 
     // Hidden input is in light DOM (slotted from outside the shadow root).

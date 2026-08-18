@@ -11,12 +11,9 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use std::time::Duration;
-
 use chromiumoxide::cdp::browser_protocol::emulation::{
     SetDeviceMetricsOverrideParams, SetTouchEmulationEnabledParams,
 };
-use tokio::time::sleep;
 
 use crap_cms::core::{collection::*, field::*};
 
@@ -86,7 +83,16 @@ async fn sidebar_toggle_opens_closes() {
     page.evaluate("() => document.querySelector('[data-action=\"toggle-sidebar\"]')?.click()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
+
+    // Poll until the sidebar gains the --open class
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('.sidebar')?.classList.contains('sidebar--open') === true"
+        )
+        .await,
+        "sidebar should be open after clicking toggle"
+    );
 
     // Sidebar should now be open
     let result = page
@@ -100,7 +106,16 @@ async fn sidebar_toggle_opens_closes() {
     page.evaluate("() => document.querySelector('[data-action=\"toggle-sidebar\"]')?.click()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
+
+    // Poll until the sidebar loses the --open class
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('.sidebar')?.classList.contains('sidebar--open') === false"
+        )
+        .await,
+        "sidebar should be closed after clicking toggle again"
+    );
 
     // Sidebar should be closed again
     let result = page

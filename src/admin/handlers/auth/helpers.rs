@@ -26,8 +26,27 @@ use crate::{
         },
     },
     config::ServerConfig,
-    core::{Document, Registry, Slug, auth::ClaimsBuilder, email},
+    core::{Document, Registry, Slug, auth::ClaimsBuilder, email, rate_limit::LoginRateLimiter},
 };
+
+/// Build an ad-hoc rate limiter that reuses the global rate-limit backend under
+/// a distinct keyspace `prefix`. Sharing the backend keeps cross-instance state
+/// consistent on Redis-backed deployments (the same pattern the per-route rate
+/// limits use), so a limiter that isn't worth its own `AdminState` field can
+/// still be scoped correctly without wiping unrelated buckets.
+pub(in crate::admin) fn scoped_limiter(
+    state: &AdminState,
+    prefix: &str,
+    max_attempts: u32,
+    window_seconds: u64,
+) -> LoginRateLimiter {
+    LoginRateLimiter::with_backend(
+        state.login_limiter.backend(),
+        prefix,
+        max_attempts,
+        window_seconds,
+    )
+}
 
 /// Extract the client IP from the request, honoring `X-Forwarded-For`
 /// only when the peer address is a configured trusted proxy.

@@ -15,7 +15,7 @@ use crate::{
     admin::{
         AdminState,
         handlers::{
-            auth::{VerifyEmailQuery, client_ip},
+            auth::{VerifyEmailQuery, client_ip, scoped_limiter},
             shared::paths,
         },
     },
@@ -77,10 +77,17 @@ pub async fn verify_email(
     // `record_failure` split left open. Every attempt counts (the same idiom as
     // login and forgot-password), so a transient internal error counts too;
     // that is acceptable for a high-entropy token endpoint and strictly safer
-    // than refunding (no induce-error-to-refund vector). Uses the dedicated
-    // forgot-password IP limiter (not the login limiter) so verification
-    // failures don't block legitimate logins from the same IP.
-    if state.ip_forgot_password_limiter.check_and_block(&ip) {
+    // than refunding (no induce-error-to-refund vector). Uses its OWN per-IP
+    // keyspace (not the shared forgot-password limiter) so a burst of
+    // verification attempts can't exhaust the budget a legitimate password
+    // reset from the same IP needs.
+    let ip_verify_limiter = scoped_limiter(
+        &state,
+        "ip_verify_email",
+        state.config.auth.max_ip_login_attempts,
+        state.config.auth.forgot_password_window_seconds,
+    );
+    if ip_verify_limiter.check_and_block(&ip) {
         return Redirect::to(paths::LOGIN);
     }
 

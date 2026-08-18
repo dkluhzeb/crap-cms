@@ -51,8 +51,8 @@ pub use forms::{
 };
 pub(super) use helpers::{
     all_disable_local, client_ip, create_session_token, extract_user_email, get_auth_collections,
-    headers_to_map, login_error, render_forgot_success, session_redirect, show_forgot_password,
-    sole_auth_collection,
+    headers_to_map, login_error, render_forgot_success, scoped_limiter, session_redirect,
+    show_forgot_password, sole_auth_collection,
 };
 pub(in crate::admin) use session::{
     CSRF_COOKIE, EDITOR_LOCALE_COOKIE, MFA_PENDING_COOKIE, SESSION_COOKIE, append_cookies,

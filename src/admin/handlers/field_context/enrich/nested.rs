@@ -290,6 +290,20 @@ pub fn enrich_nested_fields(
     }
 }
 
+/// Extract selected relationship ids from a nested row's stored value — a JSON
+/// array of id strings, or a JSON-array string (both shapes appear depending on
+/// whether the row came from a join table or nested JSON).
+fn selected_ids_from_value(value: &Value) -> Vec<String> {
+    match value {
+        Value::Array(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
+            .collect(),
+        Value::String(s) => serde_json::from_str::<Vec<String>>(s).unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
 fn enrich_nested_relationship(
     rf: &mut RelationshipField,
     field_def: &FieldDefinition,
@@ -299,17 +313,35 @@ fn enrich_nested_relationship(
         return;
     };
 
-    // Has-many nested relationships use selected_items built by parent
-    if rc.has_many {
-        return;
-    }
-
     let Some(related_def) = ctx.reg.get_collection(&rc.collection) else {
         return;
     };
     let title_field = related_def
         .title_field()
         .map(std::string::ToString::to_string);
+
+    // Has-many: resolve labels for every selected id from this row's value.
+    // (Nothing "upstream" builds these — a has-many relationship inside a group
+    // or array/block row previously rendered with no chips because the value
+    // carries the ids but the labels were never resolved.) Polymorphic nested
+    // relationships aren't resolved server-side here (pre-existing); leave them
+    // to the client.
+    if rc.has_many {
+        if rc.is_polymorphic() {
+            return;
+        }
+
+        let ids = selected_ids_from_value(&rf.base.value);
+        rf.selected_items = Some(super::types::resolve_has_many_items(
+            &ids,
+            &rc.collection,
+            related_def,
+            title_field.as_ref(),
+            ctx,
+        ));
+        return;
+    }
+
     let current_value = rf.base.value.as_str().unwrap_or("");
 
     if current_value.is_empty() {
@@ -342,11 +374,6 @@ fn enrich_nested_upload(uf: &mut UploadField, field_def: &FieldDefinition, ctx: 
         return;
     };
 
-    // Has-many: selected_items already handled by the parent context
-    if rc.has_many {
-        return;
-    }
-
     let Some(related_def) = ctx.reg.get_collection(&rc.collection) else {
         return;
     };
@@ -358,6 +385,22 @@ fn enrich_nested_upload(uf: &mut UploadField, field_def: &FieldDefinition, ctx: 
         .upload
         .as_ref()
         .and_then(|u| u.admin_thumbnail.clone());
+
+    // Has-many: resolve every selected upload's label/thumbnail from this row's
+    // value — nothing upstream builds these (same fix as nested has-many
+    // relationships).
+    if rc.has_many {
+        let ids = selected_ids_from_value(&uf.base.value);
+        uf.selected_items = Some(super::types::resolve_upload_has_many(
+            &ids,
+            &rc.collection,
+            related_def,
+            title_field.as_ref(),
+            admin_thumbnail.as_ref(),
+            ctx,
+        ));
+        return;
+    }
 
     let current_value = uf.base.value.as_str().unwrap_or("");
 
@@ -1102,6 +1145,67 @@ mod tests {
         assert_eq!(items[0]["label"], "logo.png");
     }
 
+    /// Regression (form #5, upload variant): a HAS-MANY upload nested in a row
+    /// must resolve every selected file's label — previously it returned early
+    /// with no `selected_items`, so no thumbnails showed.
+    #[test]
+    fn enrich_nested_fields_has_many_upload_gets_all_labels() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE media (
+                id TEXT PRIMARY KEY,
+                alt TEXT,
+                caption TEXT,
+                filename TEXT,
+                mime_type TEXT,
+                url TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO media (id, filename, mime_type, url, created_at, updated_at)
+            VALUES ('img1', 'logo.png', 'image/png', '/uploads/media/logo.png', '2024-01-01', '2024-01-01');
+            INSERT INTO media (id, filename, mime_type, url, created_at, updated_at)
+            VALUES ('img2', 'banner.jpg', 'image/jpeg', '/uploads/media/banner.jpg', '2024-01-01', '2024-01-01');"
+        ).unwrap();
+
+        let mut media_def = CollectionDefinition::new("media");
+        media_def.timestamps = true;
+        media_def.fields = vec![
+            make_field("filename", FieldType::Text),
+            make_field("mime_type", FieldType::Text),
+            make_field("url", FieldType::Text),
+        ];
+        media_def.upload = Some(CollectionUpload {
+            enabled: true,
+            mime_types: vec!["image/*".to_string()],
+            ..Default::default()
+        });
+
+        let mut registry = Registry::new();
+        registry.register_collection(media_def);
+
+        let mut upload_field = make_field("gallery", FieldType::Upload);
+        upload_field.relationship = Some(RelationshipConfig::new("media", true));
+
+        let field_defs = vec![upload_field];
+        let mut sub_fields = vec![json!({
+            "name": "content[0][gallery]",
+            "field_type": "upload",
+            "value": ["img1", "img2"],
+            "relationship_collection": "media",
+            "has_many": true,
+        })];
+
+        enrich_nested_fields_values(&mut sub_fields, &field_defs, &conn, &registry, None);
+
+        let items = sub_fields[0]["selected_items"]
+            .as_array()
+            .expect("selected_items should be populated for has-many upload");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["id"], "img1");
+        assert_eq!(items[1]["id"], "img2");
+    }
+
     #[test]
     fn enrich_nested_fields_relationship_gets_options() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -1146,6 +1250,59 @@ mod tests {
         assert_eq!(items.len(), 1, "Should have 1 selected item");
         assert_eq!(items[0]["id"], "u1");
         assert_eq!(items[0]["label"], "Alice");
+    }
+
+    /// Regression (form #5): a HAS-MANY relationship nested in a row must
+    /// resolve labels for every selected id — previously it returned early with
+    /// no `selected_items`, so the editor saw no chips (the ids saved fine, but
+    /// the current selection was invisible).
+    #[test]
+    fn enrich_nested_fields_has_many_relationship_gets_all_labels() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE users (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO users (id, name, created_at, updated_at)
+            VALUES ('u1', 'Alice', '2024-01-01', '2024-01-01');
+            INSERT INTO users (id, name, created_at, updated_at)
+            VALUES ('u2', 'Bob', '2024-01-01', '2024-01-01');",
+        )
+        .unwrap();
+
+        let mut users_def = CollectionDefinition::new("users");
+        users_def.timestamps = true;
+        users_def.fields = vec![make_field("name", FieldType::Text)];
+        users_def.admin.use_as_title = Some("name".to_string());
+
+        let mut registry = Registry::new();
+        registry.register_collection(users_def);
+
+        let mut rel_field = make_field("authors", FieldType::Relationship);
+        rel_field.relationship = Some(RelationshipConfig::new("users", true));
+
+        let field_defs = vec![rel_field];
+        let mut sub_fields = vec![json!({
+            "name": "items[0][authors]",
+            "field_type": "relationship",
+            "value": ["u1", "u2"],
+            "relationship_collection": "users",
+            "has_many": true,
+        })];
+
+        enrich_nested_fields_values(&mut sub_fields, &field_defs, &conn, &registry, None);
+
+        let items = sub_fields[0]["selected_items"]
+            .as_array()
+            .expect("selected_items should be populated for has-many");
+        assert_eq!(items.len(), 2, "both selected ids resolve to labels");
+        assert_eq!(items[0]["id"], "u1");
+        assert_eq!(items[0]["label"], "Alice");
+        assert_eq!(items[1]["id"], "u2");
+        assert_eq!(items[1]["label"], "Bob");
     }
 
     #[test]

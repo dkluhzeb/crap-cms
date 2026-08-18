@@ -417,6 +417,14 @@ pub fn build_router(state: AdminState) -> Router {
     // wrap them.
     let router = base.merge(custom_routes_router(&state));
 
+    // Static protective headers (frame-options, nosniff, referrer, permissions,
+    // HSTS) apply to the FULL router — including custom routes, which would
+    // otherwise ship with none. The nonce-bound admin CSP stays base-only.
+    let router = router.layer(middleware::from_fn_with_state(
+        state.clone(),
+        static_security_headers,
+    ));
+
     let router = with_cors_layer(router, &state);
     let router = with_compression_layer(router, &state);
     let router = with_tracing_layer(router);
@@ -627,6 +635,35 @@ async fn security_headers(
     // Scope the nonce into a task-local so `CrapMeta::from_state` can pick
     // it up when assembling the template context for this request.
     let mut response = CSP_NONCE.scope(nonce, next.run(request)).await;
+
+    // The nonce-bearing CSP is admin-only: it names the per-request nonce the
+    // admin templates emit. Custom routes render their own bodies (no nonce),
+    // so they must NOT inherit this CSP — they get the static protective
+    // headers via `static_security_headers` on the full router instead.
+    if let Some(csp) = state.config.admin.csp.build_header_value(Some(&nonce_str))
+        && let Ok(value) = HeaderValue::from_str(&csp)
+    {
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("content-security-policy"), value);
+    }
+
+    response
+}
+
+/// Static protective headers applied to **every** response — built-in admin
+/// routes and merged custom routes alike. Unlike the nonce-bound CSP (which is
+/// admin-template-specific and lives in [`security_headers`]), these are
+/// content-independent, so a custom Lua route also gets clickjacking,
+/// MIME-sniffing, referrer, permissions, and HSTS protection.
+// Excluded from coverage: async Axum middleware.
+#[cfg(not(tarpaulin_include))]
+async fn static_security_headers(
+    State(state): State<AdminState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let mut response = next.run(request).await;
     let headers = response.headers_mut();
 
     headers.insert(
@@ -648,12 +685,6 @@ async fn security_headers(
         HeaderName::from_static("permissions-policy"),
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
     );
-
-    if let Some(csp) = state.config.admin.csp.build_header_value(Some(&nonce_str))
-        && let Ok(value) = HeaderValue::from_str(&csp)
-    {
-        headers.insert(HeaderName::from_static("content-security-policy"), value);
-    }
 
     // HSTS: instruct browsers to always use HTTPS (skip in dev mode)
     if !state.config.admin.dev_mode {

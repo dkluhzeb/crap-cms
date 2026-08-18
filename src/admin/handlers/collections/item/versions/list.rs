@@ -49,7 +49,10 @@ fn fetch_version_data(
 
     // Fetch the title through the ACCESS-GATED read — a viewer who cannot read
     // the document must not learn its title/existence via the version page.
-    let document = match find_document_by_id(&ctx, &FindByIdInput::builder(id).build()) {
+    // Read the draft view too so a never-published draft (which still has
+    // version snapshots and links here from its edit page) isn't a 404.
+    let input = FindByIdInput::builder(id).use_draft(true).build();
+    let document = match find_document_by_id(&ctx, &input) {
         Ok(Some(doc)) => doc,
         Ok(None) => {
             return Err(Box::new(not_found(

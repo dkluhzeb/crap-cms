@@ -71,6 +71,11 @@ async fn add_row_button_creates_row() {
     let rows = page.find_elements(".form__array-row").await.unwrap();
     assert_eq!(rows.len(), 0, "should start with 0 rows");
 
+    // Wait for the array web component to upgrade before clicking — its
+    // `connectedCallback` attaches the `add-array-row` click handler, so under
+    // load a click before it's defined does nothing (no row is added).
+    browser::wait_for_js(&page, "customElements.get('crap-array-field')").await;
+
     // Click add
     page.find_element("button[data-action=\"add-array-row\"]")
         .await
@@ -78,9 +83,10 @@ async fn add_row_button_creates_row() {
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
 
-    let rows = page.find_elements(".form__array-row").await.unwrap();
+    // Poll for the cloned row instead of a fixed sleep — the row is inserted by
+    // an async DOM update that can outrun a fixed delay under load.
+    let rows = browser::wait_for_element_count(&page, ".form__array-row", 1).await;
     assert_eq!(rows.len(), 1, "should have 1 row after clicking add");
 
     server_handle.abort();
@@ -111,6 +117,11 @@ async fn remove_row_button_removes_row() {
         .await
         .unwrap();
 
+    // Wait for the array component to upgrade before clicking (its
+    // connectedCallback wires the add-row handler; a click before it is defined
+    // is a no-op under load).
+    browser::wait_for_js(&page, "customElements.get('crap-array-field')").await;
+
     // Add 2 rows. The first find_element uses the post-nav retry helper
     // because chromiumoxide can transiently see a stale frame just after
     // `wait_for_navigation()` returns; subsequent loops are fine.
@@ -119,16 +130,15 @@ async fn remove_row_button_removes_row() {
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_millis(200)).await;
+    browser::wait_for_element_count(&page, ".form__array-row", 1).await;
+
     page.find_element("button[data-action=\"add-array-row\"]")
         .await
         .unwrap()
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_millis(200)).await;
-
-    let rows = page.find_elements(".form__array-row").await.unwrap();
+    let rows = browser::wait_for_element_count(&page, ".form__array-row", 2).await;
     assert_eq!(rows.len(), 2, "should have 2 rows");
 
     // Remove first row
@@ -138,9 +148,8 @@ async fn remove_row_button_removes_row() {
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
 
-    let rows = page.find_elements(".form__array-row").await.unwrap();
+    let rows = browser::wait_for_element_count(&page, ".form__array-row", 1).await;
     assert_eq!(rows.len(), 1, "should have 1 row after removal");
 
     server_handle.abort();
@@ -171,6 +180,10 @@ async fn reorder_rows_updates_indices() {
         .await
         .unwrap();
 
+    // Wait for the array component to upgrade before clicking (handler is wired
+    // in its connectedCallback).
+    browser::wait_for_js(&page, "customElements.get('crap-array-field')").await;
+
     // Add 2 rows and fill them. First iteration uses the post-nav
     // retry helper to absorb the brief stale-frame window after
     // `wait_for_navigation()` returns.
@@ -179,14 +192,15 @@ async fn reorder_rows_updates_indices() {
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_millis(200)).await;
+    browser::wait_for_element_count(&page, ".form__array-row", 1).await;
+
     page.find_element("button[data-action=\"add-array-row\"]")
         .await
         .unwrap()
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_millis(200)).await;
+    browser::wait_for_element_count(&page, ".form__array-row", 2).await;
 
     // Type into first row
     let inputs = page
@@ -216,14 +230,29 @@ async fn reorder_rows_updates_indices() {
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
 
-    // After reorder, the first row's input should now have "Second" and vice versa
-    let inputs = page
-        .find_elements("input[name*=\"member_name\"]")
-        .await
-        .unwrap();
-    assert_eq!(inputs.len(), 2, "should still have 2 inputs after reorder");
+    // After reorder, the first row's input should now hold "Second". Poll for
+    // the swap instead of a fixed sleep, and actually assert the reordered
+    // value (the old test only re-counted the inputs, which never changed).
+    let mut first_value = String::new();
+    for _ in 0..60 {
+        first_value = page
+            .evaluate(
+                "() => document.querySelectorAll('input[name*=\"member_name\"]')[0]?.value ?? ''",
+            )
+            .await
+            .unwrap()
+            .into_value::<String>()
+            .unwrap_or_default();
+        if first_value == "Second" {
+            break;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        first_value, "Second",
+        "after move-down, the first row should show the row that was second",
+    );
 
     server_handle.abort();
 }
@@ -270,6 +299,9 @@ async fn array_rows_persist_after_save() {
         .await
         .unwrap();
 
+    // Wait for the array component to upgrade before clicking add.
+    browser::wait_for_js(&page, "customElements.get('crap-array-field')").await;
+
     // Add 2 rows and fill them
     for i in 0..2 {
         browser::find_element_after_nav(&page, "button[data-action=\"add-array-row\"]")
@@ -277,7 +309,9 @@ async fn array_rows_persist_after_save() {
             .click()
             .await
             .unwrap();
-        sleep(Duration::from_millis(300)).await;
+        // Wait for the new row to exist before setting its value (a fixed sleep
+        // could set the value on a not-yet-cloned row and lose it).
+        browser::wait_for_element_count(&page, ".form__array-row", i + 1).await;
 
         let selector = format!("input[name=\"members[{i}][member_name]\"]");
         page.evaluate(format!(
@@ -292,13 +326,20 @@ async fn array_rows_persist_after_save() {
     page.evaluate("() => document.querySelector('#edit-form')?.requestSubmit()")
         .await
         .unwrap();
-    sleep(Duration::from_secs(2)).await;
 
-    // Verify in database
+    // Poll the DB until the save lands instead of a fixed 2s sleep — the submit
+    // round-trips through the server, so the write appears asynchronously.
     let conn = app.pool.get().unwrap();
-    let rows = conn
-        .query_all("SELECT member_name FROM teams_members ORDER BY _order", &[])
-        .unwrap();
+    let mut rows = Vec::new();
+    for _ in 0..60 {
+        rows = conn
+            .query_all("SELECT member_name FROM teams_members ORDER BY _order", &[])
+            .unwrap();
+        if rows.len() == 2 {
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
     assert_eq!(rows.len(), 2, "should have 2 array rows saved");
 
     server_handle.abort();

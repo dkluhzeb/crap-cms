@@ -527,7 +527,16 @@ fn construct_group(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
     } else {
         let prefix = if fc.name_prefix.is_empty() {
             fc.field.name.clone()
+        } else if fc.full_name.contains('[') {
+            // Group nested in an array/blocks row: index the group as
+            // `<group>[0]` so its children become `<group>[0][field]` — mirroring
+            // the enrich phase's `group_child_name` and what the form parser
+            // requires to recognize the group as a single object. Without the
+            // `[0]`, a newly-added row's group data is dropped on save (the
+            // parser can't parse the child index and collapses the group to `{}`).
+            format!("{}[0]", fc.full_name)
         } else {
+            // Group nested in a top-level group chain: keep `__` column naming.
             fc.full_name.to_string()
         };
 
@@ -820,6 +829,38 @@ mod tests {
             "child of localized group must NOT be locale_locked"
         );
         assert_eq!(sub["readonly"], false);
+    }
+
+    /// Regression (form parser round-trip): a group nested in an array/blocks
+    /// row must index its children as `<group>[0][field]`. The array new-row
+    /// template uses an `items[__INDEX__]` prefix; without the `[0]` the form
+    /// parser can't parse the group child and drops a new row's group data.
+    #[test]
+    fn group_in_array_row_indexes_children_with_zero() {
+        let field = group_field("meta", false, vec![text_field("author")]);
+        let values = HashMap::new();
+        let errors = HashMap::new();
+
+        let ctx =
+            build_single_field_context(&field, &values, &errors, "items[__INDEX__]", false, 1)
+                .to_value();
+
+        assert_eq!(
+            ctx["sub_fields"][0]["name"], "items[__INDEX__][meta][0][author]",
+            "group children in an array row need the [0] index the parser requires",
+        );
+    }
+
+    /// A top-level group keeps flat `group__sub` column naming (no `[0]`).
+    #[test]
+    fn top_level_group_children_use_double_underscore() {
+        let field = group_field("meta", false, vec![text_field("author")]);
+        let values = HashMap::new();
+        let errors = HashMap::new();
+
+        let ctx = build_single_field_context(&field, &values, &errors, "", false, 0).to_value();
+
+        assert_eq!(ctx["sub_fields"][0]["name"], "meta__author");
     }
 
     fn code_field(name: &str, language: Option<&str>) -> FieldDefinition {

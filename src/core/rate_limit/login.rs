@@ -132,6 +132,18 @@ impl LoginRateLimiter {
             warn!("Rate limit clear failed: {:#}", e);
         }
     }
+
+    /// Refund a single recorded attempt for `key` (undo one increment). Unlike
+    /// [`Self::clear`], this leaves other events intact — use it on a *shared*
+    /// limiter (e.g. per-IP) when an attempt turned out legitimate, so a
+    /// success doesn't wipe unrelated suspicious attempts from the same IP.
+    pub fn refund(&self, key: &str) {
+        let pkey = self.prefixed_key(key);
+
+        if let Err(e) = self.backend.refund(&pkey, self.window_secs) {
+            warn!("Rate limit refund failed: {:#}", e);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -214,6 +226,30 @@ mod tests {
         // A success clears, re-opening the window.
         limiter.clear("a@b.com");
         assert!(!limiter.check_and_block("a@b.com"));
+    }
+
+    /// A refund removes only ONE (the most recent) recorded attempt, unlike
+    /// `clear` which wipes all. This is what stops a success on a shared per-IP
+    /// limiter from erasing other accounts' failures from the same IP.
+    #[test]
+    fn refund_removes_only_the_latest_attempt() {
+        let limiter = LoginRateLimiter::with_backend(memory_backend(), "ip", 3, 60);
+
+        // Two failures accumulate toward the IP limit (max 3, so not yet blocked).
+        limiter.record_failure("1.2.3.4");
+        limiter.record_failure("1.2.3.4");
+        assert!(!limiter.is_blocked("1.2.3.4"));
+
+        // A third attempt (a success) records, then is refunded — net zero.
+        assert!(!limiter.check_and_block("1.2.3.4"));
+        limiter.refund("1.2.3.4");
+
+        // The two earlier failures remain (refund didn't wipe them like clear).
+        limiter.record_failure("1.2.3.4");
+        assert!(
+            limiter.is_blocked("1.2.3.4"),
+            "the two prior failures plus one more must reach the limit",
+        );
     }
 
     /// Security: a backend failure must fail CLOSED (blocked), not silently

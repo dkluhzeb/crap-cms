@@ -1,6 +1,7 @@
 //! Dashboard handler showing collection/global cards with document counts.
 
 use axum::{Extension, extract::State, http::HeaderMap, response::Response};
+use tracing::error;
 
 use crate::{
     admin::{
@@ -9,7 +10,7 @@ use crate::{
             BasePageContext, PageMeta, PageType,
             page::dashboard::{CollectionCard, DashboardPage, GlobalCard},
         },
-        handlers::shared::{extract_editor_locale, get_user_doc, has_read_access, render_page},
+        handlers::shared::{extract_editor_locale, get_user_doc, is_admin_visible, render_page},
     },
     core::{AuthUser, Claims, Document},
     db::{BoxedConnection, query::global_last_updated},
@@ -35,17 +36,30 @@ fn build_collection_cards(
         .registry
         .collections
         .iter()
-        .filter(|(_, def)| has_read_access(state, def.access.read.as_ref(), user_doc, &def.slug))
+        .filter(|(_, def)| {
+            is_admin_visible(
+                state,
+                def.access.read.as_ref(),
+                def.access.admin.as_ref(),
+                user_doc,
+                &def.slug,
+            )
+        })
         .map(|(slug, def)| {
             let ctx = ServiceContext::collection(slug, def)
                 .conn(conn)
                 .read_hooks(&hooks)
                 .user(user_doc)
                 .build();
-            let card_stats = collection_stats(&ctx, true).unwrap_or(CollectionStats {
-                count: 0,
-                last_updated: None,
-            });
+            // Degrade to an empty card on error, but log first — a backend
+            // failure shouldn't silently present as a "0" indistinguishable
+            // from an empty collection (parity with the versions sidebar).
+            let card_stats = collection_stats(&ctx, true)
+                .inspect_err(|e| error!("Dashboard stats for '{slug}' failed: {e}"))
+                .unwrap_or(CollectionStats {
+                    count: 0,
+                    last_updated: None,
+                });
 
             CollectionCard {
                 slug: slug.to_string(),
@@ -75,14 +89,24 @@ fn build_global_cards(
         .registry
         .globals
         .iter()
-        .filter(|(_, def)| has_read_access(state, def.access.read.as_ref(), user_doc, &def.slug))
+        .filter(|(_, def)| {
+            is_admin_visible(
+                state,
+                def.access.read.as_ref(),
+                def.access.admin.as_ref(),
+                user_doc,
+                &def.slug,
+            )
+        })
         .map(|(slug, def)| {
             // Scope the timestamp to the published row for drafts-enabled globals
             // so a pending draft edit's `updated_at` never surfaces on the
             // dashboard to a read-only viewer (parity with the view-scoped
             // collection cards). Conservative: a draft-access viewer also sees
             // only the published time here.
-            let last_updated = global_last_updated(conn, slug, def.has_drafts()).unwrap_or(None);
+            let last_updated = global_last_updated(conn, slug, def.has_drafts())
+                .inspect_err(|e| error!("Dashboard last-updated for '{slug}' failed: {e}"))
+                .unwrap_or(None);
 
             GlobalCard {
                 slug: slug.to_string(),

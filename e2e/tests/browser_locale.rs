@@ -11,10 +11,6 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use std::time::Duration;
-
-use tokio::time::sleep;
-
 use crap_cms::{
     config::{CrapConfig, LocaleConfig},
     core::{collection::*, field::*},
@@ -79,7 +75,9 @@ async fn locale_picker_switches_locale() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
+
+    // Wait for the locale picker component to render
+    browser::wait_for_element(&page, "crap-locale-picker").await;
 
     // The locale picker should be visible (since locales are enabled)
     let pickers = page.find_elements("crap-locale-picker").await.unwrap();
@@ -95,7 +93,9 @@ async fn locale_picker_switches_locale() {
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
+
+    // Wait for the dropdown option to render before selecting it
+    browser::wait_for_element(&page, "[data-locale-value=\"de\"]").await;
 
     // Click the "de" locale option
     page.find_element("[data-locale-value=\"de\"]")
@@ -104,7 +104,12 @@ async fn locale_picker_switches_locale() {
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_secs(1)).await;
+
+    // Clicking triggers a POST + reload that sets the cookie; poll for it
+    assert!(
+        browser::wait_for_js(&page, "document.cookie.includes('crap_editor_locale=de')").await,
+        "crap_editor_locale cookie should be set to 'de'"
+    );
 
     // After clicking, a cookie should be set and page reloaded
     // Check the locale badge shows "de"

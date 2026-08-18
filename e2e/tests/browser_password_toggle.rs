@@ -11,10 +11,6 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use std::time::Duration;
-
-use tokio::time::sleep;
-
 use crap_cms::core::{collection::*, field::LocalizedString};
 
 use crap_cms_e2e::{browser, helpers::*};
@@ -37,7 +33,9 @@ async fn password_toggle_reveals_and_hides_value() {
     let page = browser.new_page("about:blank").await.unwrap();
 
     page.goto(format!("{base_url}/admin/login")).await.unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the password-toggle component (and its input) to render
+    browser::wait_for_element(&page, "crap-password-toggle input").await;
 
     let initial_type = page
         .evaluate("() => document.querySelector('crap-password-toggle input').type")
@@ -61,7 +59,16 @@ async fn password_toggle_reveals_and_hides_value() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(50)).await;
+
+    // Poll until the input type flips to text (shadow-driven state change)
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('crap-password-toggle input').type === 'text'"
+        )
+        .await,
+        "input type should become 'text' after revealing"
+    );
 
     let revealed_type = page
         .evaluate("() => document.querySelector('crap-password-toggle input').type")
@@ -77,7 +84,16 @@ async fn password_toggle_reveals_and_hides_value() {
     )
     .await
     .unwrap();
-    sleep(Duration::from_millis(50)).await;
+
+    // Poll until the input type flips back to password
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('crap-password-toggle input').type === 'password'"
+        )
+        .await,
+        "input type should return to 'password' after hiding"
+    );
 
     let final_type = page
         .evaluate("() => document.querySelector('crap-password-toggle input').type")
@@ -104,7 +120,17 @@ async fn password_toggle_icon_renders_with_icon_font() {
     let page = browser.new_page("about:blank").await.unwrap();
 
     page.goto(format!("{base_url}/admin/login")).await.unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the component's shadow icon span to render before reading styles
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "!!document.querySelector('crap-password-toggle')?.shadowRoot\
+             ?.querySelector('span.material-symbols-outlined')"
+        )
+        .await,
+        "password-toggle icon span should render in the shadow root"
+    );
 
     let font_family = browser::shadow_eval(
         &page,

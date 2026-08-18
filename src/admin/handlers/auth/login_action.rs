@@ -8,7 +8,7 @@ use axum::{
 use chrono::Utc;
 use rand::Rng;
 use tokio::task;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::core::collection::Auth;
 use crate::hooks::lifecycle::AuthStrategyInput;
@@ -18,7 +18,7 @@ use crate::{
         handlers::{
             auth::{
                 LoginForm, append_cookies, client_ip, create_session_token, headers_to_map,
-                login_error, mfa_pending_cookie, session_redirect,
+                login_error, mfa_pending_cookie, scoped_limiter, session_redirect,
             },
             shared::paths,
         },
@@ -26,7 +26,7 @@ use crate::{
     config::EmailConfig,
     core::{
         CollectionDefinition, Document, DocumentId, SharedPasswordProvider, Slug, auth,
-        auth::ClaimsBuilder,
+        auth::{ClaimsBuilder, TokenUse},
         collection::MfaMode,
         email::{self, EmailRenderer, MfaCodeEmailContext},
     },
@@ -87,9 +87,7 @@ fn try_strategy_auth(
 
 /// Synchronous body of [`verify_credentials`], extracted so the
 /// `spawn_blocking` call is a single fn invocation (CLAUDE.md).
-fn verify_credentials_blocking(
-    params: &VerifyParams,
-) -> anyhow::Result<Option<Result<LoginSuccess, String>>> {
+fn verify_credentials_blocking(params: &VerifyParams) -> anyhow::Result<Option<LoginSuccess>> {
     let conn = params.pool.get()?;
     let slug = &params.slug;
     let def = &params.def;
@@ -106,10 +104,10 @@ fn verify_credentials_blocking(
             params.verify_email_flag,
         ) {
             Ok(result) => {
-                return Ok(Some(Ok(LoginSuccess {
+                return Ok(Some(LoginSuccess {
                     user: result.user,
                     session_version: result.session_version,
-                })));
+                }));
             }
             Err(ServiceError::AccountLocked) => {
                 debug!("Login denied: account locked");
@@ -157,10 +155,10 @@ fn verify_credentials_blocking(
 
         let session_version = service::auth::get_session_version(&ctx, &user.id)
             .map_err(crate::service::ServiceError::into_anyhow)?;
-        return Ok(Some(Ok(LoginSuccess {
+        return Ok(Some(LoginSuccess {
             user,
             session_version,
-        })));
+        }));
     }
 
     if params.allows_password {
@@ -172,7 +170,7 @@ fn verify_credentials_blocking(
 
 async fn verify_credentials(
     params: VerifyParams,
-) -> Result<Result<Option<Result<LoginSuccess, String>>, anyhow::Error>, task::JoinError> {
+) -> Result<anyhow::Result<Option<LoginSuccess>>, task::JoinError> {
     task::spawn_blocking(move || verify_credentials_blocking(&params)).await
 }
 
@@ -262,6 +260,7 @@ fn handle_mfa_challenge(
         .email(user_email.clone())
         .exp((Utc::now().timestamp().max(0).cast_unsigned()).saturating_add(MFA_PENDING_EXPIRY))
         .session_version(session_version)
+        .token_use(TokenUse::MfaPending)
         .build()
     {
         Ok(c) => c,
@@ -279,21 +278,38 @@ fn handle_mfa_challenge(
         }
     };
 
-    // Generate 6-digit code and queue email in background
-    let code = format!("{:06}", rand::rng().random_range(0..1_000_000));
-    let code_for_db = code.clone();
+    // Throttle MFA-code EMAIL ISSUANCE per user. The login limiter is cleared
+    // on each successful password, so without this a password-holder could loop
+    // /admin/login to flood the victim's inbox with codes and rack up send cost.
+    // When over budget we skip regenerating/sending — the previously issued code
+    // stays valid — but still set the pending cookie so the flow isn't broken.
+    let issue_blocked = scoped_limiter(
+        state,
+        "mfa_issue",
+        state.config.auth.max_forgot_password_attempts,
+        state.config.auth.forgot_password_window_seconds,
+    )
+    .check_and_block(user.id.as_ref());
 
-    let params = MfaCodeParams {
-        pool: state.pool.clone(),
-        slug: form.collection.clone(),
-        user_id: user.id.clone(),
-        user_email,
-        email_config: state.config.email.clone(),
-        email_renderer: state.email_renderer.clone(),
-        email_max_attempts: state.config.jobs.system_email_max_attempts(),
-    };
+    if issue_blocked {
+        warn!(user = %user.id, "MFA code issuance throttled — reusing the prior code");
+    } else {
+        // Generate 6-digit code and queue email in background
+        let code = format!("{:06}", rand::rng().random_range(0..1_000_000));
+        let code_for_db = code.clone();
 
-    task::spawn_blocking(move || send_mfa_code(&params, &code_for_db));
+        let params = MfaCodeParams {
+            pool: state.pool.clone(),
+            slug: form.collection.clone(),
+            user_id: user.id.clone(),
+            user_email,
+            email_config: state.config.email.clone(),
+            email_renderer: state.email_renderer.clone(),
+            email_max_attempts: state.config.jobs.system_email_max_attempts(),
+        };
+
+        task::spawn_blocking(move || send_mfa_code(&params, &code_for_db));
+    }
 
     // Set MFA pending cookie and redirect to MFA page
     let cookie = mfa_pending_cookie(&mfa_token, state.config.admin.dev_mode);
@@ -352,7 +368,14 @@ pub async fn login_action(
     // under-limit check before any recorded). Both are evaluated (not
     // short-circuited) so each counter advances every attempt; a successful
     // login clears both below.
-    let email_blocked = state.login_limiter.check_and_block(&form.email);
+    // Key the per-email limiter on the normalized (trimmed, lowercased) address
+    // so casing/whitespace variants of the same account share one bucket. The
+    // credential lookup is case-insensitive (`LOWER(email) = ?`), so without
+    // this an attacker rotates `Victim@x.com` / `VICTIM@X.COM` / … to sidestep
+    // the per-account lockout. The clear-on-success below uses the same key.
+    let email_key = form.email.trim().to_lowercase();
+
+    let email_blocked = state.login_limiter.check_and_block(&email_key);
     let ip_blocked = state.ip_login_limiter.check_and_block(&ip);
     if email_blocked || ip_blocked {
         return login_error(&state, "error_too_many_attempts", &form.email);
@@ -392,11 +415,7 @@ pub async fn login_action(
     .await;
 
     let login = match result {
-        Ok(Ok(Some(Ok(success)))) => success,
-        Ok(Ok(Some(Err(msg)))) => {
-            // Attempt already recorded up front by check_and_block.
-            return login_error(&state, &msg, &form.email);
-        }
+        Ok(Ok(Some(success))) => success,
         Ok(Ok(None)) => {
             return login_error(&state, "error_invalid_credentials", &form.email);
         }
@@ -412,11 +431,14 @@ pub async fn login_action(
         }
     };
 
-    // Successful login — clear rate limit state for both email and IP.
-    // Without clearing IP, successful logins still accumulate toward the IP threshold,
-    // eventually locking out all users behind that IP (e.g., shared NAT/VPN).
-    state.login_limiter.clear(&form.email);
-    state.ip_login_limiter.clear(&ip);
+    // Successful login — clear the per-email limiter (scoped to this account,
+    // which just proved its identity). For the SHARED per-IP limiter, only
+    // *refund* this one attempt rather than clearing every failure: a success
+    // shouldn't accumulate toward the IP threshold (NAT/VPN friendliness), but
+    // it must not wipe other accounts' failures from the same IP either — that
+    // would let one valid account on a shared IP mask a brute-force of others.
+    state.login_limiter.clear(&email_key);
+    state.ip_login_limiter.refund(&ip);
 
     // Check admin.access gate before issuing session — deny login entirely
     // if the user doesn't pass the gate function.

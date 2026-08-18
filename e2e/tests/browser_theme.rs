@@ -11,13 +11,9 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use std::time::Duration;
-
-use tokio::time::sleep;
-
 use crap_cms::core::{collection::*, field::*};
 
-use crap_cms_e2e::{BrowserTestCtx, helpers::*, setup_browser_test};
+use crap_cms_e2e::{BrowserTestCtx, browser, helpers::*, setup_browser_test};
 
 fn make_theme_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -66,7 +62,9 @@ async fn theme_picker_changes_data_attribute() {
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
+
+    // Wait for the dropdown option to render before selecting it
+    browser::wait_for_element(&page, "[data-theme-value=\"tokyo-night\"]").await;
 
     // Select "tokyo-night" theme
     page.find_element("[data-theme-value=\"tokyo-night\"]")
@@ -75,7 +73,16 @@ async fn theme_picker_changes_data_attribute() {
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
+
+    // data-theme is applied asynchronously; poll until it flips
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.documentElement.getAttribute('data-theme') === 'tokyo-night'"
+        )
+        .await,
+        "data-theme should be 'tokyo-night' on <html>"
+    );
 
     // Check that data-theme is set on <html>
     let result = page
@@ -120,7 +127,16 @@ async fn theme_persists_across_navigation() {
     page.evaluate("() => { window.crap.theme.set('gruvbox'); }")
         .await
         .unwrap();
-    sleep(Duration::from_millis(200)).await;
+
+    // Wait for the theme to be applied before navigating away
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.documentElement.getAttribute('data-theme') === 'gruvbox'"
+        )
+        .await,
+        "theme should be applied after set()"
+    );
 
     // Navigate to create page
     page.goto(format!("{base_url}/admin/collections/posts/create"))
@@ -129,7 +145,16 @@ async fn theme_persists_across_navigation() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
+
+    // Theme is re-applied on load from localStorage; poll until present
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.documentElement.getAttribute('data-theme') === 'gruvbox'"
+        )
+        .await,
+        "theme should persist across navigation"
+    );
 
     // Theme should persist (read from localStorage and applied on load)
     let result = page

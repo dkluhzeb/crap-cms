@@ -9,10 +9,9 @@ pub(crate) fn validate_sort(sort: &str, def: &CollectionDefinition) -> Option<St
     let field_name = sort.strip_prefix('-').unwrap_or(sort);
     let system_cols = ["id", "created_at", "updated_at", "_status"];
     let valid = system_cols.contains(&field_name)
-        || def
-            .fields
-            .iter()
-            .any(|f| f.name == field_name && is_column_eligible(&f.field_type));
+        || def.fields.iter().any(|f| {
+            f.name == field_name && f.has_parent_column() && is_column_eligible(&f.field_type)
+        });
     if valid { Some(sort.to_string()) } else { None }
 }
 
@@ -81,6 +80,37 @@ mod tests {
     fn validate_sort_ineligible_field() {
         let def = test_def();
         assert_eq!(validate_sort("body", &def), None);
+    }
+
+    /// Regression: a has-many relationship has no parent column, so sorting by
+    /// it must be rejected at the 400 gate — not accepted here and then 500 at
+    /// the DB layer when the ORDER BY column doesn't exist.
+    #[test]
+    fn validate_sort_rejects_has_many_relationship() {
+        use crate::core::field::RelationshipConfig;
+
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![
+            FieldDefinition {
+                name: "tags".to_string(),
+                field_type: FieldType::Relationship,
+                relationship: Some(RelationshipConfig::new("tags", true)),
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "author".to_string(),
+                field_type: FieldType::Relationship,
+                relationship: Some(RelationshipConfig::new("users", false)),
+                ..Default::default()
+            },
+        ];
+
+        assert_eq!(validate_sort("tags", &def), None, "has-many not sortable");
+        assert_eq!(
+            validate_sort("author", &def),
+            Some("author".to_string()),
+            "has-one relationship remains sortable",
+        );
     }
 
     #[test]

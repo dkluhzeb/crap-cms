@@ -1178,14 +1178,15 @@ async fn array_collapsible_group_create_form_renders() {
         body.contains("items[__INDEX__][label]"),
         "text field inside collapsible should use items[idx][label]"
     );
-    // Group inside collapsible: uses bracket naming
+    // Group inside collapsible: uses bracket naming with the `[0]` group index
+    // (the form parser requires it to read the group as a single object).
     assert!(
-        body.contains("items[__INDEX__][settings][theme]"),
-        "group child inside collapsible should use items[idx][settings][theme]"
+        body.contains("items[__INDEX__][settings][0][theme]"),
+        "group child inside collapsible should use items[idx][settings][0][theme]"
     );
     assert!(
-        body.contains("items[__INDEX__][settings][font_size]"),
-        "number field in group should use items[idx][settings][font_size]"
+        body.contains("items[__INDEX__][settings][0][font_size]"),
+        "number field in group should use items[idx][settings][0][font_size]"
     );
 }
 
@@ -1235,14 +1236,14 @@ async fn array_tabs_group_create_form_renders() {
         body.contains("sections[__INDEX__][heading]"),
         "heading inside tab should use sections[idx][heading]"
     );
-    // Group inside tab: uses bracket naming
+    // Group inside tab: uses bracket naming with the `[0]` group index.
     assert!(
-        body.contains("sections[__INDEX__][meta][author]"),
-        "group field inside tab should use sections[idx][meta][author]"
+        body.contains("sections[__INDEX__][meta][0][author]"),
+        "group field inside tab should use sections[idx][meta][0][author]"
     );
     assert!(
-        body.contains("sections[__INDEX__][meta][tags]"),
-        "group field inside tab should use sections[idx][meta][tags]"
+        body.contains("sections[__INDEX__][meta][0][tags]"),
+        "group field inside tab should use sections[idx][meta][0][tags]"
     );
 }
 
@@ -1301,12 +1302,12 @@ async fn blocks_group_create_form_renders() {
         "hero block should have headline field"
     );
     assert!(
-        body.contains("content[__INDEX__][style][color]"),
-        "hero block should have group field style[color]"
+        body.contains("content[__INDEX__][style][0][color]"),
+        "hero block should have group field style[0][color]"
     );
     assert!(
-        body.contains("content[__INDEX__][style][size]"),
-        "hero block should have group field style[size]"
+        body.contains("content[__INDEX__][style][0][size]"),
+        "hero block should have group field style[0][size]"
     );
 }
 

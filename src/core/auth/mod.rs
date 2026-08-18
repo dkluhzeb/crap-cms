@@ -19,7 +19,7 @@ pub mod token;
 /// Authenticated user context for request extensions.
 pub mod user;
 
-pub use claims::{Claims, ClaimsBuilder};
+pub use claims::{Claims, ClaimsBuilder, TokenUse};
 pub use errors::ResetTokenError;
 pub use hashed_password::HashedPassword;
 pub use jwt_secret::JwtSecret;

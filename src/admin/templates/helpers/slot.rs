@@ -37,11 +37,37 @@
 //! instead. Both built-in fallbacks and overlay slot files use the same
 //! page context (with hash params merged on top, when supplied).
 
+use std::cell::RefCell;
+
 use handlebars::{
     Context, Handlebars, Helper, HelperDef, Output, RenderContext, RenderError, Renderable,
 };
 use serde_json::{Map, Value};
 use tracing::warn;
+
+thread_local! {
+    /// Slot names currently being rendered on this thread. A re-entry into a
+    /// slot already on the stack is a cycle (an overlay `slots/foo/x.hbs` that
+    /// contains `{{slot "foo"}}`) and would recurse until the worker's stack
+    /// overflows — so re-entry is skipped instead.
+    static ACTIVE_SLOTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// RAII guard that pops a slot name off the active stack on drop — including
+/// when a nested render returns early via `?`, so a render error can't leave a
+/// stale name that wrongly blocks that slot on the next (pool-reused) render.
+struct SlotGuard(String);
+
+impl Drop for SlotGuard {
+    fn drop(&mut self) {
+        ACTIVE_SLOTS.with(|s| {
+            let mut active = s.borrow_mut();
+            if let Some(pos) = active.iter().rposition(|n| n == &self.0) {
+                active.remove(pos);
+            }
+        });
+    }
+}
 
 /// Handlebars helper that enumerates and renders slot templates. Writes
 /// raw HTML directly to the output buffer (no escaping) — slot
@@ -65,6 +91,16 @@ impl HelperDef for SlotHelper {
                     "slot", 0,
                 ))
             })?;
+
+        // Break a slot cycle (a slot file that renders its own slot) before it
+        // overflows the stack. Skipping the re-entry is safe — the outer render
+        // of this slot is already producing its output.
+        if ACTIVE_SLOTS.with(|s| s.borrow().iter().any(|n| n == &slot_name)) {
+            warn!("Slot '{slot_name}' renders itself — skipping to avoid infinite recursion");
+            return Ok(());
+        }
+        ACTIVE_SLOTS.with(|s| s.borrow_mut().push(slot_name.clone()));
+        let _slot_guard = SlotGuard(slot_name.clone());
 
         let prefix = format!("slots/{slot_name}/");
 

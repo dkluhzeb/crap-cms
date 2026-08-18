@@ -415,6 +415,7 @@ fn fetch_versions_for_sidebar(
     let version_ctx = ServiceContext::collection(slug, def)
         .conn(&vc)
         .read_hooks(&vh)
+        .user(user)
         .build();
     fetch_version_sidebar_data(&version_ctx, doc_id)
 }

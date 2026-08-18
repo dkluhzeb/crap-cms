@@ -3,6 +3,7 @@ use std::sync::Arc;
 use axum::{
     Extension, Json,
     extract::{Path, State},
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use serde_json::json;
@@ -70,7 +71,11 @@ pub async fn back_references(
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
     let Some(def) = state.registry.get_collection(&slug).cloned() else {
-        return Json(json!({ "error": "Collection not found" })).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Collection not found" })),
+        )
+            .into_response();
     };
 
     let read_access = match check_access_or_forbid(
@@ -83,7 +88,11 @@ pub async fn back_references(
         &slug,
     ) {
         Ok(AccessResult::Denied) | Err(_) => {
-            return Json(json!({ "error": "Access denied" })).into_response();
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "Access denied" })),
+            )
+                .into_response();
         }
         Ok(access) => access,
     };
@@ -105,15 +114,27 @@ pub async fn back_references(
         Ok(Err(ServiceError::AccessDenied(_))) => {
             // Row-scoped `read` rule didn't match the target — fail closed
             // without logging (an expected denial, not a failure).
-            Json(json!({ "error": "Access denied" })).into_response()
+            (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "Access denied" })),
+            )
+                .into_response()
         }
         Ok(Err(e)) => {
             error!("Back-reference scan error: {e}");
-            Json(json!({ "error": "Back-reference scan failed" })).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Back-reference scan failed" })),
+            )
+                .into_response()
         }
         Err(e) => {
             error!("Back-reference task join error: {e}");
-            Json(json!({ "error": "Back-reference scan failed" })).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Back-reference scan failed" })),
+            )
+                .into_response()
         }
     }
 }

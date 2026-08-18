@@ -86,11 +86,37 @@ impl Translations {
             return template.to_string();
         }
 
-        let mut result = template.to_string();
+        // Single pass over the template: each `{{key}}` is replaced from `params`
+        // and the substituted text is never re-scanned. A previous `replace`
+        // loop over the params map was order-dependent (HashMap iteration) and
+        // could substitute a placeholder that appeared *inside* an already-
+        // inserted value. Unknown placeholders are kept literally.
+        let mut result = String::with_capacity(template.len());
+        let mut rest = template;
 
-        for (k, v) in params {
-            result = result.replace(&format!("{{{{{k}}}}}"), v);
+        while let Some(start) = rest.find("{{") {
+            result.push_str(&rest[..start]);
+            let after = &rest[start + 2..];
+
+            let Some(end) = after.find("}}") else {
+                // No closing braces — copy the remainder verbatim and stop.
+                result.push_str(&rest[start..]);
+                return result;
+            };
+
+            let name = &after[..end];
+            if let Some(value) = params.get(name) {
+                result.push_str(value);
+            } else {
+                result.push_str("{{");
+                result.push_str(name);
+                result.push_str("}}");
+            }
+
+            rest = &after[end + 2..];
         }
+
+        result.push_str(rest);
         result
     }
 
@@ -149,6 +175,46 @@ mod tests {
             t.get("en", "nonexistent_key_12345"),
             "nonexistent_key_12345"
         );
+    }
+
+    fn translations_with(key: &str, template: &str) -> Translations {
+        let mut inner = HashMap::new();
+        inner.insert(key.to_string(), template.to_string());
+        let mut locales = HashMap::new();
+        locales.insert("en".to_string(), inner);
+        Translations { locales }
+    }
+
+    /// Regression: interpolation is single-pass. A param value that itself
+    /// looks like a `{{placeholder}}` must not be re-substituted, and the
+    /// result must not depend on `HashMap` iteration order.
+    #[test]
+    fn interpolation_is_single_pass() {
+        let t = translations_with("greet", "{{a}} and {{b}}");
+        let mut params = HashMap::new();
+        params.insert("a".to_string(), "{{b}}".to_string());
+        params.insert("b".to_string(), "X".to_string());
+        assert_eq!(t.get_interpolated("en", "greet", &params), "{{b}} and X");
+    }
+
+    #[test]
+    fn interpolation_keeps_unknown_placeholder() {
+        let t = translations_with("msg", "hi {{name}} {{unknown}}");
+        let mut params = HashMap::new();
+        params.insert("name".to_string(), "Sam".to_string());
+        assert_eq!(
+            t.get_interpolated("en", "msg", &params),
+            "hi Sam {{unknown}}"
+        );
+    }
+
+    #[test]
+    fn interpolation_handles_unclosed_placeholder() {
+        let t = translations_with("msg", "value {{oops");
+        let mut params = HashMap::new();
+        params.insert("oops".to_string(), "X".to_string());
+        // No closing braces — the remainder is kept verbatim.
+        assert_eq!(t.get_interpolated("en", "msg", &params), "value {{oops");
     }
 
     #[test]

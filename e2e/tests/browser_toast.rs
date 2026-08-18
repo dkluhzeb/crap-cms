@@ -58,15 +58,16 @@ async fn toast_on_validation_error() {
         .wait_for_navigation()
         .await
         .unwrap();
-    // Wait for JS/HTMX to initialize
-    sleep(Duration::from_millis(500)).await;
+    // Wait for JS/HTMX to initialize (form present and htmx loaded).
+    browser::wait_for_js(&page, "document.querySelector('#edit-form') && window.htmx").await;
 
     // Submit with empty required field using requestSubmit to ensure HTMX intercepts
     page.evaluate("() => document.querySelector('#edit-form')?.requestSubmit()")
         .await
         .unwrap();
-    // Wait for validation fetch + toast rendering
-    sleep(Duration::from_secs(2)).await;
+
+    // Wait for validation fetch + toast rendering (host is light DOM).
+    browser::wait_for_element(&page, "crap-toast").await;
 
     // Toast should exist
     let has_toast = page
@@ -121,7 +122,13 @@ async fn toast_on_successful_save() {
         .click()
         .await
         .unwrap();
-    sleep(Duration::from_secs(1)).await;
+
+    // Wait for the post-save redirect off the create page onto the edit page.
+    browser::wait_for_js(
+        &page,
+        "window.location.href.includes('/admin/collections/posts/') && !window.location.href.includes('/create')",
+    )
+    .await;
 
     // After successful save, should redirect to edit page (htmx or standard)
     // Toast may or may not be visible depending on redirect behavior
@@ -163,21 +170,34 @@ async fn window_crap_namespace_dispatches_toast() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the crap namespace sugar and the toast component to be ready.
+    browser::wait_for_js(
+        &page,
+        "window.crap && window.crap.toast && customElements.get('crap-toast')",
+    )
+    .await;
 
     // Call the sugar — should dispatch crap:toast-request and the
     // singleton renders it.
     page.evaluate("() => window.crap.toast({ message: 'hello from crap', type: 'info' })")
         .await
         .unwrap();
-    sleep(Duration::from_millis(200)).await;
 
-    let result = browser::shadow_eval(
-        &page,
-        "crap-toast",
-        "const t = root.querySelector('.toast'); return t ? t.textContent : 'no-toast';",
-    )
-    .await;
+    // Poll the shadow root until the toast renders with the expected message.
+    let mut result = String::new();
+    for _ in 0..60 {
+        result = browser::shadow_eval(
+            &page,
+            "crap-toast",
+            "const t = root.querySelector('.toast'); return t ? t.textContent : 'no-toast';",
+        )
+        .await;
+        if result == "hello from crap" {
+            break;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
     assert_eq!(
         result, "hello from crap",
         "window.crap.toast should render a toast with the given message; got: '{result}'"

@@ -160,6 +160,7 @@ fn fetch_global_version_sidebar(
     let version_ctx = ServiceContext::global(slug, def)
         .conn(&vc)
         .read_hooks(&vh)
+        .user(auth_user.map(|Extension(au)| &au.user_doc))
         .build();
 
     fetch_version_sidebar_data(&version_ctx, "default")

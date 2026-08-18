@@ -13,16 +13,14 @@
 )]
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use serde_json::json;
-use tokio::time::sleep;
 
 use crap_cms::core::DocumentFields;
 use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
 use crap_cms::db::query;
-use crap_cms_e2e::{BrowserTestCtx, helpers::*, setup_browser_test};
+use crap_cms_e2e::{BrowserTestCtx, browser, helpers::*, setup_browser_test};
 
 // `<crap-delete-dialog>` is rendered as a singleton in `templates/layout/base.hbs`
 // and binds to any `[data-delete-id]` trigger via event delegation
@@ -78,7 +76,17 @@ async fn delete_button_click_opens_dialog() {
     page.evaluate("() => document.querySelector('button[data-delete-id]')?.click()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
+
+    // Poll until the shadow-DOM dialog gains the open attribute
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "!!document.querySelector('crap-delete-dialog')?.shadowRoot\
+                ?.querySelector('dialog')?.hasAttribute('open')"
+        )
+        .await,
+        "delete dialog should be open after clicking trigger"
+    );
 
     let is_open = page
         .evaluate(
@@ -132,7 +140,17 @@ async fn delete_dialog_shows_doc_title() {
     page.evaluate("() => document.querySelector('button[data-delete-id]')?.click()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
+
+    // Poll until the dialog's shadow content includes the doc title
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "(document.querySelector('crap-delete-dialog')?.shadowRoot?.textContent ?? '')\
+                .includes('Unique Title For Test')"
+        )
+        .await,
+        "dialog should display the doc title"
+    );
 
     let text = page
         .evaluate(

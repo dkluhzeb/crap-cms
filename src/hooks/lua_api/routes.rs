@@ -26,7 +26,7 @@ use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, LuaSerdeExt as _, Result as LuaResult, Table, Value};
 
 use crate::{
-    admin::custom_routes::{ALLOWED_METHODS, normalize_method, validate_path},
+    admin::custom_routes::{ALLOWED_METHODS, is_mutating_method, normalize_method, validate_path},
     core::HookRef,
     hooks::{lifecycle::InitPhase, lua_api::parse::deny_unknown_keys},
     typegen::lua::{LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
@@ -114,6 +114,39 @@ fn apply_access(lua: &Lua, def: &Table, entry: &Table) -> LuaResult<()> {
     Ok(())
 }
 
+/// Parse + validate the optional `csrf` flag and write it into `entry`.
+///
+/// `csrf` is a security opt-in — a present-but-wrong-typed value fails loudly,
+/// never silently falling back to CSRF-disabled (fail-open). And because the
+/// dispatcher only enforces CSRF on mutating methods, `csrf = true` on a route
+/// answering only safe methods (GET/HEAD/OPTIONS) is inert — rejected here so
+/// the author doesn't believe a safe-method handler is protected.
+fn apply_csrf(def: &Table, methods: &[String], entry: &Table) -> LuaResult<()> {
+    let csrf_enabled = match def.get::<Value>("csrf")? {
+        Value::Nil => false,
+        Value::Boolean(csrf) => {
+            entry.set("csrf", csrf)?;
+            csrf
+        }
+        other => {
+            return Err(RuntimeError(format!(
+                "crap.routes.register: `csrf` must be a boolean, got {}",
+                other.type_name()
+            )));
+        }
+    };
+
+    if csrf_enabled && !methods.iter().any(|m| is_mutating_method(m)) {
+        return Err(RuntimeError(
+            "crap.routes.register: `csrf = true` has no effect on a route with only safe methods \
+             (GET/HEAD/OPTIONS); CSRF is enforced only on mutating methods (POST/PUT/PATCH/DELETE)"
+                .into(),
+        ));
+    }
+
+    Ok(())
+}
+
 /// Register a custom HTTP route. Init-phase only — runtime registration has no
 /// effect (routes are mounted once at startup).
 #[lua_fn(path = "crap.routes.register")]
@@ -186,18 +219,7 @@ fn route_register(
         entry.set("rate_limit", rl)?;
     }
 
-    // `csrf` is a security opt-in — a present-but-wrong-typed value must fail
-    // loudly, never silently fall back to CSRF-disabled (fail-open).
-    match def.get::<Value>("csrf")? {
-        Value::Nil => {}
-        Value::Boolean(csrf) => entry.set("csrf", csrf)?,
-        other => {
-            return Err(RuntimeError(format!(
-                "crap.routes.register: `csrf` must be a boolean, got {}",
-                other.type_name()
-            )));
-        }
-    }
+    apply_csrf(&def, &methods, &entry)?;
 
     // Accept an integer or a whole-valued number (Lua `2^16` is a float), but
     // reject any other type instead of silently ignoring the cap. The numeric
@@ -340,6 +362,31 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("TRACE"), "{err}");
+    }
+
+    #[test]
+    fn rejects_csrf_true_on_safe_method_only_route() {
+        let lua = lua_in_init_phase();
+        let err = lua
+            .load(
+                r#"crap.routes.register({ path = "/x", method = "GET", handler = "routes.x", csrf = true })"#,
+            )
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("safe methods"), "{err}");
+    }
+
+    #[test]
+    fn accepts_csrf_true_when_a_mutating_method_is_present() {
+        let lua = lua_in_init_phase();
+        lua.load(
+            r#"crap.routes.register({ path = "/x", method = { "GET", "POST" }, handler = "routes.x", csrf = true })"#,
+        )
+        .exec()
+        .unwrap();
+        let e: Table = entries(&lua).get(1).unwrap();
+        assert!(e.get::<bool>("csrf").unwrap());
     }
 
     #[test]

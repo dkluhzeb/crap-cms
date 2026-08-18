@@ -19,7 +19,7 @@ use crate::{
     admin::{
         AdminState,
         context::{CrapMeta, EditorLocaleContext, EditorLocaleOption, NavData, UserContext},
-        handlers::shared::has_read_access,
+        handlers::shared::{has_access_with_conn, is_admin_visible_with_conn},
     },
     core::auth::{AuthUser, Claims},
     typegen::LuaAnnotation,
@@ -218,49 +218,60 @@ fn filter_nav_in_place(
     state: &AdminState,
     user_doc: Option<&crate::core::Document>,
 ) {
+    // `access.read` gates whether the entry is readable at all; `access.admin`
+    // (permissive when unset) further restricts admin-UI visibility, evaluated
+    // under op "admin" to match the route middleware — the real gate. The
+    // dashboard cards apply the same `is_admin_visible` filter so nav and
+    // dashboard stay in lockstep.
+    //
+    // All entries share ONE transaction — this runs on every authenticated page,
+    // once per collection/global/custom-page, so a pooled connection per check
+    // would fan out into many short-lived transactions under load. If a
+    // connection can't be acquired, hide everything (fail-safe, matching the
+    // per-entry behavior the pooled path had).
+    let Ok(mut conn) = state.pool.get() else {
+        nav.collections.clear();
+        nav.globals.clear();
+        nav.custom_pages.clear();
+        return;
+    };
+    let Ok(tx) = conn.transaction() else {
+        nav.collections.clear();
+        nav.globals.clear();
+        nav.custom_pages.clear();
+        return;
+    };
+
     nav.collections.retain(|c| {
         let def = state.registry.collections.get(c.slug.as_str());
 
-        if !has_read_access(
+        is_admin_visible_with_conn(
             state,
             def.and_then(|d| d.access.read.as_ref()),
+            def.and_then(|d| d.access.admin.as_ref()),
             user_doc,
+            &tx,
             &c.slug,
-        ) {
-            return false;
-        }
-
-        // `access.admin` further restricts admin-UI visibility (permissive when
-        // unset — only consulted if a rule is set). The route middleware is the
-        // real gate (op "admin"); this hides the nav entry to match.
-        match def.and_then(|d| d.access.admin.as_ref()) {
-            None => true,
-            Some(admin_ref) => has_read_access(state, Some(admin_ref), user_doc, &c.slug),
-        }
+        )
     });
 
     nav.globals.retain(|g| {
         let def = state.registry.globals.get(g.slug.as_str());
 
-        if !has_read_access(
+        is_admin_visible_with_conn(
             state,
             def.and_then(|d| d.access.read.as_ref()),
+            def.and_then(|d| d.access.admin.as_ref()),
             user_doc,
+            &tx,
             &g.slug,
-        ) {
-            return false;
-        }
-
-        // `access.admin` further restricts admin-UI visibility (permissive when
-        // unset). The route middleware is the real gate (op "admin").
-        match def.and_then(|d| d.access.admin.as_ref()) {
-            None => true,
-            Some(admin_ref) => has_read_access(state, Some(admin_ref), user_doc, &g.slug),
-        }
+        )
     });
 
     nav.custom_pages
-        .retain(|p| has_read_access(state, p.access.as_ref(), user_doc, ""));
+        .retain(|p| has_access_with_conn(state, p.access.as_ref(), user_doc, &tx, "read", ""));
+
+    let _ = tx.commit();
 }
 
 // Tests for the typed bases live alongside per-page-context tests once the

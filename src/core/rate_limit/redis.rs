@@ -198,6 +198,23 @@ impl RateLimitBackend for RedisRateLimitBackend {
         })
     }
 
+    fn refund(&self, key: &str, _window_secs: u64) -> Result<()> {
+        let pkey = self.prefixed_key(key);
+
+        self.with_conn(|conn| {
+            // Drop the single highest-scored (most-recent) member of the sorted
+            // set — the event this attempt added — leaving older events intact.
+            redis::cmd("ZREMRANGEBYRANK")
+                .arg(&pkey)
+                .arg(-1)
+                .arg(-1)
+                .query::<()>(conn)
+                .context("Redis ZREMRANGEBYRANK failed")?;
+
+            Ok(())
+        })
+    }
+
     fn kind(&self) -> &'static str {
         "redis"
     }

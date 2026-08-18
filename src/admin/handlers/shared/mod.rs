@@ -24,6 +24,7 @@ pub(crate) use super::query::{
 pub(crate) use access::{
     EvaluateConditionsRequest, check_access_or_forbid, compute_denied_read_fields,
     evaluate_condition_results, get_user_doc, has_access_with_conn, has_read_access,
+    is_admin_visible, is_admin_visible_with_conn,
 };
 
 // document

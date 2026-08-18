@@ -21,7 +21,11 @@ use crate::{
 /// Per-user permissions for a collection page.
 ///
 /// Field semantics:
-/// - `read` — can the user view the collection at all.
+/// - `read` — can the user view the collection at all. This is the **union**
+///   of the document-list views the read path serves (published ∪ draft ∪
+///   trash, each resolved with its fallback), matching the service's
+///   union-and-downgrade read model — a user allowed only drafts (or only
+///   trash) can still view the collection, so `read` is `true` for them.
 /// - `create` — can the user create new items.
 /// - `update` — can the user update existing items (drives the Save /
 ///   Publish / Save Draft / Unpublish row in the edit sidebar).
@@ -71,7 +75,7 @@ impl CollectionPermissions {
             return Self::default();
         };
 
-        let read = has_access_with_conn(
+        let read_published = has_access_with_conn(
             state,
             def.access.read.as_ref(),
             user_doc,
@@ -150,6 +154,12 @@ impl CollectionPermissions {
 
         let _ = tx.commit();
 
+        // "Can view the collection at all" = the union of the document-list
+        // views the read path serves (published ∪ draft ∪ trash). Versions is a
+        // per-document history, gated separately by `versions`, and isn't part
+        // of viewing the list.
+        let read = read_published || draft || trash;
+
         Self {
             read,
             create,
@@ -195,7 +205,7 @@ impl GlobalPermissions {
             return Self::default();
         };
 
-        let read = has_access_with_conn(
+        let read_published = has_access_with_conn(
             state,
             def.access.read.as_ref(),
             user_doc,
@@ -239,6 +249,10 @@ impl GlobalPermissions {
             );
 
         let _ = tx.commit();
+
+        // "Can view the global at all" = published ∪ draft (globals have no
+        // trash view). Versions is gated separately.
+        let read = read_published || draft;
 
         Self {
             read,

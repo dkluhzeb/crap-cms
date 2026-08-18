@@ -113,6 +113,27 @@ impl RateLimitBackend for MemoryRateLimitBackend {
         Ok(())
     }
 
+    fn refund(&self, key: &str, window_secs: u64) -> Result<()> {
+        let mut map = self
+            .events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let window = Duration::from_secs(window_secs);
+        let now = Instant::now();
+
+        if let Some(times) = map.get_mut(key) {
+            times.retain(|t| now.duration_since(*t) < window);
+            // Events are pushed in time order, so the last is the most recent.
+            times.pop();
+
+            if times.is_empty() {
+                map.remove(key);
+            }
+        }
+
+        Ok(())
+    }
+
     fn kind(&self) -> &'static str {
         "memory"
     }

@@ -1,6 +1,7 @@
 //! Locale helpers — editor locale extraction and template data building.
 
 use axum::http::{HeaderMap, header};
+use tracing::warn;
 
 use crate::{
     admin::{
@@ -46,7 +47,11 @@ pub fn build_locale_template_data(
 
     let locale_ctx = if config.is_enabled() {
         let current = requested_locale.unwrap_or(&config.default_locale);
-        LocaleContext::from_locale_string(Some(current), config).unwrap_or(None)
+        LocaleContext::from_locale_string(Some(current), config)
+            .inspect_err(|e| {
+                warn!("Invalid editor locale '{current}' — falling back to no locale context: {e}");
+            })
+            .unwrap_or(None)
     } else {
         None
     };

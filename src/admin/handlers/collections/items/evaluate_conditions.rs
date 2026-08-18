@@ -1,6 +1,7 @@
 use axum::{
     Extension, Json,
     extract::{Path, State},
+    http::StatusCode,
     response::IntoResponse,
 };
 use serde_json::{Value, json};
@@ -28,7 +29,7 @@ pub(crate) async fn evaluate_conditions(
     Json(req): Json<EvaluateConditionsRequest>,
 ) -> impl IntoResponse {
     let Some(def) = state.registry.get_collection(&slug) else {
-        return Json(json!({})).into_response();
+        return (StatusCode::NOT_FOUND, Json(json!({}))).into_response();
     };
 
     match check_access_or_forbid(
@@ -40,7 +41,9 @@ pub(crate) async fn evaluate_conditions(
         "read",
         &slug,
     ) {
-        Ok(AccessResult::Denied) | Err(_) => return Json(json!({})).into_response(),
+        Ok(AccessResult::Denied) | Err(_) => {
+            return (StatusCode::FORBIDDEN, Json(json!({}))).into_response();
+        }
         _ => {}
     }
 

@@ -13,6 +13,7 @@
 )]
 use std::{collections::HashMap, time::Duration};
 
+use chromiumoxide::Page;
 use serde_json::json;
 use tokio::time::sleep;
 
@@ -22,6 +23,33 @@ use crap_cms::{
 };
 
 use crap_cms_e2e::{browser, helpers::*};
+
+/// Poll `browser::shadow_eval` on `host` until it returns `expected`
+/// (or a ~3s budget elapses), then return the final observed value so
+/// the caller's assertion still runs against the real (possibly wrong)
+/// state. Shadow-DOM analogue of `browser::wait_for_js` for web
+/// components that `document.querySelector` can't pierce.
+async fn wait_shadow_eq(page: &Page, host: &str, js: &str, expected: &str) -> String {
+    let mut val = browser::shadow_eval(page, host, js).await;
+    for _ in 0..30 {
+        if val == expected {
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+        val = browser::shadow_eval(page, host, js).await;
+    }
+    val
+}
+
+/// JS predicate that is truthy once the list toolbar web component has
+/// been defined/upgraded — i.e. its delegated `[data-action]` click
+/// handler is attached and toolbar clicks will actually do something.
+const TOOLBAR_READY: &str = "customElements.get('crap-list-settings')";
+
+/// Shadow-eval snippet returning `'true'`/`'false'` for whether the
+/// drawer's `<dialog>` is currently open.
+const DRAWER_OPEN_JS: &str =
+    "return root.querySelector('dialog')?.hasAttribute('open') ? 'true' : 'false';";
 
 fn make_list_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -134,22 +162,16 @@ async fn column_picker_opens_drawer() {
         .wait_for_navigation()
         .await
         .unwrap();
-    // Wait for JS components to initialize
-    sleep(Duration::from_millis(500)).await;
+    // Wait for the toolbar component to be ready so the click lands.
+    browser::wait_for_js(&page, TOOLBAR_READY).await;
 
     // Click the "Columns" button
     page.evaluate("() => document.querySelector('[data-action=\"open-column-picker\"]')?.click()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
 
-    // The drawer dialog should be open (shadow DOM)
-    let result = browser::shadow_eval(
-        &page,
-        "crap-drawer",
-        "return root.querySelector('dialog')?.hasAttribute('open') ? 'true' : 'false';",
-    )
-    .await;
+    // The drawer dialog should be open (shadow DOM) — poll until open.
+    let result = wait_shadow_eq(&page, "crap-drawer", DRAWER_OPEN_JS, "true").await;
     assert_eq!(result, "true", "drawer should be open for column picker");
 
     // Column picker items with checkboxes should be inside the drawer's shadow DOM body
@@ -190,22 +212,16 @@ async fn filter_builder_adds_condition() {
         .wait_for_navigation()
         .await
         .unwrap();
-    // Wait for JS components
-    sleep(Duration::from_millis(500)).await;
+    // Wait for the toolbar component to be ready so the click lands.
+    browser::wait_for_js(&page, TOOLBAR_READY).await;
 
     // Click "Filters" button
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
 
-    // The drawer should be open
-    let result = browser::shadow_eval(
-        &page,
-        "crap-drawer",
-        "return root.querySelector('dialog')?.hasAttribute('open') ? 'true' : 'false';",
-    )
-    .await;
+    // The drawer should be open — poll until open.
+    let result = wait_shadow_eq(&page, "crap-drawer", DRAWER_OPEN_JS, "true").await;
     assert_eq!(result, "true", "drawer should be open for filter builder");
 
     // Empty URL → empty drawer (post-fix). Click "Add condition" to
@@ -216,13 +232,13 @@ async fn filter_builder_adds_condition() {
         "root.querySelector('.filter-builder > button.button--ghost')?.click(); return '';",
     )
     .await;
-    sleep(Duration::from_millis(200)).await;
 
-    // Now exactly one condition row should exist.
-    let row_count = browser::shadow_eval(
+    // Now exactly one condition row should exist — poll until it appears.
+    let row_count = wait_shadow_eq(
         &page,
         "crap-drawer",
         "return String(root.querySelectorAll('.filter-builder__row').length);",
+        "1",
     )
     .await;
     let rows: i64 = row_count.parse().unwrap_or(0);
@@ -276,19 +292,21 @@ async fn filter_builder_preset_value_change_applies() {
     .wait_for_navigation()
     .await
     .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the toolbar component to be ready so the click lands.
+    browser::wait_for_js(&page, TOOLBAR_READY).await;
 
     // Open filter drawer.
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
 
-    // Sanity: the preset row hydrated to status/equals/published.
-    let initial = browser::shadow_eval(
+    // Sanity: poll until the preset row hydrated to status/equals/published.
+    let initial = wait_shadow_eq(
         &page,
         "crap-drawer",
         "return root.querySelector('[name=\"filter-value\"]')?.value || '';",
+        "published",
     )
     .await;
     assert_eq!(initial, "published");
@@ -312,8 +330,13 @@ async fn filter_builder_preset_value_change_applies() {
     )
     .await;
 
-    // Wait for `htmx.ajax(...)` navigation in `list-settings.js::navigate()`.
-    sleep(Duration::from_millis(1500)).await;
+    // Wait for `htmx.ajax(...)` navigation to land the draft filter in the URL.
+    browser::wait_for_js(
+        &page,
+        "window.location.href.includes('where%5Bstatus%5D%5Bequals%5D=draft') \
+         || window.location.href.includes('where[status][equals]=draft')",
+    )
+    .await;
 
     let url = page
         .evaluate("() => window.location.href")
@@ -366,7 +389,9 @@ async fn filter_builder_apply_actually_filters_the_list() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Poll until both rows are rendered.
+    browser::wait_for_js(&page, "document.querySelectorAll('tbody tr').length === 2").await;
     let unfiltered = page
         .evaluate("() => document.querySelectorAll('tbody tr').length")
         .await
@@ -379,7 +404,9 @@ async fn filter_builder_apply_actually_filters_the_list() {
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the drawer to open before touching its shadow content.
+    wait_shadow_eq(&page, "crap-drawer", DRAWER_OPEN_JS, "true").await;
 
     // Drawer opens empty (no URL filter). Click "+ Add condition" to
     // create a row, then configure it.
@@ -389,7 +416,15 @@ async fn filter_builder_apply_actually_filters_the_list() {
         "root.querySelector('.filter-builder > button.button--ghost')?.click(); return '';",
     )
     .await;
-    sleep(Duration::from_millis(200)).await;
+
+    // Wait for the new row to appear before configuring it.
+    wait_shadow_eq(
+        &page,
+        "crap-drawer",
+        "return String(root.querySelectorAll('.filter-builder__row').length);",
+        "1",
+    )
+    .await;
 
     // The new row defaults to title field. Switch it to status.
     let _ = browser::shadow_eval(
@@ -401,7 +436,17 @@ async fn filter_builder_apply_actually_filters_the_list() {
          return '';",
     )
     .await;
-    sleep(Duration::from_millis(200)).await;
+
+    // Field change rebuilds the value input into a status select — wait
+    // until its 'draft' option exists before selecting it.
+    wait_shadow_eq(
+        &page,
+        "crap-drawer",
+        "return Array.from(root.querySelector('[name=\"filter-value\"]')?.options || []) \
+         .some(o => o.value === 'draft') ? 'true' : 'false';",
+        "true",
+    )
+    .await;
 
     // Now value-input should be a select with status options. Pick 'draft'.
     let _ = browser::shadow_eval(
@@ -421,7 +466,9 @@ async fn filter_builder_apply_actually_filters_the_list() {
         "root.querySelector('.filter-builder__footer .button--primary').click(); return '';",
     )
     .await;
-    sleep(Duration::from_millis(1500)).await;
+
+    // After navigation the filtered list must narrow to exactly 1 row.
+    browser::wait_for_js(&page, "document.querySelectorAll('tbody tr').length === 1").await;
 
     // After navigation: list must now show ONLY the draft post.
     let row_count = page
@@ -486,13 +533,17 @@ async fn filter_builder_multi_row_reopen_edit_persists() {
     .wait_for_navigation()
     .await
     .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the toolbar component to be ready so the click lands.
+    browser::wait_for_js(&page, TOOLBAR_READY).await;
 
     // Open drawer, add a second filter row, apply.
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the drawer to open before touching its shadow content.
+    wait_shadow_eq(&page, "crap-drawer", DRAWER_OPEN_JS, "true").await;
 
     // Click "Add condition" — the "+" button.
     let _ = browser::shadow_eval(
@@ -502,7 +553,15 @@ async fn filter_builder_multi_row_reopen_edit_persists() {
          addBtn.click(); return '';",
     )
     .await;
-    sleep(Duration::from_millis(200)).await;
+
+    // Wait for the second row to appear before configuring it.
+    wait_shadow_eq(
+        &page,
+        "crap-drawer",
+        "return String(root.querySelectorAll('.filter-builder__row').length);",
+        "2",
+    )
+    .await;
 
     // Now there should be two rows. Configure row 2: change its
     // field to "title" and put a value.
@@ -528,7 +587,9 @@ async fn filter_builder_multi_row_reopen_edit_persists() {
         "root.querySelector('.filter-builder__footer .button--primary').click(); return '';",
     )
     .await;
-    sleep(Duration::from_millis(1500)).await;
+
+    // Wait for htmx navigation to land the added title=foo filter in the URL.
+    browser::wait_for_js(&page, "window.location.href.includes('foo')").await;
 
     let url1 = page
         .evaluate("() => window.location.href")
@@ -553,12 +614,13 @@ async fn filter_builder_multi_row_reopen_edit_persists() {
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
 
-    let row_count = browser::shadow_eval(
+    // Poll until both rows are hydrated back from the URL.
+    let row_count = wait_shadow_eq(
         &page,
         "crap-drawer",
         "return String(root.querySelectorAll('.filter-builder__row').length);",
+        "2",
     )
     .await;
     assert_eq!(
@@ -585,7 +647,9 @@ async fn filter_builder_multi_row_reopen_edit_persists() {
         "root.querySelector('.filter-builder__footer .button--primary').click(); return '';",
     )
     .await;
-    sleep(Duration::from_millis(1500)).await;
+
+    // Wait for htmx navigation to land the edited 'bar' value in the URL.
+    browser::wait_for_js(&page, "window.location.href.includes('bar')").await;
 
     let url2 = page
         .evaluate("() => window.location.href")
@@ -648,19 +712,21 @@ async fn filter_builder_preserves_user_edit_across_op_change() {
     .wait_for_navigation()
     .await
     .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the toolbar component to be ready so the click lands.
+    browser::wait_for_js(&page, TOOLBAR_READY).await;
 
     // Open filter drawer.
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
 
-    // Sanity-check: drawer rendered the preset row with status/equals/published.
-    let preset_value = browser::shadow_eval(
+    // Sanity-check: poll until the preset row hydrates status/equals/published.
+    let preset_value = wait_shadow_eq(
         &page,
         "crap-drawer",
         "return root.querySelector('[name=\"filter-value\"]')?.value || '';",
+        "published",
     )
     .await;
     assert_eq!(
@@ -740,13 +806,23 @@ async fn filter_apply_strips_stale_cursor() {
     .wait_for_navigation()
     .await
     .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the toolbar component to be ready so the click lands.
+    browser::wait_for_js(&page, TOOLBAR_READY).await;
 
     // Open drawer, change the filter (title=foo → title=bar), apply.
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait until the preset row has hydrated to title=foo before editing it.
+    wait_shadow_eq(
+        &page,
+        "crap-drawer",
+        "return root.querySelector('[name=\"filter-value\"]')?.value || '';",
+        "foo",
+    )
+    .await;
 
     let _ = browser::shadow_eval(
         &page,
@@ -758,7 +834,14 @@ async fn filter_apply_strips_stale_cursor() {
          return '';",
     )
     .await;
-    sleep(Duration::from_millis(1500)).await;
+
+    // Wait for htmx navigation to land the new title=bar filter in the URL.
+    browser::wait_for_js(
+        &page,
+        "window.location.href.includes('title%5D%5Bequals%5D=bar') \
+         || window.location.href.includes('title][equals]=bar')",
+    )
+    .await;
 
     let url = page
         .evaluate("() => window.location.href")
@@ -808,12 +891,17 @@ async fn filter_drawer_empty_when_no_url_filters() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the toolbar component to be ready so the click lands.
+    browser::wait_for_js(&page, TOOLBAR_READY).await;
 
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the drawer to actually open before asserting it has 0 rows
+    // (an unopened drawer would also read as 0, masking a real regression).
+    wait_shadow_eq(&page, "crap-drawer", DRAWER_OPEN_JS, "true").await;
 
     // Empty URL → empty drawer. Zero rows, just the "+ Add condition"
     // button + footer.
@@ -837,7 +925,10 @@ async fn filter_drawer_empty_when_no_url_filters() {
         "root.querySelector('.filter-builder__footer .button--primary').click(); return '';",
     )
     .await;
-    sleep(Duration::from_millis(1500)).await;
+
+    // Apply always navigates with `page=1`; wait for that to confirm the
+    // navigation settled before asserting no `where[…]` was injected.
+    browser::wait_for_js(&page, "window.location.href.includes('page=1')").await;
 
     let url = page
         .evaluate("() => window.location.href")
@@ -884,7 +975,9 @@ async fn filter_drawer_status_field_narrows_and_clears() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Poll until both rows are rendered.
+    browser::wait_for_js(&page, "document.querySelectorAll('tbody tr').length === 2").await;
 
     let initial = page
         .evaluate("() => document.querySelectorAll('tbody tr').length")
@@ -901,7 +994,9 @@ async fn filter_drawer_status_field_narrows_and_clears() {
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the drawer to open before touching its shadow content.
+    wait_shadow_eq(&page, "crap-drawer", DRAWER_OPEN_JS, "true").await;
 
     let _ = browser::shadow_eval(
         &page,
@@ -909,7 +1004,15 @@ async fn filter_drawer_status_field_narrows_and_clears() {
         "root.querySelector('.filter-builder > button.button--ghost')?.click(); return '';",
     )
     .await;
-    sleep(Duration::from_millis(200)).await;
+
+    // Wait for the new row to appear before configuring its field.
+    wait_shadow_eq(
+        &page,
+        "crap-drawer",
+        "return String(root.querySelectorAll('.filter-builder__row').length);",
+        "1",
+    )
+    .await;
 
     let _ = browser::shadow_eval(
         &page,
@@ -920,7 +1023,17 @@ async fn filter_drawer_status_field_narrows_and_clears() {
          return '';",
     )
     .await;
-    sleep(Duration::from_millis(200)).await;
+
+    // Field change rebuilds the value input into a _status select — wait
+    // until its 'draft' option exists before selecting it.
+    wait_shadow_eq(
+        &page,
+        "crap-drawer",
+        "return Array.from(root.querySelector('[name=\"filter-value\"]')?.options || []) \
+         .some(o => o.value === 'draft') ? 'true' : 'false';",
+        "true",
+    )
+    .await;
 
     let _ = browser::shadow_eval(
         &page,
@@ -938,7 +1051,9 @@ async fn filter_drawer_status_field_narrows_and_clears() {
         "root.querySelector('.filter-builder__footer .button--primary').click(); return '';",
     )
     .await;
-    sleep(Duration::from_millis(1500)).await;
+
+    // Wait for the filtered navigation to narrow the list to 1 row.
+    browser::wait_for_js(&page, "document.querySelectorAll('tbody tr').length === 1").await;
 
     let url = page
         .evaluate("() => window.location.href")
@@ -971,7 +1086,15 @@ async fn filter_drawer_status_field_narrows_and_clears() {
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait until the row re-hydrates back to the draft value from the URL.
+    wait_shadow_eq(
+        &page,
+        "crap-drawer",
+        "return root.querySelector('[name=\"filter-value\"]')?.value || '';",
+        "draft",
+    )
+    .await;
 
     let _ = browser::shadow_eval(
         &page,
@@ -989,7 +1112,9 @@ async fn filter_drawer_status_field_narrows_and_clears() {
         "root.querySelector('.filter-builder__footer .button--primary').click(); return '';",
     )
     .await;
-    sleep(Duration::from_millis(1500)).await;
+
+    // Wait for the cleared navigation to restore both rows.
+    browser::wait_for_js(&page, "document.querySelectorAll('tbody tr').length === 2").await;
 
     let url2 = page
         .evaluate("() => window.location.href")
@@ -1045,12 +1170,16 @@ async fn filter_drawer_status_field_hidden_without_drafts() {
         .wait_for_navigation()
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the toolbar component to be ready so the click lands.
+    browser::wait_for_js(&page, TOOLBAR_READY).await;
 
     page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
         .await
         .unwrap();
-    sleep(Duration::from_millis(500)).await;
+
+    // Wait for the drawer to open before touching its shadow content.
+    wait_shadow_eq(&page, "crap-drawer", DRAWER_OPEN_JS, "true").await;
 
     let _ = browser::shadow_eval(
         &page,
@@ -1058,7 +1187,15 @@ async fn filter_drawer_status_field_hidden_without_drafts() {
         "root.querySelector('.filter-builder > button.button--ghost')?.click(); return '';",
     )
     .await;
-    sleep(Duration::from_millis(200)).await;
+
+    // Wait for the new row (and its field select) to appear.
+    wait_shadow_eq(
+        &page,
+        "crap-drawer",
+        "return String(root.querySelectorAll('.filter-builder__row').length);",
+        "1",
+    )
+    .await;
 
     let has_status_option = browser::shadow_eval(
         &page,

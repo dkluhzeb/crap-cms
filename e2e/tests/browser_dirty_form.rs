@@ -11,13 +11,9 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use std::time::Duration;
-
-use tokio::time::sleep;
-
 use crap_cms::core::{collection::*, field::*};
 
-use crap_cms_e2e::{BrowserTestCtx, helpers::*, setup_browser_test};
+use crap_cms_e2e::{BrowserTestCtx, browser, helpers::*, setup_browser_test};
 
 fn make_dirty_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -60,7 +56,14 @@ async fn dirty_form_not_armed_on_clean() {
         .unwrap();
 
     // Wait for the component to arm itself (requestAnimationFrame)
-    sleep(Duration::from_millis(500)).await;
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('crap-dirty-form')?._armed === true"
+        )
+        .await,
+        "dirty form should arm itself after load"
+    );
 
     // Without any interaction, _dirty should be false
     let result = page
@@ -98,8 +101,15 @@ async fn dirty_form_armed_after_input() {
         .await
         .unwrap();
 
-    // Wait for arming
-    sleep(Duration::from_millis(500)).await;
+    // Wait for arming before interacting (an input before arming is ignored)
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('crap-dirty-form')?._armed === true"
+        )
+        .await,
+        "dirty form should arm itself before typing"
+    );
 
     // Type into the title field
     page.find_element("input[name=\"title\"]")
@@ -111,7 +121,16 @@ async fn dirty_form_armed_after_input() {
         .type_str("Some title")
         .await
         .unwrap();
-    sleep(Duration::from_millis(300)).await;
+
+    // Poll until the input event flips _dirty to true
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelector('crap-dirty-form')?._dirty === true"
+        )
+        .await,
+        "dirty form should be dirty after typing into a field"
+    );
 
     // _dirty should now be true
     let result = page

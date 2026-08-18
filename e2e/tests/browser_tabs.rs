@@ -11,13 +11,9 @@
     clippy::too_many_lines,
     clippy::unreadable_literal
 )]
-use std::time::Duration;
-
-use tokio::time::sleep;
-
 use crap_cms::core::{collection::*, field::*};
 
-use crap_cms_e2e::{BrowserTestCtx, helpers::*, setup_browser_test};
+use crap_cms_e2e::{BrowserTestCtx, browser, helpers::*, setup_browser_test};
 
 fn make_tabs_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("profiles");
@@ -81,7 +77,17 @@ async fn tab_switching_shows_correct_panel() {
     let tabs = page.find_elements("[role=\"tab\"]").await.unwrap();
     assert_eq!(tabs.len(), 2, "should have 2 tab buttons");
     tabs[1].click().await.unwrap();
-    sleep(Duration::from_millis(300)).await;
+
+    // Poll until the second tab reports itself selected (the real state change)
+    assert!(
+        browser::wait_for_js(
+            &page,
+            "document.querySelectorAll('[role=\"tab\"]')[1]\
+                ?.getAttribute('aria-selected') === 'true'"
+        )
+        .await,
+        "second tab should be selected after clicking it"
+    );
 
     // Second tab should now be selected
     let second_tab_selected = page
