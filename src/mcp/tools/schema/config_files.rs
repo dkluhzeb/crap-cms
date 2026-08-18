@@ -77,7 +77,42 @@ pub(in crate::mcp::tools) fn safe_config_path(
     Ok(full_path)
 }
 
-/// Read a file from the config directory.
+/// TOML keys whose values are secrets. Kept in sync with the redacted-on-
+/// `Serialize` newtypes that the `crap://config` resource relies on
+/// (`auth.secret`, `email.smtp_pass`, `mcp.api_key`, S3 `secret_key`).
+const SECRET_TOML_KEYS: &[&str] = &["secret", "smtp_pass", "api_key", "secret_key"];
+
+/// Mask the values of known secret keys in raw `crap.toml` text so reading it
+/// through the tool never surfaces the JWT secret, SMTP password, MCP `api_key`,
+/// or S3 credentials — matching the `crap://config` resource, which redacts the
+/// same fields via their `Serialize` impls. Comments and structure are
+/// preserved; only the secret values are replaced.
+fn redact_toml_secrets(content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+
+    for line in content.lines() {
+        let indent_len = line.len() - line.trim_start().len();
+        let (indent, rest) = line.split_at(indent_len);
+
+        if let Some((key, _value)) = rest.split_once('=')
+            && !rest.starts_with('#')
+            && SECRET_TOML_KEYS.contains(&key.trim())
+        {
+            out.push_str(indent);
+            out.push_str(key.trim());
+            out.push_str(" = \"***REDACTED***\"");
+        } else {
+            out.push_str(line);
+        }
+
+        out.push('\n');
+    }
+
+    out
+}
+
+/// Read a file from the config directory. `crap.toml` is returned with its
+/// secret values redacted (see [`redact_toml_secrets`]).
 pub(in crate::mcp::tools) fn exec_read_config_file(
     path: &str,
     config_dir: &Path,
@@ -85,6 +120,11 @@ pub(in crate::mcp::tools) fn exec_read_config_file(
     let full_path = safe_config_path(config_dir, path)?;
     let content = fs::read_to_string(&full_path)
         .with_context(|| format!("Failed to read {}", full_path.display()))?;
+
+    if full_path.file_name().is_some_and(|n| n == "crap.toml") {
+        return Ok(redact_toml_secrets(&content));
+    }
+
     Ok(content)
 }
 
@@ -146,6 +186,38 @@ mod tests {
     fn safe_config_path_rejects_absolute() {
         let dir = Path::new("/tmp");
         assert!(safe_config_path(dir, "/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn redact_toml_secrets_masks_known_keys_keeps_rest() {
+        let toml = "\
+[auth]
+secret = \"super-secret-jwt\"
+
+[email]
+smtp_host = \"smtp.example.com\"
+smtp_pass = \"hunter2\"
+
+[mcp]
+api_key = \"mcp-key-abc\"
+
+[upload.s3]
+secret_key = \"s3-secret\"
+bucket = \"my-bucket\"
+";
+        let out = redact_toml_secrets(toml);
+
+        // Secrets gone.
+        assert!(!out.contains("super-secret-jwt"), "{out}");
+        assert!(!out.contains("hunter2"), "{out}");
+        assert!(!out.contains("mcp-key-abc"), "{out}");
+        assert!(!out.contains("s3-secret"), "{out}");
+        assert_eq!(out.matches("***REDACTED***").count(), 4);
+
+        // Non-secret values preserved.
+        assert!(out.contains("smtp_host = \"smtp.example.com\""), "{out}");
+        assert!(out.contains("bucket = \"my-bucket\""), "{out}");
+        assert!(out.contains("[auth]"), "structure preserved: {out}");
     }
 
     #[test]

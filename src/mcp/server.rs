@@ -19,8 +19,8 @@ use crate::{
 };
 
 use super::protocol::{
-    INTERNAL_ERROR, INVALID_PARAMS, InitializeParams, JsonRpcRequest, JsonRpcResponse,
-    METHOD_NOT_FOUND, PROTOCOL_VERSION, ResourceReadParams, ToolCallParams,
+    INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, InitializeParams, JsonRpcRequest,
+    JsonRpcResponse, METHOD_NOT_FOUND, PROTOCOL_VERSION, ResourceReadParams, ToolCallParams,
 };
 use super::{
     access::McpExposure,
@@ -98,6 +98,20 @@ fn parse_params<T: DeserializeOwned>(
 impl McpServer {
     /// Handle a single JSON-RPC request and return a response.
     pub fn handle_message(&self, req: JsonRpcRequest) -> JsonRpcResponse {
+        // JSON-RPC 2.0 requires the envelope to declare `"jsonrpc": "2.0"`.
+        // Reject anything else with INVALID_REQUEST rather than tolerating it
+        // (a reply to a notification is suppressed by the transport).
+        if req.jsonrpc != "2.0" {
+            return JsonRpcResponse::error(
+                req.id,
+                INVALID_REQUEST,
+                format!(
+                    "Unsupported jsonrpc version '{}'; expected \"2.0\"",
+                    req.jsonrpc
+                ),
+            );
+        }
+
         match req.method.as_str() {
             "initialize" => self.handle_initialize(req.id, req.params),
             "notifications/initialized" => {

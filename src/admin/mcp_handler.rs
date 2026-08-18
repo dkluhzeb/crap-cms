@@ -119,15 +119,20 @@ pub(super) async fn mcp_http_handler(
         Err(resp) => return resp,
     };
 
+    // A request with no `id` is a JSON-RPC notification — no response is sent
+    // (spec: MUST NOT reply). Capture the id before the move so a join error can
+    // still echo it.
+    let is_notification = rpc_request.id.is_none();
+    let request_id = rpc_request.id.clone();
+
     let server = state.mcp_server();
 
     let response = match task::spawn_blocking(move || server.handle_message(rpc_request)).await {
         Ok(resp) => resp,
-        Err(_) => JsonRpcResponse::error(None, INTERNAL_ERROR, "Internal error"),
+        Err(_) => JsonRpcResponse::error(request_id, INTERNAL_ERROR, "Internal error"),
     };
 
-    // Notifications must not receive a response per JSON-RPC spec
-    if response.id.is_none() && response.result.is_none() && response.error.is_none() {
+    if is_notification {
         return StatusCode::NO_CONTENT.into_response();
     }
 

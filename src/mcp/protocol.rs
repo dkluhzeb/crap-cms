@@ -17,7 +17,10 @@ pub struct JsonRpcRequest {
 #[derive(Debug, Serialize)]
 pub struct JsonRpcResponse {
     pub jsonrpc: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // Always serialized: JSON-RPC 2.0 requires an `id` member on every response,
+    // set to `null` when it can't be determined (e.g. a parse error). Responses
+    // to notifications are suppressed by the transport, so a `null` id here only
+    // ever appears on genuine error responses.
     pub id: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
@@ -181,6 +184,16 @@ mod tests {
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("\"result\""));
         assert!(!json.contains("\"error\""));
+    }
+
+    /// JSON-RPC 2.0 requires an `id` member on every response, `null` when it
+    /// can't be determined (e.g. a parse error). It must serialize as `null`,
+    /// not be omitted.
+    #[test]
+    fn error_response_serializes_id_null() {
+        let resp = JsonRpcResponse::error(None, PARSE_ERROR, "boom");
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"id\":null"), "id must be null, got: {json}");
     }
 
     #[test]

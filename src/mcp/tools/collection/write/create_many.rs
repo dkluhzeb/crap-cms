@@ -1,6 +1,6 @@
 //! Execute `create_many` — bulk create multiple documents.
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use serde::Serialize;
 use serde_json::{Value, to_string_pretty};
 use tracing::info;
@@ -37,18 +37,27 @@ pub(in crate::mcp::tools) fn exec_create_many(
         .and_then(|v| v.as_array())
         .context("'documents' must be an array")?;
 
-    let items: Vec<CreateManyItem> = documents_arr
-        .iter()
-        .map(|doc_val| {
-            let data = extract_data_from_args(doc_val, &["password"]);
-            let password = doc_val
-                .get("password")
-                .and_then(|v| v.as_str())
-                .map(std::string::ToString::to_string);
+    // Auth collections: reject a per-item `password` rather than setting it with
+    // no policy check (mirrors gRPC create_many, which rejects). For non-auth
+    // collections `password` is ordinary field data, validated by the strict
+    // unknown-field check in extract_data_from_args.
+    let is_auth = def.is_auth_collection();
+    let mut items: Vec<CreateManyItem> = Vec::with_capacity(documents_arr.len());
+    for doc_val in documents_arr {
+        if is_auth
+            && doc_val
+                .as_object()
+                .is_some_and(|o| o.contains_key("password"))
+        {
+            bail!("Password is not supported in create_many. Use the single create tool instead.");
+        }
 
-            CreateManyItem { data, password }
-        })
-        .collect();
+        let data = extract_data_from_args(doc_val, &[], &def.fields)?;
+        items.push(CreateManyItem {
+            data,
+            password: None,
+        });
+    }
 
     let run_hooks = args
         .get("hooks")

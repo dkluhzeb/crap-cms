@@ -36,7 +36,19 @@ pub(in crate::mcp::tools) fn exec_update_many(
     let filters = parse_where_filters(args)?;
 
     let data_obj = args.get("data").cloned().unwrap_or(json!({}));
-    let data = extract_data_from_args(&data_obj, &[]);
+
+    // Reject a password in the patch on auth collections (mirrors gRPC and Lua):
+    // the field-driven write path silently ignores it, so a caller would think
+    // they rotated a password when nothing happened.
+    if def.is_auth_collection()
+        && data_obj
+            .as_object()
+            .is_some_and(|o| o.contains_key("password"))
+    {
+        anyhow::bail!("Cannot set a password via update_many. Use the single update tool instead.");
+    }
+
+    let data = extract_data_from_args(&data_obj, &[], &def.fields)?;
 
     let run_hooks = args
         .get("hooks")

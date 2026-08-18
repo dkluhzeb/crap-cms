@@ -325,6 +325,27 @@ is now an error. To remove one locale's content, **update** the
 document with that locale's fields set to `null` (and localized
 arrays/relationships to `[]`); there is no per-locale delete.
 
+### 10. MCP surface: stricter tool inputs and reserved slugs
+
+Three changes affect MCP clients:
+
+- **Collection/global slugs can't begin with `many_` or `by_id_`.** These
+  collide with the MCP tool-name grammar (`create_many_<slug>`), so they're
+  rejected at load. **Action:** rename any such collection/global.
+- **Write tools reject unknown field keys.** `create` / `update` /
+  `create_many` / `update_many` / `validate` (and global equivalents) now error
+  on a data key that isn't a declared field or a reserved meta-key
+  (`id`/`locale`/`draft`/`events`/`password`). **Action:** stop sending stray
+  keys; a misspelled field now errors instead of being silently dropped.
+- **`create_many` / `update_many` reject a `password` on auth collections**
+  (use single `create` / `update`). On non-auth collections a `password` field
+  is now kept as ordinary data.
+
+Also: MCP `update_global` now honours `draft`, `read_config_file` redacts
+`crap.toml` secrets, and the JSON-RPC layer is stricter (`jsonrpc` must be
+`"2.0"`, notifications get no reply, error responses carry `id: null`). No
+action needed for these.
+
 ## Admin UI behavior
 
 - **List pages return 400 on invalid query params.** A

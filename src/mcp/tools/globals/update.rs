@@ -26,8 +26,12 @@ pub(in crate::mcp::tools) fn exec_update_global(
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
 
     let events = args.get("events").and_then(Value::as_bool).unwrap_or(true);
+    // Globals support drafts (gated by `has_drafts()` in the service); without
+    // reading `draft` here an MCP update of a draft-enabled global always
+    // published (and a `draft` key fell into field data and was dropped).
+    let draft = args.get("draft").and_then(Value::as_bool).unwrap_or(false);
 
-    let data = extract_data_from_args(args, &["locale", "events"]);
+    let data = extract_data_from_args(args, &["locale", "draft", "events"], &def.fields)?;
 
     let svc_ctx = ServiceContext::global(slug, def)
         .pool(ctx.pool)
@@ -43,6 +47,7 @@ pub(in crate::mcp::tools) fn exec_update_global(
         WriteInput::builder(data)
             .locale_ctx(locale_ctx.as_ref())
             .locale(locale.map(std::string::ToString::to_string))
+            .draft(draft)
             .build(),
     )?;
 

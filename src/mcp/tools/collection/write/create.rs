@@ -37,14 +37,19 @@ pub(in crate::mcp::tools) fn exec_create(
         ctx.config.auth.password_policy.validate(pw)?;
     }
 
-    // `locale`, `draft`, and `password` are reserved top-level keys —
-    // excluded from the document field data (mirrors gRPC/Lua write opts).
+    // `locale`, `draft`, `events` are reserved top-level keys; `password` is
+    // reserved only for auth collections (a non-auth collection may have a
+    // legitimate field named `password`, matching Lua).
     let locale = args.get("locale").and_then(|v| v.as_str());
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
     let draft = args.get("draft").and_then(Value::as_bool).unwrap_or(false);
     let events = args.get("events").and_then(Value::as_bool).unwrap_or(true);
 
-    let data = extract_data_from_args(args, &["password", "locale", "draft", "events"]);
+    let mut skip_keys: Vec<&str> = vec!["locale", "draft", "events"];
+    if def.is_auth_collection() {
+        skip_keys.push("password");
+    }
+    let data = extract_data_from_args(args, &skip_keys, &def.fields)?;
 
     let svc_ctx = ServiceContext::collection(slug, def)
         .pool(ctx.pool)

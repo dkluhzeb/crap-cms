@@ -68,6 +68,32 @@ pub fn validate_slug(slug: &str) -> Result<()> {
     Ok(())
 }
 
+/// Slug prefixes reserved because they would make an MCP tool name ambiguous.
+/// MCP collection tools are named `{op}_{slug}`, and `{op}` includes the
+/// compound forms `create_many_`, `update_many_`, `delete_many_`, and
+/// `find_by_id_`. A slug beginning `many_` or `by_id_` collides with another
+/// collection's bulk / find-by-id tool (e.g. `create_many_posts` is both
+/// `CreateMany`/`posts` and `Create`/`many_posts`), making one unreachable.
+const RESERVED_TOOL_SLUG_PREFIXES: &[&str] = &["many_", "by_id_"];
+
+/// Reject a collection/global slug that begins with a reserved MCP-tool prefix.
+///
+/// # Errors
+///
+/// Returns an error if `slug` starts with `many_` or `by_id_`.
+pub fn reject_reserved_tool_prefix(slug: &str) -> Result<()> {
+    for prefix in RESERVED_TOOL_SLUG_PREFIXES {
+        if slug.starts_with(prefix) {
+            bail!(
+                "Invalid slug '{slug}' — cannot begin with the reserved prefix '{prefix}' \
+                 (it would make MCP tool names like 'create_many_...' ambiguous)"
+            );
+        }
+    }
+
+    Ok(())
+}
+
 /// Validate a URL/filename-style slug: lowercase alphanumeric, hyphens,
 /// underscores. Used by scaffold targets whose slug maps to a file path
 /// or URL segment (custom pages, slots, themes) — not to a Lua or SQL
@@ -348,6 +374,19 @@ mod tests {
         assert!(validate_slug("Posts").is_err());
         assert!(validate_slug("my-slug").is_err());
         assert!(validate_slug("_private").is_err());
+    }
+
+    #[test]
+    fn reject_reserved_tool_prefix_blocks_many_and_by_id() {
+        // These would make MCP tool names like `create_many_posts` /
+        // `find_by_id_x` ambiguous.
+        assert!(reject_reserved_tool_prefix("many_posts").is_err());
+        assert!(reject_reserved_tool_prefix("by_id_users").is_err());
+        // A normal slug (and one that merely contains, not starts-with, the
+        // token) is fine.
+        assert!(reject_reserved_tool_prefix("posts").is_ok());
+        assert!(reject_reserved_tool_prefix("company_by_id").is_ok());
+        assert!(reject_reserved_tool_prefix("germany_news").is_ok());
     }
 
     #[test]

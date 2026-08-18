@@ -27,7 +27,7 @@ pub(in crate::mcp::tools) fn exec_validate_global(
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
     let draft = args.get("draft").and_then(Value::as_bool).unwrap_or(false) && def.has_drafts();
 
-    let data = extract_data_from_args(args, &["locale", "draft"]);
+    let data = extract_data_from_args(args, &["locale", "draft"], &def.fields)?;
 
     let write_hooks = RunnerWriteHooks::new(ctx.runner);
 

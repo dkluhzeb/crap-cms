@@ -39,8 +39,17 @@ pub(in crate::mcp::tools) fn exec_list_versions(
         .get(slug)
         .context("Collection not found")?;
 
-    let limit = args.get("limit").and_then(serde_json::Value::as_i64);
-    let offset = args.get("offset").and_then(serde_json::Value::as_i64);
+    // Floor at 0: a negative limit would bind as `LIMIT -1` (= unbounded) on
+    // SQLite, an unbounded read of the whole version history (mirrors the gRPC
+    // `floor_optional_limit` fix).
+    let limit = args
+        .get("limit")
+        .and_then(serde_json::Value::as_i64)
+        .map(|l| l.max(0));
+    let offset = args
+        .get("offset")
+        .and_then(serde_json::Value::as_i64)
+        .map(|o| o.max(0));
 
     // MCP operates with full access — override access checks
     let conn = ctx.pool.get().context("DB connection")?;

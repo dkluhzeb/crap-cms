@@ -383,9 +383,13 @@ fn create_many_schema(def: &CollectionDefinition) -> Value {
     json!({
         "type": "object",
         "properties": {
+            // Per-item schema is field data only. Unlike single `create`, the
+            // items carry no `locale`/`draft` (those are operation-level or
+            // ignored) and no `password` (create_many rejects it on auth
+            // collections) — advertising them would be schema/handler drift.
             "documents": {
                 "type": "array",
-                "items": create_schema(def),
+                "items": fields_to_object_schema(&def.fields),
                 "description": "Array of documents to create"
             },
             "hooks": {

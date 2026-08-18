@@ -172,6 +172,7 @@ pub fn parse_collection_definition(
     config: &Table,
 ) -> Result<CollectionDefinition> {
     query::validate_slug(slug)?;
+    query::reject_reserved_tool_prefix(slug)?;
     deny_unknown_keys(config, "collection", COLLECTION_CONFIG_KEYS)?;
     validate_collection_nested_keys(config)?;
 

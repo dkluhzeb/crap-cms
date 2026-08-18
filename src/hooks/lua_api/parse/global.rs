@@ -34,6 +34,7 @@ const GLOBAL_CONFIG_KEYS: &[&str] = &[
 /// fields/hooks/versions spec fails to parse.
 pub fn parse_global_definition(lua: &Lua, slug: &str, config: &Table) -> Result<GlobalDefinition> {
     query::validate_slug(slug)?;
+    query::reject_reserved_tool_prefix(slug)?;
     deny_unknown_keys(config, "global", GLOBAL_CONFIG_KEYS)?;
     validate_shared_nested_keys(config)?;
 

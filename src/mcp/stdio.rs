@@ -12,6 +12,21 @@ use crate::mcp::{
     protocol::{INTERNAL_ERROR, JsonRpcRequest, JsonRpcResponse, PARSE_ERROR},
 };
 
+/// Truncate a string to at most `max` bytes on a UTF-8 char boundary, for log
+/// previews. A plain `&s[..max]` byte-slice panics when byte `max` lands
+/// mid-character (any non-ASCII payload), which on the recv side would abort
+/// the whole stdio transport.
+fn log_preview(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let end = (0..=max)
+        .rev()
+        .find(|&i| s.is_char_boundary(i))
+        .unwrap_or(0);
+    &s[..end]
+}
+
 /// Write a JSON-RPC response line to stdout. Returns `false` if the pipe is broken.
 async fn write_response(stdout: &mut Stdout, resp: &JsonRpcResponse) -> bool {
     let Ok(resp_json) = to_string(resp) else {
@@ -19,7 +34,7 @@ async fn write_response(stdout: &mut Stdout, resp: &JsonRpcResponse) -> bool {
         return true;
     };
 
-    debug!("MCP send: {}", &resp_json[..resp_json.len().min(200)]);
+    debug!("MCP send: {}", log_preview(&resp_json, 200));
 
     if stdout.write_all(resp_json.as_bytes()).await.is_err()
         || stdout.write_all(b"\n").await.is_err()
@@ -46,11 +61,6 @@ async fn dispatch(server: &Arc<McpServer>, request: JsonRpcRequest) -> JsonRpcRe
     }
 }
 
-/// Returns `true` if the response is a notification acknowledgement (no reply needed).
-fn is_empty_notification(resp: &JsonRpcResponse) -> bool {
-    resp.id.is_none() && resp.result.is_none() && resp.error.is_none()
-}
-
 /// Run the stdio MCP transport. Reads newline-delimited JSON-RPC from stdin,
 /// processes each message, and writes responses to stdout.
 #[cfg(not(tarpaulin_include))] // requires interactive stdio
@@ -69,7 +79,7 @@ pub async fn run_stdio(server: McpServer) {
             continue;
         }
 
-        debug!("MCP recv: {}", &line[..line.len().min(200)]);
+        debug!("MCP recv: {}", log_preview(&line, 200));
 
         let request: JsonRpcRequest = match from_str(&line) {
             Ok(req) => req,
@@ -80,9 +90,13 @@ pub async fn run_stdio(server: McpServer) {
             }
         };
 
+        // A request with no `id` is a JSON-RPC notification — dispatch it for
+        // its side effects but never send a response (spec: MUST NOT reply).
+        let is_notification = request.id.is_none();
+
         let response = dispatch(&server, request).await;
 
-        if is_empty_notification(&response) {
+        if is_notification {
             continue;
         }
 
@@ -92,4 +106,25 @@ pub async fn run_stdio(server: McpServer) {
     }
 
     debug!("MCP stdio transport ended (stdin closed)");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::log_preview;
+
+    /// Regression: a multi-byte char straddling the byte limit must not panic
+    /// (a plain `&s[..200]` did, aborting the transport on any non-ASCII line).
+    #[test]
+    fn log_preview_truncates_on_char_boundary() {
+        // `é` is 2 bytes; place it at bytes 199-200 so byte 200 lands mid-char.
+        let s = format!("{}\u{e9}tail", "a".repeat(199));
+        let preview = log_preview(&s, 200);
+        assert!(preview.len() <= 200);
+        assert_eq!(preview.len(), 199); // truncated before the split char
+    }
+
+    #[test]
+    fn log_preview_short_string_is_unchanged() {
+        assert_eq!(log_preview("h\u{e9}llo", 200), "h\u{e9}llo");
+    }
 }

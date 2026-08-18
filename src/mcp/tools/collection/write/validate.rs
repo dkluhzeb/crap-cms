@@ -43,7 +43,11 @@ pub(in crate::mcp::tools) fn exec_validate(
         "create"
     };
 
-    let data = extract_data_from_args(args, &["id", "password", "locale", "draft"]);
+    let mut skip_keys: Vec<&str> = vec!["id", "locale", "draft"];
+    if def.is_auth_collection() {
+        skip_keys.push("password");
+    }
+    let data = extract_data_from_args(args, &skip_keys, &def.fields)?;
 
     // Attach the connection so field-level write-access denials are actually
     // evaluated (a connless hooks object skips them, diverging from the real

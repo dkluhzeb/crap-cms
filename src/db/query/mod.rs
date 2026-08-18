@@ -33,8 +33,8 @@ pub use locale::{
 pub use pagination_result::{CursorFlags, PaginationResult, PaginationResultBuilder, resolve_sort};
 pub use types::*;
 pub use validation::{
-    get_valid_filter_paths, is_valid_identifier, sanitize_locale, validate_field_name,
-    validate_query_fields, validate_slug, validate_template_slug,
+    get_valid_filter_paths, is_valid_identifier, reject_reserved_tool_prefix, sanitize_locale,
+    validate_field_name, validate_query_fields, validate_slug, validate_template_slug,
 };
 pub use view_scope::{RequestedViews, ViewScope};
 

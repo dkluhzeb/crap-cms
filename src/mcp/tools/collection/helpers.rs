@@ -1,10 +1,12 @@
 //! Shared helpers for collection CRUD tool implementations.
 
+use std::collections::HashSet;
+
 use anyhow::{Result, bail};
 use serde_json::{Map, Value};
 
 use crate::{
-    core::{Document, DocumentFields},
+    core::{Document, DocumentFields, FieldDefinition, flatten_array_sub_fields},
     db::query,
 };
 
@@ -38,7 +40,18 @@ pub(in crate::mcp::tools) fn parse_where_filters(args: &Value) -> Result<Vec<que
             Value::Object(ops) => {
                 parse_operator_filters(field, ops, &mut clauses)?;
             }
-            _ => {}
+            // Fail loudly rather than silently drop the clause (a dropped filter
+            // widens the match set — dangerous on delete_many/update_many). A
+            // bare array like `{ status: ["a","b"] }` must use `{ status: { in:
+            // [...] } }`.
+            Value::Array(_) => bail!(
+                "MCP where: field '{field}' has an array value; use an operator, \
+                 e.g. {{ \"{field}\": {{ \"in\": [...] }} }}"
+            ),
+            Value::Null => bail!(
+                "MCP where: field '{field}' has a null value; use the `exists` / \
+                 `not_exists` operator instead"
+            ),
         }
     }
 
@@ -63,7 +76,10 @@ fn parse_operator_filters(
         match op_name.as_str() {
             "in" | "not_in" => {
                 let Some(arr) = op_value.as_array() else {
-                    continue;
+                    bail!(
+                        "MCP where: operator '{op_name}' on field '{field}' needs an \
+                         array value"
+                    );
                 };
                 let vals: Vec<String> = arr
                     .iter()
@@ -165,21 +181,50 @@ pub(in crate::mcp::tools) fn doc_to_json(doc: &Document) -> Value {
     Value::Object(obj)
 }
 
-/// Extract typed field data from JSON args, dropping `skip_keys` and `null` values.
-/// Scalars and structured values both flow through as `Value` — the typed write
-/// pipeline routes them to columns or join tables based on each field's type.
+/// Extract typed field data from JSON args, dropping `skip_keys` and `null`
+/// values. Scalars and structured values both flow through as `Value` — the
+/// typed write pipeline routes them to columns or join tables based on each
+/// field's type.
+///
+/// A key that is neither a `skip_key` nor a declared top-level field of the
+/// collection is **rejected** (rather than silently dropped by the field-driven
+/// write pipeline) so a hallucinated/misspelled field name on this AI-driven
+/// surface fails loudly. Layout wrappers (Row/Collapsible/Tabs) are transparent,
+/// so their sub-fields are the valid top-level keys.
+///
+/// # Errors
+///
+/// Returns an error naming any key that is not a `skip_key` and not a field of
+/// the collection.
 pub(in crate::mcp::tools) fn extract_data_from_args(
     args: &Value,
     skip_keys: &[&str],
-) -> DocumentFields {
+    fields: &[FieldDefinition],
+) -> Result<DocumentFields> {
     let Some(obj) = args.as_object() else {
-        return DocumentFields::new();
+        return Ok(DocumentFields::new());
     };
 
-    obj.iter()
-        .filter(|(k, v)| !skip_keys.contains(&k.as_str()) && !v.is_null())
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect()
+    let known: HashSet<&str> = flatten_array_sub_fields(fields)
+        .iter()
+        .map(|f| f.name.as_str())
+        .collect();
+
+    let mut data = DocumentFields::new();
+
+    for (k, v) in obj {
+        if skip_keys.contains(&k.as_str()) || v.is_null() {
+            continue;
+        }
+
+        if !known.contains(k.as_str()) {
+            bail!("unknown field '{k}' for this collection");
+        }
+
+        data.insert(k.clone(), v.clone());
+    }
+
+    Ok(data)
 }
 
 #[cfg(test)]
@@ -428,13 +473,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn parse_where_null_value_skipped() {
-        // A bare null field value (not an operator object) is a no-op.
-        let args = json!({ "where": { "field": null } });
-        let clauses = parse_where_filters(&args).unwrap();
-        assert_eq!(clauses.len(), 0);
-    }
+    // (A bare null field value is now rejected — see
+    // `parse_where_null_value_is_rejected` below. It used to be a silent no-op.)
 
     #[test]
     fn parse_where_null_op_value_errors() {
@@ -492,5 +532,76 @@ mod tests {
         assert_eq!(val["id"], "xyz");
         assert!(val.get("created_at").is_none() || val["created_at"].is_null());
         assert!(val.get("updated_at").is_none() || val["updated_at"].is_null());
+    }
+
+    // ── parse_where_filters: fail-loud on silently-dropping shapes ─────────
+
+    /// Regression: a bare array value used to hit `_ => {}` and drop the clause
+    /// silently — which on `delete_many`/`update_many` widens to the whole
+    /// collection. It must error instead.
+    #[test]
+    fn parse_where_bare_array_value_is_rejected() {
+        let args = json!({ "where": { "status": ["draft", "review"] } });
+        let err = parse_where_filters(&args).unwrap_err().to_string();
+        assert!(err.contains("array value"), "got: {err}");
+    }
+
+    /// Regression: `in`/`not_in` with a non-array value used to `continue`
+    /// (silently dropping the clause). It must error.
+    #[test]
+    fn parse_where_in_non_array_is_rejected() {
+        let args = json!({ "where": { "status": { "in": "draft" } } });
+        let err = parse_where_filters(&args).unwrap_err().to_string();
+        assert!(err.contains("array value"), "got: {err}");
+    }
+
+    /// A null field value is rejected (use `exists`/`not_exists`), not dropped.
+    #[test]
+    fn parse_where_null_value_is_rejected() {
+        let args = json!({ "where": { "status": null } });
+        assert!(parse_where_filters(&args).is_err());
+    }
+
+    // ── extract_data_from_args: strict unknown-field rejection ────────────
+
+    fn text_field(name: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, crate::core::FieldType::Text).build()
+    }
+
+    #[test]
+    fn extract_data_keeps_known_fields_and_skips_reserved() {
+        let fields = vec![text_field("title"), text_field("body")];
+        let args = json!({ "title": "Hi", "body": "x", "locale": "en", "extra_null": null });
+        let data = extract_data_from_args(&args, &["locale"], &fields).unwrap();
+        assert_eq!(data.get("title").and_then(Value::as_str), Some("Hi"));
+        assert_eq!(data.get("body").and_then(Value::as_str), Some("x"));
+        assert!(data.get("locale").is_none(), "reserved key excluded");
+        assert!(data.get("extra_null").is_none(), "null dropped");
+    }
+
+    /// Regression: an unknown/misspelled field name must fail loudly rather than
+    /// being silently dropped by the field-driven write pipeline.
+    #[test]
+    fn extract_data_rejects_unknown_field() {
+        let fields = vec![text_field("title")];
+        let args = json!({ "title": "Hi", "titel": "typo" });
+        let err = extract_data_from_args(&args, &[], &fields)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown field 'titel'"), "got: {err}");
+    }
+
+    /// Layout wrappers (Row/Collapsible/Tabs) are transparent — their sub-fields
+    /// are valid top-level keys, so they must not be rejected.
+    #[test]
+    fn extract_data_accepts_row_sub_fields() {
+        let row = FieldDefinition::builder("row", crate::core::FieldType::Row)
+            .fields(vec![text_field("first"), text_field("last")])
+            .build();
+        let fields = vec![row];
+        let args = json!({ "first": "a", "last": "b" });
+        let data = extract_data_from_args(&args, &[], &fields).unwrap();
+        assert_eq!(data.get("first").and_then(Value::as_str), Some("a"));
+        assert_eq!(data.get("last").and_then(Value::as_str), Some("b"));
     }
 }

@@ -82,6 +82,31 @@ stored data, or clients.
   survivors so the message stays gap-free. After the freeze, removed tags must
   instead be `reserved`.
 
+## MCP (Model Context Protocol)
+
+- **Tool-name grammar** `{op}_{slug}` for collections, `global_{op}_{slug}` for
+  globals, plus the static tool names. Because `{op}` includes the compound
+  forms `create_many_` / `update_many_` / `delete_many_` / `find_by_id_`, a
+  collection/global slug **may not begin with `many_` or `by_id_`** — enforced at
+  load (`reject_reserved_tool_prefix`).
+- **Tool input schemas are strict on data keys.** Write tools reject a data key
+  that is neither a reserved meta-key (`id`/`locale`/`draft`/`events`, and
+  `password` on auth collections) nor a declared top-level field (layout wrappers
+  are transparent). The `where` filter rejects unknown operators and malformed
+  operator values loudly (never silently drops a clause).
+- **JSON-RPC 2.0 conformance:** the `jsonrpc` member must be `"2.0"`; a request
+  with no `id` is a notification and receives no response; error responses carry
+  `id: null` when it can't be determined. Error codes are the standard set
+  (`-32700` … `-32603`). Tool errors are returned in-band as a successful result
+  with `isError: true`, not as a JSON-RPC error.
+- **`read_config_file` redacts `crap.toml` secrets** (`auth.secret`,
+  `email.smtp_pass`, `mcp.api_key`, S3 `secret_key`), matching the redacted
+  `crap://config` resource. Secrets never leave the server through MCP.
+- **MCP is a machine surface**: transport-authenticated (API key over HTTP,
+  process-gated over stdio) and gated per-collection by the `access.mcp` key; it
+  runs with `override_access`, so per-row/field access rules do **not** further
+  restrict an authorized MCP caller.
+
 ## Hooks
 
 - **The 9 `HookEvent`s** and their per-operation firing order:

@@ -8,6 +8,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **MCP tools reject unknown field keys.** The collection/global write tools
+  (`create`, `update`, `create_many`, `update_many`, `validate`, and the global
+  equivalents) previously let the field-driven write pipeline silently drop any
+  data key that didn't match a declared field. They now return an error naming
+  the unknown key, so a misspelled or hallucinated field on this AI-driven
+  surface fails loudly instead of vanishing. Layout wrappers (Row/Collapsible/
+  Tabs) are transparent, so their sub-fields remain valid top-level keys.
+
+- **Collection/global slugs may not begin with `many_` or `by_id_`.** These
+  prefixes collide with the MCP tool-name grammar (`create_many_<slug>` is
+  otherwise ambiguous with `create_<many_slug>`), so they are now rejected at
+  load. **Migration:** rename any such collection/global.
+
+- **MCP `create_many` / `update_many` reject a `password` field on auth
+  collections** (matching gRPC and Lua), instead of setting it with no policy
+  check (`create_many`) or silently ignoring it (`update_many`). Set passwords
+  via the single `create` / `update` tool. On non-auth collections a field named
+  `password` is now preserved as ordinary data (previously dropped).
+
 - **gRPC document values now use a typed `FieldValue` message instead of
   `google.protobuf.Struct`.** Every `data` / `fields` field on the wire
   (`Document.fields`, `CreateRequest.data`, `UpdateRequest.data`,
@@ -427,6 +446,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `max_file_size` still inherits the global default.
 
 ### Security
+
+- **MCP `where`-filter shapes could silently widen a bulk delete/update to the
+  whole collection.** The MCP filter parser rejected unknown operators loudly
+  but silently dropped a bare array value (`{ status: ["a","b"] }`) and a
+  non-array `in`/`not_in`. A dropped clause feeds `delete_many`/`update_many`
+  with an empty filter — which matches every document. Both shapes now error
+  (use `{ status: { in: [...] } }`).
+
+- **MCP `list_versions` no longer allows an unbounded read via a negative
+  `limit`.** It passed `limit`/`offset` through unclamped, so `limit = -1` bound
+  as SQLite `LIMIT -1` (= no limit) and returned the entire version history. Both
+  are now floored at 0 (mirrors the gRPC fix).
+
+- **MCP `read_config_file` redacts secrets in `crap.toml`.** The tool returned
+  the file verbatim — JWT secret, SMTP password, MCP `api_key`, S3 credentials —
+  while the sibling `crap://config` resource redacts them. It now masks the same
+  secret keys, so config secrets never land in an AI client's context. (The tool
+  is still gated behind the opt-in `config_tools` flag + API-key auth.)
+
+- **MCP `create_many` no longer sets passwords bypassing the password policy.**
+  It extracted a per-item `password` and stored the hash without the
+  length/complexity checks the single `create` enforces; it now rejects
+  `password` on auth collections outright (see Breaking).
 
 - **A revoked session could keep receiving live events after an invalidation
   burst.** The gRPC `Subscribe` stream's session-revocation handler swallowed a
@@ -1025,6 +1067,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **MCP `update_global` ignored the `draft` flag.** A draft-enabled global was
+  always published via MCP, and a `draft` key fell into field data and was
+  dropped. It now reads `draft` and saves a draft version (matching collection
+  `update` and the global read/validate tools).
+
+- **MCP stdio transport could panic on non-ASCII input.** A debug-log preview
+  byte-sliced the message at 200 bytes; when byte 200 landed mid-character the
+  slice panicked, aborting the whole stdio transport. Truncation is now
+  char-boundary-safe.
+
+- **MCP JSON-RPC conformance.** The server now (a) never replies to a
+  notification (a request with no `id`) — previously an unknown notification got
+  an error reply; (b) serializes `id: null` on error responses instead of
+  omitting it; and (c) rejects an envelope whose `jsonrpc` is not `"2.0"` with
+  `INVALID_REQUEST`.
+
+- **MCP `create_many`'s per-item schema no longer advertises ignored keys.** The
+  per-item schema exposed `locale`/`draft`/`password`, which the handler ignored
+  (or now rejects); the item schema is now field data only.
 
 - **Deleting an upload document on a localized collection returned a spurious
   404.** The `DELETE /api/upload/{slug}/{id}` existence precheck queried with a
