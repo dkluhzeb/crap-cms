@@ -50,7 +50,7 @@ crap-cms serve
 ### `serve` — Start the server
 
 ```bash
-crap-cms serve [-d] [--stop] [--restart] [--status] [--json] [--only <admin|api>] [--no-scheduler]
+crap-cms serve [-d] [--stop] [--restart] [--status] [--json] [--only <admin|grpc>] [--no-scheduler]
 ```
 
 | Flag | Description |
@@ -59,8 +59,8 @@ crap-cms serve [-d] [--stop] [--restart] [--status] [--json] [--only <admin|api>
 | `--stop` | Stop a running detached instance (SIGTERM, then SIGKILL after 10s) |
 | `--restart` | Restart a running detached instance (stop + start) |
 | `--status` | Show whether a detached instance is running (PID, uptime) |
-| `--json` | Output logs as structured JSON (for log aggregation) |
-| `--only <admin\|api>` | Start only the specified server. Omit to start both. |
+| `--json` | Output logs as structured JSON (for log aggregation; forwarded to the detached child) |
+| `--only <admin\|grpc>` | Start only the specified server. Omit to start both. `api` is accepted as a backward-compatible alias for `grpc`. |
 | `--no-scheduler` | Disable the background job scheduler |
 
 `--detach`, `--stop`, `--restart`, and `--status` are mutually exclusive.
@@ -73,10 +73,10 @@ crap-cms serve --stop             # stop detached instance
 crap-cms serve --restart          # stop + start detached
 crap-cms serve --json
 crap-cms serve --only admin       # admin UI only
-crap-cms serve --only api         # gRPC API only
+crap-cms serve --only grpc        # gRPC API only (`--only api` also works)
 crap-cms serve --no-scheduler     # both servers, no scheduler
 crap-cms serve --only admin --no-scheduler
-crap-cms serve -d --only api      # detached, API only
+crap-cms serve -d --only grpc     # detached, API only
 ```
 
 ### `work` — Run a standalone job worker
@@ -1180,3 +1180,9 @@ eval "$(crap-cms update completions bash)"  # source directly
 | `CRAP_CONFIG_DIR` | Path to the config directory (same as `--config` flag; flag takes priority) |
 | `RUST_LOG` | Controls log verbosity. Default: `crap_cms=debug,info` for `serve`, `crap_cms=error` for all other commands. Example: `RUST_LOG=crap_cms=trace` |
 | `CRAP_LOG_FORMAT` | Set to `json` for structured JSON log output (same as `--json` flag) |
+| `CRAP_NO_UNICODE` | Force ASCII glyphs (`+ ! x >`) instead of Unicode (`✓ ⚠ ✗ →`) in CLI output. Truthy values (`1`, `true`, `yes`, `on`) enable it. |
+| `CRAP_FORCE_UNICODE` | Force Unicode glyphs even when terminal detection says otherwise. Truthy values (`1`, `true`, `yes`, `on`) enable it. |
+
+> **Reserved:** `_CRAP_DETACHED` is set internally by `serve`/`work` on the
+> re-exec'd background child so it can auto-enable file logging. It is not a
+> user-facing knob — do not set it yourself.

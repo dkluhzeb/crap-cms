@@ -10,7 +10,9 @@ use clap::{Parser, Subcommand};
 use dialoguer::Select;
 use std::path::{Path, PathBuf};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{Layer, Registry, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{
+    Layer, Registry, fmt::writer::BoxMakeWriter, layer::SubscriberExt, util::SubscriberInitExt,
+};
 
 use crap_cms::{
     cli::{self, crap_theme},
@@ -320,6 +322,7 @@ struct ServeArgs {
     stop: bool,
     restart: bool,
     status: bool,
+    json: bool,
     only: Option<ServeMode>,
     no_scheduler: bool,
 }
@@ -349,9 +352,9 @@ async fn dispatch_serve(command: Command, config_flag: Option<PathBuf>) -> Resul
         stop,
         restart,
         status,
+        json,
         only,
         no_scheduler,
-        ..
     } = command
     else {
         unreachable!("dispatch_serve called with non-Serve command");
@@ -362,6 +365,7 @@ async fn dispatch_serve(command: Command, config_flag: Option<PathBuf>) -> Resul
         stop,
         restart,
         status,
+        json,
         only,
         no_scheduler,
     };
@@ -380,12 +384,12 @@ async fn dispatch_serve(command: Command, config_flag: Option<PathBuf>) -> Resul
     }
     if args.restart {
         #[cfg(unix)]
-        return commands::serve::restart(&config, args.only, args.no_scheduler);
+        return commands::serve::restart(&config, args.only, args.no_scheduler, args.json);
         #[cfg(not(unix))]
         anyhow::bail!("--restart is not supported on this platform");
     }
     if args.detach {
-        return commands::serve::detach(&config, args.only, args.no_scheduler);
+        return commands::serve::detach(&config, args.only, args.no_scheduler, args.json);
     }
     // Box the future: serve startup wires both admin+API servers and
     // is the largest async state machine in the binary.
@@ -607,9 +611,18 @@ async fn run(cli: Cli) -> Result<()> {
         use_json,
         default_filter,
         logging_setup.serve_logging.as_ref(),
+        console_logs_to_stderr(&cli.command),
     );
 
     dispatch_command(cli.command, config_flag).await
+}
+
+/// Whether the console log layer must write to stderr instead of the default
+/// stdout. True for `mcp`: its stdio JSON-RPC transport owns stdout
+/// (`src/mcp/stdio.rs`), so any log line on stdout corrupts the protocol
+/// stream. Everything else keeps logging to stdout (the frozen default).
+fn console_logs_to_stderr(command: &Command) -> bool {
+    matches!(command, Command::Mcp)
 }
 
 /// Resolve the config directory from the optional `-C/--config` flag and
@@ -713,13 +726,21 @@ fn init_logging(
     use_json: bool,
     default_filter: &str,
     serve_logging: Option<&(PathBuf, crap_cms::config::LoggingConfig)>,
+    console_to_stderr: bool,
 ) -> Option<WorkerGuard> {
     type BoxedLayer = Box<dyn Layer<Registry> + Send + Sync>;
 
     let mut guard = None;
     let mut layers: Vec<BoxedLayer> = Vec::new();
 
-    // Stdout layer.
+    // Console layer — stdout by default, stderr when the command owns stdout
+    // for something else (e.g. mcp's stdio JSON-RPC transport).
+    let console_writer = if console_to_stderr {
+        BoxMakeWriter::new(std::io::stderr)
+    } else {
+        BoxMakeWriter::new(std::io::stdout)
+    };
+
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter));
 
@@ -727,12 +748,14 @@ fn init_logging(
         layers.push(
             tracing_subscriber::fmt::layer()
                 .json()
+                .with_writer(console_writer)
                 .with_filter(env_filter)
                 .boxed(),
         );
     } else {
         layers.push(
             tracing_subscriber::fmt::layer()
+                .with_writer(console_writer)
                 .with_filter(env_filter)
                 .boxed(),
         );
@@ -802,5 +825,19 @@ fn build_file_layer(
                 .with_filter(file_filter)
                 .boxed(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_mcp_routes_console_logs_to_stderr() {
+        // mcp owns stdout for the JSON-RPC transport → logs must go to stderr.
+        assert!(console_logs_to_stderr(&Command::Mcp));
+        // Every other command keeps the frozen stdout default.
+        assert!(!console_logs_to_stderr(&Command::Status { check: false }));
+        assert!(!console_logs_to_stderr(&Command::Proto { output: None }));
     }
 }

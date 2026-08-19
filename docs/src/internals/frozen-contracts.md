@@ -255,9 +255,33 @@ changing a representation is a breaking change to every consumer.
 
 - **Discovery directories** `collections/` `globals/` `jobs/` `hooks/` and the
   `init.lua` entrypoint; the `crap` Lua global.
-- **CLI subcommand + flag names, positional-arg order, and exit codes**
-  (notably `status --check` → 2 on warnings, `update check` → 1 when an update
-  exists). Machine output: `export` JSON envelope and `serve --json`.
+- **CLI subcommand + flag names, positional-arg order, and exit codes.**
+  Every error exits **1** — that universal mapping is the contract; the only
+  differentiated codes are `status --check` → 2 on warnings and `update check`
+  → 1 when an update exists. (No other exit codes are reserved; scripts may
+  treat any non-zero as failure.) `serve --only` accepts `admin`/`grpc`, with
+  `api` kept as a backward-compatible alias of `grpc`. Machine output: `export`
+  JSON envelope and `serve --json` (and `--json` is forwarded to the detached
+  `serve`/`work` child).
+- **Behavioral flag defaults** users' scripts/CI depend on: `logs --lines`
+  defaults to 100, `fmt` with no path scans `templates/`, `jobs status --limit`
+  / `images --limit` default 20, `jobs purge --older-than` 7d, `bench`
+  iterations 10/5. Changing any silently changes what a script does.
+- **Stdout/stderr split (machine contract).** Diagnostics — `cli::error` and
+  `cli::warning` — go to **stderr**; all normal output (`success`/`info`/`hint`/
+  `header`/`step`/`kv`/`kv_status`, tables, spinners) goes to **stdout**. A
+  pipeline can `2>/dev/null` to drop diagnostics and parse stdout. `export`
+  emits only JSON to stdout when piped.
+- **Glyph vocabulary.** The status/output glyphs are frozen as Unicode/ASCII
+  pairs: `✓`/`+` (success), `⚠`/`!` (warning), `✗`/`x` (error), `→`/`>` (info),
+  `───`/`---` (bar), `?` (prompt). The ASCII fallback is a real contract — a
+  script running under `CRAP_NO_UNICODE=1` sees the ASCII half.
+- **Environment-variable accepted-value contract.** `CRAP_NO_UNICODE` and
+  `CRAP_FORCE_UNICODE` enable on any **truthy** value — `1`/`true`/`yes`/`on`
+  (case-insensitive, trimmed) — and are disabled otherwise. `CRAP_LOG_FORMAT`
+  activates JSON on the exact value `json`. `_CRAP_DETACHED` is a **reserved**
+  internal parent→child marker (presence-only; do not set it). `CRAP_CONFIG_DIR`
+  mirrors `--config`.
 - **Backup/export formats** are gated by a numeric `format_version` — the layout
   (`manifest.json` + `crap.db` + `uploads.tar.gz`; the export envelope) is frozen
   for a given version.

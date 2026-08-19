@@ -28,7 +28,7 @@ impl Spinner {
 
             pb.set_style(
                 ProgressStyle::default_spinner()
-                    .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
+                    .tick_strings(glyphs::spinner_ticks())
                     .template("{spinner} {msg}")
                     .expect("valid template"),
             );

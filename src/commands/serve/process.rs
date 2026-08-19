@@ -21,6 +21,47 @@ use super::pid::write_pid_file;
 use super::pid::{check_existing_pid, is_process_running, read_pid, remove_pid_file};
 use super::startup::{ServeMode, validate_config_dir};
 
+/// Build the argument vector for the re-exec'd detached child.
+///
+/// Forwards every flag that changes the child's behavior — including
+/// `--json`, which the parent consumes for its own (short-lived) logging
+/// but the long-running child needs too, or its forced file logs come out
+/// plain-text. Extracted (and not `tarpaulin`-excluded) so the forwarding
+/// is unit-testable without spawning a process.
+fn detach_child_args(
+    config_dir: &Path,
+    only: Option<ServeMode>,
+    no_scheduler: bool,
+    json: bool,
+) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = vec![
+        "-C".into(),
+        config_dir.as_os_str().to_owned(),
+        "serve".into(),
+    ];
+
+    if let Some(mode) = only {
+        args.push("--only".into());
+        args.push(
+            match mode {
+                ServeMode::Admin => "admin",
+                ServeMode::Grpc => "grpc",
+            }
+            .into(),
+        );
+    }
+
+    if no_scheduler {
+        args.push("--no-scheduler".into());
+    }
+
+    if json {
+        args.push("--json".into());
+    }
+
+    args
+}
+
 /// Re-exec the current binary as a detached background process.
 ///
 /// # Errors
@@ -28,7 +69,12 @@ use super::startup::{ServeMode, validate_config_dir};
 /// Returns an error if the executable path can't be determined, the config
 /// directory is invalid, or the child process fails to spawn.
 #[cfg(not(tarpaulin_include))]
-pub fn detach(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) -> Result<()> {
+pub fn detach(
+    config_dir: &Path,
+    only: Option<ServeMode>,
+    no_scheduler: bool,
+    json: bool,
+) -> Result<()> {
     let exe = env::current_exe().context("Failed to determine executable path")?;
 
     let config_dir = config_dir
@@ -42,19 +88,7 @@ pub fn detach(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) ->
 
     let mut cmd = process::Command::new(&exe);
 
-    cmd.arg("-C").arg(&config_dir).arg("serve");
-
-    if let Some(mode) = only {
-        cmd.arg("--only");
-        cmd.arg(match mode {
-            ServeMode::Admin => "admin",
-            ServeMode::Grpc => "grpc",
-        });
-    }
-
-    if no_scheduler {
-        cmd.arg("--no-scheduler");
-    }
+    cmd.args(detach_child_args(&config_dir, only, no_scheduler, json));
 
     // Tell the child it was detached so it can auto-enable file logging
     // (the child runs without --detach, so it can't detect this itself).
@@ -161,7 +195,12 @@ pub fn stop(config_dir: &Path) -> Result<()> {
 /// The stop step's error is non-fatal: a stale PID file is cleaned up and
 /// `detach` proceeds.
 #[cfg(unix)]
-pub fn restart(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) -> Result<()> {
+pub fn restart(
+    config_dir: &Path,
+    only: Option<ServeMode>,
+    no_scheduler: bool,
+    json: bool,
+) -> Result<()> {
     validate_config_dir(config_dir)?;
 
     // Stop if running — tolerate "not running" errors (race between check and kill).
@@ -176,7 +215,7 @@ pub fn restart(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) -
         }
     }
 
-    detach(config_dir, only, no_scheduler)
+    detach(config_dir, only, no_scheduler, json)
 }
 
 /// Show the status of a detached instance.
@@ -356,6 +395,31 @@ mod tests {
             || true,
         );
         assert!(!exited, "predicate never flipped, should return false");
+    }
+
+    #[test]
+    fn detach_forwards_json_flag() {
+        let args = detach_child_args(Path::new("/cfg"), None, false, true);
+        assert!(
+            args.iter().any(|a| a == "--json"),
+            "--json must be forwarded to the detached child: {args:?}"
+        );
+    }
+
+    #[test]
+    fn detach_omits_json_flag_when_off() {
+        let args = detach_child_args(Path::new("/cfg"), None, false, false);
+        assert!(!args.iter().any(|a| a == "--json"));
+    }
+
+    #[test]
+    fn detach_forwards_only_and_no_scheduler() {
+        let args = detach_child_args(Path::new("/cfg"), Some(ServeMode::Grpc), true, false);
+        assert!(args.iter().any(|a| a == "-C"));
+        assert!(args.iter().any(|a| a == "serve"));
+        assert!(args.iter().any(|a| a == "--only"));
+        assert!(args.iter().any(|a| a == "grpc"));
+        assert!(args.iter().any(|a| a == "--no-scheduler"));
     }
 
     #[test]

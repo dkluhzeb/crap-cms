@@ -1171,6 +1171,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`crap-cms mcp` no longer corrupts the JSON-RPC stream with log lines.** The
+  MCP stdio transport owns stdout, but the console logger wrote there too, so the
+  startup `info!` line (and any later warn/error) was interleaved into the
+  protocol stream and broke the client handshake. For `mcp`, console logs now go
+  to **stderr** (matching the transport's design); all other commands keep the
+  stdout default.
+- **`serve --detach --json` (and `--restart --json`) now actually logs JSON.**
+  The `--json` flag was dropped when re-exec'ing the detached child, so the
+  long-running background process wrote plain-text file logs instead of JSON
+  (only `CRAP_LOG_FORMAT=json` in the environment worked around it). `--json` is
+  now forwarded to the child.
+- **CLI tables align non-ASCII content.** Column widths were computed from byte
+  length while padding counted characters, so rows containing CJK, emoji, or
+  combining marks (e.g. a localized title or a non-Latin name) shifted the
+  following columns. Widths and padding now use terminal display width.
+- **The progress spinner honours `CRAP_NO_UNICODE`.** The running animation
+  hard-coded braille frames regardless of terminal capability, emitting mojibake
+  on non-UTF-8 terminals even though the rest of the CLI fell back to ASCII. The
+  spinner now uses an ASCII frame set when Unicode is disabled/undetected.
 - **`crap-cms fmt` no longer mutates or drops template content.** A sweep of the
   Handlebars formatter fixed several ways it changed a template's meaning or
   broke its own `--check` gate:
@@ -2366,6 +2385,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   behavior without any configuration.
 
 ### Changed
+
+- **`CRAP_NO_UNICODE` / `CRAP_FORCE_UNICODE` accept any truthy value.**
+  Previously only the exact string `1` enabled them (`CRAP_NO_UNICODE=true` was
+  silently ignored). They now accept `1`, `true`, `yes`, or `on`
+  (case-insensitive, trimmed). Both env vars are now documented, and the
+  accepted-value set is a frozen contract.
 
 - **`status --check` exits with code 2 when the audit finds warnings**
   (previously always 0), so it can gate CI. A clean audit still exits 0.
