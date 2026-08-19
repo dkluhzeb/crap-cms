@@ -261,3 +261,37 @@ changing a representation is a breaking change to every consumer.
 - **Backup/export formats** are gated by a numeric `format_version` — the layout
   (`manifest.json` + `crap.db` + `uploads.tar.gz`; the export envelope) is frozen
   for a given version.
+
+## Template formatter (`crap-cms fmt`)
+
+CI gates on `crap-cms fmt --check`, so the formatter's exact output is a frozen
+contract: changing a rule reformats every committed `templates/**.hbs` and every
+downstream config that vendored templates.
+
+- **Idempotent and content-preserving.** `format(format(x)) == format(x)`, and
+  formatting never adds, drops, or reorders content — text, mustache
+  expressions, raw bodies (`<script>`/`<style>`/`<pre>`/`<textarea>` and
+  `{{{{raw}}}}`), and comments come through unchanged (whitespace aside). Both
+  are property-test invariants; the content one is the guard idempotency alone
+  can't provide.
+- **Verbatim regions.** Raw-content element bodies, `{{{{raw}}}}` raw blocks, and
+  comments (`<!-- -->` / `{{!-- --}}`) are emitted byte-for-byte — the final
+  blank-line-collapse and trailing-whitespace-strip passes explicitly skip them,
+  because whitespace there is significant.
+- **Inline whitespace is rendering-preserving.** A whitespace run inside inline
+  content collapses to a single space (never widened, never dropped between
+  tokens), and directly-adjacent inline elements (`<a>x</a><a>y</a>`) stay on one
+  line so no line break is introduced that would render as a space. *Residual:*
+  an adjacent inline pair whose combined length exceeds the 100-char line limit
+  is still split; keep whitespace explicit where it must render.
+- **Best-effort on unbalanced nesting, never an error.** Handlebars legitimately
+  opens/closes HTML tags across `{{#if}}`/`{{else}}` branches, so the linear
+  token stream is expected to be unbalanced; the printer clamps depth
+  (`saturating_sub`) rather than validating balance. It never rejects a template
+  for HTML nesting.
+- **Frozen rule tables.** The `BOOLEAN_ATTRS`, `VOID_TAGS`, and
+  `RAW_CONTENT_TAGS` sets, the 2-space indent, the 100-char line limit (measured
+  in **characters**), attribute order preserved (never sorted), single-quote
+  fallback only when the value has a literal `"` or a triple-stash `{{{ }}}`, and
+  the single-final-newline / one-blank-line-max policy — all load-bearing once
+  frozen. An empty input formats to a single newline.

@@ -273,6 +273,12 @@ enum Command {
         /// Used by editor formatter integrations.
         #[arg(long, conflicts_with = "check")]
         stdio: bool,
+
+        /// Follow symlinks. Off by default: symlinked directories are not
+        /// descended and a symlinked `.hbs` is not written through to its
+        /// target (which may live outside the tree).
+        #[arg(long)]
+        follow_symlinks: bool,
     },
 
     /// Manage installed versions of crap-cms
@@ -685,7 +691,8 @@ async fn dispatch_command(command: Command, config_flag: Option<PathBuf>) -> Res
             paths,
             check,
             stdio,
-        } => commands::fmt::run(paths, check, stdio),
+            follow_symlinks,
+        } => commands::fmt::run(paths, check, stdio, follow_symlinks),
         Command::Update { yes, force, action } => {
             // Run on a blocking thread — `reqwest::blocking` spawns its own
             // tokio runtime internally, and dropping that while inside

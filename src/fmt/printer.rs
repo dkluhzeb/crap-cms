@@ -56,6 +56,12 @@ pub fn print(tokens: &[Token<'_>]) -> Result<String> {
     // line. Critical for `<textarea>{{value}}</textarea>` so saved
     // values don't accrete indentation on every form round-trip.
     let mut hug_next_close = false;
+    // Byte ranges of verbatim content (raw-text bodies, comments, raw
+    // blocks) within `out`. `post_process` must not collapse blank lines or
+    // strip trailing whitespace inside these — that would mutate content the
+    // formatter promises to preserve. Recorded in emission order, so the
+    // ranges are sorted and non-overlapping.
+    let mut protected: Vec<(usize, usize)> = Vec::new();
 
     let mut i = 0;
     while i < tokens.len() {
@@ -80,12 +86,26 @@ pub fn print(tokens: &[Token<'_>]) -> Result<String> {
             }
 
             Token::RawText(s) => {
+                let start = out.len();
                 hug_next_close = emit_raw_text(s, &mut out, &mut at_line_start);
+                if out.len() > start {
+                    protected.push((start, out.len()));
+                }
             }
 
             Token::HtmlComment(raw) | Token::HbsComment(raw) => {
                 ensure_line_indent(&mut out, &mut at_line_start, depth);
+                let start = out.len();
                 emit_verbatim_block(raw, &mut out, depth);
+                protected.push((start, out.len()));
+                newline(&mut out, &mut at_line_start);
+            }
+
+            Token::RawBlock(raw) => {
+                ensure_line_indent(&mut out, &mut at_line_start, depth);
+                let start = out.len();
+                out.push_str(raw);
+                protected.push((start, out.len()));
                 newline(&mut out, &mut at_line_start);
             }
 
@@ -151,7 +171,7 @@ pub fn print(tokens: &[Token<'_>]) -> Result<String> {
         i += 1;
     }
 
-    Ok(post_process(&out))
+    Ok(post_process(&out, &protected))
 }
 
 /// If `tokens[at]` opens a block whose corresponding close is on the
@@ -167,6 +187,42 @@ fn try_render_inline(
     at: usize,
     depth: usize,
 ) -> Result<Option<(String, usize)>> {
+    let Some((mut line, mut consumed)) = render_one_inline_atom(tokens, at)? else {
+        return Ok(None);
+    };
+
+    // Greedily merge directly-adjacent inline atoms — those with no
+    // whitespace token between them, so `render_one_inline_atom` matches at
+    // exactly `at + consumed`. Keeping `<a>x</a><a>y</a>` on one line avoids
+    // the reflow inserting a newline that renders as a space (changing
+    // `xy` into `x y`). A whitespace-separated pair stops the run here
+    // (its separating space becomes the line break, which renders the same).
+    while let Some((piece, used)) = render_one_inline_atom(tokens, at + consumed)? {
+        if line.chars().count() + piece.chars().count() + depth * INDENT.chars().count()
+            > LINE_LIMIT
+        {
+            break;
+        }
+        line.push_str(&piece);
+        consumed += used;
+    }
+
+    if line.contains('\n') || line.chars().count() + depth * INDENT.chars().count() > LINE_LIMIT {
+        return Ok(None);
+    }
+
+    Ok(Some((line + "\n", consumed)))
+}
+
+/// Render one inline atom — an inline-eligible element and its
+/// single-logical-line body — starting at `tokens[at]`. Returns the
+/// rendered string (no trailing newline) and the token count consumed,
+/// or `None` when `tokens[at]` doesn't open such an atom.
+fn render_one_inline_atom(tokens: &[Token<'_>], at: usize) -> Result<Option<(String, usize)>> {
+    if at >= tokens.len() {
+        return Ok(None);
+    }
+
     let Some((need_close_kind, opener_str)) = inline_eligible_opener(&tokens[at])? else {
         return Ok(None);
     };
@@ -183,11 +239,7 @@ fn try_render_inline(
         return Ok(None);
     };
 
-    if rendered.contains('\n') || rendered.len() + depth * INDENT.len() > LINE_LIMIT {
-        return Ok(None);
-    }
-
-    Ok(Some((rendered + "\n", j - at + 1)))
+    Ok(Some((rendered, j - at + 1)))
 }
 
 /// Check whether `opener` is an inline-eligible HTML start tag.
@@ -319,7 +371,7 @@ fn render_inline_body(
             | Token::HbsElse(raw)
             | Token::HbsPartialOpen(raw)
             | Token::HbsPartialClose(raw) => buf.push_str(&normalize_mustache(raw)),
-            Token::RawText(_) => return Ok(None),
+            Token::RawText(_) | Token::RawBlock(_) => return Ok(None),
         }
     }
     match &tokens[j] {
@@ -364,7 +416,10 @@ fn body_is_single_logical_line(body: &[Token<'_>]) -> bool {
             // Block-open tokens disqualify the inline collapse.
             // RawText body (inside <script>/<style>/<pre>/<textarea>) is verbatim and never
             // collapses to inline form.
-            Token::HbsBlockOpen(_) | Token::HbsPartialOpen(_) | Token::RawText(_) => {
+            Token::HbsBlockOpen(_)
+            | Token::HbsPartialOpen(_)
+            | Token::RawText(_)
+            | Token::RawBlock(_) => {
                 return false;
             }
             _ => {}
@@ -466,10 +521,14 @@ fn render_attr(a: &Attr) -> String {
             match value {
                 None => name.clone(),
                 Some(v) => {
-                    // Default to double quotes (style guide). Switch to
-                    // single quotes if the value contains a literal `"`
-                    // — common for inline JSON in `content='{"...":...}'`.
-                    if v.contains('"') && !v.contains('\'') {
+                    // Default to double quotes (style guide). Switch to single
+                    // quotes when the value has a literal `"` (inline JSON like
+                    // `content='{"...":...}'`) or contains a triple-stash
+                    // `{{{ }}}`, whose UNescaped output can emit `"` at render
+                    // time and would break a double-quoted attribute. A regular
+                    // `{{ }}` HTML-escapes `"`, so it stays safely double-quoted.
+                    let needs_single = v.contains('"') || v.contains("{{{");
+                    if needs_single && !v.contains('\'') {
                         format!("{name}='{v}'")
                     } else {
                         format!("{name}=\"{v}\"")
@@ -498,11 +557,25 @@ fn normalize_mustache(raw: &str) -> String {
 }
 
 fn collapse_inline_whitespace(s: &str) -> String {
-    // Inline runs preserve internal whitespace but never embed newlines.
-    s.replace('\n', " ")
-        .replace("  ", " ")
-        .trim_matches(' ')
-        .to_string()
+    // Collapse every run of whitespace (newlines included) to a single
+    // space, the way HTML renders inline whitespace. A run is only ever
+    // collapsed — never widened (idempotent) — and a leading/trailing space
+    // is preserved as a single space, because whitespace *between* inline
+    // tokens (`{{x}} {{y}}`, `a <b>`) is significant to the rendered output.
+    let mut out = String::with_capacity(s.len());
+    let mut prev_ws = false;
+    for ch in s.chars() {
+        if ch.is_whitespace() {
+            if !prev_ws {
+                out.push(' ');
+            }
+            prev_ws = true;
+        } else {
+            out.push(ch);
+            prev_ws = false;
+        }
+    }
+    out
 }
 
 /// Emit raw-content body (`<script>`, `<style>`, `<pre>`, `<textarea>`)
@@ -631,33 +704,56 @@ fn emit_verbatim_block(raw: &str, out: &mut String, _depth: usize) {
     out.push_str(raw);
 }
 
-/// Final cleanup pass — collapses 3+ consecutive newlines to 2 (one
-/// blank line max) and ensures a single trailing newline.
-fn post_process(s: &str) -> String {
+/// Final cleanup pass — collapses 3+ consecutive newlines to 2 (one blank
+/// line max), strips trailing whitespace per line, and ensures a single
+/// trailing newline. `protected` (sorted, non-overlapping byte ranges of
+/// verbatim content — raw-text bodies, comments, raw blocks) is left
+/// untouched: blank lines and trailing whitespace there are significant.
+fn post_process(s: &str, protected: &[(usize, usize)]) -> String {
     let mut out = String::with_capacity(s.len());
+    // Held-back unprotected spaces/tabs — flushed when interior (followed by
+    // content), dropped when trailing (followed by a newline or end).
+    let mut pending_ws = String::new();
     let mut newline_run = 0;
-    for ch in s.chars() {
+    let mut pi = 0;
+
+    for (idx, ch) in s.char_indices() {
+        while pi < protected.len() && idx >= protected[pi].1 {
+            pi += 1;
+        }
+        let in_protected = pi < protected.len() && idx >= protected[pi].0;
+
+        if in_protected {
+            out.push_str(&pending_ws);
+            pending_ws.clear();
+            out.push(ch);
+            newline_run = 0;
+            continue;
+        }
+
         if ch == '\n' {
+            pending_ws.clear();
             newline_run += 1;
             if newline_run <= 2 {
                 out.push('\n');
             }
+        } else if ch == ' ' || ch == '\t' {
+            pending_ws.push(ch);
         } else {
-            newline_run = 0;
+            out.push_str(&pending_ws);
+            pending_ws.clear();
             out.push(ch);
+            newline_run = 0;
         }
     }
-    // Strip trailing newlines, then add exactly one.
+
+    // Trailing whitespace at EOF is dropped (pending_ws never flushed); then
+    // normalise to exactly one final newline.
     while out.ends_with('\n') {
         out.pop();
     }
     out.push('\n');
-    // Strip trailing whitespace per line.
-    out.lines()
-        .map(str::trim_end)
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n"
+    out
 }
 
 #[cfg(test)]
@@ -893,5 +989,82 @@ mod tests {
             out.contains("alert(1);\n</script>"),
             "multi-line body keeps close on own line, got:\n{out}"
         );
+    }
+
+    #[test]
+    fn inline_body_preserves_significant_space_between_tokens() {
+        // The space between two mustaches renders as a space; dropping it
+        // would change `val1 val2` into `val1val2`.
+        let out = fmt("<p>{{x}} {{y}}</p>\n");
+        assert!(out.contains("{{x}} {{y}}"), "got: {out:?}");
+    }
+
+    #[test]
+    fn inline_whitespace_run_collapses_idempotently() {
+        // A run of 3+ spaces used to collapse one pair per pass (non-idempotent).
+        let once = fmt("<p>a   b</p>\n");
+        assert!(once.contains("a b"), "run collapses to one space: {once:?}");
+        assert_eq!(once, fmt(&once), "must be a fixed point");
+    }
+
+    #[test]
+    fn adjacent_inline_elements_stay_on_one_line() {
+        // No whitespace between them → keep them together; a line break here
+        // would render as a space.
+        let out = fmt("<a>x</a><a>y</a>\n");
+        assert!(out.contains("<a>x</a><a>y</a>"), "got: {out:?}");
+        assert_eq!(out, fmt(&out), "idempotent");
+    }
+
+    #[test]
+    fn whitespace_separated_inline_elements_split_lines() {
+        // A separating space becomes the line break — renders equivalently.
+        let out = fmt("<a>x</a> <a>y</a>\n");
+        assert!(out.contains("<a>x</a>\n"), "got: {out:?}");
+        assert!(out.contains("<a>y</a>"), "got: {out:?}");
+    }
+
+    #[test]
+    fn pre_body_blank_lines_and_trailing_space_are_verbatim() {
+        let out = fmt("<pre>a\n\n\nb  \nc</pre>\n");
+        assert!(
+            out.contains("a\n\n\nb  \nc"),
+            "pre body must be verbatim: {out:?}"
+        );
+    }
+
+    #[test]
+    fn comment_blank_lines_and_trailing_space_are_verbatim() {
+        let out = fmt("<!-- a  \n\n\n b -->\n");
+        assert!(
+            out.contains("<!-- a  \n\n\n b -->"),
+            "comment must be verbatim: {out:?}"
+        );
+    }
+
+    #[test]
+    fn raw_block_body_is_verbatim() {
+        let out = fmt("{{{{raw}}}}\n  {{literal}}\n{{{{/raw}}}}\n");
+        assert!(
+            out.contains("{{{{raw}}}}\n  {{literal}}\n{{{{/raw}}}}"),
+            "raw block must pass through: {out:?}"
+        );
+    }
+
+    #[test]
+    fn triple_stash_attribute_value_uses_single_quotes() {
+        // `{{{ }}}` emits unescaped output that may contain `"`, so it must be
+        // single-quoted or it would break the attribute at render time.
+        let out = fmt("<x data-y=\"{{{json z}}}\">a</x>\n");
+        assert!(out.contains("data-y='{{{json z}}}'"), "got: {out:?}");
+    }
+
+    #[test]
+    fn line_limit_counts_chars_not_bytes() {
+        // 60 `é` = 60 chars but 120 bytes; with a chars-based limit the body
+        // (67 chars total) still collapses inline.
+        let body = "é".repeat(60);
+        let out = fmt(&format!("<p>{body}</p>\n"));
+        assert!(out.contains(&format!("<p>{body}</p>")), "got: {out:?}");
     }
 }

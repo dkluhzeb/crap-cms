@@ -17,10 +17,13 @@
 //!
 //! ## Conventions
 //!
-//! - Idempotent: `format(format(x)) == format(x)` is a property test
-//!   invariant covered by `tests/fmt_idempotent.rs`.
-//! - Comment content (`<!-- ... -->` / `{{!-- ... --}}`) is preserved
-//!   verbatim; the printer never reflows it.
+//! - Idempotent: `format(format(x)) == format(x)` is a property-test
+//!   invariant (`format::tests::format_is_idempotent_on_success`).
+//! - Content-preserving: the non-whitespace character stream survives
+//!   formatting unchanged (`format::tests::format_preserves_content`).
+//! - Comment content (`<!-- ... -->` / `{{!-- ... --}}`) and raw blocks
+//!   (`<script>`/`<style>`/`<pre>`/`<textarea>` bodies, `{{{{raw}}}}`) are
+//!   preserved verbatim; the printer never reflows them.
 
 mod format;
 pub(crate) mod printer;

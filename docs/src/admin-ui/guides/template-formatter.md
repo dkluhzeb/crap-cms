@@ -140,8 +140,13 @@ A meaningful value on a known boolean attribute is **kept** (the same
 attribute name can carry data on custom elements):
 
 ```hbs
-<crap-relationship-search selected='{{json items}}' />
+<crap-relationship-search selected="{{json items}}" />
 ```
+
+Double quotes are the default; the formatter switches an attribute to
+single quotes only when its value contains a literal `"` or a triple-stash
+`{{{ }}}` (whose unescaped output can emit `"`, which would otherwise break
+a double-quoted attribute).
 
 ### 9. Comments preserved verbatim
 

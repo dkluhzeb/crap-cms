@@ -41,6 +41,50 @@ mod tests {
                 prop_assert_eq!(once, twice);
             }
         }
+
+        /// Property: formatting never adds, drops, or reorders CONTENT — the
+        /// text nodes, raw bodies, comments, and mustache expressions come
+        /// through unchanged (down to whitespace, which the formatter may move
+        /// and mustache-normalisation may trim). Idempotency alone can't catch
+        /// a tokenizer bug that stably mangles content; this can.
+        #[test]
+        fn format_preserves_content(s in any::<String>()) {
+            if let Ok(out) = format(&s)
+                && let (Some(before), Some(after)) =
+                    (content_signature(&s), content_signature(&out))
+            {
+                prop_assert_eq!(before, after);
+            }
+        }
+    }
+
+    /// The content a formatter must preserve verbatim (modulo whitespace):
+    /// text, raw bodies, comments, and whitespace-normalised mustaches. HTML
+    /// tag/attribute *structure* is excluded — the formatter legitimately
+    /// rewrites it (void self-close, quote choice, boolean-attr and case
+    /// normalisation), so it isn't content in this sense.
+    fn content_signature(src: &str) -> Option<String> {
+        use crate::fmt::tokenizer::{Token, tokenize};
+
+        let mut sig = String::new();
+        for tok in tokenize(src).ok()? {
+            let text = match tok {
+                Token::Text(s)
+                | Token::RawText(s)
+                | Token::RawBlock(s)
+                | Token::HtmlComment(s)
+                | Token::HbsComment(s)
+                | Token::HbsExpr(s)
+                | Token::HbsBlockOpen(s)
+                | Token::HbsBlockClose(s)
+                | Token::HbsElse(s)
+                | Token::HbsPartialOpen(s)
+                | Token::HbsPartialClose(s) => s,
+                Token::HtmlStart { .. } | Token::HtmlEnd { .. } => continue,
+            };
+            sig.extend(text.chars().filter(|c| !c.is_whitespace()));
+        }
+        Some(sig)
     }
 
     /// The formatter is documented as idempotent (CI gates on

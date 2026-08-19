@@ -1171,6 +1171,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`crap-cms fmt` no longer mutates or drops template content.** A sweep of the
+  Handlebars formatter fixed several ways it changed a template's meaning or
+  broke its own `--check` gate:
+  - **Significant inline whitespace was dropped.** The space between two
+    inline tokens (`<p>{{x}} {{y}}</p>`) was deleted, changing the rendered
+    output from `val1 val2` to `val1val2`; and directly-adjacent inline elements
+    (`<a>x</a><a>y</a>`) were split onto separate lines, inserting a line break
+    that renders as a space. Inline whitespace now collapses to a single space
+    without being dropped, and adjacent inline elements stay on one line.
+  - **A run of 3+ spaces broke idempotency.** `<p>a   b</p>` collapsed one space
+    pair per pass, so `fmt` then `fmt --check` reported drift forever. Runs now
+    collapse to a fixed point in one pass.
+  - **`<pre>` / `<textarea>` bodies and comments were altered.** The final
+    cleanup pass stripped trailing whitespace and collapsed blank lines over the
+    *whole* output, including verbatim regions — losing significant whitespace in
+    preformatted/raw content and comments. Those regions are now left untouched.
+  - **Handlebars inverse sections, whitespace-control, and `else`-prefixed names
+    were mis-tokenized.** `{{^section}}`, `{{~#if}}` / `{{~/if}}` / `{{~else}}`,
+    and identifiers like `{{elsewhere}}` were misclassified, corrupting
+    indentation. They now classify correctly.
+  - **A triple-stash attribute value got double-quoted.** `foo="{{{json x}}}"`
+    kept double quotes even though the unescaped `{{{ }}}` output can emit `"` and
+    break the attribute at render time; such values now use single quotes.
+  - **The 100-char line limit was measured in bytes**, so multibyte content was
+    denied inline collapse earlier than its visible width; it now counts
+    characters.
+
 - **`typegen` produced broken or wrong output for several schema shapes.** The
   client SDK and Lua generators are now correct where they previously emitted
   code that didn't compile or that named types wrongly:
@@ -2001,6 +2028,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   files, so trashed documents remain restorable.)
 
 ### Added
+
+- **`crap-cms fmt` supports Handlebars raw blocks and a `--follow-symlinks`
+  flag.** `{{{{raw}}}} … {{{{/raw}}}}` blocks (for displaying literal handlebars
+  syntax) now pass through verbatim instead of having their bodies reformatted,
+  matching the documented contract. `crap-cms fmt` no longer follows symlinks by
+  default — a symlinked directory is not descended and a symlinked `.hbs` is not
+  written through to a target that may live outside the tree; pass
+  `--follow-symlinks` to restore the old behavior. Writes are now atomic (temp
+  file + rename), so a crash mid-write (it runs in pre-commit hooks) can't leave
+  a truncated template.
 
 - **`[server] public_schema_introspection` config flag.** Controls whether the
   gRPC schema-introspection RPCs (`ListCollections`, `DescribeCollection`) are

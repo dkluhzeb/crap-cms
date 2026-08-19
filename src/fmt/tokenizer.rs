@@ -38,6 +38,11 @@ pub enum Token<'a> {
     /// Required for elements whose content has its own grammar
     /// (JSON-in-script, JS source) that we must not reformat.
     RawText(&'a str),
+    /// A whole Handlebars raw block — `{{{{name}}}} … {{{{/name}}}}`,
+    /// delimiters included. Its purpose is to display literal handlebars
+    /// syntax, so the entire span (body and both delimiters) is emitted
+    /// verbatim and never re-tokenized.
+    RawBlock(&'a str),
 }
 
 /// Parsed attribute as the printer wants to consume it.
@@ -82,6 +87,19 @@ pub fn tokenize(src: &str) -> Result<Vec<Token<'_>>> {
             let end = find_hbs_comment_end(src, i)
                 .ok_or_else(|| anyhow!("unterminated handlebars comment at byte {i}"))?;
             out.push(Token::HbsComment(&src[i..end]));
+            i = end;
+            text_start = i;
+            continue;
+        }
+
+        // Handlebars raw block: {{{{name}}}} … {{{{/name}}}}. The body is
+        // literal handlebars to display verbatim, so capture the whole span
+        // (both delimiters included) as one token. Must precede the {{{ and
+        // {{ checks, which would otherwise mis-split the four braces.
+        if bytes[i..].starts_with(b"{{{{") {
+            flush_text(src, text_start, i, &mut out);
+            let end = find_raw_block_end(src, i)?;
+            out.push(Token::RawBlock(&src[i..end]));
             i = end;
             text_start = i;
             continue;
@@ -195,6 +213,24 @@ fn is_tag_start_char(b: u8) -> bool {
     b.is_ascii_alphabetic() || b == b'/'
 }
 
+/// End (exclusive) of a `{{{{name}}}} … {{{{/name}}}}` raw block that
+/// starts at byte `i`. The whole span becomes one verbatim [`Token::RawBlock`].
+fn find_raw_block_end(src: &str, i: usize) -> Result<usize> {
+    let open_end = find_close(src, i + 4, b"}}}}")
+        .ok_or_else(|| anyhow!("unterminated raw block at byte {i}"))?
+        + 4;
+    let name = src[i + 4..open_end - 4]
+        .split_whitespace()
+        .next()
+        .unwrap_or("");
+    let close = ["{{{{/", name, "}}}}"].concat();
+
+    src[open_end..]
+        .find(&close)
+        .map(|p| open_end + p + close.len())
+        .ok_or_else(|| anyhow!("unterminated raw block '{name}' at byte {i}"))
+}
+
 /// Find the byte position of `needle` starting from `from`, respecting
 /// quote boundaries. The returned index is the start of `needle`.
 fn find_close(src: &str, from: usize, needle: &[u8]) -> Option<usize> {
@@ -237,13 +273,24 @@ fn find_hbs_comment_end(src: &str, from: usize) -> Option<usize> {
 /// Classify a mustache token (already extracted, including outer `{{`/`}}`).
 fn classify_mustache(raw: &str) -> Token<'_> {
     let inner = strip_mustache(raw);
-    let trimmed = inner.trim_start();
-    if let Some(rest) = trimmed.strip_prefix("#>") {
-        let _ = rest;
+    // Strip whitespace-control markers (`{{~#if}}`, `{{#if ~}}`) so the token
+    // classifies by its real sigil rather than falling through to `HbsExpr`.
+    let trimmed = inner.trim();
+    let trimmed = trimmed.strip_prefix('~').unwrap_or(trimmed);
+    let trimmed = trimmed.strip_suffix('~').unwrap_or(trimmed);
+    let trimmed = trimmed.trim();
+
+    if trimmed.starts_with("#>") {
         return Token::HbsPartialOpen(raw);
     }
-    if let Some(rest) = trimmed.strip_prefix('#') {
-        let _ = rest;
+    if trimmed.starts_with('#') {
+        return Token::HbsBlockOpen(raw);
+    }
+    // Inverse section: `{{^name}}` opens a block; a bare `{{^}}` is an else.
+    if trimmed == "^" {
+        return Token::HbsElse(raw);
+    }
+    if trimmed.starts_with('^') {
         return Token::HbsBlockOpen(raw);
     }
     if let Some(rest) = trimmed.strip_prefix('/') {
@@ -255,7 +302,13 @@ fn classify_mustache(raw: &str) -> Token<'_> {
         }
         return Token::HbsBlockClose(raw);
     }
-    if trimmed.starts_with("else") {
+    // `else` / `else if …` — but not an identifier that merely starts with
+    // "else" (`{{elsewhere}}`).
+    let is_else = trimmed == "else"
+        || trimmed
+            .strip_prefix("else")
+            .is_some_and(|rest| rest.starts_with(char::is_whitespace));
+    if is_else {
         return Token::HbsElse(raw);
     }
     Token::HbsExpr(raw)
@@ -567,6 +620,7 @@ mod tests {
                 Token::HbsComment(_) => "HbsComment",
                 Token::Text(_) => "Text",
                 Token::RawText(_) => "RawText",
+                Token::RawBlock(_) => "RawBlock",
             })
             .collect()
     }
@@ -727,5 +781,51 @@ mod tests {
     fn close_tag_match_is_case_insensitive() {
         let toks = tokenize("<script>x</SCRIPT>").unwrap();
         assert_eq!(names(&toks), ["Start", "RawText", "End"]);
+    }
+
+    #[test]
+    fn inverse_section_opens_a_block() {
+        // `{{^items}}` must open a block (paired with `{{/items}}`), not be a
+        // bare expression — otherwise the printer's depth desyncs.
+        let toks = tokenize("{{^items}}x{{/items}}").unwrap();
+        assert_eq!(names(&toks), ["BlockOpen", "Text", "BlockClose"]);
+        // A bare `{{^}}` is the inverse (else) branch.
+        let toks = tokenize("{{#if a}}x{{^}}y{{/if}}").unwrap();
+        assert_eq!(
+            names(&toks),
+            ["BlockOpen", "Text", "Else", "Text", "BlockClose"]
+        );
+    }
+
+    #[test]
+    fn whitespace_control_markers_classify_by_real_sigil() {
+        let toks = tokenize("{{~#if x~}}a{{~/if~}}").unwrap();
+        assert_eq!(names(&toks), ["BlockOpen", "Text", "BlockClose"]);
+        let toks = tokenize("{{#if a}}x{{~else~}}y{{/if}}").unwrap();
+        assert_eq!(
+            names(&toks),
+            ["BlockOpen", "Text", "Else", "Text", "BlockClose"]
+        );
+    }
+
+    #[test]
+    fn else_prefixed_identifier_is_an_expression_not_else() {
+        // `{{elsewhere}}` merely starts with "else" — it's an expression.
+        let toks = tokenize("{{elsewhere}}").unwrap();
+        assert_eq!(names(&toks), ["Expr"]);
+        // `{{else if x}}` is a real else branch.
+        let toks = tokenize("{{#if a}}x{{else if b}}y{{/if}}").unwrap();
+        assert_eq!(
+            names(&toks),
+            ["BlockOpen", "Text", "Else", "Text", "BlockClose"]
+        );
+    }
+
+    #[test]
+    fn raw_block_is_one_verbatim_token() {
+        let src = "{{{{raw}}}}{{this stays literal}}{{{{/raw}}}}";
+        let toks = tokenize(src).unwrap();
+        assert_eq!(names(&toks), ["RawBlock"]);
+        assert!(matches!(&toks[0], Token::RawBlock(s) if *s == src));
     }
 }
