@@ -514,7 +514,11 @@ fn render_collection_accessor(out: &mut String, slug: &str, pascal: &str) {
     w!(out, "function {local}.ref_count(id) end");
     out.push('\n');
 
-    w!(out, "crap.collections.{slug} = {local}");
+    w!(
+        out,
+        "{} = {local}",
+        crate::typegen::idents::lua_index("crap.collections", slug)
+    );
     out.push('\n');
 }
 

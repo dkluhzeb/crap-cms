@@ -13,6 +13,7 @@ use super::helpers::{
     collect_sub_type_fields, is_optional, rel_has_many, sorted_collection_slugs,
     sorted_global_slugs, to_pascal_case, w,
 };
+use super::idents;
 
 /// Render proto conversion code for all collections and globals.
 pub(super) fn render(registry: &Registry, proto_mod: &str) -> String {
@@ -162,6 +163,36 @@ fn render_helpers(out: &mut String) {
     w!(out, "        .unwrap_or_default()");
     w!(out, "}}");
     w!(out, "");
+
+    // Numeric list: a `has_many` number field. Each element is `IntValue`
+    // (exact) or `DoubleValue`; both collapse to `f64`, mirroring `get_num`.
+    w!(
+        out,
+        "fn get_num_list(doc: &Document, name: &str) -> Vec<f64> {{"
+    );
+    w!(out, "    doc.fields.as_ref()");
+    w!(out, "        .and_then(|f| f.fields.get(name))");
+    w!(out, "        .and_then(|v| match &v.kind {{");
+    w!(out, "            Some(Kind::ListValue(list)) => Some(");
+    w!(out, "                list.values.iter()");
+    w!(out, "                    .filter_map(|v| match &v.kind {{");
+    w!(
+        out,
+        "                        Some(Kind::IntValue(n)) => Some(*n as f64),"
+    );
+    w!(
+        out,
+        "                        Some(Kind::DoubleValue(n)) => Some(*n),"
+    );
+    w!(out, "                        _ => None,");
+    w!(out, "                    }})");
+    w!(out, "                    .collect()");
+    w!(out, "            ),");
+    w!(out, "            _ => None,");
+    w!(out, "        }})");
+    w!(out, "        .unwrap_or_default()");
+    w!(out, "}}");
+    w!(out, "");
 }
 
 /// Render the `FromDocument` trait definition.
@@ -249,11 +280,11 @@ fn render_rel_helpers(out: &mut String) {
 
 /// Render `from_document` impl for a collection.
 fn render_collection_impl(out: &mut String, col: &CollectionDefinition) {
-    let pascal = to_pascal_case(&col.slug);
+    let pascal = idents::rust_type(&to_pascal_case(&col.slug));
 
     // Sub-type from_struct impls for arrays
     for stf in collect_sub_type_fields(&col.fields, &pascal) {
-        let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
+        let sub_pascal = format!("{}{}", stf.parent_pascal, to_pascal_case(&stf.field.name));
         render_sub_type_from_struct(out, &sub_pascal, &stf.field.fields);
     }
 
@@ -283,10 +314,10 @@ fn render_collection_impl(out: &mut String, col: &CollectionDefinition) {
 
 /// Render `from_document` impl for a global.
 fn render_global_impl(out: &mut String, global: &GlobalDefinition) {
-    let pascal = to_pascal_case(&global.slug);
+    let pascal = idents::rust_type(&to_pascal_case(&global.slug));
 
     for stf in collect_sub_type_fields(&global.fields, &pascal) {
-        let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
+        let sub_pascal = format!("{}{}", stf.parent_pascal, to_pascal_case(&stf.field.name));
         render_sub_type_from_struct(out, &sub_pascal, &stf.field.fields);
     }
 
@@ -322,7 +353,12 @@ fn render_field_extractions(
 ) {
     for f in flatten_array_sub_fields(fields) {
         let extraction = field_extraction(f, parent_pascal, doc_var);
-        w!(out, "            {}: {},", f.name, extraction);
+        w!(
+            out,
+            "            {}: {},",
+            idents::rust_field(&f.name).ident,
+            extraction
+        );
     }
 }
 
@@ -414,7 +450,7 @@ fn field_extraction(field: &FieldDefinition, parent_pascal: &str, doc_var: &str)
         | FieldType::Radio => scalar("get_str", doc_var, name, optional),
 
         // Numbers
-        FieldType::Number if field.has_many => opt_list("get_str_list", doc_var, name, optional), // TODO: number list
+        FieldType::Number if field.has_many => opt_list("get_num_list", doc_var, name, optional),
         FieldType::Number => scalar("get_num", doc_var, name, optional),
 
         // Booleans
@@ -480,16 +516,23 @@ fn field_extraction(field: &FieldDefinition, parent_pascal: &str, doc_var: &str)
     }
 }
 
-/// Render a `from_struct` impl for an array sub-type.
+/// Render a `from_struct` impl for an array/group sub-type. `pascal` is the
+/// sub-type's compound name (e.g. `PostsItems`), threaded into
+/// [`sub_field_extraction`] so a nested group/array references the right
+/// nested sub-type name.
 fn render_sub_type_from_struct(out: &mut String, pascal: &str, fields: &[FieldDefinition]) {
     w!(out, "impl {} {{", pascal);
     w!(out, "    fn from_struct(s: &DataMap) -> Self {{");
     w!(out, "        Self {{");
 
     for f in fields {
-        let name = &f.name;
-        let extraction = sub_field_extraction(f);
-        w!(out, "            {}: {},", name, extraction);
+        let extraction = sub_field_extraction(f, pascal);
+        w!(
+            out,
+            "            {}: {},",
+            idents::rust_field(&f.name).ident,
+            extraction
+        );
     }
 
     w!(out, "        }}");
@@ -498,10 +541,86 @@ fn render_sub_type_from_struct(out: &mut String, pascal: &str, fields: &[FieldDe
     w!(out, "");
 }
 
-/// Generate extraction for a sub-type field (from a `DataMap`, not a Document).
-fn sub_field_extraction(field: &FieldDefinition) -> String {
+/// Match arm decoding a `ListValue` of strings into a `Vec<String>` (a
+/// `has_many` scalar sub-field). Shared by the string-family and
+/// polymorphic/empty-upload arms of [`sub_field_extraction`].
+const STR_LIST: &str = "Some(Kind::ListValue(l)) => Some(l.values.iter().filter_map(|v| match &v.kind { Some(Kind::StringValue(s)) => Some(s.clone()), _ => None }).collect())";
+
+/// Decode a relationship/upload SUB-field from a nested `DataMap`. Split out of
+/// [`sub_field_extraction`] to keep it focused. Matches `field_to_rust`:
+/// polymorphic and empty-collection uploads are plain `String`/`Vec<String>`;
+/// otherwise `Rel<T>` (has-one) or `Vec<Rel<T>>` (has-many).
+fn sub_rel_extraction(field: &FieldDefinition, name: &str, optional: bool) -> String {
+    let get = |arm: &str| {
+        format!("s.fields.get(\"{name}\").and_then(|v| match &v.kind {{ {arm}, _ => None }})")
+    };
+    let finish = |base: String, dflt: &str| {
+        if optional {
+            base
+        } else {
+            format!("{base}.{dflt}")
+        }
+    };
+
+    let poly = matches!(&field.relationship, Some(rc) if rc.is_polymorphic());
+    let empty_upload = field.field_type == FieldType::Upload
+        && field
+            .relationship
+            .as_ref()
+            .is_some_and(|rc| rc.collection.is_empty());
+    let has_many = rel_has_many(field);
+
+    if poly || empty_upload {
+        if has_many {
+            finish(get(STR_LIST), "unwrap_or_default()")
+        } else {
+            finish(
+                get("Some(Kind::StringValue(s)) => Some(s.clone())"),
+                "unwrap_or_default()",
+            )
+        }
+    } else if has_many {
+        finish(
+            get(
+                "Some(Kind::ListValue(l)) => Some(l.values.iter().filter_map(|v| match &v.kind { Some(Kind::StringValue(s)) if !s.is_empty() => Some(Rel::Id(s.clone())), _ => None }).collect())",
+            ),
+            "unwrap_or_default()",
+        )
+    } else {
+        finish(
+            get("Some(Kind::StringValue(s)) if !s.is_empty() => Some(Rel::Id(s.clone()))"),
+            "unwrap_or(Rel::Id(String::new()))",
+        )
+    }
+}
+
+/// Extraction for a sub-type field, reading from a nested `DataMap` (`s`).
+///
+/// Mirrors the Rust client printer's (`super::client::rust`) type mapping exactly
+/// so the decoded value's
+/// type matches the generated struct field: `has_many` scalars decode to a
+/// `Vec`, relationships/uploads to `Rel<T>` / `Vec<Rel<T>>` (polymorphic and
+/// empty-collection uploads to `String` / `Vec<String>`), and a nested group /
+/// array to the child sub-type via its own `from_struct`. `parent_pascal` is the
+/// enclosing sub-type's compound name, used to build nested sub-type references.
+/// An optional field yields `Option<T>`; a required one is unwrapped to `T`.
+fn sub_field_extraction(field: &FieldDefinition, parent_pascal: &str) -> String {
     let name = &field.name;
     let optional = is_optional(field);
+
+    // `get(arm)` → an `Option<T>` expression reading `s.fields[name]` and matching
+    // `arm` over the value's kind. `finish(base, dflt)` keeps the `Option` for an
+    // optional field or unwraps it via `dflt` for a required one.
+    let get = |arm: &str| {
+        format!("s.fields.get(\"{name}\").and_then(|v| match &v.kind {{ {arm}, _ => None }})")
+    };
+    let finish = |base: String, dflt: &str| {
+        if optional {
+            base
+        } else {
+            format!("{base}.{dflt}")
+        }
+    };
 
     match &field.field_type {
         FieldType::Text
@@ -512,38 +631,61 @@ fn sub_field_extraction(field: &FieldDefinition) -> String {
         | FieldType::Code
         | FieldType::Select
         | FieldType::Radio => {
-            let base = format!(
-                "s.fields.get(\"{name}\").and_then(|v| match &v.kind {{ Some(Kind::StringValue(s)) => Some(s.clone()), _ => None }})"
-            );
-            if optional {
-                base
+            if field.has_many {
+                finish(get(STR_LIST), "unwrap_or_default()")
             } else {
-                format!("{base}.unwrap_or_default()")
+                finish(
+                    get("Some(Kind::StringValue(s)) => Some(s.clone())"),
+                    "unwrap_or_default()",
+                )
             }
         }
 
-        FieldType::Number => {
-            let base = format!(
-                "s.fields.get(\"{name}\").and_then(|v| match &v.kind {{ Some(Kind::IntValue(n)) => Some(*n as f64), Some(Kind::DoubleValue(n)) => Some(*n), _ => None }})"
-            );
+        FieldType::Number if field.has_many => finish(
+            get(
+                "Some(Kind::ListValue(l)) => Some(l.values.iter().filter_map(|v| match &v.kind { Some(Kind::IntValue(n)) => Some(*n as f64), Some(Kind::DoubleValue(n)) => Some(*n), _ => None }).collect())",
+            ),
+            "unwrap_or_default()",
+        ),
+        FieldType::Number => finish(
+            get(
+                "Some(Kind::IntValue(n)) => Some(*n as f64), Some(Kind::DoubleValue(n)) => Some(*n)",
+            ),
+            "unwrap_or(0.0)",
+        ),
+
+        FieldType::Checkbox => finish(
+            get("Some(Kind::BoolValue(b)) => Some(*b)"),
+            "unwrap_or(false)",
+        ),
+
+        FieldType::Relationship | FieldType::Upload => sub_rel_extraction(field, name, optional),
+
+        FieldType::Group if !field.fields.is_empty() => {
+            let sub = format!("{}{}", parent_pascal, to_pascal_case(name));
+            let base = get(&format!(
+                "Some(Kind::StructValue(m)) => Some({sub}::from_struct(m))"
+            ));
             if optional {
                 base
             } else {
-                format!("{base}.unwrap_or(0.0)")
+                format!("{base}.unwrap_or_else(|| {sub}::from_struct(&DataMap::default()))")
             }
         }
 
-        FieldType::Checkbox => {
-            let base = format!(
-                "s.fields.get(\"{name}\").and_then(|v| match &v.kind {{ Some(Kind::BoolValue(b)) => Some(*b), _ => None }})"
-            );
-            if optional {
-                base
-            } else {
-                format!("{base}.unwrap_or(false)")
-            }
+        FieldType::Array if !field.fields.is_empty() => {
+            let sub = format!("{}{}", parent_pascal, to_pascal_case(name));
+            finish(
+                get(&format!(
+                    "Some(Kind::ListValue(l)) => Some(l.values.iter().filter_map(|v| match &v.kind {{ Some(Kind::StructValue(m)) => Some({sub}::from_struct(m)), _ => None }}).collect())"
+                )),
+                "unwrap_or_default()",
+            )
         }
 
+        // Blocks / Json / Join / empty array / empty group map to `serde_json::Value`
+        // or `Vec<serde_json::Value>` in `field_to_rust`; both impl `Default`, so the
+        // typed default is a valid (empty) value. Proto→JSON decoding isn't modeled.
         _ => {
             if optional {
                 "None".to_string()
@@ -570,6 +712,28 @@ mod tests {
         def.timestamps = true;
         def.fields = fields;
         def
+    }
+
+    /// Identifier safety: the `from_document` struct-field position must be the
+    /// SANITIZED ident (matching the generated struct), while the wire lookup
+    /// keeps the raw key. A keyword field `type` → `r#type: get_str(doc, "type")`.
+    #[test]
+    fn proto_field_assignment_uses_sanitized_ident() {
+        let col = make_col(
+            "posts",
+            vec![
+                FieldDefinition::builder("type", FieldType::Text)
+                    .required(true)
+                    .build(),
+            ],
+        );
+        let mut out = String::new();
+        render_collection_impl(&mut out, &col);
+
+        assert!(
+            out.contains("r#type: get_str(doc, \"type\")"),
+            "struct field must be sanitized while the lookup uses the raw key: {out}"
+        );
     }
 
     #[test]
@@ -631,6 +795,107 @@ mod tests {
         assert!(
             out.contains("get_rel_list(doc, \"tags\")"),
             "optional has-many should use get_rel_list: {out}"
+        );
+    }
+
+    /// Regression: a required relationship SUB-field (inside an array row) must
+    /// decode to `Rel::Id`, not `Default::default()` — `Rel` has no `Default`, so
+    /// the old fallback produced non-compiling client code (E0277).
+    #[test]
+    fn proto_sub_field_relationship_uses_rel_not_default() {
+        let product = FieldDefinition::builder("product", FieldType::Relationship)
+            .required(true)
+            .relationship(RelationshipConfig::new("products", false))
+            .build();
+        let items = FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![text_field("label", true), product])
+            .build();
+        let col = make_col("orders", vec![items]);
+        let mut out = String::new();
+        render_collection_impl(&mut out, &col);
+
+        assert!(out.contains("impl OrdersItems {"), "sub-type impl: {out}");
+        assert!(
+            out.contains("Some(Kind::StringValue(s)) if !s.is_empty() => Some(Rel::Id(s.clone()))"),
+            "relationship sub-field must decode to Rel::Id: {out}"
+        );
+        assert!(
+            !out.contains("product: Default::default()"),
+            "relationship must not fall back to Default: {out}"
+        );
+    }
+
+    /// Regression: a `has_many` NUMBER sub-field must decode as a numeric list
+    /// (`Vec<f64>`), not a string list — the old code routed it through
+    /// `get_str_list`, an E0308 against the `Vec<f64>` struct field.
+    #[test]
+    fn proto_sub_field_has_many_number_decodes_numeric() {
+        let mut scores = FieldDefinition::builder("scores", FieldType::Number).build();
+        scores.has_many = true;
+        let items = FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![scores])
+            .build();
+        let col = make_col("games", vec![items]);
+        let mut out = String::new();
+        render_collection_impl(&mut out, &col);
+
+        assert!(
+            out.contains("impl GamesItems {"),
+            "compound sub-type: {out}"
+        );
+        assert!(
+            out.contains("Some(Kind::IntValue(n)) => Some(*n as f64)"),
+            "has-many number sub-field must decode numerically: {out}"
+        );
+    }
+
+    /// Regression: a group nested inside an array row uses the COMPOUND sub-type
+    /// name and decodes via that sub-type's `from_struct` — previously it fell
+    /// back to `Default::default()` (silent empty / E0277).
+    #[test]
+    fn proto_nested_group_in_array_uses_compound_from_struct() {
+        let meta = FieldDefinition::builder("meta", FieldType::Group)
+            .fields(vec![text_field("author", true)])
+            .build();
+        let items = FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![meta])
+            .build();
+        let col = make_col("posts", vec![items]);
+        let mut out = String::new();
+        render_collection_impl(&mut out, &col);
+
+        assert!(
+            out.contains("impl PostsItemsMeta {"),
+            "nested group must get a compound sub-type: {out}"
+        );
+        assert!(
+            out.contains("PostsItemsMeta::from_struct"),
+            "nested group must decode via from_struct: {out}"
+        );
+    }
+
+    /// Regression (compound-path collision): a top-level group AND a same-named
+    /// group nested in an array must produce DISTINCT sub-types, not two `impl
+    /// PostsSeo` (which redeclares/collides in the generated client).
+    #[test]
+    fn proto_same_name_group_at_two_depths_no_collision() {
+        let nested_seo = FieldDefinition::builder("seo", FieldType::Group)
+            .fields(vec![text_field("keyword", true)])
+            .build();
+        let variants = FieldDefinition::builder("variants", FieldType::Array)
+            .fields(vec![nested_seo])
+            .build();
+        let top_seo = FieldDefinition::builder("seo", FieldType::Group)
+            .fields(vec![text_field("title", true)])
+            .build();
+        let col = make_col("posts", vec![top_seo, variants]);
+        let mut out = String::new();
+        render_collection_impl(&mut out, &col);
+
+        assert!(out.contains("impl PostsSeo {"), "top-level: {out}");
+        assert!(
+            out.contains("impl PostsVariantsSeo {"),
+            "nested must be compound-named, not a second PostsSeo: {out}"
         );
     }
 

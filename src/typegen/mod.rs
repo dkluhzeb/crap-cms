@@ -2,10 +2,9 @@
 //!
 //! - `lua` — `LuaLS` annotations for hook/init IDE support (internal,
 //!   default backend used on server startup)
-//! - `typescript` — TypeScript interfaces for gRPC clients
-//! - `go` — Go structs with json tags
-//! - `python` — Python dataclasses
-//! - `rust_types` — Rust structs with serde derives
+//! - `client` — the four client-SDK type-definition generators (TypeScript,
+//!   Go, Python, Rust), built on a shared schema walk feeding a per-language
+//!   `ClientPrinter` (see `client/mod.rs`)
 //! - `rust_proto` — typed proto (`FieldValue`/`DataMap`) → typed-struct conversion impls
 //!
 //! ## Layout
@@ -17,7 +16,9 @@
 //! - Cross-language helpers (`to_pascal_case`, `is_optional`,
 //!   `rel_has_many`, `sorted_*_slugs`, `collect_sub_type_fields`) —
 //!   `helpers.rs`
-//! - Per-language render backends — `lua.rs`, `typescript.rs`, etc.
+//! - Client-SDK backends — `client/` (`rust.rs`, `typescript.rs`,
+//!   `go.rs`, `python.rs`, driven by `client/mod.rs`); Lua — `lua/`;
+//!   Rust proto conversion — `rust_proto.rs`.
 //!
 //! ## Cross-module re-export
 //!
@@ -25,19 +26,17 @@
 //! `scaffold::{job,hook}::generator` via `crate::typegen::to_pascal_case`
 //! — re-exported at the module root for short-path access.
 
+mod client;
 mod dispatch;
-mod go;
 mod helpers;
+mod idents;
 mod language;
 // `lua` is `pub` (not `mod`) so xtask + proc-macro-emitted paths can
 // reach `crap_cms::typegen::lua::{ensure_table, format_lua_fn_spec,
 // render_static_file, …}`. The submodule's internal items remain
 // gated; only what's `pub use`'d at its mod root is reachable.
 pub mod lua;
-mod python;
 mod rust_proto;
-mod rust_types;
-mod typescript;
 
 pub use dispatch::{generate_client, generate_lua, generate_proto};
 pub(crate) use helpers::to_pascal_case;

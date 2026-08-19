@@ -394,13 +394,18 @@ mod tests {
 
         let group_sub_fields = sub_fields[0]["sub_fields"].as_array().unwrap();
         assert_eq!(group_sub_fields.len(), 2);
+        // A group nested in an array row indexes its children as
+        // `<group>[0][field]` — the `[0]` the form parser requires to recognize
+        // the group as a single object in a new row (see `construct_group` and
+        // `single.rs::group_in_array_row_indexes_children_with_zero`). Without it
+        // a newly-added row's group data is dropped on save.
         assert_eq!(
             group_sub_fields[0]["name"],
-            "entries[__INDEX__][meta][author]"
+            "entries[__INDEX__][meta][0][author]"
         );
         assert_eq!(
             group_sub_fields[1]["name"],
-            "entries[__INDEX__][meta][date]"
+            "entries[__INDEX__][meta][0][date]"
         );
     }
 

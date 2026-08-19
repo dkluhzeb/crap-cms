@@ -310,6 +310,9 @@ tempfile.workspace = true
 http-body-util.workspace = true
 scraper.workspace = true
 proptest.workspace = true
+# Parse generated Rust client types in a test to guarantee they compile —
+# closes the string-match gap the client generators would otherwise leave.
+syn = { version = "2", features = ["full"] }
 
 [build-dependencies]
 tonic-prost-build.workspace = true

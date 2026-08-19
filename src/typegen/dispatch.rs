@@ -13,7 +13,7 @@ use anyhow::Result;
 
 use crate::core::Registry;
 
-use super::{Language, go, lua, python, rust_proto, rust_types, typescript};
+use super::{Language, client, lua, rust_proto};
 
 /// Embedded Lua API surface — kept in sync with the CMS binary version.
 /// Copied verbatim into the user's project on `typegen lua` (and on
@@ -65,7 +65,7 @@ pub fn generate_client(
     fs::create_dir_all(&types_dir)?;
 
     let path = types_dir.join(format!("client.{}", lang.file_extension()));
-    fs::write(&path, render_client(registry, lang))?;
+    fs::write(&path, client::generate(registry, lang)?)?;
     Ok(path)
 }
 
@@ -93,15 +93,6 @@ pub fn generate_proto(
 
 fn resolve_types_dir(config_dir: &Path, output_dir: Option<&Path>) -> PathBuf {
     output_dir.map_or_else(|| config_dir.join("types"), Path::to_path_buf)
-}
-
-fn render_client(registry: &Registry, lang: Language) -> String {
-    match lang {
-        Language::Typescript => typescript::render(registry),
-        Language::Go => go::render(registry),
-        Language::Python => python::render(registry),
-        Language::Rust => rust_types::render(registry),
-    }
 }
 
 #[cfg(test)]

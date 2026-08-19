@@ -68,6 +68,10 @@ pub(crate) fn derive(input: TokenStream) -> TokenStream {
     };
     let fields = struct_fields.fields;
 
+    // Honor `rename_all` the same way `LuaAnnotation` does — both derive off the
+    // same shared `#[lua(...)]` container, so the emitted field names must agree.
+    let rename_all = container.rename_all.as_deref();
+
     // ── BaseField: every field with no `applies_to` (and not `skip`)
     let base_header = build_class_header(base_class, None, &struct_docs);
     let mut base_stmts: Vec<TokenStream2> = Vec::new();
@@ -78,7 +82,10 @@ pub(crate) fn derive(input: TokenStream) -> TokenStream {
         let Some(name) = f.ident.as_ref() else {
             continue;
         };
-        let lua_name = f.rename.clone().unwrap_or_else(|| name.to_string());
+        let lua_name = f
+            .rename
+            .clone()
+            .unwrap_or_else(|| crate::shared::apply_rename_all(&name.to_string(), rename_all));
         match build_field_emit(&lua_name, f) {
             Ok(s) => base_stmts.extend(s),
             Err(e) => return e.write_errors().into(),
@@ -122,7 +129,10 @@ pub(crate) fn derive(input: TokenStream) -> TokenStream {
                 });
                 continue;
             }
-            let lua_name = f.rename.clone().unwrap_or_else(|| name.to_string());
+            let lua_name = f
+                .rename
+                .clone()
+                .unwrap_or_else(|| crate::shared::apply_rename_all(&name.to_string(), rename_all));
             match build_field_emit(&lua_name, f) {
                 Ok(s) => arm_stmts.extend(s),
                 Err(e) => return e.write_errors().into(),

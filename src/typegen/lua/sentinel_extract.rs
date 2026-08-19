@@ -45,6 +45,14 @@ pub fn render_sentinel_blocks(source: &str, out: &mut String) {
             continue;
         };
 
+        // The namespace is the first token of the title (e.g. `crap.http`); the
+        // source declares its functions as `function <last_segment>.name(...)`
+        // (e.g. `function http.`). Derive both from the title rather than
+        // hard-coding `util`, so a second helper namespace doesn't silently drop
+        // its functions.
+        let namespace = title.split_whitespace().next().unwrap_or(title);
+        let local_prefix = namespace.rsplit('.').next().unwrap_or(namespace);
+
         out.push_str("-- ── ");
         out.push_str(title);
         out.push(' ');
@@ -68,12 +76,14 @@ pub fn render_sentinel_blocks(source: &str, out: &mut String) {
                 continue;
             }
 
-            if let Some(sig) = parse_function_signature(inner) {
+            if let Some(sig) = parse_function_signature(inner, local_prefix) {
                 for d in &doc_buf {
                     out.push_str(d);
                     out.push('\n');
                 }
-                out.push_str("function crap.util.");
+                out.push_str("function ");
+                out.push_str(namespace);
+                out.push('.');
                 out.push_str(&sig);
                 out.push_str(" end\n\n");
                 doc_buf.clear();
@@ -88,10 +98,11 @@ pub fn render_sentinel_blocks(source: &str, out: &mut String) {
     }
 }
 
-/// Parse `function util.<name>(<args>)` and return `<name>(<args>)`. Any
-/// other line returns `None`.
-fn parse_function_signature(line: &str) -> Option<String> {
-    let rest = line.trim_start().strip_prefix("function util.")?;
+/// Parse `function <local_prefix>.<name>(<args>)` and return `<name>(<args>)`.
+/// Any other line returns `None`.
+fn parse_function_signature(line: &str, local_prefix: &str) -> Option<String> {
+    let prefix = format!("function {local_prefix}.");
+    let rest = line.trim_start().strip_prefix(&prefix)?;
     let paren = rest.find(')')?;
     Some(rest[..=paren].to_string())
 }
@@ -152,13 +163,40 @@ function util.b(x) return x end
         assert!(out.contains("function crap.util.b(x) end"));
     }
 
+    /// Regression: the namespace is derived from the sentinel title, not
+    /// hard-coded to `util`. A second helper namespace must emit under its own
+    /// `crap.<ns>` and recognize `function <ns>.` — previously both were pinned
+    /// to `util`, silently dropping any other namespace's functions.
+    #[test]
+    fn extracts_non_util_namespace() {
+        let src = "\
+-- @typegen-start crap.http — request helpers
+
+--- Parse a URL.
+--- @param u string
+--- @return table
+function http.parse_url(u) return {} end
+
+-- @typegen-end
+";
+        let mut out = String::new();
+        render_sentinel_blocks(src, &mut out);
+
+        assert!(out.contains("-- ── crap.http — request helpers"));
+        assert!(out.contains("--- Parse a URL."));
+        assert!(
+            out.contains("function crap.http.parse_url(u) end"),
+            "non-util namespace must emit under crap.http; got:\n{out}"
+        );
+    }
+
     #[test]
     fn drops_orphan_doc_at_blank_line() {
         // Doc-comments not immediately followed by a function (separated
         // by a blank line) are dropped — protects against stray doc
         // blocks bleeding into the next function's docs.
         let src = "\
--- @typegen-start s
+-- @typegen-start crap.util
 
 --- stale doc
 

@@ -86,7 +86,7 @@ pub(super) fn field_to_lua_type(field: &FieldDefinition, parent_pascal: &str) ->
                 field
                     .options
                     .iter()
-                    .map(|o| format!("\"{}\"", o.value))
+                    .map(|o| format!("\"{}\"", crate::typegen::idents::escape_str(&o.value)))
                     .collect::<Vec<_>>()
                     .join(" | ")
             };

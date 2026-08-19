@@ -89,6 +89,10 @@ struct TestApp {
     /// The per-user and per-IP MFA limiters, exposed for the same reason.
     mfa_limiter: Arc<LoginRateLimiter>,
     ip_mfa_limiter: Arc<LoginRateLimiter>,
+    /// The login limiter, whose backend the per-flow `scoped_limiter`s
+    /// (verify-email, reset-password) share — exposed so those tests can build
+    /// the same scoped limiter and observe the attempts the handlers record.
+    login_limiter: Arc<LoginRateLimiter>,
 }
 
 fn setup_app(collections: Vec<CollectionDefinition>, globals: Vec<GlobalDefinition>) -> TestApp {
@@ -154,6 +158,7 @@ fn setup_app_in_dir(
     let ip_forgot_password_limiter = Arc::new(LoginRateLimiter::new(20, 900));
     let mfa_limiter = Arc::new(LoginRateLimiter::new(5, 300));
     let ip_mfa_limiter = Arc::new(LoginRateLimiter::new(20, 300));
+    let login_limiter = Arc::new(LoginRateLimiter::new(5, 300));
 
     let state = AdminState {
         config,
@@ -169,7 +174,7 @@ fn setup_app_in_dir(
         )
         .unwrap(),
         event_transport: None,
-        login_limiter: Arc::new(LoginRateLimiter::new(5, 300)),
+        login_limiter: Arc::clone(&login_limiter),
         ip_login_limiter: Arc::new(LoginRateLimiter::new(20, 300)),
         forgot_password_limiter: std::sync::Arc::new(
             crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
@@ -216,6 +221,7 @@ fn setup_app_in_dir(
         ip_forgot_password_limiter,
         mfa_limiter,
         ip_mfa_limiter,
+        login_limiter,
     }
 }
 
@@ -1481,24 +1487,30 @@ async fn reset_password_mismatch() {
     );
 }
 
-/// Regression: the verify-email handler counts every attempt against the IP
-/// limiter via the atomic `check_and_block`. Seeding the shared limiter to one
-/// below the threshold and making a single verify request must tip it over —
-/// proving the gate is wired and increments. If the gate were removed (or
-/// reverted to a no-op on internal paths), the limiter would stay un-blocked.
-/// Blocked and invalid-token both redirect to login, so the limiter state — not
-/// the HTTP response — is the observable proof.
+/// Regression: the verify-email handler counts every attempt against its OWN
+/// per-IP `scoped_limiter` (`"ip_verify_email"` keyspace, sharing the login
+/// limiter's backend) via the atomic `check_and_block` — deliberately NOT the
+/// shared forgot-password limiter, so a burst of verification attempts can't
+/// exhaust a legitimate reset's budget. Seeding that scoped limiter to one below
+/// the threshold and making a single verify request must tip it over. Blocked
+/// and invalid-token both redirect to login, so the limiter state — not the HTTP
+/// response — is the observable proof.
 #[tokio::test]
 async fn verify_email_attempt_counts_against_ip_limiter() {
     let app = setup_app(vec![make_verify_users_def()], vec![]);
     let ip = "127.0.0.1"; // ConnectInfo below + trust_proxy=off → this key
 
-    // Harness IP limiter is 20/window; seed to 19 so one more trips it.
+    // Reconstruct the handler's scoped limiter over the shared backend
+    // (max_ip_login_attempts=20 / forgot_password_window_seconds=900 defaults).
+    let verify_limiter =
+        LoginRateLimiter::with_backend(app.login_limiter.backend(), "ip_verify_email", 20, 900);
+
+    // Seed to 19 so one more trips it.
     for _ in 0..19 {
-        let _ = app.ip_forgot_password_limiter.check_and_block(ip);
+        let _ = verify_limiter.check_and_block(ip);
     }
     assert!(
-        !app.ip_forgot_password_limiter.is_blocked(ip),
+        !verify_limiter.is_blocked(ip),
         "precondition: not yet blocked at 19/20"
     );
 
@@ -1519,8 +1531,8 @@ async fn verify_email_attempt_counts_against_ip_limiter() {
         resp.status()
     );
     assert!(
-        app.ip_forgot_password_limiter.is_blocked(ip),
-        "the verify attempt must have advanced the IP limiter to its threshold"
+        verify_limiter.is_blocked(ip),
+        "the verify attempt must have advanced the scoped IP limiter to its threshold"
     );
 }
 
@@ -1566,17 +1578,25 @@ async fn reset_password_mismatch_does_not_count_against_ip_limiter() {
 }
 
 /// Regression: a genuine reset attempt (matching passwords, valid policy) with a
-/// wrong token IS a token guess and counts against the IP limiter atomically.
-/// Seeded to one-below-threshold, one such attempt must trip it.
+/// wrong token IS a token guess and counts against the handler's OWN per-IP
+/// `scoped_limiter` (`"ip_reset_password"` keyspace, sharing the login limiter's
+/// backend) atomically — deliberately NOT the shared forgot-password limiter, so
+/// reset-token guesses and the forgot-password request flow don't drain each
+/// other's budget. Seeded to one-below-threshold, one such attempt must trip it.
 #[tokio::test]
 async fn reset_password_wrong_token_counts_against_ip_limiter() {
     let app = setup_app(vec![make_users_def()], vec![]);
     let ip = "127.0.0.1";
 
+    // Reconstruct the handler's scoped limiter over the shared backend
+    // (max_ip_login_attempts=20 / forgot_password_window_seconds=900 defaults).
+    let reset_limiter =
+        LoginRateLimiter::with_backend(app.login_limiter.backend(), "ip_reset_password", 20, 900);
+
     for _ in 0..19 {
-        let _ = app.ip_forgot_password_limiter.check_and_block(ip);
+        let _ = reset_limiter.check_and_block(ip);
     }
-    assert!(!app.ip_forgot_password_limiter.is_blocked(ip));
+    assert!(!reset_limiter.is_blocked(ip));
 
     let resp = app
         .router
@@ -1596,8 +1616,8 @@ async fn reset_password_wrong_token_counts_against_ip_limiter() {
         .unwrap();
     let _ = resp; // outcome (invalid-token error vs block) is indistinguishable
     assert!(
-        app.ip_forgot_password_limiter.is_blocked(ip),
-        "a wrong-token reset attempt must advance the IP limiter to its threshold"
+        reset_limiter.is_blocked(ip),
+        "a wrong-token reset attempt must advance the scoped IP limiter to its threshold"
     );
 }
 
@@ -1615,10 +1635,13 @@ async fn mfa_verification_attempt_counts_against_limiters() {
     let ip = "127.0.0.1"; // ConnectInfo below + trust_proxy=off → this key
 
     // A valid MFA pending token, signed the same way the login challenge step
-    // signs it. The user need not exist — the limiter gate runs before the code
-    // is verified, which is exactly the behavior under test.
+    // signs it — `token_use = MfaPending` is required, since `verify_mfa_action`
+    // rejects a plain session token (the MFA-bypass fix) before reaching the
+    // limiter gate. The user need not exist — the gate runs before the code is
+    // verified, which is exactly the behavior under test.
     let claims = auth::Claims::builder(user_id, "users")
         .email("mfa@test.com")
+        .token_use(auth::TokenUse::MfaPending)
         .exp((chrono::Utc::now().timestamp() as u64) + 300)
         .build()
         .unwrap();
@@ -1867,6 +1890,7 @@ end"#,
     let ip_forgot_password_limiter = Arc::new(LoginRateLimiter::new(20, 900));
     let mfa_limiter = Arc::new(LoginRateLimiter::new(5, 300));
     let ip_mfa_limiter = Arc::new(LoginRateLimiter::new(20, 300));
+    let login_limiter = Arc::new(LoginRateLimiter::new(5, 300));
 
     let state = AdminState {
         config,
@@ -1882,7 +1906,7 @@ end"#,
         )
         .unwrap(),
         event_transport: None,
-        login_limiter: Arc::new(LoginRateLimiter::new(5, 300)),
+        login_limiter: Arc::clone(&login_limiter),
         ip_login_limiter: Arc::new(LoginRateLimiter::new(20, 300)),
         forgot_password_limiter: Arc::new(LoginRateLimiter::new(3, 900)),
         ip_forgot_password_limiter: Arc::clone(&ip_forgot_password_limiter),
@@ -1927,6 +1951,7 @@ end"#,
         ip_forgot_password_limiter,
         mfa_limiter,
         ip_mfa_limiter,
+        login_limiter,
     }
 }
 
