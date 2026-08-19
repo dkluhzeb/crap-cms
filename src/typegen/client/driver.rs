@@ -13,8 +13,8 @@ use crate::{
     typegen::{
         Language,
         helpers::{
-            collect_sub_type_fields, is_optional, rel_has_many, sorted_collection_slugs,
-            sorted_global_slugs, to_pascal_case,
+            collect_sub_type_fields, is_optional, is_single_ref, rel_has_many,
+            sorted_collection_slugs, sorted_global_slugs, to_pascal_case,
         },
     },
 };
@@ -199,20 +199,15 @@ fn push_resolved<'a>(out: &mut Vec<Field<'a>>, field: &'a FieldDefinition, paren
     });
 }
 
-/// Whether a field is a single-valued (has-one) relationship or upload — the
-/// case population can null on read.
-fn is_single_ref(field: &FieldDefinition) -> bool {
-    matches!(
-        field.field_type,
-        FieldType::Relationship | FieldType::Upload
-    ) && !rel_has_many(field)
-}
-
 /// Map a field to its language-neutral [`FieldTy`]. Assumes a complete registry:
 /// a relationship/upload whose target collection is missing is a schema error
 /// that registry-level validation should reject before generation (see the
 /// module note), not something to silently paper over here.
-fn resolve_ty(field: &FieldDefinition, parent_pascal: &str) -> FieldTy {
+///
+/// Public within `typegen` so the Rust proto-conversion generator (`rust_proto`)
+/// drives its decode dispatch off the *same* resolved type as the client type
+/// generator — the two can't disagree about what a field's type is.
+pub(in crate::typegen) fn resolve_ty(field: &FieldDefinition, parent_pascal: &str) -> FieldTy {
     match &field.field_type {
         FieldType::Text if field.has_many => FieldTy::StrList,
         FieldType::Text

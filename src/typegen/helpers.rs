@@ -72,6 +72,18 @@ pub(super) fn rel_has_many(field: &FieldDefinition) -> bool {
     field.relationship.as_ref().is_some_and(|rc| rc.has_many)
 }
 
+/// Whether a field is a single-valued (has-one) relationship or upload. Such a
+/// field is optional on read even when `required`: population nulls it when the
+/// target is soft-deleted or access-denied (a has-many drops the entry instead).
+/// Shared by the client type generator and the proto-conversion generator so
+/// their optionality can't drift.
+pub(super) fn is_single_ref(field: &FieldDefinition) -> bool {
+    matches!(
+        field.field_type,
+        FieldType::Relationship | FieldType::Upload
+    ) && !rel_has_many(field)
+}
+
 /// Get sorted collection slugs from the registry.
 pub(super) fn sorted_collection_slugs(registry: &Registry) -> Vec<&Slug> {
     let mut slugs: Vec<&Slug> = registry.collections.keys().collect();

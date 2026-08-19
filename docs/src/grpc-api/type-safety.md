@@ -158,6 +158,12 @@ Each field in the response has:
 
 The idea: call `DescribeCollection` once (at build time or app startup), then generate typed wrappers for your language.
 
+> The hand-rolled examples below are the minimal, do-it-yourself mapping —
+> useful to understand the shape, and all you need for a depth-0 client. For a
+> turnkey generator that already models population depth, narrows selects, and
+> types polymorphic relationships, use the built-in
+> [`typegen client`](#generated-client-types-typegen-client) instead.
+
 ### TypeScript Example
 
 Call `DescribeCollection` for each collection and generate interfaces:
@@ -343,6 +349,69 @@ def document_to_post(doc) -> Post:
         # fields[name].double_value for fractional ones. fields[name].WhichOneof("kind")
         # tells you which variant is set ("int_value", "string_value", "null_value", ...).
     )
+```
+
+## Generated client types (`typegen client`)
+
+Rather than hand-rolling the wrappers above, `crap-cms typegen client -l <lang>`
+emits them for you — `types/client.{ts,go,py,rs}` — walking your Lua schema the
+same way the Lua typegen does. Regenerate after any schema change (or a binary
+upgrade):
+
+```bash
+crap-cms typegen client -l ts,go,py,rs
+```
+
+Each **collection** gets a `…Data` type (writable input fields) and a
+`…Document` type (adds `id` + timestamps); each **global** gets a single type.
+The field mapping is richer than the minimal `fieldTypeToTS` above — it models
+population depth, narrows selects, and types polymorphic relationships:
+
+| Schema field | Rust | Go | TypeScript | Python |
+|---|---|---|---|---|
+| `text` / `richtext` / `date` / … | `String` | `string` | `string` | `str` |
+| `number` | `f64` | `float64` | `number` | `float` |
+| `checkbox` | `bool` | `bool` | `boolean` | `bool` |
+| `select` | `enum { …, Other(String) }` | `type X string` + consts | `"a" \| "b"` | `Literal["a", "b"]` |
+| relationship / upload (single) | `Rel<T>` | `Rel[T]` | `string \| TDocument` | `str \| T` |
+| relationship / upload (has-many) | `Vec<Rel<T>>` | `[]Rel[T]` | `(string \| TDocument)[]` | `list[str \| T]` |
+| polymorphic relationship | untagged `enum` + tagged ref enum | `interface{}` | `string \| ADocument \| BDocument` | `str \| A \| B` |
+
+Key semantics baked into these types:
+
+- **Relationships follow `depth`.** `Rel<T>` (and its per-language equivalents)
+  is *either* an id string (`depth = 0`) *or* the populated document
+  (`depth >= 1`) — the type never lies about which you get. Rust and Go decode
+  both JSON forms automatically (Rust via `#[serde(untagged)]`, Go via a custom
+  `UnmarshalJSON`); TS/Python are a union you narrow with a
+  `typeof x === "string"` / `isinstance(x, str)` check.
+- **A single relationship is optional.** A non-`has_many` relationship/upload is
+  optional on read even when `required` on write, because it can be absent after
+  the target is soft-deleted or access-denied. Handle the empty case.
+- **`select` is lossless in Rust and Go.** A value dropped from the schema after
+  you generated still deserializes (`Other(String)` in Rust, a bare `string`
+  newtype in Go) instead of erroring; TypeScript and Python narrow to the known
+  set.
+- **`CollectionSlug`** enumerates every collection slug — a named type with
+  constants in Rust/Go, a string-literal union in TS/Python.
+- **Name collisions fail generation.** If two constructs would produce the same
+  type name (a collection slugged `posts_status` and the `status` select of a
+  `posts` collection both map to `PostsStatus`), the command errors instead of
+  emitting one wrong type — rename one.
+
+### Rust: decoding the gRPC wire (`typegen proto`)
+
+The other three languages emit *type definitions only* — pair them with your own
+gRPC codegen and decode the `DataMap`/`FieldValue` wire yourself (see the
+examples above). Rust additionally has `crap-cms typegen proto`, which generates
+`From<proto::Document>` (`FromDocument`) impls that decode the typed wire
+straight into the `typegen client -l rs` structs — including a **populated**
+relationship (`Rel::Doc`) nested inside a group/array/blocks at any depth.
+Regenerate the two together; they are designed to compile as one module:
+
+```bash
+crap-cms typegen client -l rs           --output src/generated
+crap-cms typegen proto  --module crate::proto --output src/generated
 ```
 
 ## Lua Typegen (for Hooks)

@@ -634,6 +634,76 @@ Wire-contract changes — regenerate your gRPC stubs and adjust:
   conflict maps to `ALREADY_EXISTS` (the runtime mapping was already
   `ALREADY_EXISTS`; only the proto comment was stale).
 
+## Generated client types (`typegen client` / `typegen proto` — shapes changed)
+
+The `crap-cms typegen client -l <lang>` output
+(`types/client.{ts,go,py,rs}`) and the Rust `crap-cms typegen proto` decoder
+gained proper types for several things they previously flattened. If you check
+generated types into your project, **regenerate and adjust the consuming
+code** — this is a breaking change to the generated *shapes*, not the wire.
+
+Regenerate:
+
+```bash
+crap-cms typegen client -l ts,go,py,rs
+crap-cms typegen proto            # only if you use the Rust gRPC decoder
+```
+
+What changed:
+
+- **Relationships are populate-aware, no longer bare id strings.** A
+  relationship or upload field can arrive as an id (`depth = 0`) or a populated
+  document (`depth >= 1`); the generated type now models both.
+
+  | Language | Before | After |
+  |---|---|---|
+  | Rust | `String` | `Rel<T>` — `enum { Doc(Box<T>), Id(String) }` |
+  | Go | `string` | `Rel[T]` — a struct whose custom JSON decodes an id or an object |
+  | TypeScript | `string` | `string \| TDocument` |
+  | Python | `str` | `str \| T` |
+
+  Unwrap before use: Rust `match rel { Rel::Id(id) => …, Rel::Doc(doc) => … }`
+  (generated `rel.as_id()` / `rel.as_doc()` helpers return `Option`); Go
+  `rel.ID` / `rel.Doc`; TS/Python narrow with `typeof x === "string"` /
+  `isinstance(x, str)`.
+
+- **A single (non-`has_many`) relationship is now optional on read**, even when
+  the field is `required` on write — it can be absent after the target is
+  soft-deleted or you lack read access. Handle the `null` / `None` / `nil`
+  case.
+
+- **`select` fields become a named type, and Rust/Go keep unknown values.**
+
+  | Language | After |
+  |---|---|
+  | Rust | `enum { …, Other(String) }` (`serde(from/into)`; an unknown value → `Other`) |
+  | Go | `type XStatus string` + `const`s (an unknown value still assigns) |
+  | TypeScript | string union — `"a" \| "b"` |
+  | Python | `Literal["a", "b"]` |
+
+  Rust and Go round-trip a value that was removed from the schema after you
+  generated; TypeScript and Python narrow to the known set.
+
+- **Polymorphic relationships (a relationship targeting multiple collections)
+  are typed** instead of `String`: Rust an untagged `enum` discriminated by a
+  `#[serde(tag = "collection")]` ref enum, TS/Python a union of the target
+  documents, Go `interface{}`.
+
+- **New `CollectionSlug` type** enumerating the known slugs (Rust/Go a named
+  type with constants, TS/Python a string-literal union).
+
+- **`typegen client` now errors on a type-name collision** (two constructs that
+  would generate the same type name — e.g. a collection slugged `posts_status`
+  and the `status` select of `posts`) instead of silently emitting one wrong
+  type. If generation fails with a collision error, rename one construct.
+
+- **Rust `typegen proto` and `typegen client -l rs` compile together again.**
+  The proto decoder had drifted — `select`/polymorphic fields stayed `String`,
+  single relationships were non-optional, and a relationship nested inside a
+  group/array/blocks decoded as id-only. It now matches the client types
+  field-for-field, including decoding a **populated** nested relationship
+  (`Rel::Doc`) at any depth. Regenerate both artifacts together.
+
 ## Bug fixes (no action needed)
 
 - **Bulk `update_many(draft = true)` saves a draft instead of

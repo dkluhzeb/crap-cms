@@ -5,13 +5,14 @@
 //! no JSON intermediate, no serde deserialization in the hot path.
 
 use crate::core::{
-    CollectionDefinition, FieldDefinition, FieldType, Registry, collection::GlobalDefinition,
+    CollectionDefinition, FieldDefinition, Registry, collection::GlobalDefinition,
     flatten_array_sub_fields,
 };
 
+use super::client::{FieldTy, resolve_ty};
 use super::helpers::{
-    collect_sub_type_fields, is_optional, rel_has_many, sorted_collection_slugs,
-    sorted_global_slugs, to_pascal_case, w,
+    collect_sub_type_fields, is_optional, is_single_ref, sorted_collection_slugs,
+    sorted_global_slugs, to_pascal_case, w, wraw,
 };
 use super::idents;
 
@@ -421,98 +422,168 @@ fn sub_type_extraction(
     }
 }
 
+/// Top-level select/radio-with-options: decode string(s) and wrap in the
+/// generated enum's `From<String>` so the value matches the enum-typed field.
+fn enum_extraction(
+    enum_name: &str,
+    doc_var: &str,
+    name: &str,
+    has_many: bool,
+    optional: bool,
+) -> String {
+    if has_many {
+        let mapped = format!(
+            "get_str_list({doc_var}, \"{name}\").into_iter().map({enum_name}::from).collect::<Vec<_>>()"
+        );
+        if optional {
+            format!("{{ let v = {mapped}; if v.is_empty() {{ None }} else {{ Some(v) }} }}")
+        } else {
+            mapped
+        }
+    } else if optional {
+        format!("get_str_opt({doc_var}, \"{name}\").map({enum_name}::from)")
+    } else {
+        format!("{enum_name}::from(get_str({doc_var}, \"{name}\"))")
+    }
+}
+
+/// Nested (sub-field) select/radio-with-options — same as [`enum_extraction`]
+/// but reading from a `DataMap` (`s`) instead of a `Document`.
+fn enum_sub_extraction(enum_name: &str, name: &str, has_many: bool, optional: bool) -> String {
+    if has_many {
+        let base = format!(
+            "s.fields.get(\"{name}\").and_then(|v| match &v.kind {{ {STR_LIST}, _ => None }})"
+        );
+        if optional {
+            format!("{base}.map(|l| l.into_iter().map({enum_name}::from).collect())")
+        } else {
+            format!("{base}.unwrap_or_default().into_iter().map({enum_name}::from).collect()")
+        }
+    } else {
+        let base = format!(
+            "s.fields.get(\"{name}\").and_then(|v| match &v.kind {{ Some(Kind::StringValue(s)) => Some(s.clone()), _ => None }})"
+        );
+        if optional {
+            format!("{base}.map({enum_name}::from)")
+        } else {
+            format!("{enum_name}::from({base}.unwrap_or_default())")
+        }
+    }
+}
+
+/// The match arms decoding a proto value into a polymorphic enum: a bare id
+/// string → `Id`, a `{collection, ...}` struct → the matching document variant
+/// (via the target's `from_document`). Shared by the top-level and nested paths.
+fn poly_arms(poly_name: &str, targets: &[&str]) -> String {
+    let mut variants = String::new();
+    for t in targets {
+        let variant = idents::rust_type(&to_pascal_case(t));
+        let slug = idents::escape_str(t);
+        wraw!(
+            variants,
+            "Some(\"{slug}\") => Some({poly_name}::Doc({poly_name}Ref::{variant}(Box::new({variant}::from_document(&__doc))))), "
+        );
+    }
+    format!(
+        "Some(Kind::StringValue(s)) if !s.is_empty() => Some({poly_name}::Id(s.clone())), \
+         Some(Kind::StructValue(m)) => {{ \
+             let __coll = m.fields.get(\"collection\").and_then(|v| match &v.kind {{ Some(Kind::StringValue(s)) => Some(s.as_str()), _ => None }}); \
+             let __doc = struct_to_document(m); \
+             match __coll {{ {variants}_ => None, }} \
+         }},"
+    )
+}
+
+/// A polymorphic-relationship extraction. `getter` is an `Option<&FieldValue>`
+/// expression naming the field's value in the current context (top-level or
+/// nested). Has-one is `Option<Poly>` (always optional on read); has-many is
+/// `Option<Vec<Poly>>` / `Vec<Poly>`.
+fn poly_extraction(
+    poly_name: &str,
+    targets: &[&str],
+    getter: &str,
+    has_many: bool,
+    optional: bool,
+) -> String {
+    let arms = poly_arms(poly_name, targets);
+    if has_many {
+        let base = format!(
+            "{getter}.and_then(|v| match &v.kind {{ Some(Kind::ListValue(l)) => Some(l.values.iter().filter_map(|v| match &v.kind {{ {arms} _ => None }}).collect::<Vec<_>>()), _ => None }})"
+        );
+        if optional {
+            base
+        } else {
+            format!("{base}.unwrap_or_default()")
+        }
+    } else {
+        // Single polymorphic relationships are optional on read.
+        format!("{getter}.and_then(|v| match &v.kind {{ {arms} _ => None }})")
+    }
+}
+
+/// Decode a top-level field, reading from a `Document` (`doc_var`). Dispatches on
+/// the SHARED [`resolve_ty`] so this generator and `client/rust.rs` can never
+/// disagree about a field's type — the whole class of proto↔client drift.
 fn field_extraction(field: &FieldDefinition, parent_pascal: &str, doc_var: &str) -> String {
     let name = &field.name;
-    let optional = is_optional(field);
+    // Single relationships/uploads are optional on read even when `required`.
+    let optional = is_optional(field) || is_single_ref(field);
 
-    match &field.field_type {
-        // String-like scalars
-        FieldType::Text
-        | FieldType::Textarea
-        | FieldType::Email
-        | FieldType::Date
-        | FieldType::Richtext
-        | FieldType::Code
-        | FieldType::Select
-        | FieldType::Radio
-            if field.has_many =>
-        {
-            opt_list("get_str_list", doc_var, name, optional)
+    match &resolve_ty(field, parent_pascal) {
+        // Strings (incl. id-string relationships: empty-collection upload / no target).
+        FieldTy::Str
+        | FieldTy::Rel {
+            target: None,
+            many: false,
+        } => scalar("get_str", doc_var, name, optional),
+        FieldTy::StrList
+        | FieldTy::Rel {
+            target: None,
+            many: true,
+        } => opt_list("get_str_list", doc_var, name, optional),
+        FieldTy::Num => scalar("get_num", doc_var, name, optional),
+        FieldTy::Bool => scalar("get_bool", doc_var, name, optional),
+        FieldTy::NumList => opt_list("get_num_list", doc_var, name, optional),
+        FieldTy::Json | FieldTy::Map | FieldTy::JsonList => complex_fallback(optional),
+
+        // Typed relationship/upload — `get_rel(_list)` decode both the id string
+        // and the populated document; `T` is inferred from the struct field type.
+        FieldTy::Rel {
+            target: Some(_),
+            many: true,
+        } => opt_list("get_rel_list", doc_var, name, optional),
+        FieldTy::Rel {
+            target: Some(_),
+            many: false,
+        } => format!("get_rel({doc_var}, \"{name}\")"),
+
+        FieldTy::PolyRel {
+            name: pn,
+            targets,
+            many,
+        } => poly_extraction(
+            &idents::rust_type(pn),
+            &targets.iter().map(String::as_str).collect::<Vec<_>>(),
+            &format!("{doc_var}.fields.as_ref().and_then(|f| f.fields.get(\"{name}\"))"),
+            *many,
+            optional,
+        ),
+        FieldTy::Enum { name: en, many, .. } => {
+            enum_extraction(&idents::rust_type(en), doc_var, name, *many, optional)
         }
-
-        FieldType::Text
-        | FieldType::Textarea
-        | FieldType::Email
-        | FieldType::Date
-        | FieldType::Richtext
-        | FieldType::Code
-        | FieldType::Select
-        | FieldType::Radio => scalar("get_str", doc_var, name, optional),
-
-        // Numbers
-        FieldType::Number if field.has_many => opt_list("get_num_list", doc_var, name, optional),
-        FieldType::Number => scalar("get_num", doc_var, name, optional),
-
-        // Booleans
-        FieldType::Checkbox => scalar("get_bool", doc_var, name, optional),
-
-        // Relationships — polymorphic stays as plain strings
-        FieldType::Relationship | FieldType::Upload
-            if field
-                .relationship
-                .as_ref()
-                .is_some_and(crate::core::RelationshipConfig::is_polymorphic) =>
-        {
-            if rel_has_many(field) {
-                opt_list("get_str_list", doc_var, name, optional)
-            } else {
-                scalar("get_str", doc_var, name, optional)
-            }
+        FieldTy::SubType { name: sn, list } => {
+            sub_type_extraction(&idents::rust_type(sn), name, doc_var, optional, *list)
         }
+    }
+}
 
-        // Relationships — typed with Rel<T>
-        FieldType::Relationship | FieldType::Upload if rel_has_many(field) => {
-            opt_list("get_rel_list", doc_var, name, optional)
-        }
-
-        FieldType::Relationship | FieldType::Upload => {
-            if optional {
-                format!("get_rel({doc_var}, \"{name}\")")
-            } else {
-                format!("get_rel({doc_var}, \"{name}\").unwrap_or(Rel::Id(String::new()))")
-            }
-        }
-
-        // Typed arrays — a list of structs.
-        FieldType::Array if !field.fields.is_empty() => {
-            let sub = format!("{}{}", parent_pascal, to_pascal_case(name));
-            sub_type_extraction(&sub, name, doc_var, optional, true)
-        }
-
-        // Typed group — a single nested struct (vs Array's list). Its
-        // `from_struct` impl is generated alongside array sub-types; without
-        // calling it the group would silently extract as default/empty.
-        FieldType::Group if !field.fields.is_empty() => {
-            let sub = format!("{}{}", parent_pascal, to_pascal_case(name));
-            sub_type_extraction(&sub, name, doc_var, optional, false)
-        }
-
-        // Fallbacks
-        FieldType::Array
-        | FieldType::Json
-        | FieldType::Blocks
-        | FieldType::Join
-        | FieldType::Group => {
-            if optional {
-                "None /* complex field */".to_string()
-            } else {
-                "Default::default() /* complex field */".to_string()
-            }
-        }
-
-        FieldType::Row | FieldType::Collapsible | FieldType::Tabs => {
-            unreachable!("layout wrappers handled in render_field_extractions")
-        }
+/// The proto wire carries no structured JSON/blocks/join, so these decode to the
+/// field's default (`None` / `Default::default()`).
+fn complex_fallback(optional: bool) -> String {
+    if optional {
+        "None /* complex field */".to_string()
+    } else {
+        "Default::default() /* complex field */".to_string()
     }
 }
 
@@ -542,75 +613,42 @@ fn render_sub_type_from_struct(out: &mut String, pascal: &str, fields: &[FieldDe
 }
 
 /// Match arm decoding a `ListValue` of strings into a `Vec<String>` (a
-/// `has_many` scalar sub-field). Shared by the string-family and
-/// polymorphic/empty-upload arms of [`sub_field_extraction`].
+/// `has_many` scalar sub-field, an options-less select/radio, or an
+/// empty-collection upload).
 const STR_LIST: &str = "Some(Kind::ListValue(l)) => Some(l.values.iter().filter_map(|v| match &v.kind { Some(Kind::StringValue(s)) => Some(s.clone()), _ => None }).collect())";
 
-/// Decode a relationship/upload SUB-field from a nested `DataMap`. Split out of
-/// [`sub_field_extraction`] to keep it focused. Matches `field_to_rust`:
-/// polymorphic and empty-collection uploads are plain `String`/`Vec<String>`;
-/// otherwise `Rel<T>` (has-one) or `Vec<Rel<T>>` (has-many).
-fn sub_rel_extraction(field: &FieldDefinition, name: &str, optional: bool) -> String {
-    let get = |arm: &str| {
-        format!("s.fields.get(\"{name}\").and_then(|v| match &v.kind {{ {arm}, _ => None }})")
-    };
-    let finish = |base: String, dflt: &str| {
-        if optional {
-            base
-        } else {
-            format!("{base}.{dflt}")
-        }
-    };
-
-    let poly = matches!(&field.relationship, Some(rc) if rc.is_polymorphic());
-    let empty_upload = field.field_type == FieldType::Upload
-        && field
-            .relationship
-            .as_ref()
-            .is_some_and(|rc| rc.collection.is_empty());
-    let has_many = rel_has_many(field);
-
-    if poly || empty_upload {
-        if has_many {
-            finish(get(STR_LIST), "unwrap_or_default()")
-        } else {
-            finish(
-                get("Some(Kind::StringValue(s)) => Some(s.clone())"),
-                "unwrap_or_default()",
-            )
-        }
-    } else if has_many {
-        finish(
-            get(
-                "Some(Kind::ListValue(l)) => Some(l.values.iter().filter_map(|v| match &v.kind { Some(Kind::StringValue(s)) if !s.is_empty() => Some(Rel::Id(s.clone())), _ => None }).collect())",
-            ),
-            "unwrap_or_default()",
+/// The nested match arm decoding a typed relationship into `Rel<T>`: an id string
+/// (`Rel::Id`) or a populated document (`Rel::Doc` via `struct_to_document` +
+/// `from_document`). `has_many` wraps the per-element form in a list decode.
+fn nested_rel_arm(t: &str, has_many: bool) -> String {
+    let one = format!(
+        "Some(Kind::StringValue(s)) if !s.is_empty() => Some(Rel::Id(s.clone())), Some(Kind::StructValue(m)) => Some(Rel::Doc(Box::new({t}::from_document(&struct_to_document(m)))))"
+    );
+    if has_many {
+        format!(
+            "Some(Kind::ListValue(l)) => Some(l.values.iter().filter_map(|v| match &v.kind {{ {one}, _ => None }}).collect())"
         )
     } else {
-        finish(
-            get("Some(Kind::StringValue(s)) if !s.is_empty() => Some(Rel::Id(s.clone()))"),
-            "unwrap_or(Rel::Id(String::new()))",
-        )
+        one
     }
 }
 
 /// Extraction for a sub-type field, reading from a nested `DataMap` (`s`).
 ///
-/// Mirrors the Rust client printer's (`super::client::rust`) type mapping exactly
-/// so the decoded value's
-/// type matches the generated struct field: `has_many` scalars decode to a
-/// `Vec`, relationships/uploads to `Rel<T>` / `Vec<Rel<T>>` (polymorphic and
-/// empty-collection uploads to `String` / `Vec<String>`), and a nested group /
-/// array to the child sub-type via its own `from_struct`. `parent_pascal` is the
-/// enclosing sub-type's compound name, used to build nested sub-type references.
-/// An optional field yields `Option<T>`; a required one is unwrapped to `T`.
+/// Mirrors the Rust client printer's (`super::client::rust`) type mapping so the
+/// decoded value's type matches the generated struct field: `has_many` scalars →
+/// `Vec`, select/radio-with-options → the generated enum via `From<String>`,
+/// relationships/uploads → `Rel<T>` / `Vec<Rel<T>>`, polymorphic → the generated
+/// discriminated enum, empty-collection uploads → `String` / `Vec<String>`, and a
+/// nested group/array → the child sub-type via its own `from_struct`.
+/// `parent_pascal` is the enclosing sub-type's compound name. A single
+/// relationship/upload is optional on read; other optionals yield `Option<T>`.
 fn sub_field_extraction(field: &FieldDefinition, parent_pascal: &str) -> String {
     let name = &field.name;
-    let optional = is_optional(field);
+    let optional = is_optional(field) || is_single_ref(field);
 
-    // `get(arm)` → an `Option<T>` expression reading `s.fields[name]` and matching
-    // `arm` over the value's kind. `finish(base, dflt)` keeps the `Option` for an
-    // optional field or unwraps it via `dflt` for a required one.
+    // `get(arm)` → an `Option<T>` reading `s.fields[name]`; `finish(base, dflt)`
+    // keeps the `Option` for an optional field or unwraps it for a required one.
     let get = |arm: &str| {
         format!("s.fields.get(\"{name}\").and_then(|v| match &v.kind {{ {arm}, _ => None }})")
     };
@@ -622,47 +660,74 @@ fn sub_field_extraction(field: &FieldDefinition, parent_pascal: &str) -> String 
         }
     };
 
-    match &field.field_type {
-        FieldType::Text
-        | FieldType::Textarea
-        | FieldType::Email
-        | FieldType::Date
-        | FieldType::Richtext
-        | FieldType::Code
-        | FieldType::Select
-        | FieldType::Radio => {
-            if field.has_many {
-                finish(get(STR_LIST), "unwrap_or_default()")
-            } else {
-                finish(
-                    get("Some(Kind::StringValue(s)) => Some(s.clone())"),
-                    "unwrap_or_default()",
-                )
-            }
-        }
-
-        FieldType::Number if field.has_many => finish(
-            get(
-                "Some(Kind::ListValue(l)) => Some(l.values.iter().filter_map(|v| match &v.kind { Some(Kind::IntValue(n)) => Some(*n as f64), Some(Kind::DoubleValue(n)) => Some(*n), _ => None }).collect())",
-            ),
+    match &resolve_ty(field, parent_pascal) {
+        // Strings (incl. id-string relationships: empty-collection upload / no target).
+        FieldTy::Str
+        | FieldTy::Rel {
+            target: None,
+            many: false,
+        } => finish(
+            get("Some(Kind::StringValue(s)) => Some(s.clone())"),
             "unwrap_or_default()",
         ),
-        FieldType::Number => finish(
+        FieldTy::StrList
+        | FieldTy::Rel {
+            target: None,
+            many: true,
+        } => finish(get(STR_LIST), "unwrap_or_default()"),
+        FieldTy::Num => finish(
             get(
                 "Some(Kind::IntValue(n)) => Some(*n as f64), Some(Kind::DoubleValue(n)) => Some(*n)",
             ),
             "unwrap_or(0.0)",
         ),
-
-        FieldType::Checkbox => finish(
+        FieldTy::Bool => finish(
             get("Some(Kind::BoolValue(b)) => Some(*b)"),
             "unwrap_or(false)",
         ),
+        FieldTy::NumList => finish(
+            get(
+                "Some(Kind::ListValue(l)) => Some(l.values.iter().filter_map(|v| match &v.kind { Some(Kind::IntValue(n)) => Some(*n as f64), Some(Kind::DoubleValue(n)) => Some(*n), _ => None }).collect())",
+            ),
+            "unwrap_or_default()",
+        ),
+        FieldTy::Json | FieldTy::Map | FieldTy::JsonList => complex_fallback(optional),
 
-        FieldType::Relationship | FieldType::Upload => sub_rel_extraction(field, name, optional),
+        // Typed relationship — id string OR populated document. Decoding the
+        // `StructValue` form is what closes the nested-populated-relationship gap.
+        FieldTy::Rel {
+            target: Some(t),
+            many,
+        } => {
+            let arm = nested_rel_arm(&idents::rust_type(t), *many);
+            let dflt = if *many {
+                "unwrap_or_default()"
+            } else {
+                "unwrap_or(Rel::Id(String::new()))"
+            };
+            finish(get(&arm), dflt)
+        }
 
-        FieldType::Group if !field.fields.is_empty() => {
-            let sub = format!("{}{}", parent_pascal, to_pascal_case(name));
+        FieldTy::PolyRel {
+            name: pn,
+            targets,
+            many,
+        } => poly_extraction(
+            &idents::rust_type(pn),
+            &targets.iter().map(String::as_str).collect::<Vec<_>>(),
+            &format!("s.fields.get(\"{name}\")"),
+            *many,
+            optional,
+        ),
+        FieldTy::Enum { name: en, many, .. } => {
+            enum_sub_extraction(&idents::rust_type(en), name, *many, optional)
+        }
+
+        FieldTy::SubType {
+            name: sn,
+            list: false,
+        } => {
+            let sub = idents::rust_type(sn);
             let base = get(&format!(
                 "Some(Kind::StructValue(m)) => Some({sub}::from_struct(m))"
             ));
@@ -672,9 +737,11 @@ fn sub_field_extraction(field: &FieldDefinition, parent_pascal: &str) -> String 
                 format!("{base}.unwrap_or_else(|| {sub}::from_struct(&DataMap::default()))")
             }
         }
-
-        FieldType::Array if !field.fields.is_empty() => {
-            let sub = format!("{}{}", parent_pascal, to_pascal_case(name));
+        FieldTy::SubType {
+            name: sn,
+            list: true,
+        } => {
+            let sub = idents::rust_type(sn);
             finish(
                 get(&format!(
                     "Some(Kind::ListValue(l)) => Some(l.values.iter().filter_map(|v| match &v.kind {{ Some(Kind::StructValue(m)) => Some({sub}::from_struct(m)), _ => None }}).collect())"
@@ -682,24 +749,13 @@ fn sub_field_extraction(field: &FieldDefinition, parent_pascal: &str) -> String 
                 "unwrap_or_default()",
             )
         }
-
-        // Blocks / Json / Join / empty array / empty group map to `serde_json::Value`
-        // or `Vec<serde_json::Value>` in `field_to_rust`; both impl `Default`, so the
-        // typed default is a valid (empty) value. Proto→JSON decoding isn't modeled.
-        _ => {
-            if optional {
-                "None".to_string()
-            } else {
-                "Default::default()".to_string()
-            }
-        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::RelationshipConfig;
+    use crate::core::{FieldType, LocalizedString, RelationshipConfig, SelectOption};
 
     fn text_field(name: &str, required: bool) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Text)
@@ -751,6 +807,101 @@ mod tests {
         assert!(out.contains("title: get_str(doc, \"title\")"));
         assert!(out.contains("content: get_str_opt(doc, \"content\")"));
         assert!(out.contains("created_at: doc.created_at.clone()"));
+    }
+
+    /// Alignment with `client/rust.rs`: a select/radio WITH options decodes
+    /// through the generated enum's `From<String>` (the client field is the enum).
+    #[test]
+    fn proto_select_with_options_wraps_in_enum() {
+        let col = make_col(
+            "tasks",
+            vec![
+                FieldDefinition::builder("status", FieldType::Select)
+                    .required(true)
+                    .options(vec![SelectOption::new(
+                        LocalizedString::Plain("Todo".into()),
+                        "todo",
+                    )])
+                    .build(),
+            ],
+        );
+        let mut out = String::new();
+        render_collection_impl(&mut out, &col);
+        assert!(
+            out.contains("status: TasksStatus::from(get_str(doc, \"status\"))"),
+            "select→enum: {out}"
+        );
+    }
+
+    /// A required single relationship is `Option<Rel<T>>` on the client (populate
+    /// can null it), so proto must NOT unwrap it.
+    #[test]
+    fn proto_single_relationship_is_optional() {
+        let col = make_col(
+            "comments",
+            vec![
+                FieldDefinition::builder("author", FieldType::Relationship)
+                    .required(true)
+                    .relationship(RelationshipConfig::new("users", false))
+                    .build(),
+            ],
+        );
+        let mut out = String::new();
+        render_collection_impl(&mut out, &col);
+        assert!(out.contains("author: get_rel(doc, \"author\"),"), "{out}");
+        assert!(!out.contains("unwrap_or(Rel::Id"), "no unwrap: {out}");
+    }
+
+    /// A relationship nested inside a group/array decodes BOTH forms — the id
+    /// string and the populated document (the gap the old sub-field path missed).
+    #[test]
+    fn proto_nested_relationship_decodes_populated_doc() {
+        let author = FieldDefinition::builder("author", FieldType::Relationship)
+            .relationship(RelationshipConfig::new("users", false))
+            .build();
+        let group = FieldDefinition::builder("meta", FieldType::Group)
+            .fields(vec![author])
+            .build();
+        let col = make_col("posts", vec![group]);
+        let mut out = String::new();
+        render_collection_impl(&mut out, &col);
+        assert!(
+            out.contains("Rel::Doc(Box::new(Users::from_document(&struct_to_document(m))))"),
+            "nested relationship decodes the populated document: {out}"
+        );
+    }
+
+    /// A polymorphic relationship decodes into the generated discriminated enum —
+    /// id string → `Id`, `{collection, ...}` struct → the matching doc variant.
+    #[test]
+    fn proto_polymorphic_decodes_discriminated_enum() {
+        let mut rc = RelationshipConfig::new("posts", false);
+        rc.polymorphic = vec!["posts".into(), "pages".into()];
+        let col = make_col(
+            "comments",
+            vec![
+                FieldDefinition::builder("subject", FieldType::Relationship)
+                    .required(true)
+                    .relationship(rc)
+                    .build(),
+            ],
+        );
+        let mut out = String::new();
+        render_collection_impl(&mut out, &col);
+        assert!(
+            out.contains("CommentsSubject::Id(s.clone())"),
+            "id form: {out}"
+        );
+        assert!(
+            out.contains(
+                "Some(\"posts\") => Some(CommentsSubject::Doc(CommentsSubjectRef::Posts(Box::new(Posts::from_document"
+            ),
+            "populated variant: {out}"
+        );
+        assert!(
+            out.contains("struct_to_document(m)"),
+            "reads the struct: {out}"
+        );
     }
 
     #[test]

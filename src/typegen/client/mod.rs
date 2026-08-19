@@ -39,6 +39,9 @@ mod typescript;
 mod writer;
 
 pub(super) use driver::generate;
+// `resolve_ty` + `FieldTy` are shared with `rust_proto` so both Rust generators
+// agree on every field's type (see `driver::resolve_ty`).
+pub(super) use driver::resolve_ty;
 pub(super) use ir::{ClientPrinter, Document, EnumDef, Field, FieldTy, PolyDef, SubType};
 
 // `drive` renders through a caller-chosen printer; production selects the

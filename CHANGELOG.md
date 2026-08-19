@@ -452,6 +452,55 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `fit` values remain `cover` / `contain` / `inside` / `fill`; an absent
   `max_file_size` still inherits the global default.
 
+- **`crap-cms typegen client` emits richer, breaking type shapes.** The
+  generated client types (`types/client.{ts,go,py,rs}`) changed shape to match
+  what the API actually returns; regenerate and adjust consuming code:
+  - **Relationships are populate-aware.** A relationship/upload field is no
+    longer a bare id string. Depending on the query `depth`, the wire carries
+    either an id (`depth = 0`) or a populated document (`depth >= 1`), and the
+    generated type now models both: Rust `Rel<T>` (`enum { Doc(Box<T>),
+    Id(String) }`), Go `Rel[T]` (a struct whose custom JSON decodes an id
+    string or an object), TypeScript `string | TDocument`, Python `str | T`.
+  - **Single relationships are optional on read.** A non-`has_many`
+    relationship/upload is now optional even when the field is `required` on
+    write, because it can come back absent after the target is soft-deleted or
+    access-denied.
+  - **`select` fields narrow to a named type per language, losslessly.** Rust
+    and Go generate a named type that still round-trips an unknown value (Rust
+    `enum { …, Other(String) }` via `serde(from/into)`, Go a `string` newtype
+    with `const`s), so a value removed from the schema after generation is
+    preserved rather than rejected; TypeScript emits a string union and Python
+    a `Literal[…]`.
+  - **Polymorphic relationships are typed.** A relationship targeting multiple
+    collections was previously `String`; it now generates a discriminated type
+    over its targets (Rust untagged `enum` + a `#[serde(tag = "collection")]`
+    ref enum, TypeScript/Python a union of the target documents, Go
+    `interface{}`).
+  - **New `CollectionSlug` type** enumerates the known collection slugs (Rust
+    and Go a named type with constants, TypeScript/Python a string-literal
+    union).
+  - **Generation fails on a type-name collision.** If two constructs would map
+    to the same generated type name (e.g. a collection slugged `posts_status`
+    and the `status` select of a `posts` collection, both → `PostsStatus`),
+    `typegen client` now errors instead of silently emitting one wrong type.
+    Rename one of the colliding constructs.
+
+  **Migration:** regenerate with `crap-cms typegen client -l ts,go,py,rs` and
+  update code that read relationships as plain id strings (unwrap the
+  `Rel`/union), select fields as plain strings (match the named type), or
+  polymorphic fields as strings.
+
+- **`crap-cms typegen proto` output realigned with `typegen client -l rs`.**
+  The Rust proto-decode generator (the `From<proto::Document>` impls) had
+  drifted from the Rust client type generator, so `typegen client -l rs` and
+  `typegen proto` no longer produced code that compiled together. The proto
+  decoder now agrees on every field: `select` decodes into the same lossless
+  enum, polymorphic relationships into the same discriminated enum, single
+  relationships are optional, and — the gap that previously dropped data — a
+  relationship nested inside a group/array/blocks now decodes its **populated**
+  form (`Rel::Doc`) as well as the id form (`Rel::Id`), at any depth.
+  **Migration:** regenerate both artifacts together after upgrading.
+
 ### Security
 
 - **Admin MFA was bypassable with only the password.** The `crap_mfa_pending`
@@ -1121,6 +1170,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **`typegen` produced broken or wrong output for several schema shapes.** The
+  client SDK and Lua generators are now correct where they previously emitted
+  code that didn't compile or that named types wrongly:
+  - A sub-type (the type for an `array`/`group`'s sub-fields) nested two or more
+    levels deep was named from the top-level collection instead of its immediate
+    parent, so the Go/Python/Rust generators emitted duplicate or mismatched type
+    definitions at depth ≥ 2 (TypeScript was already correct).
+  - Field, type, and select-value **names that collide with a language's rules**
+    — a leading digit, a reserved word (`type`, `self`, `Self`), or a
+    case-insensitive Go collision — are now sanitized per language (Rust `r#`/
+    rename, Go de-collision, Python trailing `_`, TypeScript quoted keys, Lua
+    bracket-indexing) with the wire key preserved, instead of emitting a syntax
+    error.
+  - The Lua generator honored `rename_all` inconsistently across the two field
+    metadata passes, and dropped helpers registered under a second namespace;
+    both are fixed.
+  - The Python generator defaulted a required list field to `""` (a type error)
+    instead of `field(default_factory=list)`.
 
 - **A Group nested inside a Blocks field lost its data.** The admin form parser
   ran block rows with empty sub-field definitions, so a group inside a block was
