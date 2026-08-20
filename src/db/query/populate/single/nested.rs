@@ -280,10 +280,7 @@ fn populate_rel_in_map(
         return Ok(());
     };
 
-    let effective_depth = match rel.max_depth {
-        Some(max) if max < pctx.effective_depth => max,
-        _ => pctx.effective_depth,
-    };
+    let effective_depth = rel.cap_depth(pctx.effective_depth);
 
     if effective_depth <= 0 {
         return Ok(());
@@ -365,7 +362,7 @@ fn populate_has_one_in_map(
     // parity with the top-level has-one path, which never leaves a denied
     // target's raw id in place.
     let value = match resolved {
-        Some(target) => document_to_json(&target, rel_collection),
+        Some(target) => document_to_json(&target, Some(rel_collection)),
         None => Value::Null,
     };
     map.insert(name.to_string(), value);
@@ -409,7 +406,7 @@ fn populate_has_many_in_map(
             effective_depth,
             visited,
         )? {
-            populated.push(document_to_json(&target, rel_collection));
+            populated.push(document_to_json(&target, Some(rel_collection)));
         }
         // Missing or access-hidden: drop the entry — parity with the top-level
         // has-many path, which never leaves a denied target's raw id in place.
@@ -458,7 +455,7 @@ fn populate_poly_has_one_in_map(
         effective_depth,
         visited,
     )? {
-        Some(target) => document_to_json(&target, &col),
+        Some(target) => document_to_json(&target, Some(&col)),
         None => Value::Null,
     };
     map.insert(name.to_string(), value);
@@ -511,7 +508,7 @@ fn populate_poly_has_many_in_map(
         if let Some(target) =
             resolve_single_target(pctx, &col, &item_def, &id, views, effective_depth, visited)?
         {
-            populated.push(document_to_json(&target, &col));
+            populated.push(document_to_json(&target, Some(&col)));
         }
         // Missing or access-hidden: drop the entry — parity with the non-poly
         // nested has-many and the top-level poly path; never leave a denied

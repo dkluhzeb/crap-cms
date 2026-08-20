@@ -24,6 +24,7 @@ pub use cache::{CacheBackend, CacheConfig};
 pub use depth::DepthConfig;
 pub use email::{EmailConfig, EmailProvider, SmtpTls};
 pub use hooks::HooksConfig;
+pub(crate) use jobs::{DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS, DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS};
 pub use jobs::{JobsConfig, QueueConfig};
 pub use live::{LiveConfig, LiveTransport};
 pub use locale::LocaleConfig;

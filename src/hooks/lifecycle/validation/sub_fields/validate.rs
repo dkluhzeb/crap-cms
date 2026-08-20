@@ -7,7 +7,7 @@ use tracing::warn;
 use crate::{
     core::{FieldDefinition, FieldType, Registry, validate::FieldError},
     hooks::lifecycle::validation::{
-        checks::{self, is_valid_date_format},
+        checks,
         custom::{ValidateCtxSource, run_required_condition_inner, run_validate_function_inner},
         is_empty_value,
         richtext_attrs::{RichtextValidationCtx, validate_richtext_node_attrs},
@@ -348,21 +348,11 @@ fn validate_leaf_sub_field(
         );
     }
 
-    // 2. Date format check
-    if sf.field_type == FieldType::Date
-        && !is_empty
-        && let Some(Value::String(s)) = value
-        && !is_valid_date_format(s)
-    {
-        errors.push(
-            FieldError::with_key(
-                qualified.to_owned(),
-                format!("{} is not a valid date format", sf.name),
-                "validation.invalid_date",
-            )
-            .with_param("field", sf.name.clone()),
-        );
-    }
+    // 2. Date format + min_date/max_date bounds. Uses the shared
+    //    `check_date_field` so a nested Date field enforces its bounds exactly
+    //    like a top-level one (inlining only the format check here silently
+    //    dropped `min_date`/`max_date` for fields inside array/blocks rows).
+    checks::check_date_field(sf, qualified, value, is_empty, errors);
 
     // 3. Custom Lua validate function
     if let Some(ref validate) = sf.validate
@@ -417,7 +407,7 @@ fn validate_leaf_sub_field(
     checks::check_option_valid(sf, qualified, value, is_empty, errors);
 
     // 8. Has-many element validation (per-element length/numeric bounds, row counts)
-    checks::check_has_many_elements(sf, qualified, value, is_empty, errors);
+    checks::check_has_many_elements(sf, qualified, value, is_empty, ctx.is_draft, errors);
 
     // 8b. Polymorphic relationship allowlist — a forged target collection on a
     //     relationship/upload nested inside an array/blocks row must be rejected

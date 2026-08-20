@@ -16,4 +16,4 @@ pub use create::create_document_in_conn;
 pub(crate) use delete::delete_document_in_conn;
 pub(crate) use update::update_document_in_conn;
 pub(crate) use update_many_single::update_many_single_in_conn;
-pub use validate::{ValidateContext, validate_document};
+pub use validate::{ValidateContext, validate_document, validate_outcome};

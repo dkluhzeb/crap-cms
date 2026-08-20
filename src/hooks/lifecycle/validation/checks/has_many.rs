@@ -2,6 +2,7 @@ use serde_json::Value;
 
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
 
+use super::numeric::{NumberViolation, number_violation};
 use super::shared::{decode_element_list, element_display};
 
 /// Validate individual values within a `has_many` element list.
@@ -13,6 +14,7 @@ pub(crate) fn check_has_many_elements(
     data_key: &str,
     value: Option<&Value>,
     is_empty: bool,
+    is_draft: bool,
     errors: &mut Vec<FieldError>,
 ) {
     if !field.has_many || is_empty {
@@ -31,7 +33,12 @@ pub(crate) fn check_has_many_elements(
         return;
     };
 
-    check_count_bounds(field, data_key, values.len(), errors);
+    // `min_rows`/`max_rows` are relaxed on draft saves — same as
+    // `check_row_bounds` does for Array/Blocks/has-many-relationship. Per-element
+    // value bounds below still run on drafts (only the count rule is relaxed).
+    if !is_draft {
+        check_count_bounds(field, data_key, values.len(), errors);
+    }
 
     // Select/Radio: per-element option validation is in check_option_valid.
     if field.field_type == FieldType::Select || field.field_type == FieldType::Radio {
@@ -110,11 +117,43 @@ fn check_number_value_bounds(
         Value::String(s) => s.parse::<f64>().ok(),
         _ => None,
     };
-    let Some(num) = num else {
-        return;
-    };
     let v = element_display(element);
     let v = v.as_str();
+
+    // A non-numeric element would be silently dropped by the write-edge
+    // coercion (data loss) — reject it, matching the single-value path.
+    let Some(num) = num else {
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{}: {} must be a number", field.name, v),
+                "validation.has_many_invalid_number",
+            )
+            .with_param("field", field.name.clone())
+            .with_param("value", v.to_string()),
+        );
+        return;
+    };
+
+    // Finite + integer rule, shared with the single-value numeric path.
+    if let Some(violation) = number_violation(field, num) {
+        let (message, key) = match violation {
+            NumberViolation::NotFinite => (
+                format!("{}: {} must be a finite number", field.name, v),
+                "validation.has_many_finite_number",
+            ),
+            NumberViolation::NotWhole => (
+                format!("{}: {} must be a whole number", field.name, v),
+                "validation.has_many_whole_number",
+            ),
+        };
+        errors.push(
+            FieldError::with_key(data_key.to_owned(), message, key)
+                .with_param("field", field.name.clone())
+                .with_param("value", v.to_string()),
+        );
+        return;
+    }
 
     if let Some(min_val) = field.min
         && num < min_val
@@ -253,6 +292,96 @@ mod tests {
                 .any(|e| e.key.as_deref() == Some("validation.has_many_min_rows")),
             "expected has_many_min_rows, got: {:?}",
             err.errors
+        );
+    }
+
+    fn number_list_error_keys(scores: serde_json::Value, integer: bool) -> Vec<String> {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, scores TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("scores", FieldType::Number)
+                .has_many(true)
+                .integer(integer)
+                .build(),
+        ];
+        let mut data = DocumentFields::new();
+        data.insert("scores".to_string(), scores);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        result
+            .err()
+            .map(|e| e.errors.iter().filter_map(|fe| fe.key.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Regression: `has_many` Number elements skipped the finite/NaN,
+    /// `integer`, and non-numeric hardening the single-value path enforces
+    /// (only min/max ran), so `["NaN"]` / `["1.5"]` on an integer field /
+    /// `["abc"]` slipped through — the last one then silently dropped on write.
+    #[test]
+    fn has_many_number_rejects_non_finite() {
+        assert!(
+            number_list_error_keys(json!(["NaN"]), false)
+                .contains(&"validation.has_many_finite_number".to_string())
+        );
+    }
+
+    #[test]
+    fn has_many_number_rejects_fractional_when_integer() {
+        assert!(
+            number_list_error_keys(json!(["1.5"]), true)
+                .contains(&"validation.has_many_whole_number".to_string())
+        );
+    }
+
+    #[test]
+    fn has_many_number_rejects_non_numeric() {
+        assert!(
+            number_list_error_keys(json!(["abc"]), false)
+                .contains(&"validation.has_many_invalid_number".to_string())
+        );
+    }
+
+    #[test]
+    fn has_many_number_valid_list_passes() {
+        assert!(number_list_error_keys(json!([1, 2, 3]), true).is_empty());
+    }
+
+    /// Regression: `min_rows`/`max_rows` on a scalar `has_many` field were
+    /// enforced even on draft saves, while Array/Blocks/relationship count
+    /// bounds are relaxed for drafts (`check_row_bounds` skips on draft). The
+    /// two are now symmetric.
+    #[test]
+    fn has_many_count_bounds_skipped_on_draft() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .min_rows(3)
+                .build(),
+        ];
+        let mut data = DocumentFields::new();
+        data.insert("tags".to_string(), json!(["one"]));
+
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").draft(true).build(),
+        );
+        assert!(
+            result.is_ok(),
+            "draft save must relax min_rows for scalar has_many, got: {:?}",
+            result.err()
         );
     }
 

@@ -21,7 +21,7 @@ const DEFAULT_IMAGES_QUEUE_CONCURRENCY: u32 = 2;
 /// on commodity hardware; the default gives generous headroom for
 /// big originals on slow disks. Override via
 /// `[jobs.queues.images] timeout = "..."`.
-const DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS: u64 = 300;
+pub(crate) const DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS: u64 = 300;
 
 /// Default retry budget applied to the `images` queue when the
 /// operator doesn't set `[jobs.queues.images]` explicitly. `2`
@@ -42,7 +42,7 @@ const DEFAULT_EMAIL_QUEUE_CONCURRENCY: u32 = 5;
 /// operator doesn't set `[jobs.queues.email]` explicitly. SMTP
 /// handshake + delivery within `30s` is the historical default from
 /// the now-removed `[email] queue_timeout` field.
-const DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS: u64 = 30;
+pub(crate) const DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS: u64 = 30;
 
 /// Default retry budget applied to the `email` queue when the
 /// operator doesn't set `[jobs.queues.email]` explicitly. `3` retries

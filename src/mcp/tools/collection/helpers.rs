@@ -195,20 +195,11 @@ fn bool_to_string(b: bool) -> String {
     if b { "1" } else { "0" }.to_string()
 }
 
-/// Convert a Document to a JSON Value.
+/// Convert a Document to a JSON Value — the top-level (untagged) envelope. Shares
+/// the one `document_to_json` converter with the populate path (which passes the
+/// `collection` tag for embedded refs), so the envelope key set can't drift.
 pub(in crate::mcp::tools) fn doc_to_json(doc: &Document) -> Value {
-    let mut obj = Map::new();
-    obj.insert("id".to_string(), Value::String(doc.id.to_string()));
-    for (k, v) in &doc.fields {
-        obj.insert(k.clone(), v.clone());
-    }
-    if let Some(ref ca) = doc.created_at {
-        obj.insert("created_at".to_string(), Value::String(ca.clone()));
-    }
-    if let Some(ref ua) = doc.updated_at {
-        obj.insert("updated_at".to_string(), Value::String(ua.clone()));
-    }
-    Value::Object(obj)
+    query::populate::document_to_json(doc, None)
 }
 
 /// Extract typed field data from JSON args, dropping `skip_keys` and `null`

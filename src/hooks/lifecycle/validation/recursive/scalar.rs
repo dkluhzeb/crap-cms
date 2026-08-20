@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::{
     core::{FieldDefinition, FieldType, validate::FieldError},
-    db::{LocaleContext, LocaleMode, query::helpers::prefixed_name, query::sanitize_locale},
+    db::{LocaleContext, query::helpers::prefixed_name, query::locale_write_column},
     hooks::lifecycle::validation::{
         checks,
         custom::{ValidateCtxSource, run_required_condition_inner},
@@ -118,7 +118,14 @@ impl ValidationWalker<'_> {
         checks::check_numeric_bounds(field, &data_key, value, is_empty, errors);
         checks::check_email_format(field, &data_key, value, is_empty, errors);
         checks::check_option_valid(field, &data_key, value, is_empty, errors);
-        checks::check_has_many_elements(field, &data_key, value, is_empty, errors);
+        checks::check_has_many_elements(
+            field,
+            &data_key,
+            value,
+            is_empty,
+            self.ctx.is_draft,
+            errors,
+        );
         checks::check_date_field(field, &data_key, value, is_empty, errors);
         checks::check_custom_validate(
             self.lua,
@@ -207,34 +214,28 @@ impl ValidationWalker<'_> {
         inherited_localized: bool,
         errors: &mut Vec<FieldError>,
     ) -> Option<String> {
-        let is_localized =
-            (inherited_localized || field.localized) && self.ctx.locale_ctx.is_some();
-        let Some(lctx) = self.ctx.locale_ctx.filter(|_| is_localized) else {
-            return Some(data_key.to_string());
+        // Resolve the exact column the write path stores into, via the shared
+        // `locale_write_column` — so the uniqueness check can never query a
+        // different column than the write targets (which would let a duplicate
+        // slip through). Emitting an error on failure keeps this fail-closed.
+        let Ok(col) =
+            locale_write_column(data_key, field, self.ctx.locale_ctx, inherited_localized)
+        else {
+            errors.push(
+                FieldError::with_key(
+                    data_key.to_string(),
+                    format!(
+                        "{}: could not resolve locale column — cannot verify uniqueness",
+                        field.name
+                    ),
+                    "validation.invalid_locale",
+                )
+                .with_param("field", field.name.clone()),
+            );
+            return None;
         };
 
-        let locale = match &lctx.mode {
-            LocaleMode::Single(l) => l.as_str(),
-            _ => lctx.config.default_locale.as_str(),
-        };
-
-        if let Ok(l) = sanitize_locale(locale) {
-            return Some(format!("{data_key}__{l}"));
-        }
-
-        errors.push(
-            FieldError::with_key(
-                data_key.to_string(),
-                format!(
-                    "{}: invalid locale '{}' — cannot verify uniqueness",
-                    field.name, locale,
-                ),
-                "validation.invalid_locale",
-            )
-            .with_param("field", field.name.clone())
-            .with_param("locale", locale.to_string()),
-        );
-        None
+        Some(col)
     }
 
     /// Validate custom-node attrs within a `Richtext` field's content.
@@ -566,11 +567,15 @@ mod tests {
         assert_eq!(errs[1].field, "content[cta#0].text");
     }
 
-    /// Regression: when locale sanitization fails, validation must emit an
-    /// error rather than silently skipping the unique check (which could allow
-    /// duplicates to slip through in the localized column).
+    /// Regression: the unique check resolves its column via the same
+    /// `locale_write_column` the write path uses, so an out-of-config locale
+    /// falls back to the **default-locale column** — the exact column the write
+    /// stores into — rather than querying a different column (which would let a
+    /// duplicate slip through). Here a locale not in `config.locales` falls back
+    /// to `slug__en`, and a value colliding with the existing `slug__en` row is
+    /// correctly caught as a unique violation.
     #[test]
-    fn test_invalid_locale_emits_validation_error() {
+    fn unique_check_uses_write_column_for_out_of_config_locale() {
         let lua = mlua::Lua::new();
         let conn = InMemoryConn::open();
         conn.setup(
@@ -591,14 +596,16 @@ mod tests {
             fallback: false,
         };
 
-        // Use a locale string that sanitizes to empty (only special chars)
+        // A locale not present in `config.locales` — resolves (like the write
+        // path) to the default-locale column `slug__en`.
         let locale_ctx = LocaleContext {
-            mode: LocaleMode::Single("@!#$%".to_string()),
+            mode: LocaleMode::Single("xx".to_string()),
             config: locale_config,
         };
 
         let mut data = DocumentFields::new();
-        data.insert("slug".to_string(), json!("taken"));
+        // Collides with the existing `slug__en` value, so the check must fire.
+        data.insert("slug".to_string(), json!("unique-en"));
 
         let result = validate_fields_inner(
             &lua,
@@ -609,15 +616,14 @@ mod tests {
                 .build(),
         );
 
-        assert!(result.is_err(), "Invalid locale must fail validation");
-        let errs = result.unwrap_err().errors;
-        assert_eq!(errs.len(), 1);
+        let errs = result
+            .expect_err("duplicate on the resolved default-locale column must be caught")
+            .errors;
         assert!(
-            errs[0].message.contains("invalid locale"),
-            "Error should mention invalid locale, got: {}",
-            errs[0].message,
+            errs.iter()
+                .any(|e| e.key.as_deref() == Some("validation.unique")),
+            "expected a unique violation on slug__en, got: {errs:?}"
         );
-        assert_eq!(errs[0].key.as_deref(), Some("validation.invalid_locale"));
     }
 
     fn en_de_config() -> LocaleConfig {

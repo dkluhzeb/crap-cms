@@ -17,7 +17,10 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    config::{JobsConfig, LocaleConfig},
+    config::{
+        DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS, DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS, JobsConfig,
+        LocaleConfig,
+    },
     core::{
         DocumentFields, JobDefinition, JobRun, Registry, SharedEmailProvider, SharedStorage,
         email::{SYSTEM_EMAIL_JOB, SYSTEM_EMAIL_QUEUE},
@@ -536,20 +539,6 @@ fn claim_pending_jobs(
     }
 }
 
-/// Hardcoded fallback timeout (seconds) for the
-/// `_system_image_convert` system job when neither
-/// `[jobs.queues.images] timeout` nor an explicit value can be
-/// resolved. Matches the framework default applied by
-/// `JobsConfig::apply_queue_defaults` for the `images` queue, used
-/// only if the config flow somehow doesn't reach this code.
-const SYSTEM_IMAGE_CONVERT_FALLBACK_TIMEOUT_SECS: u64 = 300;
-
-/// Hardcoded fallback timeout (seconds) for the `_system_email`
-/// system job when `[jobs.queues.email] timeout` is unresolved.
-/// Matches the framework default applied by
-/// `JobsConfig::apply_queue_defaults` for the `email` queue.
-const SYSTEM_EMAIL_FALLBACK_TIMEOUT_SECS: u64 = 30;
-
 /// A `running` job is treated as dead (its worker stopped heartbeating) once
 /// its `heartbeat_at` is older than `heartbeat_interval * this`. Must be > 1
 /// so a single missed heartbeat tick doesn't reclaim a live job.
@@ -576,7 +565,7 @@ fn resolve_job_def(
         let timeout = queue_timeouts
             .get(SYSTEM_EMAIL_QUEUE)
             .copied()
-            .unwrap_or(SYSTEM_EMAIL_FALLBACK_TIMEOUT_SECS);
+            .unwrap_or(DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS);
         return Some(
             JobDefinition::builder(SYSTEM_EMAIL_JOB, "_system")
                 .queue(SYSTEM_EMAIL_QUEUE)
@@ -589,7 +578,7 @@ fn resolve_job_def(
         let timeout = queue_timeouts
             .get(IMAGE_CONVERT_QUEUE)
             .copied()
-            .unwrap_or(SYSTEM_IMAGE_CONVERT_FALLBACK_TIMEOUT_SECS);
+            .unwrap_or(DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS);
         return Some(
             JobDefinition::builder(SYSTEM_IMAGE_CONVERT_JOB, "_system")
                 .queue(IMAGE_CONVERT_QUEUE)

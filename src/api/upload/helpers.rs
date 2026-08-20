@@ -101,31 +101,6 @@ pub fn json_error(status: StatusCode, message: &str) -> Response {
     json_ok(status, &ErrorBody { error: message })
 }
 
-/// Map a delete-path [`ServiceError`] to its HTTP status and a client-safe
-/// message. The typed variant is authoritative — never re-derive the status by
-/// string-matching the error's `Display` (which silently misclassifies
-/// `AccessDenied` and `Transient` as `500`). Mirrors the gRPC
-/// `ServiceError -> tonic::Status` chokepoint for the HTTP upload surface.
-pub fn classify_delete_error(e: &ServiceError) -> (StatusCode, &'static str) {
-    match e {
-        ServiceError::NotFound(_) => (StatusCode::NOT_FOUND, "Upload not found"),
-        ServiceError::Referenced { .. } | ServiceError::LimitExceeded(_) => {
-            (StatusCode::CONFLICT, "Upload is still referenced")
-        }
-        ServiceError::AccessDenied(_) | ServiceError::AccountLocked => {
-            (StatusCode::FORBIDDEN, "Access denied")
-        }
-        ServiceError::Validation(_) | ServiceError::HookError(_) => {
-            (StatusCode::BAD_REQUEST, "Delete rejected")
-        }
-        ServiceError::Transient(_) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Service temporarily unavailable, please retry",
-        ),
-        _ => (StatusCode::INTERNAL_SERVER_ERROR, "Delete failed"),
-    }
-}
-
 /// Return a JSON success response with the given status and body.
 pub fn json_ok<T: Serialize>(status: StatusCode, body: &T) -> Response {
     let serialized = serde_json::to_string(body).expect("response body serialize");
@@ -349,46 +324,7 @@ mod tests {
         assert_eq!(extract_bearer_token("Bearerabc123"), None);
     }
 
-    #[test]
-    fn delete_error_not_found() {
-        let (status, _) = classify_delete_error(&ServiceError::NotFound("gone".into()));
-        assert_eq!(status, StatusCode::NOT_FOUND);
-    }
-
-    #[test]
-    fn delete_error_referenced() {
-        let (status, _) = classify_delete_error(&ServiceError::Referenced {
-            id: "abc".into(),
-            count: 3,
-        });
-        assert_eq!(status, StatusCode::CONFLICT);
-    }
-
-    /// Regression: string-matching classified `AccessDenied` (no "not found" /
-    /// "referenced" phrase) as a 500. The typed mapping returns 403.
-    #[test]
-    fn delete_error_access_denied_is_forbidden() {
-        let (status, _) = classify_delete_error(&ServiceError::AccessDenied("nope".into()));
-        assert_eq!(status, StatusCode::FORBIDDEN);
-    }
-
-    /// Regression: a transient DB error must surface as 503 (retryable), not a
-    /// generic 500 as the old `Display`-string match produced.
-    #[test]
-    fn delete_error_transient_is_unavailable() {
-        let (status, _) =
-            classify_delete_error(&ServiceError::Transient(anyhow::anyhow!("db locked")));
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    }
-
-    #[test]
-    fn delete_error_generic() {
-        let (status, _) =
-            classify_delete_error(&ServiceError::Internal(anyhow::anyhow!("write failed")));
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    // ── service_error_to_response ──────────────────────────────────
+    // ── service_error_to_response (the one upload error mapper) ─────
 
     #[tokio::test]
     async fn service_error_access_denied_returns_403() {

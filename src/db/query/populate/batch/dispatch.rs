@@ -138,10 +138,7 @@ fn populate_flat_relationships(
             continue;
         };
 
-        let effective_depth = match rel.max_depth {
-            Some(max) if max < opts.depth => max,
-            _ => opts.depth,
-        };
+        let effective_depth = rel.cap_depth(opts.depth);
 
         if effective_depth <= 0 {
             continue;
@@ -343,10 +340,10 @@ fn populate_single_join_field(
         let Some(key) = join_key_from_value(matched_doc.fields.get(&target.config.on)) else {
             continue;
         };
-        buckets
-            .entry(key)
-            .or_default()
-            .push(document_to_json(matched_doc, &target.config.collection));
+        buckets.entry(key).or_default().push(document_to_json(
+            matched_doc,
+            Some(&target.config.collection),
+        ));
     }
 
     for doc in docs.iter_mut() {

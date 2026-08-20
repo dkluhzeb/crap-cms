@@ -1,5 +1,7 @@
 //! Document validation without persistence.
 
+use std::collections::HashMap;
+
 use crate::{
     core::{Document, FieldDefinition, RequiredLocales, collection::Hooks, nest_group_fields},
     db::{DbConnection, LocaleContext},
@@ -10,6 +12,23 @@ use crate::{
 use super::ServiceError;
 
 type Result<T> = std::result::Result<T, ServiceError>;
+
+/// Split a [`validate_document`] result into the surface-agnostic
+/// `(valid, per_field_errors)` pair shared by every validate handler
+/// (gRPC / MCP, collection / global). `Ok(())` is valid; a `Validation` error
+/// becomes the field-error map; any other error propagates for the caller to map
+/// to its own transport (gRPC `reclassify` → `Status`, MCP `into_anyhow`).
+///
+/// # Errors
+///
+/// Returns the non-validation `ServiceError` unchanged.
+pub fn validate_outcome(result: Result<()>) -> Result<(bool, HashMap<String, String>)> {
+    match result {
+        Ok(()) => Ok((true, HashMap::new())),
+        Err(ServiceError::Validation(ve)) => Ok((false, ve.to_field_map())),
+        Err(e) => Err(e),
+    }
+}
 
 /// Context for a validate-only run (no persist).
 pub struct ValidateContext<'a> {

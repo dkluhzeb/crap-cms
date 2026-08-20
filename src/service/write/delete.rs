@@ -1,10 +1,13 @@
 //! Core delete operation for collections.
 
 use serde_json::Value;
+use tracing::warn;
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, DocumentFields, ReqContext},
+    core::{
+        CollectionDefinition, DocumentFields, ReqContext, upload::delete_image_jobs_for_document,
+    },
     db::{AccessResult, DbConnection, LocaleContext, query},
     hooks::{AccessCheckInput, HookContext, HookEvent},
     service::{ServiceContext, helpers::enforce_access_constraints, hooks::WriteHooks},
@@ -200,8 +203,10 @@ pub(crate) fn delete_document_in_conn(
     }
     if def.is_upload_collection() {
         // Best-effort cleanup of any queued `_system_image_convert`
-        // jobs targeting this doc — see `core/upload/queue.rs`.
-        let _ = crate::core::upload::delete_image_jobs_for_document(conn, ctx.slug, id);
+        // jobs targeting this doc — see `core/upload/queue.rs`. Non-fatal, but
+        // logged for observability (matching the scheduler-side call site).
+        let _ = delete_image_jobs_for_document(conn, ctx.slug, id)
+            .inspect_err(|e| warn!("Failed to cancel image jobs for {}/{}: {e}", ctx.slug, id));
     }
 
     // After-delete hooks

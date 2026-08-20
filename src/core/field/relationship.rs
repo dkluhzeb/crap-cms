@@ -44,6 +44,18 @@ impl RelationshipConfig {
         !self.polymorphic.is_empty()
     }
 
+    /// Cap the remaining populate `depth` by this relationship's own
+    /// `max_depth`: the effective depth to descend with is the smaller of the
+    /// two (an unset `max_depth` imposes no cap). One place for the per-field
+    /// recursion-limit rule, shared by every populate dispatch site.
+    #[must_use]
+    pub fn cap_depth(&self, current: i32) -> i32 {
+        match self.max_depth {
+            Some(max) if max < current => max,
+            _ => current,
+        }
+    }
+
     /// Returns all target collections (polymorphic list, or single `collection`).
     #[must_use]
     pub fn all_collections(&self) -> Vec<&str> {

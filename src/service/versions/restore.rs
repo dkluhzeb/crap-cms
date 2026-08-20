@@ -11,7 +11,7 @@ use crate::{
     core::{Document, DocumentFields, FieldDefinition, FieldType, event::EventOperation},
     db::{
         AccessResult, query,
-        query::helpers::{global_table, tz_column},
+        query::helpers::{global_table, prefixed_name, tz_column},
     },
     hooks::{AccessCheckInput, LuaCrudInfra, ValidationCtx},
     service::{
@@ -46,11 +46,7 @@ fn collect_known_keys(fields: &[FieldDefinition], prefix: &str, out: &mut HashSe
     for f in fields {
         match f.field_type {
             FieldType::Group => {
-                let new_prefix = if prefix.is_empty() {
-                    f.name.clone()
-                } else {
-                    format!("{}__{}", prefix, f.name)
-                };
+                let new_prefix = prefixed_name(prefix, &f.name);
                 // Nested form is also valid in snapshots.
                 out.insert(f.name.clone());
                 collect_known_keys(&f.fields, &new_prefix, out);
@@ -64,11 +60,7 @@ fn collect_known_keys(fields: &[FieldDefinition], prefix: &str, out: &mut HashSe
                 }
             }
             _ => {
-                let key = if prefix.is_empty() {
-                    f.name.clone()
-                } else {
-                    format!("{}__{}", prefix, f.name)
-                };
+                let key = prefixed_name(prefix, &f.name);
                 out.insert(key.clone());
                 // Bare name also accepted by the snapshot extractor.
                 out.insert(f.name.clone());
@@ -179,10 +171,7 @@ fn restore_collection_version_pool(
     let inner_ctx = ServiceContext::collection(ctx.slug, def)
         .conn(&tx)
         .write_hooks(&wh)
-        .user(ctx.user)
-        .override_access(ctx.override_access)
-        .cache(ctx.cache.clone())
-        .event_transport(ctx.event_transport.clone())
+        .inherit_write_infra(ctx)
         .build();
 
     let doc = restore_collection_version_core(&inner_ctx, document_id, version_id, locale_config)?;

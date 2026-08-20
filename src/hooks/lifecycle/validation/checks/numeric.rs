@@ -3,6 +3,31 @@ use serde_json::Value;
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
 use crate::db::f64_to_exact_i64;
 
+/// Why a numeric value is unacceptable for `field`, independent of min/max.
+/// Shared by the single-value ([`check_numeric_bounds`]) and per-element
+/// (`has_many`, in `checks::has_many`) paths so both enforce the same rule.
+pub(crate) enum NumberViolation {
+    /// NaN or ±Infinity — slips past every min/max comparison and breaks
+    /// downstream filters/aggregations (`NaN != NaN`).
+    NotFinite,
+    /// A fractional value for an `integer = true` field.
+    NotWhole,
+}
+
+/// The [`NumberViolation`] for `v` under `field`, or `None` if it is acceptable
+/// (bounds are checked separately). One rule, two call sites.
+pub(crate) fn number_violation(field: &FieldDefinition, v: f64) -> Option<NumberViolation> {
+    if !v.is_finite() {
+        return Some(NumberViolation::NotFinite);
+    }
+
+    if field.integer && f64_to_exact_i64(v).is_none() {
+        return Some(NumberViolation::NotWhole);
+    }
+
+    None
+}
+
 /// Validate min / max bounds for number fields, plus whole-number rejection
 /// for `Integer` fields and numeric-type rejection for Number fields.
 /// Skipped for `has_many` fields (validated per-element in
@@ -51,33 +76,21 @@ pub(crate) fn check_numeric_bounds(
         return;
     };
 
-    // NaN and ±Infinity slip past min/max comparisons (every NaN
-    // comparison returns false, ∞ trivially passes any finite max),
-    // so a user submitting `"NaN"` or `"Infinity"` for a number field
-    // would otherwise reach the DB unchallenged and break downstream
-    // filters / aggregations (NaN ≠ NaN, no row ever matches).
-    if !v.is_finite() {
-        errors.push(
-            FieldError::with_key(
-                data_key.to_owned(),
+    // Finite + integer rule, shared with the per-element `has_many` path.
+    if let Some(violation) = number_violation(field, v) {
+        let (message, key) = match violation {
+            NumberViolation::NotFinite => (
                 format!("{} must be a finite number", field.name),
                 "validation.finite_number",
-            )
-            .with_param("field", field.name.clone()),
-        );
-        return;
-    }
-
-    // Integer fields reject fractional input — `f64_to_exact_i64` returns
-    // `None` for a non-whole value (or one outside `i64` range).
-    if is_integer && f64_to_exact_i64(v).is_none() {
-        errors.push(
-            FieldError::with_key(
-                data_key.to_owned(),
+            ),
+            NumberViolation::NotWhole => (
                 format!("{} must be a whole number", field.name),
                 "validation.whole_number",
-            )
-            .with_param("field", field.name.clone()),
+            ),
+        };
+        errors.push(
+            FieldError::with_key(data_key.to_owned(), message, key)
+                .with_param("field", field.name.clone()),
         );
         return;
     }

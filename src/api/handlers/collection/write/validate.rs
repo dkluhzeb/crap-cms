@@ -75,15 +75,10 @@ fn validate_blocking(input: ValidateBlockingInput) -> Result<content::ValidateRe
         .draft(input.draft)
         .build();
 
-    match service::validate_document(&conn, &write_hooks, &ctx, write_input, user_doc.as_ref()) {
-        Ok(()) => Ok(content::ValidateResponse {
-            valid: true,
-            errors: HashMap::new(),
-        }),
-        Err(ServiceError::Validation(ve)) => Ok(content::ValidateResponse {
-            valid: false,
-            errors: ve.to_field_map(),
-        }),
+    let result =
+        service::validate_document(&conn, &write_hooks, &ctx, write_input, user_doc.as_ref());
+    match service::validate_outcome(result) {
+        Ok((valid, errors)) => Ok(content::ValidateResponse { valid, errors }),
         Err(e) => Err(Status::from(e.reclassify(&input.db_kind))),
     }
 }

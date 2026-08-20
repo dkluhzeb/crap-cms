@@ -673,6 +673,24 @@ impl<'a> ServiceContextBuilder<'a> {
         self
     }
 
+    /// Inherit the write-infrastructure fields shared by every pool-mode
+    /// `inner_ctx` rebuild — `user`, `override_access`, `cache`,
+    /// `event_transport`, and `password_policy` — from a parent context in one
+    /// call. The caller still supplies the per-op pieces (the transaction `conn`,
+    /// the `write_hooks`, and any `event_queue` / `locale_config` /
+    /// `invalidation_transport`). Centralizing this list means a rebuild can no
+    /// longer silently drop a field (e.g. `update_many` previously omitted
+    /// `password_policy`, so its bulk writes would degrade to the default policy
+    /// if password handling were ever added to that path).
+    #[must_use]
+    pub fn inherit_write_infra(self, parent: &ServiceContext<'a>) -> Self {
+        self.user(parent.user)
+            .override_access(parent.override_access)
+            .cache(parent.cache.clone())
+            .event_transport(parent.event_transport.clone())
+            .password_policy(parent.password_policy)
+    }
+
     pub fn build(self) -> ServiceContext<'a> {
         ServiceContext {
             pool: self.pool,
@@ -707,6 +725,35 @@ mod tests {
     };
 
     use super::*;
+
+    /// Regression: every pool-mode `inner_ctx` rebuild forwards the write-infra
+    /// set — `update_many` previously dropped `password_policy`. `inherit_write_infra`
+    /// makes the forward-list a single point, so no rebuild can omit a field.
+    #[test]
+    fn inherit_write_infra_forwards_write_infra_fields() {
+        use crate::config::PasswordPolicy;
+
+        let def = CollectionDefinition::new("users");
+        let policy = PasswordPolicy::default();
+        let user = Document::builder("u1").build();
+
+        let parent = ServiceContext::collection("users", &def)
+            .user(Some(&user))
+            .override_access(true)
+            .password_policy(Some(&policy))
+            .build();
+
+        let child = ServiceContext::collection("users", &def)
+            .inherit_write_infra(&parent)
+            .build();
+
+        assert!(child.override_access, "override_access must be forwarded");
+        assert!(child.user.is_some(), "user must be forwarded");
+        assert!(
+            child.password_policy.is_some(),
+            "password_policy must be forwarded (the field update_many used to drop)"
+        );
+    }
 
     #[test]
     fn publish_user_invalidation_is_noop_without_transport() {

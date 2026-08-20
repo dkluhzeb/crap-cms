@@ -223,10 +223,7 @@ fn populate_flat_relationships(
             continue;
         };
 
-        let effective_depth = match rel.max_depth {
-            Some(max) if max < opts.depth => max,
-            _ => opts.depth,
-        };
+        let effective_depth = rel.cap_depth(opts.depth);
 
         if effective_depth <= 0 {
             continue;

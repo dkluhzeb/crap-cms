@@ -48,6 +48,9 @@ fn update_upload_blocking(
         .user(input.user_doc.as_ref())
         .build();
 
+    // Recover the real error kind from a bare `Internal` before the HTTP mapper,
+    // matching the gRPC/admin write paths (see `create_upload_blocking`).
+    let db_kind = input.pool.kind();
     service::upload::update_upload(
         &ctx,
         service::upload::UpdateUploadInput {
@@ -61,6 +64,7 @@ fn update_upload_blocking(
             image_max_attempts: input.image_max_attempts,
         },
     )
+    .map_err(|e| e.reclassify(db_kind))
 }
 
 use super::helpers::{

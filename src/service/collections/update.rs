@@ -63,12 +63,8 @@ fn update_document_pool(
     let inner_ctx = ServiceContext::collection(ctx.slug, ctx.collection_def()?)
         .conn(&tx)
         .write_hooks(&wh)
-        .user(ctx.user)
-        .override_access(ctx.override_access)
-        .cache(ctx.cache.clone())
-        .event_transport(ctx.event_transport.clone())
+        .inherit_write_infra(ctx)
         .event_queue(queue.clone())
-        .password_policy(ctx.password_policy)
         .build();
 
     let result = update_document_in_conn(&inner_ctx, id, input)?;

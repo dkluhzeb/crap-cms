@@ -14,5 +14,5 @@ pub(super) use enrich::{EnrichOptions, enrich_field_contexts};
 pub(super) use helpers::{
     MAX_FIELD_DEPTH, apply_display_conditions, collect_node_attr_errors,
     count_errors_in_field_contexts, inject_lang_values_from_row, inject_timezone_values_from_row,
-    safe_template_id, split_sidebar_fields,
+    locale_locked_display, safe_template_id, split_sidebar_fields,
 };

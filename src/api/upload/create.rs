@@ -50,6 +50,11 @@ fn create_upload_blocking(
         .user(input.user_doc.as_ref())
         .build();
 
+    // Recover the real error kind (unique violation, transient lock, …) from a
+    // bare `Internal` before it reaches the HTTP mapper, exactly as the gRPC and
+    // admin write paths do — otherwise a conflict/retryable error is reported as
+    // a generic 500.
+    let db_kind = input.pool.kind();
     service::upload::create_upload(
         &ctx,
         &input.storage,
@@ -59,6 +64,7 @@ fn create_upload_blocking(
         input.max_file_size,
         input.image_max_attempts,
     )
+    .map_err(|e| e.reclassify(db_kind))
 }
 
 #[cfg(not(tarpaulin_include))]

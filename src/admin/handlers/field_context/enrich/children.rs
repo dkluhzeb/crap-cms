@@ -31,7 +31,7 @@ use crate::{
                 builder::build_single_field_context,
                 count_errors_in_field_contexts,
                 enrich::{field_types, nested::construct_sub_variant, nested::enrich_sub_richtext},
-                safe_template_id,
+                locale_locked_display, safe_template_id,
             },
             shared::auto_label_from_name,
         },
@@ -103,7 +103,7 @@ fn build_child_base(
         |ls| ls.resolve_default().to_string(),
     );
 
-    let locale_locked = non_default_locale && !child.localized;
+    let locale_locked = locale_locked_display(non_default_locale, child);
 
     BaseFieldData {
         name: child_name.to_string(),

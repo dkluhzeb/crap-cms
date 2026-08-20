@@ -91,13 +91,30 @@ pub fn parse_job_definition(slug: &str, config: JobDefinitionConfig) -> Result<J
         }
     }
 
-    let mut builder = JobDefinitionBuilder::new(slug, handler)
-        .queue(config.queue.unwrap_or_else(|| "default".to_string()))
-        .timeout(config.timeout.unwrap_or(60))
-        .concurrency(config.concurrency.unwrap_or(1))
-        .priority(config.priority.unwrap_or(0))
-        .skip_if_running(config.skip_if_running.unwrap_or(true))
-        .labels(config.labels.unwrap_or_default());
+    // Apply each field only when the operator set it, letting the builder's
+    // `JobDefinition::default()` supply the fallback — so the scheduling defaults
+    // (queue/timeout/concurrency/priority/skip_if_running) live in exactly one
+    // place and a Lua-defined job never keeps a stale literal if a default moves.
+    let mut builder = JobDefinitionBuilder::new(slug, handler);
+
+    if let Some(queue) = config.queue {
+        builder = builder.queue(queue);
+    }
+    if let Some(timeout) = config.timeout {
+        builder = builder.timeout(timeout);
+    }
+    if let Some(concurrency) = config.concurrency {
+        builder = builder.concurrency(concurrency);
+    }
+    if let Some(priority) = config.priority {
+        builder = builder.priority(priority);
+    }
+    if let Some(skip_if_running) = config.skip_if_running {
+        builder = builder.skip_if_running(skip_if_running);
+    }
+    if let Some(labels) = config.labels {
+        builder = builder.labels(labels);
+    }
 
     // Retries: pass through only when the operator set it. `None` leaves
     // the field unset on the JobDefinition so that

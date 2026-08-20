@@ -42,6 +42,48 @@ fn test_validate_array_sub_field_date_format_enforced_in_draft() {
     );
 }
 
+/// Regression: a Date sub-field inside an Array/Blocks row enforced only its
+/// format, not `min_date`/`max_date` — the sub-field path inlined the format
+/// check instead of calling the shared `check_date_field`. Bounds now apply,
+/// exactly as at the top level.
+#[test]
+fn test_validate_array_sub_field_date_bounds_enforced() {
+    let lua = mlua::Lua::new();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+
+    let fields = vec![
+        FieldDefinition::builder("events", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("start_date", FieldType::Date)
+                    .min_date("2026-01-01")
+                    .build(),
+            ])
+            .build(),
+    ];
+
+    let mut data = DocumentFields::new();
+    // Valid format, but before min_date.
+    data.insert("events".to_string(), json!([{"start_date": "2020-05-05"}]));
+
+    let result = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test").build(),
+    );
+
+    let err = result.expect_err("date before min_date must be rejected in a nested row");
+    assert!(
+        err.errors
+            .iter()
+            .any(|e| e.key.as_deref() == Some("validation.date_min")),
+        "expected validation.date_min, got: {:?}",
+        err.errors
+    );
+}
+
 #[test]
 fn test_validate_array_sub_field_required_skipped_in_draft() {
     let lua = mlua::Lua::new();

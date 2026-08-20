@@ -103,7 +103,7 @@ pub(crate) use versions::unpublish_with_snapshot;
 pub use versions::{
     find_version_by_id, list_versions, restore_collection_version, restore_global_version,
 };
-pub use write::{ValidateContext, create_document_in_conn, validate_document};
+pub use write::{ValidateContext, create_document_in_conn, validate_document, validate_outcome};
 pub(crate) use write::{
     delete_document_in_conn, update_document_in_conn, update_many_single_in_conn,
 };

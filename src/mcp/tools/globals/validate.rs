@@ -9,7 +9,10 @@ use serde_json::{Value, json, to_string_pretty};
 use crate::{
     db::{LocaleContext, query::helpers::global_table},
     mcp::tools::{ToolExecCtx, collection::helpers::extract_data_from_args},
-    service::{RunnerWriteHooks, ServiceError, ValidateContext, WriteInput, validate_document},
+    service::{
+        RunnerWriteHooks, ServiceError, ValidateContext, WriteInput, validate_document,
+        validate_outcome,
+    },
 };
 
 /// Execute `validate_global` — returns `{ "valid": bool, "errors": { field: message } }`.
@@ -51,13 +54,16 @@ pub(in crate::mcp::tools) fn exec_validate_global(
         .draft(draft)
         .build();
 
-    let result = match validate_document(&conn, &write_hooks, &validate_ctx, input, None) {
-        Ok(()) => json!({ "valid": true, "errors": {} }),
-        Err(ServiceError::Validation(ve)) => {
-            json!({ "valid": false, "errors": ve.to_field_map() })
-        }
-        Err(e) => return Err(e.into_anyhow()),
-    };
+    let (valid, errors) = validate_outcome(validate_document(
+        &conn,
+        &write_hooks,
+        &validate_ctx,
+        input,
+        None,
+    ))
+    .map_err(ServiceError::into_anyhow)?;
 
-    Ok(to_string_pretty(&result)?)
+    Ok(to_string_pretty(
+        &json!({ "valid": valid, "errors": errors }),
+    )?)
 }

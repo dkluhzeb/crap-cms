@@ -20,6 +20,7 @@ use crate::{
                     gated_find_by_id,
                 },
                 inject_lang_values_from_row, inject_timezone_values_from_row,
+                locale_locked_display,
             },
             shared::compute_row_label,
         },
@@ -257,7 +258,7 @@ pub(super) fn enrich_array(
     doc_fields: &DocumentFields,
     enrich: &EnrichCtx,
 ) {
-    let locale_locked = enrich.non_default_locale && !field_def.localized;
+    let locale_locked = locale_locked_display(enrich.non_default_locale, field_def);
 
     let rows: Vec<ArrayRow> = match doc_fields.get(&field_def.name) {
         Some(Value::Array(arr)) => arr
@@ -523,7 +524,7 @@ pub(super) fn enrich_blocks(
     doc_fields: &DocumentFields,
     enrich: &EnrichCtx,
 ) {
-    let locale_locked = enrich.non_default_locale && !field_def.localized;
+    let locale_locked = locale_locked_display(enrich.non_default_locale, field_def);
 
     let rows: Vec<BlockRow> = match doc_fields.get(&field_def.name) {
         Some(Value::Array(arr)) => arr

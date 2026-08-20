@@ -158,7 +158,7 @@ pub(super) fn populate_join_docs(
             cache,
         )?;
 
-        populated.push(document_to_json(&matched_doc, &jc.collection));
+        populated.push(document_to_json(&matched_doc, Some(&jc.collection)));
     }
 
     Ok(populated)

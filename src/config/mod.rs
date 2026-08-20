@@ -55,6 +55,7 @@ pub use features::{
     PaginationConfig, PaginationMode, QueueConfig, S3Config, SmtpTls, UpdateConfig, UploadConfig,
     UploadStorage,
 };
+pub(crate) use features::{DEFAULT_EMAIL_QUEUE_TIMEOUT_SECS, DEFAULT_IMAGES_QUEUE_TIMEOUT_SECS};
 pub use mcp_api_key::McpApiKey;
 pub(crate) use parsing::{parse_duration_string, parse_filesize_string};
 pub use routes::RoutesConfig;

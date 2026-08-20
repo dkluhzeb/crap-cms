@@ -42,17 +42,21 @@ fn delete_upload_blocking(input: UploadDeleteBlockingInput) -> Result<ReqContext
         .invalidation_transport(Some(input.invalidation_transport))
         .build();
 
+    // Recover the real error kind from a bare `Internal` before the HTTP mapper,
+    // matching the gRPC/admin write paths (see `create_upload_blocking`).
+    let db_kind = input.pool.kind();
     delete_document(
         &ctx,
         &input.id,
         Some(&*input.storage),
         Some(&input.locale_config),
     )
+    .map_err(|e| e.reclassify(db_kind))
 }
 
 use super::helpers::{
-    SuccessBody, check_upload_access, classify_delete_error, extract_bearer_user, json_error,
-    json_ok, publish_upload_event,
+    SuccessBody, check_upload_access, extract_bearer_user, json_error, json_ok,
+    publish_upload_event, service_error_to_response,
 };
 
 /// Existence precheck for `delete_upload`. Builds a proper locale context so the
@@ -178,16 +182,10 @@ pub(super) async fn delete_upload(
             );
             json_ok(StatusCode::OK, &SuccessBody { success: true })
         }
-        Ok(Err(e)) => {
-            let (status, client_msg) = classify_delete_error(&e);
-
-            // Log full detail internally; the client only learns the
-            // status code and a generic phrase. Keeps internal DB errors,
-            // stack traces, and backend identifiers off the wire.
-            error!("Upload delete failed: {}", e);
-
-            json_error(status, client_msg)
-        }
+        // One typed mapper for the whole upload surface (create/update/delete);
+        // `Transient`/`Internal` are logged and reduced to a generic phrase
+        // inside `service_error_to_response`.
+        Ok(Err(e)) => service_error_to_response(&e),
         Err(e) => {
             error!("Upload delete task join failed: {}", e);
 

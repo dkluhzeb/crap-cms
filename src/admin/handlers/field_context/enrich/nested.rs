@@ -18,7 +18,7 @@ use crate::{
             field_context::{
                 MAX_FIELD_DEPTH, collect_node_attr_errors,
                 enrich::{EnrichCtx, SubFieldOpts, field_types, gated_find_by_id},
-                safe_template_id,
+                locale_locked_display, safe_template_id,
             },
             shared::auto_label_from_name,
         },
@@ -81,7 +81,7 @@ fn build_sub_field_base(
     // locales. Layout wrappers (Row/Tabs/Collapsible) themselves are always
     // non-localized, so they pick up the parent's lock state naturally via
     // this same formula.
-    let locale_locked = opts.non_default_locale && !sf.localized;
+    let locale_locked = locale_locked_display(opts.non_default_locale, sf);
 
     BaseFieldData {
         name: indexed_name.to_string(),

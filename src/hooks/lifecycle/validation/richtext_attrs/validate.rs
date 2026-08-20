@@ -180,6 +180,12 @@ fn validate_node_instance(
         checks::check_email_format(attr_def, &data_key, value, is_empty, errors);
         checks::check_option_valid(attr_def, &data_key, value, is_empty, errors);
         checks::check_date_field(attr_def, &data_key, value, is_empty, errors);
+        // A `has_many` node attr (Text/Number/Select/Radio list) gets the same
+        // per-element + count validation as at the top level and in array/blocks
+        // rows — previously this leaf site skipped it. (Row-bounds and the
+        // polymorphic allowlist don't apply: a node attr can't be an
+        // array/blocks or a relationship field.)
+        checks::check_has_many_elements(attr_def, &data_key, value, is_empty, ctx.is_draft, errors);
 
         // Custom Lua validate function
         if let Some(ref validate) = attr_def.validate

@@ -43,7 +43,7 @@ fn resolve_poly_item(
         return PolyResolution::Missing;
     };
 
-    PolyResolution::Populated(document_to_json(doc, &col))
+    PolyResolution::Populated(document_to_json(doc, Some(&col)))
 }
 
 /// Batch fetch and distribute for polymorphic has-many fields.

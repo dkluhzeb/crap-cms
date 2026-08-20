@@ -135,10 +135,7 @@ fn update_many_pool(
     let inner_ctx = ServiceContext::collection(ctx.slug, def)
         .conn(&tx)
         .write_hooks(&wh)
-        .user(ctx.user)
-        .override_access(ctx.override_access)
-        .event_transport(ctx.event_transport.clone())
-        .cache(ctx.cache.clone())
+        .inherit_write_infra(ctx)
         .event_queue(queue.clone())
         .build();
 

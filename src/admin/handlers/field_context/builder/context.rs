@@ -642,6 +642,31 @@ mod tests {
         assert_eq!(result[0]["readonly"], false);
     }
 
+    /// A non-localized field inside a *localized* group is editable in a
+    /// non-default locale. The group carries its children per-locale (localization
+    /// inherits), so `construct_group` builds them with `non_default_locale =
+    /// false` → `locale_locked_display` returns `false`. This matches the server's
+    /// `is_locale_locked_write`, which returns `false` for inherited localization.
+    /// Regression guard for the admin-vs-server parity a chokepoint audit flagged
+    /// as a possible mismatch — the admin encodes inheritance via
+    /// `non_default_locale`, not the locked formula, so there is no mismatch.
+    #[test]
+    fn build_field_contexts_non_localized_field_in_localized_group_is_editable() {
+        let mut group = make_field("seo", FieldType::Group);
+        group.localized = true;
+        // The child does NOT set `localized` itself — it inherits from the group.
+        group.fields = vec![make_field("slug", FieldType::Text)];
+        let fields = vec![group];
+
+        let result = build_value_contexts(&fields, &HashMap::new(), &HashMap::new(), false, true);
+        let sub = result[0]["sub_fields"].as_array().unwrap();
+        assert_eq!(
+            sub[0]["locale_locked"], false,
+            "a child of a localized group must be editable in a non-default locale"
+        );
+        assert_eq!(sub[0]["readonly"], false);
+    }
+
     // ── Group ─────────────────────────────────────────────────────────
 
     #[test]

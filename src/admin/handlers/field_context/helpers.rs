@@ -15,6 +15,24 @@ use crate::{
 /// Max nesting depth for recursive field context building (guard against infinite nesting).
 pub const MAX_FIELD_DEPTH: usize = 5;
 
+/// Whether a field renders read-only ("locale locked") in the admin editor: it's
+/// a non-default locale and the field itself is not localized, so it carries the
+/// canonical default-locale value that must be edited from the default locale.
+/// One definition for the admin-UI companion to the server-side
+/// `is_locale_locked_write`, shared by every field-context builder so the call
+/// sites can't drift.
+///
+/// This takes only the field's own `localized` flag on purpose: **inherited**
+/// localization is already folded into `non_default_locale` by the caller — a
+/// localized Group builds its children with `non_default_locale = false` (see
+/// `construct_group`), so a non-localized field inside a localized group is
+/// correctly editable, matching the server's `is_locale_locked_write` returning
+/// `false` for inherited localization.
+#[must_use]
+pub fn locale_locked_display(non_default_locale: bool, field: &FieldDefinition) -> bool {
+    non_default_locale && !field.localized
+}
+
 /// Make a template-ID-safe string from a field name (replaces `[`, `]` with `-`).
 pub fn safe_template_id(name: &str) -> String {
     name.replace('[', "-").replace(']', "")

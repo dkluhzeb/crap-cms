@@ -64,7 +64,7 @@ pub(super) fn batch_nonpoly_has_many(
             let Some(cached_doc) = doc_map.get(id) else {
                 continue;
             };
-            populated.push(document_to_json(cached_doc, rel_collection));
+            populated.push(document_to_json(cached_doc, Some(rel_collection)));
         }
         doc.fields
             .insert(field_name.to_string(), Value::Array(populated));
@@ -115,7 +115,7 @@ pub(super) fn batch_nonpoly_has_one(
         };
         doc.fields.insert(
             field_name.to_string(),
-            document_to_json(cached_doc, rel_collection),
+            document_to_json(cached_doc, Some(rel_collection)),
         );
     }
     Ok(())

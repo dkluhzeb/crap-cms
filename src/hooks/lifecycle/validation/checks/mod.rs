@@ -15,7 +15,7 @@ mod shared;
 mod unique;
 
 pub(crate) use self::custom::{CustomValidateCtx, check_custom_validate};
-pub(crate) use self::date::{check_date_field, is_valid_date_format};
+pub(crate) use self::date::check_date_field;
 pub(crate) use self::email::check_email_format;
 pub use self::email::is_valid_email_format;
 pub(crate) use self::has_many::check_has_many_elements;

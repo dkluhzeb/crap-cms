@@ -1259,6 +1259,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`min_date` / `max_date` are now enforced on Date fields nested in
+  array/blocks rows.** The nested-field validator ran only the date *format*
+  check, so a Date sub-field with `min_date` / `max_date` accepted out-of-range
+  values that the same field rejects at the top level. Both paths now share
+  `check_date_field` (format + bounds).
+
+- **`has_many` Number lists now reject NaN/∞, non-whole values on `integer`
+  fields, and non-numeric elements.** Per-element numeric validation only checked
+  min/max, so `["NaN"]`, `["1.5"]` (on an `integer` field), and `["abc"]` slipped
+  through — the last then silently dropped at the write edge. The single-value
+  and per-element paths now share one numeric rule (`number_violation`).
+
+- **`min_rows` / `max_rows` on a scalar `has_many` field are relaxed on draft
+  saves**, matching Array/Blocks/relationship count bounds (which already skipped
+  on draft). A draft with too few tags/numbers no longer errors.
+
+- **Upload create/update/delete report the correct HTTP status for conflicts and
+  transient failures.** These endpoints skipped the `reclassify` step every other
+  write surface runs, so a unique-constraint violation surfaced as `500` instead
+  of `409` and a transient DB lock as `500` instead of `503` (a retryable error
+  reported as permanent). All three now reclassify before mapping, and the whole
+  upload surface shares one `ServiceError → HTTP` mapper (delete previously used a
+  second mapper that returned `403` where create/update returned `401` for a
+  locked account).
+
 - **Scalar `has_many` lists store and canonicalize correctly — and work on
   Postgres.** A `Number` has-many list was given a numeric column
   (`REAL` / `DOUBLE PRECISION`) even though it stores a JSON array: it silently
@@ -2627,6 +2652,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     representation.
   - The MCP write tools read the `events` flag through one `events_flag` helper,
     so the "emit events unless opted out" default lives in a single place.
+  - The four validate handlers (gRPC / MCP, collection / global) split their
+    result through one `validate_outcome` helper instead of four copies.
+  - Job scheduling defaults (`queue`/`timeout`/`concurrency`/`priority`/
+    `skip_if_running`) come only from `JobDefinition::default()`; the Lua parser
+    no longer re-specifies the literals (which would have let a Lua job keep a
+    stale default if one moved).
+  - The system-queue fallback timeouts (`email` 30s, `images` 300s) are defined
+    once in the jobs config and referenced by the scheduler, replacing a
+    "must match" comment with a real link.
+  - The per-relationship populate depth cap is one `RelationshipConfig::cap_depth`
+    (was copy-pasted across three dispatch sites); the effective-locale resolver
+    is `LocaleContext::access_locale` everywhere (a byte-identical private copy in
+    the filter builder is gone); join-table and group-column names route through
+    `join_table` / `prefixed_name`; and the admin locale-locked display formula is
+    one `locale_locked_display`.
+  - Every pool-mode write context is rebuilt through one
+    `ServiceContext::inherit_write_infra`, so no operation can silently drop a
+    forwarded field — `update_many` previously omitted `password_policy`.
+  - The document→JSON envelope is one `document_to_json(doc, collection)`
+    converter shared by the populate path (passes the `collection` tag for
+    embedded polymorphic refs) and the MCP tools (pass `None`), so the envelope
+    key set can't drift between surfaces. The `collection` tag is the only
+    difference, expressed as the function's `Option` parameter.
 
 ## [0.1.0-alpha.9] — 2026-05-25
 

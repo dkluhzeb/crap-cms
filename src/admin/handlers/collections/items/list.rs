@@ -254,10 +254,8 @@ fn parse_list_inputs(
             params.after_cursor.as_deref(),
             params.before_cursor.as_deref(),
         )
-        .map_err(|e| {
-            warn!("Invalid pagination params: {}", e);
-            Box::new(bad_request(state, "Invalid pagination parameters"))
-        })?;
+        .inspect_err(|e| warn!("Invalid pagination params: {}", e))
+        .map_err(|_| Box::new(bad_request(state, "Invalid pagination parameters")))?;
 
     // Present-but-invalid URL params hard-error with 400 (parity with the
     // MCP/gRPC surfaces) instead of silently rendering wrong/unfiltered or

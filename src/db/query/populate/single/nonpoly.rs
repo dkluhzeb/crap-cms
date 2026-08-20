@@ -79,7 +79,7 @@ pub(super) fn populate_nonpoly_has_many(
             ctx.effective_depth,
             visited,
         )? {
-            populated.push(document_to_json(&target, rel_collection));
+            populated.push(document_to_json(&target, Some(rel_collection)));
         }
     }
 
@@ -120,7 +120,7 @@ pub(super) fn populate_nonpoly_has_one(
         Some(target) => {
             doc.fields.insert(
                 field_name.to_string(),
-                document_to_json(&target, rel_collection),
+                document_to_json(&target, Some(rel_collection)),
             );
         }
         None => {

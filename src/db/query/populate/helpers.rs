@@ -137,17 +137,20 @@ fn view_allows(access: &AccessResult, raw: &Document, fields: &[FieldDefinition]
     }
 }
 
-/// The shape `document_to_json` emits — a populated relationship reference
-/// embedded in a parent document's `fields`. `id` and `collection` are the
-/// envelope; the document's user-defined fields flatten alongside them.
+/// The canonical document envelope emitted as JSON — `id`, the document's
+/// user-defined fields flattened alongside, an optional `collection` tag, and the
+/// optional timestamps. `collection` is present only for an **embedded**
+/// populated relationship (where it disambiguates a polymorphic target); a
+/// top-level document read omits it (the caller already knows the collection).
 ///
 /// Wire-format equivalent to the previous manual `Map::new() + insert` loop —
 /// `#[serde(flatten)]` over `DocumentFields` (transparent over `HashMap`)
 /// reproduces the same key set in the same order.
 #[derive(Serialize)]
-struct PopulatedRef<'a> {
+struct DocumentEnvelope<'a> {
     id: &'a str,
-    collection: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    collection: Option<&'a str>,
     #[serde(flatten)]
     fields: &'a DocumentFields,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -235,18 +238,20 @@ pub(crate) fn parse_poly_ref(s: &str) -> Option<(String, String)> {
     Some((col.to_string(), id.to_string()))
 }
 
-/// Convert a Document into a JSON Value for embedding in a parent's fields.
-pub(crate) fn document_to_json(doc: &Document, collection: &str) -> Value {
-    let id = doc.id.as_ref();
-    let populated = PopulatedRef {
-        id,
+/// Convert a `Document` to the canonical JSON envelope. Pass `Some(collection)`
+/// to tag it (embedded populated relationships, for polymorphic disambiguation)
+/// or `None` to omit the tag (a top-level document read). One converter for every
+/// JSON surface so the envelope key set can't drift between them.
+pub(crate) fn document_to_json(doc: &Document, collection: Option<&str>) -> Value {
+    let envelope = DocumentEnvelope {
+        id: doc.id.as_ref(),
         collection,
         fields: &doc.fields,
         created_at: doc.created_at.as_deref(),
         updated_at: doc.updated_at.as_deref(),
     };
 
-    serde_json::to_value(&populated).expect("PopulatedRef serializes")
+    serde_json::to_value(&envelope).expect("DocumentEnvelope serializes")
 }
 
 #[cfg(test)]
@@ -424,7 +429,7 @@ mod tests {
         doc.created_at = Some("2024-01-01T00:00:00Z".to_string());
         doc.updated_at = Some("2024-01-02T00:00:00Z".to_string());
 
-        let json = document_to_json(&doc, "posts");
+        let json = document_to_json(&doc, Some("posts"));
         let obj = json.as_object().expect("should be an object");
 
         assert_eq!(obj.get("id").and_then(|v| v.as_str()), Some("doc1"));
@@ -457,7 +462,7 @@ mod tests {
             .insert("title".to_string(), json!("No Timestamps"));
         // created_at and updated_at are None by default
 
-        let json = document_to_json(&doc, "pages");
+        let json = document_to_json(&doc, Some("pages"));
         let obj = json.as_object().expect("should be an object");
 
         assert_eq!(obj.get("id").and_then(|v| v.as_str()), Some("doc2"));
@@ -490,7 +495,7 @@ mod tests {
         });
         doc.fields.insert("data".to_string(), nested.clone());
 
-        let json = document_to_json(&doc, "entries");
+        let json = document_to_json(&doc, Some("entries"));
         let obj = json.as_object().expect("should be an object");
 
         assert_eq!(obj.get("data"), Some(&nested));

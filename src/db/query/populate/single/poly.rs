@@ -70,7 +70,10 @@ fn resolve_poly_item(
         ctx.effective_depth,
         visited,
     )? {
-        Some(target) => Ok(PolyResolution::Populated(document_to_json(&target, &col))),
+        Some(target) => Ok(PolyResolution::Populated(document_to_json(
+            &target,
+            Some(&col),
+        ))),
         None => Ok(PolyResolution::Missing),
     }
 }
@@ -173,8 +176,10 @@ pub(super) fn populate_poly_has_one(
         visited,
     )? {
         Some(target) => {
-            doc.fields
-                .insert(field_name.to_string(), document_to_json(&target, &col));
+            doc.fields.insert(
+                field_name.to_string(),
+                document_to_json(&target, Some(&col)),
+            );
         }
         None => {
             // Missing, or hidden by draft visibility / `read` access: null out.

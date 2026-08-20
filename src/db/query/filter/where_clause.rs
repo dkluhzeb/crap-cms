@@ -8,7 +8,7 @@ use super::{
 };
 use crate::core::{CollectionDefinition, FieldDefinition, FieldType};
 use crate::db::{
-    DbConnection, DbValue, Filter, FilterClause, FilterOp, LocaleContext, LocaleMode,
+    DbConnection, DbValue, Filter, FilterClause, FilterOp, LocaleContext,
     query::{helpers::locale_column, is_valid_identifier},
 };
 
@@ -298,13 +298,6 @@ pub(crate) fn resolve_filter_column(
     Ok(field_name.to_string())
 }
 
-fn get_locale(ctx: &LocaleContext) -> &str {
-    match &ctx.mode {
-        LocaleMode::Single(l) => l.as_str(),
-        _ => ctx.config.default_locale.as_str(),
-    }
-}
-
 fn check_field_locale<'a>(
     field: &FieldDefinition,
     field_name: &str,
@@ -325,7 +318,7 @@ fn check_field_locale<'a>(
         }
         _ => {
             if field.name == field_name && field.localized {
-                Some(get_locale(ctx))
+                Some(ctx.access_locale())
             } else {
                 None
             }
@@ -344,7 +337,7 @@ fn check_group_locale<'a>(
         let sub_name = &field_name[prefix.len()..];
         for sub in &field.fields {
             if sub.name == sub_name && (field.localized || sub.localized) {
-                return Some(get_locale(ctx));
+                return Some(ctx.access_locale());
             }
         }
     }
@@ -358,7 +351,7 @@ fn check_flat_sub_fields<'a>(
 ) -> Option<&'a str> {
     for sub in sub_fields {
         if sub.name == field_name && sub.localized {
-            return Some(get_locale(ctx));
+            return Some(ctx.access_locale());
         }
     }
     None

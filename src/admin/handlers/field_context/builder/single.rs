@@ -20,7 +20,7 @@ use crate::{
         handlers::{
             field_context::{
                 MAX_FIELD_DEPTH, builder::build_select_options, collect_node_attr_errors,
-                count_errors_in_field_contexts, safe_template_id,
+                count_errors_in_field_contexts, locale_locked_display, safe_template_id,
             },
             shared::auto_label_from_name,
         },
@@ -64,7 +64,7 @@ fn build_base_field_data(
         |ls| ls.resolve_default().to_string(),
     );
 
-    let locale_locked = non_default_locale && !field.localized;
+    let locale_locked = locale_locked_display(non_default_locale, field);
 
     let validation = ValidationAttrs {
         min_length: field.min_length,

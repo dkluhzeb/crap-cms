@@ -60,14 +60,10 @@ fn create_document_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<W
     let inner_ctx = ServiceContext::collection(ctx.slug, ctx.collection_def()?)
         .conn(&tx)
         .write_hooks(&wh)
-        .user(ctx.user)
-        .override_access(ctx.override_access)
-        .cache(ctx.cache.clone())
-        .event_transport(ctx.event_transport.clone())
+        .inherit_write_infra(ctx)
         .event_queue(queue.clone())
         .verification_queue(vqueue.clone())
         .email_ctx(ctx.email_ctx.clone())
-        .password_policy(ctx.password_policy)
         .build();
 
     let result = create_document_in_conn(&inner_ctx, input)?;

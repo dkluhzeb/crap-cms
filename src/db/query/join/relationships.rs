@@ -305,7 +305,7 @@ pub fn find_polymorphic_related(
     parent_id: &str,
     locale: Option<&str>,
 ) -> Result<Vec<(String, String)>> {
-    let table_name = format!("{collection}_{field}");
+    let table_name = join_table(collection, field);
 
     let (sql, params) = if let Some(loc) = locale {
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
@@ -354,7 +354,7 @@ pub fn find_polymorphic_related_batch(
         return Ok(HashMap::new());
     }
 
-    let table_name = format!("{collection}_{field}");
+    let table_name = join_table(collection, field);
 
     let in_placeholders = (1..=parent_ids.len())
         .map(|i| conn.placeholder(i))
