@@ -251,9 +251,9 @@ nothing. The full list:
   used to be a silent no-op (unlike `crap.hooks.register`, which already
   errored); it now errors.
 
-### 6a. Rename job slugs and richtext node names to valid slugs
+### 6a. Rename job slugs, richtext node names, and block types to valid slugs
 
-Two registration surfaces that previously accepted looser identifiers now
+Three registration surfaces that previously accepted looser identifiers now
 enforce the standard slug rule (lowercase ASCII letters, digits, and
 underscores; not starting with an underscore):
 
@@ -263,6 +263,10 @@ underscores; not starting with an underscore):
 - **`crap.richtext.register_node(name, …)`** — a node name with uppercase
   or non-ASCII characters (the old check was Unicode-aware) now errors.
   Rename to a lowercase ASCII slug.
+- **Block `type` in a `blocks` field** — a block `type` (the `_block_type`
+  discriminator) was the one identifier accepted verbatim; a hyphenated /
+  spaced / camelCase type now errors at load. Rename e.g. `hero-image` →
+  `hero_image`.
 
 ### 6b. Number fields reject non-numeric input
 

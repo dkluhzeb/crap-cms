@@ -181,6 +181,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Unicode-aware test that accepted uppercase and non-ASCII names. **Migration:**
   rename any non-conforming node name.
 
+- **Block `type` names are now slug-validated** like every other identifier —
+  lowercase ASCII letters, digits, and underscores, not starting with an
+  underscore. A block `type` (the `_block_type` discriminator) was previously the
+  one identifier accepted verbatim, so a hyphenated / spaced / camelCase type
+  slipped through at load. **Migration:** rename any such block type to the
+  allowed charset (e.g. `hero-image` → `hero_image`).
+
 - **A non-numeric value submitted for a Number field is now a validation error**
   rather than being silently coerced to NULL on write. If any hook or client was
   relying on that silent coercion, send `nil`/omit the field for "no value"

@@ -1,9 +1,10 @@
 //! Parsing functions for block and tab definitions.
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context as _, Result, anyhow};
 use mlua::{Lua, Table};
 
 use crate::core::{BlockDefinition, FieldTab};
+use crate::db::query::validate_slug;
 
 use super::{
     fields::parse_fields,
@@ -32,6 +33,12 @@ pub(super) fn parse_block_definitions(
         )?;
         let block_type: String =
             get_string_val(&def, "type").map_err(|_| anyhow!("Block definition missing 'type'"))?;
+
+        // A block `type` is a discriminator (stored in `_block_type`) and a
+        // dotted-access key, so it follows the same slug rules as every other
+        // identifier (field/node/collection/job names) rather than being the one
+        // unvalidated identifier in the schema.
+        validate_slug(&block_type).with_context(|| format!("Invalid block type '{block_type}'"))?;
         let label = get_localized_string(&def, "label");
         let label_field = get_string(&def, "label_field");
         let group = get_string(&def, "group");
@@ -104,6 +111,28 @@ mod tests {
         assert_eq!(fields[0].blocks[0].block_type, "paragraph");
         assert_eq!(fields[0].blocks[0].fields.len(), 1);
         assert_eq!(fields[0].blocks[0].fields[0].name, "text");
+    }
+
+    /// Regression: a block `type` must be a valid slug, like every other
+    /// identifier — a hyphenated / spaced / camelCase type is rejected at load
+    /// rather than being the one unvalidated identifier in the schema.
+    #[test]
+    fn parse_block_definitions_rejects_invalid_type() {
+        let lua = Lua::new();
+
+        for bad in ["hero-image", "Hero", "call to action", "_hidden"] {
+            let blocks_tbl = lua.create_table().unwrap();
+            let block = lua.create_table().unwrap();
+            block.set("type", bad).unwrap();
+            blocks_tbl.set(1, block).unwrap();
+
+            let err = parse_block_definitions(&lua, &blocks_tbl)
+                .expect_err(&format!("block type '{bad}' should be rejected"));
+            assert!(
+                err.to_string().contains("block type") || err.to_string().contains("slug"),
+                "unexpected error for '{bad}': {err}"
+            );
+        }
     }
 
     #[test]
