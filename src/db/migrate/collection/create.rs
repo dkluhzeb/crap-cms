@@ -78,11 +78,7 @@ fn collect_field_columns(
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     for spec in &collect_column_specs(&def.fields, locale_config) {
-        let col_type = if spec.companion_text {
-            "TEXT"
-        } else {
-            conn.column_type_for(&spec.field.field_type)
-        };
+        let col_type = spec.ddl_type(conn);
 
         if spec.is_localized {
             for locale in &locale_config.locales {

@@ -33,6 +33,13 @@ stored data, or clients.
 - **Column types.** Timestamps and dates are `TEXT` (ISO-8601) on every backend;
   numbers are floating point (`REAL`/`DOUBLE PRECISION`); integers/flags are
   `BIGINT` on Postgres. Whole-valued numbers serialize back as JSON integers.
+  A **scalar `has_many` list** (`Text`/`Number`/`Select`/`Radio` with `has_many`,
+  i.e. `FieldDefinition::is_has_many_scalar`) is stored as a JSON array in a
+  `TEXT` column regardless of the base type (a numeric column can't hold the
+  array and Postgres rejects it). One `ColumnSpec::ddl_type` decides this for the
+  CREATE and reconcile paths; the write edge canonicalizes each element to the
+  field's type (`coerce_has_many_scalar`) and the read path parses it back
+  (`parse_has_many_scalar`), so the list round-trips identically across surfaces.
 - **System tables** (`_crap_meta`, `_crap_migrations`, `_crap_cron_fired`,
   `_crap_user_settings`, `_crap_jobs`) and the `_crap_meta` one-time-migration
   gate keys (`ref_count_backfilled`, …) — renaming a gate key re-runs the

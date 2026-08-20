@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Scalar `has_many` lists (`Text` / `Number` / `Select` / `Radio` with
+  `has_many = true`) now read back as typed JSON arrays on every surface.**
+  Previously these were stored as a JSON array in their column but the read path
+  was field-type-blind, so gRPC / Lua / MCP returned the raw **string**
+  (`"[\"a\",\"b\"]"`) instead of the array the generated client types
+  (`StrList` / `NumList`) already promised; only the admin UI parsed it. Reads now
+  return the array (`["a","b"]`, and `Number` lists as numbers `[1,2]`), matching
+  the declared type. **Migration:** a client that consumed the raw string from a
+  non-admin surface must now handle an array. No stored data changes on read.
+
 - **Relationship-population `depth` is resolved identically on every read surface.**
   `depth` is now clamped through one shared `clamp_depth(requested, default, max)`:
   an unset depth uses `[depth] default_depth` (default `1`), a negative depth floors
@@ -1241,6 +1251,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **Scalar `has_many` lists store and canonicalize correctly — and work on
+  Postgres.** A `Number` has-many list was given a numeric column
+  (`REAL` / `DOUBLE PRECISION`) even though it stores a JSON array: it silently
+  worked on SQLite (dynamic typing) but Postgres rejected every write. Such
+  columns are now `TEXT` on both backends (one `ColumnSpec::ddl_type` decides the
+  type for the CREATE and reconcile paths), and existing numeric columns are
+  migrated to `TEXT` in place on startup. Elements are also canonicalized to the
+  field's type at the write edge, so a list stored via the admin form (which
+  posts a JSON array of strings) and one stored via the typed gRPC/Lua/MCP API
+  now persist and read back identically — `Number` as numbers, `Text`/`Select`/
+  `Radio` as strings. The admin form normalizer also handles `Radio` lists, which
+  it previously skipped.
 
 - **The `validate` dry-run now agrees across surfaces on draft mode.** `draft` is
   clamped by `&& has_drafts()` at the shared `validate_document` chokepoint, so a

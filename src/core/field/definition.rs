@@ -374,6 +374,21 @@ impl FieldDefinition {
         }
     }
 
+    /// Whether this field is a **scalar** has-many list (`Text` / `Number` /
+    /// `Select` / `Radio` with `has_many = true`) — stored as a JSON array in its
+    /// own main column rather than in a join table.
+    ///
+    /// A has-many *relationship* / *upload* is relational (`has_parent_column`
+    /// is false), so scalar has-many is exactly `has_many && has_parent_column()`.
+    /// Such a column must be `TEXT` regardless of the base type — a JSON array
+    /// does not fit a numeric column, which silently works on `SQLite` (dynamic
+    /// typing) but fails on Postgres. The stored/read value is a JSON array whose
+    /// elements are canonicalized to the field's own type.
+    #[must_use]
+    pub fn is_has_many_scalar(&self) -> bool {
+        self.has_many && self.has_parent_column()
+    }
+
     /// Whether this field's stored value is scoped per-locale, given whether it
     /// inherits localization from an enclosing group.
     ///
@@ -965,5 +980,37 @@ mod tests {
             .build();
         assert!(fd.has_many);
         assert_eq!(fd.options.len(), 2);
+    }
+
+    #[test]
+    fn is_has_many_scalar_true_for_scalar_lists() {
+        for ft in [
+            FieldType::Text,
+            FieldType::Number,
+            FieldType::Select,
+            FieldType::Radio,
+        ] {
+            let fd = FieldDefinitionBuilder::new("f", ft.clone())
+                .has_many(true)
+                .build();
+            assert!(fd.is_has_many_scalar(), "{ft:?}");
+        }
+    }
+
+    #[test]
+    fn is_has_many_scalar_false_without_has_many() {
+        let fd = FieldDefinitionBuilder::new("f", FieldType::Number).build();
+        assert!(!fd.is_has_many_scalar());
+    }
+
+    /// A has-many *relationship* is relational (join table), not a scalar list —
+    /// `has_parent_column()` is false, so it must be excluded.
+    #[test]
+    fn is_has_many_scalar_false_for_relationship() {
+        let fd = FieldDefinitionBuilder::new("author", FieldType::Relationship)
+            .relationship(RelationshipConfig::new("users", true))
+            .build();
+        assert!(fd.has_many || fd.relationship.as_ref().unwrap().has_many);
+        assert!(!fd.is_has_many_scalar());
     }
 }

@@ -44,6 +44,42 @@ fn warn_type_mismatch(ctx: &AlterCtx, col_name: &str, expected_type: &str) {
     }
 }
 
+/// Reconcile an existing **scalar has-many** column to `TEXT`.
+///
+/// Older schemas typed a `Number` has-many list by its base type
+/// (`REAL` / `DOUBLE PRECISION`), which can't hold the JSON array — it silently
+/// worked on `SQLite` (advisory affinity) but rejected writes on Postgres. This
+/// fixes such a column in place rather than emitting the generic
+/// "manual migration required" warning. Idempotent: once the column is `TEXT`
+/// (which `Text` / `Select` / `Radio` lists always were) it is a no-op, so no
+/// version gate is needed. `SQLite` cannot `ALTER … TYPE` and does not need to —
+/// the JSON array is already stored and read back as text under `REAL` affinity.
+fn reconcile_scalar_list_column(ctx: &AlterCtx, col_name: &str) -> Result<()> {
+    let already_text = ctx
+        .column_types
+        .get(col_name)
+        .is_none_or(|t| t.eq_ignore_ascii_case("TEXT"));
+
+    if already_text || ctx.conn.kind() != "postgres" {
+        return Ok(());
+    }
+
+    let sql = format!(
+        "ALTER TABLE \"{}\" ALTER COLUMN \"{}\" TYPE TEXT USING \"{}\"::text",
+        ctx.slug, col_name, col_name
+    );
+    info!(
+        "Reconciling scalar has-many column {}.{} to TEXT",
+        ctx.slug, col_name
+    );
+
+    ctx.conn
+        .execute_ddl(&sql, &[])
+        .with_context(|| format!("Failed to reconcile {} to TEXT on {}", col_name, ctx.slug))?;
+
+    Ok(())
+}
+
 /// Add a single field column if it doesn't exist, with optional default value.
 fn add_field_column(
     ctx: &AlterCtx,
@@ -52,7 +88,12 @@ fn add_field_column(
     spec: &ColumnSpec,
 ) -> Result<()> {
     if ctx.existing.contains(col_name) {
-        warn_type_mismatch(ctx, col_name, expected_type);
+        if spec.field.is_has_many_scalar() {
+            reconcile_scalar_list_column(ctx, col_name)?;
+        } else {
+            warn_type_mismatch(ctx, col_name, expected_type);
+        }
+
         return Ok(());
     }
 
@@ -83,11 +124,7 @@ fn add_field_column(
 /// Add missing user-defined field columns (including localized variants).
 fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()> {
     for spec in &collect_column_specs(&ctx.def.fields, locale_config) {
-        let expected_type = if spec.companion_text {
-            "TEXT"
-        } else {
-            ctx.conn.column_type_for(&spec.field.field_type)
-        };
+        let expected_type = spec.ddl_type(ctx.conn);
 
         if spec.is_localized {
             for locale in &locale_config.locales {

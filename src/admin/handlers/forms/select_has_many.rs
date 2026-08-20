@@ -1,4 +1,4 @@
-//! Normalize `has_many` select/text/number form values into JSON array strings.
+//! Normalize `has_many` select/radio/text/number form values into JSON array strings.
 //!
 //! Two input shapes are accepted:
 //! - Comma-separated (`"a,b,c"`) — produced by traditional HTML form submission
@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use crate::core::{FieldDefinition, FieldType, prefixed_name, walk_leaf_fields};
 
-/// Normalize `has_many` select/text/number form values into canonical JSON
+/// Normalize `has_many` select/radio/text/number form values into canonical JSON
 /// array strings. The flat-column walk ([`walk_leaf_fields`]) handles Group
 /// `__`-prefixing and transparent layout wrappers.
 pub(crate) fn transform_select_has_many(
@@ -27,7 +27,7 @@ pub(crate) fn transform_select_has_many(
     let _ = walk_leaf_fields(field_defs, "", false, &mut |field, prefix, _| {
         let is_multi_leaf = matches!(
             field.field_type,
-            FieldType::Select | FieldType::Text | FieldType::Number
+            FieldType::Select | FieldType::Radio | FieldType::Text | FieldType::Number
         );
         if !is_multi_leaf || !field.has_many {
             return Ok(());

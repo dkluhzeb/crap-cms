@@ -29,6 +29,11 @@ fn make_tags_def() -> CollectionDefinition {
         FieldDefinition::builder("keywords", FieldType::Text)
             .has_many(true)
             .build(),
+        // Scalar has-many `Number`: the column is TEXT (JSON array), and the
+        // list round-trips as numbers through the admin form.
+        FieldDefinition::builder("scores", FieldType::Number)
+            .has_many(true)
+            .build(),
     ];
     def
 }
@@ -205,6 +210,93 @@ async fn tags_prevent_duplicates() {
         chip_count(&page).await,
         1,
         "duplicate tags should be prevented"
+    );
+
+    server_handle.abort();
+}
+
+/// Drive the `scores` (`Number` has-many) widget — the 2nd `<crap-tags>` on the
+/// page (after `keywords`). Same synthetic-Enter path as [`add_tag`].
+async fn add_score(page: &chromiumoxide::Page, value: &str) {
+    let js = format!(
+        "() => {{ \
+            const host = document.querySelectorAll('crap-tags')[1]; \
+            const input = host.shadowRoot.querySelector('.tags__input'); \
+            input.focus(); \
+            input.value = {value}; \
+            input.dispatchEvent(new Event('input')); \
+            input.dispatchEvent(new KeyboardEvent('keydown', {{ key: 'Enter', bubbles: true }})); \
+            return 'ok'; \
+        }}",
+        value = serde_json::to_string(value).unwrap(),
+    );
+
+    page.evaluate(js.as_str()).await.unwrap();
+}
+
+const SCORE_CHIPS: &str =
+    "document.querySelectorAll('crap-tags')[1].shadowRoot.querySelectorAll('.chip').length";
+
+// ── number_has_many_persists_and_reloads ─────────────────────────────────
+
+/// A `Number` has-many list survives the full admin round-trip: submit the
+/// create form, follow the redirect to the edit page, and confirm the two
+/// numeric chips render from the stored (TEXT/JSON) column. Pre-fix this column
+/// was numeric — the write path stored a JSON array that Postgres would reject
+/// and the read path returned a raw string the widget couldn't render.
+#[tokio::test(flavor = "multi_thread")]
+async fn number_has_many_persists_and_reloads() {
+    let BrowserTestCtx {
+        base_url,
+        server_handle,
+        page,
+        browser: _browser,
+        ..
+    } = setup_browser_test(
+        vec![make_tags_def(), make_users_def()],
+        vec![],
+        "btag5@test.com",
+        "pass123",
+    )
+    .await;
+
+    page.goto(format!("{base_url}/admin/collections/articles/create"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+
+    page.find_element("input[name=\"title\"]")
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap()
+        .type_str("Scored Article")
+        .await
+        .unwrap();
+
+    for (i, score) in ["10", "20"].iter().enumerate() {
+        add_score(&page, score).await;
+
+        let expected = i + 1;
+        browser::wait_for_js(&page, &format!("{SCORE_CHIPS} === {expected}")).await;
+    }
+
+    // Submit and follow the redirect to the new document's edit page.
+    page.find_element(".edit-sidebar button[type='submit']")
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
+    page.wait_for_navigation().await.unwrap();
+
+    // The stored Number list must re-render as two chips on the edit page.
+    assert!(
+        browser::wait_for_js(&page, &format!("{SCORE_CHIPS} === 2")).await,
+        "the two Number has-many chips should persist and re-render after reload"
     );
 
     server_handle.abort();

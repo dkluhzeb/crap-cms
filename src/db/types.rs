@@ -54,7 +54,7 @@ pub(crate) fn f64_to_exact_i64(f: f64) -> Option<i64> {
 /// `42.0` on every read surface (REST/Lua/MCP/admin). Fractions and values
 /// beyond the exact-integer range keep the float form; non-finite values
 /// become `Null` (JSON has no NaN/∞).
-fn real_to_json_number(f: f64) -> Value {
+pub(crate) fn real_to_json_number(f: f64) -> Value {
     if let Some(i) = f64_to_exact_i64(f) {
         return Value::Number(Number::from(i));
     }

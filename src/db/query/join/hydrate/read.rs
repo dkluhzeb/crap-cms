@@ -20,8 +20,47 @@ use super::{
 };
 use crate::{
     core::{Document, FieldDefinition, FieldType, field::RelationshipConfig},
-    db::{DbConnection, LocaleContext, query::helpers::prefixed_name},
+    db::{
+        DbConnection, LocaleContext,
+        query::helpers::{parse_has_many_scalar, prefixed_name, walk_leaf_fields},
+    },
 };
+
+/// Parse scalar has-many columns back into typed JSON arrays, in place.
+///
+/// `row_to_document` is field-type-blind, so a scalar has-many column (a JSON
+/// array stored as TEXT — see [`FieldDefinition::is_has_many_scalar`]) arrives
+/// here as a raw string. This runs before group reconstruction / locale
+/// reshaping, so it only ever sees flat columns: the bare column plus its
+/// per-locale `{col}__{locale}` variants (matched by prefix). Downstream steps
+/// then relocate the already-typed arrays. Array/blocks rows are untouched —
+/// `walk_leaf_fields` visits them as leaves without descending, and their nested
+/// lists are parsed by array/block hydration instead.
+fn parse_has_many_scalar_columns(fields: &[FieldDefinition], doc: &mut Document) {
+    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
+        if !field.is_has_many_scalar() {
+            return Ok(());
+        }
+
+        let base = prefixed_name(prefix, &field.name);
+        let locale_prefix = format!("{base}__");
+        let keys: Vec<String> = doc
+            .fields
+            .keys()
+            .filter(|k| *k == &base || k.starts_with(&locale_prefix))
+            .cloned()
+            .collect();
+
+        for k in keys {
+            if let Some(v) = doc.fields.get(&k) {
+                let parsed = parse_has_many_scalar(&field.field_type, v);
+                doc.fields.insert(k, parsed);
+            }
+        }
+
+        Ok(())
+    });
+}
 
 /// Hydrate a has-many relationship field, returning the JSON array value.
 /// Handles both polymorphic and non-polymorphic relationships with locale fallback.
@@ -313,6 +352,10 @@ pub fn hydrate_documents(
         return Ok(());
     }
 
+    for doc in docs.iter_mut() {
+        parse_has_many_scalar_columns(fields, doc);
+    }
+
     for field in fields {
         if let Some(sel) = select
             && !sel.iter().any(|s| s == &field.name)
@@ -379,6 +422,8 @@ pub fn hydrate_document(
     select: Option<&[String]>,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<()> {
+    parse_has_many_scalar_columns(fields, doc);
+
     for field in fields {
         if let Some(sel) = select
             && !sel.iter().any(|s| s == &field.name)

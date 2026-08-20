@@ -43,6 +43,12 @@ clean.
   `operation == "read"`). If your client read job runs for a job that has an
   `access` function, make sure that function allows the reader (see Security
   fixes).
+- **API clients: two read shapes are now consistent across surfaces.** Scalar
+  `has_many` lists read back as typed arrays (not a raw string) on gRPC / Lua /
+  MCP, and an unset relationship-population `depth` now defaults to
+  `[depth] default_depth` (`1`) everywhere instead of `0` on gRPC `Find` / Lua.
+  Handle the array, and pass `depth = 0` if you want IDs only (see Behavior
+  changes).
 
 ## Required action items
 
@@ -809,6 +815,36 @@ What changed:
   (`int64`) for whole numbers and `double_value` only for fractional ones,
   so the old silent rounding of integers above 2^53 (~9.0e15) is gone —
   see the gRPC wire-contract change below.)
+
+- **Scalar `has_many` lists read back as typed JSON arrays on every surface.**
+  A `has_many` list on a `Text` / `Number` / `Select` / `Radio` field is stored
+  as a JSON array in its column, but the read path used to be field-type-blind,
+  so gRPC / Lua / MCP returned the raw **string** (`"[\"a\",\"b\"]"`) while the
+  admin UI parsed it — even though the generated client types already declared an
+  array (`StrList` / `NumList`). Reads now return the array on every surface
+  (`["a","b"]`, and `Number` lists as numbers `[1,2]`), and a list stored via the
+  admin form and one stored via the typed API now persist identically. **Action:**
+  a client that consumed the raw string from a non-admin surface must now handle
+  an array; no change if you already used the generated client types. On
+  **Postgres**, a pre-existing `Number` `has_many` column (wrongly typed numeric,
+  which rejected writes) is migrated to `TEXT` automatically on the next startup —
+  no manual step.
+
+- **Relationship-population `depth` defaults consistently to `[depth] default_depth`.**
+  gRPC `Find` and the Lua reads previously defaulted an unset `depth` to `0`
+  (IDs only), while gRPC `FindById` and MCP defaulted to the configured
+  `default_depth` (`1`). Every surface now resolves an unset `depth` to
+  `default_depth`, floors a negative `depth` to `0`, and caps at `max_depth`.
+  **Action:** if you relied on gRPC `Find` / Lua returning bare IDs by default,
+  pass `depth = 0` explicitly (or set `[depth] default_depth = 0`).
+
+- **`unpublish` / `undelete` on a collection that doesn't support them now errors.**
+  Calling `unpublish` on a collection without versioning, or `undelete` on one
+  without soft-delete, previously silently fell through to a normal update on
+  gRPC and the admin UI (only Lua errored). All surfaces now return a clear
+  error. **Action:** none, unless you called these operations on a collection
+  that never supported them — enable `versions` / `soft_delete`, or stop calling
+  them there.
 
 ## Additive features (alpha.10)
 

@@ -27,6 +27,23 @@ pub(in crate::db::migrate) struct ColumnSpec<'a> {
     pub companion_text: bool,
 }
 
+impl ColumnSpec<'_> {
+    /// The backend DDL type for this column — the single source of truth shared
+    /// by the CREATE TABLE and ALTER TABLE (reconcile) paths, so the two can't
+    /// disagree on a column's type.
+    ///
+    /// Companion columns (`_tz` / `_lang`) and **scalar has-many lists** (stored
+    /// as a JSON array, see [`FieldDefinition::is_has_many_scalar`]) are always
+    /// `TEXT`; everything else uses the backend's per-field-type mapping.
+    pub(in crate::db::migrate) fn ddl_type(&self, conn: &dyn DbConnection) -> &'static str {
+        if self.companion_text || self.field.is_has_many_scalar() {
+            "TEXT"
+        } else {
+            conn.column_type_for(&self.field.field_type)
+        }
+    }
+}
+
 /// Collect column specifications from a field tree.
 /// Uses `walk_leaf_fields` to handle Group/Row/Collapsible/Tabs recursion.
 pub(in crate::db::migrate) fn collect_column_specs<'a>(

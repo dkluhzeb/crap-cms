@@ -14,7 +14,7 @@ use crate::{
         query::{
             coerce_json_value,
             helpers::{
-                coerce_date_value_json, prefixed_name, tz_column, utc_now,
+                coerce_date_value_json, coerce_has_many_scalar, prefixed_name, tz_column, utc_now,
                 validate_no_null_byte_json, walk_leaf_fields,
             },
             locale_write_column,
@@ -115,13 +115,16 @@ fn collect_leaf_param(
 
     validate_no_null_byte_json(&field.field_type, &data_key, value)?;
 
-    let db_val = match tz_key.as_ref() {
-        Some(tk) => coerce_date_value_json(
+    let db_val = if field.is_has_many_scalar() {
+        coerce_has_many_scalar(&field.field_type, value)
+    } else if let Some(tk) = tz_key.as_ref() {
+        coerce_date_value_json(
             &field.field_type,
             value,
             data.get(tk).and_then(Value::as_str),
-        ),
-        None => coerce_json_value(&field.field_type, value),
+        )
+    } else {
+        coerce_json_value(&field.field_type, value)
     };
 
     collector.push(conn, col_name, db_val);

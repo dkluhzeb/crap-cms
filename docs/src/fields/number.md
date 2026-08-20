@@ -33,7 +33,7 @@ crap.fields.number({
 })
 ```
 
-- Values are stored as `["10","20","30"]` in the TEXT column
+- Values are stored as a JSON number array (`[10, 20, 30]`) in the TEXT column, and read back as numbers on every surface — whether written via the typed API or the admin form
 - `min` / `max` validate each individual value
 - `min_rows` / `max_rows` validate the count of values
 - Type generation maps to `number[]` / `Vec<f64>` / `list[float]` etc.
