@@ -6,7 +6,10 @@ use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use serde_json::Value;
 
-use crate::{core::FieldType, db::DbValue};
+use crate::{
+    core::{FieldType, parse_truthy},
+    db::DbValue,
+};
 
 use super::sanitize_locale;
 
@@ -20,6 +23,19 @@ pub fn apply_pagination_limits(requested: Option<i64>, default_limit: i64, max_l
         None => default_limit,
         Some(v) => v.max(1).min(max_limit),
     }
+}
+
+/// Resolve a requested relationship-population depth into `[0, max_depth]`.
+///
+/// `None` (no explicit depth) uses the configured `default_depth`; a negative
+/// value floors to 0; everything is capped at `max_depth`. One helper so every
+/// read surface (Lua / gRPC / MCP / admin) resolves depth identically — the
+/// surfaces previously diverged (some defaulted to `default_depth`, some to 0,
+/// MCP never floored a negative), so the `[depth] default_depth` knob was
+/// honored inconsistently.
+#[must_use]
+pub fn clamp_depth(requested: Option<i32>, default_depth: i32, max_depth: i32) -> i32 {
+    requested.unwrap_or(default_depth).max(0).min(max_depth)
 }
 
 /// Floor an optional `limit`/`offset` at 0, preserving `None`.
@@ -207,14 +223,16 @@ pub(crate) fn coerce_value(field_type: &FieldType, value: &str) -> DbValue {
     }
 
     match field_type {
-        FieldType::Checkbox => {
-            DbValue::Integer(i64::from(matches!(value, "on" | "true" | "1" | "yes")))
-        }
+        FieldType::Checkbox => DbValue::Integer(i64::from(parse_truthy(value))),
         FieldType::Number => value
             .parse::<f64>()
             .ok()
             .filter(|f| f.is_finite())
             .map_or(DbValue::Null, DbValue::Real),
+        // Trim email on the way in so stored values share the normal form the
+        // case-insensitive login lookup / rate-limit keys compare against — a
+        // surrounding-whitespace email otherwise stored but never matched.
+        FieldType::Email => DbValue::Text(value.trim().to_string()),
         FieldType::Date => DbValue::Text(normalize_date_value(value)),
         _ => DbValue::Text(value.to_string()),
     }

@@ -9,7 +9,7 @@ use serde::Deserialize;
 use crate::{
     config::{DepthConfig, LocaleConfig},
     core::Registry,
-    db::LocaleContext,
+    db::{LocaleContext, query},
     hooks::{
         lifecycle::converters::document_to_lua_table,
         lua_api::crud::{
@@ -29,10 +29,11 @@ use crate::{
 #[serde(default, deny_unknown_fields)]
 #[lua(class = "crap.FindByIdOptions")]
 pub(crate) struct FindByIdOptions {
-    /// Population depth for relationship fields (default: `0`). `0` =
-    /// return IDs only. Clamped to the configured `[depth] max_depth`.
+    /// Population depth for relationship fields. Unset uses the configured
+    /// `[depth] default_depth` (matching the gRPC/MCP surfaces); `0` = return IDs
+    /// only. Clamped to the configured `[depth] max_depth`.
     #[lua(optional)]
-    pub(crate) depth: i32,
+    pub(crate) depth: Option<i32>,
     /// Locale code for localized fields (e.g., `"en"`, `"de"`, `"all"`).
     /// Nil = default locale.
     pub(crate) locale: Option<String>,
@@ -68,6 +69,9 @@ impl FromLua for FindByIdOptions {
 pub(crate) struct CollectionsFindByIdState {
     pub(crate) registry: Arc<Registry>,
     pub(crate) locale_config: LocaleConfig,
+    /// Default relationship-population `depth` when unset, from `[depth]
+    /// default_depth`.
+    pub(crate) default_depth: i32,
     /// Upper bound for relationship-population `depth`, from `[depth] max_depth`.
     pub(crate) max_depth: i32,
 }
@@ -98,7 +102,7 @@ fn collections_find_by_id(
 
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
-    let depth = opts.depth.clamp(0, state.max_depth);
+    let depth = query::clamp_depth(opts.depth, state.default_depth, state.max_depth);
     let locale_ctx = LocaleContext::from_locale_string(opts.locale.as_deref(), lc)
         .map_err(|e| RuntimeError(e.to_string()))?;
     let def = resolve_collection(reg, &collection)?;
@@ -161,6 +165,7 @@ pub(crate) fn register_find_by_id(
         CollectionsFindByIdState {
             registry,
             locale_config: locale_config.clone(),
+            default_depth: depth_config.default_depth,
             max_depth: depth_config.max_depth,
         },
     )?;

@@ -32,6 +32,7 @@ use crate::core::{
     AuthUser, Claims, Document, Registry, Slug,
     auth::{ClaimsBuilder, TokenProvider},
     collection::{Auth, Surface},
+    parse_truthy,
 };
 use crate::db::{DbConnection, query};
 use crate::hooks::{HookRunner, lifecycle::AuthStrategyInput};
@@ -524,7 +525,10 @@ fn bool_flag(doc: &Document, key: &str) -> bool {
         return b;
     }
     if let Some(s) = value.as_str() {
-        return matches!(s.trim(), "1" | "true" | "TRUE" | "True" | "yes");
+        // Shared truthy set (`1/true/yes/on`, case-insensitive). The old ad-hoc
+        // set here missed `on` and only case-folded `true`, so a `_locked = "on"`
+        // read as NOT locked — a fail-open. Route through the one chokepoint.
+        return parse_truthy(s);
     }
     false
 }

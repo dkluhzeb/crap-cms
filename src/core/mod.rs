@@ -39,6 +39,7 @@
 pub mod auth;
 pub mod cache;
 pub mod collection;
+pub mod column;
 pub mod condition;
 pub mod document;
 pub mod document_fields;
@@ -51,6 +52,7 @@ pub mod group_repr;
 pub mod hook_ref;
 pub mod job;
 pub mod lua_lease;
+pub mod parse;
 pub mod rate_limit;
 pub mod registry;
 pub mod req_context;
@@ -67,6 +69,7 @@ pub use collection::{
     Access, CollectionDefinition, GlobalDefinition, Hooks, IndexDefinition, Labels, LiveMode,
     LiveSetting, VersionsConfig,
 };
+pub use column::is_system_column;
 pub use condition::{ConditionExpr, ConditionOp, ConditionRow};
 pub use document::Document;
 pub use document_fields::DocumentFields;
@@ -82,6 +85,7 @@ pub(crate) use group_repr::{flatten_group_fields, nest_group_fields};
 pub use hook_ref::HookRef;
 pub use job::{JobDefinition, JobLabels, JobRun, JobStatus};
 pub use lua_lease::{LocalLease, LuaVmLease};
+pub use parse::{parse_bool, parse_truthy};
 pub(crate) use registry::RegistryRead;
 pub use registry::{Registry, SharedRegistry, StrategyEntry};
 pub use req_context::ReqContext;

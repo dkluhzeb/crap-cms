@@ -117,7 +117,11 @@ fn update_document_blocking(
         .password_policy(Some(&args.password_policy))
         .build();
 
-    let result = if args.input.action == "unpublish" && args.def.has_versions() {
+    // Route an unpublish action to the unpublish path regardless of versioning:
+    // the shared service gate rejects unpublish on a non-versioned collection
+    // (an explicit error) rather than silently doing a normal update, matching
+    // the Lua surface.
+    let result = if args.input.action == "unpublish" {
         let doc = service::unpublish_document(&ctx, &args.id)?;
 
         Ok((doc, ReqContext::new()))

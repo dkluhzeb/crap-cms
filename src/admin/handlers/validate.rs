@@ -92,6 +92,9 @@ pub struct RunValidationParams<'a> {
     pub data: &'a DocumentFields,
     pub is_draft: bool,
     pub soft_delete: bool,
+    /// Whether the collection/global supports drafts (`has_drafts()`), so the
+    /// dry-run clamps `draft && supports_drafts` at the service chokepoint.
+    pub supports_drafts: bool,
     pub locale_ctx: Option<&'a LocaleContext>,
     pub user_doc: Option<&'a Document>,
     /// Collection-level `required_locales` default (`None` for globals).
@@ -131,6 +134,7 @@ pub fn run_validation(p: &RunValidationParams) -> anyhow::Result<()> {
         operation: p.operation,
         exclude_id: p.exclude_id,
         soft_delete: p.soft_delete,
+        supports_drafts: p.supports_drafts,
         required_locales: p.required_locales,
     };
 

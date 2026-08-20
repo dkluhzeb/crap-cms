@@ -135,12 +135,8 @@ pub(super) fn unpublish_via_service(
     let lua_infra = hook_lua_infra(lua);
     let def = resolve_collection(registry, call.collection)?;
 
-    if !def.has_versions() {
-        return Err(RuntimeError(format!(
-            "Collection '{}' does not have versioning enabled",
-            call.collection
-        )));
-    }
+    // Capability gate (versioning required) is enforced at the shared service
+    // chokepoint `service::unpublish_document`, so every surface agrees.
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, call.hooks, call.collection, "update");
 

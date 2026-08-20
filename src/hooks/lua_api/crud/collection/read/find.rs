@@ -156,6 +156,9 @@ pub(crate) struct FindParams {
     default: i64,
     max: i64,
     cursor: bool,
+    /// Default relationship-population `depth` when unset, from `[depth]
+    /// default_depth`.
+    default_depth: i32,
     /// Upper bound for relationship-population `depth`, from `[depth] max_depth`.
     max_depth: i32,
 }
@@ -208,6 +211,7 @@ pub(crate) fn register_find(
         default: pagination_config.default_limit,
         max: pagination_config.max_limit,
         cursor: pagination_config.is_cursor(),
+        default_depth: depth_config.default_depth,
         max_depth: depth_config.max_depth,
     };
 
@@ -267,7 +271,7 @@ fn find_inner(
 
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
-    let depth = query.depth.unwrap_or(0).clamp(0, params.max_depth);
+    let depth = query::clamp_depth(query.depth, params.default_depth, params.max_depth);
     let locale_ctx = LocaleContext::from_locale_string(query.locale.as_deref(), lc)
         .map_err(|e| RuntimeError(e.to_string()))?;
     let override_access = query.override_access.unwrap_or(false);
@@ -365,6 +369,7 @@ mod tests {
             default: 20,
             max: 1000,
             cursor: false,
+            default_depth: 1,
             max_depth: 1,
         };
         let def = crate::core::CollectionDefinition::new("x");

@@ -101,7 +101,13 @@ impl ContentService {
             slug: req.slug.clone(),
             // The proto status filter is an enum; `Unspecified` = no filter.
             status: enum_mapping::job_status_filter(req.status()).map(|s| s.as_str().to_string()),
-            limit: clamp_limit(req.limit.unwrap_or(50), 1000),
+            // Use the configured `[pagination]` limits, not hardcoded literals,
+            // so the jobs surface honors `default_limit` / `max_limit` like every
+            // other read surface.
+            limit: clamp_limit(
+                req.limit.unwrap_or(self.pagination_ctx.default_limit),
+                self.pagination_ctx.max_limit,
+            ),
             offset: req.offset.unwrap_or(0).max(0),
         };
 

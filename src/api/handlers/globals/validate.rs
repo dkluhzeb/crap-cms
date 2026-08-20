@@ -71,6 +71,7 @@ fn validate_global_blocking(
         operation: "update",
         exclude_id: Some("default"),
         soft_delete: false,
+        supports_drafts: input.def.has_drafts(),
         // Globals have no collection-level `required_locales` default.
         required_locales: None,
     };

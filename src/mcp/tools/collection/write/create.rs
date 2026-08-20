@@ -8,7 +8,7 @@ use crate::{
     db::LocaleContext,
     mcp::tools::{
         ToolExecCtx,
-        collection::helpers::{doc_to_json, extract_data_from_args},
+        collection::helpers::{doc_to_json, extract_data_from_args, reserved_data_keys},
     },
     service::{ServiceContext, WriteInput, create_document},
 };
@@ -45,11 +45,7 @@ pub(in crate::mcp::tools) fn exec_create(
     let draft = args.get("draft").and_then(Value::as_bool).unwrap_or(false);
     let events = args.get("events").and_then(Value::as_bool).unwrap_or(true);
 
-    let mut skip_keys: Vec<&str> = vec!["locale", "draft", "events"];
-    if def.is_auth_collection() {
-        skip_keys.push("password");
-    }
-    let data = extract_data_from_args(args, &skip_keys, &def.fields)?;
+    let data = extract_data_from_args(args, &reserved_data_keys(def, false), &def.fields)?;
 
     let svc_ctx = ServiceContext::collection(slug, def)
         .pool(ctx.pool)

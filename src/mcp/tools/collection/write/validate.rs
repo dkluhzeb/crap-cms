@@ -9,7 +9,10 @@ use serde_json::{Value, json, to_string_pretty};
 
 use crate::{
     db::LocaleContext,
-    mcp::tools::{ToolExecCtx, collection::helpers::extract_data_from_args},
+    mcp::tools::{
+        ToolExecCtx,
+        collection::helpers::{extract_data_from_args, reserved_data_keys},
+    },
     service::{RunnerWriteHooks, ServiceError, ValidateContext, WriteInput, validate_document},
 };
 
@@ -43,11 +46,9 @@ pub(in crate::mcp::tools) fn exec_validate(
         "create"
     };
 
-    let mut skip_keys: Vec<&str> = vec!["id", "locale", "draft"];
-    if def.is_auth_collection() {
-        skip_keys.push("password");
-    }
-    let data = extract_data_from_args(args, &skip_keys, &def.fields)?;
+    // Reserved keys now include `events` (was omitted here, so a validate call
+    // passing `events` errored as an unknown field where create/update strip it).
+    let data = extract_data_from_args(args, &reserved_data_keys(def, true), &def.fields)?;
 
     // Attach the connection so field-level write-access denials are actually
     // evaluated (a connless hooks object skips them, diverging from the real
@@ -62,6 +63,7 @@ pub(in crate::mcp::tools) fn exec_validate(
         operation,
         exclude_id: exclude_id.as_deref(),
         soft_delete: def.soft_delete,
+        supports_drafts: def.has_drafts(),
         required_locales: def.required_locales.as_ref(),
     };
 

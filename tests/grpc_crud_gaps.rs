@@ -309,6 +309,65 @@ async fn list_and_restore_versions() {
     );
 }
 
+/// Regression (chokepoint): unpublish on a NON-versioned collection is rejected
+/// at the shared service gate. gRPC previously reached the service ungated (Lua
+/// and admin blocked it), so it would set `_status='draft'` on a collection with
+/// no versioning.
+#[tokio::test]
+async fn unpublish_on_non_versioned_collection_is_rejected() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    let doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "posts".to_string(),
+            data: Some(make_struct(&[("title", "Hello")])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    let err = ts
+        .service
+        .update(Request::new(content::UpdateRequest {
+            events: None,
+            collection: "posts".to_string(),
+            id: doc.id.clone(),
+            data: None,
+            locale: None,
+            draft: None,
+            unpublish: Some(true),
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument, "got: {err:?}");
+}
+
+/// Regression (chokepoint): undelete on a NON-soft-delete collection is rejected
+/// at the shared service gate (no trashed row can exist), instead of each surface
+/// re-checking `soft_delete` independently.
+#[tokio::test]
+async fn undelete_on_non_soft_delete_collection_is_rejected() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    let err = ts
+        .service
+        .undelete(Request::new(content::UndeleteRequest {
+            collection: "posts".to_string(),
+            id: "nonexistent".to_string(),
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument, "got: {err:?}");
+}
+
 // ── Access Control / CRUD Gaps ────────────────────────────────────────────
 
 #[tokio::test]

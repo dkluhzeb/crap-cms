@@ -3,7 +3,7 @@
 use anyhow::{Result, bail};
 use tracing::warn;
 
-use crate::core::FieldType;
+use crate::core::{FieldType, parse_bool};
 use crate::db::{
     DbConnection, DbValue, Filter, FilterOp,
     query::{helpers::normalize_date_value, is_valid_identifier},
@@ -50,10 +50,10 @@ pub(super) fn coerce_filter_value(
                 DbValue::Text(value.to_string())
             }
         },
-        FieldType::Checkbox => match value {
-            "1" | "true" | "yes" | "on" => DbValue::Integer(1),
-            "0" | "false" | "no" | "off" => DbValue::Integer(0),
-            _ => {
+        FieldType::Checkbox => {
+            if let Some(b) = parse_bool(value) {
+                DbValue::Integer(i64::from(b))
+            } else {
                 warn!(
                     "Filter value '{}' is not a recognized boolean for Checkbox field; \
                      falling back to Text comparison",
@@ -61,7 +61,7 @@ pub(super) fn coerce_filter_value(
                 );
                 DbValue::Text(value.to_string())
             }
-        },
+        }
         FieldType::Date => DbValue::Text(normalize_date_value(value)),
         _ => DbValue::Text(value.to_string()),
     }

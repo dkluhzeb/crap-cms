@@ -15,6 +15,7 @@ use crate::{
     db::{
         DbConnection, DbRow, DbValue,
         connection::{ConnectionInner, TransactionInner},
+        query::is_valid_identifier,
     },
 };
 
@@ -30,7 +31,7 @@ fn sqlite_table_exists(conn: &dyn DbConnection, name: &str) -> Result<bool> {
 }
 
 fn sqlite_get_table_columns(conn: &dyn DbConnection, table: &str) -> Result<HashSet<String>> {
-    if !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+    if !is_valid_identifier(table) {
         bail!("Invalid table name for PRAGMA: {table:?}");
     }
 
@@ -46,7 +47,7 @@ fn sqlite_get_table_column_types(
     conn: &dyn DbConnection,
     table: &str,
 ) -> Result<HashMap<String, String>> {
-    if !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+    if !is_valid_identifier(table) {
         bail!("Invalid table name for PRAGMA: {table:?}");
     }
     let rows = conn.query_all(&format!("PRAGMA table_info({table})"), &[])?;

@@ -13,7 +13,7 @@ use crate::{
         handlers::{ContentService, proto::document_to_proto},
     },
     core::{CollectionDefinition, Registry, SharedCache, SharedTokenProvider},
-    db::{DbPool, LocaleContext, query::SharedPopulateSingleflight},
+    db::{DbPool, LocaleContext, query, query::SharedPopulateSingleflight},
     hooks::HookRunner,
     service::{FindByIdInput, RunnerReadHooks, ServiceContext, ServiceError, find_document_by_id},
 };
@@ -99,11 +99,7 @@ impl ContentService {
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
-        let depth = req
-            .depth
-            .unwrap_or(self.default_depth)
-            .max(0)
-            .min(self.max_depth);
+        let depth = query::clamp_depth(req.depth, self.default_depth, self.max_depth);
 
         let select = if req.select.is_empty() {
             None

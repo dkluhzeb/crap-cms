@@ -107,7 +107,12 @@ impl ContentService {
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
-        if req.unpublish.unwrap_or(false) && def.has_versions() {
+        // Route an unpublish request to the unpublish path regardless of
+        // versioning: the shared service gate rejects unpublish on a
+        // non-versioned collection (an explicit error), instead of silently
+        // falling through to a normal update as the old `&& has_versions()`
+        // short-circuit did. Harmonizes with the Lua surface's error.
+        if req.unpublish.unwrap_or(false) {
             return self.unpublish_impl(token, headers, &req, &def).await;
         }
 

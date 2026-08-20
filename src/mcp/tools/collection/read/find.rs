@@ -60,13 +60,15 @@ pub(in crate::mcp::tools) fn exec_find(
 
     // MCP requests outside i32 range can't be valid populate depths; treat
     // them as 0 (no population) before applying max_depth.
-    let depth_raw = args
+    let requested = args
         .get("depth")
         .and_then(serde_json::Value::as_i64)
-        .unwrap_or(0);
-    let depth = i32::try_from(depth_raw)
-        .unwrap_or(0)
-        .min(ctx.config.depth.max_depth);
+        .and_then(|d| i32::try_from(d).ok());
+    let depth = query::clamp_depth(
+        requested,
+        ctx.config.depth.default_depth,
+        ctx.config.depth.max_depth,
+    );
 
     let is_trash = args
         .get("trash")

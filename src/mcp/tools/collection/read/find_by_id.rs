@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde_json::{Value, to_string_pretty};
 
 use crate::{
-    db::LocaleContext,
+    db::{LocaleContext, query},
     mcp::tools::{ToolExecCtx, collection::helpers::doc_to_json},
     service::{FindByIdInput, RunnerReadHooks, ServiceContext, ServiceError, find_document_by_id},
 };
@@ -36,15 +36,18 @@ pub(in crate::mcp::tools) fn exec_find_by_id(
     let locale = args.get("locale").and_then(|v| v.as_str());
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
 
-    // MCP requests outside i32 range can't be valid populate depths; clamp
-    // to the configured default before applying max_depth.
-    let depth_raw = args
+    // A depth outside i32 range (or absent) resolves to the configured default;
+    // `clamp_depth` then floors negatives at 0 and caps at max_depth — the one
+    // shared depth resolver every read surface uses.
+    let requested = args
         .get("depth")
         .and_then(serde_json::Value::as_i64)
-        .unwrap_or(i64::from(ctx.config.depth.default_depth));
-    let depth = i32::try_from(depth_raw)
-        .unwrap_or(ctx.config.depth.default_depth)
-        .min(ctx.config.depth.max_depth);
+        .and_then(|d| i32::try_from(d).ok());
+    let depth = query::clamp_depth(
+        requested,
+        ctx.config.depth.default_depth,
+        ctx.config.depth.max_depth,
+    );
 
     let hooks = RunnerReadHooks::new(ctx.runner, &conn, None, None).with_override_access();
     let svc_ctx = ServiceContext::collection(slug, def)

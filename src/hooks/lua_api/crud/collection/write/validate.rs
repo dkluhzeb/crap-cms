@@ -119,6 +119,7 @@ fn collections_validate(
         operation,
         exclude_id: opts.id.as_deref(),
         soft_delete: def.has_soft_delete(),
+        supports_drafts: def.has_drafts(),
         required_locales: def.required_locales.as_ref(),
     };
 

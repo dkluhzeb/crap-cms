@@ -6,9 +6,32 @@ use anyhow::{Result, bail};
 use serde_json::{Map, Value};
 
 use crate::{
-    core::{Document, DocumentFields, FieldDefinition, flatten_array_sub_fields},
+    core::{
+        CollectionDefinition, Document, DocumentFields, FieldDefinition, flatten_array_sub_fields,
+    },
     db::query,
 };
+
+/// Reserved top-level meta-keys for a single-document write tool — the keys
+/// [`extract_data_from_args`] must skip so they are not treated as unknown field
+/// data. One source so `create` / `update` / `validate` can't drift (validate
+/// previously omitted `events`, rejecting a valid dry-run that passed it).
+/// `include_id` is set on ops that accept a target `id` (update / validate);
+/// `password` is reserved only on auth collections (a non-auth collection may
+/// carry a legitimate `password` field, matching the Lua surface).
+pub(in crate::mcp::tools) fn reserved_data_keys(
+    def: &CollectionDefinition,
+    include_id: bool,
+) -> Vec<&'static str> {
+    let mut keys = vec!["locale", "draft", "events"];
+    if include_id {
+        keys.push("id");
+    }
+    if def.is_auth_collection() {
+        keys.push("password");
+    }
+    keys
+}
 
 /// Parse JSON `where` object into filter clauses.
 /// Supports `{ field: "value" }` (equals) and `{ field: { op: value } }` (operator-based).

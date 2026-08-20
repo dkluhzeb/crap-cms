@@ -167,7 +167,7 @@ impl ContentService {
         let locale_ctx =
             LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config)
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let depth = req.depth.unwrap_or(0).max(0).min(self.max_depth);
+        let depth = query::clamp_depth(req.depth, self.default_depth, self.max_depth);
         let cursor_enabled = self.pagination_ctx.cursor_enabled;
 
         let is_trash = req.trash.unwrap_or(false) && def.soft_delete;

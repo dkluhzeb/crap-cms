@@ -967,7 +967,7 @@ function crap.collections.config.list() end
 
 --- Optional options for `crap.collections.find_by_id`.
 --- @class crap.FindByIdOptions
---- @field depth? integer Population depth for relationship fields (default: `0`). `0` = return IDs only. Clamped to the configured `[depth] max_depth`.
+--- @field depth? integer Population depth for relationship fields. Unset uses the configured `[depth] default_depth` (matching the gRPC/MCP surfaces); `0` = return IDs only. Clamped to the configured `[depth] max_depth`.
 --- @field locale? string Locale code for localized fields (e.g., `"en"`, `"de"`, `"all"`). Nil = default locale.
 --- @field select? string[] Fields to return. Nil or empty = all fields. `id` is always included.
 --- @field draft? boolean When `true` and the collection has `versions.drafts`, returns the latest draft version snapshot instead of the published main-table data.

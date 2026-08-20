@@ -85,6 +85,7 @@ pub async fn validate_global(
             data: &data,
             is_draft,
             soft_delete: false,
+            supports_drafts: def_owned.has_drafts(),
             locale_ctx: locale_ctx.as_ref(),
             user_doc: user_doc.as_ref(),
             required_locales: None,

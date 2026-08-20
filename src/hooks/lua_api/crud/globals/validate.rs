@@ -112,6 +112,7 @@ fn globals_validate(
         operation: "update",
         exclude_id: Some("default"),
         soft_delete: false,
+        supports_drafts: def.has_drafts(),
         required_locales: None,
     };
 

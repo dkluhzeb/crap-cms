@@ -28,6 +28,17 @@ fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.collection_def()?;
 
+    // Authoritative capability gate: unpublish sets `_status='draft'` and writes a
+    // version snapshot, both of which require versioning. Enforced here at the one
+    // service chokepoint so no surface (gRPC previously reached this ungated) can
+    // unpublish a non-versioned collection.
+    if !def.has_versions() {
+        return Err(ServiceError::HookError(format!(
+            "Collection '{}' does not support unpublish: versioning is not enabled",
+            ctx.slug
+        )));
+    }
+
     let access = write_hooks.check_access(
         &AccessCheckInput::builder("unpublish", ctx.slug)
             .access(def.access.update.as_ref())

@@ -8,6 +8,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Relationship-population `depth` is resolved identically on every read surface.**
+  `depth` is now clamped through one shared `clamp_depth(requested, default, max)`:
+  an unset depth uses `[depth] default_depth` (default `1`), a negative depth floors
+  to `0`, and everything is capped at `max_depth`. Previously the surfaces diverged —
+  gRPC `Find` and the Lua reads defaulted to `0` (IDs only) while gRPC `FindById` and
+  MCP defaulted to `default_depth`, and MCP never floored a negative depth. **Migration:**
+  reads that relied on an implicit depth-`0` default now populate one level (the
+  configured default); set `depth = 0` explicitly for IDs-only, or set `[depth]
+  default_depth = 0`. The Lua `find_by_id` `depth` option is now optional (`nil` =
+  the configured default) instead of defaulting to `0`.
+
+- **`unpublish` / `undelete` on a collection that doesn't support them now error
+  everywhere.** Unpublish on a non-versioned collection, and undelete on a
+  non-soft-delete collection, are rejected at the shared service chokepoint. gRPC
+  and the admin UI previously *silently fell through to a normal update* (unpublish)
+  rather than erroring like the Lua surface; the capability gate now lives once in
+  `service::unpublish_document` / `service::undelete_document`.
+
 - **Auth-collection passwords are policy-checked on every write surface and every
   operation.** `[auth.password_policy]` validation previously ran only on the
   single-`create`/`update` paths of the gRPC, MCP, and admin surfaces: Lua
@@ -519,6 +537,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   **Migration:** regenerate both artifacts together after upgrading.
 
 ### Security
+
+- **A `_locked` account flag stored as a truthy string could read as *not locked*
+  (fail-open).** The auth flag reader (`_locked` / `_verified`) used its own truthy
+  set that missed `on` and only case-folded `true`, while the data plane accepted
+  `1/true/yes/on` — so a `_locked` value of `on` / `On` evaluated to `false` and let
+  a locked account through. All boolean spellings now flow through one shared
+  `core::parse_truthy` (trimmed, case-insensitive `1/true/yes/on`), used by the
+  write-coerce edge, both filter evaluators, and the auth flag reader.
 
 - **A password weaker than the policy could reach the database via Lua or bulk
   create.** Password-policy enforcement was per-surface and incomplete — Lua
@@ -1215,6 +1241,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **The `validate` dry-run now agrees across surfaces on draft mode.** `draft` is
+  clamped by `&& has_drafts()` at the shared `validate_document` chokepoint, so a
+  `draft = true` validate against a draft-disabled collection no longer relaxes
+  required-field checks on one surface (gRPC/MCP/Lua) but not another (admin).
+
+- **The MCP `validate` tool accepts `events`.** Its reserved-key set omitted
+  `events`, so a validate call passing it errored as an "unknown field" where
+  `create` / `update` strip it. All three tools now share one `reserved_data_keys`.
+
+- **`ListJobRuns` honors the configured `[pagination]` limits** instead of a
+  hardcoded `50` / `1000`, matching every other read surface.
+
+- **Checkbox and boolean filter values are matched case-insensitively.** `TRUE`,
+  `On`, `YES` now coerce like `true`/`on`/`yes` at the write edge and in the SQL and
+  in-memory filters (one shared token set).
+
+- **A stored email keeps the normal form the login lookup compares against.**
+  `Email` values are trimmed at the write edge, so a whitespace-padded address is no
+  longer stored-but-never-matched by the (trimmed, case-insensitive) login lookup.
+
+- **Admin `default_sort` / `list_columns` no longer spuriously warn on a system
+  column.** Both checks now use one `is_system_column` predicate instead of two
+  disagreeing hardcoded subsets.
 
 - **`crap.collections.list_versions` no longer accepts an unbounded negative
   limit.** The Lua version-listing surface passed its `limit` straight to the

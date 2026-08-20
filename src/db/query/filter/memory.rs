@@ -27,7 +27,9 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::core::{DocumentFields, FieldDefinition, FieldType, prefixed_name, walk_leaf_fields};
+use crate::core::{
+    DocumentFields, FieldDefinition, FieldType, parse_bool, prefixed_name, walk_leaf_fields,
+};
 use crate::db::query::helpers::normalize_date_value;
 use crate::db::{Filter, FilterClause, FilterOp};
 
@@ -176,14 +178,11 @@ fn bool_repr(v: &Value) -> Option<bool> {
     }
 }
 
-/// Parse a constraint's boolean spelling, matching SQL `coerce_filter_value`'s
-/// Checkbox set (`1/true/yes/on` → true, `0/false/no/off` → false).
+/// Parse a constraint's boolean spelling — the shared `core::parse_bool` token
+/// set (`1/true/yes/on` → true, `0/false/no/off` → false), so the in-memory
+/// filter, the SQL filter, and the write-coerce edge agree exactly.
 fn bool_from_str(s: &str) -> Option<bool> {
-    match s {
-        "1" | "true" | "yes" | "on" => Some(true),
-        "0" | "false" | "no" | "off" => Some(false),
-        _ => None,
-    }
+    parse_bool(s)
 }
 
 /// Numeric value of a stored Number field (`Number` or numeric string).

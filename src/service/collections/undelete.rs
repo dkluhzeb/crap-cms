@@ -25,6 +25,16 @@ fn undelete_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document>
     let write_hooks = ctx.write_hooks()?;
     let def = ctx.collection_def()?;
 
+    // Authoritative capability gate: undelete only makes sense when soft-delete is
+    // enabled (otherwise there is no trashed row to restore). Enforced at the one
+    // service chokepoint so every surface agrees.
+    if !def.has_soft_delete() {
+        return Err(ServiceError::HookError(format!(
+            "Collection '{}' does not support undelete: soft-delete is not enabled",
+            ctx.slug
+        )));
+    }
+
     let access = write_hooks.check_access(
         &AccessCheckInput::builder("undelete", ctx.slug)
             .access(def.access.resolve_trash())

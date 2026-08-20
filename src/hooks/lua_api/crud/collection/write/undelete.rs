@@ -57,11 +57,8 @@ fn collections_undelete(
     let lua_infra = hook_lua_infra(lua);
     let def = resolve_collection(state, &collection)?;
 
-    if !def.soft_delete {
-        return Err(RuntimeError(format!(
-            "Collection '{collection}' does not have soft_delete enabled"
-        )));
-    }
+    // Capability gate (soft-delete required) is enforced at the shared service
+    // chokepoint `service::undelete_document`, so every surface agrees.
 
     let wh = LuaWriteHooks::builder(lua)
         .user(user.as_ref())

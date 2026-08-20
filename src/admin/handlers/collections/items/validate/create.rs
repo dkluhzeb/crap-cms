@@ -73,6 +73,7 @@ pub async fn validate_create(
             data: &data,
             is_draft,
             soft_delete: def_owned.soft_delete,
+            supports_drafts: def_owned.has_drafts(),
             locale_ctx: locale_ctx.as_ref(),
             user_doc: user_doc.as_ref(),
             required_locales: def_owned.required_locales.as_ref(),

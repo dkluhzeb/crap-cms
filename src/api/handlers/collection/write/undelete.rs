@@ -84,11 +84,8 @@ impl ContentService {
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
-        if !def.soft_delete {
-            return Err(Status::failed_precondition(
-                "Collection does not have soft_delete enabled",
-            ));
-        }
+        // Capability gate (soft-delete required) is enforced at the shared service
+        // chokepoint `service::undelete_document`, so every surface agrees.
 
         let input = UndeleteBlockingInput {
             pool: self.pool.clone(),

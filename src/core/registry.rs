@@ -9,6 +9,7 @@ use tracing::{debug, warn};
 use crate::core::{
     CollectionDefinition, FieldDefinition, HookRef, Slug,
     collection::{Activation, AuthMethod, GlobalDefinition, Surface},
+    is_system_column,
     job::JobDefinition,
     richtext::RichtextNodeDef,
     walk::{prefixed_name, walk_leaf_fields},
@@ -145,11 +146,7 @@ impl Registry {
 
         if let Some(ref sort) = def.admin.default_sort {
             let col = sort.strip_prefix('-').unwrap_or(sort);
-            if !matches!(
-                col,
-                "id" | "created_at" | "updated_at" | "_status" | "_deleted_at"
-            ) && !Self::field_exists_recursive(col, &def.fields)
-            {
+            if !is_system_column(col) && !Self::field_exists_recursive(col, &def.fields) {
                 warn!(
                     "Collection '{}': default_sort references '{}' which is not a field",
                     slug, col
@@ -167,8 +164,7 @@ impl Registry {
         }
 
         for name in &def.admin.list_columns {
-            let is_meta = matches!(name.as_str(), "created_at" | "updated_at" | "_status");
-            if !is_meta && !Self::field_exists_recursive(name, &def.fields) {
+            if !is_system_column(name) && !Self::field_exists_recursive(name, &def.fields) {
                 warn!(
                     "Collection '{}': list_columns references '{}' which is not a field",
                     slug, name

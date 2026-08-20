@@ -22,6 +22,12 @@ pub struct ValidateContext<'a> {
     /// Exclude this document from unique checks (update path).
     pub exclude_id: Option<&'a str>,
     pub soft_delete: bool,
+    /// Whether the collection/global supports drafts (`has_drafts()`). The
+    /// dry-run clamps `draft && supports_drafts` here — the one chokepoint —
+    /// mirroring the real write path, so `draft=true` on a draft-disabled
+    /// collection can't relax required-field checks on one surface but not
+    /// another.
+    pub supports_drafts: bool,
     /// Collection-level `required_locales` default, so the dry-run mirrors the
     /// completeness check that `create`/`update` apply. `None` for globals.
     pub required_locales: Option<&'a RequiredLocales>,
@@ -50,7 +56,7 @@ pub fn validate_document(
     // dry-run pipeline matches the real write path.
     input.data = nest_group_fields(&input.data, ctx.fields);
 
-    let is_draft = input.draft;
+    let is_draft = input.draft && ctx.supports_drafts;
 
     // Strip write-denied fields (data-aware: each `access.create`/`access.update`
     // rule sees `ctx.data` = its level and `ctx.document` = the incoming document).
