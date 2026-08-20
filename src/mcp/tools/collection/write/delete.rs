@@ -6,7 +6,7 @@ use serde_json::{Value, to_string_pretty};
 use tracing::info;
 
 use crate::{
-    mcp::tools::ToolExecCtx,
+    mcp::tools::{ToolExecCtx, collection::helpers::events_flag},
     service::{ServiceContext, delete_document},
 };
 
@@ -43,7 +43,7 @@ pub(in crate::mcp::tools) fn exec_delete(
         def.make_hard_delete();
     }
 
-    let events = args.get("events").and_then(Value::as_bool).unwrap_or(true);
+    let events = events_flag(args);
 
     let svc_ctx = ServiceContext::collection(slug, &def)
         .pool(ctx.pool)

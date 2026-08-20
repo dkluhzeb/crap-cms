@@ -2579,6 +2579,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   (gRPC is unaffected — it carries numbers as protobuf `double`, not
   JSON.)
 
+### Internal
+
+- **Scattered duplicate logic pulled behind shared chokepoints (no behavior
+  change).** These are refactors that give each concern a single source of
+  truth so sibling call sites can't drift apart:
+  - The reserved auto-column names (`id`, `parent_id`, `created_at`,
+    `updated_at`) now live in one `AUTO_COLUMNS` constant shared by the
+    `is_system_column` predicate and the Lua field-name reservation.
+  - Email normalization for the login / forgot-password rate-limiter keys is a
+    single `normalize_email` helper (trim + lowercase), replacing four inline
+    copies across the gRPC and admin auth handlers.
+  - The custom-page slug validator is defined once; the Lua `crap.pages` path
+    imports it instead of keeping a byte-identical copy.
+  - Field-type-name strings are derived from `FieldType::as_str()` instead of
+    `format!("{:?}", …).to_lowercase()`, removing a dependency on the Debug
+    representation.
+  - The MCP write tools read the `events` flag through one `events_flag` helper,
+    so the "emit events unless opted out" default lives in a single place.
+
 ## [0.1.0-alpha.9] — 2026-05-25
 
 ### Security

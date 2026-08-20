@@ -6,6 +6,8 @@
 
 /// JWT claims module + builder.
 pub mod claims;
+/// Email normalization for auth comparisons.
+pub mod email;
 /// Error types for auth operations.
 pub mod errors;
 /// Newtype wrapper for Argon2id password hashes.
@@ -20,6 +22,7 @@ pub mod token;
 pub mod user;
 
 pub use claims::{Claims, ClaimsBuilder, TokenUse};
+pub use email::normalize_email;
 pub use errors::ResetTokenError;
 pub use hashed_password::HashedPassword;
 pub use jwt_secret::JwtSecret;

@@ -31,6 +31,7 @@ use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, 
 use serde::Deserialize;
 
 use crate::{
+    admin::custom_pages::is_valid_slug,
     core::HookRef,
     hooks::{lifecycle::InitPhase, lua_api::parse::deny_unknown_keys},
     typegen::lua::{LuaAnnotation, LuaFnSpec, LuaParam, LuaReturn, lua_fn, lua_table},
@@ -184,14 +185,6 @@ pub(super) fn register_pages(lua: &Lua) -> Result<()> {
     lua.set_named_registry_value(PAGES_KEY, lua.create_table()?)?;
     register_crap_pages(lua, ())?;
     Ok(())
-}
-
-/// Mirrors `admin::custom_pages::is_valid_slug` so we can validate
-/// slugs without crossing the admin/hooks module boundary.
-fn is_valid_slug(s: &str) -> bool {
-    !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 #[cfg(test)]

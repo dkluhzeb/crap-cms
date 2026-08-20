@@ -8,7 +8,7 @@ use crate::{
     db::LocaleContext,
     mcp::tools::{
         ToolExecCtx,
-        collection::helpers::{doc_to_json, extract_data_from_args},
+        collection::helpers::{doc_to_json, events_flag, extract_data_from_args},
     },
     service::{ServiceContext, WriteInput, update_global_document},
 };
@@ -25,7 +25,7 @@ pub(in crate::mcp::tools) fn exec_update_global(
     let locale = args.get("locale").and_then(|v| v.as_str());
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
 
-    let events = args.get("events").and_then(Value::as_bool).unwrap_or(true);
+    let events = events_flag(args);
     // Globals support drafts (gated by `has_drafts()` in the service); without
     // reading `draft` here an MCP update of a draft-enabled global always
     // published (and a `draft` key fell into field data and was dropped).

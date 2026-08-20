@@ -11,6 +11,7 @@ use crate::{
     core::{
         CollectionDefinition, email,
         email::{EmailRenderer, PasswordResetEmailContext},
+        normalize_email,
     },
     db::DbPool,
     service::{ServiceContext, auth::generate_reset_token},
@@ -35,7 +36,7 @@ impl ContentService {
         // whitespace variants of one account share a bucket — `find_by_email` is
         // case-insensitive, so a raw-email key would let an attacker sidestep the
         // per-account reset-flood limit by rotating the spelling.
-        let email_key = req.email.trim().to_lowercase();
+        let email_key = normalize_email(&req.email);
 
         // Atomically record this attempt against both limiters and bail if
         // either is now over threshold — one operation per limiter, closing the

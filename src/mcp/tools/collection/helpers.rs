@@ -12,6 +12,13 @@ use crate::{
     db::query,
 };
 
+/// Read the `events` write-tool flag from tool args, defaulting to `true`
+/// (events are emitted unless the caller opts out). One source so every write
+/// tool — collection and global — shares the same default and can't drift.
+pub(in crate::mcp::tools) fn events_flag(args: &Value) -> bool {
+    args.get("events").and_then(Value::as_bool).unwrap_or(true)
+}
+
 /// Reserved top-level meta-keys for a single-document write tool — the keys
 /// [`extract_data_from_args`] must skip so they are not treated as unknown field
 /// data. One source so `create` / `update` / `validate` can't drift (validate

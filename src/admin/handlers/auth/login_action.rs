@@ -29,6 +29,7 @@ use crate::{
         auth::{ClaimsBuilder, TokenUse},
         collection::MfaMode,
         email::{self, EmailRenderer, MfaCodeEmailContext},
+        normalize_email,
     },
     db::{BoxedConnection, DbPool},
     hooks::HookRunner,
@@ -373,7 +374,7 @@ pub async fn login_action(
     // credential lookup is case-insensitive (`LOWER(email) = ?`), so without
     // this an attacker rotates `Victim@x.com` / `VICTIM@X.COM` / … to sidestep
     // the per-account lockout. The clear-on-success below uses the same key.
-    let email_key = form.email.trim().to_lowercase();
+    let email_key = normalize_email(&form.email);
 
     let email_blocked = state.login_limiter.check_and_block(&email_key);
     let ip_blocked = state.ip_login_limiter.check_and_block(&ip);

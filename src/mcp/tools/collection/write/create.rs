@@ -8,7 +8,9 @@ use crate::{
     db::LocaleContext,
     mcp::tools::{
         ToolExecCtx,
-        collection::helpers::{doc_to_json, extract_data_from_args, reserved_data_keys},
+        collection::helpers::{
+            doc_to_json, events_flag, extract_data_from_args, reserved_data_keys,
+        },
     },
     service::{ServiceContext, WriteInput, create_document},
 };
@@ -43,7 +45,7 @@ pub(in crate::mcp::tools) fn exec_create(
     let locale = args.get("locale").and_then(|v| v.as_str());
     let locale_ctx = LocaleContext::from_locale_string(locale, &ctx.config.locale)?;
     let draft = args.get("draft").and_then(Value::as_bool).unwrap_or(false);
-    let events = args.get("events").and_then(Value::as_bool).unwrap_or(true);
+    let events = events_flag(args);
 
     let data = extract_data_from_args(args, &reserved_data_keys(def, false), &def.fields)?;
 

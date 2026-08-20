@@ -20,6 +20,7 @@ use crate::{
     core::{
         CollectionDefinition, email,
         email::{EmailRenderer, PasswordResetEmailContext},
+        normalize_email,
     },
     db::DbPool,
     service::{ServiceContext, auth::generate_reset_token},
@@ -134,7 +135,7 @@ pub async fn forgot_password_action(
     // Normalize the per-email key (trim + lowercase) so casing variants of one
     // account can't each get a fresh flooding budget — the account lookup is
     // case-insensitive, so the limiter must be too.
-    let email_key = form.email.trim().to_lowercase();
+    let email_key = normalize_email(&form.email);
 
     let email_blocked = state.forgot_password_limiter.check_and_block(&email_key);
     let ip_blocked = state.ip_forgot_password_limiter.check_and_block(&ip);

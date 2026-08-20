@@ -280,11 +280,10 @@ pub(super) fn build_filter_fields(def: &CollectionDefinition) -> Vec<Value> {
         if !is_column_eligible(&f.field_type) {
             continue;
         }
-        let ft = format!("{:?}", f.field_type).to_lowercase();
         let mut field_info = json!({
             "key": f.name,
             "label": field_label(f),
-            "field_type": ft,
+            "field_type": f.field_type.as_str(),
         });
 
         if !f.options.is_empty() {

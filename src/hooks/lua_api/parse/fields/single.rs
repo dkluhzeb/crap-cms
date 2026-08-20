@@ -19,7 +19,7 @@ use mlua::{Lua, Table, Value};
 
 use crate::{
     core::{
-        FieldAccess, FieldAdmin, FieldDefinition, FieldHooks, FieldType, JoinConfig,
+        AUTO_COLUMNS, FieldAccess, FieldAdmin, FieldDefinition, FieldHooks, FieldType, JoinConfig,
         McpFieldConfig, RequiredLocales,
     },
     db::query::{
@@ -37,14 +37,6 @@ use super::super::helpers::{
 use super::super::relationship::parse_field_relationship;
 use super::constraints::{parse_constraints, parse_date_config, parse_default_value};
 use super::top::parse_fields;
-
-/// Field names that collide with automatically generated columns which are
-/// *not* `_`-prefixed: the main-table primary key and timestamps, and the
-/// `parent_id` foreign key on array/blocks join tables. (`_`-prefixed system
-/// columns — `_status`, `_ref_count`, `_deleted_at`, `_order`, `_locale`,
-/// `_block_type`, `_password_hash`, `_mfa_code`, … — are covered by the
-/// leading-underscore rule below.)
-const RESERVED_FIELD_NAMES: &[&str] = &["id", "parent_id", "created_at", "updated_at"];
 
 /// Keys accepted on every field table regardless of type. Type-specific keys
 /// are appended by [`type_specific_field_keys`]. Unknown keys are rejected
@@ -141,7 +133,10 @@ fn parse_field_name(field_tbl: &Table) -> Result<String> {
         );
     }
 
-    if RESERVED_FIELD_NAMES.contains(&name.as_str()) {
+    // The non-`_`-prefixed auto columns: the main-table primary key, the
+    // timestamps, and the `parent_id` FK on array/blocks join tables. Shared
+    // with `is_system_column` via `core::AUTO_COLUMNS` so the two can't drift.
+    if AUTO_COLUMNS.contains(&name.as_str()) {
         bail!(
             "Field name '{name}' is reserved — it collides with an automatically generated column (id, parent_id, created_at, updated_at)"
         );

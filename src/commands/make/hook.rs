@@ -327,7 +327,7 @@ pub(super) fn load_field_infos_from_registry(
             })
             .map(|f| ConditionFieldInfo {
                 name: f.name.clone(),
-                field_type: format!("{:?}", f.field_type).to_lowercase(),
+                field_type: f.field_type.as_str().to_string(),
                 select_options: f.options.iter().map(|o| o.value.clone()).collect(),
             })
             .collect(),

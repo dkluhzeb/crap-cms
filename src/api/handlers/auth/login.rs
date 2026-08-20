@@ -13,7 +13,10 @@ use crate::{
         content,
         handlers::{ContentService, proto::document_to_proto},
     },
-    core::{CollectionDefinition, Document, SharedPasswordProvider, Slug, auth::ClaimsBuilder},
+    core::{
+        CollectionDefinition, Document, SharedPasswordProvider, Slug, auth::ClaimsBuilder,
+        normalize_email,
+    },
     db::DbPool,
     hooks::{HookRunner, lifecycle::AuthStrategyInput},
     service::{self, ServiceContext, ServiceError, auth::authenticate_local},
@@ -133,7 +136,7 @@ impl ContentService {
         // the raw address would let an attacker rotate casing/whitespace to get a
         // fresh lockout bucket per spelling of one account. Mirrors the admin
         // login twin (`login_action.rs`).
-        let email_key = req.email.trim().to_lowercase();
+        let email_key = normalize_email(&req.email);
 
         // Atomically record this attempt against both limiters and reject if
         // either is now over threshold — one operation per limiter, closing the

@@ -64,12 +64,12 @@ pub mod validate;
 pub mod walk;
 
 // Leaf-module types: flat re-export.
-pub use auth::{AuthUser, Claims, HashedPassword, JwtSecret, ResetTokenError};
+pub use auth::{AuthUser, Claims, HashedPassword, JwtSecret, ResetTokenError, normalize_email};
 pub use collection::{
     Access, CollectionDefinition, GlobalDefinition, Hooks, IndexDefinition, Labels, LiveMode,
     LiveSetting, VersionsConfig,
 };
-pub use column::is_system_column;
+pub use column::{AUTO_COLUMNS, is_system_column};
 pub use condition::{ConditionExpr, ConditionOp, ConditionRow};
 pub use document::Document;
 pub use document_fields::DocumentFields;
