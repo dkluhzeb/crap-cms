@@ -97,7 +97,7 @@ fn collections_delete(
     let mut def = resolve_collection(reg, &collection)?;
 
     if opts.force_hard_delete && def.soft_delete {
-        def.soft_delete = false;
+        def.make_hard_delete();
     }
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, opts.hooks, &collection, "delete");

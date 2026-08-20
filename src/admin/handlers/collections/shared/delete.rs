@@ -99,7 +99,7 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
     let cache = state.cache.clone();
 
     if force_hard_delete {
-        def_clone.soft_delete = false;
+        def_clone.make_hard_delete();
     }
 
     let input = DeleteBlockingInput {

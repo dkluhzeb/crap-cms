@@ -8,6 +8,7 @@ use serde_json::{Map, Value};
 use crate::{
     admin::context::field::FieldContext,
     core::{FieldDefinition, FieldType, HookRef},
+    db::query::helpers::{lang_column, tz_column},
     hooks::{ConditionContext, HookRunner, lifecycle::DisplayConditionResult},
 };
 
@@ -108,7 +109,7 @@ pub fn inject_timezone_values_from_row(
             && fd.timezone
             && let FieldContext::Date(df) = fc
         {
-            let tz_key = format!("{}_tz", fd.name);
+            let tz_key = tz_column(&fd.name);
             if let Some(tz_val) = row_obj.get(&tz_key).and_then(|v| v.as_str()) {
                 df.timezone_value = Some(tz_val.to_string());
             }
@@ -143,7 +144,7 @@ pub fn inject_lang_values_from_row(
 
         cf.languages = Some(fd.admin.languages.clone());
 
-        let lang_key = format!("{}_lang", fd.name);
+        let lang_key = lang_column(&fd.name);
         if let Some(lang_val) = row_obj
             .get(&lang_key)
             .and_then(|v| v.as_str())

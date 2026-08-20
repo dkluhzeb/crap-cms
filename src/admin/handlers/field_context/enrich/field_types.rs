@@ -29,7 +29,7 @@ use crate::{
         },
     },
     core::{BlockDefinition, FieldDefinition, FieldTab, FieldType, timezone::TIMEZONE_OPTIONS},
-    db::query::helpers::utc_to_local,
+    db::query::helpers::{tz_column, utc_to_local},
 };
 
 // ── build_enriched_sub_field_context helpers ─────────────────────────
@@ -623,14 +623,14 @@ fn build_group_child_leaf(
     // Date sub-fields with stored timezone need their _tz companion
     // for `single_date`.
     if nested_sf.field_type == FieldType::Date && nested_sf.timezone {
-        let tz_key = format!("{}_tz", nested_sf.name);
+        let tz_key = tz_column(&nested_sf.name);
         if let Some(tz_val) = group_obj
             .and_then(|v| v.as_object())
             .and_then(|m| m.get(&tz_key))
             .and_then(|v| v.as_str())
             && !tz_val.is_empty()
         {
-            values.insert(format!("{nested_name}_tz"), tz_val.to_string());
+            values.insert(tz_column(nested_name), tz_val.to_string());
         }
     }
 

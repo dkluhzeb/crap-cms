@@ -179,19 +179,12 @@ pub(super) async fn delete_upload(
             json_ok(StatusCode::OK, &SuccessBody { success: true })
         }
         Ok(Err(e)) => {
-            let msg = e.to_string();
-            let status = classify_delete_error(&msg);
+            let (status, client_msg) = classify_delete_error(&e);
 
             // Log full detail internally; the client only learns the
             // status code and a generic phrase. Keeps internal DB errors,
             // stack traces, and backend identifiers off the wire.
-            error!("Upload delete failed: {}", msg);
-
-            let client_msg = match status {
-                StatusCode::NOT_FOUND => "Upload not found",
-                StatusCode::CONFLICT => "Upload is still referenced",
-                _ => "Delete failed",
-            };
+            error!("Upload delete failed: {}", e);
 
             json_error(status, client_msg)
         }

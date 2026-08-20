@@ -126,7 +126,7 @@ impl ContentService {
         let run_hooks = req.hooks.unwrap_or(true);
 
         if req.force_hard_delete && def.soft_delete {
-            def.soft_delete = false;
+            def.make_hard_delete();
         }
 
         let input = DeleteManyBlockingInput {

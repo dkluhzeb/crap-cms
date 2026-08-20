@@ -32,20 +32,28 @@ pub(in crate::mcp::tools) fn exec_read_global(
 
     let input = GetGlobalInput::new(locale_ctx.as_ref(), None).include_drafts(draft);
 
-    match get_global_document(&svc_ctx, &input).map_err(ServiceError::into_anyhow) {
+    match get_global_document(&svc_ctx, &input) {
         Ok(d) => Ok(to_string_pretty(&doc_to_json(&d))?),
-        Err(e) => {
-            // The global row may not exist yet (table missing or default row not inserted).
-            let is_missing = e.chain().any(|cause| {
-                let msg = cause.to_string();
-                msg.contains("no such table") || msg.starts_with("Failed to get global")
-            });
 
-            if is_missing {
-                Ok(to_string_pretty(&json!({}))?)
-            } else {
-                Err(e).context(format!("Failed to read global '{slug}'"))
-            }
+        // The global may never have been initialized (backing table missing or
+        // the `default` row not inserted yet) — surface that as an empty object
+        // rather than an error. Only an internal/backend error can carry that
+        // signal; typed access/validation errors must still propagate. The
+        // string probe is scoped here because "table does not exist" has no
+        // typed variant — it is inherently a backend-specific message.
+        Err(ServiceError::Internal(e)) if is_uninitialized_global(&e) => {
+            Ok(to_string_pretty(&json!({}))?)
         }
+
+        Err(e) => Err(e.into_anyhow()).context(format!("Failed to read global '{slug}'")),
     }
+}
+
+/// Whether an internal error means the global has not been initialized yet:
+/// its backing table is missing, or the `default` row has never been inserted.
+fn is_uninitialized_global(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        let msg = cause.to_string();
+        msg.contains("no such table") || msg.starts_with("Failed to get global")
+    })
 }

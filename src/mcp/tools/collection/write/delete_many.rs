@@ -51,7 +51,7 @@ pub(in crate::mcp::tools) fn exec_delete_many(
         .unwrap_or(false);
 
     if force_hard_delete && def.soft_delete {
-        def.soft_delete = false;
+        def.make_hard_delete();
     }
 
     let events = args

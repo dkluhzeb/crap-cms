@@ -1266,6 +1266,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   column.** Both checks now use one `is_system_column` predicate instead of two
   disagreeing hardcoded subsets.
 
+- **Upload delete maps HTTP status from the typed error, not a `Display` string
+  match.** The upload delete endpoint re-derived its status code by substring
+  matching the error message, so an access-denied delete returned `500` (no "not
+  found"/"referenced" phrase) and a transient DB error also collapsed to `500`.
+  It now maps from the `ServiceError` variant — `AccessDenied → 403`,
+  `Transient → 503`, `NotFound → 404`, `Referenced → 409` — mirroring the gRPC
+  `ServiceError → Status` chokepoint.
+
+- **The MCP `read_global` tool classifies "uninitialized global" from the typed
+  error.** It previously flattened the service error to `anyhow` and string-matched
+  the whole chain to decide whether to return `{}`. It now matches the
+  `ServiceError::Internal` variant and scopes the (inherently backend-specific)
+  "table does not exist" probe to that variant, so typed access/validation errors
+  always propagate rather than risk being swallowed into an empty object.
+
+- **Hard-delete definition handling is centralized.** The six force-hard-delete /
+  empty-trash paths each cloned the collection definition and flipped
+  `soft_delete = false` inline; they now call one `CollectionDefinition::make_hard_delete`,
+  so the meaning of "hard delete" lives in a single place.
+
+- **Timezone/language companion column names come from one source of truth.** The
+  `_tz` / `_lang` suffixes were reserved (field-name validation) with hardcoded
+  literals while column generation used `tz_column` / `lang_column`, and several
+  read/enrich sites hand-rolled `format!("{}_tz", …)`. All now route through the
+  `TZ_SUFFIX` / `LANG_SUFFIX` constants and the shared column-name helpers, so the
+  reserved suffix and the generated column can never drift apart.
+
 - **`crap.collections.list_versions` no longer accepts an unbounded negative
   limit.** The Lua version-listing surface passed its `limit` straight to the
   query layer, so `limit = -1` bound `LIMIT -1` (unbounded on SQLite) — the gRPC

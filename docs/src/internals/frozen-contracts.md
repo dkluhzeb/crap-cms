@@ -58,6 +58,15 @@ stored data, or clients.
   coercions (checkbox accepts `1/true/yes/on`; a non-numeric number filter falls
   back to text) are a **deliberate, permanent** leniency.
 - **Cursor token format** (base64url JSON) — kept decodable for in-flight URLs.
+- **Timestamp formats are deliberately per-concern and must not be "unified".**
+  Persisted document date values normalize to millisecond ISO 8601 UTC
+  (`YYYY-MM-DDTHH:MM:SS.000Z`, via `utc_now` / `normalize_date_value`). The
+  event-stream payload `timestamp`, the Lua `now()` helper, and the export /
+  backup / scaffold manifest timestamps are RFC 3339 (`to_rfc3339`), an outward
+  contract for their consumers. The scheduler's cron-window dedup keys
+  (`_crap_cron_fired`) are full-precision RFC 3339 compared only against each
+  other. These serve distinct consumers; forcing one format would either break a
+  wire contract or lose scheduler precision.
 
 ## Generated client types (`typegen client` / `typegen proto`)
 
@@ -205,6 +214,19 @@ changing a representation is a breaking change to every consumer.
   restore returns 403 on denial (not a silent redirect); back-references and
   evaluate-conditions return 404 (unknown), 403 (denied), or 500 (error) with
   their JSON body — never `200` with an error payload.
+- **Response status is mapped from the typed `ServiceError`, never re-derived by
+  matching the error's `Display` string.** The gRPC surface owns the canonical
+  `ServiceError → tonic::Status` mapping; the HTTP upload-delete surface mirrors
+  it with an explicit variant match. A backend-string probe survives only where a
+  condition has no typed variant (e.g. MCP `read_global` detecting an
+  uninitialized global's missing table), and there it is scoped to
+  `ServiceError::Internal` so typed errors always propagate.
+- **Invalid-locale policy is intentionally surface-dependent.** Machine APIs
+  (gRPC / MCP / Lua) propagate an unparseable `locale` as an error. The admin
+  *rendering* helper (`build_locale_template_data`) logs a warning and falls back
+  to no locale context, so a hand-edited `?locale=` query param degrades the edit
+  page to the default view rather than 500-ing it. The admin picker only ever
+  emits configured locales, so this fallback is reachable only off the happy path.
 
 ## Access model
 

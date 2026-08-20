@@ -40,7 +40,7 @@ pub(in crate::mcp::tools) fn exec_delete(
     // copy of the definition, mirroring the gRPC/Lua delete handlers.
     let mut def = def.clone();
     if force_hard_delete && def.soft_delete {
-        def.soft_delete = false;
+        def.make_hard_delete();
     }
 
     let events = args.get("events").and_then(Value::as_bool).unwrap_or(true);

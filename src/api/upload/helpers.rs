@@ -101,14 +101,28 @@ pub fn json_error(status: StatusCode, message: &str) -> Response {
     json_ok(status, &ErrorBody { error: message })
 }
 
-/// Classify a delete error message into the appropriate HTTP status code.
-pub fn classify_delete_error(msg: &str) -> StatusCode {
-    if msg.contains("not found") {
-        StatusCode::NOT_FOUND
-    } else if msg.contains("Cannot delete") || msg.contains("referenced by") {
-        StatusCode::CONFLICT
-    } else {
-        StatusCode::INTERNAL_SERVER_ERROR
+/// Map a delete-path [`ServiceError`] to its HTTP status and a client-safe
+/// message. The typed variant is authoritative — never re-derive the status by
+/// string-matching the error's `Display` (which silently misclassifies
+/// `AccessDenied` and `Transient` as `500`). Mirrors the gRPC
+/// `ServiceError -> tonic::Status` chokepoint for the HTTP upload surface.
+pub fn classify_delete_error(e: &ServiceError) -> (StatusCode, &'static str) {
+    match e {
+        ServiceError::NotFound(_) => (StatusCode::NOT_FOUND, "Upload not found"),
+        ServiceError::Referenced { .. } | ServiceError::LimitExceeded(_) => {
+            (StatusCode::CONFLICT, "Upload is still referenced")
+        }
+        ServiceError::AccessDenied(_) | ServiceError::AccountLocked => {
+            (StatusCode::FORBIDDEN, "Access denied")
+        }
+        ServiceError::Validation(_) | ServiceError::HookError(_) => {
+            (StatusCode::BAD_REQUEST, "Delete rejected")
+        }
+        ServiceError::Transient(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Service temporarily unavailable, please retry",
+        ),
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, "Delete failed"),
     }
 }
 
@@ -337,36 +351,41 @@ mod tests {
 
     #[test]
     fn delete_error_not_found() {
-        assert_eq!(
-            classify_delete_error("Document not found in collection"),
-            StatusCode::NOT_FOUND,
-        );
+        let (status, _) = classify_delete_error(&ServiceError::NotFound("gone".into()));
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     #[test]
     fn delete_error_referenced() {
-        assert_eq!(
-            classify_delete_error(
-                "Cannot delete: this document is referenced by 3 other document(s)"
-            ),
-            StatusCode::CONFLICT,
-        );
+        let (status, _) = classify_delete_error(&ServiceError::Referenced {
+            id: "abc".into(),
+            count: 3,
+        });
+        assert_eq!(status, StatusCode::CONFLICT);
     }
 
+    /// Regression: string-matching classified `AccessDenied` (no "not found" /
+    /// "referenced" phrase) as a 500. The typed mapping returns 403.
     #[test]
-    fn delete_error_referenced_by_keyword() {
-        assert_eq!(
-            classify_delete_error("Still referenced by other documents"),
-            StatusCode::CONFLICT,
-        );
+    fn delete_error_access_denied_is_forbidden() {
+        let (status, _) = classify_delete_error(&ServiceError::AccessDenied("nope".into()));
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    /// Regression: a transient DB error must surface as 503 (retryable), not a
+    /// generic 500 as the old `Display`-string match produced.
+    #[test]
+    fn delete_error_transient_is_unavailable() {
+        let (status, _) =
+            classify_delete_error(&ServiceError::Transient(anyhow::anyhow!("db locked")));
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[test]
     fn delete_error_generic() {
-        assert_eq!(
-            classify_delete_error("Database write failed"),
-            StatusCode::INTERNAL_SERVER_ERROR,
-        );
+        let (status, _) =
+            classify_delete_error(&ServiceError::Internal(anyhow::anyhow!("write failed")));
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     // ── service_error_to_response ──────────────────────────────────

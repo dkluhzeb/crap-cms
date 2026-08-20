@@ -210,7 +210,7 @@ fn collections_delete_many(
     // Mirrors the admin empty-trash path.
     let mut service_def = def.clone();
     if opts.force_hard_delete || opts.trash {
-        service_def.soft_delete = false;
+        service_def.make_hard_delete();
     }
 
     let invalidation_transport = hook_invalidation_transport(lua);

@@ -324,9 +324,18 @@ pub(crate) fn utc_now() -> String {
         .to_string()
 }
 
+/// Suffix of a Date field's timezone companion column. The single source of
+/// truth shared by column generation ([`tz_column`]) and field-name reservation
+/// (`parse::fields` rejects user fields ending in this) so the two can't drift.
+pub(crate) const TZ_SUFFIX: &str = "_tz";
+
+/// Suffix of a Code field's language companion column. Single source of truth
+/// shared by [`lang_column`] and field-name reservation — see [`TZ_SUFFIX`].
+pub(crate) const LANG_SUFFIX: &str = "_lang";
+
 /// Build a timezone companion column name: `"field_tz"`, `"seo__start_tz"`.
 pub(crate) fn tz_column(name: &str) -> String {
-    format!("{name}_tz")
+    format!("{name}{TZ_SUFFIX}")
 }
 
 /// Build a code-language companion column name: `"snippet_lang"`,
@@ -334,7 +343,7 @@ pub(crate) fn tz_column(name: &str) -> String {
 /// `admin.languages` allow-list — see `apply_code` in the field-context
 /// builder.
 pub(crate) fn lang_column(name: &str) -> String {
-    format!("{name}_lang")
+    format!("{name}{LANG_SUFFIX}")
 }
 
 /// Build a join table name: `"collection_field"`, `"posts_tags"`.

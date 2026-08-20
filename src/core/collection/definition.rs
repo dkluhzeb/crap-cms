@@ -188,6 +188,17 @@ impl CollectionDefinition {
         self.soft_delete
     }
 
+    /// Turn this definition into a hard-delete variant: subsequent deletes
+    /// through the service layer bypass the trash and remove rows permanently.
+    ///
+    /// Every force-hard-delete and empty-trash path clones the definition and
+    /// flips this one flag; centralizing it here keeps the meaning of
+    /// "hard delete" in a single place, so future changes to what a hard delete
+    /// entails can't drift across the six delete surfaces.
+    pub fn make_hard_delete(&mut self) {
+        self.soft_delete = false;
+    }
+
     /// Lifecycle views this collection exposes to *everyone* (including
     /// unauthenticated callers) when `default_deny` is false: a feature is
     /// enabled but neither the view's own access key nor the `update` fallback

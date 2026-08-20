@@ -26,7 +26,7 @@ use crate::{
         },
     },
     core::{FieldDefinition, FieldType, timezone::TIMEZONE_OPTIONS},
-    db::query::helpers::utc_to_local,
+    db::query::helpers::{lang_column, tz_column, utc_to_local},
 };
 
 /// Resolve the full form name for a field, accounting for layout transparency.
@@ -254,7 +254,7 @@ fn construct_code(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
     let default_lang = fc.field.admin.language.as_deref().unwrap_or("json");
     let chosen = fc
         .values
-        .get(&format!("{}_lang", fc.full_name))
+        .get(&lang_column(fc.full_name))
         .map(String::as_str)
         .filter(|s| !s.is_empty())
         .unwrap_or(default_lang);
@@ -318,7 +318,7 @@ fn construct_date(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
         .map_or("dayOnly", crate::core::PickerAppearance::as_str)
         .to_string();
 
-    let tz_key = format!("{}_tz", fc.full_name);
+    let tz_key = tz_column(fc.full_name);
     let tz_value = fc
         .values
         .get(&tz_key)

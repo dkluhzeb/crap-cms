@@ -77,7 +77,7 @@ fn create_array_table(
         ));
 
         if sub_field.field_type == FieldType::Date && sub_field.timezone {
-            columns.push(format!("{}_tz TEXT", sub_field.name));
+            columns.push(format!("{} TEXT", tz_column(&sub_field.name)));
         }
     }
 

@@ -99,7 +99,7 @@ impl ContentService {
         let will_soft_delete = def.soft_delete && !req.force_hard_delete;
 
         if req.force_hard_delete && def.soft_delete {
-            def.soft_delete = false;
+            def.make_hard_delete();
         }
 
         let input = DeleteBlockingInput {

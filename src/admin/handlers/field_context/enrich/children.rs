@@ -37,6 +37,7 @@ use crate::{
         },
     },
     core::field::{FieldDefinition, FieldType},
+    db::query::helpers::tz_column,
 };
 
 /// Inheritance state passed down through recursion in this module.
@@ -252,7 +253,7 @@ fn apply_date(
         return;
     }
 
-    let tz_key = format!("{}_tz", child.name);
+    let tz_key = tz_column(&child.name);
     let tz_val = data_obj
         .and_then(|m| m.get(&tz_key))
         .and_then(|v| v.as_str())

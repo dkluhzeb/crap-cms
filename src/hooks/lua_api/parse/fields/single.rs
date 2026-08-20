@@ -22,7 +22,10 @@ use crate::{
         FieldAccess, FieldAdmin, FieldDefinition, FieldHooks, FieldType, JoinConfig,
         McpFieldConfig, RequiredLocales,
     },
-    db::query,
+    db::query::{
+        self,
+        helpers::{LANG_SUFFIX, TZ_SUFFIX},
+    },
 };
 
 use super::super::admin::parse_field_admin;
@@ -150,7 +153,7 @@ fn parse_field_name(field_tbl: &Table) -> Result<String> {
     // `start_date_tz` would collide with the companion of `start_date`.
     // Reserving the suffix pattern is the safe freeze direction — it can be
     // loosened later (additive) but never added post-freeze.
-    if name.ends_with("_tz") || name.ends_with("_lang") {
+    if name.ends_with(TZ_SUFFIX) || name.ends_with(LANG_SUFFIX) {
         bail!(
             "Field name '{name}' is reserved — the '_tz' and '_lang' suffixes are used for \
              timezone/language companion columns (e.g. a Date field's '{{field}}_tz')"

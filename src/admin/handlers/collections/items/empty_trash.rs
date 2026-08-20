@@ -55,7 +55,7 @@ fn empty_trash(input: EmptyTrashInput<'_>) -> Result<usize, ServiceError> {
     // with the flag cleared a `Constrained` delete rule still matches the (now
     // physically-trashed) rows. Keep both behaviors tied to this single flag.
     let mut hard_def = input.def.clone();
-    hard_def.soft_delete = false;
+    hard_def.make_hard_delete();
 
     let filters = trash_filters();
 

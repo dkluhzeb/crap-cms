@@ -9,7 +9,10 @@ use tracing::warn;
 use crate::{
     config::LocaleConfig,
     core::{Document, DocumentFields, FieldDefinition, FieldType, event::EventOperation},
-    db::{AccessResult, query, query::helpers::global_table},
+    db::{
+        AccessResult, query,
+        query::helpers::{global_table, tz_column},
+    },
     hooks::{AccessCheckInput, LuaCrudInfra, ValidationCtx},
     service::{
         RunnerWriteHooks, ServiceContext, ServiceError, helpers, hooks::WriteHooks,
@@ -71,8 +74,8 @@ fn collect_known_keys(fields: &[FieldDefinition], prefix: &str, out: &mut HashSe
                 out.insert(f.name.clone());
 
                 if f.field_type == FieldType::Date && f.timezone {
-                    out.insert(format!("{key}_tz"));
-                    out.insert(format!("{}_tz", f.name));
+                    out.insert(tz_column(&key));
+                    out.insert(tz_column(&f.name));
                 }
             }
         }
