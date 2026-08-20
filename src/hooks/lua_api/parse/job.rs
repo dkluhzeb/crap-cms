@@ -68,8 +68,12 @@ pub fn parse_job_definition(slug: &str, config: JobDefinitionConfig) -> Result<J
     // Validate the slug like collections and globals do — the job slug is a
     // stored value (`_crap_jobs.slug`), so this is a consistency guarantee
     // rather than an injection fix, but it keeps every registration surface
-    // uniform.
+    // uniform. The reserved-prefix reject is *inert* for jobs (a job slug never
+    // builds a `{op}_{slug}` MCP tool name, so `many_`/`by_id_` can't collide) —
+    // applied purely so every slug intake runs the identical validation pair,
+    // with no behavioral downside.
     query::validate_slug(slug)?;
+    query::reject_reserved_tool_prefix(slug)?;
 
     let handler = config
         .handler
@@ -245,5 +249,20 @@ mod tests {
         // A valid slug still parses.
         let cfg = from_lua_table(&lua, r#"return { handler = "jobs.x.run" }"#);
         assert!(parse_job_definition("my_job", cfg).is_ok());
+    }
+
+    /// Consistency: jobs run the same reserved-tool-prefix reject as collections
+    /// and globals. Inert for jobs (a job slug never builds an MCP tool name),
+    /// but every slug intake now validates identically.
+    #[test]
+    fn parse_job_definition_rejects_reserved_tool_prefix() {
+        let lua = Lua::new();
+        for bad in ["many_things", "by_id_lookup"] {
+            let cfg = from_lua_table(&lua, r#"return { handler = "jobs.x.run" }"#);
+            assert!(
+                parse_job_definition(bad, cfg).is_err(),
+                "slug '{bad}' should be rejected by reject_reserved_tool_prefix"
+            );
+        }
     }
 }

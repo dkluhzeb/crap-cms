@@ -18,10 +18,18 @@ pub(crate) use helpers::{document_to_json, parse_poly_ref};
 pub(crate) use single::populate_relationships_cached;
 pub(crate) use types::{PopulateCtx, locale_cache_key, populate_cache_key};
 
+/// The value a populate singleflight slot holds: a fetched raw doc (or a genuine
+/// not-found `None`), or a shared backend error. Storing the `Result` — with the
+/// error behind an `Arc` so the value stays `Clone` — lets EVERY concurrent waiter
+/// on the same in-flight fetch observe the same outcome (success *or* the error),
+/// not just the caller that happened to run the fetch. A cache-miss error is never
+/// persisted: the in-flight slot is dropped once the fetch returns, so the next
+/// request re-fetches (a transient error must not stick as a not-found).
+pub type CachedDoc = Result<Option<crate::core::Document>, std::sync::Arc<anyhow::Error>>;
+
 /// Shared process-wide singleflight for deduplicating concurrent populate
 /// cache misses across requests.
-pub type SharedPopulateSingleflight =
-    std::sync::Arc<singleflight::Singleflight<Option<crate::core::Document>>>;
+pub type SharedPopulateSingleflight = std::sync::Arc<singleflight::Singleflight<CachedDoc>>;
 
 /// Shared test helpers for populate tests — DB setup and collection definitions.
 #[cfg(all(test, feature = "sqlite"))]

@@ -5,7 +5,7 @@ use anyhow::Result;
 use crate::core::cache::CacheBackend;
 use crate::core::{CollectionDefinition, Document, HookRef, Registry};
 use crate::db::query::AccessResult;
-use crate::db::query::populate::Singleflight;
+use crate::db::query::populate::{CachedDoc, Singleflight};
 use crate::db::{DbConnection, LocaleContext, LocaleMode};
 
 /// Minimal access-check abstraction used by join-field population.
@@ -92,7 +92,7 @@ pub(crate) struct PopulateCtx<'a> {
     /// top-level entry point constructs this fresh per populate call; service
     /// layers may in future share a process-wide singleflight here to dedupe
     /// across concurrent requests.
-    pub singleflight: &'a Singleflight<Option<Document>>,
+    pub singleflight: &'a Singleflight<CachedDoc>,
     /// Target-collection `read` access check. When `Some`, every relationship
     /// target is gated by the target collection's `access.read` (honoring any
     /// row-level `Constrained` filter); when `None` (legacy/internal callers)

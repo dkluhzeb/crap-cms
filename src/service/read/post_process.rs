@@ -11,7 +11,7 @@ use crate::{
         cache::{CacheBackend, NoneCache},
         upload,
     },
-    db::{DbConnection, LocaleContext, SharedPopulateSingleflight, Singleflight, query},
+    db::{CachedDoc, DbConnection, LocaleContext, SharedPopulateSingleflight, Singleflight, query},
     hooks::lifecycle::AfterReadCtx,
     service::{
         ServiceContext, helpers, hooks::ReadHooksJoinGuard,
@@ -84,14 +84,13 @@ pub(crate) fn post_process_single(
         // Thread through the shared process-wide singleflight when the caller
         // provided one so concurrent populates across requests dedup cache
         // misses. Otherwise fall back to a fresh per-call singleflight.
-        let fallback_sf: Singleflight<Option<Document>>;
-        let singleflight: &Singleflight<Option<Document>> =
-            if let Some(arc) = effective_singleflight {
-                arc.as_ref()
-            } else {
-                fallback_sf = Singleflight::new();
-                &fallback_sf
-            };
+        let fallback_sf: Singleflight<CachedDoc>;
+        let singleflight: &Singleflight<CachedDoc> = if let Some(arc) = effective_singleflight {
+            arc.as_ref()
+        } else {
+            fallback_sf = Singleflight::new();
+            &fallback_sf
+        };
 
         let pop_result = if let Some(cache) = effective_cache {
             query::populate_relationships_cached_with_singleflight(
@@ -261,13 +260,12 @@ pub(crate) fn post_process_docs(
         let (effective_cache, effective_singleflight) = effective_populate_state(ctx, opts);
 
         let fallback_sf;
-        let singleflight: &Singleflight<Option<Document>> =
-            if let Some(arc) = effective_singleflight {
-                arc.as_ref()
-            } else {
-                fallback_sf = Singleflight::new();
-                &fallback_sf
-            };
+        let singleflight: &Singleflight<CachedDoc> = if let Some(arc) = effective_singleflight {
+            arc.as_ref()
+        } else {
+            fallback_sf = Singleflight::new();
+            &fallback_sf
+        };
 
         let pop_result = if let Some(cache) = effective_cache {
             query::populate_relationships_batch_cached_with_singleflight(

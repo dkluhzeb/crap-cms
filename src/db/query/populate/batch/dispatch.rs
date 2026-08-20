@@ -11,7 +11,7 @@ use crate::core::{
     upload,
 };
 use crate::db::query::populate::{
-    PopulateContext, PopulateCtx, PopulateOpts, Singleflight, document_to_json,
+    CachedDoc, PopulateContext, PopulateCtx, PopulateOpts, Singleflight, document_to_json,
 };
 
 /// The full triple needed to populate a single join field: the field
@@ -85,7 +85,7 @@ pub fn populate_relationships_batch_cached_with_singleflight(
     docs: &mut [Document],
     opts: &PopulateOpts<'_>,
     cache: &dyn CacheBackend,
-    singleflight: &Singleflight<Option<Document>>,
+    singleflight: &Singleflight<CachedDoc>,
 ) -> Result<()> {
     populate_relationships_batch_cached_inner(ctx, docs, opts, cache, singleflight)
 }
@@ -95,7 +95,7 @@ fn populate_relationships_batch_cached_inner(
     docs: &mut [Document],
     opts: &PopulateOpts<'_>,
     cache: &dyn CacheBackend,
-    singleflight: &Singleflight<Option<Document>>,
+    singleflight: &Singleflight<CachedDoc>,
 ) -> Result<()> {
     if opts.depth <= 0 || docs.is_empty() {
         return Ok(());
@@ -120,7 +120,7 @@ fn populate_flat_relationships(
     docs: &mut [Document],
     opts: &PopulateOpts<'_>,
     cache: &dyn CacheBackend,
-    singleflight: &Singleflight<Option<Document>>,
+    singleflight: &Singleflight<CachedDoc>,
     visited: &HashSet<(String, String)>,
 ) -> Result<()> {
     for field in flatten_array_sub_fields(&ctx.def.fields) {
@@ -204,7 +204,7 @@ fn populate_nested_containers(
     docs: &mut [Document],
     opts: &PopulateOpts<'_>,
     cache: &dyn CacheBackend,
-    singleflight: &Singleflight<Option<Document>>,
+    singleflight: &Singleflight<CachedDoc>,
     visited: &HashSet<(String, String)>,
 ) -> Result<()> {
     for doc in docs.iter_mut() {

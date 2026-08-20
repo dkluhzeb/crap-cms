@@ -1,6 +1,17 @@
 //! Per-field parsing: orchestrates the full Lua → `FieldDefinition` conversion
 //! for a single field table, plus the small helper parsers (name, sub-fields,
 //! access, hooks).
+//!
+//! NOTE ON SIZE: this file exceeds the ~1000-line soft cap, but the code itself
+//! is ~600 lines; the remainder is an extensive `#[cfg(test)]` suite. Those tests
+//! are integration tests of the single public entry point [`parse_single_field`]
+//! (each drives a full Lua field table through it), so they do not partition
+//! along any code-cohesion boundary. A split was deliberately declined: extracting
+//! sub-parsers would leave the integration tests behind, and partitioning the
+//! tests by feature would divorce them from the entry point they exercise — both
+//! *lower* cohesion. Keeping the parser and its tests together is the cleaner
+//! choice here (contrast `access::field`, which had genuinely separable
+//! walk/check/strip concerns and was split).
 
 use anyhow::{Result, anyhow, bail};
 use chrono::NaiveDate;

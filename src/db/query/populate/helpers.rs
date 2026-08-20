@@ -11,7 +11,7 @@ use crate::db::query::AccessResult;
 use crate::db::query::filter::memory::matches_constraints_typed;
 use crate::db::query::populate::JoinAccessCheck;
 use crate::db::query::populate::PopulateCtx;
-use crate::db::query::populate::Singleflight;
+use crate::db::query::populate::{CachedDoc, Singleflight};
 use crate::db::query::read::{find_by_id, find_by_ids};
 
 /// Fetch a single **raw** relationship target by id. The result is the
@@ -188,7 +188,7 @@ pub(super) fn cache_set_doc(cache: &dyn CacheBackend, key: &str, doc: &Document)
 /// not-found — a transient error must never render a live relationship as null.
 pub(super) fn cache_or_fetch_doc<F>(
     cache: &dyn CacheBackend,
-    singleflight: &Singleflight<Option<Document>>,
+    singleflight: &Singleflight<CachedDoc>,
     key: &str,
     fetch: F,
 ) -> Result<Option<Document>>
@@ -199,35 +199,29 @@ where
         return Ok(Some(doc));
     }
 
-    // The singleflight slot holds `Option<Document>` — a found doc or a genuine
-    // not-found. A fetch ERROR must PROPAGATE, never be cached as "not found":
-    // the old `.ok().flatten()` at the call site masked a backend error as a
-    // missing relationship, silently rendering a still-referenced target as
-    // null. Capture the error out-of-band and return it.
-    //
-    // Residual: a concurrent waiter that blocked on *this* in-flight fetch sees
-    // `Ok(None)` for the brief window rather than the error — the error still
-    // surfaces to the fetching caller and nothing is persisted as not-found.
-    let mut fetch_err: Option<anyhow::Error> = None;
-
-    let doc = singleflight.get_or_fetch(key, || match fetch() {
+    // The singleflight slot holds the whole `Result` (error behind an `Arc` so
+    // it stays `Clone`), so a fetch ERROR is shared with EVERY concurrent waiter
+    // on this in-flight fetch, not just the caller that ran it — and it is never
+    // cached as a not-found. The old `.ok().flatten()` masked a backend error as
+    // a missing relationship, silently rendering a still-referenced target null;
+    // an earlier out-of-band capture fixed the fetching caller but still let a
+    // blocked waiter see `Ok(None)`. Only a successful `Some` is written to the
+    // persistent cache; the in-flight slot (miss or error) is dropped afterward,
+    // so a transient error re-fetches on the next request.
+    let shared: CachedDoc = singleflight.get_or_fetch(key, || match fetch() {
         Ok(found) => {
             if let Some(ref d) = found {
                 let _ = cache_set_doc(cache, key, d);
             }
-            found
+            Ok(found)
         }
-        Err(e) => {
-            fetch_err = Some(e);
-            None
-        }
+        Err(e) => Err(std::sync::Arc::new(e)),
     });
 
-    if let Some(e) = fetch_err {
-        return Err(e);
-    }
-
-    Ok(doc)
+    // Reconstruct an owned error from the shared `Arc` (preserving the message
+    // chain via `{:#}`); `ServiceError::classify` matches on the message, so the
+    // transient/unique classification is retained for callers.
+    shared.map_err(|arc| anyhow::anyhow!("{arc:#}"))
 }
 
 /// Parse a polymorphic reference "collection/id" into `(collection, id)`.
@@ -288,7 +282,7 @@ mod tests {
     #[test]
     fn cache_or_fetch_doc_hit_skips_fetch() {
         let cache = MemoryCache::new(10_000);
-        let sf: Singleflight<Option<Document>> = Singleflight::new();
+        let sf: Singleflight<CachedDoc> = Singleflight::new();
 
         // Pre-populate cache.
         let mut cached = Document::new("d1".to_string());
@@ -309,7 +303,7 @@ mod tests {
     #[test]
     fn cache_or_fetch_doc_miss_runs_fetch_and_caches() {
         let cache = MemoryCache::new(10_000);
-        let sf: Singleflight<Option<Document>> = Singleflight::new();
+        let sf: Singleflight<CachedDoc> = Singleflight::new();
         let counter = AtomicUsize::new(0);
 
         let result = cache_or_fetch_doc(&cache, &sf, "k", || {
@@ -337,7 +331,7 @@ mod tests {
     #[test]
     fn cache_or_fetch_doc_miss_none_dedupes_not_found() {
         let cache = MemoryCache::new(10_000);
-        let sf: Singleflight<Option<Document>> = Singleflight::new();
+        let sf: Singleflight<CachedDoc> = Singleflight::new();
         let counter = AtomicUsize::new(0);
 
         let r = cache_or_fetch_doc(&cache, &sf, "missing", || {
@@ -356,7 +350,7 @@ mod tests {
     #[test]
     fn cache_or_fetch_doc_propagates_fetch_error() {
         let cache = MemoryCache::new(10_000);
-        let sf: Singleflight<Option<Document>> = Singleflight::new();
+        let sf: Singleflight<CachedDoc> = Singleflight::new();
 
         let r = cache_or_fetch_doc(&cache, &sf, "boom", || {
             Err(anyhow::anyhow!("backend exploded"))
@@ -374,7 +368,7 @@ mod tests {
     #[test]
     fn populate_deduplicates_concurrent_cache_miss() {
         let cache: Arc<MemoryCache> = Arc::new(MemoryCache::new(10_000));
-        let sf: Arc<Singleflight<Option<Document>>> = Arc::new(Singleflight::new());
+        let sf: Arc<Singleflight<CachedDoc>> = Arc::new(Singleflight::new());
 
         let counter = Arc::new(AtomicUsize::new(0));
         let n = 16;

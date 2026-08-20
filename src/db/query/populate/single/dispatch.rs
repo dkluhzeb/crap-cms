@@ -11,7 +11,8 @@ use crate::db::query::populate::helpers::{
     TargetViews, cache_or_fetch_doc, fetch_target, target_row_visible,
 };
 use crate::db::query::populate::{
-    PopulateContext, PopulateCtx, PopulateOpts, Singleflight, locale_cache_key, populate_cache_key,
+    CachedDoc, PopulateContext, PopulateCtx, PopulateOpts, Singleflight, locale_cache_key,
+    populate_cache_key,
 };
 
 use super::{join, nested, nonpoly, poly};
@@ -142,7 +143,7 @@ pub fn populate_relationships_cached_with_singleflight(
     visited: &mut HashSet<(String, String)>,
     opts: &PopulateOpts<'_>,
     cache: &dyn CacheBackend,
-    singleflight: &Singleflight<Option<Document>>,
+    singleflight: &Singleflight<CachedDoc>,
 ) -> Result<()> {
     populate_relationships_cached_inner(ctx, doc, visited, opts, cache, singleflight)
 }
@@ -155,7 +156,7 @@ pub(crate) fn populate_relationships_cached_inner(
     visited: &mut HashSet<(String, String)>,
     opts: &PopulateOpts<'_>,
     cache: &dyn CacheBackend,
-    singleflight: &Singleflight<Option<Document>>,
+    singleflight: &Singleflight<CachedDoc>,
 ) -> Result<()> {
     if opts.depth <= 0 {
         return Ok(());
@@ -200,7 +201,7 @@ fn populate_flat_relationships(
     doc: &mut Document,
     opts: &PopulateOpts<'_>,
     cache: &dyn CacheBackend,
-    singleflight: &Singleflight<Option<Document>>,
+    singleflight: &Singleflight<CachedDoc>,
     visited: &mut HashSet<(String, String)>,
 ) -> Result<()> {
     // Anchors a reverse-join nested under a flattened array sub-field; unused by
