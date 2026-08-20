@@ -300,6 +300,27 @@ Each only bites a definition that was already relying on ignored input:
   rejected at migration — shorten very long collection/group/field/locale
   name combinations. The error names the offending identifier.
 
+### 6d. Stricter data validation (values that used to slip through now error)
+
+The validation checks that ran only at the top level now also run where
+the same field is nested in an array/blocks row, and the numeric checks
+now cover `has_many` lists:
+
+- **`date` `min_date` / `max_date` are enforced inside array/blocks rows.**
+  A `date` sub-field with bounds now rejects an out-of-range value in a
+  nested row, exactly as at the top level (previously only its *format*
+  was checked there).
+- **`number` `has_many` lists reject invalid elements.** A `NaN` / `Infinity`
+  element, a fractional element on an `integer` field, or a non-numeric
+  element (which was silently dropped on write) is now a validation error —
+  matching the single-value `number` rule (6b).
+- **Not an error, a relaxation:** a *draft* save no longer enforces
+  `min_rows` / `max_rows` on a scalar `has_many` field, matching how draft
+  saves already skipped row counts for array/blocks/relationship fields.
+
+If a client submitted any of the now-rejected shapes, fix the value (or
+save as a draft where the count rule is relaxed).
+
 ### 7. Runtime option tables also reject unknown keys
 
 Beyond the CRUD options in item 1, the remaining Lua option tables are
@@ -751,6 +772,12 @@ What changed:
   returns a retryable 503 instead of a cacheable 404 for a file that
   exists. Custom storage `get` handlers should return `nil` for a
   missing key and raise only on real failures.
+- **Upload create/update/delete return the right HTTP status for conflicts
+  and transient failures.** A unique-constraint violation now returns `409`
+  (was `500`) and a transient DB error `503` (was `500`, a retryable failure
+  reported as permanent), matching the JSON REST and gRPC surfaces. A client
+  that specifically special-cased `500` on these endpoints should treat
+  `409`/`503` as the conflict/retry signals instead.
 - **`crap-cms serve --only grpc`** is now accepted (matching the
   `[server] grpc_*` config keys). `--only api` still works as an alias,
   so no script changes are required.
