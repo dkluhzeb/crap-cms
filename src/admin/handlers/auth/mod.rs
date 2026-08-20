@@ -15,7 +15,8 @@ pub mod login_page;
 /// Handler for logging out and clearing session cookies.
 pub mod logout_action;
 /// Handlers for MFA code entry and verification.
-pub mod mfa;
+pub mod mfa_action;
+pub mod mfa_page;
 /// Handler for the reset password form submission.
 pub mod reset_password_action;
 /// Handler for the reset password page.
@@ -38,7 +39,8 @@ pub use forgot_password_page::forgot_password_page;
 pub use login_action::login_action;
 pub use login_page::login_page;
 pub use logout_action::logout_action;
-pub use mfa::{mfa_page, verify_mfa_action};
+pub use mfa_action::verify_mfa_action;
+pub use mfa_page::mfa_page;
 pub use reset_password_action::reset_password_action;
 pub use reset_password_page::reset_password_page;
 pub use save_locale::save_locale;
@@ -50,9 +52,9 @@ pub use forms::{
     ResetPasswordQuery, VerifyEmailQuery,
 };
 pub(super) use helpers::{
-    all_disable_local, client_ip, create_session_token, extract_user_email, get_auth_collections,
-    headers_to_map, login_error, render_forgot_success, scoped_limiter, session_redirect,
-    show_forgot_password, sole_auth_collection,
+    all_disable_local, client_ip, create_session_token, extract_mfa_token, extract_user_email,
+    get_auth_collections, headers_to_map, login_error, render_forgot_success, render_mfa_form,
+    scoped_limiter, session_redirect, show_forgot_password, sole_auth_collection,
 };
 pub(in crate::admin) use session::{
     CSRF_COOKIE, EDITOR_LOCALE_COOKIE, MFA_PENDING_COOKIE, SESSION_COOKIE, append_cookies,

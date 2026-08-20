@@ -7,6 +7,7 @@ use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, 
 use serde::Deserialize;
 
 use crate::{
+    config::PasswordPolicy,
     core::{CollectionDefinition, Registry},
     hooks::{
         lifecycle::converters::document_to_lua_table,
@@ -126,6 +127,7 @@ fn collections_create_many(
         .override_access(opts.override_access)
         .emit_events(opts.events)
         .lua_infra(lua_infra.as_ref())
+        .password_policy(Some(&state.password_policy))
         .build();
 
     let create_opts = CreateManyOptions {
@@ -155,6 +157,7 @@ fn collections_create_many(
 pub(crate) struct CollectionsCreateManyState {
     pub(crate) registry: Arc<Registry>,
     pub(crate) bulk_max_documents: i64,
+    pub(crate) password_policy: PasswordPolicy,
 }
 
 lua_table! {
@@ -172,12 +175,14 @@ pub(crate) fn register_create_many(
     _table: &Table,
     registry: Arc<Registry>,
     bulk_max_documents: i64,
+    password_policy: &PasswordPolicy,
 ) -> Result<()> {
     register_crap_collections_create_many(
         lua,
         CollectionsCreateManyState {
             registry,
             bulk_max_documents,
+            password_policy: password_policy.clone(),
         },
     )?;
     Ok(())

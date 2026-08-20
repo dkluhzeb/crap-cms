@@ -64,6 +64,12 @@ crap.fields.email({
 
 If you define your own `email` field, it's used as-is.
 
+The email address is matched **case-insensitively** everywhere it identifies an
+account: login lookup, the per-account login / forgot-password rate-limit keys,
+and the uniqueness check all compare `LOWER(email)`. So `Victim@x.com` and
+`victim@x.com` are one account — you cannot register both, and either casing logs
+into the same user.
+
 ## Password Storage
 
 Auth collections get a hidden `_password_hash` TEXT column during schema migration. This column:
@@ -76,7 +82,15 @@ Auth collections get a hidden `_password_hash` TEXT column during schema migrati
 
 ## Password Policy
 
-All password-setting paths (create, update, reset, CLI) enforce the password policy configured in `[auth.password_policy]` in `crap.toml`. Defaults: min 8 Unicode characters, max 128 bytes. `min_length` counts Unicode codepoints (so multi-byte characters count as 1). `max_length` counts bytes (to bound Argon2 hashing cost). See [crap.toml reference](../configuration/crap-toml.md#authpassword_policy) for all options.
+Every password-setting path enforces the password policy configured in
+`[auth.password_policy]` in `crap.toml` — single **and** bulk `create` / `update`
+on every surface (Lua, gRPC, MCP, admin), plus password reset and the CLI.
+Enforcement lives at the service write chokepoint, so no surface can bypass it: a
+policy violation is reported as a `password` field validation error. Defaults: min
+8 Unicode characters, max 128 bytes. `min_length` counts Unicode codepoints (so
+multi-byte characters count as 1). `max_length` counts bytes (to bound Argon2
+hashing cost). See [crap.toml reference](../configuration/crap-toml.md#authpassword_policy)
+for all options.
 
 ## Password in Create/Update
 

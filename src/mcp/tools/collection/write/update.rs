@@ -64,6 +64,7 @@ pub(in crate::mcp::tools) fn exec_update(
         .invalidation_transport(ctx.invalidation_transport.clone())
         .emit_events(events)
         .cache(ctx.cache.clone())
+        .password_policy(Some(&ctx.config.auth.password_policy))
         .build();
 
     let (doc, _ctx) = update_document(

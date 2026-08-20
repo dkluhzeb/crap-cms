@@ -610,7 +610,8 @@ fn resolve_job_def(
             "job definition not found",
             false,
             job_run.attempt,
-        );
+        )
+        .inspect_err(|e| warn!("Failed to mark job {} as failed: {e}", job_run.id));
     }
 
     None
@@ -699,7 +700,8 @@ fn spawn_job_execution(s: &SpawnJobInput<'_>) {
         if let Some(reason) = fail_reason
             && let Ok(c) = pool_timeout.get()
         {
-            let _ = job_query::fail_job(&c, &id_log, &reason, should_retry, attempt);
+            let _ = job_query::fail_job(&c, &id_log, &reason, should_retry, attempt)
+                .inspect_err(|e| warn!("Failed to mark job {id_log} as failed: {e}"));
         }
     });
 }

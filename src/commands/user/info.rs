@@ -2,6 +2,7 @@
 
 use anyhow::{Context as _, Result};
 use serde_json::Value;
+use tracing::warn;
 
 use crate::{
     cli,
@@ -27,8 +28,12 @@ pub(super) fn user_info(
 
     let conn = pool.get().context("Failed to get database connection")?;
     let ctx = ServiceContext::slug_only(collection).conn(&conn).build();
-    let locked = service::auth::is_locked(&ctx, &doc.id).unwrap_or(false);
-    let has_pw = query::has_password(&conn, collection, &doc.id).unwrap_or(false);
+    let locked = service::auth::is_locked(&ctx, &doc.id)
+        .inspect_err(|e| warn!("Failed to read lock status for user {}: {e}", doc.id))
+        .unwrap_or(false);
+    let has_pw = query::has_password(&conn, collection, &doc.id)
+        .inspect_err(|e| warn!("Failed to read password status for user {}: {e}", doc.id))
+        .unwrap_or(false);
 
     print_identity(&doc, collection);
     print_status(&ctx, &doc, locked, has_pw, verify_email);
@@ -57,7 +62,9 @@ fn print_status(
     cli::kv_status("Locked", if locked { "yes" } else { "no" }, !locked);
 
     if verify_email {
-        let verified = service::auth::is_verified(ctx, &doc.id).unwrap_or(false);
+        let verified = service::auth::is_verified(ctx, &doc.id)
+            .inspect_err(|e| warn!("Failed to read verify status for user {}: {e}", doc.id))
+            .unwrap_or(false);
         cli::kv_status("Verified", if verified { "yes" } else { "no" }, verified);
     }
 

@@ -15,6 +15,7 @@ use crate::{
             proto::{data_map_to_json_map, document_to_proto},
         },
     },
+    config::PasswordPolicy,
     core::{
         CollectionDefinition, Registry, SharedCache, SharedEventTransport, SharedTokenProvider,
     },
@@ -40,6 +41,7 @@ struct CreateManyBlockingInput {
     email_ctx: Option<EmailContext>,
     token: Option<String>,
     items: Vec<CreateManyItem>,
+    password_policy: PasswordPolicy,
     run_hooks: bool,
     draft: bool,
     bulk_max_documents: i64,
@@ -73,6 +75,7 @@ fn create_many_blocking(
         .emit_events(input.events)
         .cache(input.cache)
         .email_ctx(input.email_ctx)
+        .password_policy(Some(&input.password_policy))
         .build();
 
     let opts = CreateManyOptions {
@@ -106,23 +109,29 @@ impl ContentService {
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
-        // Auth collections: reject a `password` key in bulk create rather than
-        // silently dropping it (mirrors UpdateMany). Bulk-created auth users get
-        // their password set via a follow-up single Create/Update.
+        // Auth collections: split each item's `password` off so the service
+        // create chokepoint validates it against the password policy and hashes
+        // it — parity with single Create and Lua `create_many`. Bulk create is
+        // per-item (distinct passwords per user), so seeding auth users with
+        // policed passwords in one transaction is a legitimate operation; only
+        // `update_many` (a broadcast that would set one password on many rows)
+        // rejects a password. A non-auth collection keeps a legitimate
+        // `password` field as ordinary data.
         let is_auth = def.is_auth_collection();
         let mut items: Vec<CreateManyItem> = Vec::with_capacity(req.documents.len());
         for s in &req.documents {
-            let map = data_map_to_json_map(s);
+            let mut map = data_map_to_json_map(s);
 
-            if is_auth && map.contains_key("password") {
-                return Err(Status::invalid_argument(
-                    "Password is not supported in CreateMany. Use Create for individual documents.",
-                ));
-            }
+            let password = if is_auth {
+                map.remove("password")
+                    .and_then(|v| v.as_str().map(std::string::ToString::to_string))
+            } else {
+                None
+            };
 
             items.push(CreateManyItem {
                 data: map.into(),
-                password: None,
+                password,
             });
         }
 
@@ -140,6 +149,7 @@ impl ContentService {
             token,
             headers,
             items,
+            password_policy: self.password_policy.clone(),
             run_hooks: req.hooks.unwrap_or(true),
             draft: req.draft.unwrap_or(false),
             bulk_max_documents: self.server_config.bulk_max_documents,

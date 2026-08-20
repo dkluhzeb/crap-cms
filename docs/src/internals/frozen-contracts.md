@@ -170,7 +170,11 @@ changing a representation is a breaking change to every consumer.
   `min(max_depth)`. Any new read surface **must** apply the same clamps — an
   untrusted limit/depth must never reach the query layer unclamped. This
   includes the gRPC `ListJobRuns` / `ListVersions` limits, which are floored at
-  0 (a negative `limit` must never bind as an unbounded `LIMIT -1`).
+  0 (a negative `limit` must never bind as an unbounded `LIMIT -1`). **Version
+  listing** floors its limit *and* offset inside the shared
+  `service::versions::list_versions` (via `floor_optional_limit`, which lives in
+  `db::query` so every surface and the service share one helper), so the Lua,
+  gRPC, and MCP version listings all inherit the floor at one point.
 
 ## Server-config posture (frozen defaults)
 
@@ -217,6 +221,23 @@ changing a representation is a breaking change to every consumer.
 
 ## Auth tokens
 
+- **Password policy is enforced at the service write chokepoint.** A `password`
+  supplied to a `create` or `update` on an auth collection is validated against
+  `[auth.password_policy]` inside the service create/update path, so every
+  surface (Lua / gRPC / MCP / admin) and both single and bulk `create` are
+  covered by one check that no surface can bypass. A write context that does not
+  thread the configured policy falls back to `PasswordPolicy::default()` — never
+  to no enforcement. `create_many` accepts a per-item policed password (distinct
+  per document); `update_many` **rejects** a password, because it applies one
+  value to many rows and must not broadcast a single credential. A violation
+  surfaces as a structured `password` field validation error, rendered uniformly
+  by every surface.
+- **Email is matched case-insensitively everywhere it is an identity.** Account
+  lookup (`find_by_email` = `LOWER(email) = LOWER(?)`), the per-account login and
+  forgot-password rate-limit keys, and uniqueness on an `Email`-typed field all
+  compare case-insensitively — one address is one account with one lockout bucket
+  regardless of casing. Non-`Email` unique fields (slugs, codes) stay
+  case-sensitive.
 - **The `token_use` claim** partitions signed tokens into `session` (accepted by
   every authenticated surface — admin cookie/bearer, gRPC, upload serve) and
   `mfa_pending` (accepted only by the MFA-completion endpoint). Session

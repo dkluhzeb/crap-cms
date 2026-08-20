@@ -9,8 +9,8 @@
 
 use std::sync::Arc;
 
-use crap_cms::config::{CrapConfig, LocaleConfig};
-use crap_cms::core::collection::{CollectionDefinition, Labels};
+use crap_cms::config::{CrapConfig, LocaleConfig, PasswordPolicy};
+use crap_cms::core::collection::{Auth, CollectionDefinition, Labels};
 use crap_cms::core::field::{FieldDefinition, FieldType, LocalizedString};
 use crap_cms::core::{DocumentFields, Registry};
 use crap_cms::db::{DbPool, LocaleContext, LocaleMode, migrate, pool, query};
@@ -113,6 +113,136 @@ fn item(title: &str) -> CreateManyItem {
         data,
         password: None,
     }
+}
+
+/// A minimal auth collection (`accounts`) for password-policy tests.
+fn setup_auth() -> Setup {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+
+    let mut def = CollectionDefinition::new("accounts");
+    def.labels = Labels {
+        singular: Some(LocalizedString::Plain("Account".to_string())),
+        plural: Some(LocalizedString::Plain("Accounts".to_string())),
+    };
+    def.fields = vec![
+        FieldDefinition::builder("email", FieldType::Email)
+            .required(true)
+            .unique(true)
+            .build(),
+    ];
+    def.auth = Some(Auth::enabled());
+
+    let pool = pool::create_pool(tmp.path(), &config).expect("pool");
+    let shared = Registry::shared();
+    shared.write().unwrap().register_collection(def.clone());
+    let registry = Registry::snapshot(&shared);
+    migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
+
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(Arc::clone(&registry))
+        .config(&config)
+        .build()
+        .expect("hook runner");
+
+    Setup {
+        _tmp: tmp,
+        pool,
+        runner,
+        def,
+    }
+}
+
+fn auth_item(email: &str, password: Option<&str>) -> CreateManyItem {
+    let mut data = DocumentFields::new();
+    data.insert("email".to_string(), json!(email));
+    CreateManyItem {
+        data,
+        password: password.map(std::string::ToString::to_string),
+    }
+}
+
+fn bulk_opts() -> CreateManyOptions {
+    CreateManyOptions {
+        run_hooks: false,
+        draft: false,
+        max_documents: 0,
+    }
+}
+
+/// Regression (cross-surface harmonization): `create_many` on an auth
+/// collection enforces the password policy at the service chokepoint — even
+/// when the calling context did NOT thread a policy, the DEFAULT policy is the
+/// fail-safe (min length 8). This is the Lua `create_many` weak-password hole,
+/// now closed for every surface at one authoritative point.
+#[test]
+fn create_many_enforces_password_policy_even_without_threaded_policy() {
+    let s = setup_auth();
+    let ctx = ServiceContext::collection("accounts", &s.def)
+        .pool(&s.pool)
+        .runner(&s.runner)
+        .override_access(true)
+        // No `.password_policy(...)` on purpose: the chokepoint must still
+        // enforce the default policy.
+        .build();
+
+    let items = vec![auth_item("a@x.com", Some("short"))];
+
+    let err = create_many(&ctx, &items, &bulk_opts()).expect_err("weak password must be rejected");
+    assert!(
+        matches!(err, ServiceError::Validation(_)),
+        "expected a Validation error, got {err:?}"
+    );
+}
+
+/// A policy-compliant password is accepted and the users are created (proving
+/// the relaxed `create_many` still hashes+persists, it just polices first).
+#[test]
+fn create_many_accepts_policy_compliant_password() {
+    let s = setup_auth();
+    let policy = PasswordPolicy::default();
+    let ctx = ServiceContext::collection("accounts", &s.def)
+        .pool(&s.pool)
+        .runner(&s.runner)
+        .override_access(true)
+        .password_policy(Some(&policy))
+        .build();
+
+    let items = vec![
+        auth_item("a@x.com", Some("longenough")),
+        auth_item("b@x.com", Some("alsolongenough")),
+    ];
+
+    let result = create_many(&ctx, &items, &bulk_opts()).expect("valid passwords create");
+    assert_eq!(result.created, 2);
+}
+
+/// A stricter threaded policy overrides the default: a password that passes the
+/// default (>= 8) but fails the configured policy (>= 12) is rejected.
+#[test]
+fn create_many_honors_stricter_threaded_policy() {
+    let s = setup_auth();
+    let policy = PasswordPolicy {
+        min_length: 12,
+        ..PasswordPolicy::default()
+    };
+    let ctx = ServiceContext::collection("accounts", &s.def)
+        .pool(&s.pool)
+        .runner(&s.runner)
+        .override_access(true)
+        .password_policy(Some(&policy))
+        .build();
+
+    let items = vec![auth_item("a@x.com", Some("longenough"))];
+
+    let err = create_many(&ctx, &items, &bulk_opts())
+        .expect_err("password shorter than the configured minimum must be rejected");
+    assert!(
+        matches!(err, ServiceError::Validation(_)),
+        "expected a Validation error, got {err:?}"
+    );
 }
 
 fn count_with_status(s: &Setup, status: &str) -> usize {

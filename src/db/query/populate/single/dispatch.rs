@@ -100,8 +100,9 @@ pub(super) fn resolve_single_target(
     let key = populate_cache_key(collection, id, locale.as_deref());
 
     let Some(raw) = cache_or_fetch_doc(ctx.cache, ctx.singleflight, &key, || {
-        fetch_target(ctx, collection, def, id).ok().flatten()
-    }) else {
+        fetch_target(ctx, collection, def, id)
+    })?
+    else {
         return Ok(None);
     };
 

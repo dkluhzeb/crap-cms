@@ -7,7 +7,7 @@ use tracing::warn;
 
 use crate::core::collection::Auth;
 use crate::{
-    config::LocaleConfig,
+    config::{LocaleConfig, PasswordPolicy},
     core::{
         CollectionDefinition, Document, DocumentFields, FieldDefinition, GlobalDefinition, HookRef,
         LiveMode, SharedCache, SharedEventTransport, SharedInvalidationTransport,
@@ -90,6 +90,14 @@ pub struct ServiceContext<'a> {
     /// names, generating SELECTs that reference `title` instead of
     /// `title__en` and failing with `no such column`.
     pub locale_config: Option<&'a LocaleConfig>,
+    /// Password policy for auth-collection writes. Threaded onto every write
+    /// context; the service create/update chokepoint validates a supplied
+    /// `password` against it (single AND bulk, every surface) so no weak
+    /// password can reach the DB regardless of which surface wrote it. `None`
+    /// falls back to `PasswordPolicy::default()` at the chokepoint — the policy
+    /// is *always* enforced, so a context that forgets to thread it degrades to
+    /// the default rules, never to no enforcement.
+    pub password_policy: Option<&'a PasswordPolicy>,
 }
 
 impl<'a> ServiceContext<'a> {
@@ -510,6 +518,7 @@ pub struct ServiceContextBuilder<'a> {
     verification_queue: Option<VerificationQueue>,
     invalidation_transport: Option<SharedInvalidationTransport>,
     locale_config: Option<&'a LocaleConfig>,
+    password_policy: Option<&'a PasswordPolicy>,
 }
 
 impl<'a> ServiceContextBuilder<'a> {
@@ -532,6 +541,7 @@ impl<'a> ServiceContextBuilder<'a> {
             verification_queue: None,
             invalidation_transport: None,
             locale_config: None,
+            password_policy: None,
         }
     }
 
@@ -655,6 +665,14 @@ impl<'a> ServiceContextBuilder<'a> {
         self
     }
 
+    /// Attach the password policy for auth-collection writes. Optional shape
+    /// (like `locale_config`) so a caller can forward `ctx.password_policy`
+    /// straight into a child builder without an `if let`.
+    pub fn password_policy(mut self, policy: Option<&'a PasswordPolicy>) -> Self {
+        self.password_policy = policy;
+        self
+    }
+
     pub fn build(self) -> ServiceContext<'a> {
         ServiceContext {
             pool: self.pool,
@@ -674,6 +692,7 @@ impl<'a> ServiceContextBuilder<'a> {
             slug: self.slug,
             def: self.def,
             locale_config: self.locale_config,
+            password_policy: self.password_policy,
         }
     }
 }

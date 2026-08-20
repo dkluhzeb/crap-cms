@@ -128,12 +128,19 @@ impl ContentService {
         let headers = self.metadata_headers(request.metadata());
         let req = request.into_inner();
 
+        // Normalize the per-email limiter key (trim + lowercase). `find_by_email`
+        // is case-insensitive (`LOWER(email)=LOWER(?)`), so keying the limiter on
+        // the raw address would let an attacker rotate casing/whitespace to get a
+        // fresh lockout bucket per spelling of one account. Mirrors the admin
+        // login twin (`login_action.rs`).
+        let email_key = req.email.trim().to_lowercase();
+
         // Atomically record this attempt against both limiters and reject if
         // either is now over threshold — one operation per limiter, closing the
         // burst race the old is_blocked + later record_failure split left open.
         // Both are evaluated (not short-circuited) so each counter advances;
         // a successful login clears both below.
-        let email_blocked = self.login_limiter.check_and_block(&req.email);
+        let email_blocked = self.login_limiter.check_and_block(&email_key);
         let ip_blocked = self.ip_login_limiter.check_and_block(&ip);
         if email_blocked || ip_blocked {
             return Err(Status::resource_exhausted(
@@ -208,7 +215,7 @@ impl ContentService {
             .inspect_err(|e| error!("Token creation error: {}", e))
             .map_err(|_| Status::internal("Internal error"))?;
 
-        self.login_limiter.clear(&req.email);
+        self.login_limiter.clear(&email_key);
         self.ip_login_limiter.clear(&ip);
 
         Ok(Response::new(content::LoginResponse {

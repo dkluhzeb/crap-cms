@@ -626,8 +626,11 @@ fn is_verified_default_false() {
 fn count_where_field_eq_basic() {
     let (_tmp, pool, _def) = seed_posts();
     let conn = pool.get().expect("DB connection");
-    let count = query::count_where_field_eq(&conn, "posts", "status", "published", None, false)
-        .expect("Count failed");
+    let count = query::count_where_field_eq(
+        &conn,
+        &query::FieldEqCount::builder("posts", "status", "published").build(),
+    )
+    .expect("Count failed");
     assert_eq!(count, 2);
 }
 
@@ -649,11 +652,9 @@ fn count_where_field_eq_with_exclude() {
 
     let count = query::count_where_field_eq(
         &conn,
-        "posts",
-        "status",
-        "published",
-        Some(exclude_id),
-        false,
+        &query::FieldEqCount::builder("posts", "status", "published")
+            .exclude_id(Some(exclude_id))
+            .build(),
     )
     .expect("Count failed");
     assert_eq!(count, 1);

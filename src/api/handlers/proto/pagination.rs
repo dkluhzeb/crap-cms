@@ -2,20 +2,17 @@
 
 use crate::{api::content, db::query};
 
+// `floor_optional_limit` (the optional-limit floor shared with the Lua/MCP
+// version surfaces and the service layer) lives in `db::query`; re-exported here
+// so gRPC callers keep the `proto::floor_optional_limit` path.
+pub use crate::db::query::floor_optional_limit;
+
 /// Clamp a client-supplied `limit` (with its default already applied) into
 /// `[0, max]`. Without the floor a negative value binds as `LIMIT -1`, which
 /// `SQLite` treats as *no limit* — a fail-open unbounded read that bypasses the
 /// intended cap. The floor at 0 is fail-closed (`LIMIT 0` returns no rows).
 pub fn clamp_limit(limit: i64, max: i64) -> i64 {
     limit.clamp(0, max)
-}
-
-/// Floor an optional `limit` at 0, preserving `None`. Used where `None` is an
-/// intended, separately-bounded "no explicit limit" contract (e.g. version
-/// history, capped by `max_versions`) — we must not turn `None` into a cap, but
-/// a negative `Some(-1)` must not become an unbounded `LIMIT -1` read either.
-pub fn floor_optional_limit(limit: Option<i64>) -> Option<i64> {
-    limit.map(|l| l.max(0))
 }
 
 /// Convert a [`query::PaginationResult`] to a gRPC `PaginationInfo` message.

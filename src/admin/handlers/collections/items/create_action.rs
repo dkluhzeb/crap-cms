@@ -23,6 +23,7 @@ use crate::{
             },
         },
     },
+    config::PasswordPolicy,
     core::{AuthUser, CollectionDefinition, Document, SharedCache, SharedEventTransport, upload},
     db::{DbPool, LocaleContext, LocaleMode},
     hooks::HookRunner,
@@ -100,6 +101,7 @@ struct CreateBlockingInput {
     user_doc: Option<Document>,
     locale: Option<String>,
     ui_locale: Option<String>,
+    password_policy: PasswordPolicy,
     input: CreateInput,
 }
 
@@ -115,6 +117,7 @@ fn create_document_blocking(
         .event_transport(args.event_transport)
         .cache(args.cache)
         .email_ctx(args.email_ctx)
+        .password_policy(Some(&args.password_policy))
         .build();
 
     service::create_document(
@@ -154,6 +157,7 @@ async fn spawn_create(
         user_doc: get_user_doc(auth_user).cloned(),
         locale,
         ui_locale,
+        password_policy: state.config.auth.password_policy.clone(),
         input,
     };
 

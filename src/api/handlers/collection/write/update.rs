@@ -16,6 +16,7 @@ use crate::{
             proto::{data_map_to_json_map, document_to_proto},
         },
     },
+    config::PasswordPolicy,
     core::{
         CollectionDefinition, DocumentFields, Registry, SharedCache, SharedEventTransport,
         SharedInvalidationTransport, SharedTokenProvider,
@@ -42,6 +43,7 @@ struct UpdateBlockingInput {
     token: Option<String>,
     data: DocumentFields,
     password: Option<String>,
+    password_policy: PasswordPolicy,
     locale_ctx: Option<LocaleContext>,
     draft: bool,
     events: bool,
@@ -83,6 +85,7 @@ fn update_blocking(input: UpdateBlockingInput) -> Result<content::Document, Stat
         .invalidation_transport(Some(input.invalidation_transport))
         .emit_events(input.events)
         .cache(input.cache)
+        .password_policy(Some(&input.password_policy))
         .build();
 
     let (doc, _req_context) = service::update_document(&ctx, &input.id, write_input)
@@ -141,6 +144,7 @@ impl ContentService {
             headers,
             data,
             password,
+            password_policy: self.password_policy.clone(),
             locale_ctx,
             draft: req.draft.unwrap_or(false),
             events: req.events.unwrap_or(true),

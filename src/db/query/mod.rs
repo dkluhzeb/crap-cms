@@ -26,7 +26,7 @@ mod view_scope;
 pub use columns::{get_column_names, get_expected_column_names};
 pub use cursor::{SortDirection, SortValue};
 pub use find_pagination::{FindPagination, PaginationCtx};
-pub use helpers::apply_pagination_limits;
+pub use helpers::{apply_pagination_limits, floor_optional_limit};
 pub use locale::{
     LocaleContext, LocaleMode, get_locale_select_columns, get_locale_select_columns_full,
 };

@@ -157,6 +157,83 @@ pub fn max_updated_at(
     }))
 }
 
+/// Parameters for [`count_where_field_eq`] — a unique-constraint count query.
+///
+/// Built via [`FieldEqCount::builder`]; `exclude_id`/`soft_delete`/
+/// `case_insensitive` default off.
+pub struct FieldEqCount<'a> {
+    table: &'a str,
+    field: &'a str,
+    value: &'a str,
+    exclude_id: Option<&'a str>,
+    soft_delete: bool,
+    case_insensitive: bool,
+}
+
+impl<'a> FieldEqCount<'a> {
+    /// Start a query for `table.field == value`.
+    #[must_use]
+    pub fn builder(table: &'a str, field: &'a str, value: &'a str) -> FieldEqCountBuilder<'a> {
+        FieldEqCountBuilder {
+            table,
+            field,
+            value,
+            exclude_id: None,
+            soft_delete: false,
+            case_insensitive: false,
+        }
+    }
+}
+
+/// Builder for [`FieldEqCount`].
+pub struct FieldEqCountBuilder<'a> {
+    table: &'a str,
+    field: &'a str,
+    value: &'a str,
+    exclude_id: Option<&'a str>,
+    soft_delete: bool,
+    case_insensitive: bool,
+}
+
+impl<'a> FieldEqCountBuilder<'a> {
+    /// Exclude a row id (the document being updated) from the count.
+    #[must_use]
+    pub fn exclude_id(mut self, exclude_id: Option<&'a str>) -> Self {
+        self.exclude_id = exclude_id;
+        self
+    }
+
+    /// Skip soft-deleted rows (`_deleted_at IS NULL`).
+    #[must_use]
+    pub fn soft_delete(mut self, soft_delete: bool) -> Self {
+        self.soft_delete = soft_delete;
+        self
+    }
+
+    /// Compare case-insensitively (`LOWER(col) = LOWER(?)`). Used for email
+    /// identity fields so uniqueness matches the case-insensitive login lookup
+    /// (`find_by_email` = `LOWER(email) = LOWER(?)`) — otherwise `Victim@x.com`
+    /// and `victim@x.com` both pass and then collide at login.
+    #[must_use]
+    pub fn case_insensitive(mut self, case_insensitive: bool) -> Self {
+        self.case_insensitive = case_insensitive;
+        self
+    }
+
+    /// Finalize the parameters.
+    #[must_use]
+    pub fn build(self) -> FieldEqCount<'a> {
+        FieldEqCount {
+            table: self.table,
+            field: self.field,
+            value: self.value,
+            exclude_id: self.exclude_id,
+            soft_delete: self.soft_delete,
+            case_insensitive: self.case_insensitive,
+        }
+    }
+}
+
 /// Count rows where a field equals a value, optionally excluding an ID.
 /// Used for unique constraint validation.
 ///
@@ -164,14 +241,16 @@ pub fn max_updated_at(
 ///
 /// Returns an error if the field name is invalid, or a backend error if the
 /// COUNT query fails.
-pub fn count_where_field_eq(
-    conn: &dyn DbConnection,
-    table: &str,
-    field: &str,
-    value: &str,
-    exclude_id: Option<&str>,
-    soft_delete: bool,
-) -> Result<i64> {
+pub fn count_where_field_eq(conn: &dyn DbConnection, params: &FieldEqCount<'_>) -> Result<i64> {
+    let &FieldEqCount {
+        table,
+        field,
+        value,
+        exclude_id,
+        soft_delete,
+        case_insensitive,
+    } = params;
+
     if !is_valid_identifier(field) {
         bail!("Invalid field name '{field}': must be alphanumeric/underscore");
     }
@@ -182,11 +261,17 @@ pub fn count_where_field_eq(
         ""
     };
 
+    let p1 = conn.placeholder(1);
+    let compare = if case_insensitive {
+        format!("LOWER(\"{field}\") = LOWER({p1})")
+    } else {
+        format!("\"{field}\" = {p1}")
+    };
+
     let row = if let Some(eid) = exclude_id {
-        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-        let sql = format!(
-            "SELECT COUNT(*) FROM \"{table}\" WHERE \"{field}\" = {p1} AND id != {p2}{soft_filter}"
-        );
+        let p2 = conn.placeholder(2);
+        let sql =
+            format!("SELECT COUNT(*) FROM \"{table}\" WHERE {compare} AND id != {p2}{soft_filter}");
         conn.query_one(
             &sql,
             &[
@@ -196,8 +281,7 @@ pub fn count_where_field_eq(
         )
         .with_context(|| format!("Unique check on {table}.{field}"))?
     } else {
-        let p1 = conn.placeholder(1);
-        let sql = format!("SELECT COUNT(*) FROM \"{table}\" WHERE \"{field}\" = {p1}{soft_filter}");
+        let sql = format!("SELECT COUNT(*) FROM \"{table}\" WHERE {compare}{soft_filter}");
         conn.query_one(&sql, &[DbValue::Text(value.to_string())])
             .with_context(|| format!("Unique check on {table}.{field}"))?
     };
@@ -319,20 +403,68 @@ mod tests {
         d2.insert("status".to_string(), json!("draft"));
         let doc2 = create(&conn, "posts", &def, &d2, None).unwrap();
 
-        let c = count_where_field_eq(&conn, "posts", "status", "draft", None, false).unwrap();
+        let c = count_where_field_eq(
+            &conn,
+            &FieldEqCount::builder("posts", "status", "draft").build(),
+        )
+        .unwrap();
         assert_eq!(c, 2);
 
         // Exclude one
-        let c_excl =
-            count_where_field_eq(&conn, "posts", "status", "draft", Some(&doc2.id), false).unwrap();
+        let c_excl = count_where_field_eq(
+            &conn,
+            &FieldEqCount::builder("posts", "status", "draft")
+                .exclude_id(Some(&doc2.id))
+                .build(),
+        )
+        .unwrap();
         assert_eq!(c_excl, 1);
+    }
+
+    /// Case-insensitive comparison (email identity fields): a value that differs
+    /// only in case must still match, so `Victim@x.com` and `victim@x.com` are
+    /// one account for uniqueness — mirroring the case-insensitive login lookup.
+    #[test]
+    fn count_where_field_eq_case_insensitive_matches_different_case() {
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
+        let def = test_def();
+
+        let mut d1 = DocumentFields::new();
+        d1.insert("title".to_string(), json!("Victim@X.com"));
+        d1.insert("status".to_string(), json!("draft"));
+        create(&conn, "posts", &def, &d1, None).unwrap();
+
+        // Exact match: different case does NOT match.
+        let exact = count_where_field_eq(
+            &conn,
+            &FieldEqCount::builder("posts", "title", "victim@x.com").build(),
+        )
+        .unwrap();
+        assert_eq!(exact, 0, "exact comparison is case-sensitive");
+
+        // Case-insensitive: the differently-cased value matches.
+        let ci = count_where_field_eq(
+            &conn,
+            &FieldEqCount::builder("posts", "title", "victim@x.com")
+                .case_insensitive(true)
+                .build(),
+        )
+        .unwrap();
+        assert_eq!(
+            ci, 1,
+            "case-insensitive comparison matches regardless of case"
+        );
     }
 
     #[test]
     fn count_where_field_eq_invalid_field_name() {
         let (_tmp, pool) = setup_db();
         let conn = pool.get().unwrap();
-        let result = count_where_field_eq(&conn, "posts", "bad field!", "val", None, false);
+        let result = count_where_field_eq(
+            &conn,
+            &FieldEqCount::builder("posts", "bad field!", "val").build(),
+        );
         assert!(result.is_err(), "Invalid field name should error");
         assert!(
             result

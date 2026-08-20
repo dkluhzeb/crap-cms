@@ -31,12 +31,18 @@ impl ContentService {
 
         let ok_response = Response::new(content::ForgotPasswordResponse {});
 
+        // Normalize the per-email limiter key (trim + lowercase) so casing/
+        // whitespace variants of one account share a bucket — `find_by_email` is
+        // case-insensitive, so a raw-email key would let an attacker sidestep the
+        // per-account reset-flood limit by rotating the spelling.
+        let email_key = req.email.trim().to_lowercase();
+
         // Atomically record this attempt against both limiters and bail if
         // either is now over threshold — one operation per limiter, closing the
         // concurrent-bypass race the is_blocked + separate record split left
         // open. Both are evaluated (not short-circuited) so each counter
         // advances. The generic success response leaks nothing on a block.
-        let email_blocked = self.forgot_password_limiter.check_and_block(&req.email);
+        let email_blocked = self.forgot_password_limiter.check_and_block(&email_key);
         let ip_blocked = self.ip_forgot_password_limiter.check_and_block(&ip);
         if email_blocked || ip_blocked {
             return ok_response;

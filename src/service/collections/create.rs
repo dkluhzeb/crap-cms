@@ -67,6 +67,7 @@ fn create_document_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<W
         .event_queue(queue.clone())
         .verification_queue(vqueue.clone())
         .email_ctx(ctx.email_ctx.clone())
+        .password_policy(ctx.password_policy)
         .build();
 
     let result = create_document_in_conn(&inner_ctx, input)?;

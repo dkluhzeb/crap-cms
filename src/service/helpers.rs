@@ -3,13 +3,59 @@
 use serde_json::Value;
 
 use crate::{
-    core::{Document, FieldDefinition, FieldDenial, ReqContext, collection::Hooks},
+    config::PasswordPolicy,
+    core::{
+        Document, FieldDefinition, FieldDenial, ReqContext,
+        collection::Hooks,
+        validate::{FieldError, ValidationError},
+    },
     db::{
         AccessResult, DbConnection, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query,
     },
     hooks::{HookContext, HookEvent, lifecycle::access::collect_denials_flat},
     service::{AfterChangeInput, ServiceContext, ServiceError, hooks::WriteHooks},
 };
+
+/// Validate a supplied auth-collection `password` against the effective policy,
+/// surfaced as a structured `password` field error.
+///
+/// This is THE authoritative password-policy enforcement point: the service
+/// create/update chokepoint calls it for every surface and every op (single and
+/// bulk), so no weak password can reach the DB regardless of which caller wrote
+/// it. A `None` policy falls back to [`PasswordPolicy::default`] — the policy is
+/// *always* enforced, so a context that forgets to thread the configured policy
+/// degrades to the default rules, never to no enforcement. No-op for a non-auth
+/// collection, an absent password, or an empty password (empty = "no change" on
+/// update; create requires a non-empty password upstream).
+///
+/// # Errors
+///
+/// Returns [`ServiceError::Validation`] with a single `password` field error
+/// when the password violates the policy.
+pub(crate) fn validate_password_policy(
+    is_auth: bool,
+    password: Option<&str>,
+    policy: Option<&PasswordPolicy>,
+) -> Result<(), ServiceError> {
+    if !is_auth {
+        return Ok(());
+    }
+
+    let Some(pw) = password.filter(|p| !p.is_empty()) else {
+        return Ok(());
+    };
+
+    let default_policy = PasswordPolicy::default();
+    let policy = policy.unwrap_or(&default_policy);
+
+    policy.validate(pw).map_err(|e| {
+        ServiceError::Validation(ValidationError::new(vec![FieldError::with_key(
+            "password",
+            e.to_string(),
+            "validation.password_policy",
+        )]))
+    })
+}
 
 /// Run after-change hooks and return the request-scoped context.
 /// This pattern is repeated across create, update, unpublish, and global update.
@@ -214,6 +260,64 @@ pub(crate) fn finish_cursor_overfetch(
 mod tests {
     use super::*;
     use crate::core::{FieldAdmin, FieldType};
+
+    // ── validate_password_policy ──────────────────────────────────────
+
+    #[test]
+    fn password_policy_non_auth_is_skipped() {
+        // A non-auth collection may carry a legitimate `password` field; the
+        // policy never applies to it.
+        assert!(validate_password_policy(false, Some("x"), None).is_ok());
+    }
+
+    #[test]
+    fn password_policy_absent_or_empty_is_skipped() {
+        // Absent password, and empty password ("no change" on update), skip.
+        assert!(validate_password_policy(true, None, None).is_ok());
+        assert!(validate_password_policy(true, Some(""), None).is_ok());
+    }
+
+    #[test]
+    fn password_policy_weak_rejected_as_password_field_error() {
+        // `None` policy falls back to the default (min length 8): a short
+        // password is rejected as a structured `password` field error, so every
+        // surface renders it on the password input.
+        let err = validate_password_policy(true, Some("short"), None).unwrap_err();
+        match err {
+            ServiceError::Validation(ve) => {
+                assert_eq!(ve.errors.len(), 1);
+                assert_eq!(ve.errors[0].field, "password");
+                assert_eq!(
+                    ve.errors[0].key.as_deref(),
+                    Some("validation.password_policy")
+                );
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn password_policy_valid_passes() {
+        assert!(validate_password_policy(true, Some("longenough"), None).is_ok());
+    }
+
+    #[test]
+    fn password_policy_none_falls_back_to_default_never_skips() {
+        // The fail-safe: a context that forgets to thread a policy still enforces
+        // the DEFAULT policy — never no enforcement.
+        assert!(validate_password_policy(true, Some("weak"), None).is_err());
+    }
+
+    #[test]
+    fn password_policy_uses_threaded_policy_over_default() {
+        // A stricter configured policy applies when threaded.
+        let strict = PasswordPolicy {
+            min_length: 12,
+            ..PasswordPolicy::default()
+        };
+        // Passes default (>=8) but fails the stricter threaded policy (>=12).
+        assert!(validate_password_policy(true, Some("longenough"), Some(&strict)).is_err());
+    }
 
     /// Helper: build a Text field with the given hidden flags.
     fn text_field(name: &str, hidden: bool, admin_hidden: bool) -> FieldDefinition {

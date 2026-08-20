@@ -9,7 +9,7 @@ use serde::Deserialize;
 use super::unpublish::{UnpublishCall, unpublish_via_service};
 
 use crate::{
-    config::LocaleConfig,
+    config::{LocaleConfig, PasswordPolicy},
     core::Registry,
     db::LocaleContext,
     hooks::{
@@ -82,6 +82,7 @@ impl FromLua for UpdateOptions {
 pub(crate) struct CollectionsUpdateState {
     pub(crate) registry: Arc<Registry>,
     pub(crate) locale_config: LocaleConfig,
+    pub(crate) password_policy: PasswordPolicy,
 }
 
 /// Update an existing document.
@@ -155,6 +156,7 @@ fn collections_update(
         .emit_events(opts.events)
         .lua_infra(lua_infra.as_ref())
         .invalidation_transport(hook_invalidation_transport(lua))
+        .password_policy(Some(&state.password_policy))
         .build();
 
     let (doc, _) = update_document(&ctx, &id, write_input)
@@ -178,12 +180,14 @@ pub(crate) fn register_update(
     _table: &Table,
     registry: Arc<Registry>,
     locale_config: &LocaleConfig,
+    password_policy: &PasswordPolicy,
 ) -> Result<()> {
     register_crap_collections_update(
         lua,
         CollectionsUpdateState {
             registry,
             locale_config: locale_config.clone(),
+            password_policy: password_policy.clone(),
         },
     )?;
     Ok(())

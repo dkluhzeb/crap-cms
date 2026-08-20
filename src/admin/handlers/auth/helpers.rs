@@ -6,7 +6,7 @@ use std::{
 };
 
 use axum::{
-    http::HeaderMap,
+    http::{HeaderMap, header::COOKIE},
     response::{IntoResponse, Redirect, Response},
 };
 use chrono::Utc;
@@ -18,12 +18,13 @@ use crate::{
         AdminState,
         context::{
             AuthBasePageContext, PageMeta, PageType,
-            page::auth::{AuthCollection, ForgotPasswordPage, LoginPage},
+            page::auth::{AuthCollection, ForgotPasswordPage, LoginPage, MfaPage},
         },
         handlers::{
-            auth::{append_cookies, session_cookies, session_same_site},
+            auth::{MFA_PENDING_COOKIE, append_cookies, session_cookies, session_same_site},
             shared::render_page,
         },
+        server::extract_cookie,
     },
     config::ServerConfig,
     core::{Document, Registry, Slug, auth::ClaimsBuilder, email, rate_limit::LoginRateLimiter},
@@ -320,9 +321,59 @@ pub(in crate::admin::handlers) fn session_redirect(
     response
 }
 
+/// Extract the `crap_mfa_pending` cookie value from request headers. Shared by
+/// the MFA page (GET) and the verify action (POST).
+pub(in crate::admin::handlers) fn extract_mfa_token(headers: &HeaderMap) -> Option<String> {
+    let cookie_header = headers.get(COOKIE)?.to_str().ok()?;
+
+    extract_cookie(cookie_header, MFA_PENDING_COOKIE).map(std::string::ToString::to_string)
+}
+
+/// Render the MFA code entry form with an optional error message. Shared by the
+/// MFA page (GET) and the verify action (POST, on re-render).
+pub(in crate::admin::handlers) fn render_mfa_form(
+    state: &AdminState,
+    error: Option<&str>,
+) -> Response {
+    let ctx = MfaPage {
+        base: AuthBasePageContext::for_state(
+            state,
+            PageMeta::new(PageType::AuthMfa, "mfa_page_title"),
+        ),
+        error: error.map(str::to_string),
+    };
+
+    render_page(state, "auth/mfa", &ctx)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extract_mfa_token_present() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            COOKIE,
+            "crap_csrf=abc; crap_mfa_pending=tok123; other=val"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(extract_mfa_token(&headers), Some("tok123".to_string()));
+    }
+
+    #[test]
+    fn extract_mfa_token_missing() {
+        let mut headers = HeaderMap::new();
+        headers.insert(COOKIE, "crap_csrf=abc; other=val".parse().unwrap());
+        assert_eq!(extract_mfa_token(&headers), None);
+    }
+
+    #[test]
+    fn extract_mfa_token_no_cookie_header() {
+        let headers = HeaderMap::new();
+        assert_eq!(extract_mfa_token(&headers), None);
+    }
 
     /// Helper that mirrors the legacy "trust XFF from anyone" behaviour —
     /// equivalent to `trusted_proxies = ["*"]` in `crap.toml`. Used to keep

@@ -68,6 +68,7 @@ fn update_document_pool(
         .cache(ctx.cache.clone())
         .event_transport(ctx.event_transport.clone())
         .event_queue(queue.clone())
+        .password_policy(ctx.password_policy)
         .build();
 
     let result = update_document_in_conn(&inner_ctx, id, input)?;

@@ -9,6 +9,7 @@ use axum::{
 
 use serde_json::{Value, json};
 use tokio::task;
+use tracing::warn;
 
 use crate::admin::context::field::{
     BaseFieldData, CheckboxField, ConditionData, FieldContext, TextField, ValidationAttrs,
@@ -110,7 +111,9 @@ fn append_auth_fields(fields: &mut Vec<FieldContext>, pool: &DbPool, slug: &str,
         .ok()
         .and_then(|conn| {
             let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
-            is_locked(&ctx, id).ok()
+            is_locked(&ctx, id)
+                .inspect_err(|e| warn!("Failed to read lock status for user {id}: {e}"))
+                .ok()
         })
         .unwrap_or(false);
 

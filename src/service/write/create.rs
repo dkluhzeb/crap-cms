@@ -11,7 +11,7 @@ use crate::{
 
 use super::ServiceError;
 use crate::core::nest_group_fields;
-use crate::service::helpers::collect_api_hidden_field_names;
+use crate::service::helpers::{collect_api_hidden_field_names, validate_password_policy};
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -78,6 +78,15 @@ pub fn create_document_in_conn(
         )));
     }
 
+    // Authoritative password-policy enforcement — one chokepoint for every
+    // surface and every create path (single AND `create_many`); falls back to
+    // the default policy so it can never silently skip. See `validate_password_policy`.
+    validate_password_policy(
+        def.is_auth_collection(),
+        input.password,
+        ctx.password_policy,
+    )?;
+
     let is_draft = input.draft && def.has_drafts();
     let ui_locale = input.ui_locale.as_deref();
 
@@ -93,9 +102,8 @@ pub fn create_document_in_conn(
         "create",
     );
 
-    let hook_data = input.data.clone();
     let hook_ctx = HookContext::builder(ctx.slug, "create")
-        .data(hook_data)
+        .data(input.data.clone())
         .locale(input.locale_ctx.map(LocaleContext::access_locale))
         .draft(is_draft)
         .user(ctx.user)

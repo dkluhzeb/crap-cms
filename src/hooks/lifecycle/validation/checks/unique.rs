@@ -1,8 +1,8 @@
 use serde_json::Value;
 
 use crate::{
-    core::{FieldDefinition, validate::FieldError},
-    db::query,
+    core::{FieldDefinition, FieldType, validate::FieldError},
+    db::query::{self, FieldEqCount},
     hooks::ValidationCtx,
 };
 
@@ -27,13 +27,21 @@ pub(crate) fn check_unique(
         None => String::new(),
     };
 
+    // Email identity fields are compared case-insensitively so uniqueness
+    // matches the case-insensitive login lookup (`find_by_email` uses
+    // `LOWER(email) = LOWER(?)`). Without this, `Victim@x.com` and `victim@x.com`
+    // both pass uniqueness, then collide as one account at login. Scoped to the
+    // `Email` field *type* — a definition-level signal, not a name heuristic —
+    // so case-sensitive unique fields (slugs, codes) are unaffected.
+    let case_insensitive = matches!(field.field_type, FieldType::Email);
+
     match query::count_where_field_eq(
         ctx.conn,
-        ctx.table,
-        col_name,
-        &value_str,
-        ctx.exclude_id,
-        ctx.soft_delete,
+        &FieldEqCount::builder(ctx.table, col_name, &value_str)
+            .exclude_id(ctx.exclude_id)
+            .soft_delete(ctx.soft_delete)
+            .case_insensitive(case_insensitive)
+            .build(),
     ) {
         Ok(count) if count > 0 => {
             errors.push(
@@ -395,6 +403,72 @@ mod tests {
         assert!(
             result.is_err(),
             "Without locale context, should check bare column"
+        );
+    }
+
+    /// Regression (cross-surface harmonization): a unique `Email` field must be
+    /// checked case-insensitively, matching the case-insensitive login lookup
+    /// (`find_by_email` = `LOWER(email)=LOWER(?)`). Otherwise `Victim@x.com` and
+    /// `victim@x.com` both pass uniqueness and then collide as one account.
+    #[test]
+    fn test_validate_unique_email_field_is_case_insensitive() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT);
+             INSERT INTO test (id, email) VALUES ('existing', 'Victim@X.com');",
+        )
+        .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("email", FieldType::Email)
+                .unique(true)
+                .build(),
+        ];
+
+        // A differently-cased spelling of the existing address must be rejected.
+        let mut data = DocumentFields::new();
+        data.insert("email".to_string(), json!("victim@x.com"));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(
+            result.is_err(),
+            "a case-variant of an existing email must fail the unique check"
+        );
+        assert!(result.unwrap_err().errors[0].message.contains("unique"));
+    }
+
+    /// Companion: a non-`Email` unique field stays case-SENSITIVE — a
+    /// case-variant of an existing slug is a distinct value and must pass.
+    #[test]
+    fn test_validate_unique_text_field_stays_case_sensitive() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE test (id TEXT PRIMARY KEY, slug TEXT);
+             INSERT INTO test (id, slug) VALUES ('existing', 'Hello-World');",
+        )
+        .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("slug", FieldType::Text)
+                .unique(true)
+                .build(),
+        ];
+
+        let mut data = DocumentFields::new();
+        data.insert("slug".to_string(), json!("hello-world"));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(
+            result.is_ok(),
+            "a case-variant of a non-email unique field is a distinct value and must pass"
         );
     }
 

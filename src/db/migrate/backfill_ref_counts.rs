@@ -80,18 +80,28 @@ pub(crate) fn backfill_if_needed(
     // version. An older value (or absence) means everything must recompute.
     let has_legacy_flag = meta_value(conn, META_KEY)?.as_deref() == Some(BACKFILL_VERSION);
 
-    // Collect which collections/globals need backfilling.
-    let needs_backfill_collections: Vec<_> = registry
-        .collections
-        .iter()
-        .filter(|(slug, _)| !has_legacy_flag && !is_backfilled(conn, slug).unwrap_or(true))
-        .collect();
+    // Collect which collections/globals need backfilling. A DB error from
+    // `is_backfilled` is PROPAGATED (`?`), not swallowed: the old
+    // `.unwrap_or(true)` mapped a transient error to "already backfilled" and
+    // silently dropped that collection from the backfill set, leaving its
+    // `_ref_count` columns permanently wrong. Failing loud at startup migration
+    // is correct — a broken DB should abort, not drift.
+    let mut needs_backfill_collections = Vec::new();
+    let mut needs_backfill_globals = Vec::new();
 
-    let needs_backfill_globals: Vec<_> = registry
-        .globals
-        .iter()
-        .filter(|(slug, _)| !has_legacy_flag && !is_backfilled(conn, slug).unwrap_or(true))
-        .collect();
+    if !has_legacy_flag {
+        for (slug, def) in &registry.collections {
+            if !is_backfilled(conn, slug)? {
+                needs_backfill_collections.push((slug, def));
+            }
+        }
+
+        for (slug, def) in &registry.globals {
+            if !is_backfilled(conn, slug)? {
+                needs_backfill_globals.push((slug, def));
+            }
+        }
+    }
 
     if needs_backfill_collections.is_empty() && needs_backfill_globals.is_empty() {
         return Ok(());

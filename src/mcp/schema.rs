@@ -379,17 +379,40 @@ pub(in crate::mcp) fn collection_input_schema(def: &CollectionDefinition, op: Cr
     }
 }
 
+/// Per-item schema for `create_many` — field data plus, for auth collections,
+/// an OPTIONAL `password` (validated against the password policy by the service
+/// create chokepoint when supplied). Unlike single `create`, items carry no
+/// `locale`/`draft`/`events` (those are operation-level) and password is
+/// optional, not required: bulk seeding may legitimately include strategy-only
+/// users without a password.
+fn create_many_item_schema(def: &CollectionDefinition) -> Value {
+    let mut schema = fields_to_object_schema(&def.fields);
+
+    if def.is_auth_collection()
+        && let Some(props) = get_props(&mut schema)
+    {
+        props.insert(
+            "password".to_string(),
+            json!({
+                "type": "string",
+                "description": "Optional; validated against the password policy when set"
+            }),
+        );
+    }
+
+    schema
+}
+
 fn create_many_schema(def: &CollectionDefinition) -> Value {
     json!({
         "type": "object",
         "properties": {
-            // Per-item schema is field data only. Unlike single `create`, the
-            // items carry no `locale`/`draft` (those are operation-level or
-            // ignored) and no `password` (create_many rejects it on auth
-            // collections) — advertising them would be schema/handler drift.
+            // Per-item schema is field data plus an optional `password` for auth
+            // collections. Unlike single `create`, items carry no `locale`/
+            // `draft`/`events` (those are operation-level or ignored).
             "documents": {
                 "type": "array",
-                "items": fields_to_object_schema(&def.fields),
+                "items": create_many_item_schema(def),
                 "description": "Array of documents to create"
             },
             "hooks": {
@@ -1058,6 +1081,43 @@ mod tests {
         // password is appended to the existing required array
         let req = s["required"].as_array().unwrap();
         assert!(req.contains(&Value::String("password".to_string())));
+    }
+
+    /// Regression (cross-surface harmonization): `create_many` now accepts a
+    /// per-item password on auth collections (relaxed + policed at the service),
+    /// so its item schema advertises an OPTIONAL `password` — not required, since
+    /// bulk seeding may include strategy-only users. Keeps schema and handler in
+    /// sync.
+    #[test]
+    fn auth_collection_create_many_item_advertises_optional_password() {
+        let mut def = CollectionDefinition::new("users");
+        def.fields = vec![required_text("email"), text_field("name")];
+        def.auth = Some(Auth {
+            enabled: true,
+            ..Default::default()
+        });
+        let s = collection_input_schema(&def, CrudOp::CreateMany);
+        let item = &s["properties"]["documents"]["items"];
+        assert!(
+            item["properties"]["password"].is_object(),
+            "create_many item must advertise a password field for auth collections"
+        );
+        // Optional, NOT required (unlike single create).
+        let item_required = item["required"].as_array();
+        assert!(
+            item_required.is_none_or(|r| !r.contains(&Value::String("password".to_string()))),
+            "create_many password must be optional per item"
+        );
+    }
+
+    /// A non-auth collection's `create_many` items carry no injected `password`.
+    #[test]
+    fn non_auth_create_many_item_has_no_password() {
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![required_text("title")];
+        let s = collection_input_schema(&def, CrudOp::CreateMany);
+        let item = &s["properties"]["documents"]["items"];
+        assert!(item["properties"]["password"].is_null());
     }
 
     #[test]

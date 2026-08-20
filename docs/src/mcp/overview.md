@@ -127,10 +127,10 @@ Write tools are **strict about data keys**: an argument that is neither a declar
 top-level field (layout wrappers like Row/Collapsible/Tabs are transparent — their
 sub-fields count as top-level) nor a reserved argument (see below) is **rejected**
 with an error, rather than silently ignored. A misspelled field name fails loudly
-instead of quietly writing nothing. The bulk tools additionally **reject a
-`password` key** (`create_many` / `update_many`) — auth-collection passwords must
-be set through the single `create_*` / `update_*` tools, which run the full
-password pipeline per document.
+instead of quietly writing nothing. `update_many` additionally **rejects a
+`password` key** (it applies one value to many rows); `create_many` **accepts** a
+per-item `password` on auth collections, validated against the password policy and
+hashed per document — parity with the single `create_*` tool.
 
 Alongside field values, the write tools accept a few **reserved top-level
 arguments** (excluded from the document's field data, like `id` and

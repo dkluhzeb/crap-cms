@@ -7,7 +7,7 @@ use mlua::{Error::RuntimeError, FromLua, Lua, LuaSerdeExt, Result as LuaResult, 
 use serde::Deserialize;
 
 use crate::{
-    config::LocaleConfig,
+    config::{LocaleConfig, PasswordPolicy},
     core::Registry,
     db::LocaleContext,
     hooks::{
@@ -76,6 +76,7 @@ impl FromLua for CreateOptions {
 pub(crate) struct CollectionsCreateState {
     pub(crate) registry: Arc<Registry>,
     pub(crate) locale_config: LocaleConfig,
+    pub(crate) password_policy: PasswordPolicy,
 }
 
 /// Create a new document.
@@ -132,6 +133,7 @@ fn collections_create(
         .override_access(opts.override_access)
         .emit_events(opts.events)
         .lua_infra(lua_infra.as_ref())
+        .password_policy(Some(&state.password_policy))
         .build();
 
     let (doc, _) = create_document(&ctx, write_input)
@@ -155,12 +157,14 @@ pub(crate) fn register_create(
     _table: &Table,
     registry: Arc<Registry>,
     locale_config: &LocaleConfig,
+    password_policy: &PasswordPolicy,
 ) -> Result<()> {
     register_crap_collections_create(
         lua,
         CollectionsCreateState {
             registry,
             locale_config: locale_config.clone(),
+            password_policy: password_policy.clone(),
         },
     )?;
     Ok(())

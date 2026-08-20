@@ -120,7 +120,7 @@ For auth collections, include `password` in the data to set the user's password.
 
 Bulk-create multiple documents in a single call. The whole batch is created in **one transaction** (atomic) — if any document fails, the entire batch rolls back and nothing is created. Per-document lifecycle hooks run by default — set `hooks=false` to skip them. The number of documents one call may create is capped by `[server] bulk_max_documents` (default `0` = unlimited); exceeding it errors and creates nothing. Returns the created count plus the created documents (with server-assigned IDs).
 
-Unlike single [Create](#create), `CreateMany` **rejects** a `password` field for auth collections (`INVALID_ARGUMENT`) rather than silently dropping it. Set the password with a follow-up single `Create`/`Update`, which extract and policy-validate it.
+On auth collections `CreateMany` **accepts** a per-item `password`: each is validated against `[auth.password_policy]` and hashed per document (parity with single [Create](#create)), so bulk-seeding auth users with distinct passwords works in one atomic call. `UpdateMany` still **rejects** a `password` (`INVALID_ARGUMENT`) because it applies one value to many rows.
 
 ```protobuf
 message CreateManyRequest {

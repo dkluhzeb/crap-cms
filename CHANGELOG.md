@@ -8,6 +8,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking
 
+- **Auth-collection passwords are policy-checked on every write surface and every
+  operation.** `[auth.password_policy]` validation previously ran only on the
+  single-`create`/`update` paths of the gRPC, MCP, and admin surfaces: Lua
+  `create` / `update` / `create_many` set passwords with **no** policy check, and
+  bulk `create_many` on gRPC and MCP **rejected** a password outright. A password
+  weaker than the configured policy could therefore reach the database through a
+  Lua hook or job. Validation now lives at the service create/update chokepoint,
+  so it is enforced uniformly for Lua, gRPC, MCP, and admin — single **and** bulk
+  — and no surface can bypass it (a context that does not supply the configured
+  policy falls back to the default policy, never to no enforcement). As part of
+  this, `create_many` on every surface now **accepts** a per-item `password` on
+  auth collections (validated and hashed, distinct per document) instead of
+  rejecting it; `update_many` still rejects a password, because it applies one
+  value to many rows and must not broadcast a single credential.
+  **Migration:** a Lua script or bulk import that set a password below the
+  configured policy will now be rejected — supply a policy-compliant password.
+
 - **Custom routes reject `csrf = true` on safe-method-only routes at load.** CSRF
   is enforced only on mutating methods (POST/PUT/PATCH/DELETE), so declaring
   `csrf = true` on a route that answers only GET/HEAD/OPTIONS was inert and gave
@@ -502,6 +519,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   **Migration:** regenerate both artifacts together after upgrading.
 
 ### Security
+
+- **A password weaker than the policy could reach the database via Lua or bulk
+  create.** Password-policy enforcement was per-surface and incomplete — Lua
+  writes were never checked and bulk paths were never checked — so a hook, job,
+  or bulk import could persist a weak password. Enforcement now lives at the
+  service create/update chokepoint and applies to every surface and operation
+  (see the corresponding Breaking entry).
+
+- **gRPC login / forgot-password rate limiters keyed on the raw email.** The
+  per-account limiter used the address verbatim while the account lookup is
+  case-insensitive (`LOWER(email) = LOWER(?)`), so an attacker could rotate the
+  casing or surrounding whitespace to get a fresh lockout / reset-flood bucket per
+  spelling of one account and sidestep the per-account limit. Both gRPC endpoints
+  now normalize the key (trim + lowercase), matching the admin login handler
+  (which was already fixed).
+
+- **Duplicate accounts could be created differing only in email case.** The
+  unique-constraint check compared an `Email` field exact-case, but login looks
+  the address up case-insensitively — so `Victim@x.com` and `victim@x.com` both
+  passed uniqueness and then collided as one account at login. Uniqueness for
+  `Email`-typed fields is now case-insensitive, matching the login lookup;
+  case-sensitive unique fields (slugs, codes) are unaffected.
+
+- **An OAuth callback could mint a session on a transient database error.** The
+  final session-version lookup used `unwrap_or(0)`, so a DB error mapped to
+  session-version 0 and a session was issued anyway — while every neighbouring
+  check in the same function failed closed. It now fails closed too (deny on
+  error), matching the token-validation path.
 
 - **Admin MFA was bypassable with only the password.** The `crap_mfa_pending`
   token issued after a correct password (before the email code) was a fully
@@ -1170,6 +1215,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **`crap.collections.list_versions` no longer accepts an unbounded negative
+  limit.** The Lua version-listing surface passed its `limit` straight to the
+  query layer, so `limit = -1` bound `LIMIT -1` (unbounded on SQLite) — the gRPC
+  and MCP version listings already floored it. Limit and offset are now floored at
+  the shared service layer, covering all three surfaces at one point.
+
+- **A database error while populating a relationship no longer renders it as
+  empty.** The populate cache fetch swallowed a backend error into "target not
+  found" (`.ok().flatten()`), so a transient error made a still-referenced
+  document appear null at `depth >= 1`. The error now propagates instead of
+  masking a live relationship as missing.
+
+- **The scheduler no longer silently drops the error from marking a job failed.**
+  Two `let _ = fail_job(...)` sites (the missing-definition and timeout paths)
+  could leave a job stuck with no log; the DB error is now logged.
+
+- **Ref-count backfill no longer skips a collection on a transient read error.**
+  The one-time backfill gate mapped a DB error to "already backfilled"
+  (`unwrap_or(true)`), silently leaving that collection's `_ref_count` columns
+  wrong forever. The error now aborts the startup migration instead of drifting.
+
+- **A has-many relationship / upload keeps its selections after a validation
+  error.** On an admin form re-render the top-level has-many value arrives as a
+  JSON-array string, but the reader only handled a typed array and logged the rest
+  away — silently dropping the user's selected items. It now accepts both shapes,
+  matching the nested-row reader.
+
+- **Several display-only database errors are now logged instead of silently
+  showing a default.** The admin edit form's account-lock indicator and the
+  `user list` / `user info` CLI commands mapped a DB error to "unlocked"/
+  "unverified" with no log; they now log the swallowed error.
 
 - **`crap-cms mcp` no longer corrupts the JSON-RPC stream with log lines.** The
   MCP stdio transport owns stdout, but the console logger wrote there too, so the

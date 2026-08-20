@@ -20,7 +20,7 @@ use crate::{
             },
         },
     },
-    config::LocaleConfig,
+    config::{LocaleConfig, PasswordPolicy},
     core::{
         AuthUser, CollectionDefinition, Document, ReqContext, SharedCache, SharedEventTransport,
         SharedInvalidationTransport,
@@ -95,6 +95,7 @@ struct UpdateBlockingInput {
     locale: Option<String>,
     ui_locale: Option<String>,
     locale_config: LocaleConfig,
+    password_policy: PasswordPolicy,
     input: UpdateInput,
 }
 
@@ -113,6 +114,7 @@ fn update_document_blocking(
         .invalidation_transport(Some(args.invalidation_bus.clone()))
         .cache(args.cache)
         .locale_config(Some(&args.locale_config))
+        .password_policy(Some(&args.password_policy))
         .build();
 
     let result = if args.input.action == "unpublish" && args.def.has_versions() {
@@ -191,6 +193,7 @@ async fn spawn_update(
         locale,
         ui_locale,
         locale_config: state.config.locale.clone(),
+        password_policy: state.config.auth.password_policy.clone(),
         input,
     };
 

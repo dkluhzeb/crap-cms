@@ -348,6 +348,66 @@ async fn login_invalid_password() {
     assert_eq!(err.code(), tonic::Code::Unauthenticated);
 }
 
+/// Regression (cross-surface harmonization): the gRPC per-email login limiter
+/// must key on a case-normalized email, matching the case-insensitive
+/// `find_by_email` lookup. Otherwise an attacker rotates the casing to get a
+/// fresh lockout bucket per spelling and never trips the per-account limit. The
+/// admin login twin already normalizes; this pins the gRPC side.
+#[tokio::test]
+async fn login_email_limiter_is_case_insensitive() {
+    let ts = setup_service(vec![make_users_def()], vec![]);
+
+    ts.service
+        .create(Request::new(content::CreateRequest {
+            events: None,
+            collection: "users".to_string(),
+            data: Some(make_struct(&[
+                ("email", "victim@example.com"),
+                ("password", "correct1"),
+            ])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap();
+
+    // The per-email limiter is (5, 300); the per-IP one is (20, 300), so the
+    // per-email limit trips first. Six failed attempts, each a DIFFERENT
+    // case-spelling of the same address: with a normalized key they share one
+    // bucket and the limiter trips; without normalization each spelling is its
+    // own bucket and it never trips.
+    let spellings = [
+        "victim@example.com",
+        "Victim@example.com",
+        "VICTIM@EXAMPLE.COM",
+        "vIcTiM@ExAmPlE.cOm",
+        "Victim@Example.Com",
+        "victim@EXAMPLE.com",
+    ];
+
+    let mut saw_rate_limit = false;
+    for email in spellings {
+        let err = ts
+            .service
+            .login(Request::new(content::LoginRequest {
+                collection: "users".to_string(),
+                email: email.to_string(),
+                password: "wrong".to_string(),
+            }))
+            .await
+            .unwrap_err();
+        if err.code() == tonic::Code::ResourceExhausted {
+            saw_rate_limit = true;
+        }
+    }
+
+    assert!(
+        saw_rate_limit,
+        "case-rotated failed logins for one account must share a lockout bucket \
+         and trip the per-email limiter"
+    );
+}
+
 #[tokio::test]
 async fn login_nonexistent_user() {
     let ts = setup_service(vec![make_users_def()], vec![]);

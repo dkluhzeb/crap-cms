@@ -19,7 +19,7 @@ use crate::{
         },
         lua_api::{
             self, VmLabel,
-            crud::register_crud_functions,
+            crud::{CrudConfig, register_crud_functions},
             register::{register_any_factories, register_per_slug_accessors},
         },
     },
@@ -233,11 +233,14 @@ fn register_apis(lua: &Lua, registry: &Arc<Registry>, config: &CrapConfig) -> Re
     register_crud_functions(
         lua,
         Arc::clone(registry),
-        &config.locale,
-        &config.pagination,
-        &config.depth,
-        &config.jobs,
-        config.server.bulk_max_documents,
+        &CrudConfig {
+            locale: &config.locale,
+            pagination: &config.pagination,
+            depth: &config.depth,
+            jobs: &config.jobs,
+            bulk_max_documents: config.server.bulk_max_documents,
+            password_policy: &config.auth.password_policy,
+        },
     )?;
     // Per-collection / per-global accessors at `crap.collections.<slug>`
     // / `crap.globals.<slug>` — typed wrappers that bind the slug and

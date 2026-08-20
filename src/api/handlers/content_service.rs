@@ -220,6 +220,17 @@ impl ContentService {
     }
 }
 
+/// Owned inputs for [`ContentService::resolve_schema_auth_blocking`] — grouped
+/// so the `spawn_blocking` body is a single named call rather than inline logic.
+struct SchemaAuthBlockingInput {
+    pool: DbPool,
+    token: Option<String>,
+    headers: HashMap<String, String>,
+    token_provider: SharedTokenProvider,
+    hook_runner: HookRunner,
+    registry: Arc<Registry>,
+}
+
 /// I/O-bound methods: constructor, DB-backed auth resolution, access checks.
 /// Covered by integration tests in tests/ directory.
 #[cfg(not(tarpaulin_include))]
@@ -358,6 +369,28 @@ impl ContentService {
         }
     }
 
+    /// Pull a connection and resolve the authenticated user. The
+    /// `spawn_blocking` body for schema-introspection auth — extracted so the
+    /// closure is a single function call, never inline business logic.
+    fn resolve_schema_auth_blocking(
+        input: &SchemaAuthBlockingInput,
+    ) -> Result<Option<AuthUser>, Status> {
+        let conn = input
+            .pool
+            .get()
+            .inspect_err(|e| error!("Schema introspection auth pool error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))?;
+
+        Self::resolve_auth_user(
+            input.token.as_deref(),
+            &input.headers,
+            &*input.token_provider,
+            &input.hook_runner,
+            &input.registry,
+            &conn,
+        )
+    }
+
     /// Check collection-level access using an existing connection.
     ///
     /// Free-standing helper — safe to call inside `spawn_blocking`.
@@ -393,31 +426,20 @@ impl ContentService {
             return Ok(());
         }
 
-        let token = Self::extract_token(metadata);
-        let headers = self.metadata_headers(metadata);
-        let pool = self.pool.clone();
-        let token_provider = self.token_provider.clone();
-        let hook_runner = self.hook_runner.clone();
-        let registry = Arc::clone(&self.registry);
+        let blocking_input = SchemaAuthBlockingInput {
+            token: Self::extract_token(metadata),
+            headers: self.metadata_headers(metadata),
+            pool: self.pool.clone(),
+            token_provider: self.token_provider.clone(),
+            hook_runner: self.hook_runner.clone(),
+            registry: Arc::clone(&self.registry),
+        };
 
-        let authed = task::spawn_blocking(move || {
-            let conn = pool
-                .get()
-                .inspect_err(|e| error!("Schema introspection auth pool error: {}", e))
-                .map_err(|_| Status::internal("Internal error"))?;
-
-            Self::resolve_auth_user(
-                token.as_deref(),
-                &headers,
-                &*token_provider,
-                &hook_runner,
-                &registry,
-                &conn,
-            )
-        })
-        .await
-        .inspect_err(|e| error!("Schema introspection auth task error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))??;
+        let authed =
+            task::spawn_blocking(move || Self::resolve_schema_auth_blocking(&blocking_input))
+                .await
+                .inspect_err(|e| error!("Schema introspection auth task error: {}", e))
+                .map_err(|_| Status::internal("Internal error"))??;
 
         if authed.is_none() {
             return Err(Status::unauthenticated(

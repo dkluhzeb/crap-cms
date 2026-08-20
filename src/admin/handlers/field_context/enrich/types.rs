@@ -33,22 +33,26 @@ use crate::{
 
 /// Extract selected IDs from a has-many field value.
 ///
-/// Logs a warning when the stored value isn't an array. Empty / missing keys
-/// are normal (no rows yet) and stay quiet; a string value here usually
-/// signals a `has_many` flag that disagrees with the storage shape (data
-/// migrated from `has_one` without a backfill, hand-edited DB row, or a
-/// faulty Lua hook), which would otherwise present as an empty selector
-/// without explanation.
+/// Accepts BOTH shapes a top-level has-many value can carry, matching the
+/// nested reader (`selected_ids_from_value`): a JSON array of id strings (the
+/// hydrated create/edit read), or a JSON-array *string* (the validation-error
+/// re-render path feeds form-extracted join data — a canonical JSON-array
+/// string — not a hydrated read). Parsing the string shape keeps the user's
+/// selections visible after a validation error instead of silently dropping
+/// them. A genuinely wrong shape (number/bool/object) still warns and yields an
+/// empty selector, since that signals a `has_many` flag disagreeing with the
+/// storage shape (data migrated from `has_one` without a backfill, a hand-edited
+/// DB row, or a faulty Lua hook).
 fn extract_selected_ids(doc_fields: &DocumentFields, field_name: &str) -> Vec<String> {
     match doc_fields.get(field_name) {
         Some(Value::Array(arr)) => arr
             .iter()
             .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
             .collect(),
+        Some(Value::String(s)) => serde_json::from_str::<Vec<String>>(s).unwrap_or_default(),
         None | Some(Value::Null) => Vec::new(),
         Some(other) => {
             let kind = match other {
-                Value::String(_) => "string",
                 Value::Number(_) => "number",
                 Value::Bool(_) => "bool",
                 Value::Object(_) => "object",
@@ -685,6 +689,41 @@ mod tests {
             SelectOption,
         },
     };
+
+    /// Regression (cross-surface harmonization): a top-level has-many value can
+    /// arrive as a JSON-array STRING on the validation-error re-render path
+    /// (form-extracted join data), not only as a hydrated `Value::Array`.
+    /// `extract_selected_ids` must parse both, matching the nested reader, so a
+    /// validation error doesn't silently drop the user's selected items.
+    #[test]
+    fn extract_selected_ids_accepts_array_and_json_string() {
+        use crate::core::DocumentFields;
+        use serde_json::Value;
+
+        // Hydrated read shape: a JSON array of id strings.
+        let mut arr_fields = DocumentFields::new();
+        arr_fields.insert("tags".to_string(), json!(["a", "b", "c"]));
+        assert_eq!(
+            super::extract_selected_ids(&arr_fields, "tags"),
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        );
+
+        // Validation-error re-render shape: a canonical JSON-array string.
+        let mut str_fields = DocumentFields::new();
+        str_fields.insert(
+            "tags".to_string(),
+            Value::String(r#"["a","b","c"]"#.to_string()),
+        );
+        assert_eq!(
+            super::extract_selected_ids(&str_fields, "tags"),
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            "a JSON-array string must not be dropped to empty on error re-render",
+        );
+
+        // Missing / null stays empty and quiet.
+        let empty = DocumentFields::new();
+        assert!(super::extract_selected_ids(&empty, "tags").is_empty());
+    }
 
     fn make_cta_registry() -> Registry {
         let mut reg = Registry::new();

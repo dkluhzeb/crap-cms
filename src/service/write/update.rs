@@ -11,7 +11,9 @@ use crate::{
 
 use super::ServiceError;
 use crate::core::nest_group_fields;
-use crate::service::helpers::{collect_api_hidden_field_names, enforce_access_constraints};
+use crate::service::helpers::{
+    collect_api_hidden_field_names, enforce_access_constraints, validate_password_policy,
+};
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -54,6 +56,16 @@ pub(crate) fn update_document_in_conn(
     // When the hook returned Constrained filters (e.g. "only rows where
     // author_id = me"), enforce the row-level match before writing.
     enforce_access_constraints(ctx, id, &access, "Update", false)?;
+
+    // Authoritative password-policy enforcement (all surfaces): a weak password
+    // on an auth-collection update is rejected here as a `password` field error.
+    // An empty password means "no change" and is skipped. `ctx.password_policy`
+    // falls back to the default policy, so this can never silently skip.
+    validate_password_policy(
+        def.is_auth_collection(),
+        input.password,
+        ctx.password_policy,
+    )?;
 
     let is_draft = input.draft && def.has_drafts();
     let ui_locale = input.ui_locale.as_deref();

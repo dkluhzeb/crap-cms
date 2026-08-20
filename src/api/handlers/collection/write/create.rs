@@ -16,6 +16,7 @@ use crate::{
             proto::{data_map_to_json_map, document_to_proto},
         },
     },
+    config::PasswordPolicy,
     core::{
         CollectionDefinition, DocumentFields, Registry, SharedCache, SharedEventTransport,
         SharedTokenProvider,
@@ -41,6 +42,7 @@ struct CreateBlockingInput {
     token: Option<String>,
     data: DocumentFields,
     password: Option<String>,
+    password_policy: PasswordPolicy,
     locale_ctx: Option<LocaleContext>,
     draft: bool,
     events: bool,
@@ -73,6 +75,7 @@ fn create_blocking(input: CreateBlockingInput) -> Result<content::Document, Stat
         .emit_events(input.events)
         .cache(input.cache)
         .email_ctx(input.email_ctx)
+        .password_policy(Some(&input.password_policy))
         .build();
 
     let (doc, _req_context) = service::create_document(
@@ -134,6 +137,7 @@ impl ContentService {
             headers,
             data,
             password,
+            password_policy: self.password_policy.clone(),
             locale_ctx,
             draft: req.draft.unwrap_or(false),
             events: req.events.unwrap_or(true),

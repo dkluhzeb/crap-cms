@@ -183,10 +183,13 @@ local draft = crap.collections.articles.create({
 
 For collections with `auth = true`, the `password` field is handled
 automatically: on create/update it's extracted before hooks run,
-hashed with Argon2id, and stored in the hidden `_password_hash`
-column. Hooks never see the raw password. On update, leaving
-`password` out (or empty) keeps the current hash. Matches the
-gRPC/admin behavior.
+validated against `[auth.password_policy]`, hashed with Argon2id, and
+stored in the hidden `_password_hash` column. Hooks never see the raw
+password. On update, leaving `password` out (or empty) keeps the current
+hash. The policy check runs at the service write chokepoint, so it
+applies to `create`, `update`, and `create_many` alike (a weak password
+is rejected here too, not only on the gRPC/admin surfaces) — matches the
+gRPC/MCP/admin behavior.
 
 ### `crap.collections.<slug>.update(id, data, opts?)`
 

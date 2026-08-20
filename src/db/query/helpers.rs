@@ -22,6 +22,20 @@ pub fn apply_pagination_limits(requested: Option<i64>, default_limit: i64, max_l
     }
 }
 
+/// Floor an optional `limit`/`offset` at 0, preserving `None`.
+///
+/// Used where `None` is an intended, separately-bounded "no explicit limit"
+/// contract (e.g. version history, capped by `max_versions`): we must not turn
+/// `None` into a cap, but a negative `Some(-1)` must never become an unbounded
+/// `LIMIT -1` read (which `SQLite` treats as *no limit* — a fail-open bypass).
+/// The floor at 0 is fail-closed (`LIMIT 0` / `OFFSET 0`). Lives here in
+/// `db::query` so every read surface (Lua / gRPC / MCP) and the service layer
+/// share one floor without a layering inversion.
+#[must_use]
+pub fn floor_optional_limit(limit: Option<i64>) -> Option<i64> {
+    limit.map(|l| l.max(0))
+}
+
 /// Normalize a date value for storage.
 ///
 /// - Full ISO 8601 with timezone (`2026-01-15T09:00:00Z`, `2026-01-15T09:00:00+05:00`)

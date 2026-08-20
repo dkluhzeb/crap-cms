@@ -179,30 +179,55 @@ pub(super) fn cache_set_doc(cache: &dyn CacheBackend, key: &str, doc: &Document)
 ///
 /// The cache only ever holds raw, user-independent content; population, draft
 /// filtering, and `read` access filtering are applied per request by the caller
-/// on every retrieval (hit and miss). `fetch` returns `Option<Document>` so a
-/// "not found" result also dedupes (all concurrent waiters learn the miss).
+/// on every retrieval (hit and miss). A `None` fetch result also dedupes (all
+/// concurrent waiters learn the miss).
+///
+/// # Errors
+///
+/// Propagates a backend error from `fetch` instead of caching it as a
+/// not-found — a transient error must never render a live relationship as null.
 pub(super) fn cache_or_fetch_doc<F>(
     cache: &dyn CacheBackend,
     singleflight: &Singleflight<Option<Document>>,
     key: &str,
     fetch: F,
-) -> Option<Document>
+) -> Result<Option<Document>>
 where
-    F: FnOnce() -> Option<Document>,
+    F: FnOnce() -> Result<Option<Document>>,
 {
     if let Ok(Some(doc)) = cache_get_doc(cache, key) {
-        return Some(doc);
+        return Ok(Some(doc));
     }
 
-    singleflight.get_or_fetch(key, || {
-        let doc = fetch();
+    // The singleflight slot holds `Option<Document>` — a found doc or a genuine
+    // not-found. A fetch ERROR must PROPAGATE, never be cached as "not found":
+    // the old `.ok().flatten()` at the call site masked a backend error as a
+    // missing relationship, silently rendering a still-referenced target as
+    // null. Capture the error out-of-band and return it.
+    //
+    // Residual: a concurrent waiter that blocked on *this* in-flight fetch sees
+    // `Ok(None)` for the brief window rather than the error — the error still
+    // surfaces to the fetching caller and nothing is persisted as not-found.
+    let mut fetch_err: Option<anyhow::Error> = None;
 
-        if let Some(ref d) = doc {
-            let _ = cache_set_doc(cache, key, d);
+    let doc = singleflight.get_or_fetch(key, || match fetch() {
+        Ok(found) => {
+            if let Some(ref d) = found {
+                let _ = cache_set_doc(cache, key, d);
+            }
+            found
         }
+        Err(e) => {
+            fetch_err = Some(e);
+            None
+        }
+    });
 
-        doc
-    })
+    if let Some(e) = fetch_err {
+        return Err(e);
+    }
+
+    Ok(doc)
 }
 
 /// Parse a polymorphic reference "collection/id" into `(collection, id)`.
@@ -273,8 +298,9 @@ mod tests {
         let counter = AtomicUsize::new(0);
         let result = cache_or_fetch_doc(&cache, &sf, "k", || {
             counter.fetch_add(1, Ordering::SeqCst);
-            None
-        });
+            Ok(None)
+        })
+        .expect("no fetch error");
 
         assert_eq!(counter.load(Ordering::SeqCst), 0);
         assert_eq!(result.expect("cache hit").id.as_ref(), "d1");
@@ -290,8 +316,9 @@ mod tests {
             counter.fetch_add(1, Ordering::SeqCst);
             let mut d = Document::new("d1".to_string());
             d.fields.insert("t".to_string(), json!("fresh"));
-            Some(d)
-        });
+            Ok(Some(d))
+        })
+        .expect("no fetch error");
 
         assert_eq!(counter.load(Ordering::SeqCst), 1);
         assert_eq!(result.expect("fresh fetch").id.as_ref(), "d1");
@@ -299,8 +326,9 @@ mod tests {
         // Second call should hit the cache now (fetch closure must not run).
         let result2 = cache_or_fetch_doc(&cache, &sf, "k", || {
             counter.fetch_add(1, Ordering::SeqCst);
-            None
-        });
+            Ok(None)
+        })
+        .expect("no fetch error");
 
         assert_eq!(counter.load(Ordering::SeqCst), 1, "fetch should not re-run");
         assert_eq!(result2.expect("cache hit").id.as_ref(), "d1");
@@ -314,10 +342,31 @@ mod tests {
 
         let r = cache_or_fetch_doc(&cache, &sf, "missing", || {
             counter.fetch_add(1, Ordering::SeqCst);
-            None
-        });
+            Ok(None)
+        })
+        .expect("no fetch error");
         assert!(r.is_none());
         assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    /// Regression: a backend error from the fetch closure must PROPAGATE, not be
+    /// masked as a not-found (`Ok(None)`). The old `.ok().flatten()` call site
+    /// silently rendered a still-referenced relationship target as null on a
+    /// transient DB error.
+    #[test]
+    fn cache_or_fetch_doc_propagates_fetch_error() {
+        let cache = MemoryCache::new(10_000);
+        let sf: Singleflight<Option<Document>> = Singleflight::new();
+
+        let r = cache_or_fetch_doc(&cache, &sf, "boom", || {
+            Err(anyhow::anyhow!("backend exploded"))
+        });
+
+        assert!(
+            r.is_err(),
+            "a fetch error must not be swallowed to Ok(None)"
+        );
+        assert!(r.unwrap_err().to_string().contains("backend exploded"));
     }
 
     /// Regression: N concurrent cache-miss fetches for the same key must
@@ -348,14 +397,17 @@ mod tests {
 
                     let mut d = Document::new("shared".to_string());
                     d.fields.insert("v".to_string(), json!("one"));
-                    Some(d)
+                    Ok(Some(d))
                 })
             }));
         }
 
         let mut got = 0;
         for h in handles {
-            assert!(h.join().unwrap().is_some(), "every caller gets the raw doc");
+            assert!(
+                h.join().unwrap().expect("no fetch error").is_some(),
+                "every caller gets the raw doc"
+            );
             got += 1;
         }
 

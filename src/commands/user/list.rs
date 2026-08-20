@@ -1,6 +1,7 @@
 //! `user list` — list users in an auth collection.
 
 use anyhow::{Context as _, Result};
+use tracing::warn;
 
 use crate::{
     cli::{self, Table},
@@ -47,11 +48,15 @@ pub fn user_list(pool: &DbPool, registry: &Registry, collection: &str) -> Result
             .get("email")
             .and_then(|v| v.as_str())
             .unwrap_or("-");
-        let locked = service::auth::is_locked(&ctx, &user.id).unwrap_or(false);
+        let locked = service::auth::is_locked(&ctx, &user.id)
+            .inspect_err(|e| warn!("Failed to read lock status for user {}: {e}", user.id))
+            .unwrap_or(false);
         let locked_str = if locked { "yes" } else { "no" };
 
         if verify_email {
-            let verified = service::auth::is_verified(&ctx, &user.id).unwrap_or(false);
+            let verified = service::auth::is_verified(&ctx, &user.id)
+                .inspect_err(|e| warn!("Failed to read verify status for user {}: {e}", user.id))
+                .unwrap_or(false);
             let verified_str = if verified { "yes" } else { "no" };
 
             table.row(vec![&user.id, email, locked_str, verified_str]);

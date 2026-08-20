@@ -6,7 +6,7 @@ use anyhow::Result;
 use mlua::{Lua, Table};
 
 use crate::{
-    config::{DepthConfig, JobsConfig, LocaleConfig, PaginationConfig},
+    config::{DepthConfig, JobsConfig, LocaleConfig, PaginationConfig, PasswordPolicy},
     core::Registry,
 };
 
@@ -24,6 +24,20 @@ struct CrudRegisterCtx<'a> {
     /// `server.bulk_max_documents` — max docs a bulk update/delete may match
     /// (0 = unlimited), enforced in the service layer.
     bulk_max_documents: i64,
+    /// `auth.password_policy` — threaded onto write contexts so the service
+    /// create/update chokepoint enforces it on Lua writes too.
+    password_policy: &'a PasswordPolicy,
+}
+
+/// Config bundle threaded into [`register_crud_functions`] — grouped so the
+/// entry point stays a short `(lua, registry, config)` call.
+pub(crate) struct CrudConfig<'a> {
+    pub locale: &'a LocaleConfig,
+    pub pagination: &'a PaginationConfig,
+    pub depth: &'a DepthConfig,
+    pub jobs: &'a JobsConfig,
+    pub bulk_max_documents: i64,
+    pub password_policy: &'a PasswordPolicy,
 }
 
 /// Register the CRUD functions on `crap.collections`, `crap.globals`, and `crap.jobs`.
@@ -35,24 +49,21 @@ struct CrudRegisterCtx<'a> {
 pub(crate) fn register_crud_functions(
     lua: &Lua,
     registry: Arc<Registry>,
-    locale_config: &LocaleConfig,
-    pagination_config: &PaginationConfig,
-    depth_config: &DepthConfig,
-    jobs_config: &JobsConfig,
-    bulk_max_documents: i64,
+    config: &CrudConfig<'_>,
 ) -> Result<()> {
     let crap: Table = lua.globals().get("crap")?;
     let ctx = CrudRegisterCtx {
         registry: &registry,
-        locale_config,
-        pagination_config,
-        depth_config,
-        bulk_max_documents,
+        locale_config: config.locale,
+        pagination_config: config.pagination,
+        depth_config: config.depth,
+        bulk_max_documents: config.bulk_max_documents,
+        password_policy: config.password_policy,
     };
 
     register_collection_functions(lua, &crap, &ctx)?;
     register_global_functions(lua, &crap, &ctx)?;
-    register_job_functions(lua, &crap, registry, jobs_config)?;
+    register_job_functions(lua, &crap, registry, config.jobs)?;
 
     Ok(())
 }
@@ -66,6 +77,7 @@ fn register_collection_functions(lua: &Lua, crap: &Table, ctx: &CrudRegisterCtx<
         pagination_config,
         depth_config,
         bulk_max_documents,
+        password_policy,
     } = *ctx;
     let collections: Table = crap.get("collections")?;
 
@@ -98,12 +110,14 @@ fn register_collection_functions(lua: &Lua, crap: &Table, ctx: &CrudRegisterCtx<
         &collections,
         Arc::clone(registry),
         locale_config,
+        password_policy,
     )?;
     collection::write::update::register_update(
         lua,
         &collections,
         Arc::clone(registry),
         locale_config,
+        password_policy,
     )?;
     collection::write::delete::register_delete(
         lua,
@@ -126,6 +140,7 @@ fn register_collection_functions(lua: &Lua, crap: &Table, ctx: &CrudRegisterCtx<
         &collections,
         Arc::clone(registry),
         bulk_max_documents,
+        password_policy,
     )?;
     collection::bulk::update_many::register_update_many(
         lua,

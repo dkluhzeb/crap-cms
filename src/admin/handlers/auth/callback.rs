@@ -143,7 +143,13 @@ fn validate_callback_user(state: &AdminState, slug: &str, user_id: &str) -> Opti
         return None;
     }
 
-    Some(service::auth::get_session_version(&ctx, user_id).unwrap_or(0))
+    // Fail CLOSED like every check above (`is_locked`/`is_verified`/`user_exists`
+    // all propagate DB errors as `None`): a transient DB error must NOT mint a
+    // session. The old `.unwrap_or(0)` mapped a query failure to session_version
+    // 0 — for the common user whose real version is 0 that minted a fully valid
+    // session on a DB error, out of step with the fail-closed session-version
+    // read in the token-validation path (evaluator.rs).
+    service::auth::get_session_version(&ctx, user_id).ok()
 }
 
 /// Run the rate-limit → hook → validate → mint-session flow for a callback that

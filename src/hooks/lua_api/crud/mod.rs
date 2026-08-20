@@ -8,5 +8,5 @@ pub(crate) mod jobs;
 mod register;
 mod tx_conn;
 
-pub(crate) use register::register_crud_functions;
+pub(crate) use register::{CrudConfig, register_crud_functions};
 pub(crate) use tx_conn::{get_tx_conn, with_lua_db};

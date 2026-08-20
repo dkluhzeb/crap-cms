@@ -74,15 +74,17 @@ pub fn list_versions(
         }
     }
 
+    // Floor the client-supplied limit/offset at the shared service chokepoint so
+    // every surface (Lua / gRPC / MCP) is protected here — a negative `Some(-1)`
+    // must never bind as an unbounded `LIMIT -1` (fail-open on SQLite), and a
+    // negative OFFSET must not survive to Postgres (which errors). `None` is
+    // preserved (the intended "no explicit limit", capped by `max_versions`).
+    let limit = query::floor_optional_limit(input.limit);
+    let offset = query::floor_optional_limit(input.offset);
+
     let total = query::count_versions(conn, &table, input.parent_id, published_only)?;
-    let mut versions = query::list_versions(
-        conn,
-        &table,
-        input.parent_id,
-        published_only,
-        input.limit,
-        input.offset,
-    )?;
+    let mut versions =
+        query::list_versions(conn, &table, input.parent_id, published_only, limit, offset)?;
 
     // Strip read-denied + API-hidden fields from every snapshot — parity with
     // `find_version_by_id`; otherwise denied fields leak through the list.
@@ -102,11 +104,16 @@ pub fn list_versions(
         }
     }
 
-    let limit = input.limit.unwrap_or(total);
-    let offset = input.offset.unwrap_or(0);
-    let page = if limit > 0 { offset / limit + 1 } else { 1 };
+    let meta_limit = limit.unwrap_or(total);
+    let meta_offset = offset.unwrap_or(0);
+    let page = if meta_limit > 0 {
+        meta_offset / meta_limit + 1
+    } else {
+        1
+    };
 
-    let pagination = query::PaginationResult::builder(&[], total, limit).page(page, offset);
+    let pagination =
+        query::PaginationResult::builder(&[], total, meta_limit).page(page, meta_offset);
 
     Ok(PaginatedResult {
         docs: versions,
@@ -338,6 +345,39 @@ mod tests {
         let result = list_versions(&ctx, &input).unwrap();
         assert_eq!(result.total, 3);
         assert_eq!(result.docs.len(), 2);
+    }
+
+    /// Regression (cross-surface harmonization): a negative `limit` must be
+    /// floored to 0 at the shared service chokepoint, not bind as `LIMIT -1`
+    /// (unbounded on `SQLite`). The Lua `list_versions` surface passed the raw
+    /// `Option<i64>` through — gRPC/MCP floored, Lua did not — so flooring here
+    /// covers all three. A floored `Some(-1)` → `LIMIT 0` → empty page (the
+    /// fail-closed direction), while `total` still reflects the real count.
+    #[test]
+    fn list_versions_floors_negative_limit() {
+        let (conn, def) = setup_versioned_collection();
+        conn.execute_batch(
+            "INSERT INTO _versions_posts (id, _parent, _version, _status, _latest, snapshot) \
+             VALUES ('v1', 'p1', 1, 'published', 0, '{}'),
+                    ('v2', 'p1', 2, 'published', 0, '{}'),
+                    ('v3', 'p1', 3, 'published', 1, '{}');",
+        )
+        .unwrap();
+
+        let rh = NoopReadHooks;
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .read_hooks(&rh)
+            .build();
+
+        let input = ListVersionsInput::builder("p1").limit(Some(-1)).build();
+
+        let result = list_versions(&ctx, &input).unwrap();
+        assert_eq!(result.total, 3, "total still reflects the real count");
+        assert!(
+            result.docs.is_empty(),
+            "a negative limit must floor to LIMIT 0 (empty), never LIMIT -1 (unbounded)"
+        );
     }
 
     /// Version history follows EDIT access by default (`versions ?? update`): a

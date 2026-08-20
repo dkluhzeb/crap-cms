@@ -126,6 +126,7 @@ fn create_many_pooled(
         .verification_queue(vqueue.clone())
         .cache(ctx.cache.clone())
         .email_ctx(ctx.email_ctx.clone())
+        .password_policy(ctx.password_policy)
         .build();
 
     let mut documents = Vec::with_capacity(items.len());

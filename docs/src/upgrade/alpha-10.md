@@ -337,9 +337,12 @@ Three changes affect MCP clients:
   on a data key that isn't a declared field or a reserved meta-key
   (`id`/`locale`/`draft`/`events`/`password`). **Action:** stop sending stray
   keys; a misspelled field now errors instead of being silently dropped.
-- **`create_many` / `update_many` reject a `password` on auth collections**
-  (use single `create` / `update`). On non-auth collections a `password` field
-  is now kept as ordinary data.
+- **`create_many` now accepts a policy-checked `password` on auth collections;
+  `update_many` still rejects one.** A per-item `password` in `create_many` is
+  validated against `[auth.password_policy]` and hashed per document (parity with
+  single `create`), so bulk-seeding auth users with distinct passwords works in
+  one call. `update_many` rejects a `password` because it applies one value to
+  many rows. On non-auth collections a `password` field is ordinary data.
 
 Also: MCP `update_global` now honours `draft`, `read_config_file` redacts
 `crap.toml` secrets, and the JSON-RPC layer is stricter (`jsonrpc` must be
@@ -600,10 +603,11 @@ Wire-contract changes — regenerate your gRPC stubs and adjust:
   `crap-cms typegen client` generator, regenerate it too — the Rust (`-l rs`)
   output now decodes the typed `FieldValue` (the other languages emit type
   definitions only and are unaffected).
-- **`CreateMany` rejects a `password` field for auth collections.** It
-  previously dropped it silently (creating a user unable to authenticate); it
-  now returns `INVALID_ARGUMENT`, matching `UpdateMany`. Set passwords with a
-  follow-up single `Create`/`Update`.
+- **`CreateMany` now accepts a policy-checked `password` for auth collections.**
+  It previously dropped it silently, then (earlier in this cycle) rejected it with
+  `INVALID_ARGUMENT`; a per-item `password` is now validated against
+  `[auth.password_policy]` and hashed per document (parity with single `Create`).
+  `UpdateMany` still rejects a `password` (it applies one value to many rows).
 - **Removed always-true `success` fields** from `DeleteResponse`,
   `ForgotPasswordResponse`, `ResetPasswordResponse`, `VerifyEmailResponse`,
   and `AccountActionResponse`. A non-error response is the success signal;
