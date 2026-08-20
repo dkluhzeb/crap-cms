@@ -16,7 +16,7 @@ use crate::{
         },
         handlers::shared::{
             Pagination, PaginationParams, extract_editor_locale, get_user_doc, not_found, paths,
-            redirect_response, render_page, server_error, version_to_json,
+            redirect_response, render_page, require_collection, server_error, version_to_json,
         },
     },
     core::{AuthUser, Claims, CollectionDefinition, Document},
@@ -97,8 +97,9 @@ pub async fn list_versions_page(
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let Some(def) = state.registry.get_collection(&slug).cloned() else {
-        return not_found(&state, &format!("Collection '{slug}' not found"));
+    let def = match require_collection(&state, &slug) {
+        Ok(d) => d,
+        Err(resp) => return *resp,
     };
 
     if !def.has_versions() {

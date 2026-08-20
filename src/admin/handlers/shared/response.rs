@@ -15,7 +15,7 @@ use crate::{
         AdminState,
         context::{BasePageContext, PageMeta, PageType, page::errors::ErrorPage},
     },
-    core::richtext::renderer::html_escape,
+    core::{CollectionDefinition, GlobalDefinition, richtext::renderer::html_escape},
     service::ServiceError,
 };
 
@@ -255,6 +255,41 @@ pub fn not_found(state: &AdminState, message: &str) -> Response {
     };
 
     (StatusCode::NOT_FOUND, html).into_response()
+}
+
+/// Look up a collection definition by slug, returning an owned clone or the
+/// canonical admin 404 response. The single chokepoint for the
+/// "Collection '{slug}' not found" HTML page so the message and status can't
+/// drift across the handler surface.
+///
+/// # Errors
+///
+/// Returns the rendered 404 [`Response`] (boxed — it is the large variant) when
+/// no collection matches `slug`.
+pub fn require_collection(
+    state: &AdminState,
+    slug: &str,
+) -> Result<CollectionDefinition, Box<Response>> {
+    state
+        .registry
+        .get_collection(slug)
+        .cloned()
+        .ok_or_else(|| Box::new(not_found(state, &format!("Collection '{slug}' not found"))))
+}
+
+/// Look up a global definition by slug, returning an owned clone or the
+/// canonical admin 404 response. Companion to [`require_collection`].
+///
+/// # Errors
+///
+/// Returns the rendered 404 [`Response`] (boxed — it is the large variant) when
+/// no global matches `slug`.
+pub fn require_global(state: &AdminState, slug: &str) -> Result<GlobalDefinition, Box<Response>> {
+    state
+        .registry
+        .get_global(slug)
+        .cloned()
+        .ok_or_else(|| Box::new(not_found(state, &format!("Global '{slug}' not found"))))
 }
 
 /// Convert a [`ServiceError`] into an admin HTML response.

@@ -30,6 +30,18 @@ impl PaginationConfig {
     pub fn is_cursor(&self) -> bool {
         matches!(self.mode, PaginationMode::Cursor)
     }
+
+    /// Clamp a requested page size to the configured bounds: an absent request
+    /// falls back to `default_limit`, and the result is floored to at least 1
+    /// and capped at `max_limit` (itself floored to 1 to stay a valid clamp
+    /// range on a degenerate config). The single chokepoint for turning a raw
+    /// limit into a safe SQL `LIMIT`, so no read surface can emit `LIMIT 0`
+    /// (silently empty page) or an unbounded query.
+    #[must_use]
+    pub fn resolve_limit(&self, requested: Option<i64>) -> i64 {
+        let max = self.max_limit.max(1);
+        requested.unwrap_or(self.default_limit).clamp(1, max)
+    }
 }
 
 /// Pagination strategy.
@@ -76,6 +88,50 @@ mod tests {
             PaginationMode::Page
         );
         assert!(from_value::<PaginationMode>(json!("Cursor")).is_err());
+    }
+
+    #[test]
+    fn resolve_limit_floors_zero_and_negative_to_one() {
+        // Regression: the admin relationship-search handler reimplemented limit
+        // resolution and omitted the floor-to-1, so `?limit=0` produced
+        // `LIMIT 0` — a silently empty result set. `resolve_limit` is the
+        // shared chokepoint that floors to 1, matching `PaginationParams::resolve`.
+        let c = PaginationConfig::default();
+        assert_eq!(c.resolve_limit(Some(0)), 1, "limit 0 must floor to 1");
+        assert_eq!(
+            c.resolve_limit(Some(-5)),
+            1,
+            "negative limit must floor to 1"
+        );
+    }
+
+    #[test]
+    fn resolve_limit_defaults_and_caps() {
+        let c = PaginationConfig::default();
+        assert_eq!(
+            c.resolve_limit(None),
+            20,
+            "absent limit falls back to default"
+        );
+        assert_eq!(c.resolve_limit(Some(5)), 5, "in-range limit passes through");
+        assert_eq!(
+            c.resolve_limit(Some(50_000)),
+            1000,
+            "over-max limit caps at max_limit"
+        );
+    }
+
+    #[test]
+    fn resolve_limit_survives_degenerate_max_of_zero() {
+        // A misconfigured `max_limit = 0` must not panic the `clamp` (min > max);
+        // max floors to 1 so the range stays valid.
+        let c = PaginationConfig {
+            default_limit: 20,
+            max_limit: 0,
+            mode: PaginationMode::Page,
+        };
+        assert_eq!(c.resolve_limit(Some(10)), 1);
+        assert_eq!(c.resolve_limit(None), 1);
     }
 
     #[test]

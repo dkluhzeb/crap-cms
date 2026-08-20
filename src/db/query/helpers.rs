@@ -442,6 +442,21 @@ pub(crate) fn global_table(slug: &str) -> String {
     format!("_global_{slug}")
 }
 
+/// Quote a SQL identifier (column/table name) for interpolation into DDL/DML.
+///
+/// Both `SQLite` and Postgres delimit identifiers with double quotes; an embedded
+/// `"` is doubled per the SQL standard. Applied at every identifier-emission site
+/// so a column whose name is a SQL reserved word — a user field legitimately
+/// named `order`, `select`, `group`, … (allowed by field-name validation) — is
+/// valid on every backend. (`SQLite`'s legacy "double-quoted string literal"
+/// misfeature, which would otherwise turn a quoted *missing* column into a silent
+/// string literal, is disabled per-connection via `SQLITE_DBCONFIG_DQS_*` — see
+/// the pool setup — so a quoted identifier is always an identifier.)
+#[must_use]
+pub(crate) fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
 /// Append a SQL condition with `WHERE` or `AND` depending on whether a WHERE clause already exists.
 pub(crate) fn append_sql_condition(sql: &mut String, has_where: &mut bool, condition: &str) {
     sql.push_str(if *has_where { " AND " } else { " WHERE " });

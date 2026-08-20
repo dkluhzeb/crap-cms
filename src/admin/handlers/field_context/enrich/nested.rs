@@ -14,13 +14,10 @@ use crate::{
             RelationshipField, RelationshipSelectedItem, RichtextField, RowField, TabsField,
             TextField, TextareaField, UploadField, ValidationAttrs,
         },
-        handlers::{
-            field_context::{
-                MAX_FIELD_DEPTH, collect_node_attr_errors,
-                enrich::{EnrichCtx, SubFieldOpts, field_types, gated_find_by_id},
-                locale_locked_display, safe_template_id,
-            },
-            shared::auto_label_from_name,
+        handlers::field_context::{
+            MAX_FIELD_DEPTH, collect_node_attr_errors,
+            enrich::{EnrichCtx, SubFieldOpts, field_types, gated_find_by_id},
+            locale_locked_display, safe_template_id,
         },
     },
     core::{FieldDefinition, FieldType, upload},
@@ -71,10 +68,7 @@ fn build_sub_field_base(
     val: &str,
     opts: &SubFieldOpts,
 ) -> BaseFieldData {
-    let sf_label = sf.admin.label.as_ref().map_or_else(
-        || auto_label_from_name(&sf.name),
-        |ls| ls.resolve_default().to_string(),
-    );
+    let sf_label = sf.resolved_label();
 
     // Recompute per-field instead of inheriting from the parent: a localized
     // field inside a non-localized parent must stay editable in non-default

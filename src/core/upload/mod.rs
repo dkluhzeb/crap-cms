@@ -34,6 +34,7 @@ pub use resize::process_image_entry_with_storage;
 pub use size_result::SizeResult;
 pub use storage::{
     SharedStorage, StorageBackend, StorageNotFound, create_storage, create_storage_with_lease,
+    key_from_served_url, served_url,
 };
 pub use uploaded_file::UploadedFile;
 pub use validate::format_filesize;

@@ -22,6 +22,19 @@ pub struct ResetTokenResult {
     pub token: String,
 }
 
+/// Character length of a single-use security token.
+const SECURITY_TOKEN_LEN: usize = 32;
+
+/// Generate a single-use security token (password reset, email verification).
+///
+/// A 32-character nanoid — the single chokepoint for security-token entropy so
+/// no auth flow can drift to a weaker length. Both the reset and the
+/// email-verification paths mint their tokens here.
+#[must_use]
+pub fn generate_security_token() -> String {
+    nanoid!(SECURITY_TOKEN_LEN)
+}
+
 /// Generate a reset token for a user found by email.
 ///
 /// Returns `Ok(None)` if the user is not found — callers should
@@ -46,7 +59,7 @@ pub fn generate_reset_token(
         return Ok(None);
     };
 
-    let token = nanoid!();
+    let token = generate_security_token();
     // Reject the impossible overflow rather than producing an
     // `i64::MAX` / immediate-expiry token; both directions are
     // wrong for a reset token.
@@ -178,6 +191,14 @@ pub fn find_by_reset_token(ctx: &ServiceContext, token: &str) -> Result<bool, Se
 mod tests {
     use super::*;
     use crate::service::auth::test_support::setup;
+
+    #[test]
+    fn security_token_is_32_chars() {
+        // Regression: the reset flow used to mint a 21-char default nanoid while
+        // the verification flow used 32 — the two security tokens drifted. Both
+        // now share `generate_security_token`, pinned to 32 chars.
+        assert_eq!(generate_security_token().chars().count(), 32);
+    }
 
     #[test]
     fn generate_reset_token_success() {

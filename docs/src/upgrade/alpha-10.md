@@ -741,6 +741,17 @@ What changed:
 
 ## Bug fixes (no action needed)
 
+- **Field names that are SQL reserved words (`order`, `select`, `group`, …)
+  now work.** They passed the identifier validator but were interpolated into
+  generated SQL unquoted, so writing to such a field failed with a syntax error
+  (and would have broken on Postgres regardless). All generated identifiers are
+  now quoted. If you renamed a field to dodge this, you can rename it back —
+  though renaming a field migrates its column, so weigh the churn.
+- **Private uploads on S3 / custom storage backends are reachable again.** The
+  per-document access gate compared the request path against the backend's
+  direct `public_url` rather than the served `/uploads/{key}` proxy path, so on
+  non-local storage every access-gated file returned 404 to authorized users.
+  Local storage was unaffected (the two URLs coincide there).
 - **Bulk `update_many(draft = true)` saves a draft instead of
   publishing.** The bulk path accepted the `draft` flag but ignored it
   on the write side, writing the main row directly — so a bulk "save as

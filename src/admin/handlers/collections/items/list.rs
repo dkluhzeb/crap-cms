@@ -21,9 +21,9 @@ use crate::{
             },
             shared::{
                 ListUrlContext, PaginationParams, bad_request, extract_editor_locale,
-                extract_status_filter, extract_where_params, not_found, parse_where_params, paths,
-                render_page, service_error_to_admin_response, task_join_error_response,
-                validate_sort,
+                extract_status_filter, extract_where_params, parse_where_params, paths,
+                render_page, require_collection, service_error_to_admin_response,
+                task_join_error_response, validate_sort,
             },
         },
     },
@@ -492,8 +492,9 @@ pub async fn list_items(
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let Some(def) = state.registry.get_collection(&slug).cloned() else {
-        return not_found(&state, &format!("Collection '{slug}' not found"));
+    let def = match require_collection(&state, &slug) {
+        Ok(d) => d,
+        Err(resp) => return *resp,
     };
 
     let inputs = match parse_list_inputs(&state, &def, params, &uri, &headers) {

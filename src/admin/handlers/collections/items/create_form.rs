@@ -20,8 +20,8 @@ use crate::{
         handlers::shared::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
             build_locale_template_data, check_access_or_forbid, enrich_field_contexts,
-            extract_editor_locale, forbidden, get_user_doc, is_non_default_locale, not_found,
-            paths, render_page, split_sidebar_fields,
+            extract_editor_locale, forbidden, get_user_doc, is_non_default_locale, paths,
+            render_page, require_collection, split_sidebar_fields,
         },
     },
     core::{AuthUser, Claims, CollectionDefinition, DocumentFields},
@@ -119,8 +119,9 @@ pub async fn create_form(
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let Some(def) = state.registry.get_collection(&slug).cloned() else {
-        return not_found(&state, &format!("Collection '{slug}' not found"));
+    let def = match require_collection(&state, &slug) {
+        Ok(d) => d,
+        Err(resp) => return *resp,
     };
 
     match check_access_or_forbid(

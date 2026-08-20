@@ -4,6 +4,41 @@ use anyhow::{Context as _, Result};
 
 use crate::db::{DbConnection, DbValue};
 
+/// Build the SELECT for a junction/join table's rows for one parent — the
+/// locale-optional `WHERE parent_id [AND _locale] ORDER BY _order` read that
+/// mirrors [`delete_junction_rows`]. Returns the SQL (with `select_cols`
+/// projected) and its bound params, so the array/blocks/relationship readers
+/// can't drift on the WHERE branch, the `ORDER BY _order`, or the params vector.
+pub(super) fn select_junction_rows(
+    conn: &dyn DbConnection,
+    table_name: &str,
+    select_cols: &str,
+    parent_id: &str,
+    locale: Option<&str>,
+) -> (String, Vec<DbValue>) {
+    if let Some(loc) = locale {
+        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+        (
+            format!(
+                "SELECT {select_cols} FROM \"{table_name}\" \
+                 WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order"
+            ),
+            vec![
+                DbValue::Text(parent_id.to_string()),
+                DbValue::Text(loc.to_string()),
+            ],
+        )
+    } else {
+        let p1 = conn.placeholder(1);
+        (
+            format!(
+                "SELECT {select_cols} FROM \"{table_name}\" WHERE parent_id = {p1} ORDER BY _order"
+            ),
+            vec![DbValue::Text(parent_id.to_string())],
+        )
+    }
+}
+
 /// Delete rows from a junction/join table for a given parent, optionally filtered by locale.
 pub(super) fn delete_junction_rows(
     conn: &dyn DbConnection,

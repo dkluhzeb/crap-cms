@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 use crate::{
     config::LocaleConfig,
     core::{Document, FieldDefinition, FieldType},
-    db::query::helpers::{locale_column, prefixed_name, tz_column, walk_leaf_fields},
+    db::query::helpers::{locale_column, prefixed_name, quote_ident, tz_column, walk_leaf_fields},
 };
 
 /// How to handle localized fields in a query.
@@ -155,7 +155,8 @@ fn push_column(
     if is_localized {
         add_locale_columns(select_exprs, result_names, col, locale_ctx)
     } else {
-        select_exprs.push(col.to_string());
+        // SELECT identifier quoted (reserved-word-safe); bare name for mapping.
+        select_exprs.push(quote_ident(col));
         result_names.push(col.to_string());
         Ok(())
     }
@@ -209,7 +210,11 @@ fn add_locale_columns(
         LocaleMode::Default => {
             let col = locale_column(field_name, &locale_ctx.config.default_locale)?;
 
-            select_exprs.push(format!("{col} AS {field_name}"));
+            select_exprs.push(format!(
+                "{} AS {}",
+                quote_ident(&col),
+                quote_ident(field_name)
+            ));
             result_names.push(field_name.to_string());
         }
         LocaleMode::Single(req_locale) => {
@@ -222,12 +227,15 @@ fn add_locale_columns(
             let req_col = locale_column(field_name, locale)?;
             let default_col = locale_column(field_name, &locale_ctx.config.default_locale)?;
 
+            let alias = quote_ident(field_name);
             if locale_ctx.config.fallback && req_col != default_col {
                 select_exprs.push(format!(
-                    "COALESCE({req_col}, {default_col}) AS {field_name}"
+                    "COALESCE({}, {}) AS {alias}",
+                    quote_ident(&req_col),
+                    quote_ident(&default_col)
                 ));
             } else {
-                select_exprs.push(format!("{req_col} AS {field_name}"));
+                select_exprs.push(format!("{} AS {alias}", quote_ident(&req_col)));
             }
 
             result_names.push(field_name.to_string());
@@ -235,7 +243,7 @@ fn add_locale_columns(
         LocaleMode::All => {
             for locale in &locale_ctx.config.locales {
                 let col = locale_column(field_name, locale)?;
-                select_exprs.push(col.clone());
+                select_exprs.push(quote_ident(&col));
                 result_names.push(col);
             }
         }
@@ -621,7 +629,7 @@ mod tests {
             config: locale_cfg,
         };
         let (exprs, names) = get_locale_select_columns(&fields, false, &ctx).unwrap();
-        assert_eq!(exprs, vec!["id", "title__en AS title"]);
+        assert_eq!(exprs, vec!["id", "\"title__en\" AS \"title\""]);
         assert_eq!(names, vec!["id", "title"]);
     }
 
@@ -634,7 +642,10 @@ mod tests {
             config: locale_cfg,
         };
         let (exprs, names) = get_locale_select_columns(&fields, false, &ctx).unwrap();
-        assert_eq!(exprs, vec!["id", "COALESCE(title__de, title__en) AS title"]);
+        assert_eq!(
+            exprs,
+            vec!["id", "COALESCE(\"title__de\", \"title__en\") AS \"title\""]
+        );
         assert_eq!(names, vec!["id", "title"]);
     }
 
@@ -647,7 +658,7 @@ mod tests {
             config: locale_cfg,
         };
         let (exprs, names) = get_locale_select_columns(&fields, false, &ctx).unwrap();
-        assert_eq!(exprs, vec!["id", "title__en", "title__de"]);
+        assert_eq!(exprs, vec!["id", "\"title__en\"", "\"title__de\""]);
         assert_eq!(names, vec!["id", "title__en", "title__de"]);
     }
 
@@ -712,7 +723,7 @@ mod tests {
         };
         let (exprs, names) = get_locale_select_columns(&fields, false, &ctx).unwrap();
         assert!(
-            exprs.contains(&"social__github".to_string()),
+            exprs.contains(&"\"social__github\"".to_string()),
             "Group inside Tabs should appear in SELECT"
         );
         assert!(names.contains(&"social__github".to_string()));
@@ -885,11 +896,11 @@ mod tests {
         let (exprs, names) = get_locale_select_columns(&fields, false, &ctx).unwrap();
 
         assert!(
-            exprs.contains(&"start_date".to_string()),
+            exprs.contains(&"\"start_date\"".to_string()),
             "SELECT should include start_date, got: {exprs:?}"
         );
         assert!(
-            exprs.contains(&"start_date_tz".to_string()),
+            exprs.contains(&"\"start_date_tz\"".to_string()),
             "SELECT should include start_date_tz, got: {exprs:?}"
         );
         assert!(
@@ -921,7 +932,7 @@ mod tests {
 
         assert_eq!(
             exprs,
-            vec!["id", "start_date", "start_date_tz"],
+            vec!["id", "\"start_date\"", "\"start_date_tz\""],
             "Non-localized date+tz should appear as plain columns"
         );
         assert_eq!(names, vec!["id", "start_date", "start_date_tz"]);
@@ -969,7 +980,7 @@ mod tests {
 
         let (exprs, names) = get_locale_select_columns(&fields, false, &ctx).unwrap();
 
-        assert_eq!(exprs, vec!["id", "event_date"]);
+        assert_eq!(exprs, vec!["id", "\"event_date\""]);
         assert_eq!(names, vec!["id", "event_date"]);
         assert!(
             !exprs.iter().any(|e| e.contains("_tz")),
@@ -998,11 +1009,11 @@ mod tests {
         let (exprs, names) = get_locale_select_columns(&fields, false, &ctx).unwrap();
 
         assert!(
-            exprs.contains(&"schedule__start".to_string()),
+            exprs.contains(&"\"schedule__start\"".to_string()),
             "Group date should be prefixed: {exprs:?}"
         );
         assert!(
-            exprs.contains(&"schedule__start_tz".to_string()),
+            exprs.contains(&"\"schedule__start_tz\"".to_string()),
             "Group date _tz should be prefixed: {exprs:?}"
         );
         assert!(names.contains(&"schedule__start".to_string()));

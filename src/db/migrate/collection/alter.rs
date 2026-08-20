@@ -12,7 +12,7 @@ use crate::{
         migrate::helpers::{
             ColumnSpec, collect_column_specs, get_table_column_types, get_table_columns,
         },
-        query::helpers::locale_column,
+        query::helpers::{locale_column, quote_ident},
     },
 };
 
@@ -110,7 +110,9 @@ fn add_field_column(
 
     let sql = format!(
         "ALTER TABLE \"{}\" ADD COLUMN {} {}",
-        ctx.slug, col_name, col_def
+        ctx.slug,
+        quote_ident(col_name),
+        col_def
     );
     info!("Adding column to {}: {}", ctx.slug, col_name);
 

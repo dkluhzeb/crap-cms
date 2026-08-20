@@ -6,11 +6,10 @@
 //! bucket plus rows in the same bucket past the inner sort/id keyset.
 //! Pre-composite cursors fall back to the original single-column keyset.
 
-use std::fmt::Write as _;
-
 use anyhow::{Result, bail};
 
 use crate::db::query::cursor::{CursorData, SortDirection};
+use crate::db::query::helpers::append_sql_condition;
 use crate::db::{DbConnection, DbValue};
 
 /// Resolved sort configuration for cursor pagination.
@@ -61,9 +60,7 @@ pub(super) fn apply_cursor_keyset(
         inner
     };
 
-    let prefix = if *has_where { " AND " } else { " WHERE " };
-    let _ = write!(sql, "{prefix}({clause})");
-    *has_where = true;
+    append_sql_condition(sql, has_where, &format!("({clause})"));
 
     Ok(())
 }

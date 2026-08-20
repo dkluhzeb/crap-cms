@@ -36,5 +36,5 @@ pub use local::{AuthResult, authenticate_local};
 pub use mfa::{set_mfa_code, verify_mfa_code};
 pub use tokens::{
     ResetTokenResult, consume_reset_token, consume_verification_token, find_by_reset_token,
-    generate_reset_token,
+    generate_reset_token, generate_security_token,
 };

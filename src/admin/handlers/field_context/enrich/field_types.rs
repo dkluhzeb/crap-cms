@@ -14,18 +14,15 @@ use crate::{
             FieldContext, GroupField, NumberField, RelationshipField, RowField, SelectOption,
             TabPanel, TabsField, TextField, TimezoneOption, UploadField, ValidationAttrs,
         },
-        handlers::{
-            field_context::{
-                MAX_FIELD_DEPTH,
-                builder::build_single_field_context,
-                count_errors_in_field_contexts,
-                enrich::{
-                    SubFieldOpts, children::build_enriched_children_from_data,
-                    nested::build_enriched_sub_field_context,
-                },
-                inject_lang_values_from_row, inject_timezone_values_from_row, safe_template_id,
+        handlers::field_context::{
+            MAX_FIELD_DEPTH,
+            builder::build_single_field_context,
+            count_errors_in_field_contexts,
+            enrich::{
+                SubFieldOpts, children::build_enriched_children_from_data,
+                nested::build_enriched_sub_field_context,
             },
-            shared::auto_label_from_name,
+            inject_lang_values_from_row, inject_timezone_values_from_row, safe_template_id,
         },
     },
     core::{BlockDefinition, FieldDefinition, FieldTab, FieldType, timezone::TIMEZONE_OPTIONS},
@@ -370,10 +367,7 @@ fn build_block_def_template(
         })
         .collect();
 
-    let label = bd.label.as_ref().map_or_else(
-        || bd.block_type.clone(),
-        |ls| ls.resolve_default().to_string(),
-    );
+    let label = bd.display_label();
 
     BlockDefinitionContext {
         block_type: bd.block_type.clone(),
@@ -572,10 +566,7 @@ fn build_group_child_base(
     nested_val: &str,
     opts: &SubFieldOpts,
 ) -> BaseFieldData {
-    let nested_label = nested_sf.admin.label.as_ref().map_or_else(
-        || auto_label_from_name(&nested_sf.name),
-        |ls| ls.resolve_default().to_string(),
-    );
+    let nested_label = nested_sf.resolved_label();
 
     BaseFieldData {
         name: nested_name.to_string(),

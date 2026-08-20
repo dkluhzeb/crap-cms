@@ -199,6 +199,16 @@ impl r2d2::CustomizeConnection<rusqlite::Connection, rusqlite::Error> for Sqlite
         // `sqlite3LockAndPrepare` before this knob was wired up.
         // Configurable via `[database] stmt_cache_capacity`.
         conn.set_prepared_statement_cache_capacity(self.stmt_cache_capacity);
+
+        // Disable SQLite's legacy "double-quoted string literal" misfeature so a
+        // double-quoted token is *always* an identifier, matching Postgres. This
+        // keeps quoted identifiers (needed for reserved-word column names) safe
+        // AND preserves "no such column" errors: without it, `SELECT "missing"`
+        // silently returns the string `missing` instead of erroring, masking
+        // typos and the localized-read footgun.
+        conn.set_db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_DQS_DDL, false)?;
+        conn.set_db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_DQS_DML, false)?;
+
         Ok(())
     }
 }

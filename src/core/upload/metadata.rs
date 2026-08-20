@@ -9,7 +9,7 @@ use crate::{
         Document, DocumentFields,
         upload::{
             CollectionUpload, ImageConvertJobData, ProcessedUpload, QueuedConversion,
-            queue_image_conversion, storage::StorageBackend,
+            key_from_served_url, queue_image_conversion, storage::StorageBackend,
         },
     },
     db::DbConnection,
@@ -152,7 +152,7 @@ pub fn delete_upload_files(storage: &dyn StorageBackend, doc_fields: &DocumentFi
         if (key == "url" || key.ends_with("_url"))
             && key != "image_url"
             && let Value::String(url) = value
-            && let Some(storage_key) = url.strip_prefix("/uploads/")
+            && let Some(storage_key) = key_from_served_url(url)
         {
             tracing::debug!("Deleting upload file: {}", storage_key);
             if let Err(e) = storage.delete(storage_key) {

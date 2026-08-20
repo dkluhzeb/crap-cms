@@ -1,6 +1,6 @@
 //! Block and tab definitions for Blocks/Tabs layout fields.
 
-use crate::core::{FieldDefinition, LocalizedString};
+use crate::core::{FieldDefinition, LocalizedString, field::to_title_case};
 use crate::typegen::lua::LuaAnnotation;
 use serde::{Deserialize, Serialize};
 
@@ -66,6 +66,18 @@ impl BlockDefinition {
             fields,
             ..Default::default()
         }
+    }
+
+    /// The block's display label: the explicit `label` if set, else the
+    /// `block_type` slug title-cased. One source so the admin editor and the
+    /// DB-read walkers (back-references, missing-relations) can't render the same
+    /// unlabeled block two different ways (`hero_banner` vs `Hero Banner`).
+    #[must_use]
+    pub fn display_label(&self) -> String {
+        self.label.as_ref().map_or_else(
+            || to_title_case(&self.block_type),
+            |ls| ls.resolve_default().to_string(),
+        )
     }
 }
 

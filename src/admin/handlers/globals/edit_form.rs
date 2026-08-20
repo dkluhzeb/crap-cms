@@ -20,8 +20,8 @@ use crate::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
             build_locale_template_data, compute_denied_read_fields, enrich_field_contexts,
             extract_doc_status, extract_editor_locale, fetch_version_sidebar_data,
-            flatten_document_values, get_user_doc, is_non_default_locale, not_found, paths,
-            render_page, service_error_to_admin_response, split_sidebar_fields,
+            flatten_document_values, get_user_doc, is_non_default_locale, paths, render_page,
+            require_global, service_error_to_admin_response, split_sidebar_fields,
             task_join_error_response,
         },
     },
@@ -173,9 +173,9 @@ pub async fn edit_form(
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let def = match state.registry.get_global(&slug) {
-        Some(d) => d.clone(),
-        None => return not_found(&state, &format!("Global '{slug}' not found")),
+    let def = match require_global(&state, &slug) {
+        Ok(d) => d,
+        Err(resp) => return *resp,
     };
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);

@@ -45,6 +45,14 @@ stored data, or clients.
   gate keys (`ref_count_backfilled`, …) — renaming a gate key re-runs the
   migration on every existing database. The gate **value** is the intended
   re-run lever; never rename the key.
+- **Generated SQL identifiers are always quoted.** Every column/table name
+  interpolated into generated SQL (CREATE/ALTER/INSERT/UPDATE/SELECT and FTS
+  sync) goes through `quote_ident`, so a field named after a SQL reserved word
+  (`order`, `select`, `group`, …) is valid on both backends. SQLite runs with the
+  double-quoted-string misfeature disabled (`SQLITE_DBCONFIG_DQS_DDL`/`_DML`
+  off), so a double-quoted token is unambiguously an identifier — a reference to
+  a missing column errors rather than silently reading as the literal string.
+  Never emit an unquoted user-derived identifier, and never re-enable DQS.
 
 ## Client-visible shapes
 
@@ -273,6 +281,11 @@ changing a representation is a breaking change to every consumer.
   validation rejects a non-`session` token, so an MFA-pending token can never
   authenticate a request. A token minted before the claim existed decodes as
   `session`. Never accept `mfa_pending` as a session, or MFA becomes bypassable.
+- **Single-use security tokens are minted at one chokepoint.** Password-reset
+  and email-verification tokens both come from `generate_security_token()` — a
+  32-character nanoid. Any new single-use-token flow uses the same helper so the
+  entropy length can't drift between flows. (Tokens are opaque; the length may
+  only grow, never shrink.)
 
 ## Scheduler & jobs
 

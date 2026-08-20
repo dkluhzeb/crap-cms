@@ -7,7 +7,7 @@ use anyhow::Result;
 use crate::db::query::helpers::join_table;
 use crate::db::{DbConnection, DbValue};
 
-use super::helpers::delete_junction_rows;
+use super::helpers::{delete_junction_rows, select_junction_rows};
 
 /// Set the related IDs for a has-many relationship junction table.
 /// Deletes all existing rows for the parent (scoped by locale if provided) and inserts new ones.
@@ -104,26 +104,7 @@ pub fn find_related_ids(
 ) -> Result<Vec<String>> {
     let table_name = join_table(collection, field);
 
-    let (sql, params) = if let Some(loc) = locale {
-        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-        (
-            format!(
-                "SELECT related_id FROM \"{table_name}\" WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order"
-            ),
-            vec![
-                DbValue::Text(parent_id.to_string()),
-                DbValue::Text(loc.to_string()),
-            ],
-        )
-    } else {
-        let p1 = conn.placeholder(1);
-        (
-            format!(
-                "SELECT related_id FROM \"{table_name}\" WHERE parent_id = {p1} ORDER BY _order"
-            ),
-            vec![DbValue::Text(parent_id.to_string())],
-        )
-    };
+    let (sql, params) = select_junction_rows(conn, &table_name, "related_id", parent_id, locale);
 
     let rows = conn.query_all(&sql, &params)?;
     let ids = rows
@@ -307,26 +288,13 @@ pub fn find_polymorphic_related(
 ) -> Result<Vec<(String, String)>> {
     let table_name = join_table(collection, field);
 
-    let (sql, params) = if let Some(loc) = locale {
-        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-        (
-            format!(
-                "SELECT related_collection, related_id FROM \"{table_name}\" WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order"
-            ),
-            vec![
-                DbValue::Text(parent_id.to_string()),
-                DbValue::Text(loc.to_string()),
-            ],
-        )
-    } else {
-        let p1 = conn.placeholder(1);
-        (
-            format!(
-                "SELECT related_collection, related_id FROM \"{table_name}\" WHERE parent_id = {p1} ORDER BY _order"
-            ),
-            vec![DbValue::Text(parent_id.to_string())],
-        )
-    };
+    let (sql, params) = select_junction_rows(
+        conn,
+        &table_name,
+        "related_collection, related_id",
+        parent_id,
+        locale,
+    );
 
     let rows = conn.query_all(&sql, &params)?;
     let items = rows

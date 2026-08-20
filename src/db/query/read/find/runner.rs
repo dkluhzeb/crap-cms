@@ -13,7 +13,8 @@ use crate::db::query::filter::{build_where_clause, resolve_filter_column, resolv
 use crate::db::query::read::select::apply_select_filter;
 use crate::db::query::{
     fts, get_column_names, get_locale_select_columns_full, group_locale_fields,
-    helpers::append_sql_condition, validate_query_fields,
+    helpers::{append_sql_condition, quote_ident},
+    validate_query_fields,
 };
 use crate::db::{
     DbConnection, DbRow, DbValue, FindQuery, LocaleContext, LocaleMode, document::row_to_document,
@@ -154,7 +155,8 @@ fn build_select(
         )?,
         _ => {
             let names = get_column_names(def);
-            (names.clone(), names)
+            let quoted = names.iter().map(|n| quote_ident(n)).collect();
+            (quoted, names)
         }
     };
 

@@ -12,6 +12,7 @@ use crate::db::query::fts::fields::{
     get_fts_columns, is_json_richtext_column, json_richtext_columns,
 };
 use crate::db::query::fts::search::fts_table_name;
+use crate::db::query::helpers::quote_ident;
 use crate::db::query::is_valid_identifier;
 use crate::db::{DbConnection, DbValue};
 
@@ -48,7 +49,11 @@ pub fn sync_fts_table(
         return Ok(());
     }
 
-    let field_list = fts_fields.join(", ");
+    let field_list = fts_fields
+        .iter()
+        .map(|f| quote_ident(f))
+        .collect::<Vec<_>>()
+        .join(", ");
 
     if conn.kind() == "postgres" {
         // Create regular table with a single tsvector column
@@ -96,7 +101,7 @@ fn bulk_populate_fast(
 ) -> Result<()> {
     let coalesce_fields: Vec<String> = fts_fields
         .iter()
-        .map(|f| format!("COALESCE({f}, '')"))
+        .map(|f| format!("COALESCE({}, '')", quote_ident(f)))
         .collect();
 
     let insert_sql = match conn.kind() {
@@ -133,7 +138,7 @@ fn bulk_populate_slow(
 ) -> Result<()> {
     let select_fields: Vec<String> = fts_fields
         .iter()
-        .map(|f| format!("COALESCE({f}, '')"))
+        .map(|f| format!("COALESCE({}, '')", quote_ident(f)))
         .collect();
     let select_sql = format!("SELECT id, {} FROM \"{}\"", select_fields.join(", "), slug);
 

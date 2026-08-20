@@ -10,7 +10,11 @@ use crate::core::collection::Auth;
 use crate::{
     config::LocaleConfig,
     core::{CollectionDefinition, FieldType, collection::MfaMode},
-    db::{DbConnection, migrate::helpers::collect_column_specs, query::helpers::locale_column},
+    db::{
+        DbConnection,
+        migrate::helpers::collect_column_specs,
+        query::helpers::{locale_column, quote_ident},
+    },
 };
 
 /// Column constraint options for `build_column_def`.
@@ -25,7 +29,7 @@ struct ColumnConstraints<'a> {
 
 /// Build a column definition string with type, constraints, and default.
 fn build_column_def(col_name: &str, col_type: &str, constraints: &ColumnConstraints) -> String {
-    let mut col = format!("{col_name} {col_type}");
+    let mut col = format!("{} {col_type}", quote_ident(col_name));
 
     if constraints.required {
         col.push_str(" NOT NULL");
@@ -89,7 +93,7 @@ fn collect_field_columns(
                     && !def.has_drafts();
 
                 if spec.companion_text {
-                    columns.push(format!("{col_name} TEXT"));
+                    columns.push(format!("{} TEXT", quote_ident(&col_name)));
                 } else {
                     let c = ColumnConstraints {
                         required: is_required,
@@ -103,7 +107,7 @@ fn collect_field_columns(
                 }
             }
         } else if spec.companion_text {
-            columns.push(format!("{} TEXT", spec.col_name));
+            columns.push(format!("{} TEXT", quote_ident(&spec.col_name)));
         } else {
             let c = ColumnConstraints {
                 required: spec.field.required && !def.has_drafts(),

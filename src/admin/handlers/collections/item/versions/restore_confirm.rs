@@ -15,8 +15,8 @@ use crate::{
         },
         handlers::shared::{
             check_access_or_forbid, extract_editor_locale, forbidden,
-            load_version_with_missing_relations, not_found, paths, redirect_response, render_page,
-            server_error,
+            load_version_with_missing_relations, paths, redirect_response, render_page,
+            require_collection, server_error,
         },
     },
     core::auth::{AuthUser, Claims},
@@ -32,8 +32,9 @@ pub async fn restore_confirm(
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let Some(def) = state.registry.get_collection(&slug).cloned() else {
-        return not_found(&state, &format!("Collection '{slug}' not found"));
+    let def = match require_collection(&state, &slug) {
+        Ok(d) => d,
+        Err(resp) => return *resp,
     };
 
     if !def.has_versions() {

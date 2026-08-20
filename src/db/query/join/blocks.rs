@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 use crate::db::query::helpers::join_table;
 use crate::db::{DbConnection, DbValue};
 
-use super::helpers::delete_junction_rows;
+use super::helpers::{delete_junction_rows, select_junction_rows};
 
 /// Split a block row into `(_block_type, data_json)` for INSERT.
 ///
@@ -124,26 +124,13 @@ pub fn find_block_rows(
     locale: Option<&str>,
 ) -> Result<Vec<Value>> {
     let table_name = join_table(collection, field_name);
-    let (sql, params) = if let Some(loc) = locale {
-        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-        (
-            format!(
-                "SELECT id, _block_type, data FROM \"{table_name}\" WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order"
-            ),
-            vec![
-                DbValue::Text(parent_id.to_string()),
-                DbValue::Text(loc.to_string()),
-            ],
-        )
-    } else {
-        let p1 = conn.placeholder(1);
-        (
-            format!(
-                "SELECT id, _block_type, data FROM \"{table_name}\" WHERE parent_id = {p1} ORDER BY _order"
-            ),
-            vec![DbValue::Text(parent_id.to_string())],
-        )
-    };
+    let (sql, params) = select_junction_rows(
+        conn,
+        &table_name,
+        "id, _block_type, data",
+        parent_id,
+        locale,
+    );
 
     let db_rows = conn.query_all(&sql, &params)?;
     let result = db_rows

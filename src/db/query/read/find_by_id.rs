@@ -9,7 +9,7 @@ use crate::{
         document::row_to_document,
         query::{
             get_column_names, get_locale_select_columns_full, group_locale_fields,
-            hydrate_document, hydrate_documents,
+            helpers::quote_ident, hydrate_document, hydrate_documents,
         },
     },
 };
@@ -155,7 +155,8 @@ fn select_columns(
         )?,
         _ => {
             let names = get_column_names(def);
-            (names.clone(), names)
+            let quoted = names.iter().map(|n| quote_ident(n)).collect();
+            (quoted, names)
         }
     };
     Ok(exprs)

@@ -13,7 +13,7 @@ use crate::db::{
     },
 };
 
-use super::helpers::delete_junction_rows;
+use super::helpers::{delete_junction_rows, select_junction_rows};
 
 /// Set array rows for an array field join table.
 /// Deletes all existing rows for the parent and inserts new ones with nanoid + _order.
@@ -158,26 +158,7 @@ pub fn find_array_rows(
     } else {
         format!("id, {}", select_col_names.join(", "))
     };
-    let (sql, params) = if let Some(loc) = locale {
-        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-        (
-            format!(
-                "SELECT {select_cols} FROM \"{table_name}\" WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order"
-            ),
-            vec![
-                DbValue::Text(parent_id.to_string()),
-                DbValue::Text(loc.to_string()),
-            ],
-        )
-    } else {
-        let p1 = conn.placeholder(1);
-        (
-            format!(
-                "SELECT {select_cols} FROM \"{table_name}\" WHERE parent_id = {p1} ORDER BY _order"
-            ),
-            vec![DbValue::Text(parent_id.to_string())],
-        )
-    };
+    let (sql, params) = select_junction_rows(conn, &table_name, &select_cols, parent_id, locale);
 
     let db_rows = conn.query_all(&sql, &params)?;
     let mut result = Vec::with_capacity(db_rows.len());

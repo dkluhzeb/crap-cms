@@ -14,7 +14,7 @@ use crate::{
         query::{
             LocaleContext, LocaleMode,
             global::update_global,
-            helpers::{global_table, locale_column, prefixed_name, walk_leaf_fields},
+            helpers::{global_table, locale_column, prefixed_name, quote_ident, walk_leaf_fields},
             join::save_join_table_data,
             ref_count,
             write::update,
@@ -261,12 +261,13 @@ fn restore_locale_columns(
             None
         };
 
+        let quoted = quote_ident(&col);
         if let Some(val) = db_val {
-            set_clauses.push(format!("{col} = {}", conn.placeholder(*idx)));
+            set_clauses.push(format!("{quoted} = {}", conn.placeholder(*idx)));
             params.push(val);
             *idx += 1;
         } else {
-            set_clauses.push(format!("{col} = NULL"));
+            set_clauses.push(format!("{quoted} = NULL"));
         }
     }
 

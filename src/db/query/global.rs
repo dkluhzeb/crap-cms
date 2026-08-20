@@ -9,7 +9,7 @@ use crate::{
         document::row_to_document,
         query::{
             collect_column_names, get_locale_select_columns, group_locale_fields,
-            helpers::{global_table, utc_now},
+            helpers::{global_table, quote_ident, utc_now},
             join::hydrate_document,
             write::{UpdateCollector, collect_update_params},
         },
@@ -33,7 +33,8 @@ pub fn get_global(
         Some(ctx) if ctx.config.is_enabled() => get_global_locale_columns(def, ctx)?,
         _ => {
             let names = get_global_column_names(def);
-            (names.clone(), names)
+            let quoted = names.iter().map(|n| quote_ident(n)).collect();
+            (quoted, names)
         }
     };
 

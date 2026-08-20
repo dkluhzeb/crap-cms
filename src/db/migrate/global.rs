@@ -9,7 +9,7 @@ use crate::{
     core::collection::GlobalDefinition,
     db::{
         DbConnection,
-        query::helpers::{global_table, locale_column},
+        query::helpers::{global_table, locale_column, quote_ident},
     },
 };
 
@@ -53,7 +53,7 @@ fn build_col_def(
     field: &crate::core::FieldDefinition,
     db_kind: &str,
 ) -> String {
-    let mut col = format!("{col_name} {col_type}");
+    let mut col = format!("{} {col_type}", quote_ident(col_name));
 
     if !companion_text {
         append_default_value_for(
@@ -240,7 +240,10 @@ fn add_system_column(
         return Ok(());
     }
 
-    let sql = format!("ALTER TABLE \"{table_name}\" ADD COLUMN {col_name} {col_def}");
+    let sql = format!(
+        "ALTER TABLE \"{table_name}\" ADD COLUMN {} {col_def}",
+        quote_ident(col_name)
+    );
 
     info!("Adding {} column to {}", col_name, table_name);
 

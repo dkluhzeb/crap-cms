@@ -1,18 +1,12 @@
 //! ID-collecting query helpers and field-label rendering shared by the
 //! scan submodules.
 
-use crate::core::{FieldDefinition, field::to_title_case};
+use crate::core::FieldDefinition;
 use crate::db::{DbConnection, DbValue};
 
 /// Get the display label for a field (admin label or title-cased name).
 pub(in crate::db::query::read) fn field_display_label(field: &FieldDefinition) -> String {
-    field
-        .admin
-        .label
-        .as_ref()
-        .map(|l| l.resolve_default().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| to_title_case(&field.name))
+    field.resolved_label()
 }
 
 /// Execute a query and collect `id` column values, filtering out self-references.

@@ -28,8 +28,8 @@ use crate::{
             build_locale_template_data, compute_denied_read_fields, enrich_field_contexts,
             extract_doc_status, extract_editor_locale, fetch_version_sidebar_data,
             flatten_document_values, get_user_doc, is_non_default_locale, lookup_ref_count,
-            not_found, paths, render_page, service_error_to_admin_response, split_sidebar_fields,
-            task_join_error_response,
+            not_found, paths, render_page, require_collection, service_error_to_admin_response,
+            split_sidebar_fields, task_join_error_response,
         },
     },
     core::{AuthUser, Claims, CollectionDefinition, Document, FieldDenial, upload},
@@ -303,8 +303,9 @@ pub async fn edit_form(
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let Some(def) = state.registry.get_collection(&slug).cloned() else {
-        return not_found(&state, &format!("Collection '{slug}' not found"));
+    let def = match require_collection(&state, &slug) {
+        Ok(d) => d,
+        Err(resp) => return *resp,
     };
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);

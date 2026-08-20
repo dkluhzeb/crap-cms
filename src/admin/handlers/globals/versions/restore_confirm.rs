@@ -15,8 +15,8 @@ use crate::{
         },
         handlers::shared::{
             check_access_or_forbid, extract_editor_locale, forbidden,
-            load_version_with_missing_relations, not_found, paths, redirect_response, render_page,
-            server_error,
+            load_version_with_missing_relations, paths, redirect_response, render_page,
+            require_global, server_error,
         },
     },
     core::auth::{AuthUser, Claims},
@@ -32,9 +32,9 @@ pub async fn restore_confirm(
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let def = match state.registry.get_global(&slug) {
-        Some(d) => d.clone(),
-        None => return not_found(&state, &format!("Global '{slug}' not found")),
+    let def = match require_global(&state, &slug) {
+        Ok(d) => d,
+        Err(resp) => return *resp,
     };
 
     if !def.has_versions() {

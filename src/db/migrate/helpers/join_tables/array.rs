@@ -10,7 +10,7 @@ use crate::db::migrate::helpers::column_specs::ensure_locale_column;
 use crate::db::migrate::helpers::introspection::{
     get_table_columns, sanitize_locale, table_exists,
 };
-use crate::db::query::helpers::{join_table, tz_column};
+use crate::db::query::helpers::{join_table, quote_ident, tz_column};
 
 /// Sync an array join table (create or alter).
 pub(super) fn sync_array_table(
@@ -57,7 +57,7 @@ fn create_array_table(
         "id TEXT PRIMARY KEY".to_string(),
         format!(
             "parent_id TEXT NOT NULL REFERENCES {}(id) ON DELETE CASCADE",
-            collection_slug
+            quote_ident(collection_slug)
         ),
         "_order INTEGER NOT NULL DEFAULT 0".to_string(),
     ];
@@ -72,12 +72,12 @@ fn create_array_table(
     for sub_field in flat_subs {
         columns.push(format!(
             "{} {}",
-            sub_field.name,
+            quote_ident(&sub_field.name),
             conn.column_type_for(&sub_field.field_type)
         ));
 
         if sub_field.field_type == FieldType::Date && sub_field.timezone {
-            columns.push(format!("{} TEXT", tz_column(&sub_field.name)));
+            columns.push(format!("{} TEXT", quote_ident(&tz_column(&sub_field.name))));
         }
     }
 

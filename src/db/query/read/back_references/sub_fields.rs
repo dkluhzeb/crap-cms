@@ -12,7 +12,7 @@ use std::collections::HashSet;
 
 use tracing::{debug, warn};
 
-use crate::core::{FieldDefinition, FieldType, NestStep, any_field, field::to_title_case};
+use crate::core::{FieldDefinition, FieldType, NestStep, any_field};
 use crate::db::query::join::find_all_array_rows_with_parent;
 use crate::db::query::ref_count::{walk_blocks_with, walk_nested_with};
 
@@ -97,10 +97,7 @@ fn build_label(prefix: &str, path: &[NestStep<'_>], leaf: &FieldDefinition) -> S
     for seg in path {
         parts.push(match seg {
             NestStep::Field(f) => field_display_label(f),
-            NestStep::Block(b) => b.label.as_ref().map_or_else(
-                || to_title_case(&b.block_type),
-                |l| l.resolve_default().to_string(),
-            ),
+            NestStep::Block(b) => b.display_label(),
         });
     }
     parts.push(field_display_label(leaf));

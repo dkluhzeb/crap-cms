@@ -27,7 +27,7 @@ use crate::{
     },
     core::{
         BlockDefinition, CollectionDefinition, Document, DocumentFields, FieldDefinition,
-        FieldType, Registry, to_title_case, upload,
+        FieldType, Registry, upload,
     },
     db::{Filter, FilterClause, FilterOp},
 };
@@ -602,10 +602,7 @@ pub(super) fn enrich_join(
 
 /// Build a typed attribute object for a richtext node field definition.
 fn build_node_attr(f: &FieldDefinition) -> RichtextNodeAttrCtx {
-    let label = f.admin.label.as_ref().map_or_else(
-        || to_title_case(&f.name),
-        |ls| ls.resolve_default().to_string(),
-    );
+    let label = f.resolved_label();
 
     let options = if f.options.is_empty() {
         None

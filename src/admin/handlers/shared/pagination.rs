@@ -35,10 +35,7 @@ impl PaginationParams {
     /// Resolve raw query parameters into clamped, ready-to-use pagination values.
     pub fn resolve(&self, config: &crate::config::PaginationConfig) -> Pagination {
         let page = self.page.unwrap_or(1).max(1);
-        let per_page = self
-            .per_page
-            .unwrap_or(config.default_limit)
-            .clamp(1, config.max_limit);
+        let per_page = config.resolve_limit(self.per_page);
         // Saturating math: an absurd `page` (e.g. `i64::MAX` from the query
         // string) would overflow `(page - 1) * per_page` — a panic under debug
         // overflow checks, a silent wrap in release. Saturate instead, so a

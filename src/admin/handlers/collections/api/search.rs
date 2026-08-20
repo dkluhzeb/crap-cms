@@ -80,9 +80,10 @@ pub async fn search_collection(
     };
 
     let search_term = params.q.unwrap_or_default().to_lowercase();
-    let default_limit = usize::try_from(state.config.pagination.default_limit.max(0)).unwrap_or(20);
-    let max_limit = usize::try_from(state.config.pagination.max_limit.max(0)).unwrap_or(1000);
-    let limit = params.limit.unwrap_or(default_limit).min(max_limit);
+    // Clamp through the shared pagination chokepoint: floors to 1 (never
+    // `LIMIT 0`) and caps at `max_limit`, matching `PaginationParams::resolve`.
+    let requested = params.limit.map(|l| i64::try_from(l).unwrap_or(i64::MAX));
+    let limit = state.config.pagination.resolve_limit(requested);
 
     let Ok(conn) = state.pool.get() else {
         return Json(json!([]));
@@ -99,10 +100,8 @@ pub async fn search_collection(
         Some(search_term.clone())
     };
 
-    // Overflow path falls back to a small page rather than i64::MAX —
-    // an unbounded LIMIT would return the entire collection.
     let fq = FindQuery::builder()
-        .limit(Some(i64::try_from(limit).unwrap_or(20)))
+        .limit(Some(limit))
         .search(search)
         .build();
 
@@ -128,7 +127,7 @@ pub async fn search_collection(
     };
 
     let title_field = def.title_field().map(std::string::ToString::to_string);
-    let is_upload = def.upload.as_ref().is_some_and(|u| u.enabled);
+    let is_upload = def.is_upload_collection();
     let admin_thumbnail = def.upload.as_ref().and_then(|u| u.admin_thumbnail.clone());
 
     let results: Vec<_> = result

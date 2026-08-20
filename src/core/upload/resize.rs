@@ -10,7 +10,7 @@ use tracing::warn;
 
 use crate::core::upload::{
     CollectionUpload, FormatQuality, FormatResult, ImageFit, ImageSize, QueuedConversion,
-    SharedStorage, SizeResult,
+    SharedStorage, SizeResult, served_url,
 };
 
 use super::{StorageBackend, process::CleanupGuard};
@@ -202,7 +202,7 @@ pub(super) fn save_resized_image(
 
     guard.push(size_key.clone());
 
-    let size_url = format!("/uploads/{size_key}");
+    let size_url = served_url(&size_key);
 
     Ok((size_key, size_url))
 }
@@ -229,7 +229,7 @@ pub(super) fn process_format_variant(
 ) -> Result<()> {
     let variant_filename = format!("{}_{}.{}", ctx.stem, ctx.size_name, ctx.format_name);
     let variant_key = format!("{}/{}", ctx.collection_slug, variant_filename);
-    let variant_url = format!("/uploads/{variant_key}");
+    let variant_url = served_url(&variant_key);
 
     if ctx.opts.queue {
         // Enqueue storage KEYS, not absolute filesystem paths. The scheduler

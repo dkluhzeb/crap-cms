@@ -17,12 +17,9 @@ use crate::{
             NumberField, RelationshipField, RichtextField, RowField, TabPanel, TabsField,
             TextField, TextareaField, TimezoneOption, UploadField, ValidationAttrs,
         },
-        handlers::{
-            field_context::{
-                MAX_FIELD_DEPTH, builder::build_select_options, collect_node_attr_errors,
-                count_errors_in_field_contexts, locale_locked_display, safe_template_id,
-            },
-            shared::auto_label_from_name,
+        handlers::field_context::{
+            MAX_FIELD_DEPTH, builder::build_select_options, collect_node_attr_errors,
+            count_errors_in_field_contexts, locale_locked_display, safe_template_id,
         },
     },
     core::{FieldDefinition, FieldType, timezone::TIMEZONE_OPTIONS},
@@ -59,10 +56,7 @@ fn build_base_field_data(
     let full_name = resolve_full_name(field, name_prefix);
     let value_str = values.get(&full_name).cloned().unwrap_or_default();
 
-    let label = field.admin.label.as_ref().map_or_else(
-        || auto_label_from_name(&field.name),
-        |ls| ls.resolve_default().to_string(),
-    );
+    let label = field.resolved_label();
 
     let locale_locked = locale_locked_display(non_default_locale, field);
 
@@ -713,10 +707,7 @@ fn construct_blocks(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
                     })
                     .collect();
 
-                let label = bd.label.as_ref().map_or_else(
-                    || bd.block_type.clone(),
-                    |ls| ls.resolve_default().to_string(),
-                );
+                let label = bd.display_label();
 
                 BlockDefCtx {
                     block_type: bd.block_type.clone(),

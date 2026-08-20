@@ -15,8 +15,8 @@ use crate::{
             page::globals::GlobalVersionsListPage,
         },
         handlers::shared::{
-            Pagination, PaginationParams, extract_editor_locale, get_user_doc, not_found, paths,
-            redirect_response, render_page, server_error, version_to_json,
+            Pagination, PaginationParams, extract_editor_locale, get_user_doc, paths,
+            redirect_response, render_page, require_global, server_error, version_to_json,
         },
     },
     core::auth::{AuthUser, Claims},
@@ -53,9 +53,9 @@ pub async fn list_versions_page(
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let def = match state.registry.get_global(&slug) {
-        Some(d) => d.clone(),
-        None => return not_found(&state, &format!("Global '{slug}' not found")),
+    let def = match require_global(&state, &slug) {
+        Ok(d) => d,
+        Err(resp) => return *resp,
     };
 
     if !def.has_versions() {

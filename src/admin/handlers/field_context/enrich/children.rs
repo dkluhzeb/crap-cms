@@ -25,15 +25,12 @@ use crate::{
             ArrayField, BaseFieldData, BlockDefinition, BlocksField, CodeField, ConditionData,
             FieldContext, TabPanel, TextareaField, ValidationAttrs,
         },
-        handlers::{
-            field_context::{
-                MAX_FIELD_DEPTH,
-                builder::build_single_field_context,
-                count_errors_in_field_contexts,
-                enrich::{field_types, nested::construct_sub_variant, nested::enrich_sub_richtext},
-                locale_locked_display, safe_template_id,
-            },
-            shared::auto_label_from_name,
+        handlers::field_context::{
+            MAX_FIELD_DEPTH,
+            builder::build_single_field_context,
+            count_errors_in_field_contexts,
+            enrich::{field_types, nested::construct_sub_variant, nested::enrich_sub_richtext},
+            locale_locked_display, safe_template_id,
         },
     },
     core::field::{FieldDefinition, FieldType},
@@ -98,10 +95,7 @@ fn build_child_base(
     non_default_locale: bool,
     errors: &HashMap<String, String>,
 ) -> BaseFieldData {
-    let label = child.admin.label.as_ref().map_or_else(
-        || auto_label_from_name(&child.name),
-        |ls| ls.resolve_default().to_string(),
-    );
+    let label = child.resolved_label();
 
     let locale_locked = locale_locked_display(non_default_locale, child);
 
@@ -203,10 +197,7 @@ fn apply_blocks_template(
                 })
                 .collect();
 
-            let label = bd.label.as_ref().map_or_else(
-                || bd.block_type.clone(),
-                |ls| ls.resolve_default().to_string(),
-            );
+            let label = bd.display_label();
 
             BlockDefinition {
                 block_type: bd.block_type.clone(),

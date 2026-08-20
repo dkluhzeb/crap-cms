@@ -3,13 +3,13 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use nanoid::nanoid;
 use tracing::{error, warn};
 
 use crate::{
     config::{EmailConfig, ServerConfig},
     core::email::{EmailJobData, EmailRenderer, VerifyEmailContext, is_configured, queue_email},
     db::{DbPool, query},
+    service::auth::generate_security_token,
 };
 
 /// Inputs for [`send_verification_email`]. All fields are required;
@@ -53,7 +53,7 @@ pub(crate) fn send_verification_email(input: VerificationEmailInput) {
             return;
         }
 
-        let token = nanoid!(32);
+        let token = generate_security_token();
         let exp = Utc::now().timestamp() + 86400; // 24 hours
 
         let conn = match pool.get() {

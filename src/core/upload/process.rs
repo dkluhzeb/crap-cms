@@ -8,7 +8,9 @@ use super::{
     resize::process_image_sizes,
     validate::{check_image_dimensions, sanitize_filename, validate_upload},
 };
-use crate::core::upload::{CollectionUpload, ProcessedUpload, SharedStorage, UploadedFile};
+use crate::core::upload::{
+    CollectionUpload, ProcessedUpload, SharedStorage, UploadedFile, served_url,
+};
 
 /// RAII guard that deletes written files if not committed.
 /// Returned from [`process_upload`] so callers can commit only after
@@ -85,7 +87,7 @@ fn save_original(
 
     guard.push(original_key.clone());
 
-    let url = format!("/uploads/{original_key}");
+    let url = served_url(&original_key);
 
     Ok((unique_filename, url))
 }

@@ -15,7 +15,7 @@ use crate::{
         },
         handlers::shared::{
             check_access_or_forbid, extract_editor_locale, forbidden, lookup_ref_count, not_found,
-            paths, render_page,
+            paths, render_page, require_collection,
         },
     },
     core::{AuthUser, Claims, CollectionDefinition},
@@ -71,8 +71,9 @@ pub async fn delete_confirm(
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let Some(def) = state.registry.get_collection(&slug).cloned() else {
-        return not_found(&state, &format!("Collection '{slug}' not found"));
+    let def = match require_collection(&state, &slug) {
+        Ok(d) => d,
+        Err(resp) => return *resp,
     };
 
     // For soft-delete collections, use trash access (falls back to update).

@@ -299,10 +299,7 @@ fn path_label(prefix: &str, path: &[NestStep<'_>], leaf: &FieldDefinition) -> St
     for seg in path {
         parts.push(match seg {
             NestStep::Field(f) => field_display_label(f),
-            NestStep::Block(b) => b.label.as_ref().map_or_else(
-                || to_title_case(&b.block_type),
-                |l| l.resolve_default().to_string(),
-            ),
+            NestStep::Block(b) => b.display_label(),
         });
     }
     parts.push(field_display_label(leaf));

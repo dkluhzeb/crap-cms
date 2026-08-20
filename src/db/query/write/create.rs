@@ -14,8 +14,8 @@ use crate::{
         query::{
             coerce_json_value,
             helpers::{
-                coerce_date_value_json, coerce_has_many_scalar, prefixed_name, tz_column, utc_now,
-                validate_no_null_byte_json, walk_leaf_fields,
+                coerce_date_value_json, coerce_has_many_scalar, prefixed_name, quote_ident,
+                tz_column, utc_now, validate_no_null_byte_json, walk_leaf_fields,
             },
             locale_write_column,
             read::find_by_id_raw,
@@ -33,8 +33,8 @@ pub(super) struct InsertCollector {
 
 impl InsertCollector {
     /// Push a column, its placeholder, and value.
-    fn push(&mut self, conn: &dyn DbConnection, col: String, val: DbValue) {
-        self.columns.push(col);
+    fn push(&mut self, conn: &dyn DbConnection, col: &str, val: DbValue) {
+        self.columns.push(quote_ident(col));
         self.placeholders.push(conn.placeholder(self.idx));
         self.params.push(val);
         self.idx += 1;
@@ -57,7 +57,7 @@ pub fn create(
     let now = utc_now();
 
     let mut collector = InsertCollector {
-        columns: vec!["id".to_string()],
+        columns: vec![quote_ident("id")],
         placeholders: vec![conn.placeholder(1)],
         params: vec![DbValue::Text(id.clone())],
         idx: 2,
@@ -66,8 +66,8 @@ pub fn create(
     collect_insert_params(&def.fields, data, locale_ctx, &mut collector, conn)?;
 
     if def.timestamps {
-        collector.push(conn, "created_at".to_string(), DbValue::Text(now.clone()));
-        collector.push(conn, "updated_at".to_string(), DbValue::Text(now));
+        collector.push(conn, "created_at", DbValue::Text(now.clone()));
+        collector.push(conn, "updated_at", DbValue::Text(now));
     }
 
     let sql = format!(
@@ -100,7 +100,7 @@ fn collect_leaf_param(
 
     let Some(value) = data.get(&data_key) else {
         if field.field_type == FieldType::Checkbox {
-            collector.push(conn, col_name, DbValue::Integer(0));
+            collector.push(conn, &col_name, DbValue::Integer(0));
         }
 
         return Ok(());
@@ -127,7 +127,7 @@ fn collect_leaf_param(
         coerce_json_value(&field.field_type, value)
     };
 
-    collector.push(conn, col_name, db_val);
+    collector.push(conn, &col_name, db_val);
 
     if let Some(tk) = tz_key {
         let tz_col = locale_write_column(&tk, field, locale_ctx, inherited_localized)?;
@@ -138,7 +138,7 @@ fn collect_leaf_param(
             DbValue::Text(tz_val.to_string())
         };
 
-        collector.push(conn, tz_col, db_val);
+        collector.push(conn, &tz_col, db_val);
     }
 
     Ok(())

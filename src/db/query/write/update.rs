@@ -15,8 +15,8 @@ use crate::{
         query::{
             coerce_json_value,
             helpers::{
-                coerce_date_value_json, coerce_has_many_scalar, prefixed_name, tz_column, utc_now,
-                validate_no_null_byte_json, walk_leaf_fields,
+                coerce_date_value_json, coerce_has_many_scalar, prefixed_name, quote_ident,
+                tz_column, utc_now, validate_no_null_byte_json, walk_leaf_fields,
             },
             is_locale_locked_write, locale_write_column,
             read::find_by_id_raw,
@@ -173,8 +173,11 @@ impl UpdateCollector {
 
     /// Push a SET clause, its placeholder, and value.
     pub(in crate::db::query) fn push(&mut self, conn: &dyn DbConnection, col: &str, val: DbValue) {
-        self.set_clauses
-            .push(format!("{col} = {}", conn.placeholder(self.idx)));
+        self.set_clauses.push(format!(
+            "{} = {}",
+            quote_ident(col),
+            conn.placeholder(self.idx)
+        ));
         self.params.push(val);
         self.idx += 1;
     }

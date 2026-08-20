@@ -555,6 +555,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **Password-reset tokens now carry the same entropy as email-verification
+  tokens (32-character nanoid).** The reset flow minted a 21-character default
+  nanoid while verification used 32; both now share one
+  `generate_security_token` so the length can't drift between the two flows.
+
 - **A `_locked` account flag stored as a truthy string could read as *not locked*
   (fail-open).** The auth flag reader (`_locked` / `_verified`) used its own truthy
   set that missed `on` and only case-folded `true`, while the data plane accepted
@@ -1258,6 +1263,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Breaking for SSE consumers that read `edited_by` from the event payload.
 
 ### Fixed
+
+- **Column names that collide with SQL reserved words (`order`, `select`,
+  `group`, …) now work end to end.** Field names were validated as safe
+  identifiers but interpolated into `CREATE TABLE` / `INSERT` / `SELECT` /
+  `UPDATE` / FTS-sync SQL unquoted, so a field named `order` produced a syntax
+  error on write (and would have broken on Postgres even where SQLite tolerated
+  it). Every generated identifier is now quoted through a shared `quote_ident`,
+  and SQLite's double-quoted-string misfeature is disabled
+  (`SQLITE_DBCONFIG_DQS_DDL` / `_DML` off) so a quoted token is always an
+  identifier — a missing column errors instead of silently reading as its own
+  name.
+
+- **Private uploads on S3 / custom storage backends no longer 404 for
+  authorized users.** The per-document upload access gate compared the request
+  path against the backend's `public_url` (a direct S3/CDN link), but the served
+  proxy path is always `/uploads/{key}`. On non-local storage the two never
+  matched, so every access-gated file 404'd. The gate and the write paths now
+  share one `served_url(key)` / `key_from_served_url(url)` pair, so the stored
+  proxy URL and the gate's expected URL are built the same way. (Not caught by
+  tests because the suite uses local storage, where `public_url` happens to
+  equal `/uploads/{key}`.)
+
+- **Admin relationship search with `?limit=0` no longer returns an empty list.**
+  The handler reimplemented limit resolution and omitted the floor-to-1 that
+  `PaginationParams::resolve` applies, so `limit=0` bound `LIMIT 0`. It now
+  clamps through the shared `PaginationConfig::resolve_limit`.
 
 - **`min_date` / `max_date` are now enforced on Date fields nested in
   array/blocks rows.** The nested-field validator ran only the date *format*
@@ -2675,6 +2706,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     embedded polymorphic refs) and the MCP tools (pass `None`), so the envelope
     key set can't drift between surfaces. The `collection` tag is the only
     difference, expressed as the function's `Option` parameter.
+  - The admin "Collection/Global '{slug}' not found" 404 is one
+    `require_collection` / `require_global` pair; nine handlers that each
+    inlined the registry lookup + `not_found` message now call the shared
+    helper, so the message and status can't drift.
+  - Junction/join-table row reads route through one `select_junction_rows`
+    helper (the read twin of `delete_junction_rows`): the array, blocks,
+    has-many relationship, and polymorphic readers no longer each re-spell the
+    locale-optional `WHERE parent_id [AND _locale] ORDER BY _order` SELECT.
+  - Block and field display labels resolve through
+    `BlockDefinition::display_label` and `FieldDefinition::resolved_label`
+    (admin label else title-cased name); the ten admin/DB sites that repeated
+    that fallback now share it.
+  - Raw page-size limits are clamped through one `PaginationConfig::resolve_limit`
+    (floor to 1, cap at `max_limit`), used by both `PaginationParams::resolve`
+    and the admin relationship-search handler.
+  - Single-use security tokens (password reset, email verification) are minted
+    by one `generate_security_token` (32-char nanoid), so the two flows share
+    one entropy length.
+  - The cursor keyset builder appends its clause via the shared
+    `append_sql_condition` instead of re-deriving the `WHERE` / `AND` prefix
+    inline; the admin search handler reads `def.is_upload_collection()` instead
+    of re-testing `upload.enabled`.
 
 ## [0.1.0-alpha.9] — 2026-05-25
 

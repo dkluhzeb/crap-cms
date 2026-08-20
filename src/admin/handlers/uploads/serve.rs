@@ -27,7 +27,7 @@ use crate::{
     config::LocaleConfig,
     core::{
         AuthUser, CollectionDefinition, Document,
-        upload::{SharedStorage, StorageNotFound},
+        upload::{SharedStorage, StorageNotFound, served_url},
     },
     db::{DbPool, Filter, FilterClause, FilterOp, FindQuery, LocaleContext},
     hooks::HookRunner,
@@ -52,7 +52,6 @@ fn has_path_traversal(segment: &str) -> bool {
 struct UploadVisibilityInput {
     pool: DbPool,
     runner: HookRunner,
-    storage: SharedStorage,
     def: CollectionDefinition,
     slug: String,
     filename: String,
@@ -81,11 +80,12 @@ const CACHE_PRIVATE: &str = "private, no-store";
 ///
 /// Every served file is owned by exactly one upload-collection document; the doc
 /// carries the file's URL in `url` (original) or a `{size}[_fmt]_url` column
-/// (variant). We reproduce the stored URL string from the requested key via the
-/// backend's own `public_url` (correct for local / S3 / custom) and match it
-/// against those columns — so original and variant requests both resolve to the
-/// owning doc. Fail-closed: any error, an orphan (no owning doc), or a
-/// non-upload collection → not visible.
+/// (variant). We reproduce the *stored* URL from the requested key via
+/// `served_url` — the backend-agnostic proxy path the write path stores on every
+/// backend — and match it against those columns. (Using the backend's
+/// `public_url` here would 404 access-gated uploads on S3/custom, where the
+/// direct object/CDN URL differs from the stored proxy path.) Fail-closed: any
+/// error, an orphan (no owning doc), or a non-upload collection → not visible.
 fn upload_doc_visible(input: &UploadVisibilityInput) -> bool {
     let Some(upload) = input.def.upload.as_ref() else {
         return false;
@@ -94,7 +94,7 @@ fn upload_doc_visible(input: &UploadVisibilityInput) -> bool {
     // URL-bearing columns the upload schema injects: `url` + `{size}[_fmt]_url`.
     let or_clauses: Vec<FilterClause> = {
         let key = format!("{}/{}", input.slug, input.filename);
-        let requested_url = input.storage.public_url(&key);
+        let requested_url = served_url(&key);
 
         upload
             .system_field_names()
@@ -178,7 +178,6 @@ async fn check_upload_access(
     let input = UploadVisibilityInput {
         pool: state.pool.clone(),
         runner: state.hook_runner.clone(),
-        storage: state.storage.clone(),
         def,
         slug: collection_slug.to_string(),
         filename: filename.to_string(),
